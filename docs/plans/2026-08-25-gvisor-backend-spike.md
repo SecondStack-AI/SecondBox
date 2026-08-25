@@ -145,34 +145,34 @@ production composition may depend on it.
 
 Make `gvisor` a first-class private backend kind without touching any public schema.
 
-- [ ] Add `GVISOR` to `ComputeBackendKind` in `contracts/runner/v1/runner.proto`, regenerate both
+- [x] Add `GVISOR` to `ComputeBackendKind` in `contracts/runner/v1/runner.proto`, regenerate both
   independently built protocol packages, and extend the frozen fixtures and breaking-change
   validation.
-- [ ] Map the new kind in the control plane's backend-kind translation used by registration so a
+- [x] Map the new kind in the control plane's backend-kind translation used by registration so a
   gVisor runner registers instead of failing prerequisites, and extend the registration tests.
-- [ ] Extend control-plane materialization-evidence validation with an explicit gvisor branch:
+- [x] Extend control-plane materialization-evidence validation with an explicit gvisor branch:
   require the source OCI manifest digest and flat-root digest exactly as Microsandbox does, and
   carry the pinned runsc build digest in the existing helper-build identity field. Document that
   field's per-backend meaning where the message is defined.
-- [ ] Extend `runner/internal/materialization` manifest validation and the backend-kind
+- [x] Extend `runner/internal/materialization` manifest validation and the backend-kind
   allow-list with the same gvisor branch and fixtures.
-- [ ] Add strict `gvisor` parsing to `SECONDBOX_COMPUTE_BACKEND` with a Linux-only platform gate;
+- [x] Add strict `gvisor` parsing to `SECONDBOX_COMPUTE_BACKEND` with a Linux-only platform gate;
   Darwin composition rejects it. A gVisor runner must not require KVM, jail, TAP, bridge,
   signature-key, trust-anchor, or nested-virtualization configuration.
-- [ ] Keep the WorkspaceStore formatter on `mke2fs` for the gvisor backend kind.
-- [ ] Prove RunnerPool sealing needs no mechanism change: add control-plane tests that a pool
+- [x] Keep the WorkspaceStore formatter on `mke2fs` for the gvisor backend kind.
+- [x] Prove RunnerPool sealing needs no mechanism change: add control-plane tests that a pool
   seals to `gvisor` on first registration and rejects Firecracker and Microsandbox runners
   afterward, and the reverse.
-- [ ] Define the gvisor capability semantics: `hypervisor_ready` attests a successful sentry
+- [x] Define the gvisor capability semantics: `hypervisor_ready` attests a successful sentry
   platform probe, `isolation_ready` attests the pinned runsc identity check,
   `resource_limits_ready` attests cgroup enforcement availability. Record the semantics in the
   runner-protocol design doc without changing the message shape.
-- [ ] Generalize runner lifecycle evidence so the mandatory local process identity field accepts
+- [x] Generalize runner lifecycle evidence so the mandatory local process identity field accepts
   the sandbox supervisor process and keeps rejecting absent identity; update the evidence schema
   tests.
-- [ ] Keep backend kind out of public Profile, Sandbox, Instance, operation, and data-plane
+- [x] Keep backend kind out of public Profile, Sandbox, Instance, operation, and data-plane
   schemas; extend the contract tests that prove it.
-- [ ] Add an operator-defined `amd64` gVisor RunnerPool, materialization, and Profile fixture. Do
+- [x] Add an operator-defined `amd64` gVisor RunnerPool, materialization, and Profile fixture. Do
   not change the architecture or backend semantics of any existing standard Profile name.
 
 #### Task 1H validation

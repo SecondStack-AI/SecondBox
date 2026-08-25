@@ -87,3 +87,55 @@ func issueTestIdentity(t *testing.T, runnerID string) ([]byte, []byte, []byte) {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientKey)}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 }
+
+func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
+	complete := map[string]string{
+		"SECONDBOX_GVISOR_RUNSC_PATH":                        "/opt/secondbox/bin/runsc",
+		"SECONDBOX_GVISOR_AGENT_PATH":                        "/opt/secondbox/bin/secondbox-guest-agent",
+		"SECONDBOX_GVISOR_FLAT_ROOT_PATH":                    "/var/lib/secondbox/gvisor/flat-root",
+		"SECONDBOX_GVISOR_MATERIALIZATION_PATH":              "/var/lib/secondbox/gvisor/materialization.json",
+		"SECONDBOX_GVISOR_MATERIALIZATION_DIGEST":            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"SECONDBOX_GVISOR_MAXIMUM_VCPUS":                     "8",
+		"SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES":              "17179869184",
+		"SECONDBOX_GVISOR_MAXIMUM_DISK_BYTES":                "107374182400",
+		"SECONDBOX_GVISOR_MAXIMUM_INSTANCES":                 "8",
+		"SECONDBOX_GVISOR_MAXIMUM_OPERATIONS":                "64",
+		"SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES": "8589934592",
+	}
+	for name, value := range complete {
+		t.Setenv(name, value)
+	}
+	composition, templateBytes, err := loadGVisorComposition()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if composition.RunscPath != complete["SECONDBOX_GVISOR_RUNSC_PATH"] ||
+		composition.AgentPath != complete["SECONDBOX_GVISOR_AGENT_PATH"] ||
+		composition.FlatRootPath != complete["SECONDBOX_GVISOR_FLAT_ROOT_PATH"] ||
+		composition.MaterializationPath != complete["SECONDBOX_GVISOR_MATERIALIZATION_PATH"] ||
+		composition.MaterializationDigest != complete["SECONDBOX_GVISOR_MATERIALIZATION_DIGEST"] ||
+		composition.MaximumVCPUs != 8 || composition.MaximumMemoryBytes != 17179869184 ||
+		composition.MaximumDiskBytes != 107374182400 || composition.MaximumInstances != 8 ||
+		composition.MaximumOperations != 64 || templateBytes != 8589934592 {
+		t.Fatalf("gVisor composition = %#v templateBytes=%d", composition, templateBytes)
+	}
+
+	for _, required := range []string{
+		"SECONDBOX_GVISOR_RUNSC_PATH",
+		"SECONDBOX_GVISOR_MATERIALIZATION_DIGEST",
+		"SECONDBOX_GVISOR_MAXIMUM_VCPUS",
+	} {
+		t.Run(required, func(t *testing.T) {
+			t.Setenv(required, "")
+			if _, _, err := loadGVisorComposition(); err == nil {
+				t.Fatalf("missing %s was accepted", required)
+			}
+		})
+	}
+	t.Run("relative path rejected", func(t *testing.T) {
+		t.Setenv("SECONDBOX_GVISOR_RUNSC_PATH", "bin/runsc")
+		if _, _, err := loadGVisorComposition(); err == nil {
+			t.Fatal("relative runsc path was accepted")
+		}
+	})
+}

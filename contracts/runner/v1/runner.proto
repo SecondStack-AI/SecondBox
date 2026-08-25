@@ -86,6 +86,7 @@ enum ComputeBackendKind {
   COMPUTE_BACKEND_KIND_UNSPECIFIED = 0;
   COMPUTE_BACKEND_KIND_FIRECRACKER = 1;
   COMPUTE_BACKEND_KIND_MICROSANDBOX = 2;
+  COMPUTE_BACKEND_KIND_GVISOR = 3;
 }
 
 message BackendMaterializationEvidence {
@@ -95,11 +96,17 @@ message BackendMaterializationEvidence {
   string runtime_manifest_digest = 4;
   string toolchain_manifest_digest = 5;
   string materialization_digest = 6;
+  // source_oci_manifest_digest and flat_root_digest are required for the
+  // Microsandbox and gVisor kinds, whose root filesystems are materialized
+  // from a digest-pinned OCI reference; Firecracker leaves them empty.
   string source_oci_manifest_digest = 7;
   string flat_root_digest = 8;
   uint32 agent_protocol_generation = 9;
   repeated string agent_features = 10;
   string backend_build_id = 11;
+  // helper_build_id carries the backend's pinned local launch-runtime
+  // identity: the Rust helper build for Microsandbox and the pinned runsc
+  // release digest for gVisor. Firecracker leaves it empty.
   string helper_build_id = 12;
   uint64 verified_at_unix_ms = 13;
 }

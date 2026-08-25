@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "secondbox.runner/backend-materialization/v1",
+  "key": {
+    "backendKind": "gvisor",
+    "guestArchitecture": "amd64",
+    "runtimeManifestDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    "toolchainManifestDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "sourceOciManifestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "flatRootDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "launchArtifacts": [
+    {"id": "guest-agent", "sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    {"id": "runsc", "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+  ],
+  "agentProtocolGeneration": 1,
+  "agentFeatures": ["exec-streaming", "file-streaming", "port-proxy", "pty"],
+  "backendBuildId": "secondbox-gvisor-runner-linux-amd64",
+  "helperBuildId": "runsc-release-20260817.0"
+}

@@ -42,3 +42,36 @@ func TestExperimentalMacOSMicrosandboxResourceFixture(t *testing.T) {
 		t.Fatalf("experimental macOS fixture identity = %#v %#v", pool, revision)
 	}
 }
+
+func TestExperimentalGVisorResourceFixture(t *testing.T) {
+	path := filepath.Join(
+		"..", "..", "runner", "deploy", "gvisor-linux-amd64.resources.json",
+	)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw Document
+	if err := json.Unmarshal(content, &raw); err != nil {
+		t.Fatal(err)
+	}
+	actualDigest, err := SpecDigest(raw.Profiles[0].Revisions[0].Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.Profiles[0].Revisions[0].SpecDigest != actualDigest {
+		t.Fatalf("experimental gVisor Profile spec digest = %s", actualDigest)
+	}
+	document, err := Decode(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := document.RunnerPools[0]
+	revision := document.Profiles[0].Revisions[0]
+	if pool.Name != "experimental-gvisor-amd64" ||
+		len(pool.Architectures) != 1 || pool.Architectures[0] != "amd64" ||
+		revision.Spec.Pool != pool.Name || revision.Spec.Architecture != "amd64" ||
+		revision.Spec.Startup.Mode != "cold_boot" {
+		t.Fatalf("experimental gVisor fixture identity = %#v %#v", pool, revision)
+	}
+}

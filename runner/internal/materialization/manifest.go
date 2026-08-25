@@ -20,6 +20,7 @@ const SchemaVersion = "secondbox.runner/backend-materialization/v1"
 const (
 	BackendFirecracker  = "firecracker"
 	BackendMicrosandbox = "microsandbox"
+	BackendGVisor       = "gvisor"
 )
 
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -101,7 +102,9 @@ func (manifest Manifest) Validate() error {
 	if manifest.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("SecondBox backend materialization schemaVersion must be %q", SchemaVersion)
 	}
-	if manifest.Key.BackendKind != BackendFirecracker && manifest.Key.BackendKind != BackendMicrosandbox {
+	if manifest.Key.BackendKind != BackendFirecracker &&
+		manifest.Key.BackendKind != BackendMicrosandbox &&
+		manifest.Key.BackendKind != BackendGVisor {
 		return errors.New("SecondBox backend materialization backend kind is unsupported")
 	}
 	if manifest.Key.GuestArchitecture != "amd64" && manifest.Key.GuestArchitecture != "arm64" {
@@ -112,15 +115,19 @@ func (manifest Manifest) Validate() error {
 		manifest.Key.RuntimeManifestDigest == manifest.Key.ToolchainManifestDigest {
 		return errors.New("SecondBox backend materialization runtime and toolchain digests are invalid")
 	}
-	if manifest.Key.BackendKind == BackendMicrosandbox {
+	// Microsandbox and gVisor materialize from a digest-pinned OCI reference
+	// into a content-addressed flat root and pin a local launch runtime (the
+	// Rust helper and the runsc release respectively) as the helper build
+	// identity. Firecracker must not carry any of that identity.
+	if manifest.Key.BackendKind == BackendMicrosandbox || manifest.Key.BackendKind == BackendGVisor {
 		if !digestPattern.MatchString(manifest.SourceOCIManifestDigest) || !digestPattern.MatchString(manifest.FlatRootDigest) {
-			return errors.New("SecondBox Microsandbox materialization requires digest-pinned source OCI and flat root identity")
+			return fmt.Errorf("SecondBox %s materialization requires digest-pinned source OCI and flat root identity", manifest.Key.BackendKind)
 		}
 		if strings.TrimSpace(manifest.HelperBuildID) == "" {
-			return errors.New("SecondBox Microsandbox materialization helper build identity is required")
+			return fmt.Errorf("SecondBox %s materialization helper build identity is required", manifest.Key.BackendKind)
 		}
 	} else if manifest.SourceOCIManifestDigest != "" || manifest.FlatRootDigest != "" || manifest.HelperBuildID != "" {
-		return errors.New("SecondBox Firecracker materialization contains Microsandbox-only identity")
+		return errors.New("SecondBox Firecracker materialization contains OCI-backend-only identity")
 	}
 	if manifest.AgentProtocolGeneration == 0 || strings.TrimSpace(manifest.BackendBuildID) == "" || len(manifest.LaunchArtifacts) == 0 {
 		return errors.New("SecondBox backend materialization build, agent, and launch identity is incomplete")

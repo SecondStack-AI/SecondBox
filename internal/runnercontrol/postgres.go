@@ -3454,6 +3454,8 @@ func protocolBackendKind(kind runnerv1.ComputeBackendKind) string {
 		return "firecracker"
 	case runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_MICROSANDBOX:
 		return "microsandbox"
+	case runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR:
+		return "gvisor"
 	default:
 		return ""
 	}
@@ -3472,11 +3474,18 @@ func validMaterializationEvidence(evidence *runnerv1.BackendMaterializationEvide
 			return false
 		}
 	}
-	if backend == runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_MICROSANDBOX {
+	// Microsandbox and gVisor materialize their root filesystems from a
+	// digest-pinned OCI reference and carry a pinned local launch-runtime
+	// identity in the helper-build field (the Rust helper build and the runsc
+	// release digest respectively). Firecracker must leave all three empty.
+	switch backend {
+	case runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_MICROSANDBOX,
+		runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR:
 		return canonicalSHA256Digest(evidence.SourceOciManifestDigest) &&
 			canonicalSHA256Digest(evidence.FlatRootDigest) && strings.TrimSpace(evidence.HelperBuildId) != ""
+	default:
+		return evidence.SourceOciManifestDigest == "" && evidence.FlatRootDigest == "" && evidence.HelperBuildId == ""
 	}
-	return evidence.SourceOciManifestDigest == "" && evidence.FlatRootDigest == "" && evidence.HelperBuildId == ""
 }
 
 func canonicalSHA256Digest(value string) bool {
