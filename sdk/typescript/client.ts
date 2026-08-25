@@ -385,7 +385,7 @@ export class SecondBox {
       }),
       signal: request.signal,
     });
-    if (operation.sandboxId === "") {
+    if (operation.sandboxId === undefined || operation.sandboxId === "") {
       throw new Error("SecondBox Sandbox create returned no Sandbox reference");
     }
     const sandbox = await this.requestJSON<Sandbox>("getSandbox", {

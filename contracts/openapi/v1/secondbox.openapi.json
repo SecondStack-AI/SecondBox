@@ -2580,12 +2580,12 @@
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },
-      "OperationKind": {"type": "string", "enum": ["create", "start", "drain", "stop", "delete", "relocate", "snapshot_create", "snapshot_delete", "snapshot_restore", "cancel_exec", "cancel_terminal"]},
+      "OperationKind": {"type": "string", "enum": ["create", "start", "drain", "stop", "delete", "relocate", "snapshot_create", "snapshot_delete", "snapshot_restore", "subject_cleanup", "cancel_exec", "cancel_terminal"]},
       "OperationState": {"type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"]},
       "Operation": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sandboxId", "kind", "state", "requestId", "createdAt", "updatedAt"],
+        "required": ["id", "kind", "state", "requestId", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},

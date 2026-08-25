@@ -60,23 +60,23 @@ func TestPersistedAuthoritySchemaUsesOnlyRequiredIdentityConstraints(t *testing.
 		}
 		if _, err := connection.Exec(t.Context(), `
 			INSERT INTO secondbox.subjects (
-				tenant_ref,ref,state,cleanup_state,quota_json,metadata_json,revision,created_at,updated_at
-			) VALUES ($1,'same-subject','active','none','{}','{}',1,$2,$2)`, tenantRef, now,
+				tenant_ref,ref,state,cleanup_state,cleanup_operation_id,quota_json,metadata_json,revision,created_at,updated_at
+			) VALUES ($1,'same-subject','active','none','','{}','{}',1,$2,$2)`, tenantRef, now,
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := connection.Exec(t.Context(), `
 		INSERT INTO secondbox.subjects (
-			tenant_ref,ref,state,cleanup_state,quota_json,metadata_json,revision,created_at,updated_at
-		) VALUES ('tenant-a','same-subject','active','none','{}','{}',1,$1,$1)`, now,
+			tenant_ref,ref,state,cleanup_state,cleanup_operation_id,quota_json,metadata_json,revision,created_at,updated_at
+		) VALUES ('tenant-a','same-subject','active','none','','{}','{}',1,$1,$1)`, now,
 	); err == nil {
 		t.Fatal("duplicate tenant-local subject identity was accepted")
 	}
 	if _, err := connection.Exec(t.Context(), `
 		INSERT INTO secondbox.subjects (
-			tenant_ref,ref,state,cleanup_state,quota_json,metadata_json,revision,created_at,updated_at
-		) VALUES ('logical-missing-tenant','logical-subject','active','none','{}','{}',1,$1,$1)`, now,
+			tenant_ref,ref,state,cleanup_state,cleanup_operation_id,quota_json,metadata_json,revision,created_at,updated_at
+		) VALUES ('logical-missing-tenant','logical-subject','active','none','','{}','{}',1,$1,$1)`, now,
 	); err != nil {
 		t.Fatalf("logical cross-resource reference was physically constrained: %v", err)
 	}

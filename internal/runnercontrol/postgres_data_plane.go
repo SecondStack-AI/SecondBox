@@ -11,6 +11,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -227,6 +228,9 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane admission transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane admission quota lock: %w", err)
+	}
 	lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
 		"\x1fdata-plane\x1f" + input.Operation + "\x1f" +
 		input.SandboxID + "\x1f" + input.IdempotencyKey
@@ -517,6 +521,16 @@ func lookupDataPlaneReplay(
 		err = hydrateDataPlaneTransport(ctx, tx, &session)
 	}
 	return session, true, err
+}
+
+func lockDataPlaneSessionQuota(ctx context.Context, tx pgx.Tx, sessionID string) error {
+	var tenantRef, subjectRef string
+	if err := tx.QueryRow(ctx, `
+		SELECT tenant_ref,subject_ref FROM secondbox.data_plane_sessions WHERE id=$1`, sessionID,
+	).Scan(&tenantRef, &subjectRef); err != nil {
+		return err
+	}
+	return rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef)
 }
 
 func lockDataPlaneAuthority(

@@ -126,6 +126,8 @@ func adminResponseResourceID(response any) string {
 		return resource.ID
 	case contracts.ApplicationCredentialResponse:
 		return resource.Authority.ID
+	case contracts.Operation:
+		return resource.ID
 	default:
 		return ""
 	}

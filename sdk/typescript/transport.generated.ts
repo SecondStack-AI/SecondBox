@@ -393,14 +393,14 @@ export interface Operation {
   readonly kind: OperationKind;
   readonly requestId: CorrelationID;
   readonly sandbox?: Sandbox;
-  readonly sandboxId: OpaqueID;
+  readonly sandboxId?: OpaqueID;
   readonly snapshot?: Snapshot;
   readonly startedAt?: Timestamp;
   readonly state: OperationState;
   readonly updatedAt: Timestamp;
 }
 
-export type OperationKind = "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "cancel_exec" | "cancel_terminal";
+export type OperationKind = "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "subject_cleanup" | "cancel_exec" | "cancel_terminal";
 
 export interface OperationStageTiming {
   readonly cumulativeMilliseconds: number;

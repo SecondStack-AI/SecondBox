@@ -17,6 +17,7 @@ import (
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/observability"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -310,6 +311,11 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(
+		ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef,
+	); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox quota lock failed: %w", err)
+	}
 	lockKey := input.Principal.TenantRef + "\x1f" + input.Principal.SubjectRef +
 		"\x1fcreate-sandbox\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
@@ -359,6 +365,12 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if !errors.Is(idempotencyErr, pgx.ErrNoRows) {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency lookup failed: %w", idempotencyErr)
 	}
+	tenantQuota, subjectQuota, err := lockTenantAndSubjectQuotaForAdmission(
+		ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Sandbox.CreatedAt,
+	)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
 
 	profile, err := scanProfile(tx.QueryRow(ctx, profileSelect+`
 		WHERE profile.name=$1 FOR SHARE OF profile`, input.Sandbox.Profile))
@@ -384,12 +396,6 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			input.Sandbox.CreatedAt,
 		)
 	}
-	if err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, err
-	}
-	tenantQuota, subjectQuota, err := lockTenantAndSubjectQuotaForAdmission(
-		ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Sandbox.CreatedAt,
-	)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
@@ -712,6 +718,22 @@ func (store *PostgresControlPlaneStore) GetOperation(
 	return getOperationWithQuerier(
 		ctx, store.pool, tenantRef, subjectRef, `id=$3`, operationID,
 	)
+}
+
+// GetTenantOperation returns one Operation without accepting a caller-supplied Subject assertion.
+func (store *PostgresControlPlaneStore) GetTenantOperation(
+	ctx context.Context,
+	tenantRef string,
+	operationID string,
+) (contracts.Operation, error) {
+	var subjectRef string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT subject_ref FROM secondbox.operations WHERE tenant_ref=$1 AND id=$2`,
+		tenantRef, operationID,
+	).Scan(&subjectRef); err != nil {
+		return contracts.Operation{}, mapNotFound(err, ports.ErrSandboxNotFound)
+	}
+	return getOperationWithQuerier(ctx, store.pool, tenantRef, subjectRef, `id=$3`, operationID)
 }
 
 func getCreateOperationWithQuerier(
@@ -1287,8 +1309,7 @@ func readSubjectQuota(
 		SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
 		       max_snapshots,max_port_sessions,max_concurrent_operations
 		FROM secondbox.subject_quotas
-		WHERE tenant_ref=$1 AND subject_ref=$2
-		FOR UPDATE`, tenantRef, subjectRef).Scan(
+		WHERE tenant_ref=$1 AND subject_ref=$2`, tenantRef, subjectRef).Scan(
 		&quota.MaxSandboxes, &quota.MaxActiveInstances, &quota.MaxCPUMillis,
 		&quota.MaxMemoryBytes, &quota.MaxSnapshots, &quota.MaxPortSessions,
 		&quota.MaxConcurrentOperations,
@@ -1303,14 +1324,24 @@ func lockTenantQuota(
 	tx pgx.Tx,
 	tenantRef string,
 ) (contracts.TenantQuota, error) {
+	if err := rowlock.TenantQuota(ctx, tx, tenantRef); err != nil {
+		return contracts.TenantQuota{}, err
+	}
+	return readTenantQuota(ctx, tx, tenantRef)
+}
+
+func readTenantQuota(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+) (contracts.TenantQuota, error) {
 	var quota contracts.TenantQuota
 	if err := tx.QueryRow(ctx, `
 		SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
 		       max_snapshots,max_port_sessions,max_concurrent_operations,
 		       max_active_subjects,max_application_authorities
 		FROM secondbox.tenant_quotas
-		WHERE tenant_ref=$1
-		FOR UPDATE`, tenantRef).Scan(
+		WHERE tenant_ref=$1`, tenantRef).Scan(
 		&quota.MaxSandboxes, &quota.MaxActiveInstances, &quota.MaxCPUMillis,
 		&quota.MaxMemoryBytes, &quota.MaxSnapshots, &quota.MaxPortSessions,
 		&quota.MaxConcurrentOperations, &quota.MaxActiveSubjects,
@@ -1327,7 +1358,10 @@ func lockTenantAndSubjectQuota(
 	tenantRef string,
 	subjectRef string,
 ) (contracts.TenantQuota, contracts.QuotaLimits, error) {
-	tenantQuota, err := lockTenantQuota(ctx, tx, tenantRef)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, err
+	}
+	tenantQuota, err := readTenantQuota(ctx, tx, tenantRef)
 	if err != nil {
 		return contracts.TenantQuota{}, contracts.QuotaLimits{}, err
 	}
@@ -1345,6 +1379,10 @@ func lockTenantAndSubjectQuotaForAdmission(
 	subjectRef string,
 	now time.Time,
 ) (contracts.TenantQuota, contracts.QuotaLimits, error) {
+	tenantQuota, subjectQuota, err := lockTenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef)
+	if err != nil {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, err
+	}
 	var state string
 	var expiresAt *time.Time
 	if err := tx.QueryRow(ctx, `
@@ -1361,7 +1399,7 @@ func lockTenantAndSubjectQuotaForAdmission(
 	if state != contracts.TenantStateActive {
 		return contracts.TenantQuota{}, contracts.QuotaLimits{}, ports.ErrInvalidLifecycleTransition
 	}
-	return lockTenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef)
+	return tenantQuota, subjectQuota, nil
 }
 
 func readSubjectQuotaUsage(

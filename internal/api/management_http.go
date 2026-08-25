@@ -54,6 +54,19 @@ func (apiHandler *handler) authenticateTenantControllerManagement(next http.Hand
 	})
 }
 
+func (apiHandler *handler) authenticateOperationInspection(next http.Handler) http.Handler {
+	applicationOrPlatform := apiHandler.authenticate(next)
+	controller := apiHandler.authenticateTenantControllerManagement(next)
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		credential, _ := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+		if isTenantControllerBearerToken(credential) {
+			controller.ServeHTTP(writer, request)
+			return
+		}
+		applicationOrPlatform.ServeHTTP(writer, request)
+	})
+}
+
 func (apiHandler *handler) managementUnavailable(writer http.ResponseWriter, request *http.Request) {
 	apiHandler.writeError(writer, request, ports.ErrManagementUnavailable)
 }
@@ -295,12 +308,44 @@ func (apiHandler *handler) getDeploymentUsage(writer http.ResponseWriter, reques
 }
 
 func (apiHandler *handler) subjectManagementAction(writer http.ResponseWriter, request *http.Request) {
-	action := request.PathValue("subjectAction")
-	if !strings.HasSuffix(action, ":close") && !strings.HasSuffix(action, ":cleanup") {
+	subjectRef, action, ok := splitAction(request.PathValue("subjectAction"))
+	if !ok || action != "close" && action != "cleanup" {
 		http.NotFound(writer, request)
 		return
 	}
-	apiHandler.managementUnavailable(writer, request)
+	if err := requireEmptyBody(request); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	expectedRevision, err := parseIfMatch(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	if action == "close" {
+		subject, replayed, err := apiHandler.service.CloseSubject(
+			request.Context(), requestPrincipal(request), subjectRef,
+			request.Header.Get("Idempotency-Key"), expectedRevision,
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		setRevisionETag(writer, subject.Revision)
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		apiHandler.writeJSON(writer, request, http.StatusOK, subject)
+		return
+	}
+	operation, replayed, err := apiHandler.service.CleanupSubject(
+		request.Context(), requestPrincipal(request), subjectRef,
+		request.Header.Get("Idempotency-Key"), expectedRevision,
+	)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+	apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 }
 
 func (apiHandler *handler) applicationAuthorityManagementAction(writer http.ResponseWriter, request *http.Request) {

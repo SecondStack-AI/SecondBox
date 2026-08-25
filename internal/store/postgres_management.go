@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -215,15 +216,15 @@ func (store *PostgresControlPlaneStore) CreateManagedSubject(
 		}
 		return replayed, result, nil
 	}
+	tenantQuota, err := lockTenantQuota(ctx, tx, subject.TenantRef)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
 	tenant, err := scanTenant(tx.QueryRow(ctx, tenantSelect+` WHERE ref=$1 FOR UPDATE`, subject.TenantRef))
 	if err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
 	}
 	if err := validateManagedTenantAdmission(tenant, subject.CreatedAt); err != nil {
-		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
-	}
-	tenantQuota, err := lockTenantQuota(ctx, tx, subject.TenantRef)
-	if err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
 	}
 	if !subjectQuotaWithinTenant(subject.Quota, tenant.AggregateQuota) {
@@ -319,6 +320,21 @@ func (store *PostgresControlPlaneStore) UpdateManagedSubjectQuota(
 		}
 		return replayed, result, nil
 	}
+	var subjectExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2
+		)`, tenantRef, subjectRef,
+	).Scan(&subjectExists); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota existence lookup failed: %w", err)
+	}
+	if !subjectExists {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrManagementNotFound
+	}
+	tenantQuota, _, err := lockTenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
 	tenant, err := scanTenant(tx.QueryRow(ctx, tenantSelect+` WHERE ref=$1 FOR UPDATE`, tenantRef))
 	if err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
@@ -326,17 +342,10 @@ func (store *PostgresControlPlaneStore) UpdateManagedSubjectQuota(
 	if err := validateManagedTenantAdmission(tenant, now); err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
 	}
-	tenantQuota, err := lockTenantQuota(ctx, tx, tenantRef)
-	if err != nil {
-		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
-	}
 	subject, err := scanSubject(tx.QueryRow(ctx, subjectSelect+`
 		WHERE tenant_ref=$1 AND ref=$2 FOR UPDATE`, tenantRef, subjectRef))
 	if err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
-	}
-	if _, err := readSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
-		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
 	}
 	if subject.Revision != expectedRevision {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
@@ -381,6 +390,176 @@ func (store *PostgresControlPlaneStore) UpdateManagedSubjectQuota(
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota update commit failed: %w", err)
 	}
 	return subject, result, nil
+}
+
+// CloseManagedSubject atomically revokes application authority and closes admission.
+func (store *PostgresControlPlaneStore) CloseManagedSubject(
+	ctx context.Context,
+	tenantRef string,
+	subjectRef string,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.Subject, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var subjectExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2
+		)`, tenantRef, subjectRef,
+	).Scan(&subjectExists); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close existence lookup failed: %w", err)
+	}
+	if !subjectExists {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrManagementNotFound
+	}
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	var replayed contracts.Subject
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	subject, err := scanSubject(tx.QueryRow(ctx, subjectSelect+`
+		WHERE tenant_ref=$1 AND ref=$2 FOR UPDATE`, tenantRef, subjectRef))
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if subject.State == contracts.SubjectStateActive {
+		if subject.Revision != expectedRevision {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.application_authorities
+			SET state='revoked',revision=revision+1,updated_at=$3
+			WHERE tenant_ref=$1 AND subject_ref=$2 AND state='active'`,
+			tenantRef, subjectRef, now.UTC(),
+		); err != nil {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject authority revocation failed: %w", err)
+		}
+		subject.State = contracts.SubjectStateClosed
+		subject.Revision++
+		subject.UpdatedAt = now.UTC()
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.subjects
+			SET state='closed',revision=$3,updated_at=$4
+			WHERE tenant_ref=$1 AND ref=$2`,
+			tenantRef, subjectRef, subject.Revision, subject.UpdatedAt,
+		); err != nil {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close failed: %w", err)
+		}
+	} else if subject.State != contracts.SubjectStateClosed && subject.State != contracts.SubjectStateExpired {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, subject)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close commit failed: %w", err)
+	}
+	return subject, result, nil
+}
+
+// CreateManagedSubjectCleanup creates or returns the Subject's single durable cleanup Operation.
+func (store *PostgresControlPlaneStore) CreateManagedSubjectCleanup(
+	ctx context.Context,
+	tenantRef string,
+	subjectRef string,
+	operation contracts.Operation,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.Operation, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.Operation
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	var state, cleanupState, cleanupOperationID string
+	var revision int64
+	if err := tx.QueryRow(ctx, `
+		SELECT state,cleanup_state,cleanup_operation_id,revision
+		FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2 FOR UPDATE`,
+		tenantRef, subjectRef,
+	).Scan(&state, &cleanupState, &cleanupOperationID, &revision); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if cleanupOperationID != "" {
+		stored, err := getOperationWithQuerier(ctx, tx, tenantRef, subjectRef, `id=$3`, cleanupOperationID)
+		if err != nil {
+			return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+		}
+		result, err = insertAdminIdempotency(ctx, tx, idempotency, stored)
+		if err != nil {
+			return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+		}
+		result.Replayed = true
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup identity replay commit failed: %w", err)
+		}
+		return stored, result, nil
+	}
+	if state != contracts.SubjectStateClosed && state != contracts.SubjectStateExpired {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	if revision != expectedRevision {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	operation.TenantRef = tenantRef
+	operation.SubjectRef = subjectRef
+	if err := insertOperation(ctx, tx, tenantRef, subjectRef, operation); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.subject_cleanup_operations (
+			operation_id,tenant_ref,subject_ref,stage,reconcile_owner,
+			reconcile_claim_expires_at,next_reconcile_at,retry_count,retry_limit,
+			created_at,updated_at
+		) VALUES ($1,$2,$3,'cancel_work','',$4,$4,0,20,$4,$4)`,
+		operation.ID, tenantRef, subjectRef, now.UTC(),
+	); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup coordinator insert failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.subjects
+		SET cleanup_state='pending',cleanup_operation_id=$3,
+			revision=revision+1,updated_at=$4
+		WHERE tenant_ref=$1 AND ref=$2`,
+		tenantRef, subjectRef, operation.ID, now.UTC(),
+	); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup linkage failed: %w", err)
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, operation)
+	if err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup commit failed: %w", err)
+	}
+	return operation, result, nil
 }
 
 // GetTenantUsage reads one tenant's aggregate and per-Subject quota reservations.
@@ -702,6 +881,9 @@ func (store *PostgresControlPlaneStore) CreateApplicationAuthority(
 		return contracts.ApplicationCredentialResponse{}, fmt.Errorf("SecondBox ApplicationAuthority create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, authority.TenantRef, authority.SubjectRef); err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
 	if err := insertAuthorityIdentity(ctx, tx, authority.ID, authority.Kind, authority.LookupID); err != nil {
 		return contracts.ApplicationCredentialResponse{}, err
 	}
@@ -732,6 +914,21 @@ func (store *PostgresControlPlaneStore) CreateManagedApplicationAuthority(
 		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var subjectExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2
+		)`, authority.TenantRef, authority.SubjectRef,
+	).Scan(&subjectExists); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority Subject existence lookup failed: %w", err)
+	}
+	if !subjectExists {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	tenantQuota, _, err := lockTenantAndSubjectQuota(ctx, tx, authority.TenantRef, authority.SubjectRef)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
 	var replayed contracts.ApplicationAuthority
 	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
 	if err != nil {
@@ -745,10 +942,6 @@ func (store *PostgresControlPlaneStore) CreateManagedApplicationAuthority(
 		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
 	}
 	if err := validateManagedTenantAdmission(tenant, authority.CreatedAt); err != nil {
-		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
-	}
-	tenantQuota, err := lockTenantQuota(ctx, tx, authority.TenantRef)
-	if err != nil {
 		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
 	}
 	if !isStringSubset(authority.Scopes, tenant.AllowedApplicationScopes) ||
@@ -1089,6 +1282,16 @@ func (store *PostgresControlPlaneStore) RotateManagedApplicationAuthority(
 		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority rotate transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var subjectRef string
+	if err := tx.QueryRow(ctx, `
+		SELECT subject_ref FROM secondbox.application_authorities
+		WHERE tenant_ref=$1 AND id=$2`, tenantRef, authorityID,
+	).Scan(&subjectRef); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
 	var replayed contracts.ApplicationAuthority
 	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
 	if err != nil {
@@ -1246,6 +1449,16 @@ func (store *PostgresControlPlaneStore) RevokeManagedApplicationAuthority(
 		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority revoke transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var subjectRef string
+	if err := tx.QueryRow(ctx, `
+		SELECT subject_ref FROM secondbox.application_authorities
+		WHERE tenant_ref=$1 AND id=$2`, tenantRef, authorityID,
+	).Scan(&subjectRef); err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, err
+	}
 	var replayed contracts.ApplicationAuthority
 	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
 	if err != nil {
@@ -1259,9 +1472,6 @@ func (store *PostgresControlPlaneStore) RevokeManagedApplicationAuthority(
 	}
 	if _, err := tx.Exec(ctx, `SELECT ref FROM secondbox.tenants WHERE ref=$1 FOR UPDATE`, tenantRef); err != nil {
 		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority revocation Tenant lock failed: %w", err)
-	}
-	if _, err := lockTenantQuota(ctx, tx, tenantRef); err != nil {
-		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, err
 	}
 	authority, err := scanApplicationAuthority(tx.QueryRow(ctx, `
 		SELECT id,lookup_id,tenant_ref,subject_ref,state,scopes_json,
@@ -1379,8 +1589,8 @@ func insertSubject(ctx context.Context, tx pgx.Tx, subject contracts.Subject) er
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.subjects (
-		tenant_ref,ref,state,cleanup_state,quota_json,metadata_json,expires_at,revision,created_at,updated_at
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, subject.TenantRef, subject.Ref,
+		tenant_ref,ref,state,cleanup_state,cleanup_operation_id,quota_json,metadata_json,expires_at,revision,created_at,updated_at
+	) VALUES ($1,$2,$3,$4,'',$5,$6,$7,$8,$9,$10)`, subject.TenantRef, subject.Ref,
 		subject.State, subject.CleanupState, quotaJSON, metadataJSON, subject.ExpiresAt,
 		subject.Revision, subject.CreatedAt.UTC(), subject.UpdatedAt.UTC()); err != nil {
 		return mapManagementConflict(fmt.Errorf("SecondBox Subject insert failed: %w", err))

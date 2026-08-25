@@ -156,6 +156,30 @@ func (store *PostgresStateStore) CloseConnection(
 	}
 	defer tx.Rollback(ctx)
 	now = now.UTC()
+	rows, err := tx.Query(ctx, `
+		SELECT DISTINCT tenant_ref,subject_ref FROM secondbox.data_plane_sessions
+		WHERE runner_id=$1 AND state IN ('pending','running','cancelling')
+		ORDER BY tenant_ref,subject_ref`, runnerID)
+	if err != nil {
+		return fmt.Errorf("SecondBox disconnected Runner quota scope lookup: %w", err)
+	}
+	var quotaScopes []rowlock.QuotaScope
+	for rows.Next() {
+		var scope rowlock.QuotaScope
+		if err := rows.Scan(&scope.TenantRef, &scope.SubjectRef); err != nil {
+			rows.Close()
+			return fmt.Errorf("SecondBox disconnected Runner quota scope scan: %w", err)
+		}
+		quotaScopes = append(quotaScopes, scope)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("SecondBox disconnected Runner quota scope rows: %w", err)
+	}
+	rows.Close()
+	if err := rowlock.QuotaScopes(ctx, tx, quotaScopes); err != nil {
+		return fmt.Errorf("SecondBox disconnected Runner quota lock: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_connections
 		SET state='disconnected',disconnected_at=$3,last_seen_at=$3
@@ -377,7 +401,7 @@ func (store *PostgresStateStore) RecordRegistration(
 	}
 	tx, duplicate, err := store.beginOrderedMessage(
 		ctx, registration.RunnerId, registration.ConnectionId,
-		registration.MessageId, registration.Sequence, "registration", now,
+		registration.MessageId, registration.Sequence, "registration", nil, now,
 	)
 	if err != nil || duplicate {
 		return duplicate, err
@@ -505,7 +529,7 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	}
 	tx, duplicate, err := store.beginOrderedMessage(
 		ctx, heartbeat.RunnerId, heartbeat.ConnectionId,
-		heartbeat.MessageId, heartbeat.Sequence, "heartbeat", now,
+		heartbeat.MessageId, heartbeat.Sequence, "heartbeat", nil, now,
 	)
 	if err != nil || duplicate {
 		return duplicate, err
@@ -760,7 +784,7 @@ func (store *PostgresStateStore) RecordEvent(
 	}
 	tx, duplicate, err := store.beginOrderedMessage(
 		ctx, event.RunnerID, event.ConnectionID, messageID, sequence,
-		string(event.Kind), now,
+		string(event.Kind), &event, now,
 	)
 	if err != nil {
 		return false, err
@@ -824,6 +848,17 @@ func (store *PostgresStateStore) RecordEvents(
 		return fmt.Errorf("SecondBox runner event batch transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var sandboxIDs []string
+	for _, record := range records {
+		eventIDs, err := eventSandboxIDs(ctx, tx, record.Event)
+		if err != nil {
+			return fmt.Errorf("SecondBox runner event batch quota scope lookup: %w", err)
+		}
+		sandboxIDs = append(sandboxIDs, eventIDs...)
+	}
+	if err := rowlock.SandboxQuotas(ctx, tx, sandboxIDs); err != nil && len(sandboxIDs) != 0 {
+		return fmt.Errorf("SecondBox runner event batch quota lock: %w", err)
+	}
 	var storedRunnerID, connectionState string
 	var lastSequence int64
 	if err := tx.QueryRow(ctx, `
@@ -966,6 +1001,60 @@ func recordDurableEvent(
 		return fmt.Errorf("SecondBox runner event kind %q is not durable", event.Kind)
 	}
 	return nil
+}
+
+func eventSandboxIDs(ctx context.Context, tx pgx.Tx, event Event) ([]string, error) {
+	var sandboxID string
+	switch event.Kind {
+	case EventAssignment:
+		if acknowledgement := event.Message.GetAssignmentAck(); acknowledgement != nil && acknowledgement.Fence != nil {
+			sandboxID = acknowledgement.Fence.SandboxId
+		} else if result := event.Message.GetAssignmentResult(); result != nil && result.Fence != nil {
+			sandboxID = result.Fence.SandboxId
+		}
+	case EventFence:
+		if result := event.Message.GetFenceResult(); result != nil && result.Fence != nil {
+			sandboxID = result.Fence.SandboxId
+		}
+	case EventLocalWorkspace:
+		if result := event.Message.GetLocalWorkspaceResult(); result != nil {
+			sandboxID = result.SandboxId
+			if result.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE {
+				rows, err := tx.Query(ctx, `
+					SELECT sandbox.id
+					FROM secondbox.sandboxes AS sandbox
+					JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+					WHERE workspace.home_runner_id=$1
+					ORDER BY sandbox.id`, event.RunnerID)
+				if err != nil {
+					return nil, fmt.Errorf("SecondBox runner Workspace reconciliation quota scope lookup: %w", err)
+				}
+				var sandboxIDs []string
+				for rows.Next() {
+					var id string
+					if err := rows.Scan(&id); err != nil {
+						rows.Close()
+						return nil, fmt.Errorf("SecondBox runner Workspace reconciliation quota scope scan: %w", err)
+					}
+					sandboxIDs = append(sandboxIDs, id)
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return nil, fmt.Errorf("SecondBox runner Workspace reconciliation quota scope rows: %w", err)
+				}
+				rows.Close()
+				return sandboxIDs, nil
+			}
+		}
+	case EventInstanceTerminal:
+		if terminal := event.Message.GetInstanceTerminal(); terminal != nil && terminal.Fence != nil {
+			sandboxID = terminal.Fence.SandboxId
+		}
+	}
+	if sandboxID == "" {
+		return nil, nil
+	}
+	return []string{sandboxID}, nil
 }
 
 func recordLocalWorkspaceResult(
@@ -3233,6 +3322,7 @@ func (store *PostgresStateStore) beginOrderedMessage(
 	messageID string,
 	sequence uint64,
 	kind string,
+	event *Event,
 	now time.Time,
 ) (pgx.Tx, bool, error) {
 	if runnerID == "" || connectionID == "" || messageID == "" || sequence == 0 {
@@ -3241,6 +3331,19 @@ func (store *PostgresStateStore) beginOrderedMessage(
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("SecondBox runner message transaction: %w", err)
+	}
+	var sandboxIDs []string
+	if event != nil {
+		sandboxIDs, err = eventSandboxIDs(ctx, tx, *event)
+		if err != nil {
+			return nil, false, errors.Join(err, tx.Rollback(ctx))
+		}
+	}
+	if err := rowlock.SandboxQuotas(ctx, tx, sandboxIDs); err != nil && len(sandboxIDs) != 0 {
+		return nil, false, errors.Join(
+			fmt.Errorf("SecondBox runner message quota lock: %w", err),
+			tx.Rollback(ctx),
+		)
 	}
 	var storedRunnerID, connectionState string
 	var lastSequence int64

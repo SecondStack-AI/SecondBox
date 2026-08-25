@@ -245,6 +245,85 @@ func (service *ControlPlaneService) UpdateSubjectQuota(
 	return subject, result.Replayed, nil
 }
 
+// CloseSubject revokes its application authorities and commits the admission barrier atomically.
+func (service *ControlPlaneService) CloseSubject(
+	ctx context.Context,
+	principal contracts.Principal,
+	subjectRef string,
+	idempotencyKey string,
+	expectedRevision int64,
+) (contracts.Subject, bool, error) {
+	if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+		return contracts.Subject{}, false, err
+	}
+	if expectedRevision < 1 {
+		return contracts.Subject{}, false, invalidRequest(errors.New("SecondBox Subject revision must be positive"))
+	}
+	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(principal, "subject.close", subjectRef, idempotencyKey, struct {
+		ExpectedRevision int64 `json:"expectedRevision"`
+	}{ExpectedRevision: expectedRevision}, now)
+	if err != nil {
+		return contracts.Subject{}, false, err
+	}
+	subject, result, err := service.store.CloseManagedSubject(
+		ctx, principal.TenantRef, subjectRef, expectedRevision, now, idempotency,
+	)
+	if err != nil {
+		return contracts.Subject{}, false, service.managementDenied(
+			ctx, principal, "subject.closed", "subject", subjectRef, principal.TenantRef, err,
+		)
+	}
+	if err := service.store.AppendAuditEvent(ctx, service.newAudit(
+		ctx, principal, "subject.closed", "subject", subjectRef, principal.TenantRef, now,
+	)); err != nil {
+		return contracts.Subject{}, false, err
+	}
+	return subject, result.Replayed, nil
+}
+
+// CleanupSubject creates or returns the one durable cleanup Operation for a closed Subject.
+func (service *ControlPlaneService) CleanupSubject(
+	ctx context.Context,
+	principal contracts.Principal,
+	subjectRef string,
+	idempotencyKey string,
+	expectedRevision int64,
+) (contracts.Operation, bool, error) {
+	if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+		return contracts.Operation{}, false, err
+	}
+	if expectedRevision < 1 {
+		return contracts.Operation{}, false, invalidRequest(errors.New("SecondBox Subject revision must be positive"))
+	}
+	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(principal, "subject.cleanup", subjectRef, idempotencyKey, struct {
+		ExpectedRevision int64 `json:"expectedRevision"`
+	}{ExpectedRevision: expectedRevision}, now)
+	if err != nil {
+		return contracts.Operation{}, false, err
+	}
+	operation := contracts.Operation{
+		ID: service.newID("op"), TenantRef: principal.TenantRef, SubjectRef: subjectRef,
+		Kind: "subject_cleanup", State: contracts.OperationStatePending,
+		RequestID: service.requestID(ctx), CreatedAt: now, UpdatedAt: now,
+	}
+	stored, result, err := service.store.CreateManagedSubjectCleanup(
+		ctx, principal.TenantRef, subjectRef, operation, expectedRevision, now, idempotency,
+	)
+	if err != nil {
+		return contracts.Operation{}, false, service.managementDenied(
+			ctx, principal, "subject.cleanup_requested", "subject", subjectRef, principal.TenantRef, err,
+		)
+	}
+	if err := service.store.AppendAuditEvent(ctx, service.newAudit(
+		ctx, principal, "subject.cleanup_requested", "operation", stored.ID, principal.TenantRef, now,
+	)); err != nil {
+		return contracts.Operation{}, false, err
+	}
+	return stored, result.Replayed || stored.ID != operation.ID, nil
+}
+
 // GetTenantUsage returns aggregate and per-Subject usage for the authenticated tenant.
 func (service *ControlPlaneService) GetTenantUsage(ctx context.Context, principal contracts.Principal) (contracts.TenantUsage, error) {
 	if principal.Kind != contracts.AuthorityKindTenantController || principal.TenantRef == "" {

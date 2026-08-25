@@ -437,7 +437,6 @@
       "id",
       "kind",
       "requestId",
-      "sandboxId",
       "state",
       "updatedAt"
     ],
@@ -445,6 +444,7 @@
       "completedAt",
       "error",
       "sandbox",
+      "sandboxId",
       "snapshot",
       "startedAt"
     ]

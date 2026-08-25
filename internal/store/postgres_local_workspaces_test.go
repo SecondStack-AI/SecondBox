@@ -1493,6 +1493,7 @@ func seedLocalWorkspace(
 	now time.Time,
 ) (string, string) {
 	t.Helper()
+	ensureStoreTestQuotaLedgers(t, store, "tenant-local", "subject-local", now)
 	workspaceID := "workspace-local-" + suffix
 	sandboxID := "sandbox-local-" + suffix
 	if _, err := store.pool.Exec(t.Context(), `

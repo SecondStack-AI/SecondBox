@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 )
@@ -21,8 +22,16 @@ func (store *PostgresControlPlaneStore) PingGuest(
 		liveness != contracts.GuestLivenessLost && liveness != contracts.GuestLivenessStopped {
 		return contracts.Instance{}, errors.New("SecondBox guest liveness value is invalid")
 	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Instance{}, fmt.Errorf("SecondBox guest ping transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return contracts.Instance{}, fmt.Errorf("SecondBox guest ping quota lock failed: %w", err)
+	}
 	var instance contracts.Instance
-	err := store.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		WITH updated_instance AS (
 		  UPDATE secondbox.instances AS instance
 		  SET guest_liveness=$5,guest_heartbeat_at=$6,updated_at=$6
@@ -58,6 +67,9 @@ func (store *PostgresControlPlaneStore) PingGuest(
 	}
 	if err != nil {
 		return contracts.Instance{}, fmt.Errorf("SecondBox guest ping update failed: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Instance{}, fmt.Errorf("SecondBox guest ping commit failed: %w", err)
 	}
 	return instance, nil
 }
@@ -113,6 +125,9 @@ func (store *PostgresControlPlaneStore) TouchActivity(
 		return time.Time{}, fmt.Errorf("SecondBox touch transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return time.Time{}, fmt.Errorf("SecondBox touch quota lock failed: %w", err)
+	}
 	lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
 		"\x1ftouch\x1f" + input.SandboxID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
@@ -191,6 +206,9 @@ func (store *PostgresControlPlaneStore) OpenActivitySession(
 		return contracts.ActivitySession{}, fmt.Errorf("SecondBox activity session transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return contracts.ActivitySession{}, fmt.Errorf("SecondBox activity session quota lock failed: %w", err)
+	}
 	if err := validateActivityAuthority(ctx, tx, input); err != nil {
 		return contracts.ActivitySession{}, err
 	}

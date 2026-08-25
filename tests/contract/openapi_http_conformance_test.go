@@ -108,9 +108,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"closeSandboxPortSession":         {"closeSandboxPortSession", "204", "", []string{"Idempotency-Key"}, nil},
 }
 
-var failClosedManagementOperations = map[string]bool{
-	"closeSubject": true, "cleanupSubject": true,
-}
+var failClosedManagementOperations = map[string]bool{}
 
 func TestCanonicalOpenAPIHTTPConformanceInventory(t *testing.T) {
 	document := loadOpenAPIContract(t)

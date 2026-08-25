@@ -96,6 +96,18 @@ func (client *Client) UpdateSubjectQuota(ctx context.Context, subjectRef Ownersh
 	return subject, err
 }
 
+func (client *Client) CloseSubject(ctx context.Context, subjectRef OwnershipRef, expectedRevision int64, idempotencyKey string) (Subject, error) {
+	var subject Subject
+	err := client.mutateManagementJSON(ctx, "closeSubject", map[string]string{"subjectRef": subjectRef}, expectedRevision, idempotencyKey, nil, &subject)
+	return subject, err
+}
+
+func (client *Client) CleanupSubject(ctx context.Context, subjectRef OwnershipRef, expectedRevision int64, idempotencyKey string) (Operation, error) {
+	var operation Operation
+	err := client.mutateManagementJSON(ctx, "cleanupSubject", map[string]string{"subjectRef": subjectRef}, expectedRevision, idempotencyKey, nil, &operation)
+	return operation, err
+}
+
 func (client *Client) ListSubjects(ctx context.Context, options PageOptions) (SubjectPage, error) {
 	query, err := pageQuery(options)
 	if err != nil {

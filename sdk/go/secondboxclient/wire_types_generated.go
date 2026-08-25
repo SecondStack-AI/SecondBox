@@ -430,6 +430,7 @@ const (
 	OperationKindSnapshotCreate  OperationKind = "snapshot_create"
 	OperationKindSnapshotDelete  OperationKind = "snapshot_delete"
 	OperationKindSnapshotRestore OperationKind = "snapshot_restore"
+	OperationKindSubjectCleanup  OperationKind = "subject_cleanup"
 	OperationKindCancelExec      OperationKind = "cancel_exec"
 	OperationKindCancelTerminal  OperationKind = "cancel_terminal"
 )

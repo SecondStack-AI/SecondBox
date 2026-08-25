@@ -794,7 +794,7 @@ type Operation struct {
 	ID              string            `json:"id"`
 	TenantRef       string            `json:"-"`
 	SubjectRef      string            `json:"-"`
-	SandboxID       string            `json:"sandboxId"`
+	SandboxID       string            `json:"sandboxId,omitempty"`
 	Kind            string            `json:"kind"`
 	State           string            `json:"state"`
 	RequestID       string            `json:"requestId"`

@@ -13,6 +13,7 @@ import (
 func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	now := time.Date(2026, 7, 29, 19, 0, 0, 0, time.UTC)
+	ensureStoreTestQuotaLedgers(t, controlPlaneStore, "tenant", "subject", now)
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
@@ -69,6 +70,7 @@ func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *tes
 func TestPostgresLifecycleBatchClaimsOrderedCohortAndClosesExpiredActivity(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	now := time.Date(2025, 1, 2, 12, 0, 0, 0, time.UTC)
+	ensureStoreTestQuotaLedgers(t, controlPlaneStore, "tenant", "subject", now)
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
@@ -179,6 +181,7 @@ func TestPostgresLifecycleBatchClaimsOrderedCohortAndClosesExpiredActivity(t *te
 func TestPostgresLifecycleClaimSkipsLockedExpiredLeaseWithoutCountingItsSession(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	now := time.Date(2020, 1, 2, 12, 0, 0, 0, time.UTC)
+	ensureStoreTestQuotaLedgers(t, controlPlaneStore, "tenant", "subject", now)
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
@@ -260,6 +263,7 @@ func TestPostgresAutomaticRetirementStopsDesiredCompute(t *testing.T) {
 		t.Run(terminationReason, func(t *testing.T) {
 			controlPlaneStore := openStoreTest(t)
 			now := time.Date(2026, 7, 30, 3, 10, 0, 0, time.UTC)
+			ensureStoreTestQuotaLedgers(t, controlPlaneStore, "tenant", "subject", now)
 			sandboxID := "sandbox-automatic-retirement-" + terminationReason
 			workspaceID := "workspace-automatic-retirement-" + terminationReason
 			if _, err := controlPlaneStore.pool.Exec(t.Context(), `
@@ -329,6 +333,7 @@ func TestPostgresAutomaticRetirementStopsDesiredCompute(t *testing.T) {
 func TestPostgresFinishStopAdvancesGenerationAndFencesActivity(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	ensureStoreTestQuotaLedgers(t, controlPlaneStore, "tenant", "subject", now)
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.lifecycle_effects (
 			id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,

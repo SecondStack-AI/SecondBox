@@ -36,6 +36,7 @@ var postFenceMigrationFiles = []string{
 	"0015_profile_startup_mode.sql",
 	"0016_persisted_authorities.sql",
 	"0017_tenant_aggregate_quotas.sql",
+	"0018_subject_cleanup.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

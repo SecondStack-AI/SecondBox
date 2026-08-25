@@ -144,8 +144,8 @@ func (store *PostgresControlPlaneStore) CompleteWorkspaceMutation(
 
 type lockedSandboxWorkspace = rowlock.SandboxWorkspace
 
-// lockSandboxWorkspace establishes the one invariant acquisition order used by
-// every PostgreSQL mutation path: Sandbox first, then its Workspace.
+// lockSandboxWorkspace establishes the invariant quota-ledger, Sandbox, then
+// Workspace acquisition order used by every PostgreSQL mutation path.
 func lockSandboxWorkspace(
 	ctx context.Context,
 	tx pgx.Tx,

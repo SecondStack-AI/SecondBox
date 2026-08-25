@@ -51,6 +51,11 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle intent transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(
+		ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef,
+	); err != nil {
+		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle quota lock failed: %w", err)
+	}
 	lockKey := input.Principal.TenantRef + "\x1f" + input.Principal.SubjectRef +
 		"\x1flifecycle\x1f" + input.SandboxID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
@@ -294,7 +299,7 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 	// Sandbox has no further transition, and a Sandbox holding a lifecycle
 	// failure class waits for an operator rather than for this worker.
 	rows, err := tx.Query(ctx, `
-		SELECT sandbox.id
+		SELECT sandbox.id,sandbox.tenant_ref,sandbox.subject_ref
 		FROM secondbox.sandboxes AS sandbox
 		WHERE sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$1
 		  AND NOT (
@@ -306,23 +311,61 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		    OR sandbox.reconcile_owner=$2
 		  )
 		ORDER BY sandbox.next_reconcile_at,sandbox.id
-		FOR UPDATE OF sandbox SKIP LOCKED
 		LIMIT $3`, now, workerID, batchSize)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox lifecycle claim candidate lookup failed: %w", err)
 	}
-	claimedSandboxIDs := make([]string, 0, batchSize)
+	candidateSandboxIDs := make([]string, 0, batchSize)
+	var quotaScopes []rowlock.QuotaScope
+	for rows.Next() {
+		var sandboxID string
+		var quotaScope rowlock.QuotaScope
+		if err := rows.Scan(&sandboxID, &quotaScope.TenantRef, &quotaScope.SubjectRef); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("SecondBox lifecycle claim candidate scan failed: %w", err)
+		}
+		candidateSandboxIDs = append(candidateSandboxIDs, sandboxID)
+		quotaScopes = append(quotaScopes, quotaScope)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("SecondBox lifecycle claim candidate iteration failed: %w", err)
+	}
+	rows.Close()
+	if len(candidateSandboxIDs) == 0 {
+		return nil, nil
+	}
+	if err := rowlock.QuotaScopes(ctx, tx, quotaScopes); err != nil {
+		return nil, fmt.Errorf("SecondBox lifecycle claim quota lock failed: %w", err)
+	}
+	rows, err = tx.Query(ctx, `
+		SELECT sandbox.id
+		FROM secondbox.sandboxes AS sandbox
+		WHERE sandbox.id=ANY($1::text[])
+		  AND sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$2
+		  AND NOT (sandbox.state='failed' AND sandbox.lifecycle_failure_class<>'')
+		  AND (
+		    sandbox.reconcile_claim_expires_at IS NULL
+		    OR sandbox.reconcile_claim_expires_at<=$2
+		    OR sandbox.reconcile_owner=$3
+		  )
+		ORDER BY sandbox.next_reconcile_at,sandbox.id
+		FOR UPDATE OF sandbox SKIP LOCKED`, candidateSandboxIDs, now, workerID)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox lifecycle claim candidate lock failed: %w", err)
+	}
+	claimedSandboxIDs := make([]string, 0, len(candidateSandboxIDs))
 	for rows.Next() {
 		var sandboxID string
 		if err := rows.Scan(&sandboxID); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("SecondBox lifecycle claim candidate scan failed: %w", err)
+			return nil, fmt.Errorf("SecondBox lifecycle claim candidate lock scan failed: %w", err)
 		}
 		claimedSandboxIDs = append(claimedSandboxIDs, sandboxID)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, fmt.Errorf("SecondBox lifecycle claim candidate iteration failed: %w", err)
+		return nil, fmt.Errorf("SecondBox lifecycle claim candidate lock rows failed: %w", err)
 	}
 	rows.Close()
 	if len(claimedSandboxIDs) == 0 {

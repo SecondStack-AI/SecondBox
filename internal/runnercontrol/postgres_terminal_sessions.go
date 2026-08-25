@@ -9,6 +9,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 )
@@ -78,6 +79,9 @@ func (store *PostgresDataPlaneStore) AcquireTerminalAttachment(
 		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal attachment transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal attachment quota lock: %w", err)
+	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
 		tenantRef, subjectRef, sessionID))
@@ -198,6 +202,9 @@ func (store *PostgresDataPlaneStore) DetachTerminalAttachment(
 		return false, fmt.Errorf("SecondBox Terminal detach transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return false, fmt.Errorf("SecondBox Terminal detach quota lock: %w", err)
+	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
 		tenantRef, subjectRef, sessionID))
@@ -275,6 +282,9 @@ func (store *PostgresDataPlaneStore) CheckpointTerminal(
 		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal checkpoint transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal checkpoint quota lock: %w", err)
+	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
 		tenantRef, subjectRef, sessionID))

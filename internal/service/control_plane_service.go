@@ -59,6 +59,7 @@ type SandboxStore interface {
 	GetSandbox(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.Sandbox, error)
 	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string, metadata map[string]string) (contracts.SandboxPage, error)
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
+	GetTenantOperation(ctx context.Context, tenantRef, operationID string) (contracts.Operation, error)
 	GetSubjectUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.SubjectUsage, error)
 	RelocateSandbox(ctx context.Context, input ports.WorkspaceRelocationInput) (contracts.Operation, error)
 }
@@ -106,6 +107,8 @@ type ManagementStore interface {
 	GetSubject(context.Context, string, string) (contracts.Subject, error)
 	ListSubjects(context.Context, string, int, string) (contracts.SubjectPage, error)
 	UpdateManagedSubjectQuota(context.Context, string, string, contracts.QuotaLimits, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
+	CloseManagedSubject(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
+	CreateManagedSubjectCleanup(context.Context, string, string, contracts.Operation, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Operation, ports.AdminIdempotencyResult, error)
 	CreateManagedTenantControllerAuthority(context.Context, contracts.TenantControllerAuthority, ports.AdminIdempotencyInput) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error)
 	ListTenantControllerAuthorities(context.Context, string, int, string) (contracts.TenantControllerAuthorityPage, error)
 	RotateManagedTenantControllerAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error)
@@ -616,6 +619,9 @@ func (service *ControlPlaneService) GetOperation(
 	principal contracts.Principal,
 	operationID string,
 ) (contracts.Operation, error) {
+	if principal.Kind == contracts.AuthorityKindTenantController && principal.TenantRef != "" {
+		return service.store.GetTenantOperation(ctx, principal.TenantRef, operationID)
+	}
 	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return contracts.Operation{}, ports.ErrAuthorizationDenied
 	}

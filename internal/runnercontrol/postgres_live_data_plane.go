@@ -10,6 +10,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
@@ -30,6 +31,9 @@ func (store *PostgresDataPlaneStore) StartDataPlaneSession(
 		return DataPlaneSession{}, fmt.Errorf("SecondBox proxied data-plane start transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return DataPlaneSession{}, fmt.Errorf("SecondBox proxied data-plane start quota lock: %w", err)
+	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
 		tenantRef, subjectRef, sessionID,
@@ -73,6 +77,9 @@ func (store *PostgresDataPlaneStore) CompleteDataPlaneSession(
 		return DataPlaneSession{}, fmt.Errorf("SecondBox live data-plane completion transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return DataPlaneSession{}, fmt.Errorf("SecondBox live data-plane completion quota lock: %w", err)
+	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
 		input.TenantRef, input.SubjectRef, input.SessionID,
@@ -142,6 +149,9 @@ func (store *PostgresDataPlaneStore) ConsumeDirectDataPlaneSession(
 		return fmt.Errorf("SecondBox direct data-plane consumption transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := lockDataPlaneSessionQuota(ctx, tx, input.SessionID); err != nil {
+		return fmt.Errorf("SecondBox direct data-plane consumption quota lock: %w", err)
+	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE id=$1 FOR UPDATE`, input.SessionID))
 	if err != nil {

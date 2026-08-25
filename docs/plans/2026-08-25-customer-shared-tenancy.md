@@ -110,14 +110,14 @@ Extend existing subject admission rather than creating a parallel quota system. 
 
 Represent application-environment teardown as one observable Operation. Closing a subject must stop new admission immediately, while cleanup remains restart-safe and reconciles Runner-owned state through the existing acknowledged protocol.
 
-- [ ] Make subject closure atomically deny new authorities and newly admitted Sandbox operations without pretending already admitted bounded work was never accepted.
-- [ ] Revoke all remaining application authorities as part of the close workflow and keep repeated close requests idempotent.
-- [ ] Create or return one durable subject-cleanup Operation that cancels active sessions and operations, stops and deletes Sandboxes, releases Leases and quota reservations, and requests removal of Runner-owned workspace state.
-- [ ] Advance cleanup through explicit persisted stages and existing Runner acknowledgements; retries must continue the same operation identity rather than launch untracked deletion work.
-- [ ] Add expiry reconciliation that closes expired authorities and subjects and advances cleanup even when the upstream lifecycle controller has failed.
-- [ ] Keep tenant suspension non-destructive and place any eventual whole-tenant cleanup behind a separate explicit platform-operator operation.
-- [ ] Preserve operator-visible terminal errors for irrecoverable Runner workspace loss and avoid fabricating successful cleanup when acknowledgement is unavailable.
-- [ ] Test active streams, concurrent operations, partial deletion, already absent resources, control-plane restart, Runner disconnect/reconnect, retry, expiry, and isolation between two tenants during cleanup.
+- [x] Make subject closure atomically deny new authorities and newly admitted Sandbox operations without pretending already admitted bounded work was never accepted.
+- [x] Revoke all remaining application authorities as part of the close workflow and keep repeated close requests idempotent.
+- [x] Create or return one durable subject-cleanup Operation that cancels active sessions and operations, stops and deletes Sandboxes, releases Leases and quota reservations, and requests removal of Runner-owned workspace state.
+- [x] Advance cleanup through explicit persisted stages and existing Runner acknowledgements; retries must continue the same operation identity rather than launch untracked deletion work.
+- [x] Add expiry reconciliation that closes expired authorities and subjects and advances cleanup even when the upstream lifecycle controller has failed.
+- [x] Keep tenant suspension non-destructive and place any eventual whole-tenant cleanup behind a separate explicit platform-operator operation.
+- [x] Preserve operator-visible terminal errors for irrecoverable Runner workspace loss and avoid fabricating successful cleanup when acknowledgement is unavailable.
+- [x] Test active streams, concurrent operations, partial deletion, already absent resources, control-plane restart, Runner disconnect/reconnect, retry, expiry, and isolation between two tenants during cleanup.
 
 ### Task 7: Complete CLI and clean-install deployment workflows
 
