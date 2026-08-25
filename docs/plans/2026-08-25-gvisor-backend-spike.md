@@ -350,28 +350,28 @@ without changing Firecracker behavior.
 Prove the mergeable vertical slice end to end on a real no-KVM Linux host and ship the host
 deployment profile.
 
-- [ ] Distribute the pinned `runsc` binary with the runner artifacts, digest-recorded in the
+- [x] Distribute the pinned `runsc` binary with the runner artifacts, digest-recorded in the
   materialization manifest and verified at readiness.
-- [ ] Extend the installer preflight with a gvisor path that requires reflink storage, loop and
+- [x] Extend the installer preflight with a gvisor path that requires reflink storage, loop and
   mount capability, and network-namespace authority, and does not require KVM, TUN/TAP, or
   nested-virtualization flags.
-- [ ] Add a real-host scenario driver that uses the normal control plane, authenticated runner
+- [x] Add a real-host scenario driver that uses the normal control plane, authenticated runner
   protocol, both data-plane transports, and durable WorkspaceStore: create a durable Sandbox; run
   buffered and streaming exec; exercise binary files; open/resize/close a PTY; relay a Port; and
   prove deny-all plus an exact allow-list including a domain rule.
-- [ ] Stop and restart the Sandbox while preserving Workspace data; create a Snapshot, mutate,
+- [x] Stop and restart the Sandbox while preserving Workspace data; create a Snapshot, mutate,
   restore, and prove the earlier contents return.
-- [ ] Reject a stale generation during active work; kill the runner and prove sentry and gofer
+- [x] Reject a stale generation during active work; kill the runner and prove sentry and gofer
   exit, the mount and loop device are reconciled, and the Workspace lock becomes available
   without reconstructing empty state.
-- [ ] Reject an incorrect logical or materialization digest, a Runner registering into a pool
+- [x] Reject an incorrect logical or materialization digest, a Runner registering into a pool
   sealed to another backend, and an unsupported `snapshot_resume` assignment before creating
   compute.
-- [ ] Run at least two concurrent Instances with independent operations, streams, mounts, and
+- [x] Run at least two concurrent Instances with independent operations, streams, mounts, and
   terminal events and prove no cross-Instance data or frame delivery.
-- [ ] Record 30 cold-start samples with start-to-ready p50/p95, stage breakdown, and peak
+- [x] Record 30 cold-start samples with start-to-ready p50/p95, stage breakdown, and peak
   sentry/gofer memory in the evidence document. Observations only; no gate.
-- [ ] Document the host install path for the experimental backend without altering the qualified
+- [x] Document the host install path for the experimental backend without altering the qualified
   Firecracker installer path.
 
 #### Task 7H validation
