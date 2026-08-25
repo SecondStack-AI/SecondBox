@@ -12,6 +12,8 @@ import (
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"github.com/creack/pty"
+
+	"github.com/SecondStack-AI/SecondBox/runner/internal/pid1"
 )
 
 // protocolPTYProcess owns one real pseudoterminal and the exact process wait.
@@ -35,11 +37,15 @@ func startProtocolPTYProcess(
 	if command.SysProcAttr != nil {
 		command.SysProcAttr.Setpgid = false
 	}
-	master, err := pty.StartWithSize(command, &pty.Winsize{
-		Rows: uint16(dimensions.Rows),
-		Cols: uint16(dimensions.Columns),
-	})
-	if err != nil {
+	var master *os.File
+	if err := pid1.GuardedStart(func() error {
+		started, startErr := pty.StartWithSize(command, &pty.Winsize{
+			Rows: uint16(dimensions.Rows),
+			Cols: uint16(dimensions.Columns),
+		})
+		master = started
+		return startErr
+	}); err != nil {
 		return nil, err
 	}
 	return &protocolPTYProcess{
@@ -67,6 +73,7 @@ func (p *protocolPTYProcess) Resize(rows, columns uint32) error {
 func (p *protocolPTYProcess) Wait() error {
 	p.waitOnce.Do(func() {
 		p.waitErr = p.command.Wait()
+		pid1.Release()
 		close(p.waitDone)
 	})
 	<-p.waitDone

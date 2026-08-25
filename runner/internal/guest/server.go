@@ -20,6 +20,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/pid1"
+
 	"github.com/SecondStack-AI/SecondBox/runner/internal/sandboxlimits"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/toolexecutor"
 )
@@ -627,7 +629,11 @@ func (s Server) executeCommand(ctx context.Context, req toolExecRequest) toolExe
 	stderr := newCommandOutputBuffer(maxCommandOutputStreamBytes)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	err = cmd.Run()
+	err = pid1.GuardedStart(cmd.Start)
+	if err == nil {
+		err = cmd.Wait()
+		pid1.Release()
+	}
 	resp := toolExecResponse{
 		Stdout: stdout.String(),
 		Stderr: stderr.String(),

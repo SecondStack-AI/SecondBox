@@ -187,21 +187,22 @@ Make `gvisor` a first-class private backend kind without touching any public sch
 Keep the guest protocol and its generations unchanged; add only the transport selected by Task 0H
 (written below as Unix sockets; a veth-TCP selection revises these checkboxes before work begins).
 
-- [ ] Add Unix-socket listener flags to `secondbox-guest-agent` for both mandatory listeners —
+- [x] Add Unix-socket listener flags to `secondbox-guest-agent` for both mandatory listeners —
   the HTTP control service and the gRPC guest protocol — alongside the vsock flags. Exactly one
   transport family must be selected for both listeners; mixed or absent selection fails startup.
-- [ ] Keep `Hello`/`Welcome` binding (Instance, generation, nonce, image identity) as the
+- [x] Keep `Hello`/`Welcome` binding (Instance, generation, nonce, image identity) as the
   connection authentication; no transport-level credential is introduced.
-- [ ] Deliver the startup environment by having the runner write the runtime-private directory
+- [x] Deliver the startup environment by having the runner write the runtime-private directory
   contents before launch and bind it into the sandbox; the vsock secrets-delivery path is not
   used, and the agent's secrets-wait behavior must work unchanged against the pre-written file.
-- [ ] Make the agent correct as the sandbox's initial process: reap orphaned grandchildren and
+- [x] Make the agent correct as the sandbox's initial process: reap orphaned grandchildren and
   propagate shutdown to its process group; add tests for both behaviors.
-- [ ] Add a runner-side guest-protocol dialer for a filesystem Unix socket without the
+- [x] Add a runner-side guest-protocol dialer for a filesystem Unix socket without the
   Firecracker vsock CONNECT framing, reusing the existing negotiated client.
-- [ ] Enforce socket-path length bounds and runner-owned socket-directory permissions; the socket
+- [x] Enforce socket-path length bounds and runner-owned socket-directory permissions; the socket
   directory is created per Instance and removed in the cleanup stack.
-- [ ] Cover listener selection, negotiation, rejection of a second concurrent connection, and
+- [x] Cover listener selection, negotiation, independent concurrent connections (the Port
+  relay depends on a second negotiated stream, so the protocol permits them by design), and
   transport loss with unit tests in both the agent and the dialer.
 
 #### Task 2H validation

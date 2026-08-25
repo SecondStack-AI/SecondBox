@@ -20,6 +20,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/guest"
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/pid1"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -38,6 +39,8 @@ func main() {
 func run() int {
 	var controlVsockPort int
 	var protocolVsockPort int
+	var controlUnixSocket string
+	var protocolUnixSocket string
 	var workspace string
 	var runtimePrivate string
 	var logPath string
@@ -53,6 +56,8 @@ func run() int {
 	var templateMode bool
 	flag.IntVar(&controlVsockPort, "control-vsock-port", 0, "required AF_VSOCK port for the HTTP control service")
 	flag.IntVar(&protocolVsockPort, "protocol-vsock-port", 0, "required AF_VSOCK port for the canonical gRPC guest protocol")
+	flag.StringVar(&controlUnixSocket, "control-unix-socket", "", "Unix socket path for the HTTP control service instead of vsock")
+	flag.StringVar(&protocolUnixSocket, "protocol-unix-socket", "", "Unix socket path for the canonical gRPC guest protocol instead of vsock")
 	// These two paths are image ABI constants: the init script mounts the
 	// workspace disk and RAM-only runtime-private tmpfs at these exact paths.
 	flag.StringVar(&workspace, "workspace", guestWorkspaceMountPath, "workspace mount path")
@@ -70,10 +75,9 @@ func run() int {
 	flag.BoolVar(&templateMode, "template-mode", false, "boot without Sandbox identity and receive it through one /assignment/bind control request")
 	flag.Parse()
 
-	if controlVsockPort < 1 || controlVsockPort > 65535 ||
-		protocolVsockPort < 1 || protocolVsockPort > 65535 ||
-		controlVsockPort == protocolVsockPort {
-		slog.Error("guest control and protocol vsock ports must be explicit, distinct values from 1 through 65535")
+	transport, err := selectListenerTransport(controlVsockPort, protocolVsockPort, controlUnixSocket, protocolUnixSocket)
+	if err != nil {
+		slog.Error("guest listener transport selection is invalid", "error", err)
 		return 1
 	}
 	if waitSecrets && secretsTimeout <= 0 {
@@ -105,7 +109,6 @@ func run() int {
 	}
 	controlServer := &http.Server{Handler: guestServer.Handler()}
 	var protocolService *microvmguest.ProtocolService
-	var err error
 	if templateMode {
 		protocolService, err = microvmguest.NewTemplateProtocolService(guestServer)
 	} else {
@@ -126,12 +129,12 @@ func run() int {
 	protocolServer := grpc.NewServer()
 	guestv1.RegisterGuestAgentServer(protocolServer, protocolService)
 
-	controlListener, err := listenSocket(controlVsockPort)
+	controlListener, err := transport.listenControl()
 	if err != nil {
 		slog.Error("failed to listen on guest control vsock port", "error", err)
 		return 1
 	}
-	protocolListener, err := listenSocket(protocolVsockPort)
+	protocolListener, err := transport.listenProtocol()
 	if err != nil {
 		err = errors.Join(err, controlListener.Close())
 		slog.Error("failed to listen on guest protocol vsock port", "error", err)
@@ -159,6 +162,7 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	pid1.StartReaper(ctx)
 	shutdown := func() error {
 		var joined error
 		grpcStopped := make(chan struct{})
@@ -186,8 +190,12 @@ func run() int {
 		return joined
 	}
 	finish := func(code int) int {
-		if err := shutdown(); err != nil {
-			slog.Error("guest service shutdown failed", "error", err)
+		shutdownErr := shutdown()
+		// As a sandbox's initial process, shutdown must reach every process
+		// left in the PID namespace before this process exits.
+		pid1.ShutdownNamespace(guestShutdownGraceInterval)
+		if shutdownErr != nil {
+			slog.Error("guest service shutdown failed", "error", shutdownErr)
 			return 1
 		}
 		return code
@@ -237,12 +245,13 @@ func runRuntimeCommand(ctx context.Context, args []string, env []string) int {
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	cmd.Env = env
-	if err := cmd.Start(); err != nil {
+	if err := pid1.GuardedStart(cmd.Start); err != nil {
 		slog.Error("failed to start runtime command", "command", args[0], "error", err)
 		return 1
 	}
 	slog.Info("started microVM runtime command", "pid", cmd.Process.Pid, "command", args[0])
 	err := cmd.Wait()
+	pid1.Release()
 	if err != nil {
 		slog.Warn("microVM runtime command exited with error", "error", err)
 		return processExitCode(err)
