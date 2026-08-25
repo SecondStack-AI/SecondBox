@@ -101,18 +101,18 @@ Build a bounded standalone probe against the pinned gVisor release before commit
 work. The probe may live under `runner/gvisor-probe` and may reuse generated test fixtures, but no
 production composition may depend on it.
 
-- [ ] Launch a minimal runsc sandbox on the systrap platform with no `/dev/kvm` present, from a
+- [x] Launch a minimal runsc sandbox on the systrap platform with no `/dev/kvm` present, from a
   directly supervised child process with parent-death signal delivery, and prove sentry and gofer
   exit when the parent dies. Record the forced-kill-after-deadline path separately.
-- [ ] Prove cgroup v2 enforcement of the sandbox: a CPU quota derived from an integer vCPU count
+- [x] Prove cgroup v2 enforcement of the sandbox: a CPU quota derived from an integer vCPU count
   and a hard memory limit constrain sandbox workloads, and breach produces an observable, bounded
   outcome the backend can classify.
-- [ ] Attach an already-open writable raw-ext4 descriptor by creating a loop device through the
+- [x] Attach an already-open writable raw-ext4 descriptor by creating a loop device through the
   `/proc/self/fd/<n>` path, mount it read-write in a runner-private mount namespace, bind the
   mountpoint into the sandbox through the gofer, write a marker from inside the sandbox, detach
   cleanly (syncfs, umount, loop release), reopen the image, and verify the marker, the ext4 UUID,
   and that the inode was never replaced.
-- [ ] Prove ENOSPC at image capacity surfaces through the gofer as a sane in-sandbox error and the
+- [x] Prove ENOSPC at image capacity surfaces through the gofer as a sane in-sandbox error and the
   image stays consistent after detach.
 - [ ] Run the existing `secondbox-guest-agent` inside the sandbox with both of its listeners on
   gofer-passed host Unix sockets; complete `Hello`/`Welcome` negotiation, one buffered exec, one
