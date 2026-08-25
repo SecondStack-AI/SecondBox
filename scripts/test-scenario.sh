@@ -597,7 +597,7 @@ compose up --detach --wait --wait-timeout 240 \
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
   bootstrap_subject="scenario-subject"
-  bootstrap_profile_grants='["scenario-control-restart","scenario-data-paths","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle"]'
+  bootstrap_profile_grants='["agent-compartment-isolated","scenario-agent-compartment-network-enabled","scenario-control-restart","scenario-data-paths","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle"]'
 else
   bootstrap_tenant="$(jq -er '.tenantRef' "$SECONDBOX_STRESS_CONFIG")"
   bootstrap_subject="$(jq -er '.subjectRef' "$SECONDBOX_STRESS_CONFIG")"
