@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Added a resumable `secondbox-deploy update` workflow for completed v0.5.1 or newer guided single-host installations. The latest verified bootstrap authenticates immutable source Profile history without regenerating it from newer policy; admits staging only when Runner storage can retain its operational reserve; reclaims only the current update's validated interrupted extraction path; stages every compatible target release input before downtime; revalidates privileged Runner storage; requires every Project's Sandboxes and pending lifecycle intents to be stopped; fences control-plane admission before the forward-only boundary; keeps that admission fence closed when boundary persistence is ambiguous; shuts down through the source deployment's recorded Compose assets; rejects execution-bundle changes that would strand immutable Profile revisions; preserves PostgreSQL data, authority, Runner identity, Workspaces, Snapshots, topology, and Compose volumes; then advances the original plan and receipt with append-only release history after readiness and retry-safe microVM smoke execution succeed.
+
 ### Removed
 
 - Removed the application Artifact resource, its API/SDK/CLI surfaces, S3-compatible storage integration, quotas, retention, garbage collection, and bundled object-store deployment ([#88](https://github.com/SecondStack-AI/SecondBox/pull/88)).

@@ -264,7 +264,7 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 	var output bytes.Buffer
 	renderer := cliui.Renderer{Output: &output, Diagnostic: &output, Capabilities: cliui.ForWriter(&output, &output), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
 	helpErr := usage(renderer)
-	if strings.Contains(helpErr.Error(), "_install-host-apply") || strings.Contains(helpErr.Error(), "_install-host-teardown-verify") || strings.Contains(helpErr.Error(), "_install-host-purge") || strings.Contains(helpErr.Error(), "_install-host-purge-validate") {
+	if strings.Contains(helpErr.Error(), "_install-host-apply") || strings.Contains(helpErr.Error(), "_install-host-teardown-verify") || strings.Contains(helpErr.Error(), "_install-host-update-verify") || strings.Contains(helpErr.Error(), "_install-host-purge") || strings.Contains(helpErr.Error(), "_install-host-purge-validate") {
 		t.Fatal("private installer command leaked into ordinary help")
 	}
 	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
@@ -282,6 +282,12 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 		err := runPrivateHostTeardownVerify(context.Background(), arguments)
 		if err == nil || !strings.HasPrefix(err.Error(), "SecondBox installer private host teardown verification:") {
 			t.Fatalf("teardown verification arguments %#v error = %v", arguments, err)
+		}
+	}
+	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
+		err := runPrivateHostUpdateVerify(context.Background(), arguments)
+		if err == nil || !strings.HasPrefix(err.Error(), "SecondBox installer private host update verification:") {
+			t.Fatalf("update verification arguments %#v error = %v", arguments, err)
 		}
 	}
 	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {

@@ -128,7 +128,7 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 		fetchCalls[location]++
 		return objects[location], nil
 	}
-	if err := verifyManifestObjects(t.Context(), manifest, fetch); err != nil {
+	if err := verifyManifestObjects(t.Context(), manifest, fetch, false); err != nil {
 		t.Fatal(err)
 	}
 	if fetchCalls[evidenceLocation] != 1 || fetchCalls[installerEvidenceLocation] != 1 {
@@ -146,7 +146,7 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 	}
 	objects[installerEvidenceLocation] = installerEvidenceData
 	manifest.InstallerQualificationEvidence.Digest = releasecontract.Digest(installerEvidenceData)
-	if err := verifyManifestObjects(t.Context(), manifest, fetch); err == nil || !strings.Contains(err.Error(), "identity mismatch") {
+	if err := verifyManifestObjects(t.Context(), manifest, fetch, false); err == nil || !strings.Contains(err.Error(), "identity mismatch") {
 		t.Fatalf("component substitution error = %v", err)
 	}
 }

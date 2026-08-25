@@ -21,9 +21,9 @@ type HostApplyExecutor interface {
 	RemoveEmpty(CreatedResource) (bool, error)
 }
 
-type HostTeardownVerifier interface {
+type HostResourceVerifier interface {
 	EffectiveUID() int
-	RevalidateTeardown(context.Context, InstallPlan, InstallReceipt) error
+	RevalidateHostResources(context.Context, InstallPlan, InstallReceipt) error
 }
 
 type HostApplyDependencies struct {
@@ -58,7 +58,17 @@ func ApplyAcceptedHost(ctx context.Context, directory, expectedDigest string, ca
 // identifies the same host and exact recorded privileged resources. Unlike a
 // host-apply replay, it deliberately does not require compute devices, free UID
 // ranges, or allocation capacity that Compose teardown does not consume.
-func VerifyAcceptedHostTeardown(ctx context.Context, directory, expectedDigest string, callerUID int, verifier HostTeardownVerifier) (resultErr error) {
+func VerifyAcceptedHostTeardown(ctx context.Context, directory, expectedDigest string, callerUID int, verifier HostResourceVerifier) (resultErr error) {
+	return verifyAcceptedHostResources(ctx, directory, expectedDigest, callerUID, verifier, "teardown")
+}
+
+// VerifyAcceptedHostUpdate proves that the completed guided deployment still
+// owns the exact privileged Runner storage accepted during host preparation.
+func VerifyAcceptedHostUpdate(ctx context.Context, directory, expectedDigest string, callerUID int, verifier HostResourceVerifier) (resultErr error) {
+	return verifyAcceptedHostResources(ctx, directory, expectedDigest, callerUID, verifier, "update")
+}
+
+func verifyAcceptedHostResources(ctx context.Context, directory, expectedDigest string, callerUID int, verifier HostResourceVerifier, boundary string) (resultErr error) {
 	lock, err := AcquireLock(directory)
 	if err != nil {
 		return err
@@ -68,12 +78,20 @@ func VerifyAcceptedHostTeardown(ctx context.Context, directory, expectedDigest s
 	if err != nil {
 		return err
 	}
-	return VerifyHostTeardown(ctx, plan, receipt, verifier)
+	return verifyHostResources(ctx, plan, receipt, verifier, boundary)
 }
 
-func VerifyHostTeardown(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verifier HostTeardownVerifier) error {
+func VerifyHostTeardown(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verifier HostResourceVerifier) error {
+	return verifyHostResources(ctx, plan, receipt, verifier, "teardown")
+}
+
+func VerifyHostUpdate(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verifier HostResourceVerifier) error {
+	return verifyHostResources(ctx, plan, receipt, verifier, "update")
+}
+
+func verifyHostResources(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verifier HostResourceVerifier, boundary string) error {
 	if verifier == nil {
-		return installerError("host teardown verifier is absent", nil)
+		return installerError("host "+boundary+" verifier is absent", nil)
 	}
 	digest, err := PlanDigest(plan)
 	if err != nil {
@@ -83,13 +101,13 @@ func VerifyHostTeardown(ctx context.Context, plan InstallPlan, receipt InstallRe
 		return err
 	}
 	if verifier.EffectiveUID() != 0 {
-		return installerError("private host teardown verification must run as root through sudo", nil)
+		return installerError("private host "+boundary+" verification must run as root through sudo", nil)
 	}
 	if _, complete := completedStage(receipt, StageHostApply); !complete {
-		return installerError("host teardown verification requires completed host apply", nil)
+		return installerError("host "+boundary+" verification requires completed host apply", nil)
 	}
-	if err := verifier.RevalidateTeardown(ctx, plan, receipt); err != nil {
-		return installerError("root teardown prerequisite revalidation", err)
+	if err := verifier.RevalidateHostResources(ctx, plan, receipt); err != nil {
+		return installerError("root "+boundary+" prerequisite revalidation", err)
 	}
 	return nil
 }

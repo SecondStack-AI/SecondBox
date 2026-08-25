@@ -34,7 +34,7 @@ func PurgeAcceptedHost(ctx context.Context, directory, expectedDigest string, ow
 		return InstallReceipt{}, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := ReadOperation(directory, ownerUID)
+	plan, receipt, err := RecoverOperation(directory, ownerUID, lock)
 	if err != nil {
 		return InstallReceipt{}, err
 	}
@@ -113,7 +113,7 @@ func ValidateAcceptedHostPurge(directory, expectedDigest string, ownerUID int) (
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := ReadOperation(directory, ownerUID)
+	plan, receipt, err := RecoverOperation(directory, ownerUID, lock)
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func validateNoNestedMountsInfo(root string, content []byte) error {
 		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			continue
 		}
-		return installerError("purge refuses a nested mount beneath Runner storage: "+mountpoint, nil)
+		return installerError("recursive removal refuses a nested mount beneath "+root+": "+mountpoint, nil)
 	}
 	return nil
 }

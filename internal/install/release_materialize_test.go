@@ -144,6 +144,7 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		t.Fatal(err)
 	}
 	plan.Release = releasePlanForMaterializer(release, releaseBytes)
+	plan.ReleaseHistory = []ReleaseActivation{{Release: plan.Release, ActivatedAt: plan.CreatedAt}}
 	runnerRoot := filepath.Join(root, "runner")
 	runnerStorage := filepath.Join(runnerRoot, "storage")
 	workspace := filepath.Join(runnerStorage, "workspaces")

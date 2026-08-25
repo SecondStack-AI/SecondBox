@@ -184,6 +184,7 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		"--cpu host-passthrough",
 		"run_guest btrfs_image",
 		"run_guest existing_reflink_filesystem",
+		"run_guest existing_reflink_update",
 		`destroy "$domain"`,
 		`undefine "$domain"`,
 		"cleanup_success",

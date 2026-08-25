@@ -212,6 +212,160 @@ func TestPermanentComposePurgeRemovesExactProjectVolumes(t *testing.T) {
 	}
 }
 
+func TestComposeCanFenceControlPlaneWithoutStoppingDatabase(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	executor := &recordingComposeExecutor{}
+	if err := RunCompose(context.Background(), manifestPath, "stop-control-plane", executor, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.calls) != 1 {
+		t.Fatalf("Compose control-plane fence calls = %#v", executor.calls)
+	}
+	arguments := executor.calls[0]
+	if !slices.Contains(arguments, "--project-name") || !slices.Equal(arguments[len(arguments)-2:], []string{"stop", "control-plane"}) {
+		t.Fatalf("Compose control-plane fence arguments = %#v", arguments)
+	}
+}
+
+func TestComposeDiagnosticsUseInstalledMaterializedAssets(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	resolved, err := Render(manifestPath, environmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	arguments, err := ComposeDiagnosticArguments(manifestPath, "ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, materialized := range resolved.ComposeFiles {
+		if !filepath.IsAbs(materialized) || !slices.Contains(arguments, materialized) {
+			t.Fatalf("diagnostic arguments do not use materialized Compose asset %q: %#v", materialized, arguments)
+		}
+	}
+}
+
+func TestRecordedInstallerComposeDiagnosticsDoNotRegenerateSourceProfiles(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	resolved, err := Render(manifestPath, environmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePath := manifest.StandardResources.ArtifactManifest
+	if !filepath.IsAbs(releasePath) {
+		releasePath = filepath.Join(filepath.Dir(manifestPath), releasePath)
+	}
+	// The updater independently verifies the immutable source release. Existing
+	// Compose transport must not rebuild its historical Profile lineage with the
+	// target binary's standard-resource implementation.
+	if err := os.WriteFile(releasePath, []byte("target-era regeneration must not read this\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath, "ps"); err == nil {
+		t.Fatal("ordinary accepted-manifest resolution unexpectedly accepted changed release input")
+	}
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, subject, "ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, materialized := range resolved.ComposeFiles {
+		if !slices.Contains(arguments, materialized) {
+			t.Fatalf("recorded diagnostics omitted source Compose asset %q: %#v", materialized, arguments)
+		}
+	}
+}
+
+func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	resolved, err := Render(manifestPath, environmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"stop-control-plane", "start-control-plane", "down"} {
+		executor := &recordingComposeExecutor{}
+		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, action, subject, executor); err != nil {
+			t.Fatal(err)
+		}
+		if len(executor.calls) != 1 {
+			t.Fatalf("existing Compose %s calls = %#v", action, executor.calls)
+		}
+		arguments := executor.calls[0]
+		for _, materialized := range resolved.ComposeFiles {
+			if !slices.Contains(arguments, materialized) {
+				t.Fatalf("existing Compose %s replaced materialized asset %q: %#v", action, materialized, arguments)
+			}
+		}
+		if action == "stop-control-plane" && !slices.Equal(arguments[len(arguments)-2:], []string{"stop", "control-plane"}) {
+			t.Fatalf("existing Compose stop arguments = %#v", arguments)
+		}
+		if action == "start-control-plane" && !slices.Equal(arguments[len(arguments)-4:], []string{"up", "--remove-orphans", "--detach", "control-plane"}) {
+			t.Fatalf("existing Compose start arguments = %#v", arguments)
+		}
+		if action == "down" && !slices.Equal(arguments[len(arguments)-2:], []string{"down", "--remove-orphans"}) {
+			t.Fatalf("existing Compose down arguments = %#v", arguments)
+		}
+	}
+	if err := os.WriteFile(resolved.ComposeFiles[0], []byte("drifted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, "down", subject, &recordingComposeExecutor{}); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
+		t.Fatalf("drifted recorded Compose asset result = %v", err)
+	}
+}
+
+func TestRecordedInstallerComposeSubjectAuthenticatesProjectIdentity(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	if _, err := Render(manifestPath, environmentPath); err != nil {
+		t.Fatal(err)
+	}
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := bytes.Replace(
+		manifest,
+		[]byte("compose_project_name = 'secondbox'"),
+		[]byte("compose_project_name = 'secondbox-drifted'"),
+		1,
+	)
+	if bytes.Equal(drifted, manifest) {
+		t.Fatal("Compose project identity was not found in initialized manifest")
+	}
+	if err := os.WriteFile(manifestPath, drifted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	driftedSubject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if driftedSubject == subject {
+		t.Fatal("Compose project-only drift preserved the authenticated subject")
+	}
+	if _, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, subject, "ps"); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
+		t.Fatalf("Compose project-only drift result = %v", err)
+	}
+}
+
 func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	original, err := os.ReadFile(manifestPath)

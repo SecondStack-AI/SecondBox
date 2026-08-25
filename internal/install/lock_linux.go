@@ -5,11 +5,15 @@ package install
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
 
-type OperationLock struct{ file *os.File }
+type OperationLock struct {
+	file      *os.File
+	directory string
+}
 
 func AcquireLock(directory string) (*OperationLock, error) {
 	directoryFD, err := openDirectoryNoSymlinks(directory)
@@ -56,7 +60,11 @@ func AcquireLock(directory string) (*OperationLock, error) {
 		_ = file.Close()
 		return nil, installerError("another install, resume, uninstall, or purge process owns this deployment", err)
 	}
-	return &OperationLock{file: file}, nil
+	return &OperationLock{file: file, directory: filepath.Clean(directory)}, nil
+}
+
+func (lock *OperationLock) heldFor(directory string) bool {
+	return lock != nil && lock.file != nil && lock.directory == filepath.Clean(directory)
 }
 
 func (lock *OperationLock) Close() error {

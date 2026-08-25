@@ -1,6 +1,6 @@
 # Guided single-host installation
 
-`secondbox-deploy install` installs one loopback-only development deployment and one same-host Firecracker Runner on Linux amd64. It consumes one verified public release and writes every selected identity, path, capacity, network, retention, trust anchor, and immutable image reference into a durable install plan and `secondbox.toml`. It does not create production authority, a remote Runner topology, an alternate compute backend, or automatic updates.
+`secondbox-deploy install` installs one loopback-only development deployment and one same-host Firecracker Runner on Linux amd64. It consumes one verified public release and writes every selected identity, path, capacity, network, retention, trust anchor, and immutable image reference into a durable install plan and `secondbox.toml`. It does not create production authority, a remote Runner topology, an alternate compute backend, or automatic background updates.
 
 ## Before starting
 
@@ -74,7 +74,37 @@ It then pulls exactly the control-plane, Runner, microVM-artifact, installer-too
 secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
 ```
 
-There is no automatic updater. Install a later release only through a separately reviewed future operation; do not replace files or image references behind an existing receipt.
+## Update a completed installation
+
+Updates are explicit and operator-initiated; there is no automatic background updater. Use the target release's bootstrap so the temporary, checksum-verified `secondbox-deploy` binary understands that release's update contract even when the installed binary is older.
+
+First stop every live Sandbox. The updater refuses to change desired state, leases, or workload lifecycle on the operator's behalf. Then run the read-only check against the operation directory printed by the original installer:
+
+```sh
+operation=/absolute/path/to/secondbox-install-operation
+curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh \
+  | sh -s -- update --check "$operation"
+```
+
+Activate the reviewed target:
+
+```sh
+curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh \
+  | sh -s -- update "$operation"
+```
+
+The updater accepts a completed guided installation from v0.5.1 or newer. v0.5.1 is the earliest source covered by the full retained-Workspace installer qualification; earlier installations require a fresh deployment with explicit workload migration. For an accepted source, the updater verifies the successful receipt, revalidates the privileged Runner storage identity through its narrow sudo helper, rejects same-version updates and downgrades, and stages all target binaries, images, microVM assets, manifests, and standard bundles while the source deployment remains running. Before journaling an update, it also requires enough free Runner-storage capacity for the target's expected download size plus the 4 GiB operational reserve; `update --check` fails read-only if current Workspace usage has consumed that staging headroom. An interrupted extraction is retried through one deterministic update-owned partial path, which resume validates and reclaims instead of accumulating abandoned bundle directories. Its deployment-wide PostgreSQL check covers every Project and rejects pending lifecycle or Workspace mutations as well as running Instances. Because existing Sandboxes remain pinned to immutable Profile revisions and the v1 single-host Runner serves one verified execution bundle, the check also rejects a target that changes the runtime or toolchain bundle digest. After final confirmation it stops control-plane admission, repeats the deployment-wide check, records the forward-only activation boundary, and stops the remaining Compose project without deleting volumes. If persistence of that boundary is ambiguous, admission remains fenced until resume proves the durable receipt. It then atomically publishes the target release inputs and restarts the same project against the same PostgreSQL volume and Runner storage. Generated authority, Runner identity, CLI authority, network settings, capacity, retention, Workspaces, Snapshots, storage paths, and the recorded source-era Compose transport remain unchanged.
+
+Database migrations begin when the target control plane starts. A failure before activation leaves the source deployment unchanged. A failure after activation remains bound to the verified target; resume it rather than running older binaries against potentially migrated data:
+
+```sh
+curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh \
+  | sh -s -- update --resume "$operation"
+```
+
+Each successful activation appends its source and target release identities, immutable digests, stages, and evidence to the original installation history. Uninstall, purge, support, and later updates consume that current plan and complete history. Do not replace receipt-managed files or image references manually.
+
+While an update is incomplete, installer resume, Compose recovery, and uninstall are fenced. Complete the journaled update with `update --resume` before running another deployment lifecycle command.
 
 ## Resume and diagnose
 

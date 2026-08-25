@@ -21,6 +21,7 @@ var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 var checksumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var keyPattern = regexp.MustCompile(`^SHA256:[0-9A-F]{64}$`)
 var operationPattern = regexp.MustCompile(`^install_[a-z0-9]{16,64}$`)
+var updatePattern = regexp.MustCompile(`^update_[a-z0-9]{16,64}$`)
 
 func Canonical(value any) ([]byte, error) {
 	encoded, err := json.Marshal(value)
@@ -63,6 +64,13 @@ func DecodePlan(content []byte) (InstallPlan, error) {
 	if err := decodeStrict(content, &value); err != nil {
 		return InstallPlan{}, installerError("decode plan", err)
 	}
+	if value.SchemaVersion == PlanSchemaV1 {
+		if len(value.ReleaseHistory) != 0 {
+			return InstallPlan{}, installerError("v1 plan must not contain release history", nil)
+		}
+		value.SchemaVersion = PlanSchema
+		value.ReleaseHistory = []ReleaseActivation{{Release: value.Release, ActivatedAt: value.CreatedAt.UTC()}}
+	}
 	if err := value.Validate(); err != nil {
 		return InstallPlan{}, err
 	}
@@ -77,6 +85,24 @@ func DecodeReceipt(content []byte, plan InstallPlan) (InstallReceipt, error) {
 	if err != nil {
 		return InstallReceipt{}, err
 	}
+	if value.SchemaVersion == ReceiptSchemaV1 {
+		if len(value.Updates) != 0 {
+			return InstallReceipt{}, installerError("v1 receipt must not contain update history", nil)
+		}
+		legacyPlan := plan
+		legacyPlan.SchemaVersion = PlanSchemaV1
+		legacyPlan.ReleaseHistory = nil
+		legacyDigest, legacyErr := PlanDigest(legacyPlan)
+		if legacyErr != nil {
+			return InstallReceipt{}, legacyErr
+		}
+		if value.PlanDigest != legacyDigest {
+			return InstallReceipt{}, installerError("v1 receipt plan identity does not match", nil)
+		}
+		value.SchemaVersion = ReceiptSchema
+		value.PlanDigest = digest
+		value.Updates = []UpdateRecord{}
+	}
 	if err := value.Validate(digest, plan.HostFacts.HostIdentity, plan.OperationID); err != nil {
 		return InstallReceipt{}, err
 	}
@@ -85,6 +111,9 @@ func DecodeReceipt(content []byte, plan InstallPlan) (InstallReceipt, error) {
 		if !found || !planned.Create {
 			return InstallReceipt{}, installerError("pending resource is absent from accepted plan: "+id, nil)
 		}
+	}
+	if err := validateUpdateHistory(plan, value); err != nil {
+		return InstallReceipt{}, err
 	}
 	return value, nil
 }
@@ -130,6 +159,37 @@ func (facts HostFacts) Validate() error {
 	return nil
 }
 
+func validateReleasePlan(release ReleasePlan) error {
+	if !digestPattern.MatchString(release.ArtifactManifestDigest) {
+		return installerError("artifact manifest digest is invalid", nil)
+	}
+	if !strings.HasPrefix(release.ArtifactManifestURL, "https://") {
+		return installerError("artifact manifest URL must use HTTPS", nil)
+	}
+	if release.Version == "" || !keyPattern.MatchString(release.SigningKeyFingerprint) || release.ExpectedDownloadBytes <= 0 {
+		return installerError("release identity, signing key, or expected download size is invalid", nil)
+	}
+	wantImages := []string{"control-plane", "runner", "microvm-artifacts", "installer-tools", "postgres"}
+	if len(release.Images) != len(wantImages) {
+		return installerError("release plan must contain exactly five immutable images", nil)
+	}
+	for _, name := range wantImages {
+		_, digest, found := strings.Cut(release.Images[name], "@")
+		if !found || !digestPattern.MatchString(digest) {
+			return installerError("release image "+name+" is not digest-pinned", nil)
+		}
+	}
+	if len(release.BinaryDigests) != 2 {
+		return installerError("release plan must contain exactly the secondbox and secondbox-deploy binary digests", nil)
+	}
+	for _, name := range []string{"secondbox", "secondbox-deploy"} {
+		if !checksumPattern.MatchString(release.BinaryDigests[name]) {
+			return installerError("release binary "+name+" digest is invalid", nil)
+		}
+	}
+	return nil
+}
+
 func (plan InstallPlan) Validate() error {
 	if plan.SchemaVersion != PlanSchema {
 		return installerError("plan schema is unsupported", nil)
@@ -150,32 +210,30 @@ func (plan InstallPlan) Validate() error {
 	if plan.HostFactsDigest != factsDigest {
 		return installerError("host facts digest does not match", nil)
 	}
-	if !digestPattern.MatchString(plan.Release.ArtifactManifestDigest) {
-		return installerError("artifact manifest digest is invalid", nil)
+	if err := validateReleasePlan(plan.Release); err != nil {
+		return err
 	}
-	if !strings.HasPrefix(plan.Release.ArtifactManifestURL, "https://") {
-		return installerError("artifact manifest URL must use HTTPS", nil)
+	if len(plan.ReleaseHistory) == 0 {
+		return installerError("release activation history is required", nil)
 	}
-	if plan.Release.Version == "" || !keyPattern.MatchString(plan.Release.SigningKeyFingerprint) || plan.Release.ExpectedDownloadBytes <= 0 {
-		return installerError("release identity, signing key, or expected download size is invalid", nil)
-	}
-	wantImages := []string{"control-plane", "runner", "microvm-artifacts", "installer-tools", "postgres"}
-	if len(plan.Release.Images) != len(wantImages) {
-		return installerError("release plan must contain exactly five immutable images", nil)
-	}
-	for _, name := range wantImages {
-		_, digest, found := strings.Cut(plan.Release.Images[name], "@")
-		if !found || !digestPattern.MatchString(digest) {
-			return installerError("release image "+name+" is not digest-pinned", nil)
+	seenUpdateIDs := map[string]bool{}
+	for index, activation := range plan.ReleaseHistory {
+		if err := validateReleasePlan(activation.Release); err != nil {
+			return installerError("release activation history is invalid", err)
+		}
+		if activation.ActivatedAt.IsZero() || (index == 0 && activation.UpdateID != "") || (index > 0 && !updatePattern.MatchString(activation.UpdateID)) || (activation.UpdateID != "" && seenUpdateIDs[activation.UpdateID]) {
+			return installerError("release activation identity is invalid or duplicated", nil)
+		}
+		if index > 0 && !activation.ActivatedAt.After(plan.ReleaseHistory[index-1].ActivatedAt) {
+			return installerError("release activation times must increase", nil)
+		}
+		if activation.UpdateID != "" {
+			seenUpdateIDs[activation.UpdateID] = true
 		}
 	}
-	if len(plan.Release.BinaryDigests) != 2 {
-		return installerError("release plan must contain exactly the secondbox and secondbox-deploy binary digests", nil)
-	}
-	for _, name := range []string{"secondbox", "secondbox-deploy"} {
-		if !checksumPattern.MatchString(plan.Release.BinaryDigests[name]) {
-			return installerError("release binary "+name+" digest is invalid", nil)
-		}
+	active := plan.ReleaseHistory[len(plan.ReleaseHistory)-1].Release
+	if active.Version != plan.Release.Version || active.ArtifactManifestDigest != plan.Release.ArtifactManifestDigest {
+		return installerError("active release differs from release activation history", nil)
 	}
 	if plan.Storage.Choice != StorageExistingMount && plan.Storage.Choice != StorageBtrfsImage {
 		return installerError("storage choice is invalid", nil)
@@ -430,7 +488,102 @@ func (receipt InstallReceipt) Validate(planDigest, hostIdentity, operationID str
 		}
 		purgeSteps[step] = true
 	}
+	if err := validateUpdateRecords(receipt.Updates); err != nil {
+		return err
+	}
+	if _, active := receipt.ActiveUpdate(); active && receipt.Status != OperationSucceeded {
+		return installerError("active update requires a successful installation receipt", nil)
+	}
 	return nil
+}
+
+func validateUpdateRecords(updates []UpdateRecord) error {
+	ids := map[string]bool{}
+	for updateIndex, update := range updates {
+		if !updatePattern.MatchString(update.ID) || ids[update.ID] || update.StartedAt.IsZero() || update.UpdatedAt.Before(update.StartedAt) {
+			return installerError("update record identity or time is invalid", nil)
+		}
+		ids[update.ID] = true
+		if err := validateReleasePlan(update.SourceRelease); err != nil {
+			return installerError("update source release is invalid", err)
+		}
+		if err := validateReleasePlan(update.TargetRelease); err != nil {
+			return installerError("update target release is invalid", err)
+		}
+		if update.SourceRelease.ArtifactManifestDigest == update.TargetRelease.ArtifactManifestDigest {
+			return installerError("update source and target releases are identical", nil)
+		}
+		for stageIndex, record := range update.CompletedStages {
+			if stageIndex >= len(UpdateStageSequence) || record.Stage != UpdateStageSequence[stageIndex] || record.CompletedAt.IsZero() || record.CompletedAt.Before(update.StartedAt) || (stageIndex > 0 && record.CompletedAt.Before(update.CompletedStages[stageIndex-1].CompletedAt)) {
+				return installerError("update stage sequence is invalid", nil)
+			}
+			if record.Stage == UpdateStageActivationStarted && !digestPattern.MatchString(record.Evidence["sourceComposeSubject"]) {
+				return installerError("update activation lacks an authenticated source Compose identity", nil)
+			}
+		}
+		switch update.Status {
+		case UpdateRunning:
+			if update.FailureClass != "" || update.FailureStage != "" || len(update.CompletedStages) == len(UpdateStageSequence) {
+				return installerError("running update state is invalid", nil)
+			}
+		case UpdateFailed:
+			validFailures := map[FailureClass]bool{FailureBlocked: true, FailureNeedsAction: true, FailureRetryable: true, FailureInternal: true}
+			if !validFailures[update.FailureClass] || slices.Index(UpdateStageSequence, update.FailureStage) < 0 || len(update.CompletedStages) == len(UpdateStageSequence) {
+				return installerError("failed update state is invalid", nil)
+			}
+		case UpdateSucceeded:
+			if update.FailureClass != "" || update.FailureStage != "" || len(update.CompletedStages) != len(UpdateStageSequence) {
+				return installerError("successful update state is invalid", nil)
+			}
+		default:
+			return installerError("update status is invalid", nil)
+		}
+		if updateIndex < len(updates)-1 && update.Status != UpdateSucceeded {
+			return installerError("only the last update may be incomplete", nil)
+		}
+	}
+	return nil
+}
+
+func validateUpdateHistory(plan InstallPlan, receipt InstallReceipt) error {
+	if len(plan.ReleaseHistory) != 1+countSucceededUpdates(receipt.Updates) {
+		return installerError("release activation and update histories differ", nil)
+	}
+	active := plan.ReleaseHistory[0].Release
+	activationIndex := 1
+	for _, update := range receipt.Updates {
+		if !sameReleasePlan(active, update.SourceRelease) {
+			return installerError("update source does not match the preceding active release", nil)
+		}
+		if update.Status == UpdateSucceeded {
+			activation := plan.ReleaseHistory[activationIndex]
+			if activation.UpdateID != update.ID || !sameReleasePlan(activation.Release, update.TargetRelease) || !activation.ActivatedAt.Equal(update.UpdatedAt) {
+				return installerError("successful update differs from release activation history", nil)
+			}
+			active = update.TargetRelease
+			activationIndex++
+		}
+	}
+	if !sameReleasePlan(active, plan.Release) {
+		return installerError("update history active release differs from plan", nil)
+	}
+	return nil
+}
+
+func countSucceededUpdates(updates []UpdateRecord) int {
+	count := 0
+	for _, update := range updates {
+		if update.Status == UpdateSucceeded {
+			count++
+		}
+	}
+	return count
+}
+
+func sameReleasePlan(left, right ReleasePlan) bool {
+	leftBytes, leftErr := Canonical(left)
+	rightBytes, rightErr := Canonical(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftBytes, rightBytes)
 }
 
 func validateSafePath(path string) error {

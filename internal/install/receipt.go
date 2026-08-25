@@ -11,7 +11,7 @@ func NewReceipt(plan InstallPlan, now time.Time) (InstallReceipt, error) {
 	if err != nil {
 		return InstallReceipt{}, err
 	}
-	receipt := InstallReceipt{SchemaVersion: ReceiptSchema, OperationID: plan.OperationID, PlanDigest: digest, HostIdentity: plan.HostFacts.HostIdentity, Status: OperationPlanned, CompletedStages: []StageRecord{}, CreatedResources: []CreatedResource{}, PendingResourceIDs: []string{}, RemovedResourceIDs: []string{}, CompletedPurgeSteps: []string{}, UpdatedAt: now.UTC()}
+	receipt := InstallReceipt{SchemaVersion: ReceiptSchema, OperationID: plan.OperationID, PlanDigest: digest, HostIdentity: plan.HostFacts.HostIdentity, Status: OperationPlanned, CompletedStages: []StageRecord{}, CreatedResources: []CreatedResource{}, PendingResourceIDs: []string{}, RemovedResourceIDs: []string{}, CompletedPurgeSteps: []string{}, Updates: []UpdateRecord{}, UpdatedAt: now.UTC()}
 	if err := receipt.Validate(digest, plan.HostFacts.HostIdentity, plan.OperationID); err != nil {
 		return InstallReceipt{}, err
 	}

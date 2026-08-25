@@ -2,6 +2,8 @@ package deployconfig
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,9 +31,32 @@ func RunComposeForAcceptedInstaller(ctx context.Context, manifestPath, action st
 	return runCompose(ctx, manifestPath, action, executor, httpClient, false)
 }
 
+// RunExistingComposeForAcceptedInstaller fences, shuts down, or restores the
+// source deployment through its already-materialized environment and Compose
+// assets. It deliberately does not render target-binary embedded assets.
+func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, action, expectedSubject string, executor ComposeExecutor) error {
+	if action != "stop-control-plane" && action != "start-control-plane" && action != "down" {
+		return manifestError("existing Compose action must stop, start, or shut down the recorded deployment", nil)
+	}
+	if executor == nil {
+		return manifestError("Compose executor is required", nil)
+	}
+	command := []string{"stop", "control-plane"}
+	if action == "start-control-plane" {
+		command = []string{"up", "--remove-orphans", "--detach", "control-plane"}
+	} else if action == "down" {
+		command = []string{"down", "--remove-orphans"}
+	}
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, expectedSubject, command...)
+	if err != nil {
+		return err
+	}
+	return executor.Run(ctx, arguments)
+}
+
 func runCompose(ctx context.Context, manifestPath, action string, executor ComposeExecutor, httpClient *http.Client, validateSameHost bool) error {
-	if action != "config" && action != "prepare" && action != "up" && action != "down" {
-		return manifestError("compose action must be config, prepare, up, or down", nil)
+	if action != "config" && action != "prepare" && action != "up" && action != "down" && action != "stop-control-plane" {
+		return manifestError("compose action must be config, prepare, up, down, or stop-control-plane", nil)
 	}
 	if executor == nil {
 		return manifestError("Compose executor is required", nil)
@@ -67,6 +92,8 @@ func runCompose(ctx context.Context, manifestPath, action string, executor Compo
 		arguments = composeUpArgumentsInternal(arguments, "--detach")
 	case "down":
 		arguments = append(slices.Clone(arguments), "down", "--remove-orphans")
+	case "stop-control-plane":
+		arguments = append(slices.Clone(arguments), "stop", "control-plane")
 	}
 	if err := executor.Run(ctx, arguments); err != nil {
 		return err
@@ -133,6 +160,111 @@ func ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath string, command
 	return composeDiagnosticArguments(manifestPath, false, command...)
 }
 
+// ComposeDiagnosticArgumentsForRecordedInstaller resolves only the immutable
+// Compose transport identity recorded in an accepted installer manifest. The
+// caller must already have verified the manifest against the accepted
+// operation and its public source release. In particular, this path does not
+// regenerate historical standard Profile lineage with the running target
+// binary's policy.
+func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, expectedSubject string, command ...string) ([]string, error) {
+	absolute, project, composeFiles, err := recordedInstallerComposeIdentity(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	actualSubject, err := RecordedInstallerComposeSubject(absolute, "")
+	if err != nil {
+		return nil, err
+	}
+	if expectedSubject == "" || actualSubject != expectedSubject {
+		return nil, manifestError("recorded Compose assets differ from the verified source release", nil)
+	}
+	return existingComposeArguments(absolute, project, composeFiles, command...)
+}
+
+// RecordedInstallerComposeSubject binds the generated environment and selected
+// Compose files without regenerating them with the running binary. A non-empty
+// environmentPath is used to authenticate a canonical source-binary render.
+func RecordedInstallerComposeSubject(manifestPath, environmentPath string) (string, error) {
+	absolute, project, selected, err := recordedInstallerComposeIdentity(manifestPath)
+	if err != nil {
+		return "", err
+	}
+	if environmentPath == "" {
+		environmentPath = filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
+	}
+	info, err := os.Lstat(environmentPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return "", manifestError("existing generated environment is absent or unprotected", err)
+	}
+	composeFiles, err := existingMaterializedComposeFiles(environmentPath, selected)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	_, _ = io.WriteString(hash, "compose_project_name")
+	_, _ = hash.Write([]byte{0})
+	_, _ = io.WriteString(hash, project)
+	_, _ = hash.Write([]byte{0})
+	paths := append([]string{environmentPath}, composeFiles...)
+	logical := append([]string{".secondbox.generated.env"}, selected...)
+	for index, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return "", manifestError("read recorded Compose asset: "+logical[index], err)
+		}
+		_, _ = io.WriteString(hash, logical[index])
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write(content)
+		_, _ = hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func recordedInstallerComposeIdentity(manifestPath string) (string, string, []string, error) {
+	absolute, err := filepath.Abs(manifestPath)
+	if err != nil {
+		return "", "", nil, err
+	}
+	manifest, err := ReadManifest(absolute)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if manifest.Deployment.Mode != "development" && manifest.Deployment.Mode != "production" {
+		return "", "", nil, manifestError("recorded Compose deployment mode is unsupported", nil)
+	}
+	if manifest.Database.Mode != "bundled" && manifest.Database.Mode != "external" {
+		return "", "", nil, manifestError("recorded Compose database mode is unsupported", nil)
+	}
+	composeFiles := []string{"deploy/compose.yml"}
+	if manifest.Deployment.ComposeBackendCIDR != "" {
+		composeFiles = append(composeFiles, "deploy/compose.explicit-network.yml")
+	}
+	if manifest.Deployment.Mode == "development" {
+		composeFiles = append(composeFiles, "deploy/compose.development.yml")
+	} else if manifest.Database.Mode == "bundled" {
+		composeFiles = append(composeFiles, "deploy/compose.bundled-database.yml")
+	}
+	sameHost := false
+	for _, runner := range manifest.Runners {
+		if runner.Placement == "same-host" {
+			if sameHost {
+				return "", "", nil, manifestError("recorded Compose topology has multiple same-host Runners", nil)
+			}
+			sameHost = true
+			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
+		} else if runner.Placement != "remote" {
+			return "", "", nil, manifestError("recorded Compose Runner placement is unsupported", nil)
+		}
+	}
+	project := manifest.Deployment.ComposeProjectName
+	if project == "" {
+		project = DefaultComposeProjectName
+	} else if !composeProjectPattern.MatchString(project) {
+		return "", "", nil, manifestError("recorded Compose project identity is invalid", nil)
+	}
+	return absolute, project, composeFiles, nil
+}
+
 func composeDiagnosticArguments(manifestPath string, validateSameHost bool, command ...string) ([]string, error) {
 	absolute, err := filepath.Abs(manifestPath)
 	if err != nil {
@@ -142,16 +274,42 @@ func composeDiagnosticArguments(manifestPath string, validateSameHost bool, comm
 	if err != nil {
 		return nil, err
 	}
-	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
+	return existingComposeArguments(absolute, resolved.ComposeProject(), resolved.ComposeFiles, command...)
+}
+
+func existingComposeArguments(manifestPath, project string, selected []string, command ...string) ([]string, error) {
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
 	info, err := os.Lstat(environmentPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
 		return nil, manifestError("existing generated environment is absent or unprotected", err)
 	}
-	arguments := []string{"compose", "--project-name", resolved.ComposeProject(), "--env-file", environmentPath}
-	for _, file := range resolved.ComposeFiles {
+	arguments := []string{"compose", "--project-name", project, "--env-file", environmentPath}
+	composeFiles, err := existingMaterializedComposeFiles(environmentPath, selected)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range composeFiles {
 		arguments = append(arguments, "--file", file)
 	}
 	return append(arguments, command...), nil
+}
+
+func existingMaterializedComposeFiles(environmentPath string, selected []string) ([]string, error) {
+	directory := environmentPath + ".compose"
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return nil, manifestError("existing generated Compose asset directory is absent or unprotected", err)
+	}
+	files := make([]string, 0, len(selected))
+	for _, logicalPath := range selected {
+		path := filepath.Join(directory, filepath.Base(logicalPath))
+		fileInfo, err := os.Lstat(path)
+		if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Mode()&os.ModeSymlink != 0 || fileInfo.Mode().Perm()&0o077 != 0 {
+			return nil, manifestError("existing generated Compose asset is absent or unprotected: "+logicalPath, err)
+		}
+		files = append(files, path)
+	}
+	return files, nil
 }
 
 type SystemComposeExecutor struct {

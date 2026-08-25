@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/url"
 	"regexp"
 	"slices"
@@ -37,6 +38,7 @@ var (
 	checksumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	platformPattern = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9][a-z0-9._-]*$`)
 	keyPattern      = regexp.MustCompile(`^SHA256:[0-9A-F]{64}$`)
+	numericPattern  = regexp.MustCompile(`^[0-9]+$`)
 )
 
 // Identity is repeated on every independently inspectable release object.
@@ -198,6 +200,58 @@ func ParseTag(tag string) (string, error) {
 		return "", contractError("tag %q must be vMAJOR.MINOR.PATCH with optional SemVer prerelease identifiers and no build metadata", tag)
 	}
 	return strings.TrimPrefix(tag, "v"), nil
+}
+
+// CompareVersions orders two canonical release versions according to SemVer
+// precedence. It rejects build metadata because release tags do not admit it.
+func CompareVersions(left, right string) (int, error) {
+	if !versionPattern.MatchString(left) || !versionPattern.MatchString(right) {
+		return 0, contractError("versions %q and %q must be canonical SemVer", left, right)
+	}
+	leftCore, leftPre, _ := strings.Cut(left, "-")
+	rightCore, rightPre, _ := strings.Cut(right, "-")
+	leftParts, rightParts := strings.Split(leftCore, "."), strings.Split(rightCore, ".")
+	for index := 0; index < 3; index++ {
+		leftNumber, rightNumber := new(big.Int), new(big.Int)
+		leftNumber.SetString(leftParts[index], 10)
+		rightNumber.SetString(rightParts[index], 10)
+		if comparison := leftNumber.Cmp(rightNumber); comparison != 0 {
+			return comparison, nil
+		}
+	}
+	if leftPre == "" && rightPre == "" {
+		return 0, nil
+	}
+	if leftPre == "" {
+		return 1, nil
+	}
+	if rightPre == "" {
+		return -1, nil
+	}
+	leftIdentifiers, rightIdentifiers := strings.Split(leftPre, "."), strings.Split(rightPre, ".")
+	for index := 0; index < min(len(leftIdentifiers), len(rightIdentifiers)); index++ {
+		leftID, rightID := leftIdentifiers[index], rightIdentifiers[index]
+		leftNumber, leftNumeric := new(big.Int), numericPattern.MatchString(leftID)
+		rightNumber, rightNumeric := new(big.Int), numericPattern.MatchString(rightID)
+		if leftNumeric && rightNumeric {
+			leftNumber.SetString(leftID, 10)
+			rightNumber.SetString(rightID, 10)
+			if comparison := leftNumber.Cmp(rightNumber); comparison != 0 {
+				return comparison, nil
+			}
+			continue
+		}
+		if leftNumeric != rightNumeric {
+			if leftNumeric {
+				return -1, nil
+			}
+			return 1, nil
+		}
+		if comparison := strings.Compare(leftID, rightID); comparison != 0 {
+			return comparison, nil
+		}
+	}
+	return len(leftIdentifiers) - len(rightIdentifiers), nil
 }
 
 func ArtifactManifestLocation(version string) string {

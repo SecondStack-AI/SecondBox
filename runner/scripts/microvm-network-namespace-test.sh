@@ -65,6 +65,15 @@ ip -n "$host_ns" link set lo up
 ip -n "$guest_ns" link set lo up
 network_setup apply
 
+# Model a host reboot: the durable Runner state directory survives while the
+# bridge, addresses, firewall tables, and forwarding sysctl are kernel-local.
+ip -n "$host_ns" link delete "$bridge" type bridge
+ip netns exec "$host_ns" sysctl -w net.ipv4.ip_forward=0 >/dev/null
+network_setup apply
+ip -n "$host_ns" link show "$bridge" >/dev/null
+ip -n "$host_ns" -4 addr show dev "$bridge" | grep -qw "$bridge_cidr"
+[[ "$(ip netns exec "$host_ns" sysctl -n net.ipv4.ip_forward)" == 1 ]]
+
 ip link add "$host_veth" type veth peer name "$guest_veth"
 ip link set "$host_veth" netns "$host_ns"
 ip link set "$guest_veth" netns "$guest_ns"
