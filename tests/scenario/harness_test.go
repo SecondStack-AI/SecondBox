@@ -17,12 +17,13 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
 const (
-	scenarioRunnerPool = "scenario-pool"
+	scenarioRunnerPool = standardresources.PoolAMD64
 	scenarioRunnerID   = "scenario-runner"
 )
 

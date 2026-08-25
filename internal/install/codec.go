@@ -335,8 +335,8 @@ func (plan InstallPlan) Validate() error {
 			return installerError("secret target is outside planned paths", nil)
 		}
 	}
-	if len(plan.StandardBundles) != 2 || !slices.Contains(plan.StandardBundles, "agent-compartment") || !slices.Contains(plan.StandardBundles, "durable-coding") {
-		return installerError("both standard bundles must be selected explicitly", nil)
+	if !standardBundleSelectionComplete(plan.StandardBundles) {
+		return installerError("all standard bundles must be selected explicitly", nil)
 	}
 	if len(plan.Capacity.SubjectQuotas) != 7 {
 		return installerError("all seven subject quotas are required", nil)

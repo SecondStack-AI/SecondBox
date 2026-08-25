@@ -685,10 +685,10 @@ func validateBinaries(manifest ArtifactManifest) error {
 }
 
 func validateBundles(bundles []StandardBundleArtifact) error {
-	if len(bundles) != 2 {
-		return contractError("artifact manifest must contain exactly the agent-compartment and durable-coding standard bundles")
+	if len(bundles) != 3 {
+		return contractError("artifact manifest must contain exactly the agent-compartment, durable-coding, and agent-compartment-isolated standard bundles")
 	}
-	want := map[string]bool{"agent-compartment": false, "durable-coding": false}
+	want := map[string]bool{"agent-compartment": false, "durable-coding": false, "agent-compartment-isolated": false}
 	for _, bundle := range bundles {
 		if _, ok := want[bundle.Name]; !ok || want[bundle.Name] {
 			return contractError("standard bundle %q is unexpected or duplicated", bundle.Name)

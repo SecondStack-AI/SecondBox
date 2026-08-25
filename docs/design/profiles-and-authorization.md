@@ -28,12 +28,15 @@ Every ProfileRevision contains:
 - outbound network and DNS policy;
 - approved exposed ports, protocols, and session limits.
 
-SecondBox releases two explicitly selected standard Profile bundles:
+SecondBox releases three explicitly selected standard Profile bundles:
 
 - `agent-compartment` is bounded ephemeral compute for Flue-style agent turns. It starts immediately, has short idle and maximum-duration bounds, and exposes no ports.
 - `durable-coding` is a long-running coding workspace with larger inline CPU, memory, disk, process, operation, transfer, PTY-detach, Snapshot, and development-port bounds.
+- `agent-compartment-isolated` retains the bounded command, file, workspace, cancellation, and lifecycle capabilities of `agent-compartment` while denying all outbound network and DNS access and exposing no ports.
 
 The declarative resource engine materializes standard bundles as ordinary immutable ProfileRevisions. Selection is explicit in `[standard_resources]`; the control plane has no built-in defaults, reserved-name behavior, or request-time reconciler. Each release declares the complete ordered lineage and canonical spec digest, validates an installed prefix, and appends only missing revisions. Existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules.
+
+Tenant ceilings and application grants select these release-owned Profile names directly; they do not create tenant-specific Profile copies. A network-enabled RunnerPool maps to one operator-trusted egress context. Tenant-aware shared egress identity is outside this release.
 
 Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or transferring Workspace bytes off the Runner. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
 

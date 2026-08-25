@@ -1,6 +1,9 @@
 package cliui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestInstallerFormBuildersKeepAuthorityInBoundValues(t *testing.T) {
 	workspace := ""
@@ -9,6 +12,7 @@ func TestInstallerFormBuildersKeepAuthorityInBoundValues(t *testing.T) {
 	purge := ""
 	forms := []HuhForm{
 		WorkspaceChoiceForm([]Option{{Label: "Dedicated Btrfs", Value: "mount"}, {Label: "Btrfs image", Value: "image"}}, &workspace),
+		StandardBundleSelectionForm(&accepted),
 		CapacityReviewForm("2 Sandboxes, 8 GiB memory", &accepted),
 		AdvancedSettingsForm([]TextBinding{{Title: "API bind", Value: &advanced, Validate: func(value string) error { return nil }}}),
 		FinalInstallConfirmationForm("review", &accepted),
@@ -21,11 +25,15 @@ func TestInstallerFormBuildersKeepAuthorityInBoundValues(t *testing.T) {
 			t.Fatalf("form %d is incomplete: %#v", index, form)
 		}
 	}
-	confirm := forms[3].Groups[0].Fields[0]
+	standardBundles := forms[1].Groups[0].Fields[0]
+	if !strings.Contains(standardBundles.Description, "agent-compartment-isolated") || !standardBundles.RequireAffirmative {
+		t.Fatalf("standard bundle selection = %#v", standardBundles)
+	}
+	confirm := forms[4].Groups[0].Fields[0]
 	if !confirm.RequireAffirmative || confirm.BoolValue != &accepted {
 		t.Fatal("final confirmation is not explicit")
 	}
-	validator := forms[6].Groups[0].Fields[0].ValidateString
+	validator := forms[7].Groups[0].Fields[0].ValidateString
 	if validator == nil || validator("yes") == nil || validator("PURGE secondbox") != nil {
 		t.Fatal("purge typed confirmation is not exact")
 	}

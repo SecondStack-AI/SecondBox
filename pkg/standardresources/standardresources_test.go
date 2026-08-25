@@ -3,6 +3,7 @@ package standardresources
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,6 +33,32 @@ func TestRecordedBundleAcceptsImmutablePrefixAfterPolicyAppends(t *testing.T) {
 	}
 }
 
+func TestDocumentsContainThreeExplicitBundlesAndNoIsolatedGatewayDependency(t *testing.T) {
+	documents, err := Documents("sha256:"+strings.Repeat("c", 64), v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != len(BundleNames()) {
+		t.Fatalf("standard documents = %#v", documents)
+	}
+	for index, name := range BundleNames() {
+		if documents[index].Name != name {
+			t.Fatalf("standard document order = %#v", documents)
+		}
+	}
+	isolated := documents[len(documents)-1]
+	if isolated.LogicalGateway != "" || isolated.Profile.Name != AgentCompartmentIsolated {
+		t.Fatalf("isolated standard document = %#v", isolated)
+	}
+	encoded, err := json.Marshal(isolated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeDocument(encoded); err != nil {
+		t.Fatalf("isolated standard document decode: %v", err)
+	}
+}
+
 func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *testing.T) {
 	runtimeDigest := v030RuntimeBundleDigest
 	toolchainDigest := v030ToolchainBundleDigest
@@ -43,8 +70,12 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, profile := range []resourceapply.Profile{agent, coding} {
-		if profile.Name != AgentCompartment && profile.Name != DurableCoding {
+	isolated, err := ProfileLineage(AgentCompartmentIsolated, runtimeDigest, toolchainDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []resourceapply.Profile{agent, coding, isolated} {
+		if !slices.Contains(BundleNames(), profile.Name) {
 			t.Fatalf("unexpected Profile %q", profile.Name)
 		}
 		wantRevisions := 1
@@ -62,7 +93,7 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 			if err != nil || actual != revision.SpecDigest {
 				t.Fatalf("identity = %s, %v", actual, err)
 			}
-			if revision.Spec.Architecture != ArchitectureAMD64 || revision.Spec.Network.Mode != "allow_list" || len(revision.Spec.Network.Destinations) != 1 {
+			if revision.Spec.Architecture != ArchitectureAMD64 {
 				t.Fatalf("standard spec = %#v", revision.Spec)
 			}
 			if revision.Spec.RuntimeBundleDigest != runtimeDigest || revision.Spec.ToolchainBundleDigest != toolchainDigest || revision.Spec.RuntimeBundleDigest == revision.Spec.ToolchainBundleDigest {
@@ -79,11 +110,20 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 		t.Fatalf("agent-compartment revision 2 changed more than its deadline: %#v", agent.Revisions)
 	}
 	currentAgent := agent.Revisions[len(agent.Revisions)-1].Spec
-	if currentAgent.Network.Destinations[0].Domain != AgentGateway || len(currentAgent.Ports) != 0 || currentAgent.Retention.SnapshotLimit != 0 {
+	if currentAgent.Network.Mode != "allow_list" || len(currentAgent.Network.Destinations) != 1 || currentAgent.Network.Destinations[0].Domain != AgentGateway || len(currentAgent.Ports) != 0 || currentAgent.Retention.SnapshotLimit != 0 {
 		t.Fatalf("agent-compartment is over-capable: %#v", currentAgent)
 	}
-	if coding.Revisions[0].Spec.Network.Destinations[0].Domain != PlatformGateway || len(coding.Revisions[0].Spec.Ports) == 0 || coding.Revisions[0].Spec.Retention.SnapshotLimit == 0 {
+	if coding.Revisions[0].Spec.Network.Mode != "allow_list" || len(coding.Revisions[0].Spec.Network.Destinations) != 1 || coding.Revisions[0].Spec.Network.Destinations[0].Domain != PlatformGateway || len(coding.Revisions[0].Spec.Ports) == 0 || coding.Revisions[0].Spec.Retention.SnapshotLimit == 0 {
 		t.Fatalf("durable-coding lacks durable capabilities: %#v", coding.Revisions[0].Spec)
+	}
+	isolatedSpec := isolated.Revisions[0].Spec
+	if isolatedSpec.Network.Mode != "deny_all" || len(isolatedSpec.Network.Destinations) != 0 || len(isolatedSpec.Ports) != 0 || isolatedSpec.Retention.SnapshotLimit != 0 || isolatedSpec.Execution.MaximumDeadlineMilliseconds != 900000 || isolatedSpec.Resources.WorkspaceBytes == 0 || isolatedSpec.Lifecycle.MaximumDurationSeconds == 0 {
+		t.Fatalf("agent-compartment-isolated capability bounds = %#v", isolatedSpec)
+	}
+	networkAgent := currentAgent
+	networkAgent.Network = isolatedSpec.Network
+	if !reflect.DeepEqual(networkAgent, isolatedSpec) {
+		t.Fatalf("isolated Profile changed more than network policy: agent=%#v isolated=%#v", currentAgent, isolatedSpec)
 	}
 }
 
@@ -103,6 +143,16 @@ func TestAgentCompartmentPreservesV031RevisionIdentity(t *testing.T) {
 	}
 }
 
+func TestAgentCompartmentIsolatedCanonicalRevisionIdentity(t *testing.T) {
+	profile, err := ProfileLineage(AgentCompartmentIsolated, v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := profile.Revisions[0].SpecDigest, "sha256:59693b73e62e21d3ce705060edba3e13301eaf8e14c00d90792ab78afa74be6c"; got != want {
+		t.Fatalf("agent-compartment-isolated revision 1 digest = %q, want %q", got, want)
+	}
+}
+
 func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T) {
 	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -114,13 +164,20 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agent.Revisions) != 3 || len(coding.Revisions) != 2 {
-		t.Fatalf("changed-bundle lineage = agent %#v coding %#v", agent.Revisions, coding.Revisions)
+	isolated, err := ProfileLineage(AgentCompartmentIsolated, runtimeDigest, toolchainDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.Revisions) != 3 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 2 {
+		t.Fatalf("changed-bundle lineage = agent %#v coding %#v isolated %#v", agent.Revisions, coding.Revisions, isolated.Revisions)
 	}
 	if agent.Revisions[0].SpecDigest != "sha256:837ec1f0810f9cc10d3ec760fd385cb90db894d6446f09f97a00c310449d618f" {
 		t.Fatalf("changed bundle rewrote agent revision 1: %#v", agent.Revisions)
 	}
-	for _, profile := range []resourceapply.Profile{agent, coding} {
+	if isolated.Revisions[0].SpecDigest != "sha256:59693b73e62e21d3ce705060edba3e13301eaf8e14c00d90792ab78afa74be6c" {
+		t.Fatalf("changed bundle rewrote isolated revision 1: %#v", isolated.Revisions)
+	}
+	for _, profile := range []resourceapply.Profile{agent, coding, isolated} {
 		head := profile.Revisions[len(profile.Revisions)-1].Spec
 		if head.RuntimeBundleDigest != runtimeDigest || head.ToolchainBundleDigest != toolchainDigest {
 			t.Fatalf("changed bundle did not reach %s head: %#v", profile.Name, head)
@@ -131,7 +188,7 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 func TestDevelopmentProfileLineageUsesOnlySyntheticAssets(t *testing.T) {
 	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	for _, name := range []string{AgentCompartment, DurableCoding} {
+	for _, name := range BundleNames() {
 		profile, err := DevelopmentProfileLineage(name, runtimeDigest, toolchainDigest)
 		if err != nil {
 			t.Fatal(err)

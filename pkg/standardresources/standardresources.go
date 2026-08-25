@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	AgentCompartment  = "agent-compartment"
-	DurableCoding     = "durable-coding"
-	ArchitectureAMD64 = "amd64"
-	PoolAMD64         = "standard-amd64"
+	AgentCompartment         = "agent-compartment"
+	DurableCoding            = "durable-coding"
+	AgentCompartmentIsolated = "agent-compartment-isolated"
+	ArchitectureAMD64        = "amd64"
+	PoolAMD64                = "standard-amd64"
 
 	DurableCodingCPUMillis            = int64(4000)
 	DurableCodingMemoryBytes          = int64(8 << 30)
@@ -44,6 +45,11 @@ type PoolBinding struct {
 type Selection struct {
 	Bundles []string
 	Pools   map[string]PoolBinding
+}
+
+// BundleNames returns every release-owned standard bundle in artifact order.
+func BundleNames() []string {
+	return []string{AgentCompartment, DurableCoding, AgentCompartmentIsolated}
 }
 
 // Build resolves execution asset digests only from the already-validated
@@ -113,6 +119,11 @@ func ProfileLineage(name, runtimeDigest, toolchainDigest string) (resourceapply.
 		if runtimeDigest != v030RuntimeBundleDigest || toolchainDigest != v030ToolchainBundleDigest {
 			specs = append(specs, codingSpec(PoolAMD64, runtimeDigest, toolchainDigest))
 		}
+	case AgentCompartmentIsolated:
+		specs = []secondboxclient.ProfileRevisionSpec{isolatedAgentSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest)}
+		if runtimeDigest != v030RuntimeBundleDigest || toolchainDigest != v030ToolchainBundleDigest {
+			specs = append(specs, isolatedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest))
+		}
 	default:
 		return resourceapply.Profile{}, fmt.Errorf("SecondBox standard bundle %q is unknown", name)
 	}
@@ -129,6 +140,8 @@ func DevelopmentProfileLineage(name, runtimeDigest, toolchainDigest string) (res
 		specs = []secondboxclient.ProfileRevisionSpec{agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000)}
 	case DurableCoding:
 		specs = []secondboxclient.ProfileRevisionSpec{codingSpec(PoolAMD64, runtimeDigest, toolchainDigest)}
+	case AgentCompartmentIsolated:
+		specs = []secondboxclient.ProfileRevisionSpec{isolatedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest)}
 	default:
 		return resourceapply.Profile{}, fmt.Errorf("SecondBox standard bundle %q is unknown", name)
 	}
@@ -189,6 +202,12 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilli
 		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: AgentGateway, Port: 443}}},
 		Ports:     []secondboxclient.PortPolicy{},
 	}
+}
+
+func isolatedAgentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
+	spec := agentSpec(pool, runtimeDigest, toolchainDigest, 900000)
+	spec.Network = secondboxclient.NetworkPolicy{Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{}}
+	return spec
 }
 
 func codingSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {

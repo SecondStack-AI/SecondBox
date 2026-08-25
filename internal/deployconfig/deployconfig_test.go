@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 type recordingComposeExecutor struct{ calls [][]string }
@@ -127,6 +129,20 @@ func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
 	}
 	if len(OverrideRegistry()) != 15 {
 		t.Fatalf("override count = %d", len(OverrideRegistry()))
+	}
+}
+
+func TestIsolatedStandardBundleCanBeSelectedWithoutGatewayMapping(t *testing.T) {
+	manifest := developmentManifest("secrets/postgres-password", "secrets/platform-token", "secrets/runner-enrollment-credential")
+	manifest.StandardResources.Bundles = []string{standardresources.AgentCompartmentIsolated}
+	manifest.StandardResources.RunnerPools = slices.DeleteFunc(manifest.StandardResources.RunnerPools, func(pool StandardRunnerPool) bool {
+		return pool.Bundle != standardresources.AgentCompartmentIsolated
+	})
+	runner := validTestRunner("runner-isolated", "remote")
+	runner.PoolID = standardresources.PoolAMD64
+	runner.NetworkPolicyRunnerGateways = "none"
+	if err := validateStandardResources(manifest.StandardResources, []Runner{runner}); err != nil {
+		t.Fatalf("explicit isolated bundle selection: %v", err)
 	}
 }
 
@@ -430,11 +446,13 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		}},
 		{name: "Runner features omit local workspace", want: "runner features require local-workspace", mutate: func(manifest *ManifestV1) { manifest.Policy.RunnerEnabledFeatures = "evidence" }},
 		{name: "standard resources absent", want: "standard_resources.artifact_manifest is required", mutate: func(manifest *ManifestV1) { manifest.StandardResources = StandardResources{} }},
-		{name: "standard bundle duplicate", want: "unique agent-compartment or durable-coding", mutate: func(manifest *ManifestV1) {
+		{name: "standard bundle duplicate", want: "unique release-owned bundle names", mutate: func(manifest *ManifestV1) {
 			manifest.StandardResources.Bundles = []string{"agent-compartment", "agent-compartment"}
 		}},
 		{name: "standard bundle has no pool", want: "must bind selected bundle durable-coding", mutate: func(manifest *ManifestV1) {
-			manifest.StandardResources.RunnerPools = manifest.StandardResources.RunnerPools[:1]
+			manifest.StandardResources.RunnerPools = slices.DeleteFunc(manifest.StandardResources.RunnerPools, func(pool StandardRunnerPool) bool {
+				return pool.Bundle == standardresources.DurableCoding
+			})
 		}},
 		{name: "standard pool capacity absent", want: "max_sandboxes must be positive", mutate: func(manifest *ManifestV1) { manifest.StandardResources.RunnerPools[0].MaxSandboxes = nil }},
 		{name: "standard gateway unresolved", want: "must resolve agent-gateway.secondbox.internal", mutate: func(manifest *ManifestV1) {

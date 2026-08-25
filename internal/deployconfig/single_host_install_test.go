@@ -33,7 +33,7 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 			releasePlan.BinaryDigests[binary.Name] = binary.SHA256
 		}
 	}
-	plan, err := install.ProposePlan(facts, install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: facts.ObservedAt, DeploymentDirectory: deployment, BinaryDirectory: filepath.Join(base, "bin"), CLIConfigPath: filepath.Join(base, "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan, StorageChoice: install.StorageExistingMount, ExistingMountpoint: workspaceMount, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 7200})
+	plan, err := install.ProposePlan(facts, install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: facts.ObservedAt, DeploymentDirectory: deployment, BinaryDirectory: filepath.Join(base, "bin"), CLIConfigPath: filepath.Join(base, "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan, StorageChoice: install.StorageExistingMount, ExistingMountpoint: workspaceMount, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 7200})
 	if err != nil {
 		t.Fatal(err)
 	}

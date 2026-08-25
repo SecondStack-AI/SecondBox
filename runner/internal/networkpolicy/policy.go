@@ -152,6 +152,20 @@ func (policy *CompiledPolicy) Mode() Mode {
 	return policy.mode
 }
 
+// AllowsDNS reports whether this policy has a domain destination that requires
+// the Runner-controlled resolver. CIDR-only and deny-all policies do not.
+func (policy *CompiledPolicy) AllowsDNS() bool {
+	if policy == nil || policy.mode == ModeDenyAll {
+		return false
+	}
+	for _, destination := range policy.destinations {
+		if destination.Domain != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // ProtectedPrefixes returns every host-enforced destination class, including
 // runner addresses and operator-declared management networks.
 func (policy *CompiledPolicy) ProtectedPrefixes() []netip.Prefix {

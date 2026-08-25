@@ -18,7 +18,7 @@ secondbox-deploy init --mode production \
 secondbox-deploy compose /srv/secondbox/deployment/secondbox.toml up
 ```
 
-Select `agent-compartment`, `durable-coding`, or both in `[standard_resources]`; provide only deployment inventory and gateway mappings. Do not copy their RunnerPool or Profile specifications. Reapplying the deployment validates the installed immutable lineage and appends only a missing release-owned revision.
+Select any explicit combination of `agent-compartment`, `durable-coding`, and `agent-compartment-isolated` in `[standard_resources]`; provide deployment inventory and only the gateway mappings required by the network-enabled selections. Do not copy their RunnerPool or Profile specifications. Reapplying the deployment validates the installed immutable lineage and appends only a missing release-owned revision.
 
 Import the existing SDKs at the same coordinated version:
 

@@ -160,8 +160,8 @@ func writeManifest(inputPath, outputDirectory string) error {
 	if err != nil {
 		return err
 	}
-	bundles := make([]releasecontract.StandardBundleArtifact, 0, 2)
-	for _, name := range []string{standardresources.AgentCompartment, standardresources.DurableCoding} {
+	bundles := make([]releasecontract.StandardBundleArtifact, 0, len(standardresources.BundleNames()))
+	for _, name := range standardresources.BundleNames() {
 		filename := name + ".standard-bundle.json"
 		bundleRef, err := ref(filename)
 		if err != nil {

@@ -58,7 +58,7 @@ default_subject_max_concurrent_operations = 20
 
 [standard_resources]
 artifact_manifest = 'development-artifact-manifest.json'
-bundles = ['agent-compartment', 'durable-coding']
+bundles = ['agent-compartment', 'durable-coding', 'agent-compartment-isolated']
 apply_wait_seconds = 180
 
 [[standard_resources.runner_pools]]
@@ -73,6 +73,16 @@ max_memory_bytes = 171798691840
 
 [[standard_resources.runner_pools]]
 bundle = 'durable-coding'
+name = 'standard-amd64'
+architectures = ['amd64']
+capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
+state = 'ready'
+max_sandboxes = 20
+max_cpu_millis = 80000
+max_memory_bytes = 171798691840
+
+[[standard_resources.runner_pools]]
+bundle = 'agent-compartment-isolated'
 name = 'standard-amd64'
 architectures = ['amd64']
 capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']

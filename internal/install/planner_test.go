@@ -23,7 +23,7 @@ func plannerFacts(t *testing.T) HostFacts {
 
 func plannerInput(t *testing.T, choice StorageChoice) ProposalInput {
 	t.Helper()
-	return ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC), DeploymentDirectory: "/home/operator/.local/share/secondbox", BinaryDirectory: "/home/operator/.local/bin", CLIConfigPath: "/home/operator/.config/secondbox/config.json", CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 105 << 30, DeploymentAvailableBytes: 100 << 30, Release: validPlan(t).Release, StorageChoice: choice, ExistingMountpoint: "/srv/secondbox-workspace", StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400}
+	return ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC), DeploymentDirectory: "/home/operator/.local/share/secondbox", BinaryDirectory: "/home/operator/.local/bin", CLIConfigPath: "/home/operator/.config/secondbox/config.json", CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 105 << 30, DeploymentAvailableBytes: 100 << 30, Release: validPlan(t).Release, StorageChoice: choice, ExistingMountpoint: "/srv/secondbox-workspace", StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400}
 }
 
 func TestProposalRequiresExplicitCLIIdentity(t *testing.T) {
@@ -35,10 +35,12 @@ func TestProposalRequiresExplicitCLIIdentity(t *testing.T) {
 }
 
 func TestProposalRequiresExplicitStandardBundles(t *testing.T) {
-	input := plannerInput(t, StorageBtrfsImage)
-	input.StandardBundles = nil
-	if _, err := ProposePlan(plannerFacts(t), input); err == nil || !strings.Contains(err.Error(), "standard bundles") {
-		t.Fatalf("implicit standard bundle proposal error = %v", err)
+	for _, selected := range [][]string{nil, {"agent-compartment", "durable-coding"}} {
+		input := plannerInput(t, StorageBtrfsImage)
+		input.StandardBundles = selected
+		if _, err := ProposePlan(plannerFacts(t), input); err == nil || !strings.Contains(err.Error(), "standard bundles") {
+			t.Fatalf("incomplete standard bundle proposal %#v error = %v", selected, err)
+		}
 	}
 }
 
