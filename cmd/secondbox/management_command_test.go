@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/internal/cliui"
+	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
 func TestManagementCommandsUseTypedAuthoritiesAndGeneratedRoutes(t *testing.T) {
@@ -150,6 +151,42 @@ func TestManagementCommandActionsUseGeneratedRoutes(t *testing.T) {
 			handled, err := runManagementCommand(ctx, cliSession{url: server.URL, token: "test-token", authority: test.authority}, test.args, &output, server.Client())
 			if err != nil || !handled {
 				t.Fatalf("handled, error = %t, %v", handled, err)
+			}
+		})
+	}
+}
+
+func TestManagementCommandGroupsPropagateTypedAPIErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		authority sessionAuthorityKind
+		args      []string
+	}{
+		{name: "tenant", authority: sessionAuthorityPlatform, args: []string{"tenant", "get", "tenant-a"}},
+		{name: "controller authority", authority: sessionAuthorityPlatform, args: []string{"controller-authority", "get", "tenant-a", "controller-a"}},
+		{name: "subject", authority: sessionAuthorityTenantController, args: []string{"subject", "get", "subject-a"}},
+		{name: "application authority", authority: sessionAuthorityTenantController, args: []string{"application-authority", "get", "application-a"}},
+		{name: "usage", authority: sessionAuthorityTenantController, args: []string{"usage"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "application/problem+json")
+				writer.WriteHeader(http.StatusConflict)
+				_, _ = io.WriteString(writer, `{"code":"management_test_failure","status":409,"title":"management request failed"}`)
+			}))
+			defer server.Close()
+			var output bytes.Buffer
+			ctx := managementPresentationContext(&output, cliui.OutputJSON)
+			handled, err := runManagementCommand(ctx, cliSession{url: server.URL, token: "test-token", authority: test.authority}, test.args, &output, server.Client())
+			if !handled {
+				t.Fatal("management command was not handled")
+			}
+			if code := secondboxclient.ProblemCodeOf(err); code != "management_test_failure" {
+				t.Fatalf("management API problem code = %q, error = %v", code, err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("failed management command rendered success output %q", output.String())
 			}
 		})
 	}

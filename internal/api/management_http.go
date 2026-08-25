@@ -67,10 +67,6 @@ func (apiHandler *handler) authenticateOperationInspection(next http.Handler) ht
 	})
 }
 
-func (apiHandler *handler) managementUnavailable(writer http.ResponseWriter, request *http.Request) {
-	apiHandler.writeError(writer, request, ports.ErrManagementUnavailable)
-}
-
 func (apiHandler *handler) createTenant(writer http.ResponseWriter, request *http.Request) {
 	var body contracts.CreateTenantRequest
 	if err := decodeStrictJSON(request, &body); err != nil {

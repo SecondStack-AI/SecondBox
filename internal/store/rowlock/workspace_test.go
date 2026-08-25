@@ -166,7 +166,9 @@ func TestQuotaLedgerPrecedesSandboxDuringLifecycleMutation(t *testing.T) {
 	if err := probe.QueryRow(t.Context(), `
 		SELECT id FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE NOWAIT`, fixture.sandboxID,
 	).Scan(&sandboxID); err != nil {
-		probe.Rollback(t.Context())
+		if rollbackErr := probe.Rollback(t.Context()); rollbackErr != nil {
+			t.Fatalf("rollback Sandbox lock probe after query failure: %v (query: %v)", rollbackErr, err)
+		}
 		t.Fatalf("lifecycle mutation locked Sandbox before quota ledger: %v", err)
 	}
 	if err := probe.Rollback(t.Context()); err != nil {

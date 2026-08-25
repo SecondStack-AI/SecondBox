@@ -68,27 +68,27 @@ func runTenantCommand(ctx context.Context, session cliSession, args []string, ou
 	switch args[0] {
 	case "create":
 		var request secondboxclient.CreateTenantRequest
-		idempotencyKey, err := parseCreateManagementOptions("tenant create", args[1:], &request)
-		if err != nil {
-			return err
+		idempotencyKey, parseErr := parseCreateManagementOptions("tenant create", args[1:], &request)
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.CreateTenant(ctx, request, idempotencyKey)
 	case "get":
-		ref, err := requireManagementReference("tenant get", args[1:])
-		if err != nil {
-			return err
+		ref, parseErr := requireManagementReference("tenant get", args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.GetTenant(ctx, ref)
 	case "list":
-		options, err := parseManagementPageOptions("tenant list", args[1:], false)
-		if err != nil {
-			return err
+		options, parseErr := parseManagementPageOptions("tenant list", args[1:], false)
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.ListTenants(ctx, options.page)
 	case "suspend", "reactivate":
-		ref, revision, idempotencyKey, err := parseRevisionMutationOptions("tenant "+args[0], args[1:])
-		if err != nil {
-			return err
+		ref, revision, idempotencyKey, parseErr := parseRevisionMutationOptions("tenant "+args[0], args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		if args[0] == "suspend" {
 			result, err = client.SuspendTenant(ctx, ref, revision, idempotencyKey)
@@ -115,36 +115,36 @@ func runTenantControllerAuthorityCommand(ctx context.Context, session cliSession
 	var result any
 	switch args[0] {
 	case "create":
-		tenantRef, remaining, err := shiftManagementReference("controller-authority create", args[1:])
-		if err != nil {
-			return err
+		tenantRef, remaining, parseErr := shiftManagementReference("controller-authority create", args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		var request secondboxclient.CreateTenantControllerAuthorityRequest
-		idempotencyKey, err := parseCreateManagementOptions("controller-authority create", remaining, &request)
-		if err != nil {
-			return err
+		idempotencyKey, parseErr := parseCreateManagementOptions("controller-authority create", remaining, &request)
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.CreateTenantControllerAuthority(ctx, tenantRef, request, idempotencyKey)
 	case "get":
-		tenantRef, authorityID, err := requireTwoManagementReferences("controller-authority get", args[1:])
-		if err != nil {
-			return err
+		tenantRef, authorityID, parseErr := requireTwoManagementReferences("controller-authority get", args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.GetTenantControllerAuthority(ctx, tenantRef, authorityID)
 	case "list":
-		tenantRef, remaining, err := shiftManagementReference("controller-authority list", args[1:])
-		if err != nil {
-			return err
+		tenantRef, remaining, parseErr := shiftManagementReference("controller-authority list", args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
-		options, err := parseManagementPageOptions("controller-authority list", remaining, false)
-		if err != nil {
-			return err
+		options, parseErr := parseManagementPageOptions("controller-authority list", remaining, false)
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.ListTenantControllerAuthorities(ctx, tenantRef, options.page)
 	case "rotate", "revoke":
-		tenantRef, authorityID, revision, idempotencyKey, err := parseAuthorityMutationOptions("controller-authority "+args[0], args[1:])
-		if err != nil {
-			return err
+		tenantRef, authorityID, revision, idempotencyKey, parseErr := parseAuthorityMutationOptions("controller-authority "+args[0], args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		if args[0] == "rotate" {
 			result, err = client.RotateTenantControllerAuthority(ctx, tenantRef, authorityID, revision, idempotencyKey)
@@ -172,27 +172,27 @@ func runSubjectCommand(ctx context.Context, session cliSession, args []string, o
 	switch args[0] {
 	case "create":
 		var request secondboxclient.CreateSubjectRequest
-		idempotencyKey, err := parseCreateManagementOptions("subject create", args[1:], &request)
-		if err != nil {
-			return err
+		idempotencyKey, parseErr := parseCreateManagementOptions("subject create", args[1:], &request)
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.CreateSubject(ctx, request, idempotencyKey)
 	case "get":
-		ref, err := requireManagementReference("subject get", args[1:])
-		if err != nil {
-			return err
+		ref, parseErr := requireManagementReference("subject get", args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.GetSubject(ctx, ref)
 	case "list":
-		options, err := parseManagementPageOptions("subject list", args[1:], false)
-		if err != nil {
-			return err
+		options, parseErr := parseManagementPageOptions("subject list", args[1:], false)
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.ListSubjects(ctx, options.page)
 	case "close", "cleanup":
-		ref, revision, idempotencyKey, err := parseRevisionMutationOptions("subject "+args[0], args[1:])
-		if err != nil {
-			return err
+		ref, revision, idempotencyKey, parseErr := parseRevisionMutationOptions("subject "+args[0], args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		if args[0] == "close" {
 			result, err = client.CloseSubject(ctx, ref, revision, idempotencyKey)
@@ -220,27 +220,27 @@ func runApplicationAuthorityCommand(ctx context.Context, session cliSession, arg
 	switch args[0] {
 	case "create":
 		var request secondboxclient.CreateApplicationAuthorityRequest
-		idempotencyKey, err := parseCreateManagementOptions("application-authority create", args[1:], &request)
-		if err != nil {
-			return err
+		idempotencyKey, parseErr := parseCreateManagementOptions("application-authority create", args[1:], &request)
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.CreateApplicationAuthority(ctx, request, idempotencyKey)
 	case "get":
-		authorityID, err := requireManagementReference("application-authority get", args[1:])
-		if err != nil {
-			return err
+		authorityID, parseErr := requireManagementReference("application-authority get", args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.GetApplicationAuthority(ctx, authorityID)
 	case "list":
-		options, err := parseManagementPageOptions("application-authority list", args[1:], true)
-		if err != nil {
-			return err
+		options, parseErr := parseManagementPageOptions("application-authority list", args[1:], true)
+		if parseErr != nil {
+			return parseErr
 		}
 		result, err = client.ListApplicationAuthorities(ctx, options.subjectRef, options.page)
 	case "rotate", "revoke":
-		authorityID, revision, idempotencyKey, err := parseRevisionMutationOptions("application-authority "+args[0], args[1:])
-		if err != nil {
-			return err
+		authorityID, revision, idempotencyKey, parseErr := parseRevisionMutationOptions("application-authority "+args[0], args[1:])
+		if parseErr != nil {
+			return parseErr
 		}
 		if args[0] == "rotate" {
 			result, err = client.RotateApplicationAuthority(ctx, authorityID, revision, idempotencyKey)

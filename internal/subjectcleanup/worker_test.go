@@ -379,13 +379,17 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 	}
 	var blockerPID int32
 	if err := blocker.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
-		blocker.Rollback(t.Context())
+		if rollbackErr := blocker.Rollback(t.Context()); rollbackErr != nil {
+			t.Fatalf("rollback quota blocker after backend lookup failure: %v (lookup: %v)", rollbackErr, err)
+		}
 		t.Fatal(err)
 	}
 	if _, err := blocker.Exec(t.Context(), `
 		SELECT tenant_ref FROM secondbox.tenant_quotas
 		WHERE tenant_ref=$1 FOR UPDATE`, tenantRef); err != nil {
-		blocker.Rollback(t.Context())
+		if rollbackErr := blocker.Rollback(t.Context()); rollbackErr != nil {
+			t.Fatalf("rollback quota blocker after lock failure: %v (lock: %v)", rollbackErr, err)
+		}
 		t.Fatal(err)
 	}
 	type admissionResult struct{ err error }
@@ -402,7 +406,9 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 				SELECT 1 FROM pg_stat_activity
 				WHERE $1=ANY(pg_blocking_pids(pid))
 			)`, blockerPID).Scan(&waiting); err != nil {
-			blocker.Rollback(t.Context())
+			if rollbackErr := blocker.Rollback(t.Context()); rollbackErr != nil {
+				t.Fatalf("rollback quota blocker after wait inspection failure: %v (inspection: %v)", rollbackErr, err)
+			}
 			t.Fatal(err)
 		}
 		if waiting {
@@ -412,12 +418,16 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 	}
 	probe, err := pool.Begin(t.Context())
 	if err != nil {
-		blocker.Rollback(t.Context())
+		if rollbackErr := blocker.Rollback(t.Context()); rollbackErr != nil {
+			t.Fatalf("rollback quota blocker after probe begin failure: %v (begin: %v)", rollbackErr, err)
+		}
 		t.Fatal(err)
 	}
 	_, probeErr := probe.Exec(t.Context(), `
 		SELECT id FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE NOWAIT`, sandboxID)
-	_ = probe.Rollback(t.Context())
+	if err := probe.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if err := blocker.Rollback(t.Context()); err != nil {
 		t.Fatal(err)
 	}
