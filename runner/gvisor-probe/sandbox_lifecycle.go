@@ -276,11 +276,22 @@ func newProofArea(env *probeEnv, base, name string) (*proofArea, error) {
 }
 
 func runscBaseArguments(stateRoot string, rootless bool, extraGlobal ...string) []string {
-	arguments := []string{"--root", stateRoot, "--network=none", "--platform=systrap"}
+	// --network=none is the default; an explicit --network flag in
+	// extraGlobal replaces it rather than conflicting with it.
+	network := "--network=none"
+	filtered := make([]string, 0, len(extraGlobal))
+	for _, argument := range extraGlobal {
+		if strings.HasPrefix(argument, "--network") {
+			network = argument
+			continue
+		}
+		filtered = append(filtered, argument)
+	}
+	arguments := []string{"--root", stateRoot, network, "--platform=systrap"}
 	if rootless {
 		arguments = append(arguments, "--rootless")
 	}
-	return append(arguments, extraGlobal...)
+	return append(arguments, filtered...)
 }
 
 // runscRun builds the supervised foreground run command for one proof area.

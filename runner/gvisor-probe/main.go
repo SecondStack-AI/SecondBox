@@ -33,6 +33,7 @@ var proofs = []proof{
 	{name: "cgroup-limits", run: proofCgroupLimits},
 	{name: "workspace", run: proofWorkspace},
 	{name: "agent-protocol", run: proofAgentProtocol},
+	{name: "network-policy", run: proofNetworkPolicy},
 }
 
 func main() {
@@ -56,8 +57,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	launchID := flags.String("internal-launch-id", "", "internal: container ID for -internal-launch-state-root")
 	workspaceWork := flags.String("internal-workspace-work", "",
 		"internal: run the workspace proof inside this unshared mount namespace")
+	netTargetsReady := flags.String("internal-net-targets", "",
+		"internal: serve the network-policy target listeners inside the targets namespace")
+	netDNSMap := flags.String("internal-net-dns-map", "", "internal: DNS map file for -internal-net-targets")
 	if err := flags.Parse(args); err != nil {
 		return 2
+	}
+
+	if *netTargetsReady != "" {
+		if err := runNetTargets(*netTargetsReady, *netDNSMap); err != nil {
+			_, _ = fmt.Fprintf(stderr, "SecondBox gVisor probe net targets failed: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	if *workspaceWork != "" {

@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -20,8 +23,11 @@ func main() {
 }
 
 func run() int {
+	if len(os.Args) >= 2 && os.Args[1] == "netcheck" {
+		return netcheck(os.Args[2:])
+	}
 	if len(os.Args) != 3 {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: guest <hello|fail|stay|spin|hog|fill|print|cat> <argument>")
+		_, _ = fmt.Fprintln(os.Stderr, "usage: guest <hello|fail|stay|spin|hog|fill|print|cat|netcheck> <argument>")
 		return 2
 	}
 	mode := os.Args[1]
@@ -97,6 +103,55 @@ func spin() {
 	for i := 0; i < spinWorkers; i++ {
 		<-done
 	}
+}
+
+// netcheck performs the network-policy probes. Each argument has the form
+// "label|get|http://host:port/" or "label|dial|host:port"; the outcome for
+// each label is written to stdout as "label=ok:<first-body-token>" or
+// "label=blocked". A blocked probe is any resolution, connection, or request
+// failure within the bounded timeout.
+func netcheck(checks []string) int {
+	if len(checks) == 0 {
+		_, _ = fmt.Fprintln(os.Stderr, "guest netcheck requires at least one check")
+		return 2
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	for _, check := range checks {
+		parts := strings.SplitN(check, "|", 3)
+		if len(parts) != 3 {
+			_, _ = fmt.Fprintf(os.Stderr, "guest netcheck check %q is malformed\n", check)
+			return 2
+		}
+		label, kind, target := parts[0], parts[1], parts[2]
+		outcome := "blocked"
+		switch kind {
+		case "get":
+			response, err := client.Get(target)
+			if err == nil {
+				body, readErr := io.ReadAll(io.LimitReader(response.Body, 256))
+				_ = response.Body.Close()
+				if readErr == nil && response.StatusCode == http.StatusOK {
+					fields := strings.Fields(string(body))
+					token := ""
+					if len(fields) > 0 {
+						token = fields[0]
+					}
+					outcome = "ok:" + token
+				}
+			}
+		case "dial":
+			connection, err := net.DialTimeout("tcp", target, 3*time.Second)
+			if err == nil {
+				_ = connection.Close()
+				outcome = "ok:"
+			}
+		default:
+			_, _ = fmt.Fprintf(os.Stderr, "guest netcheck kind %q is unknown\n", kind)
+			return 2
+		}
+		fmt.Printf("%s=%s\n", label, outcome)
+	}
+	return 0
 }
 
 // fill writes to the workspace until the filesystem refuses, then records the

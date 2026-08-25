@@ -53,6 +53,17 @@ type ociLinux struct {
 
 type ociNamespace struct {
 	Type string `json:"type"`
+	Path string `json:"path,omitempty"`
+}
+
+func bundleNamespaces(networkNamespacePath string) []ociNamespace {
+	namespaces := []ociNamespace{
+		{Type: "pid"}, {Type: "mount"}, {Type: "ipc"}, {Type: "uts"},
+	}
+	if networkNamespacePath != "" {
+		namespaces = append(namespaces, ociNamespace{Type: "network", Path: networkNamespacePath})
+	}
+	return namespaces
 }
 
 type ociResources struct {
@@ -86,6 +97,12 @@ type bundleConfig struct {
 	// ExtraBinaries installs additional executables into the rootfs root,
 	// keyed by their in-sandbox name.
 	ExtraBinaries map[string]string
+	// RootfsFiles writes plain files into the rootfs, keyed by rootfs-relative
+	// path (for example "etc/resolv.conf").
+	RootfsFiles map[string][]byte
+	// NetworkNamespacePath joins the sandbox to an existing network namespace
+	// so runsc attaches its netstack to the interfaces found there.
+	NetworkNamespacePath string
 }
 
 const guestBinaryName = "guest"
@@ -113,6 +130,18 @@ func writeBundle(bundleDir, guestBinary string, config bundleConfig) error {
 		}
 		if err := copyExecutable(source, filepath.Join(rootfs, name)); err != nil {
 			return fmt.Errorf("install extra binary %s: %w", name, err)
+		}
+	}
+	for relativePath, content := range config.RootfsFiles {
+		if relativePath == "" || strings.HasPrefix(relativePath, "/") || strings.Contains(relativePath, "..") {
+			return fmt.Errorf("rootfs file path %q must be rootfs-relative", relativePath)
+		}
+		destination := filepath.Join(rootfs, relativePath)
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			return fmt.Errorf("create rootfs directory for %s: %w", relativePath, err)
+		}
+		if err := os.WriteFile(destination, content, 0o644); err != nil {
+			return fmt.Errorf("write rootfs file %s: %w", relativePath, err)
 		}
 	}
 
@@ -146,9 +175,7 @@ func writeBundle(bundleDir, guestBinary string, config bundleConfig) error {
 		Root:   ociRoot{Path: "rootfs", Readonly: true},
 		Mounts: mounts,
 		Linux: ociLinux{
-			Namespaces: []ociNamespace{
-				{Type: "pid"}, {Type: "mount"}, {Type: "ipc"}, {Type: "uts"},
-			},
+			Namespaces:  bundleNamespaces(config.NetworkNamespacePath),
 			CgroupsPath: config.CgroupsPath,
 			Resources:   config.Resources,
 		},
