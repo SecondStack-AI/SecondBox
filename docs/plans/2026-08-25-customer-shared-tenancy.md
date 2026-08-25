@@ -48,15 +48,15 @@ Load-bearing tests fail when their selected Profile, authority, PostgreSQL servi
 
 Define the complete external shape before implementing storage or handler behavior. Contract conformance tests require every documented operation to be registered through the authenticated HTTP router, so new routes land here with authentication, routing, and typed errors while their behavior arrives in later tasks. Preserve provider-neutral SecondBox terminology and make the three fixed authority kinds obvious in OpenAPI, SDKs, errors, and audit concepts.
 
-- [ ] Add Tenant, Subject, TenantControllerAuthority, and ApplicationAuthority schemas with bounded references, metadata, revisions, lifecycle state, timestamps, expiry, grants, and quota fields.
-- [ ] Add operator operations for tenant lifecycle and tenant-controller authority creation, inspection, listing, rotation, and revocation.
-- [ ] Add tenant-controller operations for subject lifecycle, subject cleanup, application-authority lifecycle, and tenant-scoped usage inspection; derive the tenant from authentication rather than request input.
-- [ ] Register every new operation through the authenticated HTTP router with its conformance inventory entry in the same change; handlers fail closed with typed errors until their implementing task supplies behavior.
-- [ ] Define one-time credential creation responses, non-secret authority reads, public lookup identifiers, idempotency behavior, optimistic revision checks, and the uncertain-response revoke-and-replace procedure.
-- [ ] Define typed errors for invalid lifecycle transitions, expiry, suspension, grant escalation, quota exhaustion, revision conflict, and cleanup state while keeping cross-tenant resource failures non-enumerating.
-- [ ] Specify audit attribution for actor authority, tenant, optional subject, operation, result, and bounded correlation metadata without exposing bearer material.
-- [ ] Regenerate the Go and TypeScript SDKs and update contract fixtures and conformance coverage in the same change.
-- [ ] Add negative contract coverage for unknown fields, undocumented routes, tenant assertions on controller routes, recoverable token fields, and authority-kind escalation.
+- [x] Add Tenant, Subject, TenantControllerAuthority, and ApplicationAuthority schemas with bounded references, metadata, revisions, lifecycle state, timestamps, expiry, grants, and quota fields.
+- [x] Add operator operations for tenant lifecycle and tenant-controller authority creation, inspection, listing, rotation, and revocation.
+- [x] Add tenant-controller operations for subject lifecycle, subject cleanup, application-authority lifecycle, and tenant-scoped usage inspection; derive the tenant from authentication rather than request input.
+- [x] Register every new operation through the authenticated HTTP router with its conformance inventory entry in the same change; handlers fail closed with typed errors until their implementing task supplies behavior.
+- [x] Define one-time credential creation responses, non-secret authority reads, public lookup identifiers, idempotency behavior, optimistic revision checks, and the uncertain-response revoke-and-replace procedure.
+- [x] Define typed errors for invalid lifecycle transitions, expiry, suspension, grant escalation, quota exhaustion, revision conflict, and cleanup state while keeping cross-tenant resource failures non-enumerating.
+- [x] Specify audit attribution for actor authority, tenant, optional subject, operation, result, and bounded correlation metadata without exposing bearer material.
+- [x] Regenerate the Go and TypeScript SDKs and update contract fixtures and conformance coverage in the same change.
+- [x] Add negative contract coverage for unknown fields, undocumented routes, tenant assertions on controller routes, recoverable token fields, and authority-kind escalation.
 
 ### Task 2: Make persisted authorities work end to end
 

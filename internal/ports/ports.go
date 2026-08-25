@@ -11,6 +11,7 @@ import (
 var (
 	ErrAuthenticationFailed  = errors.New("SecondBox credential authentication failed")
 	ErrAuthorizationDenied   = errors.New("SecondBox authorization denied")
+	ErrManagementUnavailable = errors.New("SecondBox durable management store is unavailable")
 	ErrInvalidRequest        = errors.New("SecondBox request is invalid")
 	ErrProfileNotFound       = errors.New("SecondBox Profile not found")
 	ErrProfileDisabled       = errors.New("SecondBox Profile is disabled")

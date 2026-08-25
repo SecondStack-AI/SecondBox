@@ -86,6 +86,23 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.HandleFunc("GET /healthz", apiHandler.health)
 	mux.HandleFunc("GET /readyz", apiHandler.ready)
 	mux.HandleFunc("GET /metrics", apiHandler.metrics)
+	mux.Handle("GET /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("POST /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("GET /v1/tenants/{tenantRef}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("POST /v1/tenants/{tenantAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.tenantManagementAction)))
+	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities/{authorityID}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities/{authorityAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.tenantControllerAuthorityManagementAction)))
+	mux.Handle("GET /v1/subjects", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("POST /v1/subjects", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("GET /v1/subjects/{subjectRef}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("POST /v1/subjects/{subjectAction}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.subjectManagementAction)))
+	mux.Handle("GET /v1/application-authorities", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("POST /v1/application-authorities", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("GET /v1/application-authorities/{authorityID}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("POST /v1/application-authorities/{authorityAction}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.applicationAuthorityManagementAction)))
+	mux.Handle("GET /v1/usage", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
 	mux.Handle("GET /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.listProfiles)))
 	mux.Handle("POST /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.createProfile)))
 	mux.Handle("GET /v1/profiles/{profileName}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getProfile)))
@@ -980,6 +997,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusUnauthorized, "authentication_failed", "Port tunnel token is invalid", false
 	case errors.Is(err, ports.ErrAuthorizationDenied):
 		return http.StatusForbidden, "authorization_failed", "Authorization failed", false
+	case errors.Is(err, ports.ErrManagementUnavailable):
+		return http.StatusServiceUnavailable, "management_unavailable", "Management API is unavailable", false
 	case errors.Is(err, ports.ErrInvalidRequest):
 		return http.StatusBadRequest, "invalid_request", "Request is invalid", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):

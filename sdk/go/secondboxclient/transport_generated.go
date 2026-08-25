@@ -16,8 +16,21 @@ var operations = map[string]OperationMetadata{
 	"cancelSandboxTerminal": {
 		OperationID: "cancelSandboxTerminal", Method: "DELETE", PathTemplate: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}",
 	},
+	"cleanupSubject": {
+		OperationID: "cleanupSubject", Method: "POST", PathTemplate: "/v1/subjects/{subjectRef}:cleanup",
+	},
 	"closeSandboxPortSession": {
 		OperationID: "closeSandboxPortSession", Method: "DELETE", PathTemplate: "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}",
+	},
+	"closeSubject": {
+		OperationID: "closeSubject", Method: "POST", PathTemplate: "/v1/subjects/{subjectRef}:close",
+	},
+	"createApplicationAuthority": {
+		OperationID: "createApplicationAuthority", Method: "POST", PathTemplate: "/v1/application-authorities",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "CreateApplicationAuthorityRequest"},
+		},
+		RequestBodyRequired: true,
 	},
 	"createProfile": {
 		OperationID: "createProfile", Method: "POST", PathTemplate: "/v1/profiles",
@@ -75,6 +88,27 @@ var operations = map[string]OperationMetadata{
 		},
 		RequestBodyRequired: true,
 	},
+	"createSubject": {
+		OperationID: "createSubject", Method: "POST", PathTemplate: "/v1/subjects",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "CreateSubjectRequest"},
+		},
+		RequestBodyRequired: true,
+	},
+	"createTenant": {
+		OperationID: "createTenant", Method: "POST", PathTemplate: "/v1/tenants",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "CreateTenantRequest"},
+		},
+		RequestBodyRequired: true,
+	},
+	"createTenantControllerAuthority": {
+		OperationID: "createTenantControllerAuthority", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}/controller-authorities",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "CreateTenantControllerAuthorityRequest"},
+		},
+		RequestBodyRequired: true,
+	},
 	"deleteSandbox": {
 		OperationID: "deleteSandbox", Method: "DELETE", PathTemplate: "/v1/sandboxes/{sandboxId}",
 	},
@@ -93,6 +127,9 @@ var operations = map[string]OperationMetadata{
 			{ContentType: "application/json", Schema: "BufferedExecRequest"},
 		},
 		RequestBodyRequired: true,
+	},
+	"getApplicationAuthority": {
+		OperationID: "getApplicationAuthority", Method: "GET", PathTemplate: "/v1/application-authorities/{authorityId}",
 	},
 	"getDeploymentTiming": {
 		OperationID: "getDeploymentTiming", Method: "GET", PathTemplate: "/v1/timings",
@@ -127,8 +164,23 @@ var operations = map[string]OperationMetadata{
 	"getSnapshot": {
 		OperationID: "getSnapshot", Method: "GET", PathTemplate: "/v1/snapshots/{snapshotId}",
 	},
+	"getSubject": {
+		OperationID: "getSubject", Method: "GET", PathTemplate: "/v1/subjects/{subjectRef}",
+	},
+	"getTenant": {
+		OperationID: "getTenant", Method: "GET", PathTemplate: "/v1/tenants/{tenantRef}",
+	},
+	"getTenantControllerAuthority": {
+		OperationID: "getTenantControllerAuthority", Method: "GET", PathTemplate: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}",
+	},
+	"getTenantUsage": {
+		OperationID: "getTenantUsage", Method: "GET", PathTemplate: "/v1/usage",
+	},
 	"inspectSandbox": {
 		OperationID: "inspectSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:inspect",
+	},
+	"listApplicationAuthorities": {
+		OperationID: "listApplicationAuthorities", Method: "GET", PathTemplate: "/v1/application-authorities",
 	},
 	"listProfiles": {
 		OperationID: "listProfiles", Method: "GET", PathTemplate: "/v1/profiles",
@@ -148,8 +200,20 @@ var operations = map[string]OperationMetadata{
 	"listSandboxes": {
 		OperationID: "listSandboxes", Method: "GET", PathTemplate: "/v1/sandboxes",
 	},
+	"listSubjects": {
+		OperationID: "listSubjects", Method: "GET", PathTemplate: "/v1/subjects",
+	},
+	"listTenantControllerAuthorities": {
+		OperationID: "listTenantControllerAuthorities", Method: "GET", PathTemplate: "/v1/tenants/{tenantRef}/controller-authorities",
+	},
+	"listTenants": {
+		OperationID: "listTenants", Method: "GET", PathTemplate: "/v1/tenants",
+	},
 	"pingSandbox": {
 		OperationID: "pingSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:ping",
+	},
+	"reactivateTenant": {
+		OperationID: "reactivateTenant", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}:reactivate",
 	},
 	"readSandboxFile": {
 		OperationID: "readSandboxFile", Method: "GET", PathTemplate: "/v1/sandboxes/{sandboxId}/files",
@@ -195,6 +259,18 @@ var operations = map[string]OperationMetadata{
 		},
 		RequestBodyRequired: true,
 	},
+	"revokeApplicationAuthority": {
+		OperationID: "revokeApplicationAuthority", Method: "POST", PathTemplate: "/v1/application-authorities/{authorityId}:revoke",
+	},
+	"revokeTenantControllerAuthority": {
+		OperationID: "revokeTenantControllerAuthority", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}:revoke",
+	},
+	"rotateApplicationAuthority": {
+		OperationID: "rotateApplicationAuthority", Method: "POST", PathTemplate: "/v1/application-authorities/{authorityId}:rotate",
+	},
+	"rotateTenantControllerAuthority": {
+		OperationID: "rotateTenantControllerAuthority", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}:rotate",
+	},
 	"sandboxFileExists": {
 		OperationID: "sandboxFileExists", Method: "GET", PathTemplate: "/v1/sandboxes/{sandboxId}/files:exists",
 	},
@@ -206,6 +282,9 @@ var operations = map[string]OperationMetadata{
 	},
 	"stopSandbox": {
 		OperationID: "stopSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:stop",
+	},
+	"suspendTenant": {
+		OperationID: "suspendTenant", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}:suspend",
 	},
 	"touchSandbox": {
 		OperationID: "touchSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:touch",

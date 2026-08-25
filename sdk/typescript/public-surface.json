@@ -7,6 +7,40 @@
       "replaceActive"
     ]
   },
+  "ApplicationAuthority": {
+    "required": [
+      "createdAt",
+      "id",
+      "kind",
+      "lookupId",
+      "metadata",
+      "profileGrants",
+      "revision",
+      "scopes",
+      "state",
+      "subjectRef",
+      "tenantRef",
+      "updatedAt"
+    ],
+    "optional": [
+      "expiresAt"
+    ]
+  },
+  "ApplicationAuthorityPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "ApplicationCredentialResponse": {
+    "required": [
+      "authority",
+      "bearerToken"
+    ],
+    "optional": []
+  },
   "ArgvCommand": {
     "required": [
       "arguments",
@@ -14,6 +48,19 @@
       "mode"
     ],
     "optional": []
+  },
+  "AuditAttribution": {
+    "required": [
+      "actorAuthorityId",
+      "actorAuthorityKind",
+      "correlationMetadata",
+      "operation",
+      "result",
+      "tenantRef"
+    ],
+    "optional": [
+      "subjectRef"
+    ]
   },
   "BootStageTiming": {
     "required": [
@@ -52,6 +99,16 @@
       "cwd",
       "stdinBase64"
     ]
+  },
+  "CreateApplicationAuthorityRequest": {
+    "required": [
+      "expiresAt",
+      "metadata",
+      "profileGrants",
+      "scopes",
+      "subjectRef"
+    ],
+    "optional": []
   },
   "CreateDirectoryRequest": {
     "required": [
@@ -99,6 +156,36 @@
       "name"
     ],
     "optional": []
+  },
+  "CreateSubjectRequest": {
+    "required": [
+      "metadata",
+      "quota",
+      "ref"
+    ],
+    "optional": [
+      "expiresAt"
+    ]
+  },
+  "CreateTenantControllerAuthorityRequest": {
+    "required": [
+      "expiresAt",
+      "metadata"
+    ],
+    "optional": []
+  },
+  "CreateTenantRequest": {
+    "required": [
+      "aggregateQuota",
+      "allowedApplicationScopes",
+      "allowedProfileGrants",
+      "expiryPolicy",
+      "metadata",
+      "ref"
+    ],
+    "optional": [
+      "expiresAt"
+    ]
   },
   "CreateTerminalRequest": {
     "required": [
@@ -491,6 +578,18 @@
     ],
     "optional": []
   },
+  "QuotaUsage": {
+    "required": [
+      "activeInstances",
+      "concurrentOperations",
+      "cpuMillis",
+      "memoryBytes",
+      "portSessions",
+      "sandboxes",
+      "snapshots"
+    ],
+    "optional": []
+  },
   "RelocateSandboxRequest": {
     "required": [],
     "optional": [
@@ -734,6 +833,152 @@
     "optional": [
       "cwd"
     ]
+  },
+  "Subject": {
+    "required": [
+      "cleanupState",
+      "createdAt",
+      "metadata",
+      "quota",
+      "ref",
+      "revision",
+      "state",
+      "tenantRef",
+      "updatedAt"
+    ],
+    "optional": [
+      "expiresAt"
+    ]
+  },
+  "SubjectPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "SubjectQuota": {
+    "required": [
+      "maxActiveInstances",
+      "maxConcurrentOperations",
+      "maxCpuMillis",
+      "maxMemoryBytes",
+      "maxPortSessions",
+      "maxSandboxes",
+      "maxSnapshots"
+    ],
+    "optional": []
+  },
+  "SubjectUsage": {
+    "required": [
+      "limits",
+      "subjectRef",
+      "usage"
+    ],
+    "optional": []
+  },
+  "Tenant": {
+    "required": [
+      "aggregateQuota",
+      "allowedApplicationScopes",
+      "allowedProfileGrants",
+      "createdAt",
+      "expiryPolicy",
+      "metadata",
+      "ref",
+      "revision",
+      "state",
+      "updatedAt"
+    ],
+    "optional": [
+      "expiresAt"
+    ]
+  },
+  "TenantControllerAuthority": {
+    "required": [
+      "createdAt",
+      "grant",
+      "id",
+      "kind",
+      "lookupId",
+      "metadata",
+      "revision",
+      "state",
+      "tenantRef",
+      "updatedAt"
+    ],
+    "optional": [
+      "expiresAt"
+    ]
+  },
+  "TenantControllerAuthorityPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "TenantControllerCredentialResponse": {
+    "required": [
+      "authority",
+      "bearerToken"
+    ],
+    "optional": []
+  },
+  "TenantExpiryPolicy": {
+    "required": [
+      "maximumAuthorityLifetimeSeconds",
+      "maximumSubjectLifetimeSeconds"
+    ],
+    "optional": []
+  },
+  "TenantPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "TenantQuota": {
+    "required": [
+      "maxActiveInstances",
+      "maxActiveSubjects",
+      "maxApplicationAuthorities",
+      "maxConcurrentOperations",
+      "maxCpuMillis",
+      "maxMemoryBytes",
+      "maxPortSessions",
+      "maxSandboxes",
+      "maxSnapshots"
+    ],
+    "optional": []
+  },
+  "TenantQuotaUsage": {
+    "required": [
+      "activeInstances",
+      "activeSubjects",
+      "applicationAuthorities",
+      "concurrentOperations",
+      "cpuMillis",
+      "memoryBytes",
+      "portSessions",
+      "sandboxes",
+      "snapshots"
+    ],
+    "optional": []
+  },
+  "TenantUsage": {
+    "required": [
+      "limits",
+      "observedAt",
+      "subjects",
+      "tenantRef",
+      "usage"
+    ],
+    "optional": []
   },
   "TerminalAttachedFrame": {
     "required": [

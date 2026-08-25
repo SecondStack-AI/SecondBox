@@ -14,9 +14,17 @@
   "security": [
     {
       "platformBearer": []
+    },
+    {
+      "applicationBearer": []
     }
   ],
   "tags": [
+    {"name": "Tenants"},
+    {"name": "TenantControllerAuthorities"},
+    {"name": "Subjects"},
+    {"name": "ApplicationAuthorities"},
+    {"name": "TenantUsage"},
     {"name": "Profiles"},
     {"name": "RunnerPools"},
     {"name": "Runners"},
@@ -29,6 +37,158 @@
     {"name": "Ports"}
   ],
   "paths": {
+    "/v1/tenants": {
+      "get": {
+        "tags": ["Tenants"], "operationId": "listTenants", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/PageLimit"}, {"$ref": "#/components/parameters/PageCursor"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantPageOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      },
+      "post": {
+        "tags": ["Tenants"], "operationId": "createTenant", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateTenantRequest"}}}},
+        "responses": {"201": {"$ref": "#/components/responses/TenantCreated"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "409": {"$ref": "#/components/responses/Conflict"}, "429": {"$ref": "#/components/responses/TooManyRequests"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/tenants/{tenantRef}": {
+      "get": {
+        "tags": ["Tenants"], "operationId": "getTenant", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/tenants/{tenantRef}:suspend": {
+      "post": {
+        "tags": ["Tenants"], "operationId": "suspendTenant", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantMutationOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/tenants/{tenantRef}:reactivate": {
+      "post": {
+        "tags": ["Tenants"], "operationId": "reactivateTenant", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantMutationOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/tenants/{tenantRef}/controller-authorities": {
+      "get": {
+        "tags": ["TenantControllerAuthorities"], "operationId": "listTenantControllerAuthorities", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/PageLimit"}, {"$ref": "#/components/parameters/PageCursor"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantControllerAuthorityPageOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      },
+      "post": {
+        "tags": ["TenantControllerAuthorities"], "operationId": "createTenantControllerAuthority", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateTenantControllerAuthorityRequest"}}}},
+        "responses": {"201": {"$ref": "#/components/responses/TenantControllerCredentialCreated"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "429": {"$ref": "#/components/responses/TooManyRequests"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}": {
+      "get": {
+        "tags": ["TenantControllerAuthorities"], "operationId": "getTenantControllerAuthority", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/AuthorityID"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantControllerAuthorityOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}:rotate": {
+      "post": {
+        "tags": ["TenantControllerAuthorities"], "operationId": "rotateTenantControllerAuthority", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/AuthorityID"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantControllerCredentialRotated"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}:revoke": {
+      "post": {
+        "tags": ["TenantControllerAuthorities"], "operationId": "revokeTenantControllerAuthority", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/AuthorityID"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantControllerAuthorityMutationOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/subjects": {
+      "get": {
+        "tags": ["Subjects"], "operationId": "listSubjects", "security": [{"tenantControllerBearer": []}],
+        "description": "Lists Subjects in the tenant fixed by the authenticated controller. No tenant assertion is accepted.",
+        "parameters": [{"$ref": "#/components/parameters/PageLimit"}, {"$ref": "#/components/parameters/PageCursor"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/SubjectPageOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      },
+      "post": {
+        "tags": ["Subjects"], "operationId": "createSubject", "security": [{"tenantControllerBearer": []}],
+        "description": "Creates a Subject in the tenant fixed by the authenticated controller. No tenant assertion is accepted.",
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateSubjectRequest"}}}},
+        "responses": {"201": {"$ref": "#/components/responses/SubjectCreated"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "409": {"$ref": "#/components/responses/Conflict"}, "429": {"$ref": "#/components/responses/TooManyRequests"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/subjects/{subjectRef}": {
+      "get": {
+        "tags": ["Subjects"], "operationId": "getSubject", "security": [{"tenantControllerBearer": []}],
+        "description": "Gets a Subject in the tenant fixed by the authenticated controller. An absent or out-of-tenant Subject returns the same non-enumerating not_found Problem.",
+        "parameters": [{"$ref": "#/components/parameters/SubjectRefPath"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/SubjectOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/subjects/{subjectRef}:close": {
+      "post": {
+        "tags": ["Subjects"], "operationId": "closeSubject", "security": [{"tenantControllerBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/SubjectRefPath"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/SubjectMutationOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/subjects/{subjectRef}:cleanup": {
+      "post": {
+        "tags": ["Subjects"], "operationId": "cleanupSubject", "security": [{"tenantControllerBearer": []}],
+        "description": "Creates or returns the one durable cleanup Operation for a closed Subject; retries with the same idempotency key converge on the same Operation.",
+        "parameters": [{"$ref": "#/components/parameters/SubjectRefPath"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"202": {"$ref": "#/components/responses/AcceptedOperation"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/application-authorities": {
+      "get": {
+        "tags": ["ApplicationAuthorities"], "operationId": "listApplicationAuthorities", "security": [{"tenantControllerBearer": []}],
+        "description": "Lists non-secret authorities in the tenant fixed by the authenticated controller.",
+        "parameters": [{"$ref": "#/components/parameters/SubjectRefFilter"}, {"$ref": "#/components/parameters/PageLimit"}, {"$ref": "#/components/parameters/PageCursor"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/ApplicationAuthorityPageOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      },
+      "post": {
+        "tags": ["ApplicationAuthorities"], "operationId": "createApplicationAuthority", "security": [{"tenantControllerBearer": []}],
+        "description": "Creates an authority in the tenant fixed by authentication. The bearer token appears only in this successful response.",
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateApplicationAuthorityRequest"}}}},
+        "responses": {"201": {"$ref": "#/components/responses/ApplicationCredentialCreated"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "429": {"$ref": "#/components/responses/TooManyRequests"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/application-authorities/{authorityId}": {
+      "get": {
+        "tags": ["ApplicationAuthorities"], "operationId": "getApplicationAuthority", "security": [{"tenantControllerBearer": []}],
+        "description": "Gets a non-secret authority in the authenticated tenant. An absent or out-of-tenant authority returns the same non-enumerating not_found Problem.",
+        "parameters": [{"$ref": "#/components/parameters/AuthorityID"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/ApplicationAuthorityOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/application-authorities/{authorityId}:rotate": {
+      "post": {
+        "tags": ["ApplicationAuthorities"], "operationId": "rotateApplicationAuthority", "security": [{"tenantControllerBearer": []}],
+        "description": "Rotates an authority in the authenticated tenant and returns the replacement bearer token exactly once.",
+        "parameters": [{"$ref": "#/components/parameters/AuthorityID"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/ApplicationCredentialRotated"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/application-authorities/{authorityId}:revoke": {
+      "post": {
+        "tags": ["ApplicationAuthorities"], "operationId": "revokeApplicationAuthority", "security": [{"tenantControllerBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/AuthorityID"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/ApplicationAuthorityMutationOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "tags": ["TenantUsage"], "operationId": "getTenantUsage", "security": [{"tenantControllerBearer": []}],
+        "description": "Returns aggregate and per-Subject usage for the tenant fixed by the authenticated controller.",
+        "parameters": [{"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantUsageOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
     "/v1/profiles": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
@@ -1283,7 +1443,19 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "SecondBox bearer token",
-        "description": "Operator platform token or explicitly provisioned scoped application token."
+        "description": "Deployment-wide operator authority. This credential never enters application workloads."
+      },
+      "tenantControllerBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "SecondBox tenant-controller token",
+        "description": "Code-owned management authority fixed to exactly one tenant. Controller routes derive the tenant from this credential and reject tenant assertion headers."
+      },
+      "applicationBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "SecondBox application token",
+        "description": "Application authority fixed to one tenant, one subject, exact Sandbox scopes, and explicit Profile grants."
       }
     },
     "headers": {
@@ -1325,6 +1497,10 @@
         "required": true,
         "schema": {"$ref": "#/components/schemas/OwnershipRef"}
       },
+      "TenantRefPath": {"name": "tenantRef", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OwnershipRef"}},
+      "SubjectRefPath": {"name": "subjectRef", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OwnershipRef"}},
+      "SubjectRefFilter": {"name": "subjectRef", "in": "query", "required": false, "schema": {"$ref": "#/components/schemas/OwnershipRef"}},
+      "AuthorityID": {"name": "authorityId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/AuthorityID"}},
       "RequestID": {
         "name": "X-Request-ID",
         "in": "header",
@@ -1541,6 +1717,97 @@
       }
     },
     "responses": {
+      "TenantPageOK": {
+        "description": "Tenant page.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TenantPage"}}}
+      },
+      "TenantCreated": {
+        "description": "Tenant created.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Tenant"}}}
+      },
+      "TenantOK": {
+        "description": "Tenant.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Tenant"}}}
+      },
+      "TenantMutationOK": {
+        "description": "Mutated Tenant.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Tenant"}}}
+      },
+      "TenantControllerAuthorityPageOK": {
+        "description": "Non-secret tenant-controller authority page.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TenantControllerAuthorityPage"}}}
+      },
+      "TenantControllerCredentialCreated": {
+        "description": "Tenant-controller authority and its one-time bearer token. The idempotency key prevents a duplicate record but cannot replay bearer material: a retry after the initial response returns credential_response_unavailable. If this response is uncertain, inspect by idempotency or correlation identity, revoke the record, and create a replacement; the token cannot be recovered.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TenantControllerCredentialResponse"}}}
+      },
+      "TenantControllerAuthorityOK": {
+        "description": "Non-secret tenant-controller authority.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TenantControllerAuthority"}}}
+      },
+      "TenantControllerCredentialRotated": {
+        "description": "Rotated tenant-controller authority and its one-time replacement bearer token. The idempotency key prevents a second rotation but cannot replay bearer material; after an uncertain response, inspect and revoke this authority, then create a replacement.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TenantControllerCredentialResponse"}}}
+      },
+      "TenantControllerAuthorityMutationOK": {
+        "description": "Mutated non-secret tenant-controller authority.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TenantControllerAuthority"}}}
+      },
+      "SubjectPageOK": {
+        "description": "Subject page.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SubjectPage"}}}
+      },
+      "SubjectCreated": {
+        "description": "Subject created.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Subject"}}}
+      },
+      "SubjectOK": {
+        "description": "Subject.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Subject"}}}
+      },
+      "SubjectMutationOK": {
+        "description": "Mutated Subject.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Subject"}}}
+      },
+      "ApplicationAuthorityPageOK": {
+        "description": "Non-secret application-authority page.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApplicationAuthorityPage"}}}
+      },
+      "ApplicationCredentialCreated": {
+        "description": "Application authority and its one-time bearer token. The idempotency key prevents a duplicate record but cannot replay bearer material: a retry after the initial response returns credential_response_unavailable. If this response is uncertain, inspect by idempotency or correlation identity, revoke the record, and create a replacement; the token cannot be recovered.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApplicationCredentialResponse"}}}
+      },
+      "ApplicationAuthorityOK": {
+        "description": "Non-secret application authority.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApplicationAuthority"}}}
+      },
+      "ApplicationCredentialRotated": {
+        "description": "Rotated application authority and its one-time replacement bearer token. The idempotency key prevents a second rotation but cannot replay bearer material; after an uncertain response, inspect and revoke this authority, then create a replacement.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApplicationCredentialResponse"}}}
+      },
+      "ApplicationAuthorityMutationOK": {
+        "description": "Mutated non-secret application authority.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "ETag": {"$ref": "#/components/headers/ETag"}, "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApplicationAuthority"}}}
+      },
+      "TenantUsageOK": {
+        "description": "Authenticated tenant usage.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TenantUsage"}}}
+      },
+      "ManagementUnavailable": {
+        "description": "The authenticated management operation is not admitted because its durable management store is unavailable.",
+        "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+      },
       "AcceptedOperation": {
         "description": "Mutation accepted and observable as an Operation.",
         "headers": {
@@ -1632,6 +1899,274 @@
         "maxProperties": 128,
         "propertyNames": {"type": "string", "minLength": 1, "maxLength": 256},
         "additionalProperties": {"type": "string", "maxLength": 131072}
+      },
+      "AuthorityKind": {
+        "type": "string",
+        "description": "The fixed authority hierarchy. Kinds cannot be selected or widened by a credential request.",
+        "enum": ["platform", "tenant_controller", "application"]
+      },
+      "AuthorityID": {"type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+      "TokenLookupID": {
+        "type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$",
+        "description": "Public non-secret token lookup identifier. It is safe to return from read and list operations and cannot authenticate by itself."
+      },
+      "TenantControllerAuthorityKind": {"type": "string", "enum": ["tenant_controller"]},
+      "ApplicationAuthorityKind": {"type": "string", "enum": ["application"]},
+      "TenantControllerGrant": {"type": "string", "enum": ["tenant_management"]},
+      "TenantControllerBearerToken": {
+        "type": "string", "minLength": 60, "maxLength": 512, "pattern": "^secondbox_tenant_controller_[A-Za-z0-9_-]{32,}$",
+        "description": "Complete high-entropy tenant-controller bearer credential returned only by a successful creation or rotation response. It cannot be recovered later."
+      },
+      "ApplicationBearerToken": {
+        "type": "string", "minLength": 54, "maxLength": 512, "pattern": "^secondbox_application_[A-Za-z0-9_-]{32,}$",
+        "description": "Complete high-entropy application bearer credential returned only by a successful creation or rotation response. It cannot be recovered later."
+      },
+      "ApplicationScope": {
+        "type": "string",
+        "enum": ["sandbox:read", "sandbox:lifecycle", "sandbox:exec", "sandbox:files", "sandbox:ports", "sandbox:ports:direct"]
+      },
+      "ProfileGrantList": {
+        "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+        "items": {"$ref": "#/components/schemas/ProfileName"}
+      },
+      "ApplicationScopeList": {
+        "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true,
+        "items": {"$ref": "#/components/schemas/ApplicationScope"}
+      },
+      "TenantState": {"type": "string", "enum": ["active", "suspended", "expired"]},
+      "SubjectState": {"type": "string", "enum": ["active", "closing", "closed", "expired"]},
+      "SubjectCleanupState": {"type": "string", "enum": ["none", "pending", "running", "succeeded", "failed"]},
+      "AuthorityState": {"type": "string", "enum": ["active", "expired", "revoked"]},
+      "TenantExpiryPolicy": {
+        "type": "object", "additionalProperties": false,
+        "required": ["maximumSubjectLifetimeSeconds", "maximumAuthorityLifetimeSeconds"],
+        "properties": {
+          "maximumSubjectLifetimeSeconds": {"type": "integer", "format": "int64", "minimum": 1, "maximum": 31536000},
+          "maximumAuthorityLifetimeSeconds": {"type": "integer", "format": "int64", "minimum": 1, "maximum": 31536000}
+        }
+      },
+      "SubjectQuota": {
+        "type": "object", "additionalProperties": false,
+        "required": ["maxSandboxes", "maxActiveInstances", "maxCpuMillis", "maxMemoryBytes", "maxSnapshots", "maxPortSessions", "maxConcurrentOperations"],
+        "properties": {
+          "maxSandboxes": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxActiveInstances": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxCpuMillis": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxMemoryBytes": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxSnapshots": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxPortSessions": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxConcurrentOperations": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "TenantQuota": {
+        "type": "object", "additionalProperties": false,
+        "required": ["maxSandboxes", "maxActiveInstances", "maxCpuMillis", "maxMemoryBytes", "maxSnapshots", "maxPortSessions", "maxConcurrentOperations", "maxActiveSubjects", "maxApplicationAuthorities"],
+        "properties": {
+          "maxSandboxes": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxActiveInstances": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxCpuMillis": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxMemoryBytes": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxSnapshots": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxPortSessions": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxConcurrentOperations": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxActiveSubjects": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxApplicationAuthorities": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "QuotaUsage": {
+        "type": "object", "additionalProperties": false,
+        "required": ["sandboxes", "activeInstances", "cpuMillis", "memoryBytes", "snapshots", "portSessions", "concurrentOperations"],
+        "properties": {
+          "sandboxes": {"type": "integer", "format": "int64", "minimum": 0},
+          "activeInstances": {"type": "integer", "format": "int64", "minimum": 0},
+          "cpuMillis": {"type": "integer", "format": "int64", "minimum": 0},
+          "memoryBytes": {"type": "integer", "format": "int64", "minimum": 0},
+          "snapshots": {"type": "integer", "format": "int64", "minimum": 0},
+          "portSessions": {"type": "integer", "format": "int64", "minimum": 0},
+          "concurrentOperations": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "TenantQuotaUsage": {
+        "type": "object", "additionalProperties": false,
+        "required": ["sandboxes", "activeInstances", "cpuMillis", "memoryBytes", "snapshots", "portSessions", "concurrentOperations", "activeSubjects", "applicationAuthorities"],
+        "properties": {
+          "sandboxes": {"type": "integer", "format": "int64", "minimum": 0},
+          "activeInstances": {"type": "integer", "format": "int64", "minimum": 0},
+          "cpuMillis": {"type": "integer", "format": "int64", "minimum": 0},
+          "memoryBytes": {"type": "integer", "format": "int64", "minimum": 0},
+          "snapshots": {"type": "integer", "format": "int64", "minimum": 0},
+          "portSessions": {"type": "integer", "format": "int64", "minimum": 0},
+          "concurrentOperations": {"type": "integer", "format": "int64", "minimum": 0},
+          "activeSubjects": {"type": "integer", "format": "int64", "minimum": 0},
+          "applicationAuthorities": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "Tenant": {
+        "type": "object", "additionalProperties": false,
+        "required": ["ref", "state", "allowedProfileGrants", "allowedApplicationScopes", "aggregateQuota", "expiryPolicy", "metadata", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/OwnershipRef"},
+          "state": {"$ref": "#/components/schemas/TenantState"},
+          "allowedProfileGrants": {"$ref": "#/components/schemas/ProfileGrantList"},
+          "allowedApplicationScopes": {"$ref": "#/components/schemas/ApplicationScopeList"},
+          "aggregateQuota": {"$ref": "#/components/schemas/TenantQuota"},
+          "expiryPolicy": {"$ref": "#/components/schemas/TenantExpiryPolicy"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "expiresAt": {"$ref": "#/components/schemas/Timestamp"},
+          "revision": {"type": "integer", "format": "int64", "minimum": 1},
+          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+          "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "TenantPage": {
+        "type": "object", "additionalProperties": false, "required": ["items"],
+        "properties": {"items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/Tenant"}}, "nextCursor": {"type": "string", "maxLength": 512}}
+      },
+      "CreateTenantRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["ref", "allowedProfileGrants", "allowedApplicationScopes", "aggregateQuota", "expiryPolicy", "metadata"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/OwnershipRef"},
+          "allowedProfileGrants": {"$ref": "#/components/schemas/ProfileGrantList"},
+          "allowedApplicationScopes": {"$ref": "#/components/schemas/ApplicationScopeList"},
+          "aggregateQuota": {"$ref": "#/components/schemas/TenantQuota"},
+          "expiryPolicy": {"$ref": "#/components/schemas/TenantExpiryPolicy"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "Subject": {
+        "type": "object", "additionalProperties": false,
+        "required": ["tenantRef", "ref", "state", "cleanupState", "quota", "metadata", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "tenantRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "ref": {"$ref": "#/components/schemas/OwnershipRef"},
+          "state": {"$ref": "#/components/schemas/SubjectState"},
+          "cleanupState": {"$ref": "#/components/schemas/SubjectCleanupState"},
+          "quota": {"$ref": "#/components/schemas/SubjectQuota"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "expiresAt": {"$ref": "#/components/schemas/Timestamp"},
+          "revision": {"type": "integer", "format": "int64", "minimum": 1},
+          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+          "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "SubjectPage": {
+        "type": "object", "additionalProperties": false, "required": ["items"],
+        "properties": {"items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/Subject"}}, "nextCursor": {"type": "string", "maxLength": 512}}
+      },
+      "CreateSubjectRequest": {
+        "type": "object", "additionalProperties": false, "required": ["ref", "quota", "metadata"],
+        "properties": {
+          "ref": {"$ref": "#/components/schemas/OwnershipRef"},
+          "quota": {"$ref": "#/components/schemas/SubjectQuota"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "TenantControllerAuthority": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "lookupId", "kind", "tenantRef", "grant", "state", "metadata", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/AuthorityID"},
+          "lookupId": {"$ref": "#/components/schemas/TokenLookupID"},
+          "kind": {"$ref": "#/components/schemas/TenantControllerAuthorityKind"},
+          "tenantRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "grant": {"$ref": "#/components/schemas/TenantControllerGrant"},
+          "state": {"$ref": "#/components/schemas/AuthorityState"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "expiresAt": {"$ref": "#/components/schemas/Timestamp"},
+          "revision": {"type": "integer", "format": "int64", "minimum": 1},
+          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+          "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "TenantControllerAuthorityPage": {
+        "type": "object", "additionalProperties": false, "required": ["items"],
+        "properties": {"items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/TenantControllerAuthority"}}, "nextCursor": {"type": "string", "maxLength": 512}}
+      },
+      "CreateTenantControllerAuthorityRequest": {
+        "type": "object", "additionalProperties": false, "required": ["metadata", "expiresAt"],
+        "description": "The platform selects only metadata and expiry; the authority kind, tenant binding, and code-owned management grant cannot be caller-selected.",
+        "properties": {"metadata": {"$ref": "#/components/schemas/Metadata"}, "expiresAt": {"$ref": "#/components/schemas/Timestamp"}}
+      },
+      "TenantControllerCredentialResponse": {
+        "type": "object", "additionalProperties": false, "required": ["authority", "bearerToken"],
+        "properties": {"authority": {"$ref": "#/components/schemas/TenantControllerAuthority"}, "bearerToken": {"$ref": "#/components/schemas/TenantControllerBearerToken"}}
+      },
+      "ApplicationAuthority": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "lookupId", "kind", "tenantRef", "subjectRef", "state", "scopes", "profileGrants", "metadata", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/AuthorityID"},
+          "lookupId": {"$ref": "#/components/schemas/TokenLookupID"},
+          "kind": {"$ref": "#/components/schemas/ApplicationAuthorityKind"},
+          "tenantRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "subjectRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "state": {"$ref": "#/components/schemas/AuthorityState"},
+          "scopes": {"$ref": "#/components/schemas/ApplicationScopeList"},
+          "profileGrants": {"$ref": "#/components/schemas/ProfileGrantList"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "expiresAt": {"$ref": "#/components/schemas/Timestamp"},
+          "revision": {"type": "integer", "format": "int64", "minimum": 1},
+          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+          "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "ApplicationAuthorityPage": {
+        "type": "object", "additionalProperties": false, "required": ["items"],
+        "properties": {"items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/ApplicationAuthority"}}, "nextCursor": {"type": "string", "maxLength": 512}}
+      },
+      "CreateApplicationAuthorityRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["subjectRef", "scopes", "profileGrants", "metadata", "expiresAt"],
+        "description": "Creates only an application authority in the authenticated tenant. Kind and tenant cannot be supplied, and scopes and Profile grants must be subsets of the tenant ceiling.",
+        "properties": {
+          "subjectRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "scopes": {"$ref": "#/components/schemas/ApplicationScopeList"},
+          "profileGrants": {"$ref": "#/components/schemas/ProfileGrantList"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "ApplicationCredentialResponse": {
+        "type": "object", "additionalProperties": false, "required": ["authority", "bearerToken"],
+        "properties": {"authority": {"$ref": "#/components/schemas/ApplicationAuthority"}, "bearerToken": {"$ref": "#/components/schemas/ApplicationBearerToken"}}
+      },
+      "SubjectUsage": {
+        "type": "object", "additionalProperties": false, "required": ["subjectRef", "limits", "usage"],
+        "properties": {"subjectRef": {"$ref": "#/components/schemas/OwnershipRef"}, "limits": {"$ref": "#/components/schemas/SubjectQuota"}, "usage": {"$ref": "#/components/schemas/QuotaUsage"}}
+      },
+      "TenantUsage": {
+        "type": "object", "additionalProperties": false, "required": ["tenantRef", "limits", "usage", "subjects", "observedAt"],
+        "properties": {
+          "tenantRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "limits": {"$ref": "#/components/schemas/TenantQuota"},
+          "usage": {"$ref": "#/components/schemas/TenantQuotaUsage"},
+          "subjects": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/SubjectUsage"}},
+          "observedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "AuditCorrelationMetadata": {
+        "type": "object", "maxProperties": 16,
+        "propertyNames": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._/-]+$"},
+        "additionalProperties": {"type": "string", "maxLength": 256},
+        "description": "Bounded external correlation metadata. Bearer tokens, verifiers, and other credential material are forbidden."
+      },
+      "AuditResult": {"type": "string", "enum": ["succeeded", "denied", "failed"]},
+      "AuditAttribution": {
+        "type": "object", "additionalProperties": false,
+        "required": ["actorAuthorityKind", "actorAuthorityId", "tenantRef", "operation", "result", "correlationMetadata"],
+        "description": "Attribution recorded for every management mutation and denial. Credential bearer and verifier material is never recorded.",
+        "properties": {
+          "actorAuthorityKind": {"$ref": "#/components/schemas/AuthorityKind"},
+          "actorAuthorityId": {"$ref": "#/components/schemas/AuthorityID"},
+          "tenantRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "subjectRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "operation": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z][A-Za-z0-9.:-]+$"},
+          "result": {"$ref": "#/components/schemas/AuditResult"},
+          "correlationMetadata": {"$ref": "#/components/schemas/AuditCorrelationMetadata"}
+        }
       },
       "ProfileState": {"type": "string", "enum": ["enabled", "disabled"]},
       "Profile": {
@@ -2768,10 +3303,18 @@
           "invalid_request",
           "authentication_failed",
           "authorization_failed",
+          "authority_kind_mismatch",
+          "management_unavailable",
+          "credential_response_unavailable",
           "not_found",
           "idempotency_conflict",
           "precondition_failed",
           "state_conflict",
+          "invalid_lifecycle_transition",
+          "resource_expired",
+          "tenant_suspended",
+          "grant_escalation_denied",
+          "cleanup_state_conflict",
           "workspace_mutation_conflict",
           "generation_fenced",
           "lease_fenced",
