@@ -60,3 +60,4 @@ Revisions recorded before the field existed are stamped `cold_boot` by migration
 Metrics use fixed-cardinality labels. Tenant refs, subject refs, Sandbox IDs, profile names, and workspace paths are audit fields rather than metric dimensions.
 
 See [Domain and lifecycle](domain-lifecycle.md), [API conventions](api-conventions.md), and [Security](security.md).
+Customer-shared tenant, delegated authority, aggregate quota, subject cleanup, and network-isolation behavior is defined in [customer-shared tenancy](customer-shared-tenancy.md).

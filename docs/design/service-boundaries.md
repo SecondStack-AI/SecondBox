@@ -50,4 +50,4 @@ depending on a fixed device number. The adapter may not ask `MachineSpec` to
 create or replace Workspace storage and may not add a copy, overlay, or
 provider-specific fallback.
 
-See [Domain and lifecycle](domain-lifecycle.md), [Profiles and authorization](profiles-and-authorization.md), [Runner protocol](runner-protocol.md), [Guest-agent protocol](guest-agent-protocol.md), and [Security](security.md).
+See [Domain and lifecycle](domain-lifecycle.md), [Profiles and authorization](profiles-and-authorization.md), [Customer-shared tenancy](customer-shared-tenancy.md), [Runner protocol](runner-protocol.md), [Guest-agent protocol](guest-agent-protocol.md), and [Security](security.md).
