@@ -74,14 +74,14 @@ Complete the first runnable vertical slice: a clean database can persist tenant-
 
 Turn the contract and persisted credentials into a usable customer management plane. The platform operator establishes tenant ceilings and delegates a fixed, code-owned management capability; a tenant controller can create only resources narrower than that ceiling.
 
-- [ ] Implement platform-operator tenant creation, inspection, listing, suspension, reactivation, and tenant-controller authority lifecycle through service, store, HTTP, audit, and generated-client layers.
-- [ ] Implement tenant-controller subject creation, inspection, and listing, and application-authority creation, inspection, listing, rotation, and revocation, with the tenant taken only from the authenticated principal; subject closure and cleanup behavior arrive in Task 6.
-- [ ] Enforce tenant ceilings for allowed application scopes and Profile grants, and require every application authority to bind exactly one existing active subject.
-- [ ] Make tenant suspension deny new controller and application admission while preserving resources for explicit recovery or later cleanup.
-- [ ] Apply idempotency and optimistic revisions to management mutations so retries converge without silently overwriting a concurrent operator decision.
-- [ ] Audit every successful mutation and denial with bounded correlation metadata and stable, greppable operation names.
-- [ ] Add two-tenant integration scenarios proving a controller cannot discover or mutate another tenant, widen its ceiling, administer Runners or Profiles, or use ordinary Sandbox APIs as another subject.
-- [ ] Add restart and concurrency coverage for idempotent credential creation, uncertain creation responses, rotation, revocation, and lifecycle revision conflicts.
+- [x] Implement platform-operator tenant creation, inspection, listing, suspension, reactivation, and tenant-controller authority lifecycle through service, store, HTTP, audit, and generated-client layers.
+- [x] Implement tenant-controller subject creation, inspection, and listing, and application-authority creation, inspection, listing, rotation, and revocation, with the tenant taken only from the authenticated principal; subject closure and cleanup behavior arrive in Task 6.
+- [x] Enforce tenant ceilings for allowed application scopes and Profile grants, and require every application authority to bind exactly one existing active subject.
+- [x] Make tenant suspension deny new controller and application admission while preserving resources for explicit recovery or later cleanup.
+- [x] Apply idempotency and optimistic revisions to management mutations so retries converge without silently overwriting a concurrent operator decision.
+- [x] Audit every successful mutation and denial with bounded correlation metadata and stable, greppable operation names.
+- [x] Add two-tenant integration scenarios proving a controller cannot discover or mutate another tenant, widen its ceiling, administer Runners or Profiles, or use ordinary Sandbox APIs as another subject.
+- [x] Add restart and concurrency coverage for idempotent credential creation, uncertain creation responses, rotation, revocation, and lifecycle revision conflicts.
 
 ### Task 4: Retire static application authorities everywhere
 

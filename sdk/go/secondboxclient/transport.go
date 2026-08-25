@@ -80,6 +80,18 @@ func NewSecondBoxSubjectClient(
 	rawURL, token, tenantRef, subjectRef string,
 	httpClient *http.Client,
 ) (*Client, error) {
+	if strings.TrimSpace(tenantRef) == "" || strings.TrimSpace(subjectRef) == "" {
+		return nil, errors.New("SecondBox client tenant and subject references are required")
+	}
+	return newSecondBoxClient(rawURL, token, tenantRef, subjectRef, httpClient)
+}
+
+// NewSecondBoxTenantControllerClient constructs a tenant-controller client without caller-supplied ownership assertions.
+func NewSecondBoxTenantControllerClient(rawURL, token string, httpClient *http.Client) (*Client, error) {
+	return newSecondBoxClient(rawURL, token, "", "", httpClient)
+}
+
+func newSecondBoxClient(rawURL, token, tenantRef, subjectRef string, httpClient *http.Client) (*Client, error) {
 	baseURL, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || baseURL.Scheme == "" || baseURL.Host == "" ||
 		baseURL.RawQuery != "" || baseURL.Fragment != "" {
@@ -90,9 +102,6 @@ func NewSecondBoxSubjectClient(
 	}
 	if token == "" {
 		return nil, errors.New("SecondBox client platform token is required")
-	}
-	if strings.TrimSpace(tenantRef) == "" || strings.TrimSpace(subjectRef) == "" {
-		return nil, errors.New("SecondBox client tenant and subject references are required")
 	}
 	if httpClient == nil {
 		return nil, errors.New("SecondBox client HTTP client is required")
@@ -157,8 +166,12 @@ func (client *Client) Do(
 		request.Header = make(http.Header)
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
-	request.Header.Set("X-SecondBox-Tenant-Ref", client.tenantRef)
-	request.Header.Set("X-SecondBox-Subject-Ref", client.subjectRef)
+	if client.tenantRef != "" {
+		request.Header.Set("X-SecondBox-Tenant-Ref", client.tenantRef)
+	}
+	if client.subjectRef != "" {
+		request.Header.Set("X-SecondBox-Subject-Ref", client.subjectRef)
+	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}

@@ -96,6 +96,27 @@ type ObservabilityStore interface {
 	ReadDeploymentTiming(ctx context.Context, since, until time.Time) (contracts.DeploymentTimingSummary, error)
 }
 
+// ManagementStore owns durable delegated tenant management resources.
+type ManagementStore interface {
+	CreateManagedTenant(context.Context, contracts.Tenant, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
+	GetTenant(context.Context, string) (contracts.Tenant, error)
+	ListTenants(context.Context, int, string) (contracts.TenantPage, error)
+	SetTenantState(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
+	CreateManagedSubject(context.Context, contracts.Subject, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
+	GetSubject(context.Context, string, string) (contracts.Subject, error)
+	ListSubjects(context.Context, string, int, string) (contracts.SubjectPage, error)
+	CreateManagedTenantControllerAuthority(context.Context, contracts.TenantControllerAuthority, ports.AdminIdempotencyInput) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error)
+	ListTenantControllerAuthorities(context.Context, string, int, string) (contracts.TenantControllerAuthorityPage, error)
+	RotateManagedTenantControllerAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error)
+	RevokeManagedTenantControllerAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.TenantControllerAuthority, ports.AdminIdempotencyResult, error)
+	CreateManagedApplicationAuthority(context.Context, contracts.ApplicationAuthority, ports.AdminIdempotencyInput) (contracts.ApplicationCredentialResponse, ports.AdminIdempotencyResult, error)
+	ListApplicationAuthorities(context.Context, string, string, int, string) (contracts.ApplicationAuthorityPage, error)
+	RotateManagedApplicationAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.ApplicationCredentialResponse, ports.AdminIdempotencyResult, error)
+	RevokeManagedApplicationAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.ApplicationAuthority, ports.AdminIdempotencyResult, error)
+	GetTenantControllerAuthority(context.Context, string, string) (contracts.TenantControllerAuthority, error)
+	GetApplicationAuthority(context.Context, string, string) (contracts.ApplicationAuthority, error)
+}
+
 // ControlPlaneStore is the service's composite consumer-side store contract.
 type ControlPlaneStore interface {
 	HealthStore
@@ -105,6 +126,7 @@ type ControlPlaneStore interface {
 	ActivityStore
 	SnapshotStore
 	ObservabilityStore
+	ManagementStore
 }
 
 // ControlPlaneConfig contains explicit authority, quota, time, and identity dependencies.

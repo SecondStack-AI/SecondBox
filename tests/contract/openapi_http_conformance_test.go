@@ -29,24 +29,24 @@ type auditedHTTPOperation struct {
 }
 
 var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
-	"listTenants":                     {"managementUnavailable", "200", "TenantPage", nil, nil},
-	"createTenant":                    {"managementUnavailable", "201", "Tenant", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
-	"getTenant":                       {"managementUnavailable", "200", "Tenant", nil, []string{"ETag"}},
+	"listTenants":                     {"listTenants", "200", "TenantPage", nil, nil},
+	"createTenant":                    {"createTenant", "201", "Tenant", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getTenant":                       {"getTenant", "200", "Tenant", nil, []string{"ETag"}},
 	"suspendTenant":                   {"tenantManagementAction", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"reactivateTenant":                {"tenantManagementAction", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
-	"listTenantControllerAuthorities": {"managementUnavailable", "200", "TenantControllerAuthorityPage", nil, nil},
-	"createTenantControllerAuthority": {"managementUnavailable", "201", "TenantControllerCredentialResponse", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
-	"getTenantControllerAuthority":    {"managementUnavailable", "200", "TenantControllerAuthority", nil, []string{"ETag"}},
+	"listTenantControllerAuthorities": {"listTenantControllerAuthorities", "200", "TenantControllerAuthorityPage", nil, nil},
+	"createTenantControllerAuthority": {"createTenantControllerAuthority", "201", "TenantControllerCredentialResponse", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getTenantControllerAuthority":    {"getTenantControllerAuthority", "200", "TenantControllerAuthority", nil, []string{"ETag"}},
 	"rotateTenantControllerAuthority": {"tenantControllerAuthorityManagementAction", "200", "TenantControllerCredentialResponse", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"revokeTenantControllerAuthority": {"tenantControllerAuthorityManagementAction", "200", "TenantControllerAuthority", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
-	"listSubjects":                    {"managementUnavailable", "200", "SubjectPage", nil, nil},
-	"createSubject":                   {"managementUnavailable", "201", "Subject", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
-	"getSubject":                      {"managementUnavailable", "200", "Subject", nil, []string{"ETag"}},
+	"listSubjects":                    {"listSubjects", "200", "SubjectPage", nil, nil},
+	"createSubject":                   {"createSubject", "201", "Subject", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getSubject":                      {"getSubject", "200", "Subject", nil, []string{"ETag"}},
 	"closeSubject":                    {"subjectManagementAction", "200", "Subject", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"cleanupSubject":                  {"subjectManagementAction", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
-	"listApplicationAuthorities":      {"managementUnavailable", "200", "ApplicationAuthorityPage", nil, nil},
-	"createApplicationAuthority":      {"managementUnavailable", "201", "ApplicationCredentialResponse", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
-	"getApplicationAuthority":         {"managementUnavailable", "200", "ApplicationAuthority", nil, []string{"ETag"}},
+	"listApplicationAuthorities":      {"listApplicationAuthorities", "200", "ApplicationAuthorityPage", nil, nil},
+	"createApplicationAuthority":      {"createApplicationAuthority", "201", "ApplicationCredentialResponse", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getApplicationAuthority":         {"getApplicationAuthority", "200", "ApplicationAuthority", nil, []string{"ETag"}},
 	"rotateApplicationAuthority":      {"applicationAuthorityManagementAction", "200", "ApplicationCredentialResponse", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"revokeApplicationAuthority":      {"applicationAuthorityManagementAction", "200", "ApplicationAuthority", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getTenantUsage":                  {"managementUnavailable", "200", "TenantUsage", nil, nil},
@@ -106,16 +106,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 }
 
 var failClosedManagementOperations = map[string]bool{
-	"listTenants": true, "createTenant": true, "getTenant": true,
-	"suspendTenant": true, "reactivateTenant": true,
-	"listTenantControllerAuthorities": true, "createTenantControllerAuthority": true,
-	"getTenantControllerAuthority": true, "rotateTenantControllerAuthority": true,
-	"revokeTenantControllerAuthority": true,
-	"listSubjects":                    true, "createSubject": true, "getSubject": true,
-	"closeSubject": true, "cleanupSubject": true,
-	"listApplicationAuthorities": true, "createApplicationAuthority": true,
-	"getApplicationAuthority": true, "rotateApplicationAuthority": true,
-	"revokeApplicationAuthority": true, "getTenantUsage": true,
+	"closeSubject": true, "cleanupSubject": true, "getTenantUsage": true,
 }
 
 func TestCanonicalOpenAPIHTTPConformanceInventory(t *testing.T) {
@@ -199,16 +190,6 @@ func TestManagementRoutesFailClosedAtTheirAuthorityBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct SecondBox HTTP handler: %v", err)
 	}
-
-	t.Run("platform route reaches typed fail-closed handler without application assertions", func(t *testing.T) {
-		request := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
-		request.Header.Set("Authorization", "Bearer contract-platform-token-at-least-24-bytes")
-		response := httptest.NewRecorder()
-		httpHandler.ServeHTTP(response, request)
-		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"code":"management_unavailable"`) {
-			t.Fatalf("platform management response status=%d body=%s", response.Code, response.Body.String())
-		}
-	})
 
 	for _, test := range []struct {
 		name  string

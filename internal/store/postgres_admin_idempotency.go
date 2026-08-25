@@ -114,6 +114,18 @@ func adminResponseResourceID(response any) string {
 	switch resource := response.(type) {
 	case contracts.Profile:
 		return resource.Name
+	case contracts.Tenant:
+		return resource.Ref
+	case contracts.Subject:
+		return resource.Ref
+	case contracts.TenantControllerAuthority:
+		return resource.ID
+	case contracts.TenantControllerCredentialResponse:
+		return resource.Authority.ID
+	case contracts.ApplicationAuthority:
+		return resource.ID
+	case contracts.ApplicationCredentialResponse:
+		return resource.Authority.ID
 	default:
 		return ""
 	}

@@ -89,7 +89,7 @@ func TestPersistedAuthorityHTTPRestartRevocationExpiryRotationAndTenantIsolation
 	), http.StatusForbidden)
 	assertHTTPStatusAndClose(t, bearerRequest(
 		t, http.MethodGet, server.URL+"/v1/subjects", controller.BearerToken,
-	), http.StatusServiceUnavailable)
+	), http.StatusOK)
 	controllerAssertion := newBearerHTTPRequest(
 		t, http.MethodGet, server.URL+"/v1/subjects", controller.BearerToken,
 	)

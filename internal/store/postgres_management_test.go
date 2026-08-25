@@ -272,6 +272,104 @@ func TestPostgresPersistedAuthoritiesFailClosedForInvalidVerifierAndCrossTenantR
 	}
 }
 
+func TestPostgresCredentialIdempotencyStoresOnlyAuthorityAndRejectsReplay(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	tenant := managementTestTenant("credential-idempotency-tenant", now)
+	if _, err := controlPlaneStore.CreateTenant(t.Context(), tenant); err != nil {
+		t.Fatal(err)
+	}
+	subject := managementTestSubject(tenant.Ref, "credential-idempotency-subject", now)
+	if _, err := controlPlaneStore.CreateSubject(t.Context(), subject); err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := now.Add(30 * time.Minute)
+	idempotency := func(operation, targetID, key, requestHash string) ports.AdminIdempotencyInput {
+		return ports.AdminIdempotencyInput{
+			TenantRef: tenant.Ref, SubjectRef: subject.Ref, Operation: operation,
+			TargetID: targetID, Key: key, RequestHash: requestHash,
+			Now: now, Ends: now.Add(time.Hour),
+		}
+	}
+
+	controllerAuthority := contracts.TenantControllerAuthority{
+		ID: "credential-idempotency-controller", TenantRef: tenant.Ref,
+		Grant: contracts.TenantControllerGrantManagement, State: contracts.AuthorityStateActive,
+		Metadata: map[string]string{}, ExpiresAt: &expiresAt, Revision: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	controllerCreateIdempotency := idempotency("tenant_controller.created", controllerAuthority.ID, "controller-create-key", "controller-create-hash")
+	controller, _, err := controlPlaneStore.CreateManagedTenantControllerAuthority(t.Context(), controllerAuthority, controllerCreateIdempotency)
+	if err != nil || controller.BearerToken == "" {
+		t.Fatalf("create managed controller = %#v error=%v", controller, err)
+	}
+	if _, result, err := controlPlaneStore.CreateManagedTenantControllerAuthority(t.Context(), controllerAuthority, controllerCreateIdempotency); !errors.Is(err, ports.ErrCredentialResponseUnavailable) || !result.Replayed {
+		t.Fatalf("replay managed controller replay=%t error=%v", result.Replayed, err)
+	}
+	conflictingControllerCreate := controllerCreateIdempotency
+	conflictingControllerCreate.RequestHash = "different-controller-create-hash"
+	if _, _, err := controlPlaneStore.CreateManagedTenantControllerAuthority(t.Context(), controllerAuthority, conflictingControllerCreate); !errors.Is(err, ports.ErrIdempotencyConflict) {
+		t.Fatalf("conflicting managed controller replay error = %v", err)
+	}
+
+	applicationAuthority := contracts.ApplicationAuthority{
+		ID: "credential-idempotency-application", TenantRef: tenant.Ref, SubjectRef: subject.Ref,
+		State: contracts.AuthorityStateActive, Scopes: []string{"sandbox:read"},
+		ProfileGrants: []string{"coding"}, Metadata: map[string]string{}, ExpiresAt: &expiresAt,
+		Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	applicationCreateIdempotency := idempotency("application_authority.created", applicationAuthority.ID, "application-create-key", "application-create-hash")
+	application, _, err := controlPlaneStore.CreateManagedApplicationAuthority(t.Context(), applicationAuthority, applicationCreateIdempotency)
+	if err != nil || application.BearerToken == "" {
+		t.Fatalf("create managed application = %#v error=%v", application, err)
+	}
+	if _, result, err := controlPlaneStore.CreateManagedApplicationAuthority(t.Context(), applicationAuthority, applicationCreateIdempotency); !errors.Is(err, ports.ErrCredentialResponseUnavailable) || !result.Replayed {
+		t.Fatalf("replay managed application replay=%t error=%v", result.Replayed, err)
+	}
+
+	controllerRotateIdempotency := idempotency("tenant_controller.rotated", controller.Authority.ID, "controller-rotate-key", "controller-rotate-hash")
+	rotatedController, _, err := controlPlaneStore.RotateManagedTenantControllerAuthority(t.Context(), tenant.Ref, controller.Authority.ID, controller.Authority.Revision, now, controllerRotateIdempotency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, result, err := controlPlaneStore.RotateManagedTenantControllerAuthority(t.Context(), tenant.Ref, controller.Authority.ID, controller.Authority.Revision, now, controllerRotateIdempotency); !errors.Is(err, ports.ErrCredentialResponseUnavailable) || !result.Replayed {
+		t.Fatalf("replay managed controller rotation replay=%t error=%v", result.Replayed, err)
+	}
+	storedController, err := controlPlaneStore.GetTenantControllerAuthority(t.Context(), tenant.Ref, controller.Authority.ID)
+	if err != nil || storedController.Revision != controller.Authority.Revision+1 || storedController.LookupID != rotatedController.Authority.LookupID {
+		t.Fatalf("stored controller rotation = %#v error=%v", storedController, err)
+	}
+
+	applicationRotateIdempotency := idempotency("application_authority.rotated", application.Authority.ID, "application-rotate-key", "application-rotate-hash")
+	rotatedApplication, _, err := controlPlaneStore.RotateManagedApplicationAuthority(t.Context(), tenant.Ref, application.Authority.ID, application.Authority.Revision, now, applicationRotateIdempotency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, result, err := controlPlaneStore.RotateManagedApplicationAuthority(t.Context(), tenant.Ref, application.Authority.ID, application.Authority.Revision, now, applicationRotateIdempotency); !errors.Is(err, ports.ErrCredentialResponseUnavailable) || !result.Replayed {
+		t.Fatalf("replay managed application rotation replay=%t error=%v", result.Replayed, err)
+	}
+	storedApplication, err := controlPlaneStore.GetApplicationAuthority(t.Context(), tenant.Ref, application.Authority.ID)
+	if err != nil || storedApplication.Revision != application.Authority.Revision+1 || storedApplication.LookupID != rotatedApplication.Authority.LookupID {
+		t.Fatalf("stored application rotation = %#v error=%v", storedApplication, err)
+	}
+
+	var controllerCount, applicationCount, secretRecordCount int
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `SELECT count(*) FROM secondbox.tenant_controller_authorities WHERE tenant_ref=$1`, tenant.Ref).Scan(&controllerCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `SELECT count(*) FROM secondbox.application_authorities WHERE tenant_ref=$1`, tenant.Ref).Scan(&applicationCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `SELECT count(*) FROM secondbox.idempotency_records
+		WHERE response_json::text LIKE '%secondbox_tenant_controller_%'
+		   OR response_json::text LIKE '%secondbox_application_%'`).Scan(&secretRecordCount); err != nil {
+		t.Fatal(err)
+	}
+	if controllerCount != 1 || applicationCount != 1 || secretRecordCount != 0 {
+		t.Fatalf("credential idempotency records controllers=%d applications=%d secret_records=%d", controllerCount, applicationCount, secretRecordCount)
+	}
+}
+
 func managementTestTenant(ref string, now time.Time) contracts.Tenant {
 	return contracts.Tenant{
 		Ref: ref, State: contracts.TenantStateActive,

@@ -119,3 +119,61 @@ type ApplicationCredentialResponse struct {
 	Authority   ApplicationAuthority `json:"authority"`
 	BearerToken string               `json:"bearerToken"`
 }
+
+// CreateTenantRequest supplies the complete operator-owned Tenant boundary.
+type CreateTenantRequest struct {
+	Ref                      string             `json:"ref"`
+	AllowedProfileGrants     []string           `json:"allowedProfileGrants"`
+	AllowedApplicationScopes []string           `json:"allowedApplicationScopes"`
+	AggregateQuota           TenantQuota        `json:"aggregateQuota"`
+	ExpiryPolicy             TenantExpiryPolicy `json:"expiryPolicy"`
+	Metadata                 map[string]string  `json:"metadata"`
+	ExpiresAt                *time.Time         `json:"expiresAt,omitempty"`
+}
+
+// CreateSubjectRequest supplies one tenant-scoped subject and its quota.
+type CreateSubjectRequest struct {
+	Ref       string            `json:"ref"`
+	Quota     QuotaLimits       `json:"quota"`
+	Metadata  map[string]string `json:"metadata"`
+	ExpiresAt *time.Time        `json:"expiresAt,omitempty"`
+}
+
+// CreateTenantControllerAuthorityRequest supplies bounded non-secret controller attributes.
+type CreateTenantControllerAuthorityRequest struct {
+	Metadata  map[string]string `json:"metadata"`
+	ExpiresAt time.Time         `json:"expiresAt"`
+}
+
+// CreateApplicationAuthorityRequest supplies a subject-bound application grant.
+type CreateApplicationAuthorityRequest struct {
+	SubjectRef    string            `json:"subjectRef"`
+	Scopes        []string          `json:"scopes"`
+	ProfileGrants []string          `json:"profileGrants"`
+	Metadata      map[string]string `json:"metadata"`
+	ExpiresAt     time.Time         `json:"expiresAt"`
+}
+
+// TenantPage is one bounded stable Tenant traversal page.
+type TenantPage struct {
+	Items      []Tenant `json:"items"`
+	NextCursor *string  `json:"nextCursor,omitempty"`
+}
+
+// SubjectPage is one bounded stable tenant-scoped Subject traversal page.
+type SubjectPage struct {
+	Items      []Subject `json:"items"`
+	NextCursor *string   `json:"nextCursor,omitempty"`
+}
+
+// TenantControllerAuthorityPage is one bounded stable controller traversal page.
+type TenantControllerAuthorityPage struct {
+	Items      []TenantControllerAuthority `json:"items"`
+	NextCursor *string                     `json:"nextCursor,omitempty"`
+}
+
+// ApplicationAuthorityPage is one bounded stable application-authority traversal page.
+type ApplicationAuthorityPage struct {
+	Items      []ApplicationAuthority `json:"items"`
+	NextCursor *string                `json:"nextCursor,omitempty"`
+}

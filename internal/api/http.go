@@ -92,21 +92,21 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.HandleFunc("GET /healthz", apiHandler.health)
 	mux.HandleFunc("GET /readyz", apiHandler.ready)
 	mux.HandleFunc("GET /metrics", apiHandler.metrics)
-	mux.Handle("GET /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
-	mux.Handle("POST /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
-	mux.Handle("GET /v1/tenants/{tenantRef}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("GET /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.listTenants)))
+	mux.Handle("POST /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.createTenant)))
+	mux.Handle("GET /v1/tenants/{tenantRef}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.getTenant)))
 	mux.Handle("POST /v1/tenants/{tenantAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.tenantManagementAction)))
-	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
-	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
-	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities/{authorityID}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.listTenantControllerAuthorities)))
+	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.createTenantControllerAuthority)))
+	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities/{authorityID}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.getTenantControllerAuthority)))
 	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities/{authorityAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.tenantControllerAuthorityManagementAction)))
-	mux.Handle("GET /v1/subjects", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
-	mux.Handle("POST /v1/subjects", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
-	mux.Handle("GET /v1/subjects/{subjectRef}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("GET /v1/subjects", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.listSubjects)))
+	mux.Handle("POST /v1/subjects", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.createSubject)))
+	mux.Handle("GET /v1/subjects/{subjectRef}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getSubject)))
 	mux.Handle("POST /v1/subjects/{subjectAction}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.subjectManagementAction)))
-	mux.Handle("GET /v1/application-authorities", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
-	mux.Handle("POST /v1/application-authorities", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
-	mux.Handle("GET /v1/application-authorities/{authorityID}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
+	mux.Handle("GET /v1/application-authorities", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.listApplicationAuthorities)))
+	mux.Handle("POST /v1/application-authorities", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.createApplicationAuthority)))
+	mux.Handle("GET /v1/application-authorities/{authorityID}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getApplicationAuthority)))
 	mux.Handle("POST /v1/application-authorities/{authorityAction}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.applicationAuthorityManagementAction)))
 	mux.Handle("GET /v1/usage", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.managementUnavailable)))
 	mux.Handle("GET /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.listProfiles)))
@@ -1025,6 +1025,18 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusServiceUnavailable, "management_unavailable", "Management API is unavailable", false
 	case errors.Is(err, ports.ErrInvalidRequest):
 		return http.StatusBadRequest, "invalid_request", "Request is invalid", false
+	case errors.Is(err, ports.ErrManagementNotFound):
+		return http.StatusNotFound, "not_found", "Resource not found", false
+	case errors.Is(err, ports.ErrManagementConflict):
+		return http.StatusConflict, "state_conflict", "Management resource conflicts with current state", false
+	case errors.Is(err, ports.ErrInvalidLifecycleTransition):
+		return http.StatusConflict, "invalid_lifecycle_transition", "Management lifecycle transition is invalid", false
+	case errors.Is(err, ports.ErrResourceExpired):
+		return http.StatusConflict, "resource_expired", "Management resource is expired", false
+	case errors.Is(err, ports.ErrTenantSuspended):
+		return http.StatusConflict, "tenant_suspended", "Tenant is suspended", false
+	case errors.Is(err, ports.ErrGrantEscalationDenied):
+		return http.StatusForbidden, "grant_escalation_denied", "Requested grant exceeds the Tenant ceiling", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):
 		return http.StatusBadRequest, "invalid_request", "List page cursor is invalid", false
 	case errors.Is(err, ports.ErrPortPolicyDenied):
@@ -1061,6 +1073,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "state_conflict", "Sandbox name is already in use", false
 	case errors.Is(err, ports.ErrIdempotencyConflict):
 		return http.StatusConflict, "idempotency_conflict", "Idempotency key payload conflict", false
+	case errors.Is(err, ports.ErrCredentialResponseUnavailable):
+		return http.StatusConflict, "credential_response_unavailable", "Credential response is unavailable", false
 	case errors.Is(err, ports.ErrPortTokenConsumed):
 		return http.StatusConflict, "state_conflict", "Port tunnel token was already consumed", false
 	case errors.Is(err, runnercontrol.ErrFileChecksum):
