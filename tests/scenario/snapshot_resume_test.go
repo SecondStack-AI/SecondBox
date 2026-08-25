@@ -94,9 +94,9 @@ func TestScenarioSnapshotResumeStartsStopsAndMeasures(t *testing.T) {
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)
 	runner := waitForScenarioRunner(t, fixture, 90*time.Second)
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "firecracker" {
 		if slices.Contains(runner.Capabilities, "snapshot-resume") {
-			t.Fatalf("SecondBox Microsandbox Runner unexpectedly advertises snapshot-resume: %v", runner.Capabilities)
+			t.Fatalf("SecondBox cold-boot-only Runner unexpectedly advertises snapshot-resume: %v", runner.Capabilities)
 		}
 		profile := createScenarioProfile(
 			t,
@@ -120,7 +120,7 @@ func TestScenarioSnapshotResumeStartsStopsAndMeasures(t *testing.T) {
 		assertScenarioAPIError(t, err, http.StatusConflict, "startup_mode_unsupported")
 		var apiError *secondboxclient.APIError
 		if !errors.As(err, &apiError) || apiError.Problem.Retryable || operation.ID != "" || operation.SandboxID != "" {
-			t.Fatalf("SecondBox Microsandbox snapshot-resume rejection = error %#v operation %#v", apiError, operation)
+			t.Fatalf("SecondBox cold-boot snapshot-resume rejection = error %#v operation %#v", apiError, operation)
 		}
 		return
 	}

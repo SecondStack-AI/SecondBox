@@ -130,6 +130,9 @@ test-scenario-microsandbox-linux:
 test-scenario-microsandbox-macos:
     scripts/test-scenario-microsandbox-macos.sh
 
+test-scenario-gvisor:
+    scripts/test-scenario-gvisor.sh
+
 prepare-stress:
     scripts/prepare-stress.sh
 

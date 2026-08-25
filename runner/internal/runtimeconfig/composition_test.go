@@ -118,9 +118,22 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		composition.MaterializationDigest != complete["SECONDBOX_GVISOR_MATERIALIZATION_DIGEST"] ||
 		composition.MaximumVCPUs != 8 || composition.MaximumMemoryBytes != 17179869184 ||
 		composition.MaximumDiskBytes != 107374182400 || composition.MaximumInstances != 8 ||
-		composition.MaximumOperations != 64 || templateBytes != 8589934592 {
+		composition.MaximumOperations != 64 || templateBytes != 8589934592 ||
+		composition.NetworkProfile != 0 {
 		t.Fatalf("gVisor composition = %#v templateBytes=%d", composition, templateBytes)
 	}
+
+	t.Run("network profile", func(t *testing.T) {
+		t.Setenv("SECONDBOX_GVISOR_NETWORK_PROFILE", "1")
+		composition, _, err := loadGVisorComposition()
+		if err != nil || composition.NetworkProfile != 1 {
+			t.Fatalf("network profile composition = %#v, %v", composition, err)
+		}
+		t.Setenv("SECONDBOX_GVISOR_NETWORK_PROFILE", "one")
+		if _, _, err := loadGVisorComposition(); err == nil {
+			t.Fatal("malformed network profile was accepted")
+		}
+	})
 
 	for _, required := range []string{
 		"SECONDBOX_GVISOR_RUNSC_PATH",

@@ -11,14 +11,35 @@ import (
 )
 
 func TestNetworkForIndexShapesSlots(t *testing.T) {
-	first := networkForIndex(0)
+	first := networkForIndex(0, 0)
 	if first.hostAddress != "169.254.104.1" || first.guestAddress != "169.254.104.2" ||
-		first.hostVeth != "gvh0" || first.namespaceName != "sbxgv0" {
+		first.hostVeth != "gvh0-0" || first.namespaceName != "sbxgv0-0" {
 		t.Fatalf("slot 0 = %+v", first)
 	}
-	seventh := networkForIndex(7)
+	seventh := networkForIndex(0, 7)
 	if seventh.hostAddress != "169.254.104.29" || seventh.guestAddress != "169.254.104.30" {
 		t.Fatalf("slot 7 = %+v", seventh)
+	}
+}
+
+func TestNetworkProfilesSeparateRunnersOnOneHost(t *testing.T) {
+	relocated := networkForIndex(1, 0)
+	if relocated.hostAddress != "169.254.105.1" || relocated.guestAddress != "169.254.105.2" ||
+		relocated.hostVeth != "gvh1-0" || relocated.guestVeth != "gvg1-0" ||
+		relocated.namespaceName != "sbxgv1-0" {
+		t.Fatalf("profile 1 slot 0 = %+v", relocated)
+	}
+	if dnsAddressForProfile(0) != "169.254.99.53" || dnsAddressForProfile(1) != "169.254.99.54" {
+		t.Fatalf("profile DNS addresses = %q, %q", dnsAddressForProfile(0), dnsAddressForProfile(1))
+	}
+	shared := networkForIndex(0, 0)
+	if shared.hostVeth == relocated.hostVeth || shared.hostAddress == relocated.hostAddress ||
+		shared.namespaceName == relocated.namespaceName {
+		t.Fatalf("profiles collide: %+v vs %+v", shared, relocated)
+	}
+	last := networkForIndex(15, maximumNetworkslots-1)
+	if last.hostAddress != "169.254.119.249" || last.guestAddress != "169.254.119.250" {
+		t.Fatalf("final slot = %+v", last)
 	}
 }
 
@@ -63,7 +84,7 @@ func TestRenderInetPolicyFailsClosed(t *testing.T) {
 	pins := map[int][]netip.Addr{0: {netip.MustParseAddr("198.51.100.7")}}
 	script := renderInetPolicy(
 		"sbx_test", "gvh3", "169.254.104.14",
-		netip.MustParseAddr(dnsListenAddress),
+		netip.MustParseAddr(dnsAddressForProfile(0)),
 		compiled.ProtectedPrefixes(),
 		compiled.Destinations(),
 		compiled.RunnerGatewayDestinations(),
@@ -71,7 +92,7 @@ func TestRenderInetPolicyFailsClosed(t *testing.T) {
 	)
 	for _, required := range []string{
 		`add table inet sbx_test`,
-		`add chain inet sbx_test forward { type filter hook forward priority 0; policy accept; }`,
+		`add chain inet sbx_test forward { type filter hook forward priority -10; policy accept; }`,
 		`add rule inet sbx_test forward iifname "gvh3" ip saddr != 169.254.104.14 drop`,
 		`add rule inet sbx_test forward oifname "gvh3" ct state established,related accept`,
 		`ip daddr 169.254.99.53 udp dport 53 ct mark set 0x53425801 accept`,
@@ -115,7 +136,7 @@ func TestRenderInetPolicyDenyAll(t *testing.T) {
 	}
 	script := renderInetPolicy(
 		"sbx_deny", "gvh0", "169.254.104.2",
-		netip.MustParseAddr(dnsListenAddress),
+		netip.MustParseAddr(dnsAddressForProfile(0)),
 		compiled.ProtectedPrefixes(),
 		compiled.Destinations(),
 		compiled.RunnerGatewayDestinations(),

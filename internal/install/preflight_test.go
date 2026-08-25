@@ -354,3 +354,73 @@ func TestPreflightReportsMissingDeviceSeparately(t *testing.T) {
 		t.Fatal("TUN finding was lost")
 	}
 }
+
+func gvisorProbes() PreflightProbes {
+	probes := qualifiedProbes()
+	probes.Backend = "gvisor"
+	filesystem := probes.Filesystem.(*fakeFilesystem)
+	filesystem.files["/proc/cpuinfo"] = "processor: 0\nflags : fpu sse\n"
+	filesystem.lstatErrors["/dev/kvm"] = fs.ErrNotExist
+	filesystem.lstatErrors["/dev/net/tun"] = fs.ErrNotExist
+	return probes
+}
+
+func TestGVisorPreflightQualifiesHostsWithoutKVMOrTUN(t *testing.T) {
+	facts, err := Preflight(context.Background(), gvisorProbes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range facts.Findings {
+		if finding.ID == "kvm" || finding.ID == "tun" {
+			t.Fatalf("gvisor preflight must not require %q: %+v", finding.ID, finding)
+		}
+	}
+	for id, summary := range map[string]string{
+		"loop_control":   "/dev/loop-control is accessible",
+		"virtualization": "CPU virtualization is absent and not required by the gVisor backend",
+		"gvisor_nft":     "nft is available",
+		"gvisor_ip":      "ip is available",
+	} {
+		finding := findingByID(t, facts, id)
+		if finding.Class != FindingPass || finding.Summary != summary {
+			t.Fatalf("finding %q = %+v", id, finding)
+		}
+	}
+	if facts.KVMAccessible || facts.TUNAccessible {
+		t.Fatalf("device facts leaked: %+v", facts)
+	}
+	if facts.Virtualization != "none" {
+		t.Fatalf("virtualization fact %q", facts.Virtualization)
+	}
+}
+
+func TestGVisorPreflightBlocksMissingLoopControlAndTools(t *testing.T) {
+	probes := gvisorProbes()
+	probes.Filesystem.(*fakeFilesystem).lstatErrors["/dev/loop-control"] = fs.ErrNotExist
+	probes.Process.(*fakeProcess).missing["nft"] = true
+	facts, err := Preflight(context.Background(), probes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := findingByID(t, facts, "loop_control"); finding.Class != FindingBlocked {
+		t.Fatalf("loop_control finding = %+v", finding)
+	}
+	if finding := findingByID(t, facts, "gvisor_nft"); finding.Class != FindingBlocked {
+		t.Fatalf("gvisor_nft finding = %+v", finding)
+	}
+	if !HasBlockingFindings(facts) {
+		t.Fatal("blocked gvisor host must report blocking findings")
+	}
+}
+
+func TestFirecrackerPreflightStillRequiresKVM(t *testing.T) {
+	probes := qualifiedProbes()
+	probes.Filesystem.(*fakeFilesystem).lstatErrors["/dev/kvm"] = fs.ErrNotExist
+	facts, err := Preflight(context.Background(), probes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := findingByID(t, facts, "kvm"); finding.Class != FindingBlocked {
+		t.Fatalf("kvm finding = %+v", finding)
+	}
+}

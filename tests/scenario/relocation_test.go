@@ -16,7 +16,7 @@ import (
 )
 
 func TestScenarioStoppedSnapshotFreeWorkspaceRelocatesBetweenCompatibleRunners(t *testing.T) {
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "microsandbox" {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "firecracker" {
 		return
 	}
 	targetStarted := false

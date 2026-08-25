@@ -322,7 +322,7 @@ for _ in range(50):
     except OSError:
         time.sleep(0.1)
 raise SystemExit(1)'`
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "firecracker" {
 		// The pinned Alpine fixture deliberately contains BusyBox rather than
 		// Python. Its netcat exec mode preserves one interactive TCP stream,
 		// which is the behavior this transport qualification measures. Prove

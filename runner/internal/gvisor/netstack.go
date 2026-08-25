@@ -24,23 +24,33 @@ import (
 // The agent's Unix-socket transport never touches this path.
 
 const (
-	// dnsListenAddress is the runner DNS proxy address, held by a
-	// runner-owned dummy interface and reachable from every Instance
-	// namespace through its veth; policy admits only this input.
-	dnsListenAddress = "169.254.99.53"
+	// dnsListenBase anchors the runner DNS proxy address: profile N binds
+	// 169.254.99.(53+N) on the shared dummy interface, reachable from every
+	// Instance namespace through its veth; policy admits only this input.
+	// Profiles keep multiple runners on one host network namespace apart:
+	// each gets its own proxy address, /30 slot space, and link names.
+	dnsListenBase    = 53
+	dnsListenPrefix  = "169.254.99."
 	dnsInterfaceName = "sbxgv-dns"
-	// instanceSubnetBase carves link-local /30 subnets per Instance index:
+	// instanceSubnetPrefix carves a link-local /24 per profile at third
+	// octet 104+profile, then /30 subnets per Instance index inside it:
 	// host side .1, guest side .2.
-	instanceSubnetBase   = "169.254.104."
-	maximumNetworkslots  = 255
-	allowedInetMark      = "0x53425801"
-	natTableSuffix       = "nat"
-	guestResolvConfName  = "resolv.conf"
-	guestVethNamePrefix  = "gvg"
-	hostVethNamePrefix   = "gvh"
-	namespaceNamePrefix  = "sbxgv"
-	namespaceRuntimePath = "/var/run/netns/"
+	instanceSubnetPrefix    = "169.254."
+	instanceSubnetBaseOctet = 104
+	maximumNetworkProfiles  = 16
+	maximumNetworkslots     = 63
+	allowedInetMark         = "0x53425801"
+	natTableSuffix          = "nat"
+	guestVethNamePrefix     = "gvg"
+	hostVethNamePrefix      = "gvh"
+	namespaceNamePrefix     = "sbxgv"
+	guestResolvConfName     = "resolv.conf"
+	namespaceRuntimePath    = "/var/run/netns/"
 )
+
+func dnsAddressForProfile(profile uint32) string {
+	return fmt.Sprintf("%s%d", dnsListenPrefix, dnsListenBase+profile)
+}
 
 type instanceNetwork struct {
 	index         uint32
@@ -55,15 +65,16 @@ func (network instanceNetwork) namespacePath() string {
 	return namespaceRuntimePath + network.namespaceName
 }
 
-func networkForIndex(index uint32) instanceNetwork {
+func networkForIndex(profile, index uint32) instanceNetwork {
+	subnet := fmt.Sprintf("%s%d.", instanceSubnetPrefix, instanceSubnetBaseOctet+profile)
 	base := index * 4
 	return instanceNetwork{
 		index:         index,
-		namespaceName: fmt.Sprintf("%s%d", namespaceNamePrefix, index),
-		hostVeth:      fmt.Sprintf("%s%d", hostVethNamePrefix, index),
-		guestVeth:     fmt.Sprintf("%s%d", guestVethNamePrefix, index),
-		hostAddress:   fmt.Sprintf("%s%d", instanceSubnetBase, base+1),
-		guestAddress:  fmt.Sprintf("%s%d", instanceSubnetBase, base+2),
+		namespaceName: fmt.Sprintf("%s%d-%d", namespaceNamePrefix, profile, index),
+		hostVeth:      fmt.Sprintf("%s%d-%d", hostVethNamePrefix, profile, index),
+		guestVeth:     fmt.Sprintf("%s%d-%d", guestVethNamePrefix, profile, index),
+		hostAddress:   fmt.Sprintf("%s%d", subnet, base+1),
+		guestAddress:  fmt.Sprintf("%s%d", subnet, base+2),
 	}
 }
 
@@ -76,7 +87,7 @@ func (backend *AssignmentBackend) acquireNetworkSlot() (instanceNetwork, error) 
 	for index := uint32(0); index < maximumNetworkslots; index++ {
 		if !backend.networkSlots[index] {
 			backend.networkSlots[index] = true
-			return networkForIndex(index), nil
+			return networkForIndex(backend.config.NetworkProfile, index), nil
 		}
 	}
 	return instanceNetwork{}, fmt.Errorf("SecondBox gVisor network slots are exhausted")
@@ -134,15 +145,16 @@ func destroyInstanceNetwork(ctx context.Context, network instanceNetwork) error 
 }
 
 // ensureHostNetworkPlumbing prepares the runner-owned pieces every Instance
-// shares: the DNS dummy interface and IPv4 forwarding.
-func ensureHostNetworkPlumbing(ctx context.Context) error {
+// shares: the DNS dummy interface, IPv4 forwarding, and admission through a
+// coexisting Docker firewall.
+func ensureHostNetworkPlumbing(ctx context.Context, dnsAddress string) error {
 	if err := exec.CommandContext(ctx, "ip", "link", "show", dnsInterfaceName).Run(); err != nil {
 		if err := ipCommand(ctx, "link", "add", dnsInterfaceName, "type", "dummy"); err != nil &&
 			!strings.Contains(err.Error(), "File exists") {
 			return err
 		}
 	}
-	if err := ipCommand(ctx, "addr", "replace", dnsListenAddress+"/32", "dev", dnsInterfaceName); err != nil {
+	if err := ipCommand(ctx, "addr", "replace", dnsAddress+"/32", "dev", dnsInterfaceName); err != nil {
 		return err
 	}
 	if err := ipCommand(ctx, "link", "set", dnsInterfaceName, "up"); err != nil {
@@ -150,6 +162,30 @@ func ensureHostNetworkPlumbing(ctx context.Context) error {
 	}
 	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); err != nil {
 		return fmt.Errorf("enable IPv4 forwarding: %w", err)
+	}
+	return ensureDockerForwardAdmission(ctx)
+}
+
+// ensureDockerForwardAdmission lets policy-accepted flows through a Docker
+// firewall sharing the host. Docker sets its own forward-hook chain to a drop
+// policy, and every forward-hook chain must accept a packet independently, so
+// the runner inserts one rule into Docker's designated DOCKER-USER extension
+// chain admitting exactly the connections the runner's fail-closed tables
+// have already marked. Hosts without Docker have no such chain and need no
+// admission.
+func ensureDockerForwardAdmission(ctx context.Context) error {
+	listing, err := exec.CommandContext(ctx, "nft", "list", "chain", "ip", "filter", "DOCKER-USER").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	if strings.Contains(string(listing), allowedInetMark) {
+		return nil
+	}
+	script := fmt.Sprintf("insert rule ip filter DOCKER-USER ct mark %s counter accept\n", allowedInetMark)
+	command := exec.CommandContext(ctx, "nft", "-f", "-")
+	command.Stdin = strings.NewReader(script)
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("admit runner flows through the Docker firewall: %w: %s", err, bytes.TrimSpace(output))
 	}
 	return nil
 }
@@ -189,8 +225,11 @@ func renderInetPolicy(
 ) string {
 	var script bytes.Buffer
 	fmt.Fprintf(&script, "add table inet %s\n", table)
-	fmt.Fprintf(&script, "add chain inet %s forward { type filter hook forward priority 0; policy accept; }\n", table)
-	fmt.Fprintf(&script, "add chain inet %s input { type filter hook input priority 0; policy accept; }\n", table)
+	// Priority -10 runs these chains before a coexisting Docker firewall's
+	// priority-0 chains, so accepted connections carry their ct mark by the
+	// time DOCKER-USER admission evaluates the same packet.
+	fmt.Fprintf(&script, "add chain inet %s forward { type filter hook forward priority -10; policy accept; }\n", table)
+	fmt.Fprintf(&script, "add chain inet %s input { type filter hook input priority -10; policy accept; }\n", table)
 	fmt.Fprintf(&script, "add rule inet %s forward iifname %q ip saddr != %s drop\n", table, interfaceName, guestIP)
 	fmt.Fprintf(&script, "add rule inet %s input iifname %q ip saddr != %s drop\n", table, interfaceName, guestIP)
 	fmt.Fprintf(&script, "add rule inet %s forward oifname %q ct state established,related accept\n", table, interfaceName)
@@ -264,9 +303,9 @@ func deleteInetPolicyTables(table string) string {
 }
 
 // writeGuestResolvConf points the sandbox resolver at the runner DNS proxy.
-func writeGuestResolvConf(instanceDir string) (string, error) {
+func writeGuestResolvConf(instanceDir, dnsAddress string) (string, error) {
 	path := instanceDir + "/" + guestResolvConfName
-	content := "nameserver " + dnsListenAddress + "\noptions timeout:2 attempts:2\n"
+	content := "nameserver " + dnsAddress + "\noptions timeout:2 attempts:2\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("write guest resolver configuration: %w", err)
 	}

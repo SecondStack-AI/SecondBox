@@ -354,3 +354,19 @@ func captureDeployStdout(t *testing.T, action func() error) ([]byte, error) {
 	_ = reader.Close()
 	return content, errors.Join(actionErr, closeErr, readErr)
 }
+
+func TestParsePreflightBackendGrammar(t *testing.T) {
+	backend, remaining, err := parsePreflightBackend([]string{"--backend", "gvisor", "--check"})
+	if err != nil || backend != "gvisor" || len(remaining) != 1 || remaining[0] != "--check" {
+		t.Fatalf("parse = %q, %v, %v", backend, remaining, err)
+	}
+	backend, remaining, err = parsePreflightBackend([]string{"--check"})
+	if err != nil || backend != "" || len(remaining) != 1 {
+		t.Fatalf("default parse = %q, %v, %v", backend, remaining, err)
+	}
+	_, _, err = parsePreflightBackend([]string{"--backend", "kata"})
+	var exited interface{ ExitCode() int }
+	if !errors.As(err, &exited) || exited.ExitCode() != 2 {
+		t.Fatalf("unknown backend error = %v; want installer exit 2", err)
+	}
+}

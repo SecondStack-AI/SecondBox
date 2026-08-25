@@ -19,6 +19,15 @@ import (
 
 const microsandboxColdStartSamples = 30
 
+// coldStartMaterializationDigestVariable names the digest input for the
+// backend under qualification; the cold-start evidence records it verbatim.
+func coldStartMaterializationDigestVariable() string {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "gvisor" {
+		return "SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST"
+	}
+	return "SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"
+}
+
 type microsandboxColdStartEvidence struct {
 	SchemaVersion         int                          `json:"schemaVersion"`
 	SourceCommit          string                       `json:"sourceCommit"`
@@ -41,8 +50,8 @@ type microsandboxLifecycleLog struct {
 	HostPlatform   string `json:"hostPlatform"`
 }
 
-func TestScenarioMicrosandboxRecordsThirtyColdStarts(t *testing.T) {
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "microsandbox" {
+func TestScenarioColdBootBackendRecordsThirtyColdStarts(t *testing.T) {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "firecracker" {
 		return
 	}
 	fixture := newScenarioFixture(t)
@@ -115,7 +124,7 @@ func TestScenarioMicrosandboxRecordsThirtyColdStarts(t *testing.T) {
 		CompletedAt:           time.Now().UTC().Format(time.RFC3339Nano),
 		BackendVersion:        backendVersion,
 		HostPlatform:          hostPlatform,
-		MaterializationDigest: requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"),
+		MaterializationDigest: requireScenarioEnvironment(t, coldStartMaterializationDigestVariable()),
 		Samples:               len(startToReady),
 		StartToReady: snapshotResumeDuration{
 			Samples: len(startToReady),

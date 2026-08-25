@@ -77,7 +77,7 @@ func TestScenarioConcurrentInstancesRemainIsolated(t *testing.T) {
 	}
 
 	networkProbe := "curl --silent --show-error --connect-timeout 2 --max-time 2 http://example.com/ >/dev/null"
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "firecracker" {
 		networkProbe = "wget -q -T 2 -O /dev/null http://example.com/"
 	}
 	for name, handle := range map[string]*secondboxclient.SandboxHandle{

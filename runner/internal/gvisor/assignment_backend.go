@@ -161,6 +161,12 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The runtime directory usually lives on tmpfs (for example under /run),
+	// so the backend creates it on every start rather than expecting the host
+	// to have preserved it.
+	if err := os.MkdirAll(validated.RuntimeDir, 0o700); err != nil {
+		return nil, fmt.Errorf("SecondBox gVisor runtime directory: %w", err)
+	}
 	nftPath, err := exec.LookPath("nft")
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox gVisor network enforcement requires nft: %w", err)
@@ -169,7 +175,7 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 	if err != nil {
 		return nil, err
 	}
-	dnsListen := netip.MustParseAddr(dnsListenAddress)
+	dnsListen := netip.MustParseAddr(dnsAddressForProfile(config.NetworkProfile))
 	return &AssignmentBackend{
 		config:            validated,
 		assignments:       make(map[string]*activeAssignment),
@@ -529,7 +535,7 @@ func (backend *AssignmentBackend) launchInstance(
 			return nil, errors.Join(fmt.Errorf("create instance directory: %w", err), os.RemoveAll(instanceDir))
 		}
 	}
-	resolvConfPath, err := writeGuestResolvConf(instanceDir)
+	resolvConfPath, err := writeGuestResolvConf(instanceDir, dnsAddressForProfile(backend.config.NetworkProfile))
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(instanceDir))
 	}
@@ -712,7 +718,7 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 		InstanceID: assignment.Fence.InstanceId,
 		TapName:    network.hostVeth,
 		GuestIP:    network.guestAddress,
-		DNSAddress: netip.MustParseAddr(dnsListenAddress),
+		DNSAddress: netip.MustParseAddr(dnsAddressForProfile(backend.config.NetworkProfile)),
 		Policy:     compiled,
 		OnFailure: func(error) {
 			// Enforcement loss fails closed: the compute is forced down and

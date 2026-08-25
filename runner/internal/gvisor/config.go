@@ -26,6 +26,10 @@ type Config struct {
 	MaterializationPath   string
 	MaterializationDigest string
 	RuntimeDir            string
+	// NetworkProfile separates runners sharing one host network namespace:
+	// it selects the DNS proxy address, the link-local /30 slot space, and
+	// the veth and namespace name spaces. Single-runner hosts keep 0.
+	NetworkProfile uint32
 	WorkspaceRoot         string
 	SelfExecutable        string
 	// DNSUpstream optionally overrides host-resolver discovery for the
@@ -70,6 +74,12 @@ func validateConfig(config Config) (validatedConfig, error) {
 	}
 	if config.WorkspaceStore == nil {
 		return validatedConfig{}, fmt.Errorf("SecondBox gVisor backend requires the runner WorkspaceStore")
+	}
+	if config.NetworkProfile >= maximumNetworkProfiles {
+		return validatedConfig{}, fmt.Errorf("SecondBox gVisor network profile must be below %d", maximumNetworkProfiles)
+	}
+	if config.MaximumInstances > maximumNetworkslots {
+		return validatedConfig{}, fmt.Errorf("SecondBox gVisor supports at most %d concurrent Instances per runner", maximumNetworkslots)
 	}
 	manifest, err := materialization.Load(config.MaterializationPath, config.MaterializationDigest)
 	if err != nil {

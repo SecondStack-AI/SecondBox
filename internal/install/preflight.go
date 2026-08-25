@@ -57,6 +57,12 @@ type PreflightProbes struct {
 	CPUCount     int
 	InvokingUID  int64
 	InvokingGID  int64
+	// Backend selects the compute-backend host requirements: "firecracker"
+	// (the default when empty) requires KVM, TUN, and hardware
+	// virtualization; "gvisor" requires none of those and instead requires
+	// loop devices, nftables, and iproute2 for its host attachment and
+	// routed-veth policy path.
+	Backend string
 }
 
 type systemFilesystemProbe struct{}
@@ -355,10 +361,28 @@ func preflightCgroup(p PreflightProbes, f *HostFacts, add func(string, FindingCl
 	}
 }
 func preflightDevices(p PreflightProbes, f *HostFacts, add func(string, FindingClass, string, string, string)) {
-	for _, item := range []struct {
+	requiredDevices := []struct {
 		id, path string
 		target   *bool
-	}{{"kvm", "/dev/kvm", &f.KVMAccessible}, {"tun", "/dev/net/tun", &f.TUNAccessible}} {
+	}{{"kvm", "/dev/kvm", &f.KVMAccessible}, {"tun", "/dev/net/tun", &f.TUNAccessible}}
+	if p.Backend == "gvisor" {
+		// The gVisor Runner needs no hypervisor or TAP devices; its host
+		// attachment binds Workspace images to loop devices.
+		requiredDevices = requiredDevices[:0]
+		requiredDevices = append(requiredDevices, struct {
+			id, path string
+			target   *bool
+		}{"loop_control", "/dev/loop-control", new(bool)})
+		for _, tool := range []string{"nft", "ip"} {
+			if _, err := p.Process.LookPath(tool); err != nil {
+				add("gvisor_"+tool, FindingBlocked, tool+" is unavailable", errorText(err),
+					"Install nftables and iproute2 for the gVisor network-policy path.")
+			} else {
+				add("gvisor_"+tool, FindingPass, tool+" is available", "", "")
+			}
+		}
+	}
+	for _, item := range requiredDevices {
 		info, err := p.Filesystem.Lstat(item.path)
 		if err != nil || info.Mode()&os.ModeDevice == 0 {
 			add(item.id, FindingBlocked, item.path+" is unavailable", errorText(err), "Expose the host device to the installer and Runner.")
@@ -386,6 +410,11 @@ func preflightCPUAndMemory(p PreflightProbes, f *HostFacts, add func(string, Fin
 	if err == nil && (strings.Contains(text, " vmx ") || strings.Contains(text, " svm ") || strings.Contains(text, "\nflags") && (strings.Contains(text, "vmx") || strings.Contains(text, "svm"))) {
 		f.Virtualization = "hardware"
 		add("virtualization", FindingPass, "CPU virtualization is available", "", "")
+	} else if p.Backend == "gvisor" {
+		// The sentry's systrap platform runs without hardware virtualization;
+		// this is exactly the host class the gVisor Runner qualifies.
+		f.Virtualization = "none"
+		add("virtualization", FindingPass, "CPU virtualization is absent and not required by the gVisor backend", "", "")
 	} else {
 		add("virtualization", FindingBlocked, "CPU virtualization is unavailable", errorText(err), "Enable VT-x/AMD-V and nested virtualization when applicable.")
 	}

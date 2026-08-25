@@ -41,6 +41,7 @@ type GVisorComposition struct {
 	MaximumDiskBytes      uint64
 	MaximumInstances      uint32
 	MaximumOperations     uint32
+	NetworkProfile        uint32
 }
 
 type MicrosandboxComposition struct {
@@ -171,6 +172,15 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 	if err != nil {
 		return GVisorComposition{}, 0, err
 	}
+	// The network profile keeps runners sharing one host network namespace
+	// apart; a single runner per host keeps the default 0.
+	networkProfile := uint64(0)
+	if raw := strings.TrimSpace(os.Getenv("SECONDBOX_GVISOR_NETWORK_PROFILE")); raw != "" {
+		networkProfile, err = strconv.ParseUint(raw, 10, 32)
+		if err != nil {
+			return GVisorComposition{}, 0, fmt.Errorf("SECONDBOX_GVISOR_NETWORK_PROFILE must be a base-10 integer")
+		}
+	}
 	return GVisorComposition{
 		RunscPath:             values["SECONDBOX_GVISOR_RUNSC_PATH"],
 		RuntimeDir:            values["SECONDBOX_GVISOR_RUNTIME_DIR"],
@@ -180,6 +190,7 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		MaterializationDigest: digest,
 		MaximumVCPUs:          uint32(vcpus), MaximumMemoryBytes: memory, MaximumDiskBytes: disk,
 		MaximumInstances: uint32(instances), MaximumOperations: uint32(operations),
+		NetworkProfile: uint32(networkProfile),
 	}, int64(template), nil
 }
 

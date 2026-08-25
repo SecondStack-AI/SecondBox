@@ -287,9 +287,34 @@ func (err *deployExitError) Unwrap() error { return err.err }
 func (err *deployExitError) ExitCode() int { return err.code }
 
 func runInstallPreflight(ctx context.Context, arguments []string, renderer cliui.Renderer, probes install.PreflightProbes) error {
-	return runInstallPreflightWith(ctx, arguments, renderer, func(ctx context.Context) (install.HostFacts, error) {
+	backend, remaining, err := parsePreflightBackend(arguments)
+	if err != nil {
+		return err
+	}
+	probes.Backend = backend
+	return runInstallPreflightWith(ctx, remaining, renderer, func(ctx context.Context) (install.HostFacts, error) {
 		return install.Preflight(ctx, probes)
 	})
+}
+
+// parsePreflightBackend removes a "--backend <kind>" pair from the install
+// arguments and validates the kind; the remaining arguments keep the existing
+// --check/--advanced grammar.
+func parsePreflightBackend(arguments []string) (string, []string, error) {
+	backend := ""
+	remaining := make([]string, 0, len(arguments))
+	for index := 0; index < len(arguments); index++ {
+		if arguments[index] == "--backend" && index+1 < len(arguments) {
+			backend = arguments[index+1]
+			index++
+			continue
+		}
+		remaining = append(remaining, arguments[index])
+	}
+	if backend != "" && backend != "firecracker" && backend != "gvisor" {
+		return "", nil, &deployExitError{code: 2, err: errors.New("SecondBox installer preflight: --backend must be firecracker or gvisor")}
+	}
+	return backend, remaining, nil
 }
 
 func runInstallPreflightWith(ctx context.Context, arguments []string, renderer cliui.Renderer, preflight func(context.Context) (install.HostFacts, error)) error {

@@ -39,6 +39,7 @@ func newGVisorAssignmentBackend(
 		MaximumDiskBytes:      settings.MaximumDiskBytes,
 		MaximumInstances:      settings.MaximumInstances,
 		MaximumOperations:     settings.MaximumOperations,
+		NetworkProfile:        settings.NetworkProfile,
 		WorkspaceStore:        workspaceStore,
 	})
 	if err != nil {
