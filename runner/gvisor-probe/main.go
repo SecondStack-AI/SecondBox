@@ -16,6 +16,7 @@ import (
 type probeEnv struct {
 	runscPath string
 	guestPath string
+	agentPath string
 	workDir   string
 	rootless  bool
 	stdout    io.Writer
@@ -31,6 +32,7 @@ var proofs = []proof{
 	{name: "sandbox-lifecycle", run: proofSandboxLifecycle},
 	{name: "cgroup-limits", run: proofCgroupLimits},
 	{name: "workspace", run: proofWorkspace},
+	{name: "agent-protocol", run: proofAgentProtocol},
 }
 
 func main() {
@@ -42,6 +44,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	runscPath := flags.String("runsc", "", "path to the pinned runsc binary")
 	guestPath := flags.String("guest", "", "path to the probe guest binary")
+	agentPath := flags.String("agent", "", "path to the probe agent-harness binary")
 	workDir := flags.String("work", "", "probe state directory; must not already exist")
 	allowKVMHost := flags.Bool("allow-kvm-host", false,
 		"development only: run although /dev/kvm exists; qualification must not pass this")
@@ -90,7 +93,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	for _, binary := range []string{*runscPath, *guestPath} {
+	binaries := []string{*runscPath, *guestPath}
+	if *agentPath != "" {
+		binaries = append(binaries, *agentPath)
+	}
+	for _, binary := range binaries {
 		info, err := os.Stat(binary)
 		if err != nil || info.IsDir() || info.Mode().Perm()&0o100 == 0 {
 			_, _ = fmt.Fprintf(stderr, "SecondBox gVisor probe requires an executable binary: %s\n", binary)
@@ -112,6 +119,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		workDir:   mustAbs(*workDir),
 		rootless:  *rootless,
 		stdout:    stdout,
+	}
+	if *agentPath != "" {
+		env.agentPath = mustAbs(*agentPath)
 	}
 	for _, p := range selectProofs(selected) {
 		if err := p.run(env); err != nil {

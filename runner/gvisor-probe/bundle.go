@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // The probe generates minimal OCI bundles directly so the exact spec shape a
@@ -79,6 +80,12 @@ type bundleConfig struct {
 	Binds       []bindMount
 	CgroupsPath string
 	Resources   *ociResources
+	// Entrypoint overrides the default /guest argv entirely when set;
+	// GuestArgs is ignored in that case.
+	Entrypoint []string
+	// ExtraBinaries installs additional executables into the rootfs root,
+	// keyed by their in-sandbox name.
+	ExtraBinaries map[string]string
 }
 
 const guestBinaryName = "guest"
@@ -86,8 +93,12 @@ const guestBinaryName = "guest"
 // writeBundle assembles one OCI bundle: a read-only rootfs holding only the
 // static probe guest binary, plus the requested bind mounts.
 func writeBundle(bundleDir, guestBinary string, config bundleConfig) error {
-	if len(config.GuestArgs) == 0 {
-		return fmt.Errorf("bundle requires guest arguments")
+	arguments := config.Entrypoint
+	if len(arguments) == 0 {
+		if len(config.GuestArgs) == 0 {
+			return fmt.Errorf("bundle requires guest arguments or an entrypoint")
+		}
+		arguments = append([]string{"/" + guestBinaryName}, config.GuestArgs...)
 	}
 	rootfs := filepath.Join(bundleDir, "rootfs")
 	if err := os.MkdirAll(rootfs, 0o755); err != nil {
@@ -95,6 +106,14 @@ func writeBundle(bundleDir, guestBinary string, config bundleConfig) error {
 	}
 	if err := copyExecutable(guestBinary, filepath.Join(rootfs, guestBinaryName)); err != nil {
 		return fmt.Errorf("install guest binary: %w", err)
+	}
+	for name, source := range config.ExtraBinaries {
+		if name == "" || strings.Contains(name, "/") {
+			return fmt.Errorf("extra binary name %q must be a bare file name", name)
+		}
+		if err := copyExecutable(source, filepath.Join(rootfs, name)); err != nil {
+			return fmt.Errorf("install extra binary %s: %w", name, err)
+		}
 	}
 
 	mounts := []ociMount{
@@ -120,7 +139,7 @@ func writeBundle(bundleDir, guestBinary string, config bundleConfig) error {
 		Version: "1.2.0",
 		Process: ociProcess{
 			User: ociUser{UID: 0, GID: 0},
-			Args: append([]string{"/" + guestBinaryName}, config.GuestArgs...),
+			Args: arguments,
 			Env:  []string{"PATH=/"},
 			Cwd:  "/",
 		},

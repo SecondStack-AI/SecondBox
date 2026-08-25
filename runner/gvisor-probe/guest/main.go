@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,11 +21,25 @@ func main() {
 
 func run() int {
 	if len(os.Args) != 3 {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: guest <hello|fail|stay|spin|hog|fill> <marker-path>")
+		_, _ = fmt.Fprintln(os.Stderr, "usage: guest <hello|fail|stay|spin|hog|fill|print|cat> <argument>")
 		return 2
 	}
 	mode := os.Args[1]
-	markerPath := os.Args[2]
+	argument := os.Args[2]
+	// print and cat are exec-operation targets; they use stdio rather than a
+	// marker mount and must not touch the filesystem.
+	switch mode {
+	case "print":
+		fmt.Println(argument)
+		return 0
+	case "cat":
+		if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "guest cat failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	markerPath := argument
 	if err := os.WriteFile(markerPath, []byte("secondbox-gvisor-probe-guest "+mode+"\n"), 0o600); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "guest marker write failed: %v\n", err)
 		return 1

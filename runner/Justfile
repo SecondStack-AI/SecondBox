@@ -90,6 +90,7 @@ build-gvisor-probe output:
     scripts/fetch-runsc.sh --output "$output/bin"
     CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe" ./gvisor-probe
     CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe-guest" ./gvisor-probe/guest
+    CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe-agent" ./gvisor-probe/agentharness
     echo "SecondBox gVisor probe build complete: $output/bin"
 
 test-gvisor-probe build_dir work_dir:
@@ -107,12 +108,14 @@ test-gvisor-probe build_dir work_dir:
     work_dir="{{work_dir}}"
     probe="$build_dir/bin/secondbox-gvisor-probe"
     guest="$build_dir/bin/secondbox-gvisor-probe-guest"
+    agent="$build_dir/bin/secondbox-gvisor-probe-agent"
     runsc="$build_dir/bin/runsc"
     [[ -x "$probe" ]] || { echo "SecondBox gVisor probe binary is missing: $probe" >&2; exit 1; }
     [[ -x "$guest" ]] || { echo "SecondBox gVisor probe guest binary is missing: $guest" >&2; exit 1; }
+    [[ -x "$agent" ]] || { echo "SecondBox gVisor probe agent binary is missing: $agent" >&2; exit 1; }
     [[ -x "$runsc" ]] || { echo "SecondBox pinned runsc binary is missing: $runsc" >&2; exit 1; }
     mkdir -- "$work_dir"
-    "$probe" -runsc "$runsc" -guest "$guest" -work "$work_dir/probe" all
+    "$probe" -runsc "$runsc" -guest "$guest" -agent "$agent" -work "$work_dir/probe" all
 
 test-microsandbox-probe-linux build_dir work_dir:
     #!/usr/bin/env bash

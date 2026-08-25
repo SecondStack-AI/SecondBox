@@ -275,17 +275,18 @@ func newProofArea(env *probeEnv, base, name string) (*proofArea, error) {
 	return area, nil
 }
 
-func runscBaseArguments(stateRoot string, rootless bool) []string {
+func runscBaseArguments(stateRoot string, rootless bool, extraGlobal ...string) []string {
 	arguments := []string{"--root", stateRoot, "--network=none", "--platform=systrap"}
 	if rootless {
 		arguments = append(arguments, "--rootless")
 	}
-	return arguments
+	return append(arguments, extraGlobal...)
 }
 
 // runscRun builds the supervised foreground run command for one proof area.
-func (env *probeEnv) runscRun(area *proofArea, verb string) *exec.Cmd {
-	arguments := runscBaseArguments(area.stateRoot, env.rootless)
+// Extra global flags precede the subcommand.
+func (env *probeEnv) runscRun(area *proofArea, verb string, extraGlobal ...string) *exec.Cmd {
+	arguments := runscBaseArguments(area.stateRoot, env.rootless, extraGlobal...)
 	arguments = append(arguments, verb, "-bundle", area.bundleDir, area.containerID)
 	command := exec.Command(env.runscPath, arguments...)
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
