@@ -127,13 +127,13 @@ production composition may depend on it.
   agent transport is unreachable from the policed path. This proves the rule family and namespace
   shape that Task 6H's shared extraction must render; the existing bridge-family rules are not
   reused here.
-- [ ] Run a representative released toolchain bundle's standard workloads under runsc and record
+- [x] Run a representative released toolchain bundle's standard workloads under runsc and record
   every syscall-compatibility failure verbatim.
-- [ ] Record 30 sandbox cold-start samples and bounded `/workspace` throughput samples with
+- [x] Record 30 sandbox cold-start samples and bounded `/workspace` throughput samples with
   directFS enabled and disabled. Observations only; no gate.
-- [ ] Record exact host environment, gVisor release tag and runsc build digest, kernel versions,
+- [x] Record exact host environment, gVisor release tag and runsc build digest, kernel versions,
   commands, outcomes, and bounded logs in a dated evidence document under `docs/plans/evidence/`.
-- [ ] Declare Task 0H passed only if every proof succeeds on a real no-KVM host. A KVM-capable
+- [x] Declare Task 0H passed only if every proof succeeds on a real no-KVM host. A KVM-capable
   host run or a compile-only result is not sufficient.
 
 #### Task 0H validation
