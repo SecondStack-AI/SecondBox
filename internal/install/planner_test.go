@@ -24,14 +24,14 @@ func plannerFacts(t *testing.T) HostFacts {
 
 func plannerInput(t *testing.T, choice StorageChoice) ProposalInput {
 	t.Helper()
-	return ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC), DeploymentDirectory: "/home/operator/.local/share/secondbox", BinaryDirectory: "/home/operator/.local/bin", CLIConfigPath: "/home/operator/.config/secondbox/config.json", CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 105 << 30, DeploymentAvailableBytes: 100 << 30, Release: validPlan(t).Release, StorageChoice: choice, ExistingMountpoint: "/srv/secondbox-workspace", StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400}
+	return ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC), DeploymentDirectory: "/home/operator/.local/share/secondbox", BinaryDirectory: "/home/operator/.local/bin", CLIConfigPath: "/home/operator/.config/secondbox/config.json", BackingAvailableBytes: 105 << 30, DeploymentAvailableBytes: 100 << 30, Release: validPlan(t).Release, StorageChoice: choice, ExistingMountpoint: "/srv/secondbox-workspace", StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400}
 }
 
-func TestProposalRequiresExplicitCLIIdentity(t *testing.T) {
+func TestProposalRequiresExplicitCLIConfigurationPath(t *testing.T) {
 	input := plannerInput(t, StorageBtrfsImage)
-	input.CLISubjectRef = ""
+	input.CLIConfigPath = ""
 	if _, err := ProposePlan(plannerFacts(t), input); err == nil || !strings.Contains(err.Error(), "explicit CLI") {
-		t.Fatalf("implicit CLI identity proposal error = %v", err)
+		t.Fatalf("implicit CLI configuration proposal error = %v", err)
 	}
 }
 

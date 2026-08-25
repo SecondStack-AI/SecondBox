@@ -62,8 +62,6 @@ type ProposalInput struct {
 	DeploymentDirectory      string
 	BinaryDirectory          string
 	CLIConfigPath            string
-	CLITenantRef             string
-	CLISubjectRef            string
 	BackingAvailableBytes    int64
 	DeploymentAvailableBytes int64
 	Release                  ReleasePlan
@@ -141,8 +139,8 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 	if input.DeploymentAvailableBytes < MinimumDeploymentBytes {
 		return InstallPlan{}, installerError("deployment filesystem capacity is insufficient for verified release materialization", nil)
 	}
-	if input.CLIConfigPath == "" || input.CLITenantRef == "" || input.CLISubjectRef == "" {
-		return InstallPlan{}, installerError("explicit CLI configuration path, tenant reference, and subject reference are required", nil)
+	if input.CLIConfigPath == "" {
+		return InstallPlan{}, installerError("explicit CLI configuration path is required", nil)
 	}
 	for name, path := range map[string]string{"deployment": input.DeploymentDirectory, "binary": input.BinaryDirectory, "CLI configuration": input.CLIConfigPath} {
 		if err := validateSafePath(path); err != nil {
@@ -172,7 +170,7 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 	if input.RetentionSeconds <= 0 {
 		return InstallPlan{}, installerError("operator-selected retention is required", nil)
 	}
-	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"platform-authority", "runner-enrollment", "runner-pki", "database"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage), ReleaseHistory: []ReleaseActivation{{Release: input.Release, ActivatedAt: input.CreatedAt.UTC()}}}
+	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"platform-authority", "runner-enrollment", "runner-pki", "database"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage), ReleaseHistory: []ReleaseActivation{{Release: input.Release, ActivatedAt: input.CreatedAt.UTC()}}}
 	if err := plan.Validate(); err != nil {
 		return InstallPlan{}, err
 	}
@@ -518,7 +516,7 @@ func privilegedActions(storage StoragePlan) []string {
 func RenderPlanReview(plan InstallPlan) string {
 	var result strings.Builder
 	fmt.Fprintf(&result, "Release %s\nArtifact manifest: %s\nManifest digest: %s\nSigning key: %s\nExpected downloads: %s\n", plan.Release.Version, plan.Release.ArtifactManifestURL, plan.Release.ArtifactManifestDigest, plan.Release.SigningKeyFingerprint, formatBytes(plan.Release.ExpectedDownloadBytes))
-	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, guests %s, Compose backend %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
+	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, guests %s, Compose backend %s, DNS %s\nCLI platform authority: %s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, time.Duration(plan.RetentionSeconds)*time.Second)
 	result.WriteString("Generated authority: " + strings.Join(plan.GeneratedAuthorityCategories, ", ") + "\nPersistent services: PostgreSQL, control plane, same-host Runner\nExisting SecondBox CLIs and CLI configuration at the reviewed paths are upgraded atomically; unrelated files are refused.\nOrdinary uninstall preserves workspaces, authority, manifests, execution assets, and service data.\nPaths requiring sudo:\n")
 	for _, path := range plan.Paths {
 		if path.RequiresSudo {

@@ -241,8 +241,6 @@ type ReleaseActivation struct {
 }
 type CLIPlan struct {
 	ConfigPath string `json:"configPath"`
-	TenantRef  string `json:"tenantRef"`
-	SubjectRef string `json:"subjectRef"`
 }
 
 type InstallPlan struct {

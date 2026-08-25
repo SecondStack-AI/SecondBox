@@ -154,7 +154,8 @@ func run(ctx context.Context, args []string, output io.Writer) (resultErr error)
 	global := flag.NewFlagSet("secondbox", flag.ContinueOnError)
 	global.SetOutput(io.Discard)
 	rawURL := global.String("url", "", "absolute SecondBox API endpoint")
-	token := global.String("token", "", "SecondBox platform token")
+	token := global.String("token", "", "SecondBox bearer token")
+	authority := global.String("authority-kind", "", "authority kind: platform, tenant_controller, or application")
 	tenantRef := global.String("tenant-ref", "", "trusted caller tenant reference")
 	subjectRef := global.String("subject-ref", "", "trusted caller subject reference")
 	outputModeValue := global.String("output", "auto", "output mode: auto, json, or plain")
@@ -204,7 +205,8 @@ func run(ctx context.Context, args []string, output io.Writer) (resultErr error)
 		return renderer.WriteHelp(secondboxHelp())
 	}
 	session, err := resolveSession(cliSession{
-		url: *rawURL, token: *token, tenantRef: *tenantRef, subjectRef: *subjectRef,
+		url: *rawURL, token: *token, authority: sessionAuthorityKind(*authority),
+		tenantRef: *tenantRef, subjectRef: *subjectRef,
 	})
 	if err != nil {
 		return err
@@ -219,7 +221,8 @@ func run(ctx context.Context, args []string, output io.Writer) (resultErr error)
 	if session.token == "" {
 		return errors.New("SecondBox CLI requires --token" + sessionSourceHint)
 	}
-	if session.tenantRef == "" || session.subjectRef == "" {
+	if session.authority == sessionAuthorityApplication &&
+		(session.tenantRef == "" || session.subjectRef == "") {
 		return errors.New("SecondBox CLI requires --tenant-ref and --subject-ref" + sessionSourceHint)
 	}
 	genericRawOperation := len(commandArguments) > 0 && commandArguments[0] == "operation"
@@ -228,9 +231,7 @@ func run(ctx context.Context, args []string, output io.Writer) (resultErr error)
 		return err
 	}
 
-	client, err := secondboxclient.NewSecondBoxSubjectClient(
-		session.url, session.token, session.tenantRef, session.subjectRef, http.DefaultClient,
-	)
+	client, err := clientForSession(session, http.DefaultClient)
 	if err != nil {
 		return err
 	}
@@ -290,10 +291,25 @@ func runOperationalCommand(
 		return true, cliui.WriteJSONPassthrough(output, encoded.Bytes())
 	case "login":
 		return true, runLoginCommandPresented(ctx, session, args[1:], output, http.DefaultClient)
+	case "application":
+		if len(args) >= 2 && args[1] == "login" {
+			return true, runAuthorityLoginCommandPresented(ctx, session, sessionAuthorityApplication, args[2:], output, http.DefaultClient)
+		}
+	case "platform":
+		if len(args) >= 2 && args[1] == "login" {
+			return true, runAuthorityLoginCommandPresented(ctx, session, sessionAuthorityPlatform, args[2:], output, http.DefaultClient)
+		}
+	case "controller":
+		if len(args) >= 2 && args[1] == "login" {
+			return true, runAuthorityLoginCommandPresented(ctx, session, sessionAuthorityTenantController, args[2:], output, http.DefaultClient)
+		}
 	case "logout":
 		return true, runLogoutCommandPresented(ctx, session, args[1:], output)
 	case "whoami":
 		return true, runWhoamiCommandPresented(ctx, session, args[1:], output)
+	}
+	if handled, err := runManagementCommand(ctx, session, args, output, http.DefaultClient); handled {
+		return true, err
 	}
 	if args[0] == "exec" && !isExecSubcommand(args) {
 		return true, runExecCommand(ctx, session, args[1:], execCommandEnvironment{
@@ -352,6 +368,21 @@ func runOperationalCommand(
 		return true, runLogsCommand(ctx, args[1], args[2:], output)
 	default:
 		return false, nil
+	}
+}
+
+func clientForSession(session cliSession, httpClient *http.Client) (*secondboxclient.Client, error) {
+	switch session.authority {
+	case sessionAuthorityPlatform:
+		return secondboxclient.NewSecondBoxClient(session.url, session.token, httpClient)
+	case sessionAuthorityTenantController:
+		return secondboxclient.NewSecondBoxTenantControllerClient(session.url, session.token, httpClient)
+	case sessionAuthorityApplication, "":
+		return secondboxclient.NewSecondBoxSubjectClient(
+			session.url, session.token, session.tenantRef, session.subjectRef, httpClient,
+		)
+	default:
+		return nil, fmt.Errorf("SecondBox CLI session authority kind %q is invalid", session.authority)
 	}
 }
 
@@ -493,9 +524,9 @@ func commandSummary() string {
 	}
 	keys = append(
 		keys,
-		"diagnostics bundle", "exec", "login", "logout", "logs follow", "logs tail",
+		"application login", "controller login", "diagnostics bundle", "exec", "login", "logout", "logs follow", "logs tail", "platform login",
 		"run", "sandbox shell", "shell", "timings operation", "timings sandbox",
-		"timings summary", "whoami",
+		"timings summary", "tenant", "subject", "application-authority", "usage", "whoami",
 	)
 	sort.Strings(keys)
 	return strings.Join(keys, ", ")

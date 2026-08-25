@@ -153,7 +153,7 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		t.Fatal(err)
 	}
 	plan.Storage = StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: "fixture-device"}
-	plan.CLI = CLIPlan{ConfigPath: filepath.Join(root, "config", "secondbox", "config.json"), TenantRef: "tenant", SubjectRef: "subject"}
+	plan.CLI = CLIPlan{ConfigPath: filepath.Join(root, "config", "secondbox", "config.json")}
 	uid, gid := int64(os.Getuid()), int64(os.Getgid())
 	plan.Paths = []PlannedPath{
 		plannedPath("deployment", operation, PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),

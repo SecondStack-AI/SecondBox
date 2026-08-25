@@ -22,6 +22,13 @@ type StagedSingleHostUpdate struct {
 }
 
 func ValidateSingleHostUpdateSource(plan install.InstallPlan, release releasecontract.ArtifactManifest, releaseBytes []byte, artifact install.VerifiedArtifact) error {
+	comparison, err := releasecontract.CompareVersions(release.Version, cleanInstallBoundaryVersion)
+	if err != nil {
+		return err
+	}
+	if release.Version != "0.0.0-development" && comparison < 0 {
+		return cleanInstallBoundaryError("installed deployment predates v" + cleanInstallBoundaryVersion)
+	}
 	if err := release.Validate(); err != nil {
 		return err
 	}

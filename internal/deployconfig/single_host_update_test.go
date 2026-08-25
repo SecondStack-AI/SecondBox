@@ -71,6 +71,20 @@ func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
 	}
 }
 
+func TestUpdateSourceValidationRefusesPreCleanInstallBoundary(t *testing.T) {
+	err := ValidateSingleHostUpdateSource(
+		install.InstallPlan{},
+		releasecontract.ArtifactManifest{Identity: releasecontract.Identity{Version: "0.5.2"}},
+		nil,
+		install.VerifiedArtifact{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "v0.6.0 clean-install boundary") ||
+		!strings.Contains(err.Error(), "clean reinstall") ||
+		!strings.Contains(err.Error(), "compatibility modes are not available") {
+		t.Fatalf("pre-boundary update error = %v", err)
+	}
+}
+
 func TestPublishedUpdateFileMustMatchVerifiedTargetBytes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "secondbox.toml")
 	expected := []byte("verified target\n")

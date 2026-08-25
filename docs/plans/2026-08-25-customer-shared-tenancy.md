@@ -123,12 +123,12 @@ Represent application-environment teardown as one observable Operation. Closing 
 
 Give operators and tenant controllers a source-free management surface. Production initialization creates only the platform authority; delegated credentials are created after startup through authenticated management operations.
 
-- [ ] Add `secondbox` CLI command groups for platform-operator tenant management and tenant-controller subject, authority, usage, close, and cleanup workflows using the generated client.
-- [ ] Keep human and structured output stable, show bearer tokens only after successful creation, and prevent session/config helpers from treating tenant-controller and application credentials as platform tokens.
-- [ ] Generate and materialize only the platform token during a production installation; do not create an implicit tenant, subject, controller, or application authority.
-- [ ] Make v0.6.0 validation and update refuse a v0.5.2-style manifest or deployment with a direct clean-reinstall diagnostic and no import or compatibility option.
-- [ ] Keep development setup explicit: any sample tenant and credentials must be created by an observable post-start development step, not a runtime default or hidden bootstrap path.
-- [ ] Test a clean source-free install through platform-token login, tenant/controller creation, controller login, subject/application credential creation, and an authenticated Sandbox request.
+- [x] Add `secondbox` CLI command groups for platform-operator tenant management and tenant-controller subject, authority, usage, close, and cleanup workflows using the generated client.
+- [x] Keep human and structured output stable, show bearer tokens only after successful creation, and prevent session/config helpers from treating tenant-controller and application credentials as platform tokens.
+- [x] Generate and materialize only the platform token during a production installation; do not create an implicit tenant, subject, controller, or application authority.
+- [x] Make v0.6.0 validation and update refuse a v0.5.2-style manifest or deployment with a direct clean-reinstall diagnostic and no import or compatibility option.
+- [x] Keep development setup explicit: any sample tenant and credentials must be created by an observable post-start development step, not a runtime default or hidden bootstrap path.
+- [x] Test a clean source-free install through platform-token login, tenant/controller creation, controller login, subject/application credential creation, and an authenticated Sandbox request.
 
 ### Task 8: Ship the isolated agent Profile as a release-owned resource
 

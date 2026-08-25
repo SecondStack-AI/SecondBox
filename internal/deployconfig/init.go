@@ -255,13 +255,13 @@ func initProduction(directory string, writeSkeleton func(string, []byte) error) 
 			_ = os.RemoveAll(absolute)
 		}
 	}()
-	skeleton := []byte("schema_version = 1\n\n# Production initialization is incomplete. Supply the deployment, database, runners,\n# execution asset trust, applications, tenancy policy, and lifecycle policy groups.\n")
+	skeleton := []byte("schema_version = 1\n\n# Production initialization is incomplete. Supply the deployment, database, runners,\n# execution asset trust, platform authority, tenancy policy, and lifecycle policy groups.\n")
 	path := filepath.Join(absolute, "secondbox.toml")
 	if err := writeSkeleton(path, skeleton); err != nil {
 		return "", err
 	}
 	created = false
-	return path, manifestError("production initialization unresolved decision groups: deployment, database, Runner topology, execution-asset trust, application authorities, tenancy policy, lifecycle policy", nil)
+	return path, manifestError("production initialization unresolved decision groups: deployment, database, Runner topology, execution-asset trust, platform authority, tenancy policy, lifecycle policy", nil)
 }
 
 // InitProductionFromManifest is the non-interactive automation path. It

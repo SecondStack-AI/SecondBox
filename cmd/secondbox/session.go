@@ -20,6 +20,7 @@ import (
 const (
 	sessionURLEnvironment        = "SECONDBOX_URL"
 	sessionTokenEnvironment      = "SECONDBOX_TOKEN"
+	sessionAuthorityEnvironment  = "SECONDBOX_AUTHORITY_KIND"
 	sessionTenantRefEnvironment  = "SECONDBOX_TENANT_REF"
 	sessionSubjectRefEnvironment = "SECONDBOX_SUBJECT_REF"
 	sessionPathEnvironment       = "SECONDBOX_CONFIG"
@@ -30,6 +31,14 @@ const sessionSourceHint = "; supply it as a flag, in the environment, or with se
 
 // sessionOrigin records which source supplied one resolved value.
 type sessionOrigin string
+
+type sessionAuthorityKind string
+
+const (
+	sessionAuthorityPlatform         sessionAuthorityKind = "platform"
+	sessionAuthorityTenantController sessionAuthorityKind = "tenant_controller"
+	sessionAuthorityApplication      sessionAuthorityKind = "application"
+)
 
 const (
 	sessionOriginUnset         sessionOrigin = "unset"
@@ -42,6 +51,7 @@ const (
 type cliSession struct {
 	url        string
 	token      string
+	authority  sessionAuthorityKind
 	tenantRef  string
 	subjectRef string
 	origins    sessionOrigins
@@ -51,6 +61,7 @@ type cliSession struct {
 type sessionOrigins struct {
 	url        sessionOrigin
 	token      sessionOrigin
+	authority  sessionOrigin
 	tenantRef  sessionOrigin
 	subjectRef sessionOrigin
 }
@@ -59,8 +70,9 @@ type sessionOrigins struct {
 type sessionFile struct {
 	URL        string `json:"url"`
 	Token      string `json:"token"`
-	TenantRef  string `json:"tenantRef"`
-	SubjectRef string `json:"subjectRef"`
+	Authority  string `json:"authorityKind,omitempty"`
+	TenantRef  string `json:"tenantRef,omitempty"`
+	SubjectRef string `json:"subjectRef,omitempty"`
 }
 
 // resolveSession merges explicit flags, the environment, and stored configuration.
@@ -81,13 +93,39 @@ func resolveSession(flagValues cliSession) (cliSession, error) {
 	session.token, session.origins.token = selectSessionValue(
 		flagValues.token, sessionTokenEnvironment, stored.Token,
 	)
+	authority, authorityOrigin := selectSessionValue(
+		string(flagValues.authority), sessionAuthorityEnvironment, stored.Authority,
+	)
+	session.authority = sessionAuthorityKind(authority)
+	session.origins.authority = authorityOrigin
+	if session.origins.token != sessionOriginConfiguration &&
+		session.origins.authority == sessionOriginConfiguration {
+		session.authority = ""
+		session.origins.authority = sessionOriginUnset
+	}
 	session.tenantRef, session.origins.tenantRef = selectSessionValue(
 		flagValues.tenantRef, sessionTenantRefEnvironment, stored.TenantRef,
 	)
 	session.subjectRef, session.origins.subjectRef = selectSessionValue(
 		flagValues.subjectRef, sessionSubjectRefEnvironment, stored.SubjectRef,
 	)
+	if session.authority == "" && session.tenantRef != "" && session.subjectRef != "" {
+		session.authority = sessionAuthorityApplication
+		session.origins.authority = sessionOriginUnset
+	}
+	if err := validateSessionAuthorityKind(session.authority); err != nil {
+		return cliSession{}, err
+	}
 	return session, nil
+}
+
+func validateSessionAuthorityKind(kind sessionAuthorityKind) error {
+	switch kind {
+	case "", sessionAuthorityPlatform, sessionAuthorityTenantController, sessionAuthorityApplication:
+		return nil
+	default:
+		return fmt.Errorf("SecondBox CLI authority kind %q must be platform, tenant_controller, or application", kind)
+	}
 }
 
 func selectSessionValue(
@@ -224,12 +262,29 @@ func runLoginCommand(
 	output io.Writer,
 	httpClient *http.Client,
 ) error {
+	return runAuthorityLoginCommand(
+		ctx, session, sessionAuthorityApplication, args, output, httpClient,
+	)
+}
+
+func runAuthorityLoginCommand(
+	ctx context.Context,
+	session cliSession,
+	authority sessionAuthorityKind,
+	args []string,
+	output io.Writer,
+	httpClient *http.Client,
+) error {
 	flags := flag.NewFlagSet("login", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	rawURL := flags.String("url", session.url, "absolute SecondBox API endpoint")
 	token := flags.String("token", session.token, "SecondBox API token")
-	tenantRef := flags.String("tenant-ref", session.tenantRef, "trusted caller tenant reference")
-	subjectRef := flags.String("subject-ref", session.subjectRef, "trusted caller subject reference")
+	defaultTenantRef, defaultSubjectRef := "", ""
+	if authority == sessionAuthorityApplication {
+		defaultTenantRef, defaultSubjectRef = session.tenantRef, session.subjectRef
+	}
+	tenantRef := flags.String("tenant-ref", defaultTenantRef, "trusted caller tenant reference")
+	subjectRef := flags.String("subject-ref", defaultSubjectRef, "trusted caller subject reference")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("SecondBox CLI parse login options: %w", err)
 	}
@@ -239,12 +294,19 @@ func runLoginCommand(
 		)
 	}
 	stored := sessionFile{
-		URL:        strings.TrimSpace(*rawURL),
-		Token:      strings.TrimSpace(*token),
-		TenantRef:  strings.TrimSpace(*tenantRef),
-		SubjectRef: strings.TrimSpace(*subjectRef),
+		URL:       strings.TrimSpace(*rawURL),
+		Token:     strings.TrimSpace(*token),
+		Authority: string(authority),
 	}
-	if stored.URL == "" || stored.Token == "" || stored.TenantRef == "" || stored.SubjectRef == "" {
+	if authority == sessionAuthorityApplication {
+		stored.TenantRef = strings.TrimSpace(*tenantRef)
+		stored.SubjectRef = strings.TrimSpace(*subjectRef)
+	} else if strings.TrimSpace(*tenantRef) != "" || strings.TrimSpace(*subjectRef) != "" {
+		return fmt.Errorf("SecondBox CLI %s login does not accept tenant or subject assertions", authority)
+	}
+	missingApplicationBinding := authority == sessionAuthorityApplication &&
+		(stored.TenantRef == "" || stored.SubjectRef == "")
+	if stored.URL == "" || stored.Token == "" || missingApplicationBinding {
 		view := presentationFromContext(ctx, output)
 		if view.renderer.OutputMode != cliui.OutputJSON && view.renderer.Capabilities.Input.TTY && view.renderer.Capabilities.Output.TTY && view.input != nil {
 			fields := make([]cliui.FieldSpec, 0, 4)
@@ -252,12 +314,12 @@ func runLoginCommand(
 				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldText, Title: "API endpoint", Description: "Absolute URL of the SecondBox control plane", StringValue: &stored.URL, ValidateString: requiredLoginValue("API endpoint")})
 			}
 			if stored.Token == "" {
-				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldSecret, Title: "Platform token", Description: "Input is masked and is never printed", StringValue: &stored.Token, ValidateString: requiredLoginValue("platform token")})
+				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldSecret, Title: authorityLoginTokenTitle(authority), Description: "Input is masked and is never printed", StringValue: &stored.Token, ValidateString: requiredLoginValue(string(authority) + " token")})
 			}
-			if stored.TenantRef == "" {
+			if authority == sessionAuthorityApplication && stored.TenantRef == "" {
 				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldText, Title: "Tenant reference", StringValue: &stored.TenantRef, ValidateString: requiredLoginValue("tenant reference")})
 			}
-			if stored.SubjectRef == "" {
+			if authority == sessionAuthorityApplication && stored.SubjectRef == "" {
 				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldText, Title: "Subject reference", StringValue: &stored.SubjectRef, ValidateString: requiredLoginValue("subject reference")})
 			}
 			form := cliui.HuhForm{Groups: []cliui.GroupSpec{{Title: "Store credentials in " + session.path, Fields: fields}}}
@@ -270,22 +332,21 @@ func runLoginCommand(
 			stored.SubjectRef = strings.TrimSpace(stored.SubjectRef)
 		}
 	}
-	if stored.URL == "" || stored.Token == "" ||
-		stored.TenantRef == "" || stored.SubjectRef == "" {
-		return errors.New(
-			"SecondBox CLI login requires --url, --token, --tenant-ref, and --subject-ref",
-		)
+	if stored.URL == "" || stored.Token == "" {
+		return errors.New("SecondBox CLI login requires --url and --token")
+	}
+	if authority == sessionAuthorityApplication &&
+		(stored.TenantRef == "" || stored.SubjectRef == "") {
+		return errors.New("SecondBox CLI application login requires --url, --token, --tenant-ref, and --subject-ref")
 	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	client, err := secondboxclient.NewSecondBoxSubjectClient(
-		stored.URL, stored.Token, stored.TenantRef, stored.SubjectRef, httpClient,
-	)
+	client, err := clientForStoredAuthority(stored, httpClient)
 	if err != nil {
 		return err
 	}
-	if err := verifySessionCredentials(ctx, client); err != nil {
+	if err := verifySessionCredentials(ctx, client, authority); err != nil {
 		return err
 	}
 	if err := writeSessionFile(session.path, stored); err != nil {
@@ -301,8 +362,38 @@ func runLoginCommand(
 	return printErr
 }
 
+func authorityLoginTokenTitle(authority sessionAuthorityKind) string {
+	switch authority {
+	case sessionAuthorityPlatform:
+		return "Platform token"
+	case sessionAuthorityTenantController:
+		return "Tenant-controller token"
+	default:
+		return "Application token"
+	}
+}
+
+func clientForStoredAuthority(stored sessionFile, httpClient *http.Client) (*secondboxclient.Client, error) {
+	switch sessionAuthorityKind(stored.Authority) {
+	case sessionAuthorityPlatform:
+		return secondboxclient.NewSecondBoxClient(stored.URL, stored.Token, httpClient)
+	case sessionAuthorityTenantController:
+		return secondboxclient.NewSecondBoxTenantControllerClient(stored.URL, stored.Token, httpClient)
+	case sessionAuthorityApplication:
+		return secondboxclient.NewSecondBoxSubjectClient(stored.URL, stored.Token, stored.TenantRef, stored.SubjectRef, httpClient)
+	default:
+		return nil, fmt.Errorf("SecondBox CLI stored authority kind %q is invalid", stored.Authority)
+	}
+}
+
 func runLoginCommandPresented(ctx context.Context, session cliSession, args []string, output io.Writer, httpClient *http.Client) error {
-	if err := runLoginCommand(ctx, session, args, output, httpClient); err != nil {
+	return runAuthorityLoginCommandPresented(
+		ctx, session, sessionAuthorityApplication, args, output, httpClient,
+	)
+}
+
+func runAuthorityLoginCommandPresented(ctx context.Context, session cliSession, authority sessionAuthorityKind, args []string, output io.Writer, httpClient *http.Client) error {
+	if err := runAuthorityLoginCommand(ctx, session, authority, args, output, httpClient); err != nil {
 		return err
 	}
 	stored, err := readSessionFile(session.path)
@@ -311,7 +402,7 @@ func runLoginCommandPresented(ctx context.Context, session cliSession, args []st
 	}
 	view := presentationFromContext(ctx, output)
 	if view.renderer.OutputMode == cliui.OutputJSON {
-		return json.NewEncoder(output).Encode(map[string]string{"configuration": session.path, "status": "verified", "url": stored.URL})
+		return json.NewEncoder(output).Encode(map[string]string{"authorityKind": stored.Authority, "configuration": session.path, "status": "verified", "url": stored.URL})
 	}
 	if view.renderer.HumanOutput() {
 		return view.renderer.WriteSummary(cliui.Summary{Title: "Login complete", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Endpoint", Value: stored.URL}, {Key: "Credentials", Value: session.path}}})
@@ -329,17 +420,45 @@ func requiredLoginValue(name string) func(string) error {
 }
 
 // verifySessionCredentials proves the authority before it is written to disk.
-func verifySessionCredentials(ctx context.Context, client *secondboxclient.Client) error {
-	response, err := client.Request(ctx, "listSandboxes", secondboxclient.CallOptions{
-		QueryParameters: url.Values{"limit": []string{"1"}},
-	})
-	if err != nil {
-		return fmt.Errorf("SecondBox CLI verify credentials: %w", err)
+type cliSessionAuthorityError struct {
+	Required sessionAuthorityKind
+	Actual   sessionAuthorityKind
+}
+
+func (failure *cliSessionAuthorityError) Error() string {
+	actual := failure.Actual
+	if actual == "" {
+		actual = "unknown"
 	}
-	_, copyErr := io.Copy(io.Discard, response.Body)
-	closeErr := response.Body.Close()
-	if err := errors.Join(copyErr, closeErr); err != nil {
-		return fmt.Errorf("SecondBox CLI verify credentials response: %w", err)
+	return fmt.Sprintf("SecondBox CLI credential kind mismatch: command requires %s authority, session has %s authority", failure.Required, actual)
+}
+
+func verifySessionCredentials(ctx context.Context, client *secondboxclient.Client, authority sessionAuthorityKind) error {
+	var err error
+	switch authority {
+	case sessionAuthorityPlatform:
+		_, err = client.ListTenants(ctx, secondboxclient.PageOptions{Limit: 1})
+	case sessionAuthorityTenantController:
+		_, err = client.ListSubjects(ctx, secondboxclient.PageOptions{Limit: 1})
+	case sessionAuthorityApplication:
+		var response *http.Response
+		response, err = client.Request(ctx, "listSandboxes", secondboxclient.CallOptions{
+			QueryParameters: url.Values{"limit": []string{"1"}},
+		})
+		if err == nil {
+			_, copyErr := io.Copy(io.Discard, response.Body)
+			closeErr := response.Body.Close()
+			err = errors.Join(copyErr, closeErr)
+		}
+	default:
+		return &cliSessionAuthorityError{Required: authority}
+	}
+	if err != nil {
+		var apiFailure *secondboxclient.APIError
+		if errors.As(err, &apiFailure) && apiFailure.StatusCode == http.StatusForbidden {
+			return &cliSessionAuthorityError{Required: authority}
+		}
+		return fmt.Errorf("SecondBox CLI verify credentials: %w", err)
 	}
 	return nil
 }
@@ -399,9 +518,10 @@ func runWhoamiCommand(session cliSession, args []string, output io.Writer) error
 	}
 	_, err := fmt.Fprintf(
 		output,
-		"configuration  %s\nurl            %s (%s)\ntenant-ref     %s (%s)\nsubject-ref    %s (%s)\ntoken          %s (%s)\n",
+		"configuration  %s\nurl            %s (%s)\nauthority      %s (%s)\ntenant-ref     %s (%s)\nsubject-ref    %s (%s)\ntoken          %s (%s)\n",
 		session.path,
 		displaySessionValue(session.url), session.origins.url,
+		displaySessionValue(string(session.authority)), session.origins.authority,
 		displaySessionValue(session.tenantRef), session.origins.tenantRef,
 		displaySessionValue(session.subjectRef), session.origins.subjectRef,
 		token, session.origins.token,
@@ -419,10 +539,10 @@ func runWhoamiCommandPresented(ctx context.Context, session cliSession, args []s
 		token = "present"
 	}
 	if view.renderer.OutputMode == cliui.OutputJSON {
-		return json.NewEncoder(output).Encode(map[string]any{"configuration": session.path, "url": map[string]string{"value": displaySessionValue(session.url), "source": string(session.origins.url)}, "tenantRef": map[string]string{"value": displaySessionValue(session.tenantRef), "source": string(session.origins.tenantRef)}, "subjectRef": map[string]string{"value": displaySessionValue(session.subjectRef), "source": string(session.origins.subjectRef)}, "token": map[string]string{"state": token, "source": string(session.origins.token)}})
+		return json.NewEncoder(output).Encode(map[string]any{"authorityKind": map[string]string{"value": displaySessionValue(string(session.authority)), "source": string(session.origins.authority)}, "configuration": session.path, "url": map[string]string{"value": displaySessionValue(session.url), "source": string(session.origins.url)}, "tenantRef": map[string]string{"value": displaySessionValue(session.tenantRef), "source": string(session.origins.tenantRef)}, "subjectRef": map[string]string{"value": displaySessionValue(session.subjectRef), "source": string(session.origins.subjectRef)}, "token": map[string]string{"state": token, "source": string(session.origins.token)}})
 	}
 	if view.renderer.HumanOutput() {
-		return view.renderer.WriteSummary(cliui.Summary{Title: "Current authority", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Configuration", Value: session.path}, {Key: "URL", Value: displaySessionValue(session.url) + " (" + string(session.origins.url) + ")"}, {Key: "Tenant", Value: displaySessionValue(session.tenantRef) + " (" + string(session.origins.tenantRef) + ")"}, {Key: "Subject", Value: displaySessionValue(session.subjectRef) + " (" + string(session.origins.subjectRef) + ")"}, {Key: "Token", Value: token + " (" + string(session.origins.token) + ")"}}})
+		return view.renderer.WriteSummary(cliui.Summary{Title: "Current authority", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Configuration", Value: session.path}, {Key: "URL", Value: displaySessionValue(session.url) + " (" + string(session.origins.url) + ")"}, {Key: "Authority", Value: displaySessionValue(string(session.authority)) + " (" + string(session.origins.authority) + ")"}, {Key: "Tenant", Value: displaySessionValue(session.tenantRef) + " (" + string(session.origins.tenantRef) + ")"}, {Key: "Subject", Value: displaySessionValue(session.subjectRef) + " (" + string(session.origins.subjectRef) + ")"}, {Key: "Token", Value: token + " (" + string(session.origins.token) + ")"}}})
 	}
 	return runWhoamiCommand(session, args, output)
 }

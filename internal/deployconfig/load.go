@@ -39,13 +39,15 @@ const DefaultComposeProjectName = "secondbox"
 const (
 	linuxUnixSocketPathLimit      = 108
 	maxFirecrackerInstanceIDBytes = 42
+	cleanInstallBoundaryVersion   = "0.6.0"
 )
 
 var (
-	artifactKeyPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	opaqueRunnerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	composeProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
-	configValidationMu    sync.Mutex
+	artifactKeyPattern            = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	opaqueRunnerIDPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	composeProjectPattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	retiredApplicationAuthorities = strings.Join([]string{"application", "authorities", "file"}, "_")
+	configValidationMu            sync.Mutex
 )
 
 func ReadManifest(path string) (ManifestV1, error) {
@@ -64,6 +66,9 @@ func ReadManifest(path string) (ManifestV1, error) {
 	if err != nil {
 		return ManifestV1{}, manifestError("read", err)
 	}
+	if hasRetiredApplicationAuthoritiesFile(data) {
+		return ManifestV1{}, cleanInstallBoundaryError("manifest contains applications." + retiredApplicationAuthorities)
+	}
 	decoder := toml.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var manifest ManifestV1
@@ -74,6 +79,23 @@ func ReadManifest(path string) (ManifestV1, error) {
 		return ManifestV1{}, manifestError(fmt.Sprintf("unsupported schema_version %d", manifest.SchemaVersion), nil)
 	}
 	return manifest, nil
+}
+
+func hasRetiredApplicationAuthoritiesFile(data []byte) bool {
+	var document map[string]any
+	if err := toml.Unmarshal(data, &document); err != nil {
+		return false
+	}
+	applications, ok := document["applications"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, found := applications[retiredApplicationAuthorities]
+	return found
+}
+
+func cleanInstallBoundaryError(reason string) error {
+	return manifestError("v0.6.0 clean-install boundary: "+reason+"; perform a clean reinstall; import and compatibility modes are not available", nil)
 }
 
 // Resolve validates and resolves a manifest without consulting ambient process

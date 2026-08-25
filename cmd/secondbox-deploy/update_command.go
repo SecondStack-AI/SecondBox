@@ -21,10 +21,8 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
 
-// v0.5.1 is the immutable source release exercised by the guided-update
-// installer qualification. Do not widen this boundary without qualifying that
-// additional source release through the full retained-Workspace update path.
-const minimumGuidedUpdateSourceVersion = "0.5.1"
+// Guided updates begin at the customer-shared-tenancy clean-install boundary.
+const minimumGuidedUpdateSourceVersion = "0.6.0"
 
 type updateDependencies struct {
 	OwnerUID      int
@@ -332,7 +330,7 @@ func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt in
 		return err
 	}
 	if sourceComparison < 0 {
-		return fmt.Errorf("SecondBox installer update: active release %s predates the minimum supported guided-update source %s; install a fresh deployment and migrate workloads explicitly", plan.Release.Version, minimumGuidedUpdateSourceVersion)
+		return fmt.Errorf("SecondBox installer update: v0.6.0 clean-install boundary: active release %s predates v%s; perform a clean reinstall; import and compatibility modes are not available", plan.Release.Version, minimumGuidedUpdateSourceVersion)
 	}
 	comparison, err := releasecontract.CompareVersions(target.Version, plan.Release.Version)
 	if err != nil {

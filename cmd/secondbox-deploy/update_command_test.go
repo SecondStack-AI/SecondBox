@@ -151,12 +151,12 @@ func TestUpdateTargetIdentityIncludesEveryReleaseInput(t *testing.T) {
 	}
 }
 
-func TestGuidedUpdateRejectsSourceBeforeV051WithoutConsultingReleaseInputs(t *testing.T) {
+func TestGuidedUpdateRejectsSourceBeforeCleanInstallBoundaryWithoutConsultingReleaseInputs(t *testing.T) {
 	plan := install.InstallPlan{Release: installReleasePlanFixture()}
-	plan.Release.Version = "0.4.7"
+	plan.Release.Version = "0.5.2"
 	receipt := install.InstallReceipt{Status: install.OperationSucceeded, CompletedStages: make([]install.StageRecord, len(install.StageSequence))}
 	target := installReleasePlanFixture()
-	target.Version = "0.5.2"
+	target.Version = "0.6.0"
 	verified := false
 	err := validateNewUpdate(context.Background(), plan, receipt, target, releaseverify.VerifiedRelease{}, updateDependencies{
 		VerifySource: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
@@ -164,7 +164,8 @@ func TestGuidedUpdateRejectsSourceBeforeV051WithoutConsultingReleaseInputs(t *te
 			return releaseverify.VerifiedRelease{}, nil
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "minimum supported guided-update source 0.5.1") || verified {
+	if err == nil || !strings.Contains(err.Error(), "v0.6.0 clean-install boundary") ||
+		!strings.Contains(err.Error(), "clean reinstall") || verified {
 		t.Fatalf("historical source rejection = %v, verified=%t", err, verified)
 	}
 }

@@ -410,7 +410,10 @@ func TestStrictDecodeRejectsRetiredStaticAuthorityManifestKey(t *testing.T) {
 	if err := os.WriteFile(manifestPath, updated, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadManifest(manifestPath); err == nil {
+	if _, err := ReadManifest(manifestPath); err == nil ||
+		!strings.Contains(err.Error(), "v0.6.0 clean-install boundary") ||
+		!strings.Contains(err.Error(), "clean reinstall") ||
+		!strings.Contains(err.Error(), "applications."+retiredKey) {
 		t.Fatalf("retired manifest key error = %v", err)
 	}
 }
@@ -870,7 +873,7 @@ func TestProductionInitializationReportsEveryUnresolvedDecisionGroup(t *testing.
 	if path == "" || err == nil {
 		t.Fatalf("path, error = %q, %v", path, err)
 	}
-	for _, group := range []string{"deployment", "database", "Runner topology", "execution-asset trust", "application authorities", "tenancy policy", "lifecycle policy"} {
+	for _, group := range []string{"deployment", "database", "Runner topology", "execution-asset trust", "platform authority", "tenancy policy", "lifecycle policy"} {
 		if !strings.Contains(err.Error(), group) {
 			t.Errorf("production error omitted %q: %v", group, err)
 		}
