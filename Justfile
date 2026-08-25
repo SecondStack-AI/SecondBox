@@ -24,6 +24,12 @@ test-microsandbox-probe-ext4-linux build_dir work_dir:
 test-microsandbox-probe-linux build_dir work_dir:
     just -f runner/Justfile test-microsandbox-probe-linux "{{build_dir}}" "{{work_dir}}"
 
+build-gvisor-probe output:
+    just -f runner/Justfile build-gvisor-probe "{{output}}"
+
+test-gvisor-probe build_dir work_dir:
+    just -f runner/Justfile test-gvisor-probe "{{build_dir}}" "{{work_dir}}"
+
 lint:
     golangci-lint run ./...
     cd runner && golangci-lint run --config ../.golangci.yml ./...
