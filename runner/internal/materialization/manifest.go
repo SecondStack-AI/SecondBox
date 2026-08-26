@@ -60,6 +60,24 @@ func Load(path, expectedDigest string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("SecondBox backend materialization read: %w", err)
 	}
+	manifest, err := Decode(data)
+	if err != nil {
+		return Manifest{}, err
+	}
+	digest, err := manifest.Digest()
+	if err != nil {
+		return Manifest{}, err
+	}
+	if digest != expectedDigest {
+		return Manifest{}, errors.New("SecondBox backend materialization digest differs from pinned identity")
+	}
+	return manifest, nil
+}
+
+// Decode strictly decodes and validates one manifest document exactly as
+// runner startup does: unknown fields, trailing values, and invalid identity
+// are rejected before any digest is computed over the typed manifest.
+func Decode(data []byte) (Manifest, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var manifest Manifest
@@ -74,13 +92,6 @@ func Load(path, expectedDigest string) (Manifest, error) {
 	}
 	if err := manifest.Validate(); err != nil {
 		return Manifest{}, err
-	}
-	digest, err := manifest.Digest()
-	if err != nil {
-		return Manifest{}, err
-	}
-	if digest != expectedDigest {
-		return Manifest{}, errors.New("SecondBox backend materialization digest differs from pinned identity")
 	}
 	return manifest, nil
 }

@@ -53,7 +53,10 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 	// revision (response multiplexing or independent channels), which means
 	// re-pinning the reviewed helper build; the serialization is documented
 	// as a known limitation of the experimental backend.
-	process.requestMu.Lock()
+	if err := process.acquireRequest(opCtx); err != nil {
+		release()
+		return nil, fmt.Errorf("SecondBox Microsandbox open guest Port: %w", err)
+	}
 	requestID := process.nextRequestID
 	process.nextRequestID++
 	request := &microsandboxprotocol.Envelope{
@@ -87,7 +90,11 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 			} else if terminal := response.GetTerminal(); terminal != nil {
 				err = fmt.Errorf("guest TCP connection failed: %s", terminal.Reason)
 			} else {
+				// Any other frame means the helper is somewhere else in the
+				// relay conversation and may emit more; the stream is not
+				// known-clean for the next operation.
 				err = fmt.Errorf("invalid TCP connected event")
+				indeterminate = true
 			}
 		}
 	}
@@ -99,7 +106,7 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 			// a known-clean protocol state.
 			process.forceStop()
 		}
-		process.requestMu.Unlock()
+		process.releaseRequest()
 		release()
 		return nil, fmt.Errorf("SecondBox Microsandbox open guest Port: %w", err)
 	}
@@ -276,7 +283,7 @@ func (connection *helperPortConnection) Close() error {
 			// is desynchronized and no terminal can be trusted. Close it
 			// immediately so nothing reuses the corrupted channel.
 			err = errors.Join(err, connection.process.control.Close())
-			connection.process.requestMu.Unlock()
+			connection.process.releaseRequest()
 			connection.release()
 			connection.closeErr = err
 			return
@@ -314,7 +321,7 @@ func (connection *helperPortConnection) Close() error {
 			// reuse a corrupted stream.
 			err = errors.Join(err, connection.process.control.Close())
 		}
-		connection.process.requestMu.Unlock()
+		connection.process.releaseRequest()
 		connection.release()
 		connection.closeErr = err
 	})

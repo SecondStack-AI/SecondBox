@@ -34,7 +34,7 @@ type helperProcess struct {
 	closeOnce       sync.Once
 	closeErr        error
 	stderr          *boundedBuffer
-	requestMu       sync.Mutex
+	requestGate     chan struct{}
 	nextRequestID   uint64
 	materialization string
 }
@@ -132,6 +132,7 @@ func launchHelper(
 		workspace:       workspace,
 		done:            make(chan struct{}),
 		stderr:          stderr,
+		requestGate:     make(chan struct{}, 1),
 		nextRequestID:   1,
 		materialization: config.MaterializationDigest,
 	}
@@ -228,8 +229,32 @@ func helperStartRequest(
 	}, nil
 }
 
+// acquireRequest serializes use of the shared helper control stream. Every
+// acquisition observes its context so a stuck holder can never pin fencing
+// or shutdown past their deadlines.
+func (process *helperProcess) acquireRequest(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case process.requestGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (process *helperProcess) releaseRequest() { <-process.requestGate }
+
 func (process *helperProcess) shutdown(ctx context.Context) error {
-	process.requestMu.Lock()
+	if err := process.acquireRequest(ctx); err != nil {
+		// The stream holder is stuck past the fencing deadline; the graceful
+		// frame exchange is forfeit and the helper is forced down so fencing
+		// completes on time.
+		killErr := process.command.Process.Kill()
+		<-process.done
+		return errors.Join(err, killErr, normalizeKilledExit(process.processWaitError()), process.closeResources())
+	}
 	requestID := process.nextRequestID
 	process.nextRequestID++
 	deadline := time.Now().Add(10 * time.Second)
@@ -253,7 +278,7 @@ func (process *helperProcess) shutdown(ctx context.Context) error {
 			err = fmt.Errorf("SecondBox Microsandbox helper returned invalid shutdown terminal")
 		}
 	}
-	process.requestMu.Unlock()
+	process.releaseRequest()
 
 	select {
 	case <-process.done:
@@ -271,8 +296,10 @@ func (process *helperProcess) execOperation(
 	controls <-chan helperExecControl,
 	emit func(*microsandboxprotocol.StreamData) error,
 ) (*microsandboxprotocol.TerminalEvent, error) {
-	process.requestMu.Lock()
-	defer process.requestMu.Unlock()
+	if err := process.acquireRequest(ctx); err != nil {
+		return nil, err
+	}
+	defer process.releaseRequest()
 	requestID := process.nextRequestID
 	process.nextRequestID++
 	if err := process.control.SetDeadline(time.Time{}); err != nil {
@@ -378,8 +405,10 @@ func (process *helperProcess) fileOperation(
 	request *microsandboxprotocol.FileRequest,
 	content []byte,
 ) ([]*microsandboxprotocol.Envelope, error) {
-	process.requestMu.Lock()
-	defer process.requestMu.Unlock()
+	if err := process.acquireRequest(ctx); err != nil {
+		return nil, err
+	}
+	defer process.releaseRequest()
 	requestID := process.nextRequestID
 	process.nextRequestID++
 	deadline := time.Now().Add(24 * time.Hour)
@@ -398,7 +427,9 @@ func (process *helperProcess) fileOperation(
 		return nil, fmt.Errorf("SecondBox Microsandbox bound helper File writes: %w", err)
 	}
 	stopWriteCancel := context.AfterFunc(ctx, func() {
-		_ = process.control.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		// Cancellation interrupts a blocked frame immediately: the write is
+		// already forfeit because a partial frame forces helper termination.
+		_ = process.control.SetWriteDeadline(time.Now())
 	})
 	failedWrite := func(action string, err error) ([]*microsandboxprotocol.Envelope, error) {
 		stopWriteCancel()

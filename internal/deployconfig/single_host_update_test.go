@@ -64,18 +64,14 @@ func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A supported source release recorded the same assets with a per-asset
-	// signatureKeyId; that exact schema must validate as the same identity.
-	signedCatalog := struct {
-		Assets []signedSourceAsset `json:"assets"`
-	}{Assets: []signedSourceAsset{
-		signedComponentAsset(release.MicroVM.RuntimeBundle, keyID, release.GuestProtocol.Maximum),
-		signedComponentAsset(release.MicroVM.ToolchainBundle, keyID, release.GuestProtocol.Maximum),
-	}}
-	signedCatalogBytes, err := json.Marshal(signedCatalog)
+	// signatureKeyId; the exact bytes such a release wrote (frozen in
+	// testdata, independent of current reconstruction helpers) must validate
+	// as the same identity.
+	signedCatalogBytes, err := os.ReadFile(filepath.Join("testdata", "v060-signed-catalog.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(catalogPath, append(signedCatalogBytes, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(catalogPath, signedCatalogBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := ValidateSingleHostUpdateSource(plan, release, releaseBytes, artifact); err != nil {

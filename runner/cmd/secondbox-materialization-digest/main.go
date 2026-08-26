@@ -4,7 +4,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -21,8 +20,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "read materialization manifest: %v\n", err)
 		os.Exit(1)
 	}
-	var manifest materialization.Manifest
-	if err := json.Unmarshal(content, &manifest); err != nil {
+	manifest, err := materialization.Decode(content)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "decode materialization manifest: %v\n", err)
 		os.Exit(1)
 	}

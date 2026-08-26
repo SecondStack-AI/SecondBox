@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestLinuxFormatterCompositionIsExplicit(t *testing.T) {
@@ -122,4 +124,53 @@ func TestWorkspaceLockProbeProcess(t *testing.T) {
 		t.Fatal("unexpected lock acquisition")
 	}
 	os.Exit(0)
+}
+
+// TestWriterFenceSurvivesParentCloseWhileChildHoldsDescriptor proves the
+// open-file-description behavior the writer fence depends on: a child that
+// inherited a duplicate of the locked descriptor keeps the exclusive flock
+// after the parent closes every descriptor of its own, and the fence releases
+// only when the child exits.
+func TestWriterFenceSurvivesParentCloseWhileChildHoldsDescriptor(t *testing.T) {
+	root := t.TempDir()
+	lock, err := os.OpenFile(filepath.Join(root, "writer.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := platformTryLock(lock); err != nil {
+		t.Fatal(err)
+	}
+	stdin, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command("cat")
+	child.Stdin = stdin
+	child.ExtraFiles = []*os.File{lock}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdin.Close()
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	competitor, err := os.OpenFile(filepath.Join(root, "writer.lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer competitor.Close()
+	if err := platformTryLock(competitor); !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+		_ = stdinWriter.Close()
+		_ = child.Wait()
+		t.Fatalf("writer fence released while the child still held its inherited descriptor: %v", err)
+	}
+	if err := stdinWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if err := platformTryLock(competitor); err != nil {
+		t.Fatalf("writer fence did not release after the last inherited descriptor closed: %v", err)
+	}
 }

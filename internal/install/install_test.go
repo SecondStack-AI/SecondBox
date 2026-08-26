@@ -69,6 +69,35 @@ func TestLegacyCapacitySpellingRoundTripsWithStableIdentity(t *testing.T) {
 	}
 }
 
+// TestFrozenV060PlanDecodesWithStableIdentity decodes the exact plan bytes a
+// v0.6.0 release recorded (frozen in testdata, independent of current struct
+// tags), proving strict decoding accepts them, the accessors normalize the
+// milli-unit spelling, and re-encoding reproduces the recorded bytes so the
+// plan digest a v0.6.0 receipt pinned never moves.
+func TestFrozenV060PlanDecodesWithStableIdentity(t *testing.T) {
+	frozen, err := os.ReadFile(filepath.Join("testdata", "v060-plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := DecodePlan(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Capacity.VCPUCount(); got != 32 {
+		t.Fatalf("frozen plan VCPUCount = %d, want 32", got)
+	}
+	if got := plan.Capacity.SubjectQuotaVCPUCount(); got != 32 {
+		t.Fatalf("frozen plan subject quota vCPUs = %d, want 32", got)
+	}
+	reencoded, err := Canonical(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reencoded) != string(frozen) {
+		t.Fatal("frozen v0.6.0 plan bytes did not survive a decode round-trip")
+	}
+}
+
 func TestStrictCanonicalPlanAndReceiptIdentity(t *testing.T) {
 	plan := validPlan(t)
 	if err := plan.Validate(); err != nil {
