@@ -221,7 +221,13 @@ func Preflight(ctx context.Context, probes PreflightProbes) (HostFacts, error) {
 	preflightCPUAndMemory(probes, &facts, add)
 	preflightMounts(probes, &facts, add)
 	preflightNetwork(ctx, probes, &facts, add)
-	preflightUsers(probes, &facts, add)
+	if probes.Backend != "gvisor" {
+		// Jailer UID ranges exist for Firecracker's per-instance jails; the
+		// gVisor backend runs runsc under the service identity and has no
+		// subordinate-ID requirement, so an otherwise valid host must not be
+		// rejected for lacking one.
+		preflightUsers(probes, &facts, add)
+	}
 	preflightUtilities(probes, &facts, add)
 	if facts.HostIdentity == "" {
 		facts.HostIdentity = "unavailable"

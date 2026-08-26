@@ -370,3 +370,22 @@ func TestParsePreflightBackendGrammar(t *testing.T) {
 		t.Fatalf("unknown backend error = %v; want installer exit 2", err)
 	}
 }
+
+// TestGVisorBackendRefusesGuidedInstall proves --backend gvisor never falls
+// through into the Firecracker-only guided installer: only the read-only
+// --check preflight is a supported gVisor path.
+func TestGVisorBackendRefusesGuidedInstall(t *testing.T) {
+	for _, arguments := range [][]string{
+		{"--backend", "gvisor"},
+		{"--backend", "gvisor", "--advanced"},
+	} {
+		var output bytes.Buffer
+		renderer := cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(&output, io.Discard), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+		err := runInstallPreflight(context.Background(), arguments, renderer, install.PreflightProbes{})
+		var exited interface{ ExitCode() int }
+		if !errors.As(err, &exited) || exited.ExitCode() != 2 ||
+			!strings.Contains(err.Error(), "supports only --check") {
+			t.Fatalf("gvisor guided install (%v) error = %v; want installer exit 2", arguments, err)
+		}
+	}
+}

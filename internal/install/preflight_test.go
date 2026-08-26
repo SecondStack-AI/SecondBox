@@ -380,6 +380,11 @@ func TestGVisorPreflightQualifiesHostsWithoutKVMOrTUN(t *testing.T) {
 			t.Fatalf("gvisor preflight must not require a container engine: %+v", finding)
 		}
 	}
+	for _, finding := range facts.Findings {
+		if finding.ID == "uids" {
+			t.Fatalf("gvisor preflight must not require jailer UID ranges: %+v", finding)
+		}
+	}
 	utilities := findingByID(t, facts, "utilities")
 	if utilities.Class != FindingPass {
 		t.Fatalf("gvisor utilities finding = %+v", utilities)
