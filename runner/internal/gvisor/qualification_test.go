@@ -112,12 +112,13 @@ func TestAttachmentHoldRoundTripPreservesContentAndIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	writerLock := qualificationWriterLock(t)
 	handles, err := StartMountSupervisor(self, MountSupervisorPlan{
 		Mountpoint:    filepath.Join(t.TempDir(), "mnt"),
 		ExpectedUUID:  qualificationUUID,
 		CapacityBytes: 128 << 20,
 		Hold:          true,
-	}, image)
+	}, image, writerLock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,12 +173,13 @@ func TestAttachmentSupervisorCrashAutoclearsAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	writerLock := qualificationWriterLock(t)
 	handles, err := StartMountSupervisor(self, MountSupervisorPlan{
 		Mountpoint:    filepath.Join(t.TempDir(), "mnt"),
 		ExpectedUUID:  qualificationUUID,
 		CapacityBytes: 128 << 20,
 		Hold:          true,
-	}, image)
+	}, image, writerLock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,12 +233,13 @@ func TestAttachmentRejectsWrongIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	writerLock := qualificationWriterLock(t)
 	handles, err := StartMountSupervisor(self, MountSupervisorPlan{
 		Mountpoint:    filepath.Join(t.TempDir(), "mnt"),
 		ExpectedUUID:  "00000000-0000-0000-0000-000000000000",
 		CapacityBytes: 128 << 20,
 		Hold:          true,
-	}, image)
+	}, image, writerLock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,4 +253,17 @@ func TestAttachmentRejectsWrongIdentity(t *testing.T) {
 	}
 	_ = handles.Command.Wait()
 	_ = handles.CloseParentSide()
+}
+
+// qualificationWriterLock stands in for the attachment's writer-lock
+// descriptor: the supervisor only holds it, so any open file proves the
+// inheritance plumbing.
+func qualificationWriterLock(t *testing.T) *os.File {
+	t.Helper()
+	lock, err := os.CreateTemp(t.TempDir(), "writer-lock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Close() })
+	return lock
 }

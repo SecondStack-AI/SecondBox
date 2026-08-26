@@ -152,20 +152,41 @@ never copied from a document.
    observable:
 
    ```sh
-   # On the runner host, with the same environment the service runs under:
+   # On the runner host, with the same environment the service runs under.
+   # This proves authenticated mTLS/protocol connectivity to the control
+   # plane only - it can succeed while gVisor composition or host
+   # prerequisites are broken:
    secondbox-runner -healthcheck
-   # From an operator workstation; the POOL column names the gVisor pool:
+   # From an operator workstation; the POOL column names the gVisor pool and
+   # STATE is the authoritative backend readiness signal:
    secondbox runners list
    ```
 
-   The Runner appears `ready` only after its materialization revalidation, loop and cgroup
-   reconciliation, host network plumbing, and the `runsc` boot probe all pass.
+   The Runner reaches `ready` state only after its materialization revalidation, loop and
+   cgroup reconciliation, host network plumbing, network-policy enforcement, a live
+   loop-device allocation, and the `runsc` boot probe all pass, and the degradable checks
+   re-prove themselves on every readiness pass.
 
 5. Tear down without losing Workspaces: stop the systemd unit (the backend fences and flushes
    every Instance), leave `SECONDBOX_RUNNER_WORKSPACE_ROOT` untouched, and decommission the
    Runner through the control plane only when its Workspaces have been relocated or are no
    longer needed. The WorkspaceStore root is the durable authority; never delete it as part of
    a runner restart or upgrade.
+
+   Startup also modifies host-wide networking state that per-Instance teardown deliberately
+   leaves in place; remove it only when decommissioning the host as a runner entirely:
+
+   ```sh
+   # The runner DNS interface and its per-profile listener address:
+   ip link delete sbxgv-dns
+   # The marked-traffic admission rule inserted into Docker's extension chain
+   # (present only on hosts where Docker manages ip filter DOCKER-USER):
+   nft -a list chain ip filter DOCKER-USER   # find the "ct mark 0x53425801 counter accept" handle
+   nft delete rule ip filter DOCKER-USER handle <handle>
+   ```
+
+   IPv4 forwarding (`net.ipv4.ip_forward=1`) is enabled but not disabled automatically:
+   other services commonly rely on it, so review the host's own policy before reverting it.
 
 ## Kubernetes pod install path
 
@@ -211,9 +232,12 @@ reviewed pins, with the materialization manifest derived from it.
 
 ```sh
 export SECONDBOX_GVISOR_BUILD=/absolute/path/to/build
+export SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM=/absolute/path/on/reflink-fs
 just test-gvisor "$SECONDBOX_GVISOR_BUILD"
 
 export SECONDBOX_GVISOR_LINUX_BUILD="$SECONDBOX_GVISOR_BUILD"
+export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
+export SECONDBOX_RUNNER_WORKSPACE_ROOT=/absolute/path/on/reflink-fs/scenario-workspaces
 just test-scenario-gvisor
 ```
 

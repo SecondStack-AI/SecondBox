@@ -137,12 +137,13 @@ func StartMountSupervisor(
 	selfExecutable string,
 	plan MountSupervisorPlan,
 	workspaceImage *os.File,
+	writerLock *os.File,
 ) (*SupervisorHandles, error) {
 	if err := plan.validate(); err != nil {
 		return nil, err
 	}
-	if workspaceImage == nil {
-		return nil, errors.New("SecondBox gVisor mount supervisor requires the workspace descriptor")
+	if workspaceImage == nil || writerLock == nil {
+		return nil, errors.New("SecondBox gVisor mount supervisor requires the workspace and writer-lock descriptors")
 	}
 	controlRead, controlWrite, err := os.Pipe()
 	if err != nil {
@@ -153,7 +154,13 @@ func StartMountSupervisor(
 		return nil, errors.Join(err, controlRead.Close(), controlWrite.Close())
 	}
 	command := exec.Command(selfExecutable, plan.arguments()...)
-	command.ExtraFiles = []*os.File{workspaceImage, controlRead, statusWrite}
+	// The writer-lock duplicate shares the attachment's open-file
+	// description, so the exclusive Workspace fence survives a runner crash
+	// for as long as the supervisor or its sandbox is alive and possibly
+	// writing: the kernel releases the flock only when the last inherited
+	// descriptor closes. The supervisor never uses the descriptor; holding
+	// it is the point.
+	command.ExtraFiles = []*os.File{workspaceImage, controlRead, statusWrite, writerLock}
 	command.SysProcAttr = &syscall.SysProcAttr{
 		Unshareflags: syscall.CLONE_NEWNS,
 		Pdeathsig:    syscall.SIGKILL,

@@ -677,7 +677,7 @@ func (backend *AssignmentBackend) launchInstance(
 		RunscGlobal: []string{
 			"--network=sandbox", "--platform=systrap", "--host-uds=all", "--overlay2=root:memory",
 		},
-	}, workspace.Descriptor())
+	}, workspace.Descriptor(), workspace.LockDescriptor())
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(instanceDir))
 	}

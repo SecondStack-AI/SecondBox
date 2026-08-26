@@ -3,10 +3,13 @@
 package gvisor
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -168,5 +171,35 @@ func TestScanStaleLoopsSelectsWorkspaceBackedDevices(t *testing.T) {
 func TestScanStaleLoopsRequiresAbsoluteRoot(t *testing.T) {
 	if _, err := scanStaleLoops(t.TempDir(), "/dev", "relative/root"); err == nil {
 		t.Fatal("relative workspace root was accepted")
+	}
+}
+
+// TestClassifyRunscExitSeparatesExitCodesFromSignals proves ordinary nonzero
+// exits keep their code, delivered signals classify as signals, and only a
+// non-ExitError wait failure reports wait-failure: lifecycle and terminal
+// evidence depend on this distinction.
+func TestClassifyRunscExitSeparatesExitCodesFromSignals(t *testing.T) {
+	clean := exec.Command("/bin/sh", "-c", "exit 0")
+	if err := clean.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, code := classifyRunscExit(clean, nil); outcome != "exit" || code != 0 {
+		t.Fatalf("clean exit = %s/%d", outcome, code)
+	}
+
+	nonzero := exec.Command("/bin/sh", "-c", "exit 3")
+	nonzeroErr := nonzero.Run()
+	if outcome, code := classifyRunscExit(nonzero, nonzeroErr); outcome != "exit" || code != 3 {
+		t.Fatalf("nonzero exit = %s/%d, want exit/3", outcome, code)
+	}
+
+	signaled := exec.Command("/bin/sh", "-c", "kill -TERM $$")
+	signaledErr := signaled.Run()
+	if outcome, code := classifyRunscExit(signaled, signaledErr); outcome != "signal" || code != int(syscall.SIGTERM) {
+		t.Fatalf("signaled exit = %s/%d, want signal/%d", outcome, code, int(syscall.SIGTERM))
+	}
+
+	if outcome, code := classifyRunscExit(clean, errors.New("wait interrupted")); outcome != "wait-failure" || code != -1 {
+		t.Fatalf("wait failure = %s/%d", outcome, code)
 	}
 }
