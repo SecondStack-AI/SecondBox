@@ -606,7 +606,8 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	command, stdout, stderr := installedCLICommand(
-		ctx, plan, "--output", "json", "runner-pools", "get", standardresources.PoolAMD64,
+		ctx, plan, "--output", "json", "runner-pools", "get",
+		"--path", "runnerPoolName="+standardresources.PoolAMD64,
 	)
 	if err := command.Run(); err != nil {
 		return nil, fmt.Errorf("SecondBox installer qualification RunnerPool: %w: %s", err, cliui.Sanitize(stderr.String()))
@@ -617,7 +618,8 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 	}
 	runnerID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
 	command, stdout, stderr = installedCLICommand(
-		ctx, plan, "--output", "json", "runners", "get", runnerID,
+		ctx, plan, "--output", "json", "runners", "get",
+		"--path", "runnerId="+runnerID,
 	)
 	if err := command.Run(); err != nil {
 		return nil, fmt.Errorf("SecondBox installer qualification Runner: %w: %s", err, cliui.Sanitize(stderr.String()))

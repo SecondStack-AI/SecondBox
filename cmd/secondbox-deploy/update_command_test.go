@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -166,6 +168,21 @@ func TestGuidedUpdateRejectsSourceBeforeCleanInstallBoundaryWithoutConsultingRel
 	if err == nil || !strings.Contains(err.Error(), "v0.6.0 clean-install boundary") ||
 		!strings.Contains(err.Error(), "clean reinstall") || verified {
 		t.Fatalf("historical source rejection = %v, verified=%t", err, verified)
+	}
+}
+
+func TestGuidedUpdateRoutesLegacyOperationToCleanInstallBoundaryBeforeStrictDecode(t *testing.T) {
+	directory := t.TempDir()
+	legacyPlan := []byte(`{"schemaVersion":"secondbox.install.plan/v1","release":{"version":"0.5.2"},"tenantRef":"legacy-tenant"}`)
+	if err := os.WriteFile(filepath.Join(directory, "install-plan.json"), legacyPlan, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dependencies := systemUpdateDependencies(cliui.Renderer{})
+	dependencies.TargetVersion = "0.6.0"
+	err := runUpdateWith(context.Background(), directory, true, false, cliui.Renderer{}, dependencies)
+	if err == nil || !strings.Contains(err.Error(), "v0.6.0 clean-install boundary") ||
+		!strings.Contains(err.Error(), "clean reinstall") || strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("legacy operation rejection = %v", err)
 	}
 }
 

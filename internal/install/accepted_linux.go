@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -102,22 +103,57 @@ func ReadOperation(directory string, ownerUID int) (InstallPlan, InstallReceipt,
 // completing a pending plan/receipt commit. Callers that promise not to mutate
 // deployment state must direct the operator to resume recovery instead.
 func ReadOperationReadOnly(directory string, ownerUID int) (InstallPlan, InstallReceipt, error) {
+	directoryFD, err := openReadOnlyOperationDirectory(directory, ownerUID)
+	if err != nil {
+		return InstallPlan{}, InstallReceipt{}, err
+	}
+	defer unix.Close(directoryFD)
+	return readOperationDocumentsFromFD(directoryFD, ownerUID)
+}
+
+// InspectOperationReleaseVersionReadOnly securely reads only the release
+// version needed to route an operation to a clean-install boundary diagnostic.
+// It does not decode or accept the historical plan as a current plan.
+func InspectOperationReleaseVersionReadOnly(directory string, ownerUID int) (string, error) {
+	directoryFD, err := openReadOnlyOperationDirectory(directory, ownerUID)
+	if err != nil {
+		return "", err
+	}
+	defer unix.Close(directoryFD)
+	planBytes, err := readAcceptedFile(directoryFD, "install-plan.json", ownerUID)
+	if err != nil {
+		return "", err
+	}
+	var identity struct {
+		Release struct {
+			Version string `json:"version"`
+		} `json:"release"`
+	}
+	if err := json.Unmarshal(planBytes, &identity); err != nil {
+		return "", installerError("inspect operation release version", err)
+	}
+	if identity.Release.Version == "" {
+		return "", installerError("operation release version is absent", nil)
+	}
+	return identity.Release.Version, nil
+}
+
+func openReadOnlyOperationDirectory(directory string, ownerUID int) (int, error) {
 	if err := validateSafePath(directory); err != nil || ownerUID < 0 {
-		return InstallPlan{}, InstallReceipt{}, installerError("operation directory or owner is invalid", err)
+		return -1, installerError("operation directory or owner is invalid", err)
 	}
 	directoryFD, err := openDirectoryNoSymlinks(directory)
 	if err != nil {
-		return InstallPlan{}, InstallReceipt{}, installerError("open operation directory without symbolic links", err)
+		return -1, installerError("open operation directory without symbolic links", err)
 	}
-	defer unix.Close(directoryFD)
 	for _, name := range []string{operationPlanStageName, operationReceiptStageName, operationCommitMarkerName} {
 		if err := unix.Fstatat(directoryFD, name, &unix.Stat_t{}, unix.AT_SYMLINK_NOFOLLOW); err == nil {
-			return InstallPlan{}, InstallReceipt{}, installerError("operation has pending commit recovery; run update --resume", nil)
+			return -1, errors.Join(installerError("operation has pending commit recovery; run update --resume", nil), unix.Close(directoryFD))
 		} else if err != unix.ENOENT {
-			return InstallPlan{}, InstallReceipt{}, installerError("inspect operation commit state", err)
+			return -1, errors.Join(installerError("inspect operation commit state", err), unix.Close(directoryFD))
 		}
 	}
-	return readOperationDocumentsFromFD(directoryFD, ownerUID)
+	return directoryFD, nil
 }
 
 // RecoverOperation completes or discards a pending plan/receipt commit before
