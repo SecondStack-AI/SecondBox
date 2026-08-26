@@ -484,10 +484,11 @@ func TestScenarioNetworkPolicyDenyAndAllowList(t *testing.T) {
 }
 
 func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *testing.T) {
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+	if backend := os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND"); backend != "" && backend != "firecracker" {
 		// The network-enabled egress gateway listens on the Runner's host
 		// guest bridge, which only the Firecracker backend creates; the
-		// Microsandbox backend has no host bridge to bind the gateway on.
+		// Microsandbox and gVisor backends have no host bridge to bind
+		// the gateway on.
 		t.Skip("SecondBox scenario network-enabled gateway requires the Firecracker host guest bridge")
 	}
 	fixture := newScenarioFixture(t)
