@@ -350,21 +350,31 @@ func (process *helperProcess) execOperation(
 	if err := process.control.SetWriteDeadline(initialWriteDeadline); err != nil {
 		return nil, err
 	}
+	initialCancelSettled := make(chan struct{})
 	stopInitialWriteCancel := context.AfterFunc(ctx, func() {
+		defer close(initialCancelSettled)
 		_ = process.control.SetWriteDeadline(time.Now())
 	})
+	// A stop that lost the race to a started callback must wait for it, or
+	// the callback could re-arm an expired deadline after cleanup restored
+	// the shared connection.
+	settleInitialWriteCancel := func() {
+		if !stopInitialWriteCancel() {
+			<-initialCancelSettled
+		}
+	}
 	if err := microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{
 		ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID,
 		Message: &microsandboxprotocol.Envelope_Exec{Exec: request},
 	}); err != nil {
-		stopInitialWriteCancel()
+		settleInitialWriteCancel()
 		process.forceStop()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, fmt.Errorf("SecondBox Microsandbox write helper Exec: %w", err)
 	}
-	stopInitialWriteCancel()
+	settleInitialWriteCancel()
 	if err := process.control.SetWriteDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
@@ -483,13 +493,20 @@ func (process *helperProcess) fileOperation(
 	if err := process.control.SetWriteDeadline(deadline); err != nil {
 		return nil, fmt.Errorf("SecondBox Microsandbox bound helper File writes: %w", err)
 	}
+	writeCancelSettled := make(chan struct{})
 	stopWriteCancel := context.AfterFunc(ctx, func() {
 		// Cancellation interrupts a blocked frame immediately: the write is
 		// already forfeit because a partial frame forces helper termination.
+		defer close(writeCancelSettled)
 		_ = process.control.SetWriteDeadline(time.Now())
 	})
+	settleWriteCancel := func() {
+		if !stopWriteCancel() {
+			<-writeCancelSettled
+		}
+	}
 	failedWrite := func(action string, err error) ([]*microsandboxprotocol.Envelope, error) {
-		stopWriteCancel()
+		settleWriteCancel()
 		process.forceStop()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -526,7 +543,7 @@ func (process *helperProcess) fileOperation(
 			return failedWrite("finish helper File content", err)
 		}
 	}
-	stopWriteCancel()
+	settleWriteCancel()
 	if err := process.control.SetWriteDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
@@ -571,12 +588,11 @@ func (process *helperProcess) forceStop() {
 		return
 	}
 	_ = process.command.Process.Kill()
-	// Closing the runner-side resources first invalidates the shared stream
-	// for every waiter immediately; the bounded reap wait afterwards only
-	// tidies the process table and can never pin a caller's deadline on an
-	// unreapable helper.
+	// Closing the runner-side resources invalidates the shared stream for
+	// every waiter immediately. Reaping is not waited on at all: the wait
+	// goroutine collects the exit whenever the kernel delivers it, so no
+	// caller deadline ever rides on an unreapable helper.
 	_ = process.closeResources()
-	_ = process.awaitExit(context.Background(), reapBound)
 }
 
 // processWaitError reports the reaped exit result, or a placeholder while the
