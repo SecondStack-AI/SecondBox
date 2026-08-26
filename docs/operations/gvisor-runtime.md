@@ -152,8 +152,10 @@ never copied from a document.
    observable:
 
    ```sh
-   curl -fsS http://127.0.0.1:8080/metrics | grep runner
-   secondbox runners list --pool <gvisor-pool>
+   # On the runner host, with the same environment the service runs under:
+   secondbox-runner -healthcheck
+   # From an operator workstation; the POOL column names the gVisor pool:
+   secondbox runners list
    ```
 
    The Runner appears `ready` only after its materialization revalidation, loop and cgroup
@@ -201,20 +203,32 @@ remains operator-authored and unqualified.
 ## Qualification before enrollment
 
 Run the backend qualification suites and the full scenario driver on the target host class — a
-real Linux host without `/dev/kvm`:
+real Linux x86-64 host without `/dev/kvm`. Both drivers run as root (network namespaces, nft
+tables, and loop devices are created and destroyed), need Docker with Compose for the scenario
+control plane, and consume a local gVisor build directory produced by the image build procedure
+above: an absolute, non-symlink path whose `bin/runsc` and `bin/secondbox-guest-agent` match the
+reviewed pins, with the materialization manifest derived from it.
 
 ```sh
 export SECONDBOX_GVISOR_BUILD=/absolute/path/to/build
 just test-gvisor "$SECONDBOX_GVISOR_BUILD"
 
-export SECONDBOX_GVISOR_LINUX_BUILD=/absolute/path/to/build
+export SECONDBOX_GVISOR_LINUX_BUILD="$SECONDBOX_GVISOR_BUILD"
 just test-scenario-gvisor
 ```
 
 For the pod placement, qualify the mechanisms and the identical scenario suite on the target
-node class (a no-KVM Kubernetes node with local kubectl):
+node class: a no-KVM Kubernetes node, as root, with node-local `kubectl` (both wrappers default
+to `k3s kubectl`; override with `SECONDBOX_GVISOR_POD_KUBECTL` / `SECONDBOX_SCENARIO_POD_KUBECTL`).
+The mechanism check additionally needs the qualification image imported into the node's
+container runtime, the same node-local build directory, a compiled `internal/gvisor` test binary
+(`go test -c ./internal/gvisor` from `runner/`), and a node-local reflink-capable directory:
 
 ```sh
+export SECONDBOX_GVISOR_POD_IMAGE=<imported image reference>
+export SECONDBOX_GVISOR_POD_BUILD=/absolute/path/to/build
+export SECONDBOX_GVISOR_POD_TEST_BINARY=/absolute/path/to/gvisor.test
+export SECONDBOX_GVISOR_POD_REFLINK=/absolute/path/on/reflink-fs
 just test-gvisor-pod
 just test-scenario-gvisor-pod
 ```
