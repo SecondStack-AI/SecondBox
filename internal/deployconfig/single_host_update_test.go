@@ -24,10 +24,10 @@ func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
 	keyID := strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:"))
 	artifact := install.VerifiedArtifact{SigningKeyID: keyID, ManifestDigest: release.MicroVM.SignedManifestDigest}
 	catalog := struct {
-		Assets []assetcatalog.SignedAsset `json:"assets"`
-	}{Assets: []assetcatalog.SignedAsset{
-		componentAsset(release.MicroVM.RuntimeBundle, keyID, release.GuestProtocol.Maximum),
-		componentAsset(release.MicroVM.ToolchainBundle, keyID, release.GuestProtocol.Maximum),
+		Assets []assetcatalog.Asset `json:"assets"`
+	}{Assets: []assetcatalog.Asset{
+		componentAsset(release.MicroVM.RuntimeBundle, release.GuestProtocol.Maximum),
+		componentAsset(release.MicroVM.ToolchainBundle, release.GuestProtocol.Maximum),
 	}}
 	catalogBytes, err := json.Marshal(catalog)
 	if err != nil {

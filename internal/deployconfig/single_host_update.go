@@ -51,10 +51,10 @@ func ValidateSingleHostUpdateSource(plan install.InstallPlan, release releasecon
 		return manifestError("existing single-host release manifest differs from the verified release", err)
 	}
 	catalog := struct {
-		Assets []assetcatalog.SignedAsset `json:"assets"`
-	}{Assets: []assetcatalog.SignedAsset{
-		componentAsset(release.MicroVM.RuntimeBundle, artifact.SigningKeyID, release.GuestProtocol.Maximum),
-		componentAsset(release.MicroVM.ToolchainBundle, artifact.SigningKeyID, release.GuestProtocol.Maximum),
+		Assets []assetcatalog.Asset `json:"assets"`
+	}{Assets: []assetcatalog.Asset{
+		componentAsset(release.MicroVM.RuntimeBundle, release.GuestProtocol.Maximum),
+		componentAsset(release.MicroVM.ToolchainBundle, release.GuestProtocol.Maximum),
 	}}
 	expectedCatalog, err := json.Marshal(catalog)
 	if err != nil {
@@ -112,10 +112,10 @@ func singleHostUpdateContents(plan install.InstallPlan, update install.UpdateRec
 		return nil, nil, err
 	}
 	catalog := struct {
-		Assets []assetcatalog.SignedAsset `json:"assets"`
-	}{Assets: []assetcatalog.SignedAsset{
-		componentAsset(verified.Manifest.MicroVM.RuntimeBundle, artifact.SigningKeyID, verified.Manifest.GuestProtocol.Maximum),
-		componentAsset(verified.Manifest.MicroVM.ToolchainBundle, artifact.SigningKeyID, verified.Manifest.GuestProtocol.Maximum),
+		Assets []assetcatalog.Asset `json:"assets"`
+	}{Assets: []assetcatalog.Asset{
+		componentAsset(verified.Manifest.MicroVM.RuntimeBundle, verified.Manifest.GuestProtocol.Maximum),
+		componentAsset(verified.Manifest.MicroVM.ToolchainBundle, verified.Manifest.GuestProtocol.Maximum),
 	}}
 	catalogBytes, err := json.Marshal(catalog)
 	if err != nil {
