@@ -137,8 +137,12 @@ func launchHelper(
 		materialization: config.MaterializationDigest,
 	}
 	go func() {
+		// Wait runs outside the mutex: holding it across an unreapable
+		// process would make every wait-result read - and through it,
+		// fencing - block until the kernel finally delivers the exit.
+		waitErr := command.Wait()
 		process.waitMu.Lock()
-		process.waitErr = command.Wait()
+		process.waitErr = waitErr
 		process.waitMu.Unlock()
 		close(process.done)
 	}()
@@ -264,7 +268,7 @@ func (process *helperProcess) shutdown(ctx context.Context) error {
 		// frame exchange is forfeit and the helper is forced down so fencing
 		// completes on time.
 		killErr := process.command.Process.Kill()
-		waitErr := process.awaitExit(reapBound)
+		waitErr := process.awaitExit(ctx, reapBound)
 		return errors.Join(err, killErr, waitErr, normalizeKilledExit(process.processWaitError()), process.closeResources())
 	}
 	requestID := process.nextRequestID
@@ -297,20 +301,25 @@ func (process *helperProcess) shutdown(ctx context.Context) error {
 		return errors.Join(err, normalizeProcessExit(process.processWaitError()), process.closeResources())
 	case <-ctx.Done():
 		killErr := process.command.Process.Kill()
-		waitErr := process.awaitExit(reapBound)
+		waitErr := process.awaitExit(ctx, reapBound)
 		return errors.Join(err, ctx.Err(), killErr, waitErr, normalizeKilledExit(process.processWaitError()), process.closeResources())
 	}
 }
 
-// awaitExit waits for the helper's reap, bounded so an unreapable process
-// cannot pin fencing or shutdown: closing the runner-side resources below
-// invalidates the shared stream either way, and the leaked wait goroutine
-// resolves whenever the kernel finally delivers the exit.
-func (process *helperProcess) awaitExit(bound time.Duration) error {
+// awaitExit waits for the helper's reap, bounded by both the caller's
+// context and the reap bound so an unreapable process cannot pin fencing or
+// shutdown: closing the runner-side resources invalidates the shared stream
+// either way, and the leaked wait goroutine resolves whenever the kernel
+// finally delivers the exit.
+func (process *helperProcess) awaitExit(ctx context.Context, bound time.Duration) error {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
 	select {
 	case <-process.done:
 		return nil
-	case <-time.After(bound):
+	case <-ctx.Done():
+		return errors.New("SecondBox Microsandbox helper was not reaped before the fencing deadline")
+	case <-timer.C:
 		return errors.New("SecondBox Microsandbox helper did not exit within the termination bound")
 	}
 }
@@ -330,11 +339,34 @@ func (process *helperProcess) execOperation(
 	if err := process.control.SetDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
+	// The initial frame writes under a context-bound deadline: a helper that
+	// stops reading must not pin the request gate past the caller's
+	// deadline, and a partial frame terminates the helper because the
+	// shared stream is desynchronized.
+	initialWriteDeadline := time.Now().Add(24 * time.Hour)
+	if value, ok := ctx.Deadline(); ok {
+		initialWriteDeadline = value.Add(5 * time.Second)
+	}
+	if err := process.control.SetWriteDeadline(initialWriteDeadline); err != nil {
+		return nil, err
+	}
+	stopInitialWriteCancel := context.AfterFunc(ctx, func() {
+		_ = process.control.SetWriteDeadline(time.Now())
+	})
 	if err := microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{
 		ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID,
 		Message: &microsandboxprotocol.Envelope_Exec{Exec: request},
 	}); err != nil {
+		stopInitialWriteCancel()
+		process.forceStop()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("SecondBox Microsandbox write helper Exec: %w", err)
+	}
+	stopInitialWriteCancel()
+	if err := process.control.SetWriteDeadline(time.Time{}); err != nil {
+		return nil, err
 	}
 	writesDone := make(chan struct{})
 	stopWrites := make(chan struct{})
@@ -544,13 +576,20 @@ func (process *helperProcess) forceStop() {
 	// tidies the process table and can never pin a caller's deadline on an
 	// unreapable helper.
 	_ = process.closeResources()
-	_ = process.awaitExit(reapBound)
+	_ = process.awaitExit(context.Background(), reapBound)
 }
 
+// processWaitError reports the reaped exit result, or a placeholder while the
+// helper is still unreaped; it never blocks on the reap itself.
 func (process *helperProcess) processWaitError() error {
-	process.waitMu.Lock()
-	defer process.waitMu.Unlock()
-	return process.waitErr
+	select {
+	case <-process.done:
+		process.waitMu.Lock()
+		defer process.waitMu.Unlock()
+		return process.waitErr
+	default:
+		return errors.New("SecondBox Microsandbox helper exit is not yet reaped")
+	}
 }
 
 func (process *helperProcess) closeResources() error {
