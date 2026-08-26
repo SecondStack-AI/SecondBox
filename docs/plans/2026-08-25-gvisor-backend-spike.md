@@ -410,25 +410,25 @@ track, retain evidence, and keep the host profile as the spike's sole qualified 
 
 ### Task 9P: Package the runner pod, qualify it end to end, and close the spike
 
-- [ ] Add a runner container image variant including runsc and the mount/loop toolchain, built
+- [x] Add a runner container image variant including runsc and the mount/loop toolchain, built
   and digest-pinned by CI.
-- [ ] Add a reference privileged, node-pinned runner pod specification under `runner/deploy/`
+- [x] Add a reference privileged, node-pinned runner pod specification under `runner/deploy/`
   with a dedicated tainted node pool, node-local reflink volume, per-runner identity Secret, and
   resource requests equal to the node's sandbox budget. Document that this reference manifest is
   the qualified surface for the gvisor runner pod and that broader Kubernetes manifests remain
   operator-authored.
-- [ ] Document the pod install path, the proxied-only data-plane default in clusters, and the
+- [x] Document the pod install path, the proxied-only data-plane default in clusters, and the
   hostPort direct-transport option.
-- [ ] Run the identical scenario driver from Task 7H inside the pod environment, including
+- [x] Run the identical scenario driver from Task 7H inside the pod environment, including
   Snapshot/restore, runner-kill reconciliation, concurrency, and the rejection matrix, and record
   30 cold-start samples for the evidence document.
-- [ ] Run the existing Firecracker and Microsandbox suites unchanged; prove backend selection
+- [x] Run the existing Firecracker and Microsandbox suites unchanged; prove backend selection
   introduced no fallback and their backend-specific checks still operate.
-- [ ] Update current architecture, security, operations, and the Kubernetes-boundary document
+- [x] Update current architecture, security, operations, and the Kubernetes-boundary document
   only after both environment suites pass. Describe the gVisor isolation class, the host-mount
   provenance invariant, and the privileged-pod trust posture accurately, and keep
   `snapshot_resume` absent from gVisor capabilities.
-- [ ] Remove the experimental label only in a later decision with production distribution,
+- [x] Remove the experimental label only in a later decision with production distribution,
   sustained stress, upgrade/recovery evidence, and an explicit support policy; those are not
   spike exit criteria.
 
