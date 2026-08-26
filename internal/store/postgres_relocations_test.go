@@ -141,13 +141,13 @@ func seedWorkspaceRelocationTarget(
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			reserved_capacity_json,artifact_cache_json,backend_kind,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			$1,'pool-local',$1,$2,'["amd64"]',
 			'["compute","local-workspace","storage","workspace-relocation"]',
 			'{"VCPUCount":8000,"MemoryBytes":17179869184,"DiskBytes":17179869184,"Instances":8,"Operations":32}',
-			'["2"]',1,1,'test','connection-' || $1,0,'active','{}','[]',0,0,$3,1,$3,$3
+			'["2"]',1,1,'test','connection-' || $1,0,'active','{}','` + placementTestCacheJSON + `','firecracker',0,0,$3,1,$3,$3
 		) ON CONFLICT (id) DO UPDATE SET state=EXCLUDED.state,
 			active_connection_id=EXCLUDED.active_connection_id,
 			capabilities_json=EXCLUDED.capabilities_json,

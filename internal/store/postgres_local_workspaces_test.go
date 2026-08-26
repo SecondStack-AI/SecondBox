@@ -847,12 +847,12 @@ func TestSnapshotRestoreAdmissionPersistsEveryLocalPhaseIdentity(t *testing.T) {
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			reserved_capacity_json,artifact_cache_json,backend_kind,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			'runner-home','pool-local','runner-home','ready','["amd64"]',
 			'["compute","local-workspace"]','{}','[1]',1,1,'test','connection-home',0,
-			'active','{}','[]',0,0,$1,1,$1,$1
+			'active','{}','` + placementTestCacheJSON + `','firecracker',0,0,$1,1,$1,$1
 		) ON CONFLICT (id) DO UPDATE SET state='ready',last_seen_at=EXCLUDED.last_seen_at`,
 		now,
 	); err != nil {
@@ -1383,6 +1383,8 @@ func seedLocalWorkspacePolicyAndRunner(
 	t.Helper()
 	specJSON, err := json.Marshal(contracts.ProfileRevisionSpec{
 		Pool: "pool-local", Architecture: "amd64",
+		RuntimeBundleDigest:   placementTestRuntimeDigest,
+		ToolchainBundleDigest: placementTestToolchainDigest,
 		Resources: contracts.ResourcePolicy{
 			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
 			ConcurrentOperations: 4,
@@ -1454,12 +1456,12 @@ func seedLocalWorkspacePolicyAndRunner(
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			reserved_capacity_json,artifact_cache_json,backend_kind,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			'runner-home','pool-local','runner-home','ready','["amd64"]',
 			'["compute","local-workspace"]','{}','[1]',1,1,'test','connection-home',0,
-			'active','{}','[]',0,0,$2,1,$2,$2
+			'active','{}','` + placementTestCacheJSON + `','firecracker',0,0,$2,1,$2,$2
 		) ON CONFLICT (id) DO UPDATE SET state='ready',last_seen_at=EXCLUDED.last_seen_at`,
 		pgx.QueryExecModeSimpleProtocol, string(specJSON), now,
 	); err != nil {

@@ -25,11 +25,23 @@ type runnerPlacementCandidate struct {
 	state              string
 	drainPhase         string
 	activeConnectionID string
+	backendKind        string
 	architectures      []string
 	capabilities       []string
 	protocolVersions   []string
+	materializations   []placementMaterialization
 	allocatable        runnerCapacity
 	reportedReserved   runnerCapacity
+}
+
+// placementMaterialization mirrors the scheduler's materialization snapshot
+// shape recorded in artifact_cache_json.
+type placementMaterialization struct {
+	BackendKind     string `json:"backendKind"`
+	Architecture    string `json:"architecture"`
+	RuntimeDigest   string `json:"runtimeDigest"`
+	ToolchainDigest string `json:"toolchainDigest"`
+	Digest          string `json:"digest"`
 }
 
 // selectRunnerForPlacement ranks an unlocked snapshot, then locks and
@@ -42,9 +54,9 @@ func selectRunnerForPlacement(
 	options runnerPlacementOptions,
 ) (string, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id,pool_name,state,drain_phase,active_connection_id,
+		SELECT id,pool_name,state,drain_phase,active_connection_id,backend_kind,
 		       architectures_json,capabilities_json,protocol_versions_json,
-		       capacity_json,reserved_capacity_json
+		       capacity_json,reserved_capacity_json,artifact_cache_json
 		FROM secondbox.runners
 		WHERE pool_name=$1
 		  AND ($2='' OR id=$2)
@@ -137,9 +149,9 @@ func lockRunnerPlacementCandidate(
 		lockClause += " SKIP LOCKED"
 	}
 	candidate, err := scanRunnerPlacementCandidate(tx.QueryRow(ctx, `
-			SELECT id,pool_name,state,drain_phase,active_connection_id,
+			SELECT id,pool_name,state,drain_phase,active_connection_id,backend_kind,
 			       architectures_json,capabilities_json,protocol_versions_json,
-			       capacity_json,reserved_capacity_json
+			       capacity_json,reserved_capacity_json,artifact_cache_json
 			FROM secondbox.runners
 			WHERE id=$1
 			`+lockClause, snapshot.id),
@@ -172,14 +184,23 @@ func scanRunnerPlacementCandidate(
 	decodeProtocolVersions bool,
 ) (runnerPlacementCandidate, error) {
 	var candidate runnerPlacementCandidate
-	var architecturesJSON, capabilitiesJSON, versionsJSON, capacityJSON, reservedJSON []byte
+	var architecturesJSON, capabilitiesJSON, versionsJSON, capacityJSON, reservedJSON, cacheJSON []byte
 	if err := scanner.Scan(
 		&candidate.id, &candidate.poolName, &candidate.state,
-		&candidate.drainPhase, &candidate.activeConnectionID,
+		&candidate.drainPhase, &candidate.activeConnectionID, &candidate.backendKind,
 		&architecturesJSON, &capabilitiesJSON, &versionsJSON,
-		&capacityJSON, &reservedJSON,
+		&capacityJSON, &reservedJSON, &cacheJSON,
 	); err != nil {
 		return runnerPlacementCandidate{}, err
+	}
+	var cacheEvidence struct {
+		Materializations []placementMaterialization `json:"materializations"`
+	}
+	// A cache written by an earlier release decodes to no materializations,
+	// which makes the candidate incompatible until it re-registers rather
+	// than failing every selection over it.
+	if err := json.Unmarshal(cacheJSON, &cacheEvidence); err == nil {
+		candidate.materializations = cacheEvidence.Materializations
 	}
 	for _, item := range []struct {
 		name  string
@@ -233,11 +254,33 @@ func runnerPlacementCompatible(
 		!contains(candidate.capabilities, contracts.RunnerCapabilitySnapshotResume) {
 		return false
 	}
+	// A Sandbox is homed permanently, so the home must already hold an exact
+	// materialization of the Profile's pinned execution assets for its sealed
+	// backend; otherwise every later assignment onto this home is refused.
+	if !placementHasMaterialization(candidate, spec) {
+		return false
+	}
 	return candidate.allocatable.VCPUCount-reserved.VCPUCount >= spec.Resources.VCPUCount &&
 		candidate.allocatable.MemoryBytes-reserved.MemoryBytes >= spec.Resources.MemoryBytes &&
 		candidate.allocatable.DiskBytes-reserved.DiskBytes >= spec.Resources.WorkspaceBytes &&
 		candidate.allocatable.Instances-reserved.Instances >= 1 &&
 		candidate.allocatable.Operations-reserved.Operations >= spec.Resources.ConcurrentOperations
+}
+
+func placementHasMaterialization(candidate runnerPlacementCandidate, spec contracts.ProfileRevisionSpec) bool {
+	if candidate.backendKind == "" {
+		return false
+	}
+	for _, materialization := range candidate.materializations {
+		if materialization.BackendKind == candidate.backendKind &&
+			materialization.Architecture == spec.Architecture &&
+			materialization.RuntimeDigest == spec.RuntimeBundleDigest &&
+			materialization.ToolchainDigest == spec.ToolchainBundleDigest &&
+			materialization.Digest != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func supportsProtocolGeneration(versions []string, minimum uint64) bool {

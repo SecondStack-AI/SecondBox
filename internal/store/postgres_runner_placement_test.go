@@ -299,9 +299,21 @@ type runnerPlacementResult struct {
 	err      error
 }
 
+// The placement fixtures share one pinned execution-asset identity: every
+// seeded runner materializes exactly what every seeded Profile revision pins.
+const (
+	placementTestRuntimeDigest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	placementTestToolchainDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	placementTestCacheJSON       = `{"artifactDigests":[],"materializations":[{"backendKind":"firecracker","architecture":"amd64","runtimeDigest":"` +
+		placementTestRuntimeDigest + `","toolchainDigest":"` + placementTestToolchainDigest +
+		`","digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]}`
+)
+
 func placementTestSpec(poolName string) contracts.ProfileRevisionSpec {
 	return contracts.ProfileRevisionSpec{
 		Pool: poolName, Architecture: "amd64",
+		RuntimeBundleDigest:   placementTestRuntimeDigest,
+		ToolchainBundleDigest: placementTestToolchainDigest,
 		Resources: contracts.ResourcePolicy{
 			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 1 << 30,
 			ConcurrentOperations: 1,
@@ -322,13 +334,13 @@ func seedPlacementRunner(
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			reserved_capacity_json,artifact_cache_json,backend_kind,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			$1,$2,$1,'ready','["amd64"]','["compute","local-workspace"]',
 			'{"VCPUCount":1,"MemoryBytes":1073741824,"DiskBytes":1073741824,"Instances":1,"Operations":1}',
-			'["1"]',1,1,'test','connection-' || $1,0,'active','{}','[]',0,0,$3,1,$3,$3
-		)`, runnerID, poolName, now); err != nil {
+			'["1"]',1,1,'test','connection-' || $1,0,'active','{}',$4,'firecracker',0,0,$3,1,$3,$3
+		)`, runnerID, poolName, now, placementTestCacheJSON); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -394,8 +406,15 @@ func insertPlacementReservation(
 func TestRunnerPlacementRequiresSnapshotResumeCapacityForResumeProfiles(t *testing.T) {
 	coldOnly := runnerPlacementCandidate{
 		id: "runner-cold-only", poolName: "pool", state: "ready", drainPhase: "active",
-		activeConnectionID: "connection", architectures: []string{"amd64"},
-		capabilities: []string{"compute", "local-workspace"},
+		activeConnectionID: "connection", backendKind: "firecracker",
+		architectures: []string{"amd64"},
+		capabilities:  []string{"compute", "local-workspace"},
+		materializations: []placementMaterialization{{
+			BackendKind: "firecracker", Architecture: "amd64",
+			RuntimeDigest:   placementTestRuntimeDigest,
+			ToolchainDigest: placementTestToolchainDigest,
+			Digest:          "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		}},
 		allocatable: runnerCapacity{
 			VCPUCount: 4, MemoryBytes: 8 << 30, DiskBytes: 8 << 30, Instances: 4, Operations: 8,
 		},
@@ -426,6 +445,67 @@ func TestRunnerPlacementRequiresSnapshotResumeCapacityForResumeProfiles(t *testi
 			)
 			if got != testCase.want {
 				t.Fatalf("compatible = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestRunnerPlacementRequiresExactBackendMaterialization pins the home-time
+// half of asset admission: a Sandbox must never be homed to a Runner that
+// holds no exact materialization of the Profile's pinned execution assets,
+// because every later assignment onto that permanent home would be refused.
+func TestRunnerPlacementRequiresExactBackendMaterialization(t *testing.T) {
+	materialized := runnerPlacementCandidate{
+		id: "runner-materialized", poolName: "pool", state: "ready", drainPhase: "active",
+		activeConnectionID: "connection", backendKind: "firecracker",
+		architectures: []string{"amd64"},
+		capabilities:  []string{"compute", "local-workspace"},
+		materializations: []placementMaterialization{{
+			BackendKind: "firecracker", Architecture: "amd64",
+			RuntimeDigest:   placementTestRuntimeDigest,
+			ToolchainDigest: placementTestToolchainDigest,
+			Digest:          "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		}},
+		allocatable: runnerCapacity{
+			VCPUCount: 4, MemoryBytes: 8 << 30, DiskBytes: 8 << 30, Instances: 4, Operations: 8,
+		},
+	}
+	unsealed := materialized
+	unsealed.backendKind = ""
+	unmaterialized := materialized
+	unmaterialized.materializations = nil
+	wrongRuntime := materialized
+	wrongRuntime.materializations = []placementMaterialization{{
+		BackendKind: "firecracker", Architecture: "amd64",
+		RuntimeDigest:   "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		ToolchainDigest: placementTestToolchainDigest,
+		Digest:          "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}}
+	foreignBackend := materialized
+	foreignBackend.materializations = []placementMaterialization{{
+		BackendKind: "microsandbox", Architecture: "amd64",
+		RuntimeDigest:   placementTestRuntimeDigest,
+		ToolchainDigest: placementTestToolchainDigest,
+		Digest:          "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}}
+
+	spec := placementTestSpec("pool")
+	for _, testCase := range []struct {
+		name      string
+		candidate runnerPlacementCandidate
+		want      bool
+	}{
+		{"exact materialization", materialized, true},
+		{"unsealed backend", unsealed, false},
+		{"no materialization", unmaterialized, false},
+		{"different runtime digest", wrongRuntime, false},
+		{"materialization for a different backend", foreignBackend, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := runnerPlacementCompatible(
+				testCase.candidate, spec, runnerPlacementOptions{}, testCase.candidate.reportedReserved,
+			); got != testCase.want {
+				t.Fatalf("compatibility = %t, want %t", got, testCase.want)
 			}
 		})
 	}
