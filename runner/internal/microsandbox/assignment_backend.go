@@ -523,11 +523,12 @@ func (backend *AssignmentBackend) StartAssignment(
 	backend.mu.Unlock()
 	go backend.observeExit(active)
 	if fencedDuringLaunch {
-		// A fence recorded its intent while this launch was in flight; the
+		// A fence recorded its intent before this launch published; the
 		// awaiting fence must win. Aborting before READY tears the compute
 		// down through the pushed cleanup, the claim settles empty, and the
 		// fence reports ALREADY_STOPPED - never STOPPED racing a READY
-		// success.
+		// success. A fence that arrives after this point gates on the open
+		// launch until the READY exchange completes below.
 		backend.mu.Lock()
 		if backend.assignments[assignment.Fence.AssignmentId] == active {
 			delete(backend.assignments, assignment.Fence.AssignmentId)
@@ -608,7 +609,7 @@ func (backend *AssignmentBackend) FenceAssignment(
 			backend.mu.Unlock()
 			return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox Microsandbox fence token or generation mismatch")
 		}
-		if current.process != nil {
+		if current.process != nil && current.launched == nil {
 			active = current
 			break
 		}
@@ -619,10 +620,12 @@ func (backend *AssignmentBackend) FenceAssignment(
 				TerminationEvidenceDigest: fenceDigest(command.Fence),
 			}, nil
 		}
-		// A pending claimed launch holds no process or operation state yet;
-		// fencing records its intent on the claim — rejecting further
-		// replays immediately — then waits for the launch to settle and
-		// fences whatever it produced.
+		// The launch gate is still open: either a pending claim with no
+		// process yet, or an assignment published for the READY exchange
+		// whose start has not returned. Fencing records its intent -
+		// rejecting further replays immediately - then waits for the launch
+		// to settle and fences whatever it produced, so teardown can never
+		// begin while a READY success is still being reported.
 		current.fenced = true
 		pendingLaunch := current.launched
 		backend.mu.Unlock()

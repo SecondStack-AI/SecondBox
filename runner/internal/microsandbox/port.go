@@ -264,6 +264,13 @@ func acquireGate(ctx context.Context, gate chan struct{}) error {
 func (connection *helperPortConnection) Close() error {
 	connection.closeOnce.Do(func() {
 		connection.closed.Store(true)
+		// Any in-flight writer that passed the closed check must finish or
+		// be interrupted before the terminal-seen shortcut can release the
+		// shared stream, or its stale tunnel frame could land after release.
+		_ = connection.process.control.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		connection.writeGate <- struct{}{}
+		_ = connection.process.control.SetWriteDeadline(time.Time{})
+		<-connection.writeGate
 		// terminal is written by Read under the read gate, so the check
 		// holds it too; the bounded deadline first interrupts any blocked
 		// reader instead of stalling the close.

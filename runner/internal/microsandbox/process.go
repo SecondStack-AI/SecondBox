@@ -277,21 +277,17 @@ func (process *helperProcess) shutdown(ctx context.Context) error {
 	if value, ok := ctx.Deadline(); ok {
 		deadline = value
 	}
-	// Cancellation before the deadline advances the socket deadline
-	// immediately so a disconnected control stream cannot delay fencing
-	// until the original command deadline; the callback settles before the
-	// deadline is trusted again.
+	// The normal deadline installs before the cancellation hook registers,
+	// so a cancellation that fires in between can never be overwritten by
+	// it; the hook then settles and the deadline clears before the request
+	// gate is released, so a late callback can never touch the next
+	// holder's deadline.
+	err := process.control.SetDeadline(deadline)
 	shutdownCancelSettled := make(chan struct{})
 	stopShutdownCancel := context.AfterFunc(ctx, func() {
 		defer close(shutdownCancelSettled)
 		_ = process.control.SetDeadline(time.Now())
 	})
-	defer func() {
-		if !stopShutdownCancel() {
-			<-shutdownCancelSettled
-		}
-	}()
-	err := process.control.SetDeadline(deadline)
 	if err == nil {
 		err = microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{
 			ProtocolVersion: microsandboxprotocol.Version,
@@ -308,6 +304,10 @@ func (process *helperProcess) shutdown(ctx context.Context) error {
 			err = fmt.Errorf("SecondBox Microsandbox helper returned invalid shutdown terminal")
 		}
 	}
+	if !stopShutdownCancel() {
+		<-shutdownCancelSettled
+	}
+	_ = process.control.SetDeadline(time.Time{})
 	process.releaseRequest()
 
 	select {

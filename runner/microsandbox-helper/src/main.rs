@@ -45,8 +45,12 @@ const VMM_STOP_BOUND: Duration = Duration::from_secs(2);
 /// caller's flush deadline for the VMM stop acknowledgment and the final
 /// Workspace sync, or the runner's kill at that same deadline could release
 /// the writer fence over an unflushed image.
-const SHUTDOWN_CLEANUP_RESERVE_MS: u64 =
-    VMM_STOP_BOUND.as_millis() as u64 + PARENT_LOSS_FLUSH_BOUND.as_millis() as u64;
+const SHUTDOWN_CLEANUP_RESERVE_MS: u64 = VMM_STOP_BOUND.as_millis() as u64
+    + PARENT_LOSS_FLUSH_BOUND.as_millis() as u64
+    // Setup slack: descriptor cloning, flush-thread creation, scheduling,
+    // and process exit also spend wall-clock inside the same deadline the
+    // runner enforces with its kill.
+    + 1_000;
 
 fn main() {
     let action = std::env::args().nth(1).unwrap_or_default();
