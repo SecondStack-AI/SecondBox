@@ -105,6 +105,7 @@ type ComputeAttachment interface {
 	WorkspaceID() string
 	Generation() uint64
 	Descriptor() *os.File
+	LockDescriptor() *os.File
 	StableBlockID() string
 	CapacityBytes() int64
 	FilesystemUUID() string
@@ -138,6 +139,18 @@ func (attachment *Attachment) Descriptor() *os.File {
 		return nil
 	}
 	return attachment.file
+}
+
+// LockDescriptor returns the open descriptor holding the exclusive writer
+// lock. A compute process that inherits a duplicate shares the same open file
+// description, so the flock stays held until the last holder exits: a crashed
+// runner cannot release the Workspace to a replacement while its compute is
+// still flushing.
+func (attachment *Attachment) LockDescriptor() *os.File {
+	if attachment == nil {
+		return nil
+	}
+	return attachment.lock
 }
 
 func (*Attachment) StableBlockID() string { return "workspace" }

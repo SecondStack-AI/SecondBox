@@ -360,6 +360,17 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := backend.ValidateAssignment(ctx, assignment); err != nil {
 		return result, err
 	}
+	// At-least-once command delivery replays starts. A replay of the active
+	// fence returns the existing backend reference instead of reserving and
+	// launching a second helper for the same Instance.
+	backend.mu.Lock()
+	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists &&
+		sameFence(active.fence, assignment.Fence) {
+		reference := active.backendRef
+		backend.mu.Unlock()
+		return runnercontrol.BackendInstance{BackendKind: "microsandbox", BackendReference: reference}, nil
+	}
+	backend.mu.Unlock()
 	reservation := capacityReservation{
 		vcpus: assignment.Requirements.VcpuCount, memory: assignment.Requirements.MemoryBytes,
 		disk: assignment.Requirements.DiskBytes, instances: 1,

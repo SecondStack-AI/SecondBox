@@ -428,6 +428,13 @@ impl AgentSession {
                 }
                 Operation::FileWrite => {
                     validate_workspace_path(&self.client, &path, true).await?;
+                    // Exclusive creation is the only open in this protocol
+                    // that cannot traverse a leaf symlink. Remove whatever
+                    // leaf exists (removal unlinks a symlink itself, never
+                    // its target), then create the file exclusively so a
+                    // raced-in replacement fails the open instead of
+                    // redirecting the write outside /workspace.
+                    let _ = fs_request(&self.client, FsOp::Remove { path: path.clone() }).await;
                     let handle = fs_handle(
                         &self.client,
                         FsOp::OpenFile {
@@ -435,7 +442,7 @@ impl AgentSession {
                             options: FsOpenOptions {
                                 write: true,
                                 create: true,
-                                truncate: true,
+                                create_new: true,
                                 mode: Some(request.mode),
                                 ..Default::default()
                             },

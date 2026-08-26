@@ -92,9 +92,16 @@ func launchHelper(
 	defer diagnosticWrite.Close()
 
 	stderr := &boundedBuffer{limit: helperStderrLimit}
+	writerLock := workspace.LockDescriptor()
+	if writerLock == nil {
+		return nil, nil, fmt.Errorf("SecondBox Microsandbox helper requires the Workspace writer-lock descriptor")
+	}
 	command := exec.Command(config.HelperExecutable, "serve")
 	command.Env = []string{}
-	command.ExtraFiles = []*os.File{childSocket, workspace.Descriptor(), lifecycleRead, diagnosticWrite}
+	// The writer-lock duplicate shares the runner's open file description, so
+	// the exclusive Workspace lock outlives a crashed runner until the helper
+	// finishes its final flush and exits.
+	command.ExtraFiles = []*os.File{childSocket, workspace.Descriptor(), lifecycleRead, diagnosticWrite, writerLock}
 	command.Stdin = nil
 	command.Stdout = nil
 	command.Stderr = stderr

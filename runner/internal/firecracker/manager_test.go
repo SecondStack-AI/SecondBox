@@ -43,6 +43,8 @@ func (attachment *managerTestComputeAttachment) Generation() uint64 {
 	return attachment.generation
 }
 
+func (attachment *managerTestComputeAttachment) LockDescriptor() *os.File { return nil }
+
 func (attachment *managerTestComputeAttachment) Descriptor() *os.File {
 	return attachment.image
 }

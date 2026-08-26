@@ -14,8 +14,12 @@ func platformSocketpair() ([2]int, error) {
 }
 
 func configureHelperProcess(command *exec.Cmd) {
+	// SIGTERM, which the helper ignores, instead of SIGKILL: parent loss must
+	// reach the helper as its lifecycle-pipe EOF so the coordinated
+	// stop-the-VMM-then-flush path can run instead of dying mid-write. The
+	// inherited writer lock keeps the Workspace fenced until that path exits.
 	command.SysProcAttr = &syscall.SysProcAttr{
-		Pdeathsig: syscall.SIGKILL,
+		Pdeathsig: syscall.SIGTERM,
 		Setpgid:   true,
 	}
 }

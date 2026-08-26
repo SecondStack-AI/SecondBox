@@ -7,7 +7,7 @@ use std::{
     },
     process,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -38,7 +38,9 @@ use secondbox_microsandbox_helper::{
 const CONTROL_FD: RawFd = 3;
 const WORKSPACE_FD: RawFd = 4;
 const LIFECYCLE_FD: RawFd = 5;
+const LOCK_FD: RawFd = 7;
 const PARENT_LOSS_FLUSH_BOUND: Duration = Duration::from_secs(4);
+const VMM_STOP_SETTLE: Duration = Duration::from_millis(250);
 
 fn main() {
     let action = std::env::args().nth(1).unwrap_or_default();
@@ -57,12 +59,26 @@ fn main() {
 }
 
 fn serve() -> Result<(), String> {
+    // Parent loss arrives as SIGTERM from the parent-death signal and as the
+    // lifecycle-pipe EOF. Ignoring the signal keeps the coordinated
+    // stop-the-VMM-then-flush path below the only exit on parent loss;
+    // SIGKILL from the runner's force paths still works.
+    // SAFETY: SIG_IGN carries no handler code and is async-signal-safe.
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+    }
     let mut control = inherited_socket(CONTROL_FD)?;
     let workspace = inherited_file(WORKSPACE_FD, true)?;
+    // The inherited duplicate of the runner's writer-lock descriptor shares
+    // its open file description, so the exclusive Workspace flock stays held
+    // until this process exits; it is held, never read.
+    let _workspace_writer_lock = inherited_raw_descriptor(LOCK_FD)?;
     let shutting_down = Arc::new(AtomicBool::new(false));
+    let vmm_exit: Arc<OnceLock<msb_krun::ExitHandle>> = Arc::new(OnceLock::new());
     monitor_parent(
         shutting_down.clone(),
         workspace.try_clone().map_err(|error| error.to_string())?,
+        vmm_exit.clone(),
     )?;
     let envelope = read_frame(&mut control)
         .map_err(|error| error.to_string())?
@@ -84,6 +100,12 @@ fn serve() -> Result<(), String> {
         .build(console.backend(), runtime_dir.path())
         .map_err(|error| error.to_string())?;
     let exit_handle = vm.exit_handle();
+    let _ = vmm_exit.set(vm.exit_handle());
+    let control_flush_workspace = workspace
+        .try_clone()
+        .map_err(|error| format!("clone Workspace for control-loss flush: {error}"))?;
+    let control_vmm_exit = vmm_exit.clone();
+    let control_shutting_down = shutting_down.clone();
     thread::Builder::new()
         .name("secondbox-helper-control".into())
         .spawn(move || {
@@ -95,19 +117,33 @@ fn serve() -> Result<(), String> {
                 start_request_id,
                 materialization_digest,
                 exit_handle,
-                shutting_down,
+                control_shutting_down.clone(),
             ) {
+                control_shutting_down.store(true, Ordering::Release);
                 eprintln!(
                     "SecondBox Microsandbox helper control: {}",
                     bounded_diagnostic(&error)
                 );
-                process::exit(1);
+                // A lost control socket is parent loss by another door; take
+                // the same coordinated exit so dirty Workspace writes reach
+                // the image before the process ends.
+                coordinated_loss_exit(&control_vmm_exit, &control_flush_workspace, 1);
             }
         })
         .map_err(|error| format!("start helper control thread: {error}"))?;
     match vm.enter() {
         Ok(never) => match never {},
-        Err(error) => Err(format!("enter Microsandbox VM: {error}")),
+        Err(error) => {
+            // A coordinated loss exit stops the VMM and then flushes from its
+            // own thread; the returning main thread must not preempt that
+            // flush with its error exit.
+            if shutting_down.load(Ordering::Acquire) {
+                loop {
+                    thread::park();
+                }
+            }
+            Err(format!("enter Microsandbox VM: {error}"))
+        }
     }
 }
 
@@ -848,7 +884,11 @@ fn write_diagnostic(
     .map_err(|error| error.to_string())
 }
 
-fn monitor_parent(shutting_down: Arc<AtomicBool>, workspace: File) -> Result<(), String> {
+fn monitor_parent(
+    shutting_down: Arc<AtomicBool>,
+    workspace: File,
+    vmm_exit: Arc<OnceLock<msb_krun::ExitHandle>>,
+) -> Result<(), String> {
     let mut lifecycle = inherited_file(LIFECYCLE_FD, false)?;
     thread::Builder::new()
         .name("secondbox-parent-watchdog".into())
@@ -856,24 +896,43 @@ fn monitor_parent(shutting_down: Arc<AtomicBool>, workspace: File) -> Result<(),
             let mut byte = [0_u8; 1];
             while lifecycle.read(&mut byte).is_ok_and(|count| count != 0) {}
             shutting_down.store(true, Ordering::Release);
-            let (completed, flushed) = mpsc::sync_channel(1);
-            if thread::Builder::new()
-                .name("secondbox-parent-loss-flush".into())
-                .spawn(move || {
-                    let _ = completed.send(workspace.sync_all());
-                })
-                .is_err()
-            {
-                process::exit(1);
-            }
-            let status = match flushed.recv_timeout(PARENT_LOSS_FLUSH_BOUND) {
-                Ok(Ok(())) => 0,
-                Ok(Err(_)) | Err(_) => 1,
-            };
-            process::exit(status);
+            coordinated_loss_exit(&vmm_exit, &workspace, 0);
         })
         .map_err(|error| format!("start parent watchdog: {error}"))?;
     Ok(())
+}
+
+/// The single exit for parent or control loss: stop the VMM so no guest write
+/// races the final sync, flush the Workspace within a bound, then exit. The
+/// inherited writer lock releases only when the process ends, so a
+/// replacement runner cannot attach the image before this completes.
+fn coordinated_loss_exit(
+    vmm_exit: &OnceLock<msb_krun::ExitHandle>,
+    workspace: &File,
+    success_status: i32,
+) -> ! {
+    if let Some(handle) = vmm_exit.get() {
+        handle.trigger();
+        thread::sleep(VMM_STOP_SETTLE);
+    }
+    let Ok(flush_workspace) = workspace.try_clone() else {
+        process::exit(1);
+    };
+    let (completed, flushed) = mpsc::sync_channel(1);
+    if thread::Builder::new()
+        .name("secondbox-loss-flush".into())
+        .spawn(move || {
+            let _ = completed.send(flush_workspace.sync_all());
+        })
+        .is_err()
+    {
+        process::exit(1);
+    }
+    let status = match flushed.recv_timeout(PARENT_LOSS_FLUSH_BOUND) {
+        Ok(Ok(())) => success_status,
+        Ok(Err(_)) | Err(_) => 1,
+    };
+    process::exit(status);
 }
 
 fn inherited_socket(fd: RawFd) -> Result<UnixStream, String> {
@@ -882,6 +941,21 @@ fn inherited_socket(fd: RawFd) -> Result<UnixStream, String> {
     }
     // SAFETY: the runner transfers exclusive ownership of this fixed inherited descriptor.
     Ok(unsafe { UnixStream::from_raw_fd(fd) })
+}
+
+/// Adopts an inherited descriptor without reopening it: a reopen would create
+/// a new open file description and drop the flock the duplicate exists to
+/// hold.
+fn inherited_raw_descriptor(fd: RawFd) -> Result<File, String> {
+    if fd < 3 {
+        return Err("inherited descriptor is invalid".into());
+    }
+    // SAFETY: the runner transfers this fixed inherited descriptor for the
+    // helper to hold until exit.
+    let file = unsafe { File::from_raw_fd(fd) };
+    file.metadata()
+        .map_err(|error| format!("validate inherited descriptor {fd}: {error}"))?;
+    Ok(file)
 }
 
 fn inherited_file(fd: RawFd, writable: bool) -> Result<File, String> {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	microsandboxprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol"
@@ -22,6 +23,7 @@ type helperPortConnection struct {
 	requestID    uint64
 	nextSequence uint64
 	release      func()
+	closed       atomic.Bool
 	readMu       sync.Mutex
 	writeMu      sync.Mutex
 	buffer       bytes.Buffer
@@ -89,8 +91,14 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 }
 
 func (connection *helperPortConnection) Read(ctx context.Context, maximum int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	connection.readMu.Lock()
 	defer connection.readMu.Unlock()
+	if connection.closed.Load() {
+		return nil, fmt.Errorf("SecondBox Microsandbox Port connection is closed")
+	}
 	if maximum <= 0 {
 		return nil, fmt.Errorf("SecondBox Microsandbox Port read bound must be positive")
 	}
@@ -139,8 +147,17 @@ func (connection *helperPortConnection) Read(ctx context.Context, maximum int) (
 }
 
 func (connection *helperPortConnection) Write(ctx context.Context, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	connection.writeMu.Lock()
 	defer connection.writeMu.Unlock()
+	// Close records closure before taking this lock, so a write racing Close
+	// can never send a stale request ID onto the shared helper channel after
+	// serialization has been released.
+	if connection.closed.Load() {
+		return fmt.Errorf("SecondBox Microsandbox Port connection is closed")
+	}
 	if len(data) == 0 {
 		return nil
 	}
@@ -161,6 +178,7 @@ func (connection *helperPortConnection) Write(ctx context.Context, data []byte) 
 
 func (connection *helperPortConnection) Close() error {
 	connection.closeOnce.Do(func() {
+		connection.closed.Store(true)
 		connection.writeMu.Lock()
 		sequence := connection.nextSequence
 		connection.nextSequence++

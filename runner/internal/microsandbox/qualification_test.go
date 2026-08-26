@@ -230,6 +230,36 @@ func TestQualifiedBackendBootsAgentAndWorkspace(t *testing.T) {
 	if err != nil || !existsResult.Metadata.GetExists() {
 		t.Fatalf("qualified File exists = %#v, %v", existsResult, err)
 	}
+
+	// A leaf symlink must never redirect a Workspace write outside
+	// /workspace: the write replaces the link with a regular file and the
+	// link's former target keeps its contents.
+	symlinkSetup, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{
+			"/bin/sh", "-c", "echo guarded > /etc/qualification-escape-target && ln -s /etc/qualification-escape-target /workspace/qualification/escape",
+		}}},
+		Cwd: "/workspace", OutputLimitBytes: 1024,
+	})
+	if err != nil || symlinkSetup.Terminal.GetExitCode() != 0 {
+		t.Fatalf("qualified symlink setup = %#v, %v", symlinkSetup, err)
+	}
+	escapeWrite, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
+		Operation: runnerprotocol.FileOperation_FILE_OPERATION_WRITE, WorkspaceRelativePath: "qualification/escape", ExpectedSize: 8,
+		ExpectedChecksum: "sha256:0d6c43eb50327614d393893d9604b2d012fa5a031ded1ef26d35feb0d582eecd",
+	}, []byte("workspce"))
+	if err != nil || escapeWrite.Terminal.GetKind() != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED {
+		t.Fatalf("qualified symlink-leaf write = %#v, %v", escapeWrite, err)
+	}
+	escapeCheck, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{
+			"/bin/sh", "-c", "test ! -L /workspace/qualification/escape && test \"$(cat /etc/qualification-escape-target)\" = guarded && echo contained",
+		}}},
+		Cwd: "/workspace", OutputLimitBytes: 1024,
+	})
+	if err != nil || !bytes.Contains(escapeCheck.Stdout, []byte("contained")) {
+		t.Fatalf("qualified symlink containment stdout=%q stderr=%q exit=%d, %v",
+			escapeCheck.Stdout, escapeCheck.Stderr, escapeCheck.Terminal.GetExitCode(), err)
+	}
 	missingResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
 		Operation: runnerprotocol.FileOperation_FILE_OPERATION_EXISTS, WorkspaceRelativePath: "qualification/missing",
 	}, nil)

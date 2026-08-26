@@ -80,6 +80,11 @@ func TestValidateConfigRejectsFlatRootThatDiffersFromMaterialization(t *testing.
 	if _, err := validateConfig(config); err != nil {
 		t.Fatalf("valid materialization: %v", err)
 	}
+	oversized := config
+	oversized.MaximumVCPUs = 256
+	if _, err := validateConfig(oversized); err == nil || !strings.Contains(err.Error(), "at most 255 vCPUs") {
+		t.Fatalf("helper single-byte vCPU bound error = %v", err)
+	}
 	if err := os.WriteFile(rootFile, []byte("mutated"), 0o755); err != nil {
 		t.Fatal(err)
 	}

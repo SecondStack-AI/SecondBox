@@ -76,6 +76,11 @@ func validateConfig(config Config) (validatedConfig, error) {
 		config.MaximumInstances == 0 || config.MaximumOperations == 0 {
 		return validatedConfig{}, fmt.Errorf("SecondBox Microsandbox integer capacity is incomplete")
 	}
+	// The helper launch protocol carries the vCPU count as a single byte, so
+	// a wider advertisement would accept placement it can never launch.
+	if config.MaximumVCPUs > 255 {
+		return validatedConfig{}, fmt.Errorf("SecondBox Microsandbox supports at most 255 vCPUs per Instance")
+	}
 	manifest, err := materialization.Load(config.MaterializationPath, config.MaterializationDigest)
 	if err != nil {
 		return validatedConfig{}, fmt.Errorf("SecondBox Microsandbox materialization: %w", err)

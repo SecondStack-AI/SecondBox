@@ -101,9 +101,13 @@ fn spawn(
 ) -> Child {
     let control_source = duplicate(control.as_raw_fd());
     let image_source = duplicate(image.as_raw_fd());
+    // serve mode holds the inherited writer-lock duplicate for its lifetime;
+    // the image descriptor stands in for it here.
+    let lock_source = duplicate(image.as_raw_fd());
     let lifecycle_source = lifecycle.map(duplicate);
     let control_fd = control_source.as_raw_fd();
     let image_fd = image_source.as_raw_fd();
+    let lock_fd = lock_source.as_raw_fd();
     let lifecycle_fd = lifecycle_source.as_ref().map(AsRawFd::as_raw_fd);
     let mut command = Command::new(env!("CARGO_BIN_EXE_secondbox-microsandbox-helper"));
     command
@@ -113,7 +117,10 @@ fn spawn(
         .stderr(Stdio::piped());
     unsafe {
         command.pre_exec(move || {
-            if libc::dup2(control_fd, 3) < 0 || libc::dup2(image_fd, 4) < 0 {
+            if libc::dup2(control_fd, 3) < 0
+                || libc::dup2(image_fd, 4) < 0
+                || libc::dup2(lock_fd, 7) < 0
+            {
                 return Err(std::io::Error::last_os_error());
             }
             if let Some(lifecycle_fd) = lifecycle_fd

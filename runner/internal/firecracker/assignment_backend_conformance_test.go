@@ -419,6 +419,10 @@ func (attachment *conformanceComputeAttachment) Generation() uint64 {
 	return attachment.generation
 }
 
+// The Firecracker backend never launches helper processes, so the fake holds
+// no separate writer-lock descriptor.
+func (attachment *conformanceComputeAttachment) LockDescriptor() *os.File { return nil }
+
 func (attachment *conformanceComputeAttachment) Descriptor() *os.File {
 	return attachment.image
 }
