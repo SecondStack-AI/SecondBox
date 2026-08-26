@@ -217,38 +217,33 @@ if [[ "$phase" == install ]]; then
     done
     [[ "$source_state" == stopped ]] || { echo 'qualified update source Sandbox did not stop' >&2; exit 1; }
     setup_candidate_registry
-    if "$deploy" --output json update --check "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-check-${mode}.json" 2>"$qualification_root/update-check-${mode}.log"; then
-      printf 'y\n' | "$deploy" --accessible update "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-${mode}.log" 2>&1
-      jq -e --arg source "$source_version" --arg target "$candidate_version" '
-        .schemaVersion == "secondbox.install.receipt/v2" and
-        .updates[-1].status == "succeeded" and
-        .updates[-1].sourceRelease.version == $source and
-        .updates[-1].targetRelease.version == $target and
-        .updates[-1].completedStages[-1].stage == "smoke_execution" and
-        .updates[-1].completedStages[-1].evidence.qualification == "authenticated-runner-readiness" and
-        .updates[-1].completedStages[-1].evidence.runnerPool == "standard-amd64" and
-        .updates[-1].completedStages[-1].evidence.runnerState == "ready" and
-        .updates[-1].completedStages[-1].evidence.runnerCredentialState == "pre_shared" and
-        .updates[-1].completedStages[-1].evidence.runnerPoolState == "ready" and
-        (.updates[-1].completedStages[-1].evidence.runnerPoolReadyRunners | tonumber) >= 1 and
-        .updates[-1].completedStages[-1].evidence.coldBootCapacity == "advertised" and
-        (.updates[-1].completedStages[-1].evidence.concurrentOperationCapacity | tonumber) >= 16 and
-        .updates[-1].completedStages[-1].evidence.postUpdateState == "runner-ready"
-      ' "$receipt" >/dev/null
-      jq -e --arg source "$source_version" --arg target "$candidate_version" '
-        .schemaVersion == "secondbox.install.plan/v2" and .release.version == $target and
-        .releaseHistory[0].release.version == $source and .releaseHistory[-1].release.version == $target
-      ' "$plan" >/dev/null
-      update_attempt='succeeded'
-    else
-      grep -Eq 'update target changes execution assets pinned by existing Sandbox Profile revisions|v0\.6\.0 clean-install boundary: .*perform a clean reinstall' "$qualification_root/update-check-${mode}.log" || {
-        echo 'qualified update check failed for a reason other than an expected release incompatibility' >&2
-        exit 1
-      }
-      jq -e --arg source "$source_version" '.release.version == $source' "$plan" >/dev/null
-      jq -e '.status == "succeeded" and ((.updates // []) | length) == 0' "$receipt" >/dev/null
-      update_attempt='incompatible'
+    if ! "$deploy" --output json update --check "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-check-${mode}.json" 2>"$qualification_root/update-check-${mode}.log"; then
+      echo 'qualified v0.6.0 update rejected the candidate release' >&2
+      tail -n 100 "$qualification_root/update-check-${mode}.log" >&2
+      exit 1
     fi
+    printf 'y\n' | "$deploy" --accessible update "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-${mode}.log" 2>&1
+    jq -e --arg source "$source_version" --arg target "$candidate_version" '
+      .schemaVersion == "secondbox.install.receipt/v2" and
+      .updates[-1].status == "succeeded" and
+      .updates[-1].sourceRelease.version == $source and
+      .updates[-1].targetRelease.version == $target and
+      .updates[-1].completedStages[-1].stage == "smoke_execution" and
+      .updates[-1].completedStages[-1].evidence.qualification == "authenticated-runner-readiness" and
+      .updates[-1].completedStages[-1].evidence.runnerPool == "standard-amd64" and
+      .updates[-1].completedStages[-1].evidence.runnerState == "ready" and
+      .updates[-1].completedStages[-1].evidence.runnerCredentialState == "pre_shared" and
+      .updates[-1].completedStages[-1].evidence.runnerPoolState == "ready" and
+      (.updates[-1].completedStages[-1].evidence.runnerPoolReadyRunners | tonumber) >= 1 and
+      .updates[-1].completedStages[-1].evidence.coldBootCapacity == "advertised" and
+      (.updates[-1].completedStages[-1].evidence.concurrentOperationCapacity | tonumber) >= 16 and
+      .updates[-1].completedStages[-1].evidence.postUpdateState == "runner-ready"
+    ' "$receipt" >/dev/null
+    jq -e --arg source "$source_version" --arg target "$candidate_version" '
+      .schemaVersion == "secondbox.install.plan/v2" and .release.version == $target and
+      .releaseHistory[0].release.version == $source and .releaseHistory[-1].release.version == $target
+    ' "$plan" >/dev/null
+    update_attempt='succeeded'
   else
     setup_candidate_registry
     install_log="$qualification_root/install-${mode}.log"
@@ -285,8 +280,8 @@ if [[ "$phase" == install ]]; then
     --arg artifacts "$artifacts" --arg manifest "$manifest_path" --arg cliBinary "$cli_binary" --arg cliConfig "$cli_config" \
     --arg artifactFingerprint "$(artifact_fingerprint "$artifacts")" --arg filesystemIdentity "$filesystem_identity" --arg neighbor "$neighbor" \
     --arg sandboxId "$qualification_sandbox_id" --arg workloadConfig "$qualification_workload_config" \
-    --arg sourceSandboxLineage "$source_sandbox_lineage" --arg updateAttempt "$update_attempt" --arg sourceDeploy "$source_deploy" \
-    '{operation:$operation,operationId:$operationId,workspace:$workspace,artifacts:$artifacts,manifest:$manifest,cliBinary:$cliBinary,cliConfig:$cliConfig,artifactFingerprint:$artifactFingerprint,filesystemIdentity:$filesystemIdentity,neighbor:$neighbor,sandboxId:$sandboxId,workloadConfig:$workloadConfig,updateAttempt:$updateAttempt,sourceSandboxLineage:$sourceSandboxLineage,sourceDeploy:$sourceDeploy}' >"$state"
+    --arg sourceSandboxLineage "$source_sandbox_lineage" --arg updateAttempt "$update_attempt" \
+    '{operation:$operation,operationId:$operationId,workspace:$workspace,artifacts:$artifacts,manifest:$manifest,cliBinary:$cliBinary,cliConfig:$cliConfig,artifactFingerprint:$artifactFingerprint,filesystemIdentity:$filesystemIdentity,neighbor:$neighbor,sandboxId:$sandboxId,workloadConfig:$workloadConfig,updateAttempt:$updateAttempt,sourceSandboxLineage:$sourceSandboxLineage}' >"$state"
   exit 0
 fi
 
@@ -337,20 +332,18 @@ jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerStat
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 expected_runner_id="runner-${operation_id#install_}"
 update_attempt="$(jq -er .updateAttempt "$state")"
-if [[ "$update_attempt" != incompatible ]]; then
-  jq -e --arg runnerId "$expected_runner_id" '
-    .completedStages[] | select(.stage == "smoke_execution") |
-    .evidence.qualification == "authenticated-runner-readiness" and
-    .evidence.runnerId == $runnerId and
-    .evidence.runnerPool == "standard-amd64" and
-    .evidence.runnerState == "ready" and
-    .evidence.runnerCredentialState == "pre_shared" and
-    .evidence.runnerPoolState == "ready" and
-    (.evidence.runnerPoolReadyRunners | tonumber) >= 1 and
-    .evidence.coldBootCapacity == "advertised" and
-    (.evidence.concurrentOperationCapacity | tonumber) >= 16
-  ' "$receipt" >/dev/null
-fi
+jq -e --arg runnerId "$expected_runner_id" '
+  .completedStages[] | select(.stage == "smoke_execution") |
+  .evidence.qualification == "authenticated-runner-readiness" and
+  .evidence.runnerId == $runnerId and
+  .evidence.runnerPool == "standard-amd64" and
+  .evidence.runnerState == "ready" and
+  .evidence.runnerCredentialState == "pre_shared" and
+  .evidence.runnerPoolState == "ready" and
+  (.evidence.runnerPoolReadyRunners | tonumber) >= 1 and
+  .evidence.coldBootCapacity == "advertised" and
+  (.evidence.concurrentOperationCapacity | tonumber) >= 16
+' "$receipt" >/dev/null
 if [[ "$mode" == existing_reflink_update ]]; then
   sandbox_id="$(jq -er '.sandboxId | select(length > 0)' "$state")"
   workload_config="$(jq -er '.workloadConfig | select(length > 0)' "$state")"
@@ -397,17 +390,10 @@ workspace_generation_before="$(jq -er '.workspace.generation | select(type == "n
 (( workspace_generation_before == generation_before )) || { printf 'retained qualification Sandbox and Workspace generations differ before uninstall: sandbox=%s workspace=%s\n' "$generation_before" "$workspace_generation_before" >&2; exit 1; }
 
 lifecycle_deploy="$deploy"
-if [[ "$(jq -er .updateAttempt "$state")" == incompatible ]]; then
-  lifecycle_deploy="$(jq -er .sourceDeploy "$state")"
-fi
 "$lifecycle_deploy" --accessible uninstall "$operation" >"$qualification_root/uninstall-${mode}.log" 2>&1
 jq -e '.status == "uninstalled"' "$receipt" >/dev/null
 [[ -d "$workspace" && -d "$artifacts" && -f "$manifest_path" ]]
-if [[ "$(jq -er .updateAttempt "$state")" == incompatible ]]; then
-  "$lifecycle_deploy" --accessible install --resume "$operation" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
-else
-  "$lifecycle_deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
-fi
+"$lifecycle_deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
 sandbox_after_document="$(SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
 sandbox_after="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_after_document")"
 generation_after="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_after_document")"
@@ -443,12 +429,7 @@ common=(clean_host read_only_preflight bootstrap_checksum guided_install reboot_
 if [[ "$mode" == existing_reflink_filesystem ]]; then
   common+=(existing_reflink_isolation unsafe_filesystem_refusals fresh_existing_reflink_install)
 elif [[ "$mode" == existing_reflink_update ]]; then
-  common=(update_compatibility_enforced)
-  if [[ "$(jq -er .updateAttempt "$state")" == succeeded ]]; then
-    common+=(update_receipt_history_preserved update_release_activated update_workspace_preserved)
-  else
-    common+=(update_incompatible_release_refused)
-  fi
+  common=(update_compatibility_enforced update_receipt_history_preserved update_release_activated update_workspace_preserved)
 fi
 jq -n --arg mode "$mode" --arg filesystemIdentity "$(jq -er .filesystemIdentity "$state")" \
   --arg candidateManifestDigest "sha256:$(sha256sum "$manifest" | awk '{print $1}')" --argjson assertions "$(assertions_json "${common[@]}")" \
