@@ -32,8 +32,10 @@ type helperPortConnection struct {
 }
 
 func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerprotocol.AssignmentFence, open *runnerprotocol.PortOpen) (runnercontrol.PortConnection, error) {
-	if open == nil || open.Protocol != "tcp" || open.GuestPort == 0 || open.GuestPort > 65535 {
-		return nil, fmt.Errorf("SecondBox Microsandbox Port Open requires a valid TCP guest port")
+	// "http" is a TCP relay with public HTTP semantics layered above the
+	// runner; both public protocols reach the guest as one byte stream.
+	if open == nil || (open.Protocol != "tcp" && open.Protocol != "http") || open.GuestPort == 0 || open.GuestPort > 65535 {
+		return nil, fmt.Errorf("SecondBox Microsandbox Port Open requires a TCP or HTTP relay to a valid guest port")
 	}
 	active, opCtx, release, err := backend.acquireOperation(ctx, fence)
 	if err != nil {

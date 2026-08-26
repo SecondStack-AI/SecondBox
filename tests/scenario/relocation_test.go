@@ -77,8 +77,18 @@ func TestScenarioStoppedSnapshotFreeWorkspaceRelocatesBetweenCompatibleRunners(t
 	}
 
 	// With the source Runner offline, only a committed home move to the target
-	// can start the Sandbox and recover these exact Workspace bytes.
+	// can start the Sandbox and recover these exact Workspace bytes. Every
+	// later scenario shares this baseline runner, so a failure anywhere before
+	// the inline restart must still put it back.
+	baselineStopped := false
+	t.Cleanup(func() {
+		if baselineStopped {
+			scenarioCompose(t, "start", "secondbox-runner")
+			waitForScenarioRunner(t, fixture, 90*time.Second)
+		}
+	})
 	scenarioCompose(t, "stop", "secondbox-runner")
+	baselineStopped = true
 	waitForRunnerPoolReadyCount(t, fixture, 1, 30*time.Second)
 	restarted := startScenarioSandbox(t, ctx, fixture, handle, "relocation-start-target-only")
 	if restarted.State != contracts.SandboxStateReady {
@@ -95,6 +105,7 @@ func TestScenarioStoppedSnapshotFreeWorkspaceRelocatesBetweenCompatibleRunners(t
 
 	scenarioCompose(t, "start", "secondbox-runner")
 	waitForScenarioRunner(t, fixture, 90*time.Second)
+	baselineStopped = false
 
 	// Delete while the target runner still owns the relocated home, then put
 	// the shared scenario topology back into its single-runner baseline for

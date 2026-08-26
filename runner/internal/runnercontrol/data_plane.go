@@ -360,6 +360,9 @@ func sendExecControl(ctx context.Context, done <-chan struct{}, controls chan<- 
 		return nil
 	default:
 	}
+	// A full queue applies backpressure to the caller's stream rather than
+	// tearing the operation down; the operation's terminal or the caller's
+	// cancellation still release a blocked sender.
 	select {
 	case controls <- control:
 		return nil
@@ -367,8 +370,6 @@ func sendExecControl(ctx context.Context, done <-chan struct{}, controls chan<- 
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	default:
-		return fmt.Errorf("SecondBox runner Exec control queue is full")
 	}
 }
 

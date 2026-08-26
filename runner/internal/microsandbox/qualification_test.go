@@ -369,6 +369,29 @@ func TestQualifiedBackendBootsAgentAndWorkspace(t *testing.T) {
 	if err := port.Close(); err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("qualified Port close: %v", err)
 	}
+
+	httpServer, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "nc -l -p 23457 -e /bin/cat </dev/null >/dev/null 2>&1 & sleep 0.1"}}},
+		Cwd:     "/workspace", OutputLimitBytes: 1024,
+	})
+	if err != nil || httpServer.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+		t.Fatalf("start qualified HTTP relay server = %#v, %v", httpServer, err)
+	}
+	httpPort, err := backend.OpenPort(t.Context(), fence, &runnerprotocol.PortOpen{Protocol: "http", GuestPort: 23457, IdleTimeoutMs: 30_000})
+	if err != nil {
+		t.Fatalf("qualified HTTP relay open: %v", err)
+	}
+	httpProbe := []byte("GET / HTTP/1.0\r\n\r\n")
+	if err := httpPort.Write(t.Context(), httpProbe); err != nil {
+		t.Fatalf("qualified HTTP relay write: %v", err)
+	}
+	httpEcho, err := httpPort.Read(t.Context(), len(httpProbe))
+	if err != nil || len(httpEcho) == 0 {
+		t.Fatalf("qualified HTTP relay response = %v, %v", httpEcho, err)
+	}
+	if err := httpPort.Close(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("qualified HTTP relay close: %v", err)
+	}
 	postPort, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
 		Command: &runnerprotocol.ExecOpen_Shell{Shell: "printf post-port"}, DeadlineUnixMs: uint64(time.Now().Add(2 * time.Second).UnixMilli()), OutputLimitBytes: 1024,
 	})

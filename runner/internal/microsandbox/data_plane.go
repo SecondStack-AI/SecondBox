@@ -146,20 +146,32 @@ func (backend *AssignmentBackend) ExecuteFile(
 	if !backend.operationFenceActive(active, fence) {
 		return runnercontrol.FileOperationResult{}, staleOperationError()
 	}
-	if open.Operation == runnerprotocol.FileOperation_FILE_OPERATION_READ {
-		if uint64(len(result.Content)) > open.ExpectedSize {
-			result.Content = nil
-			result.Terminal = &runnerprotocol.FileTerminal{Kind: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED, SafeDetail: "file read limit exceeded"}
-		} else {
-			digest := sha256.Sum256(result.Content)
-			if result.Metadata == nil {
-				result.Metadata = &runnerprotocol.FileMetadata{Exists: true, Kind: runnerprotocol.FileKind_FILE_KIND_FILE}
-			}
-			result.Metadata.Size = uint64(len(result.Content))
-			result.Metadata.Checksum = "sha256:" + hex.EncodeToString(digest[:])
-		}
+	return finalizeFileResult(open, result), nil
+}
+
+// finalizeFileResult bounds a read and attaches computed metadata. Computed
+// metadata states a fact about delivered content; a read that did not
+// complete delivered none, so it keeps whatever the helper reported instead
+// of a synthesized existing file.
+func finalizeFileResult(open *runnerprotocol.FileOpen, result runnercontrol.FileOperationResult) runnercontrol.FileOperationResult {
+	if open.Operation != runnerprotocol.FileOperation_FILE_OPERATION_READ {
+		return result
 	}
-	return result, nil
+	if uint64(len(result.Content)) > open.ExpectedSize {
+		result.Content = nil
+		result.Terminal = &runnerprotocol.FileTerminal{Kind: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED, SafeDetail: "file read limit exceeded"}
+		return result
+	}
+	if result.Terminal.GetKind() != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED {
+		return result
+	}
+	digest := sha256.Sum256(result.Content)
+	if result.Metadata == nil {
+		result.Metadata = &runnerprotocol.FileMetadata{Exists: true, Kind: runnerprotocol.FileKind_FILE_KIND_FILE}
+	}
+	result.Metadata.Size = uint64(len(result.Content))
+	result.Metadata.Checksum = "sha256:" + hex.EncodeToString(digest[:])
+	return result
 }
 
 func microsandboxExecRequest(open *runnerprotocol.ExecOpen, requirePTY bool) (*microsandboxprotocol.ExecRequest, error) {
