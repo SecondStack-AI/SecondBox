@@ -32,7 +32,10 @@ for name in \
 done
 
 kubectl_command=(${SECONDBOX_SCENARIO_POD_KUBECTL:-k3s kubectl})
-kubectl() { "${kubectl_command[@]}" "$@"; }
+# kubectl writes its discovery cache under $HOME; pin it outside the
+# repository so a qualification run cannot dirty the source tree.
+export KUBECACHEDIR="${TMPDIR:-/tmp}/secondbox-scenario-kubecache"
+kubectl() { "${kubectl_command[@]}" --cache-dir "$KUBECACHEDIR" "$@"; }
 
 if docker compose version >/dev/null 2>&1; then
   compose=(docker compose)
