@@ -2,7 +2,7 @@
 
 Date: 2026-08-26 (UTC)
 
-Source commit: `a8d76ef10` (clean tree; both scenario evidence files record
+Source commit: `1ec33f3cd` (clean tree; both scenario evidence files record
 `repositoryDirty: false` at this commit, re-run after the branch was rebased onto the v0.6.0
 tenancy merge and the full Dark Review remediation landed)
 
@@ -32,14 +32,14 @@ containerd `2.3.2-k3s2`):
 - `test-scenario-gvisor` (host placement): 23 backend scenarios passed (31 including the
   shared tenancy scenarios; the network-enabled egress-gateway fencing scenario is skipped on
   bridge-less backends) — `2026-08-25-gvisor-task-9p-linux-scenario.json`. 30 cold starts:
-  start-to-ready p50 383.994 ms, p95 420.881 ms; peak compute-tree RSS (supervisor with its runsc
-  sentry and gofer) p50 161932 KiB — `2026-08-25-gvisor-task-9p-cold-starts.json`.
+  start-to-ready p50 381.042 ms, p95 424.598 ms; peak compute-tree RSS (supervisor with its runsc
+  sentry and gofer) p50 161996 KiB — `2026-08-25-gvisor-task-9p-cold-starts.json`.
 - `test-scenario-gvisor-pod` (pod placement): the same scenarios passed, including
   Snapshot/restore, runner-kill reconciliation, concurrency, the rejection matrix, the network
   policy matrix with real external egress through pod and node NAT, and Workspace relocation
   between two runner pods on distinct network profiles —
-  `2026-08-25-gvisor-task-9p-pod-scenario.json`. 30 cold starts inside the pod: p50 375.529 ms,
-  p95 414.884 ms; peak compute-tree RSS p50 159748 KiB —
+  `2026-08-25-gvisor-task-9p-pod-scenario.json`. 30 cold starts inside the pod: p50 422.373 ms,
+  p95 491.771 ms; peak compute-tree RSS p50 161180 KiB —
   `2026-08-25-gvisor-task-9p-pod-cold-starts.json`.
 - `test-gvisor-pod` and the backend qualification suites (`TestQualified|TestAttachment`) also
   passed at the same commit, with sandbox cgroups observed nested at
