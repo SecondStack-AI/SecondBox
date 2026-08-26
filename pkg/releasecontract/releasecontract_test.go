@@ -122,6 +122,7 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 		SchemaVersion: QualificationEvidenceSchema, SourceCommit: testCommit,
 		Suite: "test-scenario", PassCount: 16, WallClockSeconds: 600,
 		Host: QualificationHostEvidence{
+			Platform:            "linux-amd64",
 			KVM:                 QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
 			TUN:                 QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
 			WorkspaceFilesystem: QualificationFilesystemEvidence{Mount: "/srv/secondbox xfs", Type: "xfs"},
@@ -135,6 +136,11 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 	if err := decoded.ValidateForRelease(testCommit); err != nil {
 		t.Fatal(err)
 	}
+	decoded.Host.Platform = ""
+	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "host platform") {
+		t.Fatalf("missing host platform error = %v", err)
+	}
+	decoded.Host.Platform = "linux-amd64"
 	decoded.RepositoryDirty = true
 	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "dirty repository") {
 		t.Fatalf("dirty qualification evidence error = %v", err)
@@ -174,6 +180,7 @@ func TestInstallerQualificationEvidenceRequiresRebootAndPinnedRelease(t *testing
 		SchemaVersion: InstallerQualificationEvidenceSchema, SourceCommit: testCommit,
 		Suite: "test-installer-qualified", PassCount: 19, WallClockSeconds: 1200,
 		Host: QualificationHostEvidence{
+			Platform:            "linux-amd64",
 			KVM:                 QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
 			TUN:                 QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
 			WorkspaceFilesystem: QualificationFilesystemEvidence{Mount: "/srv/secondbox xfs", Type: "xfs"},

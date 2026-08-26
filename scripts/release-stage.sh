@@ -67,6 +67,7 @@ validate_qualification_evidence() {
     .suite == "test-scenario" and
     (.passCount | type == "number") and .passCount > 0 and .passCount == (.passCount | floor) and
     (.wallClockSeconds | type == "number") and .wallClockSeconds >= 0 and .wallClockSeconds == (.wallClockSeconds | floor) and
+    .host.platform == "linux-amd64" and
     .host.kvm == {path:"/dev/kvm",present:true,readable:true,writable:true} and
     .host.tun == {path:"/dev/net/tun",present:true,readable:true,writable:true} and
     (.host.workspaceFilesystem.mount | type == "string") and (.host.workspaceFilesystem.mount | length) > 0 and
@@ -90,6 +91,7 @@ validate_installer_qualification_evidence() {
     .suite == "test-installer-qualified" and
     (.passCount | type == "number") and .passCount > 0 and .passCount == (.passCount | floor) and
     (.wallClockSeconds | type == "number") and .wallClockSeconds >= 0 and .wallClockSeconds == (.wallClockSeconds | floor) and
+    .host.platform == "linux-amd64" and
     .host.kvm == {path:"/dev/kvm",present:true,readable:true,writable:true} and
     .host.tun == {path:"/dev/net/tun",present:true,readable:true,writable:true} and
     (.host.workspaceFilesystem.mount | type == "string") and (.host.workspaceFilesystem.mount | length) > 0 and
@@ -154,6 +156,7 @@ if $test_mode; then
       passCount: 16,
       wallClockSeconds: 1,
       host: {
+        platform: "linux-amd64",
         kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
         tun: {path: "/dev/net/tun", present: true, readable: true, writable: true},
         workspaceFilesystem: {mount: "/synthetic/qualification xfs", type: "xfs"}
@@ -170,7 +173,7 @@ if $test_mode && ! $candidate_mode; then
     --arg schemaVersion "$installer_qualification_evidence_schema" \
     --arg sourceCommit "$source_commit" \
     --arg releaseManifestDigest "sha256:$(printf '%s' "$source_commit-installer-qualified" | sha256sum | awk '{print $1}')" \
-    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:24,wallClockSeconds:1,host:{kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
+    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:24,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
 elif ! $candidate_mode; then
 	install -m 0644 "$installer_qualification_evidence_source" "$output_dir/$installer_qualification_evidence_name"
 fi

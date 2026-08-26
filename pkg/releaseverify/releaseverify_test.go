@@ -67,6 +67,7 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 		SchemaVersion: releasecontract.QualificationEvidenceSchema, SourceCommit: sourceCommit,
 		Suite: "test-scenario", PassCount: 16, WallClockSeconds: 600,
 		Host: releasecontract.QualificationHostEvidence{
+			Platform:            "linux-amd64",
 			KVM:                 releasecontract.QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
 			TUN:                 releasecontract.QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
 			WorkspaceFilesystem: releasecontract.QualificationFilesystemEvidence{Mount: "/srv xfs", Type: "xfs"},
@@ -83,6 +84,7 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 		SchemaVersion: releasecontract.InstallerQualificationEvidenceSchema, SourceCommit: sourceCommit,
 		Suite: "test-installer-qualified", PassCount: 19, WallClockSeconds: 1200,
 		Host: releasecontract.QualificationHostEvidence{
+			Platform:            "linux-amd64",
 			KVM:                 releasecontract.QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
 			TUN:                 releasecontract.QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
 			WorkspaceFilesystem: releasecontract.QualificationFilesystemEvidence{Mount: "/srv xfs", Type: "xfs"},
