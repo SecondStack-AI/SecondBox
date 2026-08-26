@@ -464,27 +464,39 @@ func attachLoopDescriptor(image *os.File) (string, *os.File, error) {
 		return "", nil, fmt.Errorf("open loop control: %w", err)
 	}
 	defer controlDevice.Close()
-	index, err := unix.IoctlRetInt(int(controlDevice.Fd()), unix.LOOP_CTL_GET_FREE)
-	if err != nil {
-		return "", nil, fmt.Errorf("acquire free loop device: %w", err)
+	// LOOP_CTL_GET_FREE reports a free index without reserving it, so two
+	// concurrent starts can race to the same device and the loser binds
+	// EBUSY while other devices remain available. Losing that race is
+	// ordinary, so re-request a fresh index a bounded number of times.
+	var lastErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		index, err := unix.IoctlRetInt(int(controlDevice.Fd()), unix.LOOP_CTL_GET_FREE)
+		if err != nil {
+			return "", nil, fmt.Errorf("acquire free loop device: %w", err)
+		}
+		devicePath := fmt.Sprintf("/dev/loop%d", index)
+		loopFile, err := os.OpenFile(devicePath, os.O_RDWR, 0)
+		if err != nil {
+			return "", nil, fmt.Errorf("open %s: %w", devicePath, err)
+		}
+		if err := unix.IoctlSetInt(int(loopFile.Fd()), unix.LOOP_SET_FD, int(image.Fd())); err != nil {
+			_ = loopFile.Close()
+			if errors.Is(err, unix.EBUSY) {
+				lastErr = fmt.Errorf("bind workspace descriptor to %s: %w", devicePath, err)
+				continue
+			}
+			return "", nil, fmt.Errorf("bind workspace descriptor to %s: %w", devicePath, err)
+		}
+		var info unix.LoopInfo64
+		info.Flags = unix.LO_FLAGS_AUTOCLEAR
+		if err := unix.IoctlLoopSetStatus64(int(loopFile.Fd()), &info); err != nil {
+			_ = unix.IoctlSetInt(int(loopFile.Fd()), unix.LOOP_CLR_FD, 0)
+			_ = loopFile.Close()
+			return "", nil, fmt.Errorf("arm loop autoclear on %s: %w", devicePath, err)
+		}
+		return devicePath, loopFile, nil
 	}
-	devicePath := fmt.Sprintf("/dev/loop%d", index)
-	loopFile, err := os.OpenFile(devicePath, os.O_RDWR, 0)
-	if err != nil {
-		return "", nil, fmt.Errorf("open %s: %w", devicePath, err)
-	}
-	if err := unix.IoctlSetInt(int(loopFile.Fd()), unix.LOOP_SET_FD, int(image.Fd())); err != nil {
-		_ = loopFile.Close()
-		return "", nil, fmt.Errorf("bind workspace descriptor to %s: %w", devicePath, err)
-	}
-	var info unix.LoopInfo64
-	info.Flags = unix.LO_FLAGS_AUTOCLEAR
-	if err := unix.IoctlLoopSetStatus64(int(loopFile.Fd()), &info); err != nil {
-		_ = unix.IoctlSetInt(int(loopFile.Fd()), unix.LOOP_CLR_FD, 0)
-		_ = loopFile.Close()
-		return "", nil, fmt.Errorf("arm loop autoclear on %s: %w", devicePath, err)
-	}
-	return devicePath, loopFile, nil
+	return "", nil, fmt.Errorf("acquire free loop device: every attempt lost its reservation race: %w", lastErr)
 }
 
 func boundToken(value string) string {

@@ -544,7 +544,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err != nil {
 		return result, incompatibleAssignment(err)
 	}
-	network, supervisorPid, err := backend.installInstanceNetwork(ctx, assignment, compiled)
+	network, supervisorProcess, err := backend.installInstanceNetwork(ctx, assignment, compiled)
 	if err != nil {
 		return result, err
 	}
@@ -560,7 +560,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_COMPUTE_LAUNCH); err != nil {
 		return result, err
 	}
-	active, err := backend.launchInstance(ctx, assignment, workspace, network, supervisorPid)
+	active, err := backend.launchInstance(ctx, assignment, workspace, network, supervisorProcess)
 	if err != nil {
 		return result, infrastructureAssignment(err)
 	}
@@ -620,7 +620,7 @@ func (backend *AssignmentBackend) launchInstance(
 	assignment *runnerprotocol.AssignmentCommand,
 	workspace workspacestore.ComputeAttachment,
 	network instanceNetwork,
-	supervisorPid *atomic.Int64,
+	supervisorProcess *atomic.Pointer[os.Process],
 ) (*activeAssignment, error) {
 	// A short digest keeps every per-Instance socket path inside sun_path
 	// regardless of Instance ID length or runtime-directory depth.
@@ -681,7 +681,7 @@ func (backend *AssignmentBackend) launchInstance(
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(instanceDir))
 	}
-	supervisorPid.Store(int64(handles.Command.Process.Pid))
+	supervisorProcess.Store(handles.Command.Process)
 	active := &activeAssignment{
 		fence:         cloneFence(assignment.Fence),
 		correlation:   proto.Clone(assignment.Correlation).(*runnerprotocol.Correlation),
@@ -831,7 +831,7 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 	ctx context.Context,
 	assignment *runnerprotocol.AssignmentCommand,
 	compiled *networkpolicy.CompiledPolicy,
-) (instanceNetwork, *atomic.Int64, error) {
+) (instanceNetwork, *atomic.Pointer[os.Process], error) {
 	network, err := backend.acquireNetworkSlot()
 	if err != nil {
 		return instanceNetwork{}, nil, capacityAssignment(err)
@@ -840,7 +840,7 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 		backend.releaseNetworkSlot(network)
 		return instanceNetwork{}, nil, infrastructureAssignment(err)
 	}
-	supervisorPid := &atomic.Int64{}
+	supervisorProcess := &atomic.Pointer[os.Process]{}
 	if err := backend.enforcer.Install(ctx, firecracker.PolicyNetworkConfig{
 		InstanceID: assignment.Fence.InstanceId,
 		TapName:    network.hostVeth,
@@ -849,16 +849,20 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 		Policy:     compiled,
 		OnFailure: func(error) {
 			// Enforcement loss fails closed: the compute is forced down and
-			// the supervisor-exit path delivers the single terminal.
-			if pid := supervisorPid.Load(); pid > 0 {
-				_ = syscallKillGroup(int(pid))
+			// the supervisor-exit path delivers the single terminal. The
+			// retained process handle signals through its pidfd, so a late
+			// callback can never target a recycled numeric PID, and the
+			// supervisor's runsc child follows through its SIGKILL death
+			// signal.
+			if process := supervisorProcess.Load(); process != nil {
+				_ = process.Kill()
 			}
 		},
 	}); err != nil {
 		teardown := backend.teardownInstanceNetwork(assignment.Fence.InstanceId, network)
 		return instanceNetwork{}, nil, infrastructureAssignment(errors.Join(err, teardown))
 	}
-	return network, supervisorPid, nil
+	return network, supervisorProcess, nil
 }
 
 func (backend *AssignmentBackend) teardownInstanceNetwork(instanceID string, network instanceNetwork) error {

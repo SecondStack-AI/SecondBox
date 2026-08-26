@@ -10,25 +10,55 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // probePlatform proves the real environment: the pinned runsc reports its
 // expected release, the sentry platform can boot and tear down a trivial
-// sandbox with no KVM requirement, loop devices are usable, and startup
-// reconciliation has cleared any stale leftovers. Only success is cached: a
-// transient failure retries on the next readiness pass instead of pinning
-// the runner unready until restart.
+// sandbox with no KVM requirement, and startup reconciliation has cleared any
+// stale leftovers. Only success is cached, and only for the immutable
+// platform facts: a transient failure retries on the next readiness pass
+// instead of pinning the runner unready until restart, while health that can
+// degrade after a successful probe - network-policy enforcement and loop
+// allocation - re-proves itself on every pass.
 func (backend *AssignmentBackend) probePlatform(ctx context.Context) error {
 	backend.platformProbeMu.Lock()
 	defer backend.platformProbeMu.Unlock()
-	if backend.platformProbed {
-		return nil
+	if !backend.platformProbed {
+		if err := backend.runPlatformProbe(ctx); err != nil {
+			return err
+		}
+		backend.platformProbed = true
 	}
-	if err := backend.runPlatformProbe(ctx); err != nil {
+	if err := backend.enforcer.Ready(ctx); err != nil {
+		return fmt.Errorf("SecondBox gVisor network policy enforcement: %w", err)
+	}
+	if err := probeLoopAllocation(); err != nil {
+		return fmt.Errorf("SecondBox gVisor loop devices are unavailable: %w", err)
+	}
+	return nil
+}
+
+// probeLoopAllocation proves a loop device can actually be allocated and
+// opened, not merely that the control node exists: missing device nodes or
+// exhausted allocation would otherwise pass readiness while every assignment
+// start fails.
+func probeLoopAllocation() error {
+	loopControl, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
+	if err != nil {
 		return err
 	}
-	backend.platformProbed = true
-	return nil
+	defer loopControl.Close()
+	index, err := unix.IoctlRetInt(int(loopControl.Fd()), unix.LOOP_CTL_GET_FREE)
+	if err != nil {
+		return fmt.Errorf("acquire free loop device: %w", err)
+	}
+	device, err := os.OpenFile(fmt.Sprintf("/dev/loop%d", index), os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	return device.Close()
 }
 
 func (backend *AssignmentBackend) runPlatformProbe(ctx context.Context) error {
@@ -40,11 +70,6 @@ func (backend *AssignmentBackend) runPlatformProbe(ctx context.Context) error {
 	if !strings.Contains(string(version), release) {
 		return fmt.Errorf("SecondBox gVisor runsc reports a different release than the pinned materialization")
 	}
-	loopControl, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("SecondBox gVisor loop devices are unavailable: %w", err)
-	}
-	_ = loopControl.Close()
 	if _, err := ReconcileStaleLoops(backend.config.WorkspaceRoot); err != nil {
 		return fmt.Errorf("SecondBox gVisor stale attachment reconciliation: %w", err)
 	}
@@ -59,9 +84,6 @@ func (backend *AssignmentBackend) runPlatformProbe(ctx context.Context) error {
 	}
 	if err := ensureHostNetworkPlumbing(ctx, dnsAddressForProfile(backend.config.NetworkProfile)); err != nil {
 		return fmt.Errorf("SecondBox gVisor host network plumbing: %w", err)
-	}
-	if err := backend.enforcer.Ready(ctx); err != nil {
-		return fmt.Errorf("SecondBox gVisor network policy enforcement: %w", err)
 	}
 	stateRoot, err := os.MkdirTemp(backend.config.RuntimeDir, "readiness-")
 	if err != nil {
