@@ -173,6 +173,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build gVisor runner image
         run: |
+          # The default docker driver cannot export OCI layout; a
+          # docker-container builder can.
+          docker buildx create --name secondbox-oci --driver docker-container --use
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
             --build-arg "RELEASE_VERSION=ci" --build-arg "SOURCE_COMMIT=${GITHUB_SHA}" \
             --file runner/Dockerfile.gvisor \
