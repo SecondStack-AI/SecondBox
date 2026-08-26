@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -407,7 +406,7 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 	}
 	if last == install.StageReadiness {
 		var evidence map[string]string
-		if err := runInstallPhase(ctx, renderer, "Smoke execution", "durable-coding microVM", func() error {
+		if err := runInstallPhase(ctx, renderer, "Installation qualification", "authenticated RunnerPool and Runner readiness", func() error {
 			var smokeErr error
 			evidence, smokeErr = dependencies.Smoke(ctx, plan)
 			return smokeErr
@@ -606,64 +605,47 @@ func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contra
 func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	sandboxName := "installer-smoke-" + strings.TrimPrefix(plan.OperationID, "install_")
-	sandboxID, found, err := findInstalledSmokeSandbox(ctx, plan, sandboxName)
-	if err != nil {
-		return nil, err
-	}
-	arguments := []string{"--output", "plain", "run", "durable-coding", "--name", sandboxName, "--keep", "--", "python3", "-c", `print("hello from a microVM")`}
-	if found {
-		arguments = []string{"--output", "plain", "exec", sandboxName, "--", "python3", "-c", `print("hello from a microVM")`}
-	}
-	command, stdout, stderr := installedCLICommand(ctx, plan, arguments...)
+	command, stdout, stderr := installedCLICommand(
+		ctx, plan, "--output", "json", "runner-pools", "get", standardresources.PoolAMD64,
+	)
 	if err := command.Run(); err != nil {
-		return nil, fmt.Errorf("SecondBox installer smoke command: %w: %s", err, cliui.Sanitize(stderr.String()))
+		return nil, fmt.Errorf("SecondBox installer qualification RunnerPool: %w: %s", err, cliui.Sanitize(stderr.String()))
 	}
-	if stdout.String() != "hello from a microVM\n" {
-		return nil, fmt.Errorf("SecondBox installer smoke output mismatch: %q", cliui.Sanitize(stdout.String()))
+	var pool contracts.RunnerPool
+	if err := json.Unmarshal(stdout.Bytes(), &pool); err != nil {
+		return nil, fmt.Errorf("SecondBox installer qualification RunnerPool decode: %w", err)
 	}
-	if !found {
-		sandboxID = regexp.MustCompile(`\bsbx_[A-Za-z0-9_-]{24}\b`).FindString(stderr.String())
-		if sandboxID == "" {
-			return nil, fmt.Errorf("SecondBox installer smoke retained Sandbox identity is absent: %s", cliui.Sanitize(stderr.String()))
-		}
+	runnerID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
+	command, stdout, stderr = installedCLICommand(
+		ctx, plan, "--output", "json", "runners", "get", runnerID,
+	)
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("SecondBox installer qualification Runner: %w: %s", err, cliui.Sanitize(stderr.String()))
 	}
-	return map[string]string{"profile": "durable-coding", "output": "hello from a microVM", "exitStatus": "0", "sandboxId": sandboxID, "sandboxName": sandboxName}, nil
+	var runner contracts.Runner
+	if err := json.Unmarshal(stdout.Bytes(), &runner); err != nil {
+		return nil, fmt.Errorf("SecondBox installer qualification Runner decode: %w", err)
+	}
+	return installedSmokeEvidence(plan, pool, runner)
 }
 
-func findInstalledSmokeSandbox(ctx context.Context, plan install.InstallPlan, sandboxName string) (string, bool, error) {
-	command, stdout, stderr := installedCLICommand(ctx, plan, "--output", "json", "sandboxes", "list", "--query", "metadata="+contracts.SandboxNameMetadataKey+"="+sandboxName, "--query", "limit=2")
-	if err := command.Run(); err != nil {
-		return "", false, fmt.Errorf("SecondBox installer inspect retained smoke Sandbox: %w: %s", err, cliui.Sanitize(stderr.String()))
+func installedSmokeEvidence(
+	plan install.InstallPlan,
+	pool contracts.RunnerPool,
+	runner contracts.Runner,
+) (map[string]string, error) {
+	if pool.Name != standardresources.PoolAMD64 || pool.State != contracts.RunnerPoolStateReady ||
+		pool.ReadyRunnerCount < 1 {
+		return nil, errors.New("SecondBox installer qualification RunnerPool is not ready")
 	}
-	if stdout.tooLong {
-		return "", false, errors.New("SecondBox installer retained smoke Sandbox response exceeded the bounded output limit")
+	evidence, ready := installedRunnerReadinessEvidence(plan, []contracts.Runner{runner})
+	if !ready {
+		return nil, errors.New("SecondBox installer qualification Runner is not ready")
 	}
-	var page contracts.SandboxPage
-	if err := json.Unmarshal(stdout.Bytes(), &page); err != nil {
-		return "", false, fmt.Errorf("SecondBox installer decode retained smoke Sandbox: %w", err)
-	}
-	return installedSmokeSandboxID(page, sandboxName)
-}
-
-func installedSmokeSandboxID(page contracts.SandboxPage, sandboxName string) (string, bool, error) {
-	identifier := ""
-	for _, sandbox := range page.Items {
-		if sandbox.DeletedAt != nil || sandbox.State == "deleted" || sandbox.Metadata[contracts.SandboxNameMetadataKey] != sandboxName {
-			continue
-		}
-		if identifier != "" {
-			return "", false, errors.New("SecondBox installer retained smoke Sandbox name resolved to multiple live Sandboxes")
-		}
-		identifier = sandbox.ID
-	}
-	if identifier == "" {
-		return "", false, nil
-	}
-	if !regexp.MustCompile(`^sbx_[A-Za-z0-9_-]{24}$`).MatchString(identifier) {
-		return "", false, errors.New("SecondBox installer retained smoke Sandbox returned an invalid public identity")
-	}
-	return identifier, true, nil
+	evidence["qualification"] = "authenticated-runner-readiness"
+	evidence["runnerPoolState"] = pool.State
+	evidence["runnerPoolReadyRunners"] = strconv.FormatInt(pool.ReadyRunnerCount, 10)
+	return evidence, nil
 }
 
 func installedCLICommand(ctx context.Context, plan install.InstallPlan, arguments ...string) (*exec.Cmd, *boundedCommandBuffer, *boundedCommandBuffer) {
@@ -714,21 +696,13 @@ func installerCommandEnvironment(configPath string) []string {
 func writeInstallerSuccess(renderer cliui.Renderer, plan install.InstallPlan, receipt install.InstallReceipt) error {
 	pairs := []cliui.Pair{{Key: "Release", Value: plan.Release.Version}, {Key: "Manifest", Value: installerPlannedPath(plan, "manifest")}, {Key: "Workspace", Value: plan.Storage.WorkspacePath}, {Key: "Generated authority", Value: installerPlannedPath(plan, "secrets")}, {Key: "Runner logs", Value: installerPlannedPath(plan, "logs")}, {Key: "Installed binaries", Value: installerPlannedPath(plan, "binary-directory")}, {Key: "CLI configuration", Value: plan.CLI.ConfigPath}, {Key: "Receipt", Value: filepath.Join(installerPlannedPath(plan, "deployment"), "install-receipt.json")}}
 	for _, record := range receipt.CompletedStages {
-		if record.Stage == install.StageSmokeExecution {
-			if value := record.Evidence["sandboxId"]; value != "" {
-				pairs = append(pairs, cliui.Pair{Key: "First Sandbox", Value: value})
-			}
-			if value := record.Evidence["sandboxName"]; value != "" {
-				pairs = append(pairs, cliui.Pair{Key: "Sandbox name", Value: value})
-			}
-		}
 		if record.Stage == install.StageReadiness {
 			if value := record.Evidence["runnerId"]; value != "" {
 				pairs = append(pairs, cliui.Pair{Key: "Runner", Value: value})
 			}
 		}
 	}
-	return renderer.WriteSummary(cliui.Summary{Title: "SecondBox single-host installation complete", Status: cliui.StatusComplete, Pairs: pairs, Next: "Health: secondbox whoami && secondbox runners list\nRun: secondbox run durable-coding -- python3 -c 'print(\"hello from a microVM\")'\nRetained smoke Sandbox: secondbox exec installer-smoke-" + strings.TrimPrefix(plan.OperationID, "install_") + " -- python3 -c 'print(\"hello again\")'\nSupport: secondbox-deploy install --support " + installerPlannedPath(plan, "deployment") + " --output /secure/path/secondbox-installer-support.tar.gz\nUninstall: secondbox-deploy uninstall " + installerPlannedPath(plan, "deployment") + "\nResume: secondbox-deploy install --resume " + installerPlannedPath(plan, "deployment")})
+	return renderer.WriteSummary(cliui.Summary{Title: "SecondBox single-host installation complete", Status: cliui.StatusComplete, Pairs: pairs, Next: "Health: secondbox whoami && secondbox runners list\nBootstrap an explicit Tenant and Subject before creating a Sandbox.\nSupport: secondbox-deploy install --support " + installerPlannedPath(plan, "deployment") + " --output /secure/path/secondbox-installer-support.tar.gz\nUninstall: secondbox-deploy uninstall " + installerPlannedPath(plan, "deployment") + "\nResume: secondbox-deploy install --resume " + installerPlannedPath(plan, "deployment")})
 }
 
 func runInstallUninstall(ctx context.Context, arguments []string, renderer cliui.Renderer) error {

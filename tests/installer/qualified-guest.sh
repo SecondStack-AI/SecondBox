@@ -267,6 +267,42 @@ jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerStat
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "smoke_execution") | .evidence.output == "hello from a microVM" and .evidence.exitStatus == "0"' "$receipt" >/dev/null
 sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
+
+clean_install_root="$qualification_root/clean-install-$mode"
+mkdir -p "$clean_install_root"
+platform_flow_config="$clean_install_root/platform.json"
+controller_flow_config="$clean_install_root/controller.json"
+application_flow_config="$clean_install_root/application.json"
+platform_token_path="$(jq -er '.secretTargets[] | select(.category == "platform-authority") | .path' "$plan")"
+platform_token="$(tr -d '\n' <"$platform_token_path")"
+api_address="$(jq -er .network.apiAddress "$plan")"
+flow_tenant="qualified-$mode"
+flow_subject="qualified-subject"
+flow_expiry="$(date -u -d '+1 hour' '+%Y-%m-%dT%H:%M:%SZ')"
+
+SECONDBOX_CONFIG="$platform_flow_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$platform_token" \
+  "$cli_binary" --output json platform login >/dev/null
+jq -n --arg ref "$flow_tenant" '{ref:$ref,allowedProfileGrants:["durable-coding"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle"],aggregateQuota:{maxSandboxes:1,maxActiveInstances:1,maxCpuMillis:2000,maxMemoryBytes:2147483648,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:2,maxActiveSubjects:1,maxApplicationAuthorities:1},expiryPolicy:{maximumSubjectLifetimeSeconds:3600,maximumAuthorityLifetimeSeconds:3600},metadata:{qualification:"source-free-clean-install"}}' >"$clean_install_root/tenant.json"
+SECONDBOX_CONFIG="$platform_flow_config" "$cli_binary" --output json tenant create \
+  --file "$clean_install_root/tenant.json" --idempotency-key "qualified-tenant-$mode" >/dev/null
+jq -n --arg expiresAt "$flow_expiry" '{expiresAt:$expiresAt,metadata:{qualification:"source-free-clean-install"}}' >"$clean_install_root/controller.json"
+controller_flow_response="$(SECONDBOX_CONFIG="$platform_flow_config" "$cli_binary" --output json tenant controller-authority create \
+  "$flow_tenant" --file "$clean_install_root/controller.json" --idempotency-key "qualified-controller-$mode")"
+controller_flow_token="$(jq -er .bearerToken <<<"$controller_flow_response")"
+SECONDBOX_CONFIG="$controller_flow_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$controller_flow_token" \
+  "$cli_binary" --output json controller login >/dev/null
+jq -n --arg ref "$flow_subject" '{ref:$ref,quota:{maxSandboxes:1,maxActiveInstances:1,maxCpuMillis:2000,maxMemoryBytes:2147483648,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:2},metadata:{qualification:"source-free-clean-install"}}' >"$clean_install_root/subject.json"
+SECONDBOX_CONFIG="$controller_flow_config" "$cli_binary" --output json subject create \
+  --file "$clean_install_root/subject.json" --idempotency-key "qualified-subject-$mode" >/dev/null
+jq -n --arg subjectRef "$flow_subject" --arg expiresAt "$flow_expiry" '{subjectRef:$subjectRef,scopes:["sandbox:read","sandbox:lifecycle"],profileGrants:["durable-coding"],expiresAt:$expiresAt,metadata:{qualification:"source-free-clean-install"}}' >"$clean_install_root/application.json"
+application_flow_response="$(SECONDBOX_CONFIG="$controller_flow_config" "$cli_binary" --output json application-authority create \
+  --file "$clean_install_root/application.json" --idempotency-key "qualified-application-$mode")"
+application_flow_token="$(jq -er .bearerToken <<<"$application_flow_response")"
+SECONDBOX_CONFIG="$application_flow_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$application_flow_token" \
+  SECONDBOX_TENANT_REF="$flow_tenant" SECONDBOX_SUBJECT_REF="$flow_subject" \
+  "$cli_binary" --output json application login >/dev/null
+SECONDBOX_CONFIG="$application_flow_config" "$cli_binary" --output json sandboxes list --query limit=1 | jq -e '.items | type == "array"' >/dev/null
+
 expected_runner_id="runner-${operation_id#install_}"
 live_runner_state=''
 for _ in $(seq 1 300); do
@@ -347,7 +383,7 @@ done
 [[ -z "$(docker network ls -q --filter "label=com.docker.compose.project=$compose_project")" ]]
 [[ -f "$operation/install-plan.json" && -f "$receipt" ]]
 
-common=(clean_host read_only_preflight bootstrap_checksum guided_install reboot_recovery mount_recovery compose_ready runner_ready cli_login hello_microvm stage_interrupt_resume verified_bundle_not_reextracted uninstall_workspace_preserved resume_same_sandbox_lineage purge_exact_resources purge_neighbor_preserved purge_foreign_mount_refused)
+common=(clean_host read_only_preflight bootstrap_checksum guided_install reboot_recovery mount_recovery compose_ready runner_ready cli_login clean_install_delegated_workflow hello_microvm stage_interrupt_resume verified_bundle_not_reextracted uninstall_workspace_preserved resume_same_sandbox_lineage purge_exact_resources purge_neighbor_preserved purge_foreign_mount_refused)
 if [[ "$mode" == existing_reflink_filesystem ]]; then
   common+=(existing_reflink_isolation unsafe_filesystem_refusals fresh_existing_reflink_install)
 elif [[ "$mode" == existing_reflink_update ]]; then

@@ -22,6 +22,13 @@ type StagedSingleHostUpdate struct {
 }
 
 func ValidateSingleHostUpdateSource(plan install.InstallPlan, release releasecontract.ArtifactManifest, releaseBytes []byte, artifact install.VerifiedArtifact) error {
+	comparison, err := releasecontract.CompareVersions(release.Version, cleanInstallBoundaryVersion)
+	if err != nil {
+		return err
+	}
+	if release.Version != "0.0.0-development" && comparison < 0 {
+		return cleanInstallBoundaryError("installed deployment predates v" + cleanInstallBoundaryVersion)
+	}
 	if err := release.Validate(); err != nil {
 		return err
 	}
@@ -96,7 +103,7 @@ func singleHostUpdateContents(plan install.InstallPlan, update install.UpdateRec
 	catalogPath := installPath(plan, "signed-asset-catalog")
 	releasePath := installPath(plan, "release-artifact-manifest")
 	pkiPath := installPath(plan, "runner-pki")
-	manifest, err := singleHostManifest(plan, verified.Manifest, artifact.SigningKeyID, runnerID, installPath(plan, "runner-identity"), relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTarget("application-authority"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
+	manifest, err := singleHostManifest(plan, verified.Manifest, artifact.SigningKeyID, runnerID, installPath(plan, "runner-identity"), relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
 	if err != nil {
 		return nil, nil, err
 	}

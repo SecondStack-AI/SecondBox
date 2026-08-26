@@ -77,6 +77,33 @@ func TestSecondBoxClientSendsGeneratedOperation(t *testing.T) {
 	}
 }
 
+func TestSecondBoxClientPreservesEncodedOwnershipReferenceSegments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/tenants/tenant/west:blue:suspend" {
+			t.Errorf("request path = %q", request.URL.Path)
+		}
+		if request.URL.EscapedPath() != "/v1/tenants/tenant%2Fwest:blue:suspend" {
+			t.Errorf("escaped request path = %q", request.URL.EscapedPath())
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(response, `{}`)
+	}))
+	defer server.Close()
+
+	client, err := NewSecondBoxClient(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(t.Context(), OperationMetadata{
+		OperationID: "SuspendTenant", Method: http.MethodPost,
+		PathTemplate: "/v1/tenants/{tenantRef}:suspend",
+	}, RequestOptions{PathParameters: map[string]string{"tenantRef": "tenant/west:blue"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+}
+
 type openAPIOperationExpectation struct {
 	Method              string
 	Path                string

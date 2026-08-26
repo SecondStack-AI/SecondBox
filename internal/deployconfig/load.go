@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -40,13 +39,15 @@ const DefaultComposeProjectName = "secondbox"
 const (
 	linuxUnixSocketPathLimit      = 108
 	maxFirecrackerInstanceIDBytes = 42
+	cleanInstallBoundaryVersion   = "0.6.0"
 )
 
 var (
-	artifactKeyPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	opaqueRunnerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	composeProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
-	configValidationMu    sync.Mutex
+	artifactKeyPattern            = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	opaqueRunnerIDPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	composeProjectPattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	retiredApplicationAuthorities = strings.Join([]string{"application", "authorities", "file"}, "_")
+	configValidationMu            sync.Mutex
 )
 
 func ReadManifest(path string) (ManifestV1, error) {
@@ -65,6 +66,9 @@ func ReadManifest(path string) (ManifestV1, error) {
 	if err != nil {
 		return ManifestV1{}, manifestError("read", err)
 	}
+	if hasRetiredApplicationAuthoritiesFile(data) {
+		return ManifestV1{}, cleanInstallBoundaryError("manifest contains applications." + retiredApplicationAuthorities)
+	}
 	decoder := toml.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var manifest ManifestV1
@@ -75,6 +79,23 @@ func ReadManifest(path string) (ManifestV1, error) {
 		return ManifestV1{}, manifestError(fmt.Sprintf("unsupported schema_version %d", manifest.SchemaVersion), nil)
 	}
 	return manifest, nil
+}
+
+func hasRetiredApplicationAuthoritiesFile(data []byte) bool {
+	var document map[string]any
+	if err := toml.Unmarshal(data, &document); err != nil {
+		return false
+	}
+	applications, ok := document["applications"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, found := applications[retiredApplicationAuthorities]
+	return found
+}
+
+func cleanInstallBoundaryError(reason string) error {
+	return manifestError("v0.6.0 clean-install boundary: "+reason+"; perform a clean reinstall; import and compatibility modes are not available", nil)
 }
 
 // Resolve validates and resolves a manifest without consulting ambient process
@@ -240,14 +261,6 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		return ResolvedDeployment{}, manifestError("applications.platform_token_file", err)
 	}
 	secretPaths["applications.platform_token_file"] = platformPath
-	authorities, authoritiesPath, err := readSecretReference(base, manifest.Applications.ApplicationAuthoritiesFile)
-	if err != nil {
-		return ResolvedDeployment{}, manifestError("applications.application_authorities_file", err)
-	}
-	var authorityValue []controlconfig.ApplicationAuthority
-	if err := json.Unmarshal([]byte(authorities), &authorityValue); err != nil {
-		return ResolvedDeployment{}, manifestError("applications.application_authorities_file must contain a JSON array", err)
-	}
 	credentials := map[string]string{
 		"applications.platform_token_file":        platformToken,
 		"runner_trust.enrollment_credential_file": credential,
@@ -255,15 +268,10 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	if databasePassword != "" {
 		credentials["database.password_file"] = databasePassword
 	}
-	for i, authority := range authorityValue {
-		credentials[fmt.Sprintf("applications.application_authorities_file[%d].token", i)] = authority.Token
-	}
 	if err := validateDistinctCredentials(credentials); err != nil {
 		return ResolvedDeployment{}, err
 	}
-	secretPaths["applications.application_authorities_file"] = authoritiesPath
 	put("SECONDBOX_PLATFORM_TOKEN", platformToken)
-	put("SECONDBOX_APPLICATION_AUTHORITIES_JSON", authorities)
 
 	addPolicyEnvironment(environment, manifest.Policy)
 	overrides, err := resolvedOverrides(manifest.Overrides)
@@ -450,10 +458,8 @@ func validateManifestShape(manifest ManifestV1) error {
 	if err := requireInt("runner_trust.certificate_lifetime_days", t.CertificateLifetimeDays, false); err != nil {
 		return err
 	}
-	for p, v := range map[string]string{"applications.platform_token_file": manifest.Applications.PlatformTokenFile, "applications.application_authorities_file": manifest.Applications.ApplicationAuthoritiesFile} {
-		if err := require(p, v); err != nil {
-			return err
-		}
+	if err := require("applications.platform_token_file", manifest.Applications.PlatformTokenFile); err != nil {
+		return err
 	}
 	if err := validatePolicy(manifest.Policy); err != nil {
 		return err
@@ -594,8 +600,8 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 	}
 	selected := map[string]bool{}
 	for _, bundle := range resources.Bundles {
-		if (bundle != standardresources.AgentCompartment && bundle != standardresources.DurableCoding) || selected[bundle] {
-			return manifestError("standard_resources.bundles must contain unique agent-compartment or durable-coding names", nil)
+		if !slices.Contains(standardresources.BundleNames(), bundle) || selected[bundle] {
+			return manifestError("standard_resources.bundles must contain unique release-owned bundle names", nil)
 		}
 		selected[bundle] = true
 	}
@@ -615,7 +621,7 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 		}
 		gateway := map[string]string{standardresources.AgentCompartment: standardresources.AgentGateway, standardresources.DurableCoding: standardresources.PlatformGateway}[pool.Bundle]
 		for runnerIndex, runner := range runners {
-			if runner.PoolID == pool.Name && !runnerGatewayNames(runner.NetworkPolicyRunnerGateways)[gateway] {
+			if gateway != "" && runner.PoolID == pool.Name && !runnerGatewayNames(runner.NetworkPolicyRunnerGateways)[gateway] {
 				return manifestError(fmt.Sprintf("runners[%d].network_policy_runner_gateways must resolve %s for selected bundle %s", runnerIndex, gateway, pool.Bundle), nil)
 			}
 		}

@@ -80,6 +80,30 @@ func TestDenyAllRejectsEveryDestination(t *testing.T) {
 	}
 }
 
+func TestCompiledPolicyAllowsDNSOnlyForDomainDestinations(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  Policy
+		allowed bool
+	}{
+		{name: "deny all", policy: Policy{Mode: ModeDenyAll}},
+		{name: "empty allow list", policy: Policy{Mode: ModeAllowList}},
+		{name: "CIDR only", policy: Policy{Mode: ModeAllowList, Destinations: []Destination{{Protocol: ProtocolHTTPS, Prefix: netip.MustParsePrefix("93.184.216.0/24"), Port: 443}}}},
+		{name: "domain", policy: Policy{Mode: ModeAllowList, Destinations: []Destination{{Protocol: ProtocolHTTPS, Domain: "example.com", Port: 443}}}, allowed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			compiled, err := Compile(test.policy, CompileOptions{MaximumPins: 64, MaximumTTL: time.Minute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := compiled.AllowsDNS(); got != test.allowed {
+				t.Fatalf("AllowsDNS = %t, want %t", got, test.allowed)
+			}
+		})
+	}
+}
+
 func TestIPPolicyRejectsMetadataSSRFAndPrivateRanges(t *testing.T) {
 	protected := []string{
 		"0.0.0.0",

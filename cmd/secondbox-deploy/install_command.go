@@ -19,6 +19,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 type guidedInstallDependencies struct {
@@ -195,7 +196,7 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 	if err != nil || retentionSeconds <= 0 {
 		return errors.New("SecondBox installer: retention form returned an invalid selection")
 	}
-	input := install.ProposalInput{OperationID: operationID, CreatedAt: dependencies.Now().UTC(), DeploymentDirectory: deploymentDirectory, BinaryDirectory: filepath.Join(home, ".local", "bin"), CLIConfigPath: filepath.Join(home, ".config", "secondbox", "config.json"), CLITenantRef: "local-tenant", CLISubjectRef: "local-operator", BackingAvailableBytes: backingAvailable, DeploymentAvailableBytes: deploymentAvailable, Release: release, StorageChoice: options[selectedIndex].Choice, ExistingMountpoint: options[selectedIndex].Mountpoint, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: retentionSeconds}
+	input := install.ProposalInput{OperationID: operationID, CreatedAt: dependencies.Now().UTC(), DeploymentDirectory: deploymentDirectory, BinaryDirectory: filepath.Join(home, ".local", "bin"), CLIConfigPath: filepath.Join(home, ".config", "secondbox", "config.json"), BackingAvailableBytes: backingAvailable, DeploymentAvailableBytes: deploymentAvailable, Release: release, StorageChoice: options[selectedIndex].Choice, ExistingMountpoint: options[selectedIndex].Mountpoint, StandardBundles: standardresources.BundleNames(), RetentionSeconds: retentionSeconds}
 	plan, err := install.ProposePlan(facts, input)
 	if err != nil {
 		return err

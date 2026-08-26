@@ -10,11 +10,100 @@ import (
 
 type AcquireLeaseRequest = contracts.AcquireLeaseRequest
 
+type ApplicationAuthority struct {
+	CreatedAt     Timestamp                `json:"createdAt"`
+	ExpiresAt     *Timestamp               `json:"expiresAt,omitempty"`
+	ID            AuthorityID              `json:"id"`
+	Kind          ApplicationAuthorityKind `json:"kind"`
+	LookupID      TokenLookupID            `json:"lookupId"`
+	Metadata      Metadata                 `json:"metadata"`
+	ProfileGrants ProfileGrantList         `json:"profileGrants"`
+	Revision      int64                    `json:"revision"`
+	Scopes        ApplicationScopeList     `json:"scopes"`
+	State         AuthorityState           `json:"state"`
+	SubjectRef    OwnershipRef             `json:"subjectRef"`
+	TenantRef     OwnershipRef             `json:"tenantRef"`
+	UpdatedAt     Timestamp                `json:"updatedAt"`
+}
+
+type ApplicationAuthorityKind = string
+
+const (
+	ApplicationAuthorityKindApplication ApplicationAuthorityKind = "application"
+)
+
+type ApplicationAuthorityPage struct {
+	Items      []ApplicationAuthority `json:"items"`
+	NextCursor *string                `json:"nextCursor,omitempty"`
+}
+
+// ApplicationBearerToken Complete high-entropy application bearer credential returned only by a successful creation or rotation response. It cannot be recovered later.
+type ApplicationBearerToken = string
+
+type ApplicationCredentialResponse struct {
+	Authority   ApplicationAuthority   `json:"authority"`
+	BearerToken ApplicationBearerToken `json:"bearerToken"`
+}
+
+type ApplicationScope = string
+
+const (
+	ApplicationScopeSandboxRead        ApplicationScope = "sandbox:read"
+	ApplicationScopeSandboxLifecycle   ApplicationScope = "sandbox:lifecycle"
+	ApplicationScopeSandboxExec        ApplicationScope = "sandbox:exec"
+	ApplicationScopeSandboxFiles       ApplicationScope = "sandbox:files"
+	ApplicationScopeSandboxPorts       ApplicationScope = "sandbox:ports"
+	ApplicationScopeSandboxPortsDirect ApplicationScope = "sandbox:ports:direct"
+)
+
+type ApplicationScopeList = []ApplicationScope
+
 type ArgvCommand struct {
 	Arguments  []string `json:"arguments"`
 	Executable string   `json:"executable"`
 	Mode       string   `json:"mode"`
 }
+
+// AuditAttribution Attribution recorded for every management mutation and denial. Credential bearer and verifier material is never recorded.
+type AuditAttribution struct {
+	ActorAuthorityID    AuthorityID              `json:"actorAuthorityId"`
+	ActorAuthorityKind  AuthorityKind            `json:"actorAuthorityKind"`
+	CorrelationMetadata AuditCorrelationMetadata `json:"correlationMetadata"`
+	Operation           string                   `json:"operation"`
+	Result              AuditResult              `json:"result"`
+	SubjectRef          *OwnershipRef            `json:"subjectRef,omitempty"`
+	TenantRef           OwnershipRef             `json:"tenantRef"`
+}
+
+// AuditCorrelationMetadata Bounded external correlation metadata. Bearer tokens, verifiers, and other credential material are forbidden.
+type AuditCorrelationMetadata = map[string]string
+
+type AuditResult = string
+
+const (
+	AuditResultSucceeded AuditResult = "succeeded"
+	AuditResultDenied    AuditResult = "denied"
+	AuditResultFailed    AuditResult = "failed"
+)
+
+type AuthorityID = string
+
+// AuthorityKind The fixed authority hierarchy. Kinds cannot be selected or widened by a credential request.
+type AuthorityKind = string
+
+const (
+	AuthorityKindPlatform         AuthorityKind = "platform"
+	AuthorityKindTenantController AuthorityKind = "tenant_controller"
+	AuthorityKindApplication      AuthorityKind = "application"
+)
+
+type AuthorityState = string
+
+const (
+	AuthorityStateActive  AuthorityState = "active"
+	AuthorityStateExpired AuthorityState = "expired"
+	AuthorityStateRevoked AuthorityState = "revoked"
+)
 
 type BootStage = string
 
@@ -53,6 +142,15 @@ type Command struct {
 
 type CorrelationID = string
 
+// CreateApplicationAuthorityRequest Creates only an application authority in the authenticated tenant. Kind and tenant cannot be supplied, and scopes and Profile grants must be subsets of the tenant ceiling.
+type CreateApplicationAuthorityRequest struct {
+	ExpiresAt     Timestamp            `json:"expiresAt"`
+	Metadata      Metadata             `json:"metadata"`
+	ProfileGrants ProfileGrantList     `json:"profileGrants"`
+	Scopes        ApplicationScopeList `json:"scopes"`
+	SubjectRef    OwnershipRef         `json:"subjectRef"`
+}
+
 type CreateDirectoryRequest struct {
 	Path      WorkspacePath `json:"path"`
 	Recursive bool          `json:"recursive"`
@@ -71,6 +169,29 @@ type CreateSandboxRequest = contracts.CreateSandboxRequest
 
 type CreateSnapshotRequest = contracts.CreateSnapshotRequest
 
+type CreateSubjectRequest struct {
+	ExpiresAt *Timestamp   `json:"expiresAt,omitempty"`
+	Metadata  Metadata     `json:"metadata"`
+	Quota     SubjectQuota `json:"quota"`
+	Ref       OwnershipRef `json:"ref"`
+}
+
+// CreateTenantControllerAuthorityRequest The platform selects only metadata and expiry; the authority kind, tenant binding, and code-owned management grant cannot be caller-selected.
+type CreateTenantControllerAuthorityRequest struct {
+	ExpiresAt Timestamp `json:"expiresAt"`
+	Metadata  Metadata  `json:"metadata"`
+}
+
+type CreateTenantRequest struct {
+	AggregateQuota           TenantQuota          `json:"aggregateQuota"`
+	AllowedApplicationScopes ApplicationScopeList `json:"allowedApplicationScopes"`
+	AllowedProfileGrants     ProfileGrantList     `json:"allowedProfileGrants"`
+	ExpiresAt                *Timestamp           `json:"expiresAt,omitempty"`
+	ExpiryPolicy             TenantExpiryPolicy   `json:"expiryPolicy"`
+	Metadata                 Metadata             `json:"metadata"`
+	Ref                      OwnershipRef         `json:"ref"`
+}
+
 type CreateTerminalRequest struct {
 	Columns              int            `json:"columns"`
 	Command              Command        `json:"command"`
@@ -82,6 +203,13 @@ type CreateTerminalRequest struct {
 }
 
 type DeploymentTimingSummary = contracts.DeploymentTimingSummary
+
+type DeploymentUsage struct {
+	NextCursor *string                `json:"nextCursor,omitempty"`
+	ObservedAt Timestamp              `json:"observedAt"`
+	Tenants    []TenantAggregateUsage `json:"tenants"`
+	Usage      TenantQuotaUsage       `json:"usage"`
+}
 
 type DirectoryListing struct {
 	Entries []FileStat    `json:"entries"`
@@ -302,6 +430,7 @@ const (
 	OperationKindSnapshotCreate  OperationKind = "snapshot_create"
 	OperationKindSnapshotDelete  OperationKind = "snapshot_delete"
 	OperationKindSnapshotRestore OperationKind = "snapshot_restore"
+	OperationKindSubjectCleanup  OperationKind = "subject_cleanup"
 	OperationKindCancelExec      OperationKind = "cancel_exec"
 	OperationKindCancelTerminal  OperationKind = "cancel_terminal"
 )
@@ -361,10 +490,18 @@ const (
 	ProblemCodeInvalidRequest                       ProblemCode = "invalid_request"
 	ProblemCodeAuthenticationFailed                 ProblemCode = "authentication_failed"
 	ProblemCodeAuthorizationFailed                  ProblemCode = "authorization_failed"
+	ProblemCodeAuthorityKindMismatch                ProblemCode = "authority_kind_mismatch"
+	ProblemCodeManagementUnavailable                ProblemCode = "management_unavailable"
+	ProblemCodeCredentialResponseUnavailable        ProblemCode = "credential_response_unavailable"
 	ProblemCodeNotFound                             ProblemCode = "not_found"
 	ProblemCodeIdempotencyConflict                  ProblemCode = "idempotency_conflict"
 	ProblemCodePreconditionFailed                   ProblemCode = "precondition_failed"
 	ProblemCodeStateConflict                        ProblemCode = "state_conflict"
+	ProblemCodeInvalidLifecycleTransition           ProblemCode = "invalid_lifecycle_transition"
+	ProblemCodeResourceExpired                      ProblemCode = "resource_expired"
+	ProblemCodeTenantSuspended                      ProblemCode = "tenant_suspended"
+	ProblemCodeGrantEscalationDenied                ProblemCode = "grant_escalation_denied"
+	ProblemCodeCleanupStateConflict                 ProblemCode = "cleanup_state_conflict"
 	ProblemCodeWorkspaceMutationConflict            ProblemCode = "workspace_mutation_conflict"
 	ProblemCodeGenerationFenced                     ProblemCode = "generation_fenced"
 	ProblemCodeLeaseFenced                          ProblemCode = "lease_fenced"
@@ -391,6 +528,8 @@ type ProblemDetail struct {
 
 type Profile = contracts.Profile
 
+type ProfileGrantList = []ProfileName
+
 type ProfileName = string
 
 type ProfilePage struct {
@@ -413,6 +552,16 @@ const (
 	ProfileStateEnabled  ProfileState = "enabled"
 	ProfileStateDisabled ProfileState = "disabled"
 )
+
+type QuotaUsage struct {
+	ActiveInstances      int64 `json:"activeInstances"`
+	ConcurrentOperations int64 `json:"concurrentOperations"`
+	CPUMillis            int64 `json:"cpuMillis"`
+	MemoryBytes          int64 `json:"memoryBytes"`
+	PortSessions         int64 `json:"portSessions"`
+	Sandboxes            int64 `json:"sandboxes"`
+	Snapshots            int64 `json:"snapshots"`
+}
 
 type RelocateSandboxRequest struct {
 	RunnerPool     *ProfileName `json:"runnerPool,omitempty"`
@@ -583,6 +732,169 @@ type StreamingExecRequest struct {
 
 type StringMap = map[string]string
 
+type Subject struct {
+	CleanupState SubjectCleanupState `json:"cleanupState"`
+	CreatedAt    Timestamp           `json:"createdAt"`
+	ExpiresAt    *Timestamp          `json:"expiresAt,omitempty"`
+	Metadata     Metadata            `json:"metadata"`
+	Quota        SubjectQuota        `json:"quota"`
+	Ref          OwnershipRef        `json:"ref"`
+	Revision     int64               `json:"revision"`
+	State        SubjectState        `json:"state"`
+	TenantRef    OwnershipRef        `json:"tenantRef"`
+	UpdatedAt    Timestamp           `json:"updatedAt"`
+}
+
+type SubjectCleanupState = string
+
+const (
+	SubjectCleanupStateNone      SubjectCleanupState = "none"
+	SubjectCleanupStatePending   SubjectCleanupState = "pending"
+	SubjectCleanupStateRunning   SubjectCleanupState = "running"
+	SubjectCleanupStateSucceeded SubjectCleanupState = "succeeded"
+	SubjectCleanupStateFailed    SubjectCleanupState = "failed"
+)
+
+type SubjectPage struct {
+	Items      []Subject `json:"items"`
+	NextCursor *string   `json:"nextCursor,omitempty"`
+}
+
+type SubjectQuota struct {
+	MaxActiveInstances      int64 `json:"maxActiveInstances"`
+	MaxConcurrentOperations int64 `json:"maxConcurrentOperations"`
+	MaxCpuMillis            int64 `json:"maxCpuMillis"`
+	MaxMemoryBytes          int64 `json:"maxMemoryBytes"`
+	MaxPortSessions         int64 `json:"maxPortSessions"`
+	MaxSandboxes            int64 `json:"maxSandboxes"`
+	MaxSnapshots            int64 `json:"maxSnapshots"`
+}
+
+type SubjectState = string
+
+const (
+	SubjectStateActive  SubjectState = "active"
+	SubjectStateClosing SubjectState = "closing"
+	SubjectStateClosed  SubjectState = "closed"
+	SubjectStateExpired SubjectState = "expired"
+)
+
+type SubjectUsage struct {
+	Limits     SubjectQuota `json:"limits"`
+	SubjectRef OwnershipRef `json:"subjectRef"`
+	Usage      QuotaUsage   `json:"usage"`
+}
+
+type Tenant struct {
+	AggregateQuota           TenantQuota          `json:"aggregateQuota"`
+	AllowedApplicationScopes ApplicationScopeList `json:"allowedApplicationScopes"`
+	AllowedProfileGrants     ProfileGrantList     `json:"allowedProfileGrants"`
+	CreatedAt                Timestamp            `json:"createdAt"`
+	ExpiresAt                *Timestamp           `json:"expiresAt,omitempty"`
+	ExpiryPolicy             TenantExpiryPolicy   `json:"expiryPolicy"`
+	Metadata                 Metadata             `json:"metadata"`
+	Ref                      OwnershipRef         `json:"ref"`
+	Revision                 int64                `json:"revision"`
+	State                    TenantState          `json:"state"`
+	UpdatedAt                Timestamp            `json:"updatedAt"`
+}
+
+type TenantAggregateUsage struct {
+	Limits    TenantQuota      `json:"limits"`
+	TenantRef OwnershipRef     `json:"tenantRef"`
+	Usage     TenantQuotaUsage `json:"usage"`
+}
+
+type TenantControllerAuthority struct {
+	CreatedAt Timestamp                     `json:"createdAt"`
+	ExpiresAt *Timestamp                    `json:"expiresAt,omitempty"`
+	Grant     TenantControllerGrant         `json:"grant"`
+	ID        AuthorityID                   `json:"id"`
+	Kind      TenantControllerAuthorityKind `json:"kind"`
+	LookupID  TokenLookupID                 `json:"lookupId"`
+	Metadata  Metadata                      `json:"metadata"`
+	Revision  int64                         `json:"revision"`
+	State     AuthorityState                `json:"state"`
+	TenantRef OwnershipRef                  `json:"tenantRef"`
+	UpdatedAt Timestamp                     `json:"updatedAt"`
+}
+
+type TenantControllerAuthorityKind = string
+
+const (
+	TenantControllerAuthorityKindTenantController TenantControllerAuthorityKind = "tenant_controller"
+)
+
+type TenantControllerAuthorityPage struct {
+	Items      []TenantControllerAuthority `json:"items"`
+	NextCursor *string                     `json:"nextCursor,omitempty"`
+}
+
+// TenantControllerBearerToken Complete high-entropy tenant-controller bearer credential returned only by a successful creation or rotation response. It cannot be recovered later.
+type TenantControllerBearerToken = string
+
+type TenantControllerCredentialResponse struct {
+	Authority   TenantControllerAuthority   `json:"authority"`
+	BearerToken TenantControllerBearerToken `json:"bearerToken"`
+}
+
+type TenantControllerGrant = string
+
+const (
+	TenantControllerGrantTenantManagement TenantControllerGrant = "tenant_management"
+)
+
+type TenantExpiryPolicy struct {
+	MaximumAuthorityLifetimeSeconds int64 `json:"maximumAuthorityLifetimeSeconds"`
+	MaximumSubjectLifetimeSeconds   int64 `json:"maximumSubjectLifetimeSeconds"`
+}
+
+type TenantPage struct {
+	Items      []Tenant `json:"items"`
+	NextCursor *string  `json:"nextCursor,omitempty"`
+}
+
+type TenantQuota struct {
+	MaxActiveInstances        int64 `json:"maxActiveInstances"`
+	MaxActiveSubjects         int64 `json:"maxActiveSubjects"`
+	MaxApplicationAuthorities int64 `json:"maxApplicationAuthorities"`
+	MaxConcurrentOperations   int64 `json:"maxConcurrentOperations"`
+	MaxCpuMillis              int64 `json:"maxCpuMillis"`
+	MaxMemoryBytes            int64 `json:"maxMemoryBytes"`
+	MaxPortSessions           int64 `json:"maxPortSessions"`
+	MaxSandboxes              int64 `json:"maxSandboxes"`
+	MaxSnapshots              int64 `json:"maxSnapshots"`
+}
+
+type TenantQuotaUsage struct {
+	ActiveInstances        int64 `json:"activeInstances"`
+	ActiveSubjects         int64 `json:"activeSubjects"`
+	ApplicationAuthorities int64 `json:"applicationAuthorities"`
+	ConcurrentOperations   int64 `json:"concurrentOperations"`
+	CPUMillis              int64 `json:"cpuMillis"`
+	MemoryBytes            int64 `json:"memoryBytes"`
+	PortSessions           int64 `json:"portSessions"`
+	Sandboxes              int64 `json:"sandboxes"`
+	Snapshots              int64 `json:"snapshots"`
+}
+
+type TenantState = string
+
+const (
+	TenantStateActive    TenantState = "active"
+	TenantStateSuspended TenantState = "suspended"
+	TenantStateExpired   TenantState = "expired"
+)
+
+type TenantUsage struct {
+	Limits     TenantQuota      `json:"limits"`
+	NextCursor *string          `json:"nextCursor,omitempty"`
+	ObservedAt Timestamp        `json:"observedAt"`
+	Subjects   []SubjectUsage   `json:"subjects"`
+	TenantRef  OwnershipRef     `json:"tenantRef"`
+	Usage      TenantQuotaUsage `json:"usage"`
+}
+
 type TerminalAttachedFrame struct {
 	NextClientSequence *int64 `json:"nextClientSequence,omitempty"`
 	Type               string `json:"type"`
@@ -631,6 +943,9 @@ type TerminalSession struct {
 
 type Timestamp = time.Time
 
+// TokenLookupID Public non-secret token lookup identifier. It is safe to return from read and list operations and cannot authenticate by itself.
+type TokenLookupID = string
+
 type TouchResult struct {
 	Generation     int64     `json:"generation"`
 	LastActivityAt Timestamp `json:"lastActivityAt"`
@@ -646,6 +961,10 @@ type UpdateRunnerPoolRequest struct {
 
 type UpdateSandboxMetadataRequest struct {
 	Metadata Metadata `json:"metadata"`
+}
+
+type UpdateSubjectQuotaRequest struct {
+	Quota SubjectQuota `json:"quota"`
 }
 
 type WaitSandboxRequest struct {

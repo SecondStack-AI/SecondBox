@@ -26,7 +26,7 @@ import (
 func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *testing.T) {
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,11 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 		},
 		Smoke: func(context.Context, install.InstallPlan) (map[string]string, error) {
 			calls = append(calls, "smoke")
-			return map[string]string{"output": "hello from a microVM"}, nil
+			return map[string]string{
+				"qualification": "authenticated-runner-readiness",
+				"runnerId":      "runner-0123456789abcdef",
+				"runnerPool":    standardresources.PoolAMD64,
+			}, nil
 		},
 	}
 	var output, diagnostic bytes.Buffer
@@ -131,6 +135,11 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	}
 	if final.Status != install.OperationSucceeded || len(final.CompletedStages) != len(install.StageSequence) {
 		t.Fatalf("final receipt = status %s stages %#v", final.Status, final.CompletedStages)
+	}
+	smokeEvidence := final.CompletedStages[len(final.CompletedStages)-1].Evidence
+	if smokeEvidence["qualification"] != "authenticated-runner-readiness" ||
+		smokeEvidence["runnerId"] != "runner-0123456789abcdef" {
+		t.Fatalf("installation qualification receipt evidence = %#v", smokeEvidence)
 	}
 	wantCalls := []string{"host-apply", "revalidate", "verify-release", "postconditions", "materialize", "initialize", "enroll", "compose-prepare", "compose-up", "login", "readiness", "smoke"}
 	if strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
@@ -176,19 +185,29 @@ func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *t
 	}
 }
 
-func TestInstalledSmokeSandboxIDAdoptsOnlyOneExactLiveName(t *testing.T) {
-	name := "installer-smoke-0123456789abcdef"
-	id := "sbx_0123456789abcdefghijklmn"
-	page := contracts.SandboxPage{Items: []contracts.Sandbox{
-		{ID: "sbx_deleted000000000000000000", State: "deleted", Metadata: map[string]string{contracts.SandboxNameMetadataKey: name}},
-		{ID: id, State: "ready", Metadata: map[string]string{contracts.SandboxNameMetadataKey: name}},
-	}}
-	if got, found, err := installedSmokeSandboxID(page, name); err != nil || !found || got != id {
-		t.Fatalf("retained smoke lookup = %q, %t, %v", got, found, err)
+func TestInstalledSmokeRequiresAuthenticatedRunnerPoolAndRunnerReadiness(t *testing.T) {
+	plan := install.InstallPlan{OperationID: "install_0123456789abcdef"}
+	pool := contracts.RunnerPool{Name: standardresources.PoolAMD64, State: contracts.RunnerPoolStateReady, ReadyRunnerCount: 1}
+	runner := contracts.Runner{
+		ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared",
+		Architectures: []string{standardresources.ArchitectureAMD64},
+		Capabilities:  []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"},
+		Capacity: map[string]int64{
+			"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes,
+			"DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1,
+			"Operations": install.DurableCodingConcurrentOperations,
+		},
 	}
-	page.Items = append(page.Items, contracts.Sandbox{ID: "sbx_abcdefghijklmnopqrstuvwxyz", State: "ready", Metadata: map[string]string{contracts.SandboxNameMetadataKey: name}})
-	if _, _, err := installedSmokeSandboxID(page, name); err == nil {
-		t.Fatal("duplicate live retained smoke Sandbox names were accepted")
+	evidence, err := installedSmokeEvidence(plan, pool, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence["qualification"] != "authenticated-runner-readiness" {
+		t.Fatalf("qualification evidence = %#v", evidence)
+	}
+	pool.ReadyRunnerCount = 0
+	if _, err := installedSmokeEvidence(plan, pool, runner); err == nil {
+		t.Fatal("unready RunnerPool was accepted")
 	}
 }
 
@@ -252,7 +271,7 @@ func activeUpdateOperation(t *testing.T) (string, install.InstallPlan) {
 	t.Helper()
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +303,7 @@ func activeUpdateOperation(t *testing.T) (string, install.InstallPlan) {
 func TestOrdinaryUninstallStopsComposeAndPreservesDurableResources(t *testing.T) {
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +514,7 @@ func failedComposeRecoveryOperationAt(t *testing.T, completed, failure install.S
 	t.Helper()
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +619,7 @@ func TestInstallResumeFailureInjectionStopsAtEveryOrchestrationBoundary(t *testi
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			operation := filepath.Join(t.TempDir(), "operation")
-			plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+			plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 			if err != nil {
 				t.Fatal(err)
 			}

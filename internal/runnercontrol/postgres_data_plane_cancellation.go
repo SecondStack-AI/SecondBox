@@ -7,6 +7,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )
@@ -156,23 +157,26 @@ func (store *PostgresDataPlaneStore) sweepDataPlaneSessions(
 	}
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
-		SELECT session.id FROM secondbox.data_plane_sessions AS session
+		SELECT session.id,session.tenant_ref,session.subject_ref
+		FROM secondbox.data_plane_sessions AS session
 		WHERE session.state IN ('completed','failed','cancelled','expired')
 		  AND session.retain_until<=$1
 		ORDER BY session.retain_until,session.id
-		FOR UPDATE OF session SKIP LOCKED
 		LIMIT $2`, now, limit)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox retained session lookup: %w", err)
 	}
 	ids := make([]string, 0, limit)
+	var scopes []rowlock.QuotaScope
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var scope rowlock.QuotaScope
+		if err := rows.Scan(&id, &scope.TenantRef, &scope.SubjectRef); err != nil {
 			rows.Close()
 			return false, fmt.Errorf("SecondBox retained session scan: %w", err)
 		}
 		ids = append(ids, id)
+		scopes = append(scopes, scope)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -180,8 +184,13 @@ func (store *PostgresDataPlaneStore) sweepDataPlaneSessions(
 	}
 	rows.Close()
 	if len(ids) > 0 {
+		if err := rowlock.QuotaScopes(ctx, tx, scopes); err != nil {
+			return false, fmt.Errorf("SecondBox retained session quota lock: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `
-			DELETE FROM secondbox.data_plane_sessions WHERE id=ANY($1)`, ids,
+			DELETE FROM secondbox.data_plane_sessions
+			WHERE id=ANY($1) AND state IN ('completed','failed','cancelled','expired')
+			  AND retain_until<=$2`, ids, now,
 		); err != nil {
 			return false, fmt.Errorf("SecondBox retained session cleanup: %w", err)
 		}
@@ -205,6 +214,9 @@ func (store *PostgresDataPlaneStore) ExpireDataPlaneSession(
 		return DataPlaneSession{}, fmt.Errorf("SecondBox data-plane expiry transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return DataPlaneSession{}, fmt.Errorf("SecondBox data-plane expiry quota lock: %w", err)
+	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
 		tenantRef, subjectRef, sessionID))
@@ -307,6 +319,9 @@ func (store *PostgresDataPlaneStore) cancelDataPlaneSession(
 		return false, fmt.Errorf("SecondBox data-plane cancellation transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return false, fmt.Errorf("SecondBox data-plane cancellation quota lock: %w", err)
+	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
 		tenantRef, subjectRef, sessionID))

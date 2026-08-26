@@ -28,9 +28,11 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/internal/store"
+	"github.com/SecondStack-AI/SecondBox/internal/subjectcleanup"
 	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	postgresmigrations "github.com/SecondStack-AI/SecondBox/migrations/postgres"
 	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
+	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -180,6 +182,16 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer lifecycleEffects.Close()
+	subjectCleanupWorker, err := subjectcleanup.NewWorker(
+		processContext, processConfig.DatabaseURL, dataPlaneStore,
+		service.NewOpaqueID("subject-cleanup-worker"),
+		processConfig.LifecycleReconcileClaimDuration,
+		processConfig.LifecycleReconcilePollInterval,
+	)
+	if err != nil {
+		return err
+	}
+	defer subjectCleanupWorker.Close()
 	runnerServerCertificate, err := tls.LoadX509KeyPair(
 		processConfig.RunnerServerCertificatePath,
 		processConfig.RunnerServerPrivateKeyPath,
@@ -237,7 +249,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	httpHandler, err := api.NewHandler(api.HandlerConfig{
 		Service: controlPlane, Logger: logger,
 		PlatformToken:             processConfig.PlatformToken,
-		ApplicationAuthorities:    applicationAuthorities(processConfig.ApplicationAuthorities),
+		PersistedAuthorities:      controlPlaneStore,
 		MaximumDataPlaneBodyBytes: processConfig.DataPlaneMaximumSessionBytes,
 	})
 	if err != nil {
@@ -270,6 +282,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	dataPlaneErrors := make(chan error, 1)
 	sessionAccountingErrors := make(chan error, 1)
 	workListenerErrors := make(chan error, 1)
+	subjectCleanupErrors := make(chan error, 1)
 	go func() {
 		logger.Info("SecondBox listening", "address", processConfig.ListenAddress)
 		serverErrors <- server.ListenAndServe()
@@ -331,6 +344,9 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	go func() {
 		workListenerErrors <- workListener.Run(processContext)
 	}()
+	go func() {
+		subjectCleanupErrors <- runSubjectCleanupWorker(processContext, subjectCleanupWorker)
+	}()
 	var serveErr error
 	lifecycleExited := false
 	assignmentExited := false
@@ -338,6 +354,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	dataPlaneExited := false
 	sessionAccountingExited := false
 	workListenerExited := false
+	subjectCleanupExited := false
 	select {
 	case <-processContext.Done():
 	case httpServeErr := <-serverErrors:
@@ -389,6 +406,13 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			serveErr = workListenerErr
 		} else if processContext.Err() == nil {
 			serveErr = errors.New("SecondBox PostgreSQL work listener stopped unexpectedly")
+		}
+	case subjectCleanupErr := <-subjectCleanupErrors:
+		subjectCleanupExited = true
+		if subjectCleanupErr != nil {
+			serveErr = subjectCleanupErr
+		} else if processContext.Err() == nil {
+			serveErr = errors.New("SecondBox Subject cleanup worker stopped unexpectedly")
 		}
 	}
 	cancel()
@@ -454,27 +478,26 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			)
 		}
 	}
+	var subjectCleanupShutdownErr error
+	if !subjectCleanupExited {
+		select {
+		case subjectCleanupShutdownErr = <-subjectCleanupErrors:
+		case <-shutdownContext.Done():
+			subjectCleanupShutdownErr = fmt.Errorf(
+				"SecondBox Subject cleanup worker shutdown: %w", shutdownContext.Err(),
+			)
+		}
+	}
 	if err := errors.Join(
 		serveErr, httpShutdownErr, grpcShutdownErr, lifecycleShutdownErr,
 		assignmentShutdownErr, snapshotRetentionShutdownErr,
 		dataPlaneShutdownErr, workListenerShutdownErr,
 		sessionAccountingShutdownErr,
+		subjectCleanupShutdownErr,
 	); err != nil {
 		return fmt.Errorf("SecondBox coordinated server shutdown: %w", err)
 	}
 	return nil
-}
-
-func applicationAuthorities(configured []config.ApplicationAuthority) []api.ApplicationAuthority {
-	authorities := make([]api.ApplicationAuthority, 0, len(configured))
-	for _, authority := range configured {
-		authorities = append(authorities, api.ApplicationAuthority{
-			ID: authority.ID, Token: authority.Token,
-			TenantRef: authority.TenantRef, SubjectRef: authority.SubjectRef,
-			Scopes: authority.Scopes, ProfileGrants: authority.ProfileGrants,
-		})
-	}
-	return authorities
 }
 
 func runDataPlaneSweeper(
@@ -487,6 +510,9 @@ func runDataPlaneSweeper(
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
+			}
+			if retryablePostgresContention(err) {
+				continue
 			}
 			return fmt.Errorf("SecondBox data-plane sweep failed: %w", err)
 		}
@@ -516,6 +542,9 @@ func runSessionAccountingSweeper(
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
+			}
+			if retryablePostgresContention(err) {
+				continue
 			}
 			return fmt.Errorf("SecondBox session-accounting sweep failed: %w", err)
 		}
@@ -645,7 +674,7 @@ func runLifecycleReconciler(
 			// generation is the same shape: the claim lost its race with a
 			// generation advance, and the next claim observes fresh state.
 			if errors.Is(err, ports.ErrRevisionConflict) ||
-				errors.Is(err, ports.ErrSerializationContention) ||
+				retryablePostgresContention(err) ||
 				errors.Is(err, ports.ErrGenerationFenced) {
 				wakeTrigger = ports.LifecycleWakeTriggerImmediate
 				continue
@@ -678,8 +707,7 @@ func runAssignmentReconciler(
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, reconcile.ErrClaimLost) ||
-				errors.Is(err, ports.ErrSerializationContention) {
+			if errors.Is(err, reconcile.ErrClaimLost) || retryablePostgresContention(err) {
 				continue
 			}
 			return fmt.Errorf("SecondBox Assignment reconciliation failed: %w", err)
@@ -689,6 +717,33 @@ func runAssignmentReconciler(
 		}
 		if _, running := waitForWork(ctx, worker.PollInterval, wakeups); !running {
 			return nil
+		}
+	}
+}
+
+func runSubjectCleanupWorker(ctx context.Context, worker *subjectcleanup.Worker) error {
+	for {
+		found, err := worker.RunOnce(ctx, service.SystemClock())
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if retryablePostgresContention(err) {
+				continue
+			}
+			return fmt.Errorf("SecondBox Subject cleanup reconciliation failed: %w", err)
+		}
+		if found {
+			continue
+		}
+		timer := time.NewTimer(worker.PollInterval())
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
 		}
 	}
 }
@@ -724,6 +779,9 @@ func runSnapshotRetentionWorker(
 			if ctx.Err() != nil {
 				return nil
 			}
+			if retryablePostgresContention(err) {
+				continue
+			}
 			return fmt.Errorf("SecondBox Snapshot retention failed: %w", err)
 		}
 		if queued {
@@ -739,6 +797,18 @@ func runSnapshotRetentionWorker(
 		case <-timer.C:
 		}
 	}
+}
+
+// retryablePostgresContention identifies only transaction-ordering races that
+// PostgreSQL explicitly asks the caller to retry. Background workers must not
+// turn one such loser into a coordinated control-plane shutdown.
+func retryablePostgresContention(err error) bool {
+	if errors.Is(err, ports.ErrSerializationContention) {
+		return true
+	}
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) &&
+		(postgresError.Code == "40001" || postgresError.Code == "40P01")
 }
 
 func stopGRPCServer(ctx context.Context, server *grpc.Server) error {

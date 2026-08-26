@@ -296,6 +296,9 @@ func TestSupportBundleCollectionIsBoundedAndSecretAvoiding(t *testing.T) {
 	for _, forbidden := range []string{
 		"BOOTSTRAP_ADMIN_TOKEN",
 		"API_KEY_HASH_SECRET",
+		"SECONDBOX_APPLICATION_" + "AUTHORITIES_JSON",
+		"application_" + "authorities_file",
+		"application-" + "authorities.json",
 		"env >",
 		"printenv",
 	} {

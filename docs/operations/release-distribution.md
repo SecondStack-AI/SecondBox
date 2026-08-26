@@ -16,7 +16,7 @@ A SecondBox release is a SemVer Git tag plus the locally built files attached to
 | Deployment binary | `secondbox-deploy_VERSION_OS_ARCH` |
 | Guided-install bootstrap | versioned `releases/download/vVERSION/install.sh`; stable `releases/latest/download/install.sh` |
 
-The release also includes checksums, the OpenAPI document, standard resource bundles, KVM scenario qualification evidence, and an artifact manifest containing digest-pinned OCI references. `install.sh` embeds the exact release version and Linux amd64 deployment-binary digest. It downloads and verifies only that binary; all release and host verification remains in `secondbox-deploy install`.
+The release also includes checksums, the OpenAPI document, the Go module archive, the TypeScript package, an SPDX SBOM, standard resource bundles, KVM scenario and installer qualification evidence, package and OCI metadata, and an artifact manifest containing digest-pinned OCI references. Every generated identity record carries the same version and exact source commit; binaries embed both. The npm publication uses trusted-publisher provenance, while the signed microVM manifest attests its component hashes and provenance under the independently provisioned release key. There is no separate locally manufactured qualification attestation. `install.sh` embeds the exact release version and Linux amd64 deployment-binary digest. It downloads and verifies only that binary; all release and host verification remains in `secondbox-deploy install`.
 
 ## Supported platforms
 
@@ -34,10 +34,10 @@ just release-stage VERSION OUTPUT_DIR
 just release-upload VERSION OUTPUT_DIR
 ```
 
-Run the scenario suite, build the non-publishable installer candidate, point `SECONDBOX_INSTALLER_RELEASE_DIRECTORY` at that candidate, and then run installer qualification on the qualified release host. The candidate contains the exact binaries, digest-pinned images, bundles, and protocol windows but no installer-evidence claim. Installer qualification records their shared qualification-subject digest. `release-stage` refuses absent, dirty, commit-mismatched, or release-mismatched evidence and emits the final publishable manifest; `release-publish` rejects candidate manifests.
+Run the scenario suite, build the non-publishable installer candidate, point `SECONDBOX_INSTALLER_RELEASE_DIRECTORY` at that candidate, and then run installer qualification on the qualified release host. The candidate contains the exact binaries, digest-pinned images, bundles, and protocol windows but no installer-evidence claim. Installer qualification records their shared qualification-subject digest. `release-stage` refuses absent, dirty, commit-mismatched, or release-mismatched evidence and emits the final publishable manifest; scenario evidence must name `HEAD` exactly. `release-publish` rejects candidate manifests.
 
 Installer qualification also requires the repository's `scripts/installer-qualification-driver`, the explicitly pinned Ubuntu image and SHA-256 documented in [scenario qualification](scenario-qualification.md), and a dedicated existing XFS/Btrfs host directory. The driver performs all guest mutation inside uniquely named disposable libvirt resources and uses a candidate-only local release transport. It does not publish candidate images or weaken the normal installer's HTTPS and immutable-registry requirements.
 
-The installer candidate is the only pre-final phase and cannot be published. There is no separate attestation or hosted finalization phase. GitHub Actions does not rebuild or qualify the release.
+The installer candidate is the only pre-final phase and cannot be published. There is no separate qualification-attestation or hosted finalization phase. GitHub Actions does not rebuild or qualify the release; it publishes the staged bytes and supplies npm provenance.
 
 See [release operator setup](release-operator-setup.md) for one-time permissions and the exact operator commands.

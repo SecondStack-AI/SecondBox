@@ -1,6 +1,6 @@
 # External scenario qualification
 
-`just test-scenario` is the qualified black-box gate for the complete SecondBox path: public HTTP API, PostgreSQL desired state, the authenticated runner protocol, runner-local reflink Workspaces and Snapshots, and Firecracker guests on real KVM.
+`just test-scenario` is the qualified black-box gate for the complete SecondBox path: public HTTP and delegated management APIs, PostgreSQL desired state and persisted authorities, the authenticated runner protocol, runner-local reflink Workspaces and Snapshots, and Firecracker guests on real KVM.
 
 The suite never skips. It exits non-zero unless qualification is explicitly required and every host and artifact prerequisite is present. A passing `just test-compose` is not evidence for this gate: the Compose suite has no real runner or guest, while the scenario suite proves that public operations reach real compute.
 
@@ -71,11 +71,28 @@ just test-scenario
 
 Run this command directly on the qualified local host before release staging. GitHub Actions does not run the KVM suite and no self-hosted Actions runner or repository path variable is required.
 
+The harness starts with only the platform and Runner authorities. After
+readiness it creates the Tenant, tenant controller, Subject, and general
+application authority through authenticated management HTTP operations. The
+general authority has `sandbox:read`, `sandbox:lifecycle`, `sandbox:exec`,
+`sandbox:files`, and `sandbox:ports`. It creates a second, narrower application
+authority for the direct-Port test with `sandbox:read`, `sandbox:lifecycle`,
+`sandbox:ports`, and `sandbox:ports:direct`; that credential receives only the
+direct-Port Profile grant. Tokens exist only in the harness process environment
+and are not written to evidence or diagnostics.
+
+The customer-shared scenario then creates two additional Tenants with the same
+Subject and Sandbox name. It exercises tenant-scoped reads, mutation, Exec,
+File, Port, and timing diagnostics; non-enumerating cross-tenant denials;
+revocation; explicit closure; expiry; quota release; durable cleanup across a
+control-plane restart; and Runner reconnect while the other Tenant remains
+usable. The isolated/network-enabled concurrency test runs in the same suite.
+
 ## Evidence and timing budgets
 
 The harness removes `.tmp/scenario-qualification-evidence.json` when any scenario run starts. Only a complete, unfiltered `test-scenario` suite whose teardown also succeeds writes a replacement. Focused, failed, stress, and lifecycle runs leave no release qualification evidence.
 
-The JSON records schema `secondbox.release/qualification-evidence/v1`, the full source commit, whether the repository was dirty, suite name, top-level pass count, total wall-clock seconds, UTC completion time, KVM and TUN availability, and the checked workspace mount and filesystem type. `release-stage` requires the file to name its exact embedded `sourceCommit` and to record a clean repository. It stages the document as `secondbox-<version>-qualification-evidence.json` and binds its digest in the artifact manifest and `SHA256SUMS`.
+The JSON records schema `secondbox.release/qualification-evidence/v1`, the full source commit, whether the repository was dirty, suite name, top-level pass count, total wall-clock seconds, UTC completion time, KVM and TUN availability, and the checked workspace mount and filesystem type. It contains no token, Tenant, Subject, authority, Sandbox, Runner credential, or metric sample. `release-stage` requires the file to name `HEAD` exactly through its embedded `sourceCommit` and to record a clean repository. It stages the document as `secondbox-<version>-qualification-evidence.json` and binds its digest in the artifact manifest and `SHA256SUMS`.
 
 Preserve the beginning and end of the command output. A qualified run prints:
 

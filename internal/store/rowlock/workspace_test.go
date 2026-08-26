@@ -10,11 +10,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	postgresmigrations "github.com/SecondStack-AI/SecondBox/migrations/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestActiveSubjectMapsAbsentSubjectToManagementNotFound(t *testing.T) {
+	pool := openRowlockTestPool(t)
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if err := ActiveSubject(t.Context(), tx, "absent-tenant", "absent-subject", time.Now()); !errors.Is(err, ports.ErrManagementNotFound) {
+		t.Fatalf("absent Subject admission = %v", err)
+	}
+}
 
 var rowlockTestDatabaseURL string
 
@@ -119,6 +132,69 @@ func TestSandboxWorkspaceSnapshotHelpersHoldDocumentedLockOrder(t *testing.T) {
 	<-done
 }
 
+func TestQuotaLedgerPrecedesSandboxDuringLifecycleMutation(t *testing.T) {
+	pool := openRowlockTestPool(t)
+	fixture := seedRowlockFixture(t, pool, fmt.Sprintf("quota-before-sandbox-%d", time.Now().UnixNano()))
+
+	quotaBlocker, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer quotaBlocker.Rollback(t.Context())
+	if err := quotaBlocker.QueryRow(t.Context(), `
+		SELECT tenant_ref FROM secondbox.tenant_quotas
+		WHERE tenant_ref=$1 FOR UPDATE`, fixture.tenantRef,
+	).Scan(new(string)); err != nil {
+		t.Fatal(err)
+	}
+
+	mutation, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mutation.Rollback(t.Context())
+	var mutationPID int32
+	if err := mutation.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&mutationPID); err != nil {
+		t.Fatal(err)
+	}
+	mutationResult := make(chan error, 1)
+	go func() {
+		_, lockErr := SandboxWorkspaceForSubject(
+			t.Context(), mutation, fixture.tenantRef, fixture.subjectRef, fixture.sandboxID,
+		)
+		if lockErr == nil {
+			_, lockErr = mutation.Exec(t.Context(), `
+				UPDATE secondbox.sandboxes SET desired_state='running'
+				WHERE id=$1`, fixture.sandboxID)
+		}
+		mutationResult <- lockErr
+	}()
+	waitForBackendLock(t, pool, mutationPID)
+
+	probe, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sandboxID string
+	if err := probe.QueryRow(t.Context(), `
+		SELECT id FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE NOWAIT`, fixture.sandboxID,
+	).Scan(&sandboxID); err != nil {
+		if rollbackErr := probe.Rollback(t.Context()); rollbackErr != nil {
+			t.Fatalf("rollback Sandbox lock probe after query failure: %v (query: %v)", rollbackErr, err)
+		}
+		t.Fatalf("lifecycle mutation locked Sandbox before quota ledger: %v", err)
+	}
+	if err := probe.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := quotaBlocker.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-mutationResult; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSnapshotByIDReverifiesLogicalLinkageAfterLock(t *testing.T) {
 	pool := openRowlockTestPool(t)
 	fixture := seedRowlockFixture(t, pool, "linkage")
@@ -170,6 +246,15 @@ func seedRowlockFixture(t *testing.T, pool *pgxpool.Pool, suffix string) rowlock
 	}
 	now := time.Now().UTC()
 	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.tenant_quotas (
+			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
+			max_application_authorities,updated_at
+		) VALUES ($2,10,10,10000,10737418240,10,10,10,10,10,$5);
+		INSERT INTO secondbox.subject_quotas (
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
+		) VALUES ($2,$3,10,10,10000,10737418240,10,10,10,$5);
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
 			logical_capacity_bytes,generation,mutation_kind,mutation_id,

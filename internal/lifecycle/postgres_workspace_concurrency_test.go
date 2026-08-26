@@ -614,6 +614,7 @@ func openLifecyclePostgresTestDatabase(t *testing.T) string {
 		admin.Close(t.Context())
 		t.Fatal(err)
 	}
+	seedLifecycleTestQuotaLedgers(t, databaseURL)
 	t.Cleanup(func() {
 		if _, err := admin.Exec(context.Background(), "DROP DATABASE "+identifier+" WITH (FORCE)"); err != nil {
 			t.Errorf("drop lifecycle test database: %v", err)
@@ -623,4 +624,27 @@ func openLifecyclePostgresTestDatabase(t *testing.T) string {
 		}
 	})
 	return databaseURL
+}
+
+func seedLifecycleTestQuotaLedgers(t *testing.T, databaseURL string) {
+	t.Helper()
+	connection, err := pgx.Connect(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close(t.Context())
+	if _, err := connection.Exec(t.Context(), `
+		INSERT INTO secondbox.tenant_quotas (
+			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
+			max_application_authorities,updated_at
+		) VALUES ('tenant',100,100,100000,1099511627776,100,100,100,100,100,now());
+		INSERT INTO secondbox.subject_quotas (
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
+		) VALUES ('tenant','subject',100,100,100000,1099511627776,100,100,100,now())`,
+		pgx.QueryExecModeSimpleProtocol,
+	); err != nil {
+		t.Fatal(err)
+	}
 }

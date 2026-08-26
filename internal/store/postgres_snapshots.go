@@ -9,6 +9,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
@@ -32,6 +33,11 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(
+		ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef,
+	); err != nil {
+		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot create quota lock failed: %w", err)
+	}
 	replayed, found, err := lookupSnapshotMutationReplay(
 		ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef,
 		"snapshot.create", input.Snapshot.SandboxID, input.IdempotencyKey, input.RequestHash,
@@ -100,7 +106,9 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	).Scan(&count); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot count lookup failed: %w", err)
 	}
-	quota, err := readSubjectQuota(ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef)
+	tenantQuota, quota, err := lockTenantAndSubjectQuotaForAdmission(
+		ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef, input.Snapshot.CreatedAt,
+	)
 	if err != nil {
 		return contracts.Operation{}, err
 	}
@@ -108,7 +116,12 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	if err != nil {
 		return contracts.Operation{}, err
 	}
-	if count+1 > spec.Retention.SnapshotLimit || usage.snapshots+1 > quota.MaxSnapshots {
+	tenantUsage, err := readTenantQuotaUsage(ctx, tx, input.Snapshot.TenantRef, input.Snapshot.CreatedAt)
+	if err != nil {
+		return contracts.Operation{}, err
+	}
+	if count+1 > spec.Retention.SnapshotLimit || usage.snapshots+1 > quota.MaxSnapshots ||
+		tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, quotaUsage{snapshots: 1}) {
 		return contracts.Operation{}, ports.ErrQuotaExceeded
 	}
 
@@ -192,6 +205,9 @@ func (store *PostgresControlPlaneStore) deleteSnapshot(
 		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot delete transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot delete quota lock failed: %w", err)
+	}
 	if recordIdempotency {
 		replayed, found, err := lookupSnapshotMutationReplay(
 			ctx, tx, input.TenantRef, input.SubjectRef, "snapshot.delete",
@@ -396,6 +412,9 @@ func (store *PostgresControlPlaneStore) RestoreSnapshot(
 		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot restore transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot restore quota lock failed: %w", err)
+	}
 	replayed, found, err := lookupSnapshotMutationReplay(
 		ctx, tx, input.TenantRef, input.SubjectRef, "snapshot.restore",
 		input.SandboxID, input.IdempotencyKey, input.RequestHash, input.Now,

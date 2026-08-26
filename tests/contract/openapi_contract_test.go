@@ -186,6 +186,12 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			}
 		}
 		for _, required := range []string{
+			"listTenants", "createTenant", "getTenant", "suspendTenant", "reactivateTenant",
+			"listTenantControllerAuthorities", "createTenantControllerAuthority",
+			"getTenantControllerAuthority", "rotateTenantControllerAuthority", "revokeTenantControllerAuthority",
+			"listSubjects", "createSubject", "getSubject", "updateSubjectQuota", "closeSubject", "cleanupSubject",
+			"listApplicationAuthorities", "createApplicationAuthority", "getApplicationAuthority",
+			"rotateApplicationAuthority", "revokeApplicationAuthority", "getTenantUsage", "getDeploymentUsage",
 			"createProfile", "reviseProfile", "createSandbox", "updateSandboxMetadata", "startSandbox",
 			"drainSandbox", "stopSandbox", "restoreSandboxSnapshot", "getOperation",
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
@@ -227,6 +233,12 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 	t.Run("administrative mutation replays are observable", func(t *testing.T) {
 		required := map[string]bool{
 			"createProfile": true, "reviseProfile": true, "disableProfile": true,
+			"createTenant": true, "suspendTenant": true, "reactivateTenant": true,
+			"createTenantControllerAuthority": true, "rotateTenantControllerAuthority": true,
+			"revokeTenantControllerAuthority": true, "createSubject": true, "updateSubjectQuota": true,
+			"closeSubject": true, "cleanupSubject": true,
+			"createApplicationAuthority": true, "rotateApplicationAuthority": true,
+			"revokeApplicationAuthority": true,
 		}
 		paths := object(t, document["paths"], "paths")
 		for path, pathValue := range paths {
@@ -234,7 +246,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			if reference, ok := pathItem["$ref"].(string); ok {
 				pathItem = object(t, resolveLocalReference(t, document, reference), path)
 			}
-			for _, method := range []string{"patch", "post"} {
+			for _, method := range []string{"patch", "post", "put"} {
 				operationValue, exists := pathItem[method]
 				if !exists {
 					continue
@@ -253,7 +265,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 					if !strings.HasPrefix(status, "2") {
 						continue
 					}
-					response := object(t, responseValue, operationID+" "+status)
+					response := resolveOpenAPIObject(t, document, responseValue, operationID+" "+status)
 					headers := object(t, response["headers"], operationID+" "+status+" headers")
 					if _, exists := headers["Idempotency-Replayed"]; !exists {
 						t.Errorf("%s %s must expose Idempotency-Replayed", operationID, status)
@@ -267,9 +279,15 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		}
 	})
 
-	t.Run("platform ownership headers are required and identity administration is absent", func(t *testing.T) {
+	t.Run("application routes require ownership headers and removed identity vocabulary stays absent", func(t *testing.T) {
 		paths := object(t, document["paths"], "paths")
 		for path, pathValue := range paths {
+			if strings.HasPrefix(path, "/v1/tenants") ||
+				strings.HasPrefix(path, "/v1/subjects") ||
+				strings.HasPrefix(path, "/v1/application-authorities") ||
+				path == "/v1/usage" || path == "/v1/deployment-usage" {
+				continue
+			}
 			pathItem := object(t, pathValue, path)
 			if reference, ok := pathItem["$ref"].(string); ok {
 				pathItem = object(t, resolveLocalReference(t, document, reference), path)
@@ -468,6 +486,133 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		} {
 			if strings.Contains(string(encoded), forbidden) {
 				t.Errorf("public timing schemas contain internal vocabulary %q", forbidden)
+			}
+		}
+	})
+}
+
+func TestManagementContractRejectsUnsafeShapes(t *testing.T) {
+	document := loadOpenAPIContract(t)
+
+	t.Run("management request objects reject unknown fields", func(t *testing.T) {
+		for _, name := range []string{
+			"CreateTenantRequest", "CreateTenantControllerAuthorityRequest",
+			"CreateSubjectRequest", "CreateApplicationAuthorityRequest",
+		} {
+			schema := componentSchema(t, document, name)
+			if schema["type"] != "object" || schema["additionalProperties"] != false {
+				t.Errorf("%s must be a closed object", name)
+			}
+		}
+	})
+
+	t.Run("controller routes accept no tenant assertion", func(t *testing.T) {
+		for path, pathValue := range object(t, document["paths"], "paths") {
+			if !strings.HasPrefix(path, "/v1/subjects") &&
+				!strings.HasPrefix(path, "/v1/application-authorities") &&
+				path != "/v1/usage" {
+				continue
+			}
+			pathItem := resolveOpenAPIObject(t, document, pathValue, path)
+			encoded, err := json.Marshal(pathItem)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), "#/components/parameters/TenantRef") ||
+				strings.Contains(string(encoded), "X-SecondBox-Tenant-Ref") {
+				t.Errorf("controller route %s accepts a tenant assertion", path)
+			}
+		}
+		applicationCreate := componentSchema(t, document, "CreateApplicationAuthorityRequest")
+		if _, exists := object(t, applicationCreate["properties"], "application create properties")["tenantRef"]; exists {
+			t.Error("application authority creation accepts a caller-selected tenant")
+		}
+	})
+
+	t.Run("non-secret authority projections cannot recover credentials", func(t *testing.T) {
+		for _, name := range []string{
+			"TenantControllerAuthority", "TenantControllerAuthorityPage",
+			"ApplicationAuthority", "ApplicationAuthorityPage",
+		} {
+			encoded, err := json.Marshal(componentSchema(t, document, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lower := strings.ToLower(string(encoded))
+			for _, forbidden := range []string{"bearertoken", "verifier", "secret"} {
+				if strings.Contains(lower, forbidden) {
+					t.Errorf("non-secret schema %s exposes recoverable credential field %q", name, forbidden)
+				}
+			}
+		}
+		for _, name := range []string{"TenantControllerCredentialResponse", "ApplicationCredentialResponse"} {
+			properties := object(t, componentSchema(t, document, name)["properties"], name+".properties")
+			if len(properties) != 2 || properties["authority"] == nil || properties["bearerToken"] == nil {
+				t.Errorf("%s must expose exactly the authority and one-time bearer token", name)
+			}
+		}
+	})
+
+	t.Run("authority creation cannot escalate kind or grants", func(t *testing.T) {
+		for _, name := range []string{"CreateTenantControllerAuthorityRequest", "CreateApplicationAuthorityRequest"} {
+			properties := object(t, componentSchema(t, document, name)["properties"], name+".properties")
+			for _, forbidden := range []string{"kind", "authorityKind", "tenantRef", "grant"} {
+				if _, exists := properties[forbidden]; exists {
+					t.Errorf("%s permits authority escalation through %q", name, forbidden)
+				}
+			}
+		}
+		scopes := map[string]bool{}
+		for _, value := range array(t, componentSchema(t, document, "ApplicationScope")["enum"], "ApplicationScope.enum") {
+			scopes[value.(string)] = true
+		}
+		for scope := range scopes {
+			if strings.Contains(scope, "tenant") || strings.Contains(scope, "platform") || strings.Contains(scope, "runner") || strings.Contains(scope, "profile") {
+				t.Errorf("application scope %q escalates into management authority", scope)
+			}
+		}
+	})
+
+	t.Run("management errors and audit attribution are explicit", func(t *testing.T) {
+		codes := map[string]bool{}
+		for _, value := range array(t, componentSchema(t, document, "ProblemCode")["enum"], "ProblemCode.enum") {
+			codes[value.(string)] = true
+		}
+		for _, code := range []string{
+			"authority_kind_mismatch", "invalid_lifecycle_transition", "resource_expired", "tenant_suspended",
+			"grant_escalation_denied", "quota_exceeded", "precondition_failed",
+			"cleanup_state_conflict", "management_unavailable", "credential_response_unavailable",
+		} {
+			if !codes[code] {
+				t.Errorf("ProblemCode is missing management error %q", code)
+			}
+		}
+		audit := componentSchema(t, document, "AuditAttribution")
+		required := map[string]bool{}
+		for _, value := range array(t, audit["required"], "AuditAttribution.required") {
+			required[value.(string)] = true
+		}
+		for _, field := range []string{"actorAuthorityKind", "actorAuthorityId", "tenantRef", "operation", "result", "correlationMetadata"} {
+			if !required[field] {
+				t.Errorf("AuditAttribution must require %q", field)
+			}
+		}
+		properties := object(t, audit["properties"], "AuditAttribution.properties")
+		for _, forbidden := range []string{"bearerToken", "verifier", "secret"} {
+			if _, exists := properties[forbidden]; exists {
+				t.Errorf("AuditAttribution exposes credential material %q", forbidden)
+			}
+		}
+	})
+
+	t.Run("credential uncertainty procedure is documented", func(t *testing.T) {
+		responses := object(t, object(t, document["components"], "components")["responses"], "components.responses")
+		for _, name := range []string{"TenantControllerCredentialCreated", "ApplicationCredentialCreated"} {
+			description, _ := object(t, responses[name], name)["description"].(string)
+			for _, required := range []string{"uncertain", "revoke", "replacement", "cannot be recovered"} {
+				if !strings.Contains(strings.ToLower(description), required) {
+					t.Errorf("%s does not document %q", name, required)
+				}
 			}
 		}
 	})

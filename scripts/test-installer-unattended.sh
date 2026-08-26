@@ -6,6 +6,13 @@ temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 
 CGO_ENABLED=0 go -C "$repo_root" build -trimpath -o "$temporary/secondbox-deploy" ./cmd/secondbox-deploy
+retired_environment="SECONDBOX_APPLICATION_"'AUTHORITIES_JSON'
+retired_manifest_key="application_"'authorities_file'
+retired_secret="application-"'authorities.json'
+if rg -a -q "$retired_environment|$retired_manifest_key|$retired_secret" "$temporary/secondbox-deploy"; then
+  echo 'unattended installer binary retained static application authority configuration' >&2
+  exit 1
+fi
 set +e
 "$temporary/secondbox-deploy" --output json --color never install --check >"$temporary/facts.json" 2>"$temporary/diagnostic"
 status=$?

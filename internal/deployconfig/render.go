@@ -223,8 +223,8 @@ func Inspect(manifestPath string) ([]byte, error) {
 	redacted := make(map[string]string, len(resolved.Environment))
 	secretNames := map[string]bool{
 		"SECONDBOX_PLATFORM_TOKEN": true, "SECONDBOX_RUNNER_CREDENTIAL": true,
-		"SECONDBOX_APPLICATION_AUTHORITIES_JSON": true, "SECONDBOX_POSTGRES_PASSWORD": true,
-		"SECONDBOX_DATABASE_URL": true, "SECONDBOX_RUNNER_CA_PRIVATE_KEY": true,
+		"SECONDBOX_POSTGRES_PASSWORD": true,
+		"SECONDBOX_DATABASE_URL":      true, "SECONDBOX_RUNNER_CA_PRIVATE_KEY": true,
 		"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY": true,
 	}
 	secretPathNames := map[string]bool{

@@ -13,11 +13,69 @@ export interface AcquireLeaseRequest {
   readonly replaceActive?: boolean;
 }
 
+export interface ApplicationAuthority {
+  readonly createdAt: Timestamp;
+  readonly expiresAt?: Timestamp;
+  readonly id: AuthorityID;
+  readonly kind: ApplicationAuthorityKind;
+  readonly lookupId: TokenLookupID;
+  readonly metadata: Metadata;
+  readonly profileGrants: ProfileGrantList;
+  readonly revision: number;
+  readonly scopes: ApplicationScopeList;
+  readonly state: AuthorityState;
+  readonly subjectRef: OwnershipRef;
+  readonly tenantRef: OwnershipRef;
+  readonly updatedAt: Timestamp;
+}
+
+export type ApplicationAuthorityKind = "application";
+
+export interface ApplicationAuthorityPage {
+  readonly items: readonly ApplicationAuthority[];
+  readonly nextCursor?: string;
+}
+
+/** Complete high-entropy application bearer credential returned only by a successful creation or rotation response. It cannot be recovered later. */
+export type ApplicationBearerToken = string;
+
+export interface ApplicationCredentialResponse {
+  readonly authority: ApplicationAuthority;
+  readonly bearerToken: ApplicationBearerToken;
+}
+
+export type ApplicationScope = "sandbox:read" | "sandbox:lifecycle" | "sandbox:exec" | "sandbox:files" | "sandbox:ports" | "sandbox:ports:direct";
+
+export type ApplicationScopeList = readonly ApplicationScope[];
+
 export interface ArgvCommand {
   readonly arguments: readonly string[];
   readonly executable: string;
   readonly mode: "argv";
 }
+
+/** Attribution recorded for every management mutation and denial. Credential bearer and verifier material is never recorded. */
+export interface AuditAttribution {
+  readonly actorAuthorityId: AuthorityID;
+  readonly actorAuthorityKind: AuthorityKind;
+  readonly correlationMetadata: AuditCorrelationMetadata;
+  readonly operation: string;
+  readonly result: AuditResult;
+  readonly subjectRef?: OwnershipRef;
+  readonly tenantRef: OwnershipRef;
+}
+
+/** Bounded external correlation metadata. Bearer tokens, verifiers, and other credential material are forbidden. */
+export type AuditCorrelationMetadata = Readonly<Record<string, string>>;
+
+export type AuditResult = "succeeded" | "denied" | "failed";
+
+export type AuthorityID = string;
+
+/** The fixed authority hierarchy. Kinds cannot be selected or widened by a credential request. */
+export type AuthorityKind = "platform" | "tenant_controller" | "application";
+
+export type AuthorityState = "active" | "expired" | "revoked";
 
 export type BootStage = "runner_admission" | "artifact_verify" | "workspace_attach" | "network_setup" | "compute_launch" | "guest_negotiation" | "ready";
 
@@ -54,6 +112,15 @@ export type Command = ShellCommand | ArgvCommand;
 
 export type CorrelationID = string;
 
+/** Creates only an application authority in the authenticated tenant. Kind and tenant cannot be supplied, and scopes and Profile grants must be subsets of the tenant ceiling. */
+export interface CreateApplicationAuthorityRequest {
+  readonly expiresAt: Timestamp;
+  readonly metadata: Metadata;
+  readonly profileGrants: ProfileGrantList;
+  readonly scopes: ApplicationScopeList;
+  readonly subjectRef: OwnershipRef;
+}
+
 export interface CreateDirectoryRequest {
   readonly path: WorkspacePath;
   readonly recursive: boolean;
@@ -88,6 +155,29 @@ export interface CreateSnapshotRequest {
   readonly name: string;
 }
 
+export interface CreateSubjectRequest {
+  readonly expiresAt?: Timestamp;
+  readonly metadata: Metadata;
+  readonly quota: SubjectQuota;
+  readonly ref: OwnershipRef;
+}
+
+/** The platform selects only metadata and expiry; the authority kind, tenant binding, and code-owned management grant cannot be caller-selected. */
+export interface CreateTenantControllerAuthorityRequest {
+  readonly expiresAt: Timestamp;
+  readonly metadata: Metadata;
+}
+
+export interface CreateTenantRequest {
+  readonly aggregateQuota: TenantQuota;
+  readonly allowedApplicationScopes: ApplicationScopeList;
+  readonly allowedProfileGrants: ProfileGrantList;
+  readonly expiresAt?: Timestamp;
+  readonly expiryPolicy: TenantExpiryPolicy;
+  readonly metadata: Metadata;
+  readonly ref: OwnershipRef;
+}
+
 export interface CreateTerminalRequest {
   readonly columns: number;
   readonly command: Command;
@@ -109,6 +199,13 @@ export interface DeploymentTimingSummary {
   readonly observedAt: Timestamp;
   readonly operations: readonly OperationTimingSummary[];
   readonly windowSeconds: number;
+}
+
+export interface DeploymentUsage {
+  readonly nextCursor?: string;
+  readonly observedAt: Timestamp;
+  readonly tenants: readonly TenantAggregateUsage[];
+  readonly usage: TenantQuotaUsage;
 }
 
 export interface DirectoryListing {
@@ -296,14 +393,14 @@ export interface Operation {
   readonly kind: OperationKind;
   readonly requestId: CorrelationID;
   readonly sandbox?: Sandbox;
-  readonly sandboxId: OpaqueID;
+  readonly sandboxId?: OpaqueID;
   readonly snapshot?: Snapshot;
   readonly startedAt?: Timestamp;
   readonly state: OperationState;
   readonly updatedAt: Timestamp;
 }
 
-export type OperationKind = "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "cancel_exec" | "cancel_terminal";
+export type OperationKind = "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "subject_cleanup" | "cancel_exec" | "cancel_terminal";
 
 export interface OperationStageTiming {
   readonly cumulativeMilliseconds: number;
@@ -379,7 +476,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -395,6 +492,8 @@ export interface Profile {
   readonly state: ProfileState;
   readonly updatedAt: Timestamp;
 }
+
+export type ProfileGrantList = readonly ProfileName[];
 
 export type ProfileName = string;
 
@@ -425,6 +524,16 @@ export interface ProfileRevisionSpec {
 }
 
 export type ProfileState = "enabled" | "disabled";
+
+export interface QuotaUsage {
+  readonly activeInstances: number;
+  readonly concurrentOperations: number;
+  readonly cpuMillis: number;
+  readonly memoryBytes: number;
+  readonly portSessions: number;
+  readonly sandboxes: number;
+  readonly snapshots: number;
+}
 
 export interface RelocateSandboxRequest {
   readonly runnerPool?: ProfileName;
@@ -634,6 +743,140 @@ export interface StreamingExecRequest {
 
 export type StringMap = Readonly<Record<string, string>>;
 
+export interface Subject {
+  readonly cleanupState: SubjectCleanupState;
+  readonly createdAt: Timestamp;
+  readonly expiresAt?: Timestamp;
+  readonly metadata: Metadata;
+  readonly quota: SubjectQuota;
+  readonly ref: OwnershipRef;
+  readonly revision: number;
+  readonly state: SubjectState;
+  readonly tenantRef: OwnershipRef;
+  readonly updatedAt: Timestamp;
+}
+
+export type SubjectCleanupState = "none" | "pending" | "running" | "succeeded" | "failed";
+
+export interface SubjectPage {
+  readonly items: readonly Subject[];
+  readonly nextCursor?: string;
+}
+
+export interface SubjectQuota {
+  readonly maxActiveInstances: number;
+  readonly maxConcurrentOperations: number;
+  readonly maxCpuMillis: number;
+  readonly maxMemoryBytes: number;
+  readonly maxPortSessions: number;
+  readonly maxSandboxes: number;
+  readonly maxSnapshots: number;
+}
+
+export type SubjectState = "active" | "closing" | "closed" | "expired";
+
+export interface SubjectUsage {
+  readonly limits: SubjectQuota;
+  readonly subjectRef: OwnershipRef;
+  readonly usage: QuotaUsage;
+}
+
+export interface Tenant {
+  readonly aggregateQuota: TenantQuota;
+  readonly allowedApplicationScopes: ApplicationScopeList;
+  readonly allowedProfileGrants: ProfileGrantList;
+  readonly createdAt: Timestamp;
+  readonly expiresAt?: Timestamp;
+  readonly expiryPolicy: TenantExpiryPolicy;
+  readonly metadata: Metadata;
+  readonly ref: OwnershipRef;
+  readonly revision: number;
+  readonly state: TenantState;
+  readonly updatedAt: Timestamp;
+}
+
+export interface TenantAggregateUsage {
+  readonly limits: TenantQuota;
+  readonly tenantRef: OwnershipRef;
+  readonly usage: TenantQuotaUsage;
+}
+
+export interface TenantControllerAuthority {
+  readonly createdAt: Timestamp;
+  readonly expiresAt?: Timestamp;
+  readonly grant: TenantControllerGrant;
+  readonly id: AuthorityID;
+  readonly kind: TenantControllerAuthorityKind;
+  readonly lookupId: TokenLookupID;
+  readonly metadata: Metadata;
+  readonly revision: number;
+  readonly state: AuthorityState;
+  readonly tenantRef: OwnershipRef;
+  readonly updatedAt: Timestamp;
+}
+
+export type TenantControllerAuthorityKind = "tenant_controller";
+
+export interface TenantControllerAuthorityPage {
+  readonly items: readonly TenantControllerAuthority[];
+  readonly nextCursor?: string;
+}
+
+/** Complete high-entropy tenant-controller bearer credential returned only by a successful creation or rotation response. It cannot be recovered later. */
+export type TenantControllerBearerToken = string;
+
+export interface TenantControllerCredentialResponse {
+  readonly authority: TenantControllerAuthority;
+  readonly bearerToken: TenantControllerBearerToken;
+}
+
+export type TenantControllerGrant = "tenant_management";
+
+export interface TenantExpiryPolicy {
+  readonly maximumAuthorityLifetimeSeconds: number;
+  readonly maximumSubjectLifetimeSeconds: number;
+}
+
+export interface TenantPage {
+  readonly items: readonly Tenant[];
+  readonly nextCursor?: string;
+}
+
+export interface TenantQuota {
+  readonly maxActiveInstances: number;
+  readonly maxActiveSubjects: number;
+  readonly maxApplicationAuthorities: number;
+  readonly maxConcurrentOperations: number;
+  readonly maxCpuMillis: number;
+  readonly maxMemoryBytes: number;
+  readonly maxPortSessions: number;
+  readonly maxSandboxes: number;
+  readonly maxSnapshots: number;
+}
+
+export interface TenantQuotaUsage {
+  readonly activeInstances: number;
+  readonly activeSubjects: number;
+  readonly applicationAuthorities: number;
+  readonly concurrentOperations: number;
+  readonly cpuMillis: number;
+  readonly memoryBytes: number;
+  readonly portSessions: number;
+  readonly sandboxes: number;
+  readonly snapshots: number;
+}
+
+export type TenantState = "active" | "suspended" | "expired";
+
+export interface TenantUsage {
+  readonly limits: TenantQuota;
+  readonly nextCursor?: string;
+  readonly observedAt: Timestamp;
+  readonly subjects: readonly SubjectUsage[];
+  readonly tenantRef: OwnershipRef;
+  readonly usage: TenantQuotaUsage;
+}
+
 export interface TerminalAttachedFrame {
   readonly nextClientSequence?: number;
   readonly type: "terminal_attached";
@@ -674,6 +917,9 @@ export interface TerminalSession {
 
 export type Timestamp = string;
 
+/** Public non-secret token lookup identifier. It is safe to return from read and list operations and cannot authenticate by itself. */
+export type TokenLookupID = string;
+
 export interface TouchResult {
   readonly generation: number;
   readonly lastActivityAt: Timestamp;
@@ -689,6 +935,10 @@ export interface UpdateRunnerPoolRequest {
 
 export interface UpdateSandboxMetadataRequest {
   readonly metadata: Metadata;
+}
+
+export interface UpdateSubjectQuotaRequest {
+  readonly quota: SubjectQuota;
 }
 
 export interface WaitSandboxRequest {
@@ -711,7 +961,10 @@ export type OperationID =
   | "acquireSandboxLease"
   | "cancelSandboxExecStream"
   | "cancelSandboxTerminal"
+  | "cleanupSubject"
   | "closeSandboxPortSession"
+  | "closeSubject"
+  | "createApplicationAuthority"
   | "createProfile"
   | "createRunnerPool"
   | "createSandbox"
@@ -720,12 +973,17 @@ export type OperationID =
   | "createSandboxPortSession"
   | "createSandboxSnapshot"
   | "createSandboxTerminal"
+  | "createSubject"
+  | "createTenant"
+  | "createTenantControllerAuthority"
   | "deleteSandbox"
   | "deleteSnapshot"
   | "disableProfile"
   | "drainSandbox"
   | "executeSandboxCommand"
+  | "getApplicationAuthority"
   | "getDeploymentTiming"
+  | "getDeploymentUsage"
   | "getOperation"
   | "getOperationTiming"
   | "getProfile"
@@ -736,14 +994,23 @@ export type OperationID =
   | "getSandboxPortSession"
   | "getSandboxTiming"
   | "getSnapshot"
+  | "getSubject"
+  | "getTenant"
+  | "getTenantControllerAuthority"
+  | "getTenantUsage"
   | "inspectSandbox"
+  | "listApplicationAuthorities"
   | "listProfiles"
   | "listRunnerPools"
   | "listRunners"
   | "listSandboxDirectory"
   | "listSandboxSnapshots"
   | "listSandboxes"
+  | "listSubjects"
+  | "listTenantControllerAuthorities"
+  | "listTenants"
   | "pingSandbox"
+  | "reactivateTenant"
   | "readSandboxFile"
   | "reconnectSandboxTerminal"
   | "releaseSandboxLease"
@@ -752,13 +1019,19 @@ export type OperationID =
   | "renewSandboxLease"
   | "restoreSandboxSnapshot"
   | "reviseProfile"
+  | "revokeApplicationAuthority"
+  | "revokeTenantControllerAuthority"
+  | "rotateApplicationAuthority"
+  | "rotateTenantControllerAuthority"
   | "sandboxFileExists"
   | "startSandbox"
   | "statSandboxFile"
   | "stopSandbox"
+  | "suspendTenant"
   | "touchSandbox"
   | "updateRunnerPool"
   | "updateSandboxMetadata"
+  | "updateSubjectQuota"
   | "waitForSandbox"
   | "writeSandboxFile";
 
@@ -772,7 +1045,10 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   acquireSandboxLease: { method: "POST", path: "/v1/sandboxes/{sandboxId}/leases", contentType: "application/json" },
   cancelSandboxExecStream: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec-streams/{execSessionId}:cancel" },
   cancelSandboxTerminal: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
+  cleanupSubject: { method: "POST", path: "/v1/subjects/{subjectRef}:cleanup" },
   closeSandboxPortSession: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}" },
+  closeSubject: { method: "POST", path: "/v1/subjects/{subjectRef}:close" },
+  createApplicationAuthority: { method: "POST", path: "/v1/application-authorities", contentType: "application/json" },
   createProfile: { method: "POST", path: "/v1/profiles", contentType: "application/json" },
   createRunnerPool: { method: "POST", path: "/v1/runner-pools", contentType: "application/json" },
   createSandbox: { method: "POST", path: "/v1/sandboxes", contentType: "application/json" },
@@ -781,12 +1057,17 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   createSandboxPortSession: { method: "POST", path: "/v1/sandboxes/{sandboxId}/port-sessions", contentType: "application/json" },
   createSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}/snapshots", contentType: "application/json" },
   createSandboxTerminal: { method: "POST", path: "/v1/sandboxes/{sandboxId}/terminals", contentType: "application/json" },
+  createSubject: { method: "POST", path: "/v1/subjects", contentType: "application/json" },
+  createTenant: { method: "POST", path: "/v1/tenants", contentType: "application/json" },
+  createTenantControllerAuthority: { method: "POST", path: "/v1/tenants/{tenantRef}/controller-authorities", contentType: "application/json" },
   deleteSandbox: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}" },
   deleteSnapshot: { method: "DELETE", path: "/v1/snapshots/{snapshotId}" },
   disableProfile: { method: "POST", path: "/v1/profiles/{profileName}:disable" },
   drainSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:drain" },
   executeSandboxCommand: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec", contentType: "application/json" },
+  getApplicationAuthority: { method: "GET", path: "/v1/application-authorities/{authorityId}" },
   getDeploymentTiming: { method: "GET", path: "/v1/timings" },
+  getDeploymentUsage: { method: "GET", path: "/v1/deployment-usage" },
   getOperation: { method: "GET", path: "/v1/operations/{operationId}" },
   getOperationTiming: { method: "GET", path: "/v1/operations/{operationId}/timings" },
   getProfile: { method: "GET", path: "/v1/profiles/{profileName}" },
@@ -797,14 +1078,23 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   getSandboxPortSession: { method: "GET", path: "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}" },
   getSandboxTiming: { method: "GET", path: "/v1/sandboxes/{sandboxId}/timings" },
   getSnapshot: { method: "GET", path: "/v1/snapshots/{snapshotId}" },
+  getSubject: { method: "GET", path: "/v1/subjects/{subjectRef}" },
+  getTenant: { method: "GET", path: "/v1/tenants/{tenantRef}" },
+  getTenantControllerAuthority: { method: "GET", path: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}" },
+  getTenantUsage: { method: "GET", path: "/v1/usage" },
   inspectSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:inspect" },
+  listApplicationAuthorities: { method: "GET", path: "/v1/application-authorities" },
   listProfiles: { method: "GET", path: "/v1/profiles" },
   listRunnerPools: { method: "GET", path: "/v1/runner-pools" },
   listRunners: { method: "GET", path: "/v1/runners" },
   listSandboxDirectory: { method: "GET", path: "/v1/sandboxes/{sandboxId}/directories" },
   listSandboxSnapshots: { method: "GET", path: "/v1/sandboxes/{sandboxId}/snapshots" },
   listSandboxes: { method: "GET", path: "/v1/sandboxes" },
+  listSubjects: { method: "GET", path: "/v1/subjects" },
+  listTenantControllerAuthorities: { method: "GET", path: "/v1/tenants/{tenantRef}/controller-authorities" },
+  listTenants: { method: "GET", path: "/v1/tenants" },
   pingSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:ping" },
+  reactivateTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:reactivate" },
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },
   reconnectSandboxTerminal: { method: "GET", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
   releaseSandboxLease: { method: "DELETE", path: "/v1/leases/{leaseId}" },
@@ -813,13 +1103,19 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   renewSandboxLease: { method: "POST", path: "/v1/leases/{leaseId}:renew", contentType: "application/json" },
   restoreSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}:restore", contentType: "application/json" },
   reviseProfile: { method: "POST", path: "/v1/profiles/{profileName}:revise", contentType: "application/json" },
+  revokeApplicationAuthority: { method: "POST", path: "/v1/application-authorities/{authorityId}:revoke" },
+  revokeTenantControllerAuthority: { method: "POST", path: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}:revoke" },
+  rotateApplicationAuthority: { method: "POST", path: "/v1/application-authorities/{authorityId}:rotate" },
+  rotateTenantControllerAuthority: { method: "POST", path: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}:rotate" },
   sandboxFileExists: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:exists" },
   startSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:start" },
   statSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:stat" },
   stopSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:stop" },
+  suspendTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:suspend" },
   touchSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:touch" },
   updateRunnerPool: { method: "PATCH", path: "/v1/runner-pools/{runnerPoolName}", contentType: "application/json" },
   updateSandboxMetadata: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/metadata", contentType: "application/json" },
+  updateSubjectQuota: { method: "PUT", path: "/v1/subjects/{subjectRef}/quota", contentType: "application/json" },
   waitForSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:wait", contentType: "application/json" },
   writeSandboxFile: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/files", contentType: "application/octet-stream" },
 };

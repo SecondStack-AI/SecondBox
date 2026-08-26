@@ -9,6 +9,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -25,6 +26,9 @@ func (store *PostgresDataPlaneStore) CancelPublicDataPlaneSession(
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox public session cancellation transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return DataPlaneSession{}, false, fmt.Errorf("SecondBox public session cancellation quota lock: %w", err)
+	}
 
 	idempotencyOperation := publicDataPlaneCancellationOperation(input)
 	scope := input.TenantRef + "\x1f" + input.SubjectRef + "\x1f" +

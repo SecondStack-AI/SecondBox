@@ -18,10 +18,9 @@ import (
 const maximumCLIConfigurationBytes = 1 << 20
 
 type cliConfiguration struct {
-	URL        string `json:"url"`
-	Token      string `json:"token"`
-	TenantRef  string `json:"tenantRef"`
-	SubjectRef string `json:"subjectRef"`
+	URL           string `json:"url"`
+	Token         string `json:"token"`
+	AuthorityKind string `json:"authorityKind"`
 }
 
 // LoginCLI verifies the generated platform authority, then writes the invoking
@@ -42,16 +41,13 @@ func LoginCLI(ctx context.Context, plan InstallPlan, httpClient *http.Client) ([
 	if err != nil {
 		return nil, err
 	}
-	client, err := secondboxclient.NewSecondBoxSubjectClient("http://"+plan.Network.APIAddress, token, plan.CLI.TenantRef, plan.CLI.SubjectRef, httpClient)
+	client, err := secondboxclient.NewSecondBoxClient("http://"+plan.Network.APIAddress, token, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	response, err := client.Request(ctx, "listSandboxes", secondboxclient.CallOptions{QueryParameters: url.Values{"limit": {"1"}}})
+	_, err = client.ListTenants(ctx, secondboxclient.PageOptions{Limit: 1})
 	if err != nil {
 		return nil, installerError("verify generated CLI authority", err)
-	}
-	if err := response.Body.Close(); err != nil {
-		return nil, installerError("close CLI authority verification response", err)
 	}
 	created := []CreatedResource{}
 	for _, name := range []string{"cli-config-root", "cli-config-directory"} {
@@ -119,7 +115,7 @@ func ValidateCLIConfig(plan InstallPlan) error {
 }
 
 func cliConfigurationBytes(plan InstallPlan, token string) ([]byte, error) {
-	configuration := cliConfiguration{URL: "http://" + plan.Network.APIAddress, Token: token, TenantRef: plan.CLI.TenantRef, SubjectRef: plan.CLI.SubjectRef}
+	configuration := cliConfiguration{URL: "http://" + plan.Network.APIAddress, Token: token, AuthorityKind: "platform"}
 	content, err := json.MarshalIndent(configuration, "", "  ")
 	if err != nil {
 		return nil, err
@@ -162,10 +158,13 @@ func validateReplaceableCLIConfiguration(planned PlannedPath) error {
 	if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return installerError("pre-existing CLI configuration URL is invalid", err)
 	}
-	for name, value := range map[string]string{"token": configuration.Token, "tenantRef": configuration.TenantRef, "subjectRef": configuration.SubjectRef} {
+	for name, value := range map[string]string{"token": configuration.Token, "authorityKind": configuration.AuthorityKind} {
 		if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\x00") {
 			return installerError("pre-existing CLI configuration "+name+" is invalid", nil)
 		}
+	}
+	if configuration.AuthorityKind != "platform" {
+		return installerError("pre-existing CLI configuration must contain a platform authority", nil)
 	}
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/reconcile"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestLifecycleReconcilerRunsImmediatelyAndStopsWithContext(t *testing.T) {
@@ -55,6 +56,36 @@ func TestLifecycleReconcilerRetriesRevisionContention(t *testing.T) {
 			"lifecycle contention result = error %v, claims %d, applies %d",
 			err, store.claimCalls, store.applyCalls,
 		)
+	}
+}
+
+func TestReconcileWorkersRetryRawPostgresContention(t *testing.T) {
+	for _, code := range []string{"40P01", "40001"} {
+		t.Run(code, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			lifecycleStore := &contentionLifecycleStore{
+				cancel: cancel, applyErr: &pgconn.PgError{Code: code},
+			}
+			if err := runLifecycleReconciler(ctx, lifecycle.Reconciler{
+				Store: lifecycleStore, WorkerID: "worker-postgres-contention",
+				ClaimDuration: time.Minute, PollInterval: time.Hour, BatchSize: 1,
+			}, nil); err != nil || lifecycleStore.claimCalls != 2 {
+				t.Fatalf("lifecycle PostgreSQL contention result = error %v, claims %d", err, lifecycleStore.claimCalls)
+			}
+
+			ctx, cancel = context.WithCancel(t.Context())
+			assignmentStore := &contentionAssignmentStore{
+				cancel: cancel, applyErr: &pgconn.PgError{Code: code},
+			}
+			if err := runAssignmentReconciler(ctx, reconcile.AssignmentWorker{
+				Store: assignmentStore, WorkerID: "assignment-postgres-contention",
+				ClaimDuration: time.Minute, PollInterval: time.Hour,
+				CommandDeadline: time.Minute, HeartbeatTimeout: time.Minute,
+				NewCommandID: func(string) string { return "unused-command" },
+			}, nil); err != nil || assignmentStore.claimCalls != 2 {
+				t.Fatalf("Assignment PostgreSQL contention result = error %v, claims %d", err, assignmentStore.claimCalls)
+			}
+		})
 	}
 }
 

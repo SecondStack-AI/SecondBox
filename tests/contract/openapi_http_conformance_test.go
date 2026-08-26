@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/internal/api"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 )
 
@@ -29,60 +30,85 @@ type auditedHTTPOperation struct {
 }
 
 var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
-	"listProfiles":             {"listProfiles", "200", "ProfilePage", nil, nil},
-	"createProfile":            {"createProfile", "201", "Profile", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
-	"getProfile":               {"getProfile", "200", "Profile", nil, []string{"ETag"}},
-	"reviseProfile":            {"mutateProfile", "200", "Profile", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
-	"disableProfile":           {"mutateProfile", "200", "Profile", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
-	"listRunnerPools":          {"listRunnerPools", "200", "RunnerPoolPage", nil, nil},
-	"createRunnerPool":         {"createRunnerPool", "201", "RunnerPool", nil, []string{"ETag"}},
-	"getRunnerPool":            {"getRunnerPool", "200", "RunnerPool", nil, []string{"ETag"}},
-	"updateRunnerPool":         {"updateRunnerPool", "200", "RunnerPool", []string{"If-Match"}, []string{"ETag"}},
-	"listRunners":              {"listRunners", "200", "RunnerPage", nil, nil},
-	"getRunner":                {"getRunner", "200", "Runner", nil, []string{"ETag"}},
-	"getDeploymentTiming":      {"getDeploymentTiming", "200", "DeploymentTimingSummary", nil, nil},
-	"listSandboxes":            {"listSandboxes", "200", "SandboxPage", nil, nil},
-	"createSandbox":            {"createSandbox", "202", "Operation", []string{"Idempotency-Key"}, []string{"Idempotency-Replayed"}},
-	"getSandbox":               {"getSandbox", "200", "Sandbox", nil, []string{"ETag"}},
-	"updateSandboxMetadata":    {"updateSandboxMetadata", "200", "Sandbox", []string{"If-Match"}, []string{"ETag"}},
-	"getSandboxTiming":         {"getSandboxTiming", "200", "SandboxTiming", nil, nil},
-	"deleteSandbox":            {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
-	"startSandbox":             {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
-	"inspectSandbox":           {"mutateSandbox", "200", "SandboxInspection", []string{"SecondBox-Generation"}, nil},
-	"pingSandbox":              {"mutateSandbox", "200", "PingResult", []string{"SecondBox-Generation"}, nil},
-	"touchSandbox":             {"mutateSandbox", "200", "TouchResult", []string{"Idempotency-Key", "SecondBox-Generation"}, nil},
-	"drainSandbox":             {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
-	"stopSandbox":              {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
-	"relocateSandbox":          {"mutateSandbox", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
-	"restoreSandboxSnapshot":   {"mutateSandbox", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
-	"waitForSandbox":           {"mutateSandbox", "200", "Sandbox", nil, []string{"ETag"}},
-	"getOperation":             {"getOperation", "200", "Operation", nil, nil},
-	"getOperationTiming":       {"getOperationTiming", "200", "OperationTiming", nil, nil},
-	"acquireSandboxLease":      {"acquireLease", "201", "Lease", []string{"Idempotency-Key", "SecondBox-Generation"}, nil},
-	"getSandboxLease":          {"getLease", "200", "Lease", nil, nil},
-	"releaseSandboxLease":      {"releaseLease", "200", "Lease", []string{"Idempotency-Key"}, nil},
-	"renewSandboxLease":        {"renewLease", "200", "Lease", []string{"Idempotency-Key"}, nil},
-	"executeSandboxCommand":    {"executeSandboxCommand", "200", "ExecOutcome", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"createSandboxExecStream":  {"createSandboxExecStream", "201", "ExecStreamSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"cancelSandboxExecStream":  {"cancelSandboxExecStream", "202", "ExecStreamSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"createSandboxTerminal":    {"createSandboxTerminal", "201", "TerminalSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"reconnectSandboxTerminal": {"getOrConnectSandboxTerminal", "200", "TerminalSession", []string{"SecondBox-Generation"}, nil},
-	"cancelSandboxTerminal":    {"cancelSandboxTerminal", "202", "TerminalSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"readSandboxFile":          {"readSandboxFile", "200", "string", []string{"SecondBox-Generation"}, []string{"Content-Length", "Digest"}},
-	"writeSandboxFile":         {"writeSandboxFile", "200", "FileWriteResult", []string{"Digest", "Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"statSandboxFile":          {"statSandboxFile", "200", "FileStat", []string{"SecondBox-Generation"}, nil},
-	"sandboxFileExists":        {"sandboxFileExists", "200", "FileExistsResult", []string{"SecondBox-Generation"}, nil},
-	"listSandboxDirectory":     {"listSandboxDirectory", "200", "DirectoryListing", []string{"SecondBox-Generation"}, nil},
-	"createSandboxDirectory":   {"createSandboxDirectory", "204", "", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"removeSandboxPath":        {"removeSandboxPath", "204", "", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"listSandboxSnapshots":     {"listSandboxSnapshots", "200", "SnapshotPage", nil, nil},
-	"createSandboxSnapshot":    {"createSandboxSnapshot", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
-	"getSnapshot":              {"getSnapshot", "200", "Snapshot", nil, nil},
-	"deleteSnapshot":           {"deleteSnapshot", "202", "Operation", []string{"Idempotency-Key"}, []string{"Idempotency-Replayed"}},
-	"createSandboxPortSession": {"createSandboxPortSession", "201", "PortSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"getSandboxPortSession":    {"getSandboxPortSession", "200", "PortSession", nil, nil},
-	"closeSandboxPortSession":  {"closeSandboxPortSession", "204", "", []string{"Idempotency-Key"}, nil},
+	"listTenants":                     {"listTenants", "200", "TenantPage", nil, nil},
+	"createTenant":                    {"createTenant", "201", "Tenant", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getTenant":                       {"getTenant", "200", "Tenant", nil, []string{"ETag"}},
+	"suspendTenant":                   {"tenantManagementAction", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"reactivateTenant":                {"tenantManagementAction", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"listTenantControllerAuthorities": {"listTenantControllerAuthorities", "200", "TenantControllerAuthorityPage", nil, nil},
+	"createTenantControllerAuthority": {"createTenantControllerAuthority", "201", "TenantControllerCredentialResponse", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getTenantControllerAuthority":    {"getTenantControllerAuthority", "200", "TenantControllerAuthority", nil, []string{"ETag"}},
+	"rotateTenantControllerAuthority": {"tenantControllerAuthorityManagementAction", "200", "TenantControllerCredentialResponse", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"revokeTenantControllerAuthority": {"tenantControllerAuthorityManagementAction", "200", "TenantControllerAuthority", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"listSubjects":                    {"listSubjects", "200", "SubjectPage", nil, nil},
+	"createSubject":                   {"createSubject", "201", "Subject", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getSubject":                      {"getSubject", "200", "Subject", nil, []string{"ETag"}},
+	"updateSubjectQuota":              {"updateSubjectQuota", "200", "Subject", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"closeSubject":                    {"subjectManagementAction", "200", "Subject", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"cleanupSubject":                  {"subjectManagementAction", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"listApplicationAuthorities":      {"listApplicationAuthorities", "200", "ApplicationAuthorityPage", nil, nil},
+	"createApplicationAuthority":      {"createApplicationAuthority", "201", "ApplicationCredentialResponse", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getApplicationAuthority":         {"getApplicationAuthority", "200", "ApplicationAuthority", nil, []string{"ETag"}},
+	"rotateApplicationAuthority":      {"applicationAuthorityManagementAction", "200", "ApplicationCredentialResponse", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"revokeApplicationAuthority":      {"applicationAuthorityManagementAction", "200", "ApplicationAuthority", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getTenantUsage":                  {"getTenantUsage", "200", "TenantUsage", nil, nil},
+	"getDeploymentUsage":              {"getDeploymentUsage", "200", "DeploymentUsage", nil, nil},
+	"listProfiles":                    {"listProfiles", "200", "ProfilePage", nil, nil},
+	"createProfile":                   {"createProfile", "201", "Profile", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
+	"getProfile":                      {"getProfile", "200", "Profile", nil, []string{"ETag"}},
+	"reviseProfile":                   {"mutateProfile", "200", "Profile", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"disableProfile":                  {"mutateProfile", "200", "Profile", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
+	"listRunnerPools":                 {"listRunnerPools", "200", "RunnerPoolPage", nil, nil},
+	"createRunnerPool":                {"createRunnerPool", "201", "RunnerPool", nil, []string{"ETag"}},
+	"getRunnerPool":                   {"getRunnerPool", "200", "RunnerPool", nil, []string{"ETag"}},
+	"updateRunnerPool":                {"updateRunnerPool", "200", "RunnerPool", []string{"If-Match"}, []string{"ETag"}},
+	"listRunners":                     {"listRunners", "200", "RunnerPage", nil, nil},
+	"getRunner":                       {"getRunner", "200", "Runner", nil, []string{"ETag"}},
+	"getDeploymentTiming":             {"getDeploymentTiming", "200", "DeploymentTimingSummary", nil, nil},
+	"listSandboxes":                   {"listSandboxes", "200", "SandboxPage", nil, nil},
+	"createSandbox":                   {"createSandbox", "202", "Operation", []string{"Idempotency-Key"}, []string{"Idempotency-Replayed"}},
+	"getSandbox":                      {"getSandbox", "200", "Sandbox", nil, []string{"ETag"}},
+	"updateSandboxMetadata":           {"updateSandboxMetadata", "200", "Sandbox", []string{"If-Match"}, []string{"ETag"}},
+	"getSandboxTiming":                {"getSandboxTiming", "200", "SandboxTiming", nil, nil},
+	"deleteSandbox":                   {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"startSandbox":                    {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"inspectSandbox":                  {"mutateSandbox", "200", "SandboxInspection", []string{"SecondBox-Generation"}, nil},
+	"pingSandbox":                     {"mutateSandbox", "200", "PingResult", []string{"SecondBox-Generation"}, nil},
+	"touchSandbox":                    {"mutateSandbox", "200", "TouchResult", []string{"Idempotency-Key", "SecondBox-Generation"}, nil},
+	"drainSandbox":                    {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"stopSandbox":                     {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"relocateSandbox":                 {"mutateSandbox", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"restoreSandboxSnapshot":          {"mutateSandbox", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"waitForSandbox":                  {"mutateSandbox", "200", "Sandbox", nil, []string{"ETag"}},
+	"getOperation":                    {"getOperation", "200", "Operation", nil, nil},
+	"getOperationTiming":              {"getOperationTiming", "200", "OperationTiming", nil, nil},
+	"acquireSandboxLease":             {"acquireLease", "201", "Lease", []string{"Idempotency-Key", "SecondBox-Generation"}, nil},
+	"getSandboxLease":                 {"getLease", "200", "Lease", nil, nil},
+	"releaseSandboxLease":             {"releaseLease", "200", "Lease", []string{"Idempotency-Key"}, nil},
+	"renewSandboxLease":               {"renewLease", "200", "Lease", []string{"Idempotency-Key"}, nil},
+	"executeSandboxCommand":           {"executeSandboxCommand", "200", "ExecOutcome", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"createSandboxExecStream":         {"createSandboxExecStream", "201", "ExecStreamSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"cancelSandboxExecStream":         {"cancelSandboxExecStream", "202", "ExecStreamSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"createSandboxTerminal":           {"createSandboxTerminal", "201", "TerminalSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"reconnectSandboxTerminal":        {"getOrConnectSandboxTerminal", "200", "TerminalSession", []string{"SecondBox-Generation"}, nil},
+	"cancelSandboxTerminal":           {"cancelSandboxTerminal", "202", "TerminalSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"readSandboxFile":                 {"readSandboxFile", "200", "string", []string{"SecondBox-Generation"}, []string{"Content-Length", "Digest"}},
+	"writeSandboxFile":                {"writeSandboxFile", "200", "FileWriteResult", []string{"Digest", "Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"statSandboxFile":                 {"statSandboxFile", "200", "FileStat", []string{"SecondBox-Generation"}, nil},
+	"sandboxFileExists":               {"sandboxFileExists", "200", "FileExistsResult", []string{"SecondBox-Generation"}, nil},
+	"listSandboxDirectory":            {"listSandboxDirectory", "200", "DirectoryListing", []string{"SecondBox-Generation"}, nil},
+	"createSandboxDirectory":          {"createSandboxDirectory", "204", "", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"removeSandboxPath":               {"removeSandboxPath", "204", "", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"listSandboxSnapshots":            {"listSandboxSnapshots", "200", "SnapshotPage", nil, nil},
+	"createSandboxSnapshot":           {"createSandboxSnapshot", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"getSnapshot":                     {"getSnapshot", "200", "Snapshot", nil, nil},
+	"deleteSnapshot":                  {"deleteSnapshot", "202", "Operation", []string{"Idempotency-Key"}, []string{"Idempotency-Replayed"}},
+	"createSandboxPortSession":        {"createSandboxPortSession", "201", "PortSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
+	"getSandboxPortSession":           {"getSandboxPortSession", "200", "PortSession", nil, nil},
+	"closeSandboxPortSession":         {"closeSandboxPortSession", "204", "", []string{"Idempotency-Key"}, nil},
 }
+
+var failClosedManagementOperations = map[string]bool{}
 
 func TestCanonicalOpenAPIHTTPConformanceInventory(t *testing.T) {
 	document := loadOpenAPIContract(t)
@@ -150,6 +176,58 @@ func TestCanonicalOpenAPIOperationsReachHTTPRouter(t *testing.T) {
 	}
 }
 
+func TestManagementRoutesFailClosedAtTheirAuthorityBoundary(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	httpHandler, err := api.NewHandler(api.HandlerConfig{
+		Service: &service.ControlPlaneService{}, Logger: logger,
+		PlatformToken:             "contract-platform-token-at-least-24-bytes",
+		MaximumDataPlaneBodyBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("construct SecondBox HTTP handler: %v", err)
+	}
+
+	for _, test := range []struct {
+		name  string
+		path  string
+		token string
+	}{
+		{name: "platform cannot escalate to tenant controller", path: "/v1/subjects", token: "contract-platform-token-at-least-24-bytes"},
+		{name: "application cannot escalate to tenant controller", path: "/v1/subjects", token: ports.ApplicationBearerTokenPrefix + "contract-application-token-material"},
+		{name: "application cannot escalate to platform", path: "/v1/tenants", token: ports.ApplicationBearerTokenPrefix + "contract-application-token-material"},
+		{name: "tenant controller cannot inspect deployment usage", path: "/v1/deployment-usage", token: ports.TenantControllerBearerTokenPrefix + "contract-controller-token-material"},
+		{name: "application cannot inspect deployment usage", path: "/v1/deployment-usage", token: ports.ApplicationBearerTokenPrefix + "contract-application-token-material"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request.Header.Set("Authorization", "Bearer "+test.token)
+			response := httptest.NewRecorder()
+			httpHandler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":"authentication_failed"`) {
+				t.Fatalf("authority boundary response status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	t.Run("undocumented management route is absent", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/v1/tenant-administration", nil)
+		request.Header.Set("Authorization", "Bearer contract-platform-token-at-least-24-bytes")
+		response := httptest.NewRecorder()
+		httpHandler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("undocumented management route status=%d body=%s", response.Code, response.Body.String())
+		}
+
+		request = httptest.NewRequest(http.MethodPost, "/v1/tenants/tenant-one:escalate", nil)
+		request.Header.Set("Authorization", "Bearer contract-platform-token-at-least-24-bytes")
+		response = httptest.NewRecorder()
+		httpHandler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("undocumented management action status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+}
+
 func TestCanonicalOpenAPICoversEveryPublicHTTPRoute(t *testing.T) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -215,6 +293,16 @@ func TestAuditedHTTPHandlersContainConformanceMarkers(t *testing.T) {
 		source, exists := handlerSources[audited.handler]
 		if !exists {
 			t.Errorf("%s audited handler %q is absent", operationID, audited.handler)
+			continue
+		}
+		if failClosedManagementOperations[operationID] {
+			marker := ".managementUnavailable("
+			if audited.handler == "managementUnavailable" {
+				marker = "ErrManagementUnavailable"
+			}
+			if !strings.Contains(source, marker) {
+				t.Errorf("%s fail-closed handler %s does not emit its typed management error", operationID, audited.handler)
+			}
 			continue
 		}
 		if marker := statusMarkers[audited.successStatus]; !strings.Contains(source, marker) {

@@ -25,6 +25,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 )
@@ -1022,6 +1023,17 @@ func task4InsertSchedulableSandbox(
 	t.Cleanup(pool.Close)
 	workspaceID := task4ID("workspace")
 	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.tenant_quotas (
+			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
+			max_application_authorities,updated_at
+		) VALUES ('task4-project',100,100,100000,1099511627776,100,100,100,100,100,$4)
+		ON CONFLICT (tenant_ref) DO NOTHING;
+		INSERT INTO secondbox.subject_quotas (
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
+		) VALUES ('task4-project','task4-subject',100,100,100000,1099511627776,100,100,100,$4)
+		ON CONFLICT (tenant_ref,subject_ref) DO NOTHING;
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
 			generation,mutation_kind,mutation_id,mutation_effect_id,mutation_operation_id,
@@ -1031,7 +1043,7 @@ func task4InsertSchedulableSandbox(
 			$1,'task4-project','task4-subject',$2,$3,'ready',1073741824,
 			1,'','','','',NULL,NULL,'','{}',$4,$4
 		)`,
-		workspaceID, sandboxID, homeRunnerID, now,
+		pgx.QueryExecModeSimpleProtocol, workspaceID, sandboxID, homeRunnerID, now,
 	); err != nil {
 		t.Fatal(err)
 	}

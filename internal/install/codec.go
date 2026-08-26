@@ -335,8 +335,8 @@ func (plan InstallPlan) Validate() error {
 			return installerError("secret target is outside planned paths", nil)
 		}
 	}
-	if len(plan.StandardBundles) != 2 || !slices.Contains(plan.StandardBundles, "agent-compartment") || !slices.Contains(plan.StandardBundles, "durable-coding") {
-		return installerError("both standard bundles must be selected explicitly", nil)
+	if !standardBundleSelectionComplete(plan.StandardBundles) {
+		return installerError("all standard bundles must be selected explicitly", nil)
 	}
 	if len(plan.Capacity.SubjectQuotas) != 7 {
 		return installerError("all seven subject quotas are required", nil)
@@ -355,7 +355,7 @@ func (plan InstallPlan) Validate() error {
 	if plan.Network.APIAddress == "" || plan.Network.RunnerAddress == "" || plan.Network.DataPlaneAddress == "" || plan.Network.DatabaseAddress == "" || plan.Network.GuestBridgeCIDR == "" || plan.Network.DNSUpstream == "" || len(plan.Network.Gateways) != 2 {
 		return installerError("network plan is incomplete", nil)
 	}
-	if err := validateSafePath(plan.CLI.ConfigPath); err != nil || strings.TrimSpace(plan.CLI.TenantRef) == "" || strings.TrimSpace(plan.CLI.SubjectRef) == "" || strings.ContainsAny(plan.CLI.TenantRef+plan.CLI.SubjectRef, "\r\n\x00") {
+	if err := validateSafePath(plan.CLI.ConfigPath); err != nil {
 		return installerError("CLI authority plan is incomplete or invalid", err)
 	}
 	cliIndex := slices.IndexFunc(plan.Paths, func(path PlannedPath) bool { return path.Name == "cli-config" })

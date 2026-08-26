@@ -1,6 +1,7 @@
 package deployment_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -46,6 +47,79 @@ func TestDeploymentCompilerReplacesLegacyOperatorSurface(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, present)); err != nil {
 			t.Errorf("new deployment artifact missing: %s: %v", present, err)
 		}
+	}
+}
+
+func TestStaticApplicationAuthorityConfigurationIsAbsentFromShippedSurfaces(t *testing.T) {
+	root := repositoryRootForDeploymentPolicy(t)
+	retired := [][]byte{
+		[]byte("SECONDBOX_APPLICATION_" + "AUTHORITIES_JSON"),
+		[]byte("application_" + "authorities_file"),
+		[]byte("application-" + "authorities.json"),
+	}
+	for _, directory := range []string{"cmd", "deploy", "internal", "scripts"} {
+		err := filepath.WalkDir(filepath.Join(root, directory), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, value := range retired {
+				if bytes.Contains(content, value) {
+					t.Errorf("shipped surface %s retains %q", path, value)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestDevelopmentTenancyBootstrapIsExplicitAndPostStart(t *testing.T) {
+	root := repositoryRootForDeploymentPolicy(t)
+	path := filepath.Join(root, "scripts", "bootstrap-development-tenancy.sh")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatal("development tenancy bootstrap is not executable")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	ordered := []string{"platform login", "tenant create", "controller-authority create", "controller login", "subject create", "application-authority create", "application login", "sandboxes list"}
+	position := 0
+	for _, command := range ordered {
+		next := strings.Index(text[position:], command)
+		if next < 0 {
+			t.Fatalf("development bootstrap lacks ordered command %q", command)
+		}
+		position += next + len(command)
+	}
+	justfile, err := os.ReadFile(filepath.Join(root, "Justfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(justfile), "deploy-development-up directory:")
+	if start < 0 {
+		t.Fatal("development startup recipe is absent")
+	}
+	startup := string(justfile)[start:]
+	if next := strings.Index(startup[1:], "\n\n"); next >= 0 {
+		startup = startup[:next+1]
+	}
+	if strings.Contains(startup, "bootstrap-development-tenancy") || strings.Contains(startup, "/v1/tenants") {
+		t.Fatal("development startup hides tenancy bootstrap work")
 	}
 }
 

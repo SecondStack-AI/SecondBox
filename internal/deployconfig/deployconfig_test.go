@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 type recordingComposeExecutor struct{ calls [][]string }
@@ -64,6 +66,14 @@ func TestDevelopmentInitializationAndRenderAreCompleteAndReproducible(t *testing
 		if _, exists := resolved.Environment[name]; exists {
 			t.Errorf("removed protocol declaration %s was rendered", name)
 		}
+	}
+	retiredEnvironment := "SECONDBOX_APPLICATION_" + "AUTHORITIES_JSON"
+	if _, exists := resolved.Environment[retiredEnvironment]; exists {
+		t.Fatalf("retired static authority environment %s was rendered", retiredEnvironment)
+	}
+	retiredSecret := filepath.Join(filepath.Dir(manifestPath), "secrets", "application-"+"authorities.json")
+	if _, err := os.Lstat(retiredSecret); !os.IsNotExist(err) {
+		t.Fatalf("retired static authority secret remains: %v", err)
 	}
 	first := filepath.Join(filepath.Dir(manifestPath), "generated.env")
 	if _, err := Render(manifestPath, first); err != nil {
@@ -127,6 +137,20 @@ func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
 	}
 	if len(OverrideRegistry()) != 15 {
 		t.Fatalf("override count = %d", len(OverrideRegistry()))
+	}
+}
+
+func TestIsolatedStandardBundleCanBeSelectedWithoutGatewayMapping(t *testing.T) {
+	manifest := developmentManifest("secrets/postgres-password", "secrets/platform-token", "secrets/runner-enrollment-credential")
+	manifest.StandardResources.Bundles = []string{standardresources.AgentCompartmentIsolated}
+	manifest.StandardResources.RunnerPools = slices.DeleteFunc(manifest.StandardResources.RunnerPools, func(pool StandardRunnerPool) bool {
+		return pool.Bundle != standardresources.AgentCompartmentIsolated
+	})
+	runner := validTestRunner("runner-isolated", "remote")
+	runner.PoolID = standardresources.PoolAMD64
+	runner.NetworkPolicyRunnerGateways = "none"
+	if err := validateStandardResources(manifest.StandardResources, []Runner{runner}); err != nil {
+		t.Fatalf("explicit isolated bundle selection: %v", err)
 	}
 }
 
@@ -386,6 +410,30 @@ func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 	}
 }
 
+func TestStrictDecodeRejectsRetiredStaticAuthorityManifestKey(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	original, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retiredKey := "application_" + "authorities_file"
+	updated := bytes.Replace(
+		original,
+		[]byte("[applications]\n"),
+		[]byte("[applications]\n"+retiredKey+" = 'secrets/retired.json'\n"),
+		1,
+	)
+	if err := os.WriteFile(manifestPath, updated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadManifest(manifestPath); err == nil ||
+		!strings.Contains(err.Error(), "v0.6.0 clean-install boundary") ||
+		!strings.Contains(err.Error(), "clean reinstall") ||
+		!strings.Contains(err.Error(), "applications."+retiredKey) {
+		t.Fatalf("retired manifest key error = %v", err)
+	}
+}
+
 func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -430,11 +478,13 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		}},
 		{name: "Runner features omit local workspace", want: "runner features require local-workspace", mutate: func(manifest *ManifestV1) { manifest.Policy.RunnerEnabledFeatures = "evidence" }},
 		{name: "standard resources absent", want: "standard_resources.artifact_manifest is required", mutate: func(manifest *ManifestV1) { manifest.StandardResources = StandardResources{} }},
-		{name: "standard bundle duplicate", want: "unique agent-compartment or durable-coding", mutate: func(manifest *ManifestV1) {
+		{name: "standard bundle duplicate", want: "unique release-owned bundle names", mutate: func(manifest *ManifestV1) {
 			manifest.StandardResources.Bundles = []string{"agent-compartment", "agent-compartment"}
 		}},
 		{name: "standard bundle has no pool", want: "must bind selected bundle durable-coding", mutate: func(manifest *ManifestV1) {
-			manifest.StandardResources.RunnerPools = manifest.StandardResources.RunnerPools[:1]
+			manifest.StandardResources.RunnerPools = slices.DeleteFunc(manifest.StandardResources.RunnerPools, func(pool StandardRunnerPool) bool {
+				return pool.Bundle == standardresources.DurableCoding
+			})
 		}},
 		{name: "standard pool capacity absent", want: "max_sandboxes must be positive", mutate: func(manifest *ManifestV1) { manifest.StandardResources.RunnerPools[0].MaxSandboxes = nil }},
 		{name: "standard gateway unresolved", want: "must resolve agent-gateway.secondbox.internal", mutate: func(manifest *ManifestV1) {
@@ -584,14 +634,6 @@ func TestCredentialsRemainSeparateAcrossTrustBoundaries(t *testing.T) {
 	for name, writeCollision := range map[string]func(string, ManifestV1, []byte) error{
 		"platform token": func(base string, manifest ManifestV1, runnerCredential []byte) error {
 			return os.WriteFile(filepath.Join(base, manifest.Applications.PlatformTokenFile), runnerCredential, 0o600)
-		},
-		"application authority token": func(base string, manifest ManifestV1, runnerCredential []byte) error {
-			authorities := []map[string]any{{"id": "review", "token": strings.TrimSpace(string(runnerCredential)), "tenantRef": "tenant", "subjectRef": "subject", "scopes": []string{"sandbox:read"}, "profileGrants": []string{"agent-compartment"}}}
-			content, err := json.Marshal(authorities)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(filepath.Join(base, manifest.Applications.ApplicationAuthoritiesFile), append(content, '\n'), 0o600)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -849,7 +891,7 @@ func TestProductionInitializationReportsEveryUnresolvedDecisionGroup(t *testing.
 	if path == "" || err == nil {
 		t.Fatalf("path, error = %q, %v", path, err)
 	}
-	for _, group := range []string{"deployment", "database", "Runner topology", "execution-asset trust", "application authorities", "tenancy policy", "lifecycle policy"} {
+	for _, group := range []string{"deployment", "database", "Runner topology", "execution-asset trust", "platform authority", "tenancy policy", "lifecycle policy"} {
 		if !strings.Contains(err.Error(), group) {
 			t.Errorf("production error omitted %q: %v", group, err)
 		}

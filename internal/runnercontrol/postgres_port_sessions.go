@@ -12,6 +12,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
@@ -41,6 +42,9 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession quota lock: %w", err)
+	}
 	lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
 		"\x1fport-session\x1f" + input.Session.SandboxID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
@@ -69,6 +73,9 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession replay lookup: %w", err)
+	}
+	if err := rowlock.ActiveSubject(ctx, tx, input.TenantRef, input.SubjectRef, input.Now); err != nil {
+		return PortTunnel{}, false, err
 	}
 	for _, capacityKey := range []string{
 		input.TenantRef + "\x1f" + input.SubjectRef + "\x1fport-session-capacity",
@@ -258,6 +265,9 @@ func (store *PostgresDataPlaneStore) ConsumePortSession(
 		return PortTunnel{}, fmt.Errorf("SecondBox Port tunnel consume transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox Port tunnel consume quota lock: %w", err)
+	}
 	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
 	if err != nil {
 		return PortTunnel{}, err
@@ -325,6 +335,9 @@ func (store *PostgresDataPlaneStore) ConsumeDirectPortSession(
 		return PortTunnel{}, fmt.Errorf("SecondBox direct Port consume transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := lockDataPlaneSessionQuota(ctx, tx, input.SessionID); err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct Port consume quota lock: %w", err)
+	}
 	tunnel, err := lockDirectPortTunnel(ctx, tx, input.RunnerID, input.SessionID)
 	if err != nil {
 		return PortTunnel{}, err
@@ -439,6 +452,11 @@ func (store *PostgresDataPlaneStore) ClosePortSession(
 		return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := lockDataPlaneSessionQuota(ctx, tx, input.SessionID); errors.Is(err, pgx.ErrNoRows) {
+		return contracts.PortSession{}, ports.ErrPortSessionNotFound
+	} else if err != nil {
+		return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close quota lock: %w", err)
+	}
 	if input.IdempotencyKey != "" {
 		lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
 			"\x1fport-session-close\x1f" + input.SessionID + "\x1f" + input.IdempotencyKey
@@ -536,6 +554,9 @@ func (store *PostgresDataPlaneStore) RecordPortClientBytes(
 		return fmt.Errorf("SecondBox Port client-byte transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return fmt.Errorf("SecondBox Port client-byte quota lock: %w", err)
+	}
 	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
 	if err != nil {
 		return err
@@ -601,6 +622,9 @@ func (store *PostgresDataPlaneStore) RecordPortTunnelAcknowledgement(
 		return fmt.Errorf("SecondBox live Port acknowledgement transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return fmt.Errorf("SecondBox live Port acknowledgement quota lock: %w", err)
+	}
 	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
 	if err != nil {
 		return err
@@ -706,6 +730,30 @@ func enforcePortSessionCapacity(
 	_ string,
 	policy contracts.PortPolicy,
 ) error {
+	var tenantState string
+	var tenantExpiresAt *time.Time
+	var tenantMaximum, tenantActive int64
+	if err := tx.QueryRow(ctx, `
+		SELECT tenant.state,tenant.expires_at,quota.max_port_sessions,
+		       (SELECT count(*) FROM secondbox.port_sessions
+		        WHERE tenant_ref=$1 AND state IN ('open','closing') AND expires_at>$2)
+		FROM secondbox.tenants AS tenant
+		JOIN secondbox.tenant_quotas AS quota ON quota.tenant_ref=tenant.ref
+		WHERE tenant.ref=$1
+		FOR UPDATE OF tenant,quota`, input.TenantRef, input.Now.UTC(),
+	).Scan(&tenantState, &tenantExpiresAt, &tenantMaximum, &tenantActive); err != nil {
+		return fmt.Errorf("SecondBox Tenant PortSession quota lookup: %w", err)
+	}
+	if tenantState == contracts.TenantStateSuspended {
+		return ports.ErrTenantSuspended
+	}
+	if tenantState == contracts.TenantStateExpired ||
+		tenantExpiresAt != nil && !tenantExpiresAt.After(input.Now.UTC()) {
+		return ports.ErrResourceExpired
+	}
+	if tenantState != contracts.TenantStateActive {
+		return ports.ErrInvalidLifecycleTransition
+	}
 	var subjectMaximum int64
 	if err := tx.QueryRow(ctx, `
 		SELECT max_port_sessions FROM secondbox.subject_quotas
@@ -726,7 +774,7 @@ func enforcePortSessionCapacity(
 	).Scan(&subjectActive, &namedActive); err != nil {
 		return fmt.Errorf("SecondBox PortSession usage lookup: %w", err)
 	}
-	if subjectActive >= subjectMaximum || namedActive >= policy.MaximumSessions {
+	if tenantActive >= tenantMaximum || subjectActive >= subjectMaximum || namedActive >= policy.MaximumSessions {
 		return ports.ErrQuotaExceeded
 	}
 	return nil
@@ -784,6 +832,9 @@ func (store *PostgresDataPlaneStore) terminatePortSession(
 		return fmt.Errorf("SecondBox Port terminal projection transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, expected.TenantRef, expected.SubjectRef); err != nil {
+		return fmt.Errorf("SecondBox Port terminal projection quota lock: %w", err)
+	}
 	tunnel, err := lockPortTunnel(
 		ctx, tx, expected.TenantRef, expected.SubjectRef, "", expected.Session.ID,
 	)
@@ -954,6 +1005,9 @@ func (store *PostgresDataPlaneStore) projectPortSessionFrame(
 		return false, fmt.Errorf("SecondBox inbound Port transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := lockDataPlaneSessionQuota(ctx, tx, frame.OperationId); err != nil {
+		return false, fmt.Errorf("SecondBox inbound Port quota lock: %w", err)
+	}
 	tunnel, err := lockDirectPortTunnel(ctx, tx, input.RunnerID, frame.OperationId)
 	if err != nil {
 		return false, err

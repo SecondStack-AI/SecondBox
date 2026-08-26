@@ -9,7 +9,6 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	"github.com/SecondStack-AI/SecondBox/internal/install"
-	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
 
@@ -151,12 +150,12 @@ func TestUpdateTargetIdentityIncludesEveryReleaseInput(t *testing.T) {
 	}
 }
 
-func TestGuidedUpdateRejectsSourceBeforeV051WithoutConsultingReleaseInputs(t *testing.T) {
+func TestGuidedUpdateRejectsSourceBeforeCleanInstallBoundaryWithoutConsultingReleaseInputs(t *testing.T) {
 	plan := install.InstallPlan{Release: installReleasePlanFixture()}
-	plan.Release.Version = "0.4.7"
+	plan.Release.Version = "0.5.2"
 	receipt := install.InstallReceipt{Status: install.OperationSucceeded, CompletedStages: make([]install.StageRecord, len(install.StageSequence))}
 	target := installReleasePlanFixture()
-	target.Version = "0.5.2"
+	target.Version = "0.6.0"
 	verified := false
 	err := validateNewUpdate(context.Background(), plan, receipt, target, releaseverify.VerifiedRelease{}, updateDependencies{
 		VerifySource: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
@@ -164,7 +163,8 @@ func TestGuidedUpdateRejectsSourceBeforeV051WithoutConsultingReleaseInputs(t *te
 			return releaseverify.VerifiedRelease{}, nil
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "minimum supported guided-update source 0.5.1") || verified {
+	if err == nil || !strings.Contains(err.Error(), "v0.6.0 clean-install boundary") ||
+		!strings.Contains(err.Error(), "clean reinstall") || verified {
 		t.Fatalf("historical source rejection = %v, verified=%t", err, verified)
 	}
 }
@@ -226,38 +226,5 @@ func TestUpdateDiagnosticBufferAcceptsQuiescenceResult(t *testing.T) {
 	buffer := &boundedCommandBuffer{maximum: 4 << 20}
 	if _, err := buffer.Write([]byte("[]\n")); err != nil || buffer.tooLong || buffer.String() != "[]\n" {
 		t.Fatalf("quiescence buffer = %q tooLong=%t err=%v", buffer.String(), buffer.tooLong, err)
-	}
-}
-
-func TestUpdateSmokeMutationRecoversLostResponsesAndFencesLaterTransitions(t *testing.T) {
-	sandbox := contracts.Sandbox{ID: "sbx_0123456789abcdefghijklmn", State: "stopped", DesiredState: contracts.SandboxDesiredStateStopped, Revision: 41}
-	mutate, firstKey, err := installedUpdateSandboxMutation(sandbox, "start")
-	if err != nil || !mutate || !strings.Contains(firstKey, "revision-41") {
-		t.Fatalf("initial start mutation = %t, %q, %v", mutate, firstKey, err)
-	}
-
-	// The intent committed but its response was lost. Desired state is the
-	// durable acknowledgement, even while observed state still says stopped.
-	sandbox.DesiredState = contracts.SandboxDesiredStateRunning
-	sandbox.Revision = 42
-	if mutate, key, err := installedUpdateSandboxMutation(sandbox, "start"); err != nil || mutate || key != "" {
-		t.Fatalf("ambiguous committed start = %t, %q, %v", mutate, key, err)
-	}
-	sandbox.State = contracts.SandboxStateFailed
-	if mutate, key, err := installedUpdateSandboxMutation(sandbox, "start"); err != nil || !mutate || !strings.Contains(key, "revision-42") {
-		t.Fatalf("terminally failed start retry = %t, %q, %v", mutate, key, err)
-	}
-	sandbox.State = contracts.SandboxStateStopped
-
-	// A completed stop advances the revision, so the next smoke retry receives a
-	// distinct idempotency key instead of replaying the preceding start.
-	sandbox.DesiredState = contracts.SandboxDesiredStateStopped
-	sandbox.Revision = 43
-	mutate, restartKey, err := installedUpdateSandboxMutation(sandbox, "start")
-	if err != nil || !mutate || restartKey == firstKey || !strings.Contains(restartKey, "revision-43") {
-		t.Fatalf("post-stop restart = %t, %q, %v", mutate, restartKey, err)
-	}
-	if _, _, err := installedUpdateSandboxMutation(sandbox, "delete"); err == nil {
-		t.Fatal("invalid update smoke action was accepted")
 	}
 }

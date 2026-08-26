@@ -91,6 +91,15 @@ func TestDiagnosticsBundleBoundsContentAndUsesCredentialOnlyForTiming(t *testing
 		if bytes.Contains(content, []byte(platformToken)) {
 			t.Fatalf("bundle entry %s contains the platform token", name)
 		}
+		for _, retired := range []string{
+			"SECONDBOX_APPLICATION_" + "AUTHORITIES_JSON",
+			"application_" + "authorities_file",
+			"application-" + "authorities.json",
+		} {
+			if bytes.Contains(content, []byte(retired)) {
+				t.Fatalf("bundle entry %s retained static authority surface %q", name, retired)
+			}
+		}
 	}
 	mu.Lock()
 	defer mu.Unlock()

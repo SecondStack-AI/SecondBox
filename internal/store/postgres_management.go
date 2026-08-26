@@ -1,0 +1,1883 @@
+package store
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+)
+
+const (
+	tenantControllerLookupPrefix = "tca_"
+	applicationLookupPrefix      = "apa_"
+)
+
+const tenantSelect = `SELECT ref,state,allowed_profile_grants_json,allowed_application_scopes_json,
+	aggregate_quota_json,expiry_policy_json,metadata_json,expires_at,revision,created_at,updated_at
+	FROM secondbox.tenants`
+
+const subjectSelect = `SELECT tenant_ref,ref,state,cleanup_state,quota_json,metadata_json,
+	expires_at,revision,created_at,updated_at FROM secondbox.subjects`
+
+// CreateTenant persists one explicit tenant management boundary.
+func (store *PostgresControlPlaneStore) CreateTenant(
+	ctx context.Context,
+	tenant contracts.Tenant,
+) (contracts.Tenant, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Tenant{}, fmt.Errorf("SecondBox Tenant create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := insertTenant(ctx, tx, tenant); err != nil {
+		return contracts.Tenant{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Tenant{}, fmt.Errorf("SecondBox Tenant create commit failed: %w", err)
+	}
+	return tenant, nil
+}
+
+// CreateManagedTenant creates or replays one exact operator-owned Tenant response.
+func (store *PostgresControlPlaneStore) CreateManagedTenant(
+	ctx context.Context,
+	tenant contracts.Tenant,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.Tenant, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.Tenant
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant idempotency replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	if err := insertTenant(ctx, tx, tenant); err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, err
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, tenant)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant create commit failed: %w", err)
+	}
+	return tenant, result, nil
+}
+
+// GetTenant returns one operator-visible Tenant.
+func (store *PostgresControlPlaneStore) GetTenant(ctx context.Context, tenantRef string) (contracts.Tenant, error) {
+	tenant, err := scanTenant(store.pool.QueryRow(ctx, tenantSelect+` WHERE ref=$1`, tenantRef))
+	return tenant, mapNotFound(err, ports.ErrManagementNotFound)
+}
+
+// ListTenants returns one stable operator-visible Tenant page.
+func (store *PostgresControlPlaneStore) ListTenants(ctx context.Context, limit int, cursor string) (contracts.TenantPage, error) {
+	boundary, err := store.resolvePostgresListCursor(ctx, tenantListCursorResource, "", cursor,
+		`SELECT created_at FROM secondbox.tenants WHERE ref=$1`)
+	if err != nil {
+		return contracts.TenantPage{}, err
+	}
+	rows, err := store.pool.Query(ctx, tenantSelect+`
+		WHERE NOT $1 OR (created_at,ref) > ($2,$3)
+		ORDER BY created_at,ref LIMIT $4`, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.TenantPage{}, fmt.Errorf("SecondBox Tenant list failed: %w", err)
+	}
+	defer rows.Close()
+	page := contracts.TenantPage{Items: make([]contracts.Tenant, 0)}
+	for rows.Next() {
+		tenant, scanErr := scanTenant(rows)
+		if scanErr != nil {
+			return contracts.TenantPage{}, fmt.Errorf("SecondBox Tenant list scan failed: %w", scanErr)
+		}
+		page.Items = append(page.Items, tenant)
+	}
+	if err := rows.Err(); err != nil {
+		return contracts.TenantPage{}, fmt.Errorf("SecondBox Tenant list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(tenantListCursorResource, "", page.Items[limit-1].Ref)
+	}
+	return page, err
+}
+
+// SetTenantState applies one revision-fenced Tenant lifecycle transition.
+func (store *PostgresControlPlaneStore) SetTenantState(
+	ctx context.Context, tenantRef, targetState string, expectedRevision int64, now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.Tenant, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant lifecycle transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.Tenant
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant lifecycle replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	tenant, err := scanTenant(tx.QueryRow(ctx, tenantSelect+` WHERE ref=$1 FOR UPDATE`, tenantRef))
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if tenant.Revision != expectedRevision {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	if tenant.State == contracts.TenantStateExpired {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, ports.ErrResourceExpired
+	}
+	valid := tenant.State == contracts.TenantStateActive && targetState == contracts.TenantStateSuspended ||
+		tenant.State == contracts.TenantStateSuspended && targetState == contracts.TenantStateActive
+	if !valid {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	tenant.State = targetState
+	tenant.Revision++
+	tenant.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `UPDATE secondbox.tenants SET state=$2,revision=$3,updated_at=$4 WHERE ref=$1`,
+		tenant.Ref, tenant.State, tenant.Revision, tenant.UpdatedAt); err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant lifecycle update failed: %w", err)
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, tenant)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant lifecycle commit failed: %w", err)
+	}
+	return tenant, result, nil
+}
+
+// CreateSubject persists one tenant-scoped subject identity.
+func (store *PostgresControlPlaneStore) CreateSubject(
+	ctx context.Context,
+	subject contracts.Subject,
+) (contracts.Subject, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Subject{}, fmt.Errorf("SecondBox Subject create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := insertSubject(ctx, tx, subject); err != nil {
+		return contracts.Subject{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Subject{}, fmt.Errorf("SecondBox Subject create commit failed: %w", err)
+	}
+	return subject, nil
+}
+
+// CreateManagedSubject creates or replays one tenant-scoped Subject after ceiling checks.
+func (store *PostgresControlPlaneStore) CreateManagedSubject(
+	ctx context.Context, subject contracts.Subject, idempotency ports.AdminIdempotencyInput,
+) (contracts.Subject, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.Subject
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject idempotency replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	tenantQuota, err := lockTenantQuota(ctx, tx, subject.TenantRef)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	tenant, err := scanTenant(tx.QueryRow(ctx, tenantSelect+` WHERE ref=$1 FOR UPDATE`, subject.TenantRef))
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if err := validateManagedTenantAdmission(tenant, subject.CreatedAt); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if !subjectQuotaWithinTenant(subject.Quota, tenant.AggregateQuota) {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	if subject.ExpiresAt != nil && (subject.ExpiresAt.After(subject.CreatedAt.Add(time.Duration(tenant.ExpiryPolicy.MaximumSubjectLifetimeSeconds)*time.Second)) ||
+		tenant.ExpiresAt != nil && subject.ExpiresAt.After(*tenant.ExpiresAt)) {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	var activeSubjects int64
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM secondbox.subjects
+		WHERE tenant_ref=$1 AND state='active' AND (expires_at IS NULL OR expires_at>$2)`,
+		subject.TenantRef, subject.CreatedAt.UTC()).Scan(&activeSubjects); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox active Subject usage lookup failed: %w", err)
+	}
+	if activeSubjects+1 > tenantQuota.MaxActiveSubjects {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrQuotaExceeded
+	}
+	if err := insertSubject(ctx, tx, subject); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, subject)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject create commit failed: %w", err)
+	}
+	return subject, result, nil
+}
+
+// GetSubject returns one non-enumerating tenant-scoped Subject.
+func (store *PostgresControlPlaneStore) GetSubject(ctx context.Context, tenantRef, subjectRef string) (contracts.Subject, error) {
+	subject, err := scanSubject(store.pool.QueryRow(ctx, subjectSelect+` WHERE tenant_ref=$1 AND ref=$2`, tenantRef, subjectRef))
+	return subject, mapNotFound(err, ports.ErrManagementNotFound)
+}
+
+// ListSubjects returns one stable tenant-scoped Subject page.
+func (store *PostgresControlPlaneStore) ListSubjects(ctx context.Context, tenantRef string, limit int, cursor string) (contracts.SubjectPage, error) {
+	boundary, err := store.resolvePostgresListCursor(ctx, subjectListCursorResource, tenantRef, cursor,
+		`SELECT created_at FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2`, tenantRef)
+	if err != nil {
+		return contracts.SubjectPage{}, err
+	}
+	rows, err := store.pool.Query(ctx, subjectSelect+`
+		WHERE tenant_ref=$1 AND (NOT $2 OR (created_at,ref) > ($3,$4))
+		ORDER BY created_at,ref LIMIT $5`, tenantRef, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.SubjectPage{}, fmt.Errorf("SecondBox Subject list failed: %w", err)
+	}
+	defer rows.Close()
+	page := contracts.SubjectPage{Items: make([]contracts.Subject, 0)}
+	for rows.Next() {
+		subject, scanErr := scanSubject(rows)
+		if scanErr != nil {
+			return contracts.SubjectPage{}, fmt.Errorf("SecondBox Subject list scan failed: %w", scanErr)
+		}
+		page.Items = append(page.Items, subject)
+	}
+	if err := rows.Err(); err != nil {
+		return contracts.SubjectPage{}, fmt.Errorf("SecondBox Subject list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(subjectListCursorResource, tenantRef, page.Items[limit-1].Ref)
+	}
+	return page, err
+}
+
+// UpdateManagedSubjectQuota applies one revision-fenced complete quota replacement.
+func (store *PostgresControlPlaneStore) UpdateManagedSubjectQuota(
+	ctx context.Context,
+	tenantRef string,
+	subjectRef string,
+	quota contracts.QuotaLimits,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.Subject, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota update transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.Subject
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota update replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	var subjectExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2
+		)`, tenantRef, subjectRef,
+	).Scan(&subjectExists); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota existence lookup failed: %w", err)
+	}
+	if !subjectExists {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrManagementNotFound
+	}
+	tenantQuota, _, err := lockTenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	tenant, err := scanTenant(tx.QueryRow(ctx, tenantSelect+` WHERE ref=$1 FOR UPDATE`, tenantRef))
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if err := validateManagedTenantAdmission(tenant, now); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	subject, err := scanSubject(tx.QueryRow(ctx, subjectSelect+`
+		WHERE tenant_ref=$1 AND ref=$2 FOR UPDATE`, tenantRef, subjectRef))
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if subject.Revision != expectedRevision {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	if !subjectQuotaWithinTenant(quota, tenantQuota) {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	usage, err := readSubjectQuotaUsage(ctx, tx, tenantRef, subjectRef)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if !subjectQuotaCoversUsage(quota, usage) {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrManagementConflict
+	}
+	quotaJSON, err := encodeManagementJSON("Subject quota", quota)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	subject.Quota = quota
+	subject.Revision++
+	subject.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `UPDATE secondbox.subjects
+		SET quota_json=$3,revision=$4,updated_at=$5
+		WHERE tenant_ref=$1 AND ref=$2`, tenantRef, subjectRef, quotaJSON,
+		subject.Revision, subject.UpdatedAt); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota update failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE secondbox.subject_quotas SET
+		max_sandboxes=$3,max_active_instances=$4,max_cpu_millis=$5,max_memory_bytes=$6,
+		max_snapshots=$7,max_port_sessions=$8,max_concurrent_operations=$9,updated_at=$10
+		WHERE tenant_ref=$1 AND subject_ref=$2`, tenantRef, subjectRef,
+		quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxCPUMillis,
+		quota.MaxMemoryBytes, quota.MaxSnapshots, quota.MaxPortSessions,
+		quota.MaxConcurrentOperations, subject.UpdatedAt); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota ledger update failed: %w", err)
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, subject)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota update commit failed: %w", err)
+	}
+	return subject, result, nil
+}
+
+// CloseManagedSubject atomically revokes application authority and closes admission.
+func (store *PostgresControlPlaneStore) CloseManagedSubject(
+	ctx context.Context,
+	tenantRef string,
+	subjectRef string,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.Subject, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var subjectExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2
+		)`, tenantRef, subjectRef,
+	).Scan(&subjectExists); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close existence lookup failed: %w", err)
+	}
+	if !subjectExists {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrManagementNotFound
+	}
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	var replayed contracts.Subject
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	subject, err := scanSubject(tx.QueryRow(ctx, subjectSelect+`
+		WHERE tenant_ref=$1 AND ref=$2 FOR UPDATE`, tenantRef, subjectRef))
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if subject.State == contracts.SubjectStateActive {
+		if subject.Revision != expectedRevision {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.application_authorities
+			SET state='revoked',revision=revision+1,updated_at=$3
+			WHERE tenant_ref=$1 AND subject_ref=$2 AND state='active'`,
+			tenantRef, subjectRef, now.UTC(),
+		); err != nil {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject authority revocation failed: %w", err)
+		}
+		subject.State = contracts.SubjectStateClosed
+		subject.Revision++
+		subject.UpdatedAt = now.UTC()
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.subjects
+			SET state='closed',revision=$3,updated_at=$4
+			WHERE tenant_ref=$1 AND ref=$2`,
+			tenantRef, subjectRef, subject.Revision, subject.UpdatedAt,
+		); err != nil {
+			return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close failed: %w", err)
+		}
+	} else if subject.State != contracts.SubjectStateClosed && subject.State != contracts.SubjectStateExpired {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, subject)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject close commit failed: %w", err)
+	}
+	return subject, result, nil
+}
+
+// CreateManagedSubjectCleanup creates or returns the Subject's single durable cleanup Operation.
+func (store *PostgresControlPlaneStore) CreateManagedSubjectCleanup(
+	ctx context.Context,
+	tenantRef string,
+	subjectRef string,
+	operation contracts.Operation,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.Operation, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.Operation
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	var state, cleanupState, cleanupOperationID string
+	var revision int64
+	if err := tx.QueryRow(ctx, `
+		SELECT state,cleanup_state,cleanup_operation_id,revision
+		FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2 FOR UPDATE`,
+		tenantRef, subjectRef,
+	).Scan(&state, &cleanupState, &cleanupOperationID, &revision); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if cleanupOperationID != "" {
+		stored, err := getOperationWithQuerier(ctx, tx, tenantRef, subjectRef, `id=$3`, cleanupOperationID)
+		if err != nil {
+			return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+		}
+		result, err = insertAdminIdempotency(ctx, tx, idempotency, stored)
+		if err != nil {
+			return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+		}
+		result.Replayed = true
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup identity replay commit failed: %w", err)
+		}
+		return stored, result, nil
+	}
+	if state != contracts.SubjectStateClosed && state != contracts.SubjectStateExpired {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	if revision != expectedRevision {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	operation.TenantRef = tenantRef
+	operation.SubjectRef = subjectRef
+	if err := insertOperation(ctx, tx, tenantRef, subjectRef, operation); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.subject_cleanup_operations (
+			operation_id,tenant_ref,subject_ref,stage,reconcile_owner,
+			reconcile_claim_expires_at,next_reconcile_at,retry_count,retry_limit,
+			created_at,updated_at
+		) VALUES ($1,$2,$3,'cancel_work','',$4,$4,0,20,$4,$4)`,
+		operation.ID, tenantRef, subjectRef, now.UTC(),
+	); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup coordinator insert failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.subjects
+		SET cleanup_state='pending',cleanup_operation_id=$3,
+			revision=revision+1,updated_at=$4
+		WHERE tenant_ref=$1 AND ref=$2`,
+		tenantRef, subjectRef, operation.ID, now.UTC(),
+	); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup linkage failed: %w", err)
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, operation)
+	if err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Operation{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject cleanup commit failed: %w", err)
+	}
+	return operation, result, nil
+}
+
+// GetTenantUsage reads one tenant's aggregate and per-Subject quota reservations.
+func (store *PostgresControlPlaneStore) GetTenantUsage(
+	ctx context.Context,
+	tenantRef string,
+	limit int,
+	cursor string,
+	observedAt time.Time,
+) (contracts.TenantUsage, error) {
+	boundary, err := store.resolvePostgresListCursor(
+		ctx, tenantUsageSubjectListCursorResource, tenantRef, cursor,
+		`SELECT created_at FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2`, tenantRef,
+	)
+	if err != nil {
+		return contracts.TenantUsage{}, err
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.TenantUsage{}, fmt.Errorf("SecondBox Tenant usage transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	limits, err := lockTenantQuota(ctx, tx, tenantRef)
+	if err != nil {
+		return contracts.TenantUsage{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	usage, err := readTenantQuotaUsage(ctx, tx, tenantRef, observedAt)
+	if err != nil {
+		return contracts.TenantUsage{}, err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT subject.ref,
+		       quota.max_sandboxes,quota.max_active_instances,quota.max_cpu_millis,
+		       quota.max_memory_bytes,quota.max_snapshots,quota.max_port_sessions,
+		       quota.max_concurrent_operations
+		FROM secondbox.subjects AS subject
+		JOIN secondbox.subject_quotas AS quota
+		  ON quota.tenant_ref=subject.tenant_ref AND quota.subject_ref=subject.ref
+		WHERE subject.tenant_ref=$1
+		  AND (NOT $2 OR (subject.created_at,subject.ref) > ($3,$4))
+		ORDER BY subject.created_at,subject.ref
+		LIMIT $5
+		FOR UPDATE OF quota`, tenantRef, boundary.Active,
+		boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.TenantUsage{}, fmt.Errorf("SecondBox Tenant Subject usage list failed: %w", err)
+	}
+	type subjectLimit struct {
+		ref    string
+		limits contracts.QuotaLimits
+	}
+	subjectLimits := make([]subjectLimit, 0)
+	for rows.Next() {
+		var item subjectLimit
+		if err := rows.Scan(
+			&item.ref, &item.limits.MaxSandboxes, &item.limits.MaxActiveInstances,
+			&item.limits.MaxCPUMillis, &item.limits.MaxMemoryBytes,
+			&item.limits.MaxSnapshots, &item.limits.MaxPortSessions,
+			&item.limits.MaxConcurrentOperations,
+		); err != nil {
+			rows.Close()
+			return contracts.TenantUsage{}, fmt.Errorf("SecondBox Tenant Subject usage scan failed: %w", err)
+		}
+		subjectLimits = append(subjectLimits, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return contracts.TenantUsage{}, fmt.Errorf("SecondBox Tenant Subject usage rows failed: %w", err)
+	}
+	rows.Close()
+	var nextCursor *string
+	if len(subjectLimits) > limit {
+		subjectLimits = subjectLimits[:limit]
+		value, err := encodePostgresListNextCursor(
+			tenantUsageSubjectListCursorResource, tenantRef, subjectLimits[limit-1].ref,
+		)
+		if err != nil {
+			return contracts.TenantUsage{}, err
+		}
+		nextCursor = value
+	}
+	subjects := make([]contracts.SubjectUsage, 0, len(subjectLimits))
+	for _, item := range subjectLimits {
+		reserved, err := readSubjectQuotaUsage(ctx, tx, tenantRef, item.ref)
+		if err != nil {
+			return contracts.TenantUsage{}, err
+		}
+		subjects = append(subjects, contracts.SubjectUsage{
+			TenantRef: tenantRef, SubjectRef: item.ref, Limits: item.limits,
+			Usage: contracts.QuotaUsage{
+				Sandboxes: reserved.sandboxes, ActiveInstances: reserved.activeInstances,
+				CPUMillis: reserved.cpuMillis, MemoryBytes: reserved.memoryBytes,
+				Snapshots: reserved.snapshots, PortSessions: reserved.portSessions,
+				ConcurrentOperations: reserved.concurrentOperations,
+			},
+		})
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.TenantUsage{}, fmt.Errorf("SecondBox Tenant usage commit failed: %w", err)
+	}
+	return contracts.TenantUsage{
+		TenantRef: tenantRef, Limits: limits, Usage: usage,
+		Subjects: subjects, NextCursor: nextCursor, ObservedAt: observedAt.UTC(),
+	}, nil
+}
+
+// GetDeploymentUsage returns one repeatable-read deployment aggregate and Tenant page.
+func (store *PostgresControlPlaneStore) GetDeploymentUsage(
+	ctx context.Context,
+	limit int,
+	cursor string,
+	observedAt time.Time,
+) (contracts.DeploymentUsage, error) {
+	boundary, err := store.resolvePostgresListCursor(ctx, deploymentUsageTenantListCursorResource, "", cursor,
+		`SELECT created_at FROM secondbox.tenants WHERE ref=$1`)
+	if err != nil {
+		return contracts.DeploymentUsage{}, err
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return contracts.DeploymentUsage{}, fmt.Errorf("SecondBox Deployment usage transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	usage, err := readDeploymentQuotaUsage(ctx, tx, observedAt)
+	if err != nil {
+		return contracts.DeploymentUsage{}, err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT tenant.ref,
+		       quota.max_sandboxes,quota.max_active_instances,quota.max_cpu_millis,
+		       quota.max_memory_bytes,quota.max_snapshots,quota.max_port_sessions,
+		       quota.max_concurrent_operations,quota.max_active_subjects,
+		       quota.max_application_authorities
+		FROM secondbox.tenants AS tenant
+		JOIN secondbox.tenant_quotas AS quota ON quota.tenant_ref=tenant.ref
+		WHERE NOT $1 OR (tenant.created_at,tenant.ref) > ($2,$3)
+		ORDER BY tenant.created_at,tenant.ref LIMIT $4`, boundary.Active,
+		boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.DeploymentUsage{}, fmt.Errorf("SecondBox Deployment usage Tenant list failed: %w", err)
+	}
+	defer rows.Close()
+	tenantLimits := make([]contracts.TenantAggregateUsage, 0)
+	for rows.Next() {
+		var item contracts.TenantAggregateUsage
+		if err := rows.Scan(&item.TenantRef, &item.Limits.MaxSandboxes,
+			&item.Limits.MaxActiveInstances, &item.Limits.MaxCPUMillis,
+			&item.Limits.MaxMemoryBytes, &item.Limits.MaxSnapshots,
+			&item.Limits.MaxPortSessions, &item.Limits.MaxConcurrentOperations,
+			&item.Limits.MaxActiveSubjects, &item.Limits.MaxApplicationAuthorities); err != nil {
+			return contracts.DeploymentUsage{}, fmt.Errorf("SecondBox Deployment usage Tenant scan failed: %w", err)
+		}
+		tenantLimits = append(tenantLimits, item)
+	}
+	if err := rows.Err(); err != nil {
+		return contracts.DeploymentUsage{}, fmt.Errorf("SecondBox Deployment usage Tenant rows failed: %w", err)
+	}
+	page := contracts.DeploymentUsage{
+		Usage: usage, Tenants: tenantLimits, ObservedAt: observedAt.UTC(),
+	}
+	if len(page.Tenants) > limit {
+		page.Tenants = page.Tenants[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(
+			deploymentUsageTenantListCursorResource, "", page.Tenants[limit-1].TenantRef,
+		)
+		if err != nil {
+			return contracts.DeploymentUsage{}, err
+		}
+	}
+	for index := range page.Tenants {
+		page.Tenants[index].Usage, err = readTenantQuotaUsage(
+			ctx, tx, page.Tenants[index].TenantRef, observedAt,
+		)
+		if err != nil {
+			return contracts.DeploymentUsage{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.DeploymentUsage{}, fmt.Errorf("SecondBox Deployment usage commit failed: %w", err)
+	}
+	return page, nil
+}
+
+// CreateTenantControllerAuthority generates and persists one tenant-controller credential.
+func (store *PostgresControlPlaneStore) CreateTenantControllerAuthority(
+	ctx context.Context,
+	authority contracts.TenantControllerAuthority,
+) (contracts.TenantControllerCredentialResponse, error) {
+	if authority.LookupID != "" {
+		return contracts.TenantControllerCredentialResponse{}, errors.New("SecondBox TenantControllerAuthority lookup identity is server-generated")
+	}
+	authority.Kind = contracts.AuthorityKindTenantController
+	authority.Grant = contracts.TenantControllerGrantManagement
+	lookupID, bearerToken, verifier, err := generatePersistedAuthorityCredential(
+		tenantControllerLookupPrefix,
+		ports.TenantControllerBearerTokenPrefix,
+	)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, err
+	}
+	authority.LookupID = lookupID
+	metadataJSON, err := encodeManagementJSON("TenantControllerAuthority metadata", authority.Metadata)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, err
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, fmt.Errorf("SecondBox TenantControllerAuthority create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := insertAuthorityIdentity(ctx, tx, authority.ID, authority.Kind, authority.LookupID); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.tenant_controller_authorities (
+			id,lookup_id,tenant_ref,grant_name,state,metadata_json,expires_at,
+			revision,token_verifier_sha256,created_at,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		authority.ID, authority.LookupID, authority.TenantRef, authority.Grant,
+		authority.State, metadataJSON, authority.ExpiresAt, authority.Revision,
+		verifier[:], authority.CreatedAt.UTC(), authority.UpdatedAt.UTC(),
+	); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, fmt.Errorf("SecondBox TenantControllerAuthority insert failed: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, fmt.Errorf("SecondBox TenantControllerAuthority create commit failed: %w", err)
+	}
+	return contracts.TenantControllerCredentialResponse{Authority: authority, BearerToken: bearerToken}, nil
+}
+
+// CreateManagedTenantControllerAuthority creates one idempotency-protected controller credential.
+func (store *PostgresControlPlaneStore) CreateManagedTenantControllerAuthority(
+	ctx context.Context, authority contracts.TenantControllerAuthority, idempotency ports.AdminIdempotencyInput,
+) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.TenantControllerAuthority
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		return contracts.TenantControllerCredentialResponse{}, result, ports.ErrCredentialResponseUnavailable
+	}
+	tenant, err := scanTenant(tx.QueryRow(ctx, tenantSelect+` WHERE ref=$1 FOR SHARE`, authority.TenantRef))
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if err := validateManagedTenantAdmission(tenant, authority.CreatedAt); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if !managedAuthorityExpiryAllowed(tenant, authority.CreatedAt, authority.ExpiresAt) {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	response, err := insertTenantControllerCredential(ctx, tx, authority)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, response.Authority)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority create commit failed: %w", err)
+	}
+	return response, result, nil
+}
+
+// ListTenantControllerAuthorities returns one stable tenant-scoped controller page.
+func (store *PostgresControlPlaneStore) ListTenantControllerAuthorities(ctx context.Context, tenantRef string, limit int, cursor string) (contracts.TenantControllerAuthorityPage, error) {
+	if _, err := store.GetTenant(ctx, tenantRef); err != nil {
+		return contracts.TenantControllerAuthorityPage{}, err
+	}
+	boundary, err := store.resolvePostgresListCursor(ctx, tenantControllerAuthorityListCursorResource, tenantRef, cursor,
+		`SELECT created_at FROM secondbox.tenant_controller_authorities WHERE tenant_ref=$1 AND id=$2`, tenantRef)
+	if err != nil {
+		return contracts.TenantControllerAuthorityPage{}, err
+	}
+	rows, err := store.pool.Query(ctx, `SELECT id,lookup_id,tenant_ref,grant_name,state,metadata_json,expires_at,revision,created_at,updated_at
+		FROM secondbox.tenant_controller_authorities WHERE tenant_ref=$1 AND (NOT $2 OR (created_at,id)>($3,$4))
+		ORDER BY created_at,id LIMIT $5`, tenantRef, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.TenantControllerAuthorityPage{}, fmt.Errorf("SecondBox TenantControllerAuthority list failed: %w", err)
+	}
+	defer rows.Close()
+	page := contracts.TenantControllerAuthorityPage{Items: make([]contracts.TenantControllerAuthority, 0)}
+	for rows.Next() {
+		authority, scanErr := scanTenantControllerAuthority(rows)
+		if scanErr != nil {
+			return contracts.TenantControllerAuthorityPage{}, fmt.Errorf("SecondBox TenantControllerAuthority list scan failed: %w", scanErr)
+		}
+		page.Items = append(page.Items, authority)
+	}
+	if err := rows.Err(); err != nil {
+		return contracts.TenantControllerAuthorityPage{}, fmt.Errorf("SecondBox TenantControllerAuthority list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(tenantControllerAuthorityListCursorResource, tenantRef, page.Items[limit-1].ID)
+	}
+	return page, err
+}
+
+// CreateApplicationAuthority generates and persists one application credential.
+func (store *PostgresControlPlaneStore) CreateApplicationAuthority(
+	ctx context.Context,
+	authority contracts.ApplicationAuthority,
+) (contracts.ApplicationCredentialResponse, error) {
+	if authority.LookupID != "" {
+		return contracts.ApplicationCredentialResponse{}, errors.New("SecondBox ApplicationAuthority lookup identity is server-generated")
+	}
+	authority.Kind = contracts.AuthorityKindApplication
+	lookupID, bearerToken, verifier, err := generatePersistedAuthorityCredential(
+		applicationLookupPrefix,
+		ports.ApplicationBearerTokenPrefix,
+	)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	authority.LookupID = lookupID
+	scopesJSON, err := encodeManagementJSON("ApplicationAuthority scopes", authority.Scopes)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	profileGrantsJSON, err := encodeManagementJSON("ApplicationAuthority Profile grants", authority.ProfileGrants)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	metadataJSON, err := encodeManagementJSON("ApplicationAuthority metadata", authority.Metadata)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, fmt.Errorf("SecondBox ApplicationAuthority create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, authority.TenantRef, authority.SubjectRef); err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	if err := insertAuthorityIdentity(ctx, tx, authority.ID, authority.Kind, authority.LookupID); err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.application_authorities (
+			id,lookup_id,tenant_ref,subject_ref,state,scopes_json,profile_grants_json,
+			metadata_json,expires_at,revision,token_verifier_sha256,created_at,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		authority.ID, authority.LookupID, authority.TenantRef, authority.SubjectRef,
+		authority.State, scopesJSON, profileGrantsJSON, metadataJSON,
+		authority.ExpiresAt, authority.Revision, verifier[:],
+		authority.CreatedAt.UTC(), authority.UpdatedAt.UTC(),
+	); err != nil {
+		return contracts.ApplicationCredentialResponse{}, fmt.Errorf("SecondBox ApplicationAuthority insert failed: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.ApplicationCredentialResponse{}, fmt.Errorf("SecondBox ApplicationAuthority create commit failed: %w", err)
+	}
+	return contracts.ApplicationCredentialResponse{Authority: authority, BearerToken: bearerToken}, nil
+}
+
+// CreateManagedApplicationAuthority creates one idempotency-protected ceiling-checked application credential.
+func (store *PostgresControlPlaneStore) CreateManagedApplicationAuthority(
+	ctx context.Context, authority contracts.ApplicationAuthority, idempotency ports.AdminIdempotencyInput,
+) (contracts.ApplicationCredentialResponse, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var subjectExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2
+		)`, authority.TenantRef, authority.SubjectRef,
+	).Scan(&subjectExists); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority Subject existence lookup failed: %w", err)
+	}
+	if !subjectExists {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	tenantQuota, _, err := lockTenantAndSubjectQuota(ctx, tx, authority.TenantRef, authority.SubjectRef)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	var replayed contracts.ApplicationAuthority
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		return contracts.ApplicationCredentialResponse{}, result, ports.ErrCredentialResponseUnavailable
+	}
+	tenant, err := scanTenant(tx.QueryRow(ctx, tenantSelect+` WHERE ref=$1 FOR SHARE`, authority.TenantRef))
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if err := validateManagedTenantAdmission(tenant, authority.CreatedAt); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if !isStringSubset(authority.Scopes, tenant.AllowedApplicationScopes) ||
+		!isStringSubset(authority.ProfileGrants, tenant.AllowedProfileGrants) ||
+		!managedAuthorityExpiryAllowed(tenant, authority.CreatedAt, authority.ExpiresAt) {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	subject, err := scanSubject(tx.QueryRow(ctx, subjectSelect+` WHERE tenant_ref=$1 AND ref=$2 FOR SHARE`, authority.TenantRef, authority.SubjectRef))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+		}
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority Subject lookup failed: %w", err)
+	}
+	if subject.State != contracts.SubjectStateActive || isExpired(subject.ExpiresAt, authority.CreatedAt) {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	if subject.ExpiresAt != nil && authority.ExpiresAt != nil && authority.ExpiresAt.After(*subject.ExpiresAt) {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
+	}
+	var applicationAuthorities int64
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM secondbox.application_authorities
+		WHERE tenant_ref=$1 AND state='active' AND (expires_at IS NULL OR expires_at>$2)`,
+		authority.TenantRef, authority.CreatedAt.UTC()).Scan(&applicationAuthorities); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority usage lookup failed: %w", err)
+	}
+	if applicationAuthorities+1 > tenantQuota.MaxApplicationAuthorities {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrQuotaExceeded
+	}
+	response, err := insertApplicationCredential(ctx, tx, authority)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, response.Authority)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority create commit failed: %w", err)
+	}
+	return response, result, nil
+}
+
+// ListApplicationAuthorities returns one stable non-secret tenant-scoped page.
+func (store *PostgresControlPlaneStore) ListApplicationAuthorities(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string) (contracts.ApplicationAuthorityPage, error) {
+	scope := tenantRef + "\x1f" + subjectRef
+	lookup := `SELECT created_at FROM secondbox.application_authorities WHERE tenant_ref=$1 AND id=$2`
+	lookupArgs := []any{tenantRef}
+	if subjectRef != "" {
+		lookup = `SELECT created_at FROM secondbox.application_authorities WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`
+		lookupArgs = append(lookupArgs, subjectRef)
+	}
+	boundary, err := store.resolvePostgresListCursor(ctx, applicationAuthorityListCursorResource, scope, cursor, lookup, lookupArgs...)
+	if err != nil {
+		return contracts.ApplicationAuthorityPage{}, err
+	}
+	rows, err := store.pool.Query(ctx, `SELECT id,lookup_id,tenant_ref,subject_ref,state,scopes_json,profile_grants_json,metadata_json,expires_at,revision,created_at,updated_at
+		FROM secondbox.application_authorities WHERE tenant_ref=$1 AND ($2='' OR subject_ref=$2)
+		AND (NOT $3 OR (created_at,id)>($4,$5)) ORDER BY created_at,id LIMIT $6`,
+		tenantRef, subjectRef, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.ApplicationAuthorityPage{}, fmt.Errorf("SecondBox ApplicationAuthority list failed: %w", err)
+	}
+	defer rows.Close()
+	page := contracts.ApplicationAuthorityPage{Items: make([]contracts.ApplicationAuthority, 0)}
+	for rows.Next() {
+		authority, scanErr := scanApplicationAuthority(rows)
+		if scanErr != nil {
+			return contracts.ApplicationAuthorityPage{}, fmt.Errorf("SecondBox ApplicationAuthority list scan failed: %w", scanErr)
+		}
+		page.Items = append(page.Items, authority)
+	}
+	if err := rows.Err(); err != nil {
+		return contracts.ApplicationAuthorityPage{}, fmt.Errorf("SecondBox ApplicationAuthority list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(applicationAuthorityListCursorResource, scope, page.Items[limit-1].ID)
+	}
+	return page, err
+}
+
+// AuthenticateTenantControllerAuthority resolves and verifies current durable controller authority.
+func (store *PostgresControlPlaneStore) AuthenticateTenantControllerAuthority(
+	ctx context.Context,
+	bearerToken string,
+	now time.Time,
+) (contracts.Principal, error) {
+	lookupID, ok := parsePersistedAuthorityCredential(
+		bearerToken,
+		ports.TenantControllerBearerTokenPrefix,
+		tenantControllerLookupPrefix,
+	)
+	if !ok {
+		return contracts.Principal{}, ports.ErrAuthenticationFailed
+	}
+	var id, tenantRef, grant, authorityState, tenantState string
+	var verifier []byte
+	var authorityExpiresAt, tenantExpiresAt *time.Time
+	err := store.pool.QueryRow(ctx, `
+		SELECT authority.id,authority.tenant_ref,authority.grant_name,authority.state,
+		       authority.expires_at,authority.token_verifier_sha256,
+		       tenant.state,tenant.expires_at
+		FROM secondbox.tenant_controller_authorities AS authority
+		JOIN secondbox.tenants AS tenant ON tenant.ref=authority.tenant_ref
+		WHERE authority.lookup_id=$1`, lookupID,
+	).Scan(
+		&id, &tenantRef, &grant, &authorityState, &authorityExpiresAt, &verifier,
+		&tenantState, &tenantExpiresAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return contracts.Principal{}, ports.ErrAuthenticationFailed
+	}
+	if err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox TenantControllerAuthority authentication lookup failed: %w", err)
+	}
+	if !verifyPersistedAuthorityCredential(bearerToken, verifier) ||
+		authorityState != contracts.AuthorityStateActive ||
+		grant != contracts.TenantControllerGrantManagement ||
+		tenantState != contracts.TenantStateActive ||
+		isExpired(authorityExpiresAt, now) || isExpired(tenantExpiresAt, now) {
+		return contracts.Principal{}, ports.ErrAuthenticationFailed
+	}
+	return contracts.Principal{
+		Kind: contracts.AuthorityKindTenantController,
+		ID:   id, TenantRef: tenantRef,
+	}, nil
+}
+
+// AuthenticateApplicationAuthority resolves and verifies current durable application authority.
+func (store *PostgresControlPlaneStore) AuthenticateApplicationAuthority(
+	ctx context.Context,
+	bearerToken string,
+	now time.Time,
+) (ports.AuthenticatedApplicationAuthority, error) {
+	lookupID, ok := parsePersistedAuthorityCredential(
+		bearerToken,
+		ports.ApplicationBearerTokenPrefix,
+		applicationLookupPrefix,
+	)
+	if !ok {
+		return ports.AuthenticatedApplicationAuthority{}, ports.ErrAuthenticationFailed
+	}
+	var authenticated ports.AuthenticatedApplicationAuthority
+	var authorityState, subjectState, tenantState string
+	var scopesJSON, profileGrantsJSON, tenantScopesJSON, tenantProfileGrantsJSON []byte
+	var verifier []byte
+	var authorityExpiresAt, subjectExpiresAt, tenantExpiresAt *time.Time
+	err := store.pool.QueryRow(ctx, `
+		SELECT authority.id,authority.tenant_ref,authority.subject_ref,authority.state,
+		       authority.scopes_json,authority.profile_grants_json,authority.expires_at,
+		       authority.token_verifier_sha256,
+		       subject.state,subject.expires_at,
+		       tenant.state,tenant.expires_at,
+		       tenant.allowed_application_scopes_json,tenant.allowed_profile_grants_json
+		FROM secondbox.application_authorities AS authority
+		JOIN secondbox.subjects AS subject
+		  ON subject.tenant_ref=authority.tenant_ref AND subject.ref=authority.subject_ref
+		JOIN secondbox.tenants AS tenant ON tenant.ref=authority.tenant_ref
+		WHERE authority.lookup_id=$1`, lookupID,
+	).Scan(
+		&authenticated.ID, &authenticated.TenantRef, &authenticated.SubjectRef,
+		&authorityState, &scopesJSON, &profileGrantsJSON, &authorityExpiresAt, &verifier,
+		&subjectState, &subjectExpiresAt, &tenantState, &tenantExpiresAt,
+		&tenantScopesJSON, &tenantProfileGrantsJSON,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ports.AuthenticatedApplicationAuthority{}, ports.ErrAuthenticationFailed
+	}
+	if err != nil {
+		return ports.AuthenticatedApplicationAuthority{}, fmt.Errorf("SecondBox ApplicationAuthority authentication lookup failed: %w", err)
+	}
+	if !verifyPersistedAuthorityCredential(bearerToken, verifier) ||
+		authorityState != contracts.AuthorityStateActive ||
+		subjectState != contracts.SubjectStateActive ||
+		tenantState != contracts.TenantStateActive ||
+		isExpired(authorityExpiresAt, now) || isExpired(subjectExpiresAt, now) ||
+		isExpired(tenantExpiresAt, now) {
+		return ports.AuthenticatedApplicationAuthority{}, ports.ErrAuthenticationFailed
+	}
+	var tenantScopes, tenantProfileGrants []string
+	if err := decodeManagementJSON("ApplicationAuthority scopes", scopesJSON, &authenticated.Scopes); err != nil {
+		return ports.AuthenticatedApplicationAuthority{}, err
+	}
+	if err := decodeManagementJSON("ApplicationAuthority Profile grants", profileGrantsJSON, &authenticated.ProfileGrants); err != nil {
+		return ports.AuthenticatedApplicationAuthority{}, err
+	}
+	if err := decodeManagementJSON("Tenant application scopes", tenantScopesJSON, &tenantScopes); err != nil {
+		return ports.AuthenticatedApplicationAuthority{}, err
+	}
+	if err := decodeManagementJSON("Tenant Profile grants", tenantProfileGrantsJSON, &tenantProfileGrants); err != nil {
+		return ports.AuthenticatedApplicationAuthority{}, err
+	}
+	if !isStringSubset(authenticated.Scopes, tenantScopes) ||
+		!isStringSubset(authenticated.ProfileGrants, tenantProfileGrants) {
+		return ports.AuthenticatedApplicationAuthority{}, ports.ErrAuthenticationFailed
+	}
+	return authenticated, nil
+}
+
+// GetTenantControllerAuthority returns no bearer or verifier material.
+func (store *PostgresControlPlaneStore) GetTenantControllerAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+) (contracts.TenantControllerAuthority, error) {
+	authority, err := scanTenantControllerAuthority(store.pool.QueryRow(ctx, `
+		SELECT id,lookup_id,tenant_ref,grant_name,state,metadata_json,expires_at,
+		       revision,created_at,updated_at
+		FROM secondbox.tenant_controller_authorities
+		WHERE tenant_ref=$1 AND id=$2`, tenantRef, authorityID))
+	return authority, mapNotFound(err, ports.ErrManagementNotFound)
+}
+
+// GetApplicationAuthority returns no bearer or verifier material.
+func (store *PostgresControlPlaneStore) GetApplicationAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+) (contracts.ApplicationAuthority, error) {
+	authority, err := scanApplicationAuthority(store.pool.QueryRow(ctx, `
+		SELECT id,lookup_id,tenant_ref,subject_ref,state,scopes_json,
+		       profile_grants_json,metadata_json,expires_at,revision,created_at,updated_at
+		FROM secondbox.application_authorities
+		WHERE tenant_ref=$1 AND id=$2`, tenantRef, authorityID))
+	return authority, mapNotFound(err, ports.ErrManagementNotFound)
+}
+
+// RotateTenantControllerAuthority invalidates the previous bearer and returns one replacement.
+func (store *PostgresControlPlaneStore) RotateTenantControllerAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+	expectedRevision int64,
+	now time.Time,
+) (contracts.TenantControllerCredentialResponse, error) {
+	response, _, err := store.RotateManagedTenantControllerAuthority(
+		ctx, tenantRef, authorityID, expectedRevision, now, ports.AdminIdempotencyInput{},
+	)
+	return response, err
+}
+
+// RotateManagedTenantControllerAuthority performs one idempotency-protected controller credential rotation.
+func (store *PostgresControlPlaneStore) RotateManagedTenantControllerAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority rotate transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.TenantControllerAuthority
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		return contracts.TenantControllerCredentialResponse{}, result, ports.ErrCredentialResponseUnavailable
+	}
+	lookupID, bearerToken, verifier, err := generatePersistedAuthorityCredential(
+		tenantControllerLookupPrefix,
+		ports.TenantControllerBearerTokenPrefix,
+	)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	authority, err := scanTenantControllerAuthority(tx.QueryRow(ctx, `
+		SELECT id,lookup_id,tenant_ref,grant_name,state,metadata_json,expires_at,
+		       revision,created_at,updated_at
+		FROM secondbox.tenant_controller_authorities
+		WHERE tenant_ref=$1 AND id=$2 FOR UPDATE`, tenantRef, authorityID))
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if authority.Revision != expectedRevision {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	if authority.State != contracts.AuthorityStateActive || isExpired(authority.ExpiresAt, now) {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	authority.LookupID = lookupID
+	authority.Revision++
+	authority.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.authority_identities SET lookup_id=$2
+		WHERE id=$1 AND kind=$3`, authority.ID, lookupID, contracts.AuthorityKindTenantController,
+	); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority identity rotation failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.tenant_controller_authorities
+		SET lookup_id=$2,token_verifier_sha256=$3,revision=$4,updated_at=$5
+		WHERE id=$1`, authority.ID, lookupID, verifier[:], authority.Revision, authority.UpdatedAt,
+	); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority rotation failed: %w", err)
+	}
+	response := contracts.TenantControllerCredentialResponse{Authority: authority, BearerToken: bearerToken}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, response.Authority)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority rotate commit failed: %w", err)
+	}
+	return response, result, nil
+}
+
+// RotateApplicationAuthority invalidates the previous bearer and returns one replacement.
+func (store *PostgresControlPlaneStore) RotateApplicationAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+	expectedRevision int64,
+	now time.Time,
+) (contracts.ApplicationCredentialResponse, error) {
+	response, _, err := store.RotateManagedApplicationAuthority(
+		ctx, tenantRef, authorityID, expectedRevision, now, ports.AdminIdempotencyInput{},
+	)
+	return response, err
+}
+
+// RotateManagedApplicationAuthority performs one idempotency-protected application credential rotation.
+func (store *PostgresControlPlaneStore) RotateManagedApplicationAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.ApplicationCredentialResponse, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority rotate transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var subjectRef string
+	if err := tx.QueryRow(ctx, `
+		SELECT subject_ref FROM secondbox.application_authorities
+		WHERE tenant_ref=$1 AND id=$2`, tenantRef, authorityID,
+	).Scan(&subjectRef); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	var replayed contracts.ApplicationAuthority
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		return contracts.ApplicationCredentialResponse{}, result, ports.ErrCredentialResponseUnavailable
+	}
+	lookupID, bearerToken, verifier, err := generatePersistedAuthorityCredential(
+		applicationLookupPrefix,
+		ports.ApplicationBearerTokenPrefix,
+	)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	authority, err := scanApplicationAuthority(tx.QueryRow(ctx, `
+		SELECT id,lookup_id,tenant_ref,subject_ref,state,scopes_json,
+		       profile_grants_json,metadata_json,expires_at,revision,created_at,updated_at
+		FROM secondbox.application_authorities
+		WHERE tenant_ref=$1 AND id=$2 FOR UPDATE`, tenantRef, authorityID))
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if authority.Revision != expectedRevision {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	if authority.State != contracts.AuthorityStateActive || isExpired(authority.ExpiresAt, now) {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	authority.LookupID = lookupID
+	authority.Revision++
+	authority.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.authority_identities SET lookup_id=$2
+		WHERE id=$1 AND kind=$3`, authority.ID, lookupID, contracts.AuthorityKindApplication,
+	); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority identity rotation failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.application_authorities
+		SET lookup_id=$2,token_verifier_sha256=$3,revision=$4,updated_at=$5
+		WHERE id=$1`, authority.ID, lookupID, verifier[:], authority.Revision, authority.UpdatedAt,
+	); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority rotation failed: %w", err)
+	}
+	response := contracts.ApplicationCredentialResponse{Authority: authority, BearerToken: bearerToken}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, response.Authority)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority rotate commit failed: %w", err)
+	}
+	return response, result, nil
+}
+
+// RevokeTenantControllerAuthority immediately denies its bearer credential.
+func (store *PostgresControlPlaneStore) RevokeTenantControllerAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+	expectedRevision int64,
+	now time.Time,
+) (contracts.TenantControllerAuthority, error) {
+	authority, _, err := store.RevokeManagedTenantControllerAuthority(
+		ctx, tenantRef, authorityID, expectedRevision, now, ports.AdminIdempotencyInput{},
+	)
+	return authority, err
+}
+
+// RevokeManagedTenantControllerAuthority revokes or replays one controller mutation.
+func (store *PostgresControlPlaneStore) RevokeManagedTenantControllerAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.TenantControllerAuthority, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority revoke transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.TenantControllerAuthority
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority revocation replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	authority, err := scanTenantControllerAuthority(tx.QueryRow(ctx, `
+		SELECT id,lookup_id,tenant_ref,grant_name,state,metadata_json,expires_at,
+		       revision,created_at,updated_at
+		FROM secondbox.tenant_controller_authorities
+		WHERE tenant_ref=$1 AND id=$2 FOR UPDATE`, tenantRef, authorityID))
+	if err != nil {
+		return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if authority.Revision != expectedRevision {
+		return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	if authority.State != contracts.AuthorityStateActive {
+		return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	authority.State = contracts.AuthorityStateRevoked
+	authority.Revision++
+	authority.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.tenant_controller_authorities
+		SET state=$2,revision=$3,updated_at=$4 WHERE id=$1`,
+		authority.ID, authority.State, authority.Revision, authority.UpdatedAt,
+	); err != nil {
+		return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority revocation failed: %w", err)
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, authority)
+	if err != nil {
+		return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.TenantControllerAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox TenantControllerAuthority revoke commit failed: %w", err)
+	}
+	return authority, result, nil
+}
+
+// RevokeApplicationAuthority immediately denies its bearer credential.
+func (store *PostgresControlPlaneStore) RevokeApplicationAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+	expectedRevision int64,
+	now time.Time,
+) (contracts.ApplicationAuthority, error) {
+	authority, _, err := store.RevokeManagedApplicationAuthority(
+		ctx, tenantRef, authorityID, expectedRevision, now, ports.AdminIdempotencyInput{},
+	)
+	return authority, err
+}
+
+// RevokeManagedApplicationAuthority revokes or replays one application mutation.
+func (store *PostgresControlPlaneStore) RevokeManagedApplicationAuthority(
+	ctx context.Context,
+	tenantRef string,
+	authorityID string,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.ApplicationAuthority, ports.AdminIdempotencyResult, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority revoke transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var subjectRef string
+	if err := tx.QueryRow(ctx, `
+		SELECT subject_ref FROM secondbox.application_authorities
+		WHERE tenant_ref=$1 AND id=$2`, tenantRef, authorityID,
+	).Scan(&subjectRef); err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, err
+	}
+	var replayed contracts.ApplicationAuthority
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority revocation replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT ref FROM secondbox.tenants WHERE ref=$1 FOR UPDATE`, tenantRef); err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority revocation Tenant lock failed: %w", err)
+	}
+	authority, err := scanApplicationAuthority(tx.QueryRow(ctx, `
+		SELECT id,lookup_id,tenant_ref,subject_ref,state,scopes_json,
+		       profile_grants_json,metadata_json,expires_at,revision,created_at,updated_at
+		FROM secondbox.application_authorities
+		WHERE tenant_ref=$1 AND id=$2 FOR UPDATE`, tenantRef, authorityID))
+	if err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if authority.Revision != expectedRevision {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	if authority.State != contracts.AuthorityStateActive {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, ports.ErrInvalidLifecycleTransition
+	}
+	authority.State = contracts.AuthorityStateRevoked
+	authority.Revision++
+	authority.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.application_authorities
+		SET state=$2,revision=$3,updated_at=$4 WHERE id=$1`,
+		authority.ID, authority.State, authority.Revision, authority.UpdatedAt,
+	); err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority revocation failed: %w", err)
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, authority)
+	if err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.ApplicationAuthority{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority revoke commit failed: %w", err)
+	}
+	return authority, result, nil
+}
+
+func insertAuthorityIdentity(
+	ctx context.Context,
+	tx pgx.Tx,
+	authorityID string,
+	kind string,
+	lookupID string,
+) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.authority_identities (id,kind,lookup_id)
+		VALUES ($1,$2,$3)`, authorityID, kind, lookupID,
+	); err != nil {
+		return mapManagementConflict(fmt.Errorf("SecondBox authority identity insert failed: %w", err))
+	}
+	return nil
+}
+
+func insertTenant(ctx context.Context, tx pgx.Tx, tenant contracts.Tenant) error {
+	profileGrantsJSON, err := encodeManagementJSON("Tenant Profile grants", tenant.AllowedProfileGrants)
+	if err != nil {
+		return err
+	}
+	scopesJSON, err := encodeManagementJSON("Tenant application scopes", tenant.AllowedApplicationScopes)
+	if err != nil {
+		return err
+	}
+	quotaJSON, err := encodeManagementJSON("Tenant aggregate quota", tenant.AggregateQuota)
+	if err != nil {
+		return err
+	}
+	expiryPolicyJSON, err := encodeManagementJSON("Tenant expiry policy", tenant.ExpiryPolicy)
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := encodeManagementJSON("Tenant metadata", tenant.Metadata)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.tenants (
+		ref,state,allowed_profile_grants_json,allowed_application_scopes_json,
+		aggregate_quota_json,expiry_policy_json,metadata_json,expires_at,revision,created_at,updated_at
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, tenant.Ref, tenant.State,
+		profileGrantsJSON, scopesJSON, quotaJSON, expiryPolicyJSON, metadataJSON,
+		tenant.ExpiresAt, tenant.Revision, tenant.CreatedAt.UTC(), tenant.UpdatedAt.UTC()); err != nil {
+		return mapManagementConflict(fmt.Errorf("SecondBox Tenant insert failed: %w", err))
+	}
+	if err := insertTenantQuota(ctx, tx, tenant.Ref, tenant.AggregateQuota, tenant.UpdatedAt); err != nil {
+		return err
+	}
+	return nil
+}
+
+func insertTenantQuota(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+	quota contracts.TenantQuota,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.tenant_quotas (
+		tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+		max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
+		max_application_authorities,updated_at
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, tenantRef,
+		quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxCPUMillis,
+		quota.MaxMemoryBytes, quota.MaxSnapshots, quota.MaxPortSessions,
+		quota.MaxConcurrentOperations, quota.MaxActiveSubjects,
+		quota.MaxApplicationAuthorities, now.UTC()); err != nil {
+		return mapManagementConflict(fmt.Errorf("SecondBox Tenant quota insert failed: %w", err))
+	}
+	return nil
+}
+
+func insertSubject(ctx context.Context, tx pgx.Tx, subject contracts.Subject) error {
+	quotaJSON, err := encodeManagementJSON("Subject quota", subject.Quota)
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := encodeManagementJSON("Subject metadata", subject.Metadata)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.subjects (
+		tenant_ref,ref,state,cleanup_state,cleanup_operation_id,quota_json,metadata_json,expires_at,revision,created_at,updated_at
+	) VALUES ($1,$2,$3,$4,'',$5,$6,$7,$8,$9,$10)`, subject.TenantRef, subject.Ref,
+		subject.State, subject.CleanupState, quotaJSON, metadataJSON, subject.ExpiresAt,
+		subject.Revision, subject.CreatedAt.UTC(), subject.UpdatedAt.UTC()); err != nil {
+		return mapManagementConflict(fmt.Errorf("SecondBox Subject insert failed: %w", err))
+	}
+	if err := ensureSubjectQuota(ctx, tx, subject.TenantRef, subject.Ref, subject.Quota, subject.UpdatedAt); err != nil {
+		return err
+	}
+	return nil
+}
+
+func mapManagementConflict(err error) error {
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+		return errors.Join(ports.ErrManagementConflict, err)
+	}
+	return err
+}
+
+func insertTenantControllerCredential(ctx context.Context, tx pgx.Tx, authority contracts.TenantControllerAuthority) (contracts.TenantControllerCredentialResponse, error) {
+	authority.Kind = contracts.AuthorityKindTenantController
+	authority.Grant = contracts.TenantControllerGrantManagement
+	lookupID, bearerToken, verifier, err := generatePersistedAuthorityCredential(tenantControllerLookupPrefix, ports.TenantControllerBearerTokenPrefix)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, err
+	}
+	authority.LookupID = lookupID
+	metadataJSON, err := encodeManagementJSON("TenantControllerAuthority metadata", authority.Metadata)
+	if err != nil {
+		return contracts.TenantControllerCredentialResponse{}, err
+	}
+	if err := insertAuthorityIdentity(ctx, tx, authority.ID, authority.Kind, authority.LookupID); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.tenant_controller_authorities (
+		id,lookup_id,tenant_ref,grant_name,state,metadata_json,expires_at,revision,
+		token_verifier_sha256,created_at,updated_at
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, authority.ID, authority.LookupID,
+		authority.TenantRef, authority.Grant, authority.State, metadataJSON, authority.ExpiresAt,
+		authority.Revision, verifier[:], authority.CreatedAt.UTC(), authority.UpdatedAt.UTC()); err != nil {
+		return contracts.TenantControllerCredentialResponse{}, fmt.Errorf("SecondBox TenantControllerAuthority insert failed: %w", err)
+	}
+	return contracts.TenantControllerCredentialResponse{Authority: authority, BearerToken: bearerToken}, nil
+}
+
+func insertApplicationCredential(ctx context.Context, tx pgx.Tx, authority contracts.ApplicationAuthority) (contracts.ApplicationCredentialResponse, error) {
+	authority.Kind = contracts.AuthorityKindApplication
+	lookupID, bearerToken, verifier, err := generatePersistedAuthorityCredential(applicationLookupPrefix, ports.ApplicationBearerTokenPrefix)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	authority.LookupID = lookupID
+	scopesJSON, err := encodeManagementJSON("ApplicationAuthority scopes", authority.Scopes)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	profileGrantsJSON, err := encodeManagementJSON("ApplicationAuthority Profile grants", authority.ProfileGrants)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	metadataJSON, err := encodeManagementJSON("ApplicationAuthority metadata", authority.Metadata)
+	if err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	if err := insertAuthorityIdentity(ctx, tx, authority.ID, authority.Kind, authority.LookupID); err != nil {
+		return contracts.ApplicationCredentialResponse{}, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.application_authorities (
+		id,lookup_id,tenant_ref,subject_ref,state,scopes_json,profile_grants_json,metadata_json,
+		expires_at,revision,token_verifier_sha256,created_at,updated_at
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, authority.ID, authority.LookupID,
+		authority.TenantRef, authority.SubjectRef, authority.State, scopesJSON, profileGrantsJSON,
+		metadataJSON, authority.ExpiresAt, authority.Revision, verifier[:], authority.CreatedAt.UTC(),
+		authority.UpdatedAt.UTC()); err != nil {
+		return contracts.ApplicationCredentialResponse{}, fmt.Errorf("SecondBox ApplicationAuthority insert failed: %w", err)
+	}
+	return contracts.ApplicationCredentialResponse{Authority: authority, BearerToken: bearerToken}, nil
+}
+
+func validateManagedTenantAdmission(tenant contracts.Tenant, now time.Time) error {
+	if tenant.State == contracts.TenantStateSuspended {
+		return ports.ErrTenantSuspended
+	}
+	if tenant.State == contracts.TenantStateExpired || isExpired(tenant.ExpiresAt, now) {
+		return ports.ErrResourceExpired
+	}
+	if tenant.State != contracts.TenantStateActive {
+		return ports.ErrInvalidLifecycleTransition
+	}
+	return nil
+}
+
+func managedAuthorityExpiryAllowed(tenant contracts.Tenant, now time.Time, expiresAt *time.Time) bool {
+	if expiresAt == nil || !expiresAt.After(now.UTC()) {
+		return false
+	}
+	if expiresAt.After(now.Add(time.Duration(tenant.ExpiryPolicy.MaximumAuthorityLifetimeSeconds) * time.Second)) {
+		return false
+	}
+	return tenant.ExpiresAt == nil || !expiresAt.After(*tenant.ExpiresAt)
+}
+
+func subjectQuotaWithinTenant(subject contracts.QuotaLimits, tenant contracts.TenantQuota) bool {
+	return subject.MaxSandboxes <= tenant.MaxSandboxes &&
+		subject.MaxActiveInstances <= tenant.MaxActiveInstances &&
+		subject.MaxCPUMillis <= tenant.MaxCPUMillis &&
+		subject.MaxMemoryBytes <= tenant.MaxMemoryBytes &&
+		subject.MaxSnapshots <= tenant.MaxSnapshots &&
+		subject.MaxPortSessions <= tenant.MaxPortSessions &&
+		subject.MaxConcurrentOperations <= tenant.MaxConcurrentOperations
+}
+
+func generatePersistedAuthorityCredential(
+	lookupPrefix string,
+	tokenPrefix string,
+) (string, string, [sha256.Size]byte, error) {
+	lookupRandom := make([]byte, 18)
+	if _, err := rand.Read(lookupRandom); err != nil {
+		return "", "", [sha256.Size]byte{}, fmt.Errorf("SecondBox authority lookup identity generation failed: %w", err)
+	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", "", [sha256.Size]byte{}, fmt.Errorf("SecondBox authority bearer generation failed: %w", err)
+	}
+	lookupID := lookupPrefix + base64.RawURLEncoding.EncodeToString(lookupRandom)
+	bearerToken := tokenPrefix + lookupID + "_" + base64.RawURLEncoding.EncodeToString(secret)
+	return lookupID, bearerToken, sha256.Sum256([]byte(bearerToken)), nil
+}
+
+func parsePersistedAuthorityCredential(
+	bearerToken string,
+	tokenPrefix string,
+	lookupPrefix string,
+) (string, bool) {
+	tail, ok := strings.CutPrefix(bearerToken, tokenPrefix)
+	if !ok {
+		return "", false
+	}
+	lookupLength := len(lookupPrefix) + 24
+	if len(tail) <= lookupLength || tail[lookupLength] != '_' {
+		return "", false
+	}
+	lookupID := tail[:lookupLength]
+	if !strings.HasPrefix(lookupID, lookupPrefix) {
+		return "", false
+	}
+	return lookupID, true
+}
+
+func verifyPersistedAuthorityCredential(bearerToken string, verifier []byte) bool {
+	presented := sha256.Sum256([]byte(bearerToken))
+	return subtle.ConstantTimeCompare(presented[:], verifier) == 1
+}
+
+func isExpired(expiresAt *time.Time, now time.Time) bool {
+	return expiresAt != nil && !expiresAt.After(now.UTC())
+}
+
+func isStringSubset(values []string, ceiling []string) bool {
+	allowed := make(map[string]struct{}, len(ceiling))
+	for _, value := range ceiling {
+		allowed[value] = struct{}{}
+	}
+	for _, value := range values {
+		if _, ok := allowed[value]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func encodeManagementJSON(name string, value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox %s encoding failed: %w", name, err)
+	}
+	return encoded, nil
+}
+
+func decodeManagementJSON(name string, encoded []byte, target any) error {
+	if err := json.Unmarshal(encoded, target); err != nil {
+		return fmt.Errorf("SecondBox %s decode failed: %w", name, err)
+	}
+	return nil
+}
+
+type managementRow interface {
+	Scan(dest ...any) error
+}
+
+func scanTenant(row managementRow) (contracts.Tenant, error) {
+	var tenant contracts.Tenant
+	var profileGrantsJSON, scopesJSON, quotaJSON, expiryPolicyJSON, metadataJSON []byte
+	if err := row.Scan(&tenant.Ref, &tenant.State, &profileGrantsJSON, &scopesJSON, &quotaJSON,
+		&expiryPolicyJSON, &metadataJSON, &tenant.ExpiresAt, &tenant.Revision,
+		&tenant.CreatedAt, &tenant.UpdatedAt); err != nil {
+		return contracts.Tenant{}, err
+	}
+	for _, decoded := range []struct {
+		name string
+		raw  []byte
+		into any
+	}{
+		{"Tenant Profile grants", profileGrantsJSON, &tenant.AllowedProfileGrants},
+		{"Tenant application scopes", scopesJSON, &tenant.AllowedApplicationScopes},
+		{"Tenant aggregate quota", quotaJSON, &tenant.AggregateQuota},
+		{"Tenant expiry policy", expiryPolicyJSON, &tenant.ExpiryPolicy},
+		{"Tenant metadata", metadataJSON, &tenant.Metadata},
+	} {
+		if err := decodeManagementJSON(decoded.name, decoded.raw, decoded.into); err != nil {
+			return contracts.Tenant{}, err
+		}
+	}
+	return tenant, nil
+}
+
+func scanSubject(row managementRow) (contracts.Subject, error) {
+	var subject contracts.Subject
+	var quotaJSON, metadataJSON []byte
+	if err := row.Scan(&subject.TenantRef, &subject.Ref, &subject.State, &subject.CleanupState,
+		&quotaJSON, &metadataJSON, &subject.ExpiresAt, &subject.Revision,
+		&subject.CreatedAt, &subject.UpdatedAt); err != nil {
+		return contracts.Subject{}, err
+	}
+	if err := decodeManagementJSON("Subject quota", quotaJSON, &subject.Quota); err != nil {
+		return contracts.Subject{}, err
+	}
+	if err := decodeManagementJSON("Subject metadata", metadataJSON, &subject.Metadata); err != nil {
+		return contracts.Subject{}, err
+	}
+	return subject, nil
+}
+
+func scanTenantControllerAuthority(row managementRow) (contracts.TenantControllerAuthority, error) {
+	var authority contracts.TenantControllerAuthority
+	var metadataJSON []byte
+	if err := row.Scan(
+		&authority.ID, &authority.LookupID, &authority.TenantRef, &authority.Grant,
+		&authority.State, &metadataJSON, &authority.ExpiresAt, &authority.Revision,
+		&authority.CreatedAt, &authority.UpdatedAt,
+	); err != nil {
+		return contracts.TenantControllerAuthority{}, err
+	}
+	authority.Kind = contracts.AuthorityKindTenantController
+	if err := decodeManagementJSON("TenantControllerAuthority metadata", metadataJSON, &authority.Metadata); err != nil {
+		return contracts.TenantControllerAuthority{}, err
+	}
+	return authority, nil
+}
+
+func scanApplicationAuthority(row managementRow) (contracts.ApplicationAuthority, error) {
+	var authority contracts.ApplicationAuthority
+	var scopesJSON, profileGrantsJSON, metadataJSON []byte
+	if err := row.Scan(
+		&authority.ID, &authority.LookupID, &authority.TenantRef, &authority.SubjectRef,
+		&authority.State, &scopesJSON, &profileGrantsJSON, &metadataJSON,
+		&authority.ExpiresAt, &authority.Revision, &authority.CreatedAt, &authority.UpdatedAt,
+	); err != nil {
+		return contracts.ApplicationAuthority{}, err
+	}
+	authority.Kind = contracts.AuthorityKindApplication
+	if err := decodeManagementJSON("ApplicationAuthority scopes", scopesJSON, &authority.Scopes); err != nil {
+		return contracts.ApplicationAuthority{}, err
+	}
+	if err := decodeManagementJSON("ApplicationAuthority Profile grants", profileGrantsJSON, &authority.ProfileGrants); err != nil {
+		return contracts.ApplicationAuthority{}, err
+	}
+	if err := decodeManagementJSON("ApplicationAuthority metadata", metadataJSON, &authority.Metadata); err != nil {
+		return contracts.ApplicationAuthority{}, err
+	}
+	return authority, nil
+}

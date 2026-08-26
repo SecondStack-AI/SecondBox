@@ -59,6 +59,7 @@ type SandboxStore interface {
 	GetSandbox(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.Sandbox, error)
 	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string, metadata map[string]string) (contracts.SandboxPage, error)
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
+	GetTenantOperation(ctx context.Context, tenantRef, operationID string) (contracts.Operation, error)
 	GetSubjectUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.SubjectUsage, error)
 	RelocateSandbox(ctx context.Context, input ports.WorkspaceRelocationInput) (contracts.Operation, error)
 }
@@ -96,6 +97,32 @@ type ObservabilityStore interface {
 	ReadDeploymentTiming(ctx context.Context, since, until time.Time) (contracts.DeploymentTimingSummary, error)
 }
 
+// ManagementStore owns durable delegated tenant management resources.
+type ManagementStore interface {
+	CreateManagedTenant(context.Context, contracts.Tenant, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
+	GetTenant(context.Context, string) (contracts.Tenant, error)
+	ListTenants(context.Context, int, string) (contracts.TenantPage, error)
+	SetTenantState(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
+	CreateManagedSubject(context.Context, contracts.Subject, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
+	GetSubject(context.Context, string, string) (contracts.Subject, error)
+	ListSubjects(context.Context, string, int, string) (contracts.SubjectPage, error)
+	UpdateManagedSubjectQuota(context.Context, string, string, contracts.QuotaLimits, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
+	CloseManagedSubject(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
+	CreateManagedSubjectCleanup(context.Context, string, string, contracts.Operation, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Operation, ports.AdminIdempotencyResult, error)
+	CreateManagedTenantControllerAuthority(context.Context, contracts.TenantControllerAuthority, ports.AdminIdempotencyInput) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error)
+	ListTenantControllerAuthorities(context.Context, string, int, string) (contracts.TenantControllerAuthorityPage, error)
+	RotateManagedTenantControllerAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error)
+	RevokeManagedTenantControllerAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.TenantControllerAuthority, ports.AdminIdempotencyResult, error)
+	CreateManagedApplicationAuthority(context.Context, contracts.ApplicationAuthority, ports.AdminIdempotencyInput) (contracts.ApplicationCredentialResponse, ports.AdminIdempotencyResult, error)
+	ListApplicationAuthorities(context.Context, string, string, int, string) (contracts.ApplicationAuthorityPage, error)
+	RotateManagedApplicationAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.ApplicationCredentialResponse, ports.AdminIdempotencyResult, error)
+	RevokeManagedApplicationAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.ApplicationAuthority, ports.AdminIdempotencyResult, error)
+	GetTenantControllerAuthority(context.Context, string, string) (contracts.TenantControllerAuthority, error)
+	GetApplicationAuthority(context.Context, string, string) (contracts.ApplicationAuthority, error)
+	GetTenantUsage(context.Context, string, int, string, time.Time) (contracts.TenantUsage, error)
+	GetDeploymentUsage(context.Context, int, string, time.Time) (contracts.DeploymentUsage, error)
+}
+
 // ControlPlaneStore is the service's composite consumer-side store contract.
 type ControlPlaneStore interface {
 	HealthStore
@@ -105,6 +132,7 @@ type ControlPlaneStore interface {
 	ActivityStore
 	SnapshotStore
 	ObservabilityStore
+	ManagementStore
 }
 
 // ControlPlaneConfig contains explicit authority, quota, time, and identity dependencies.
@@ -244,7 +272,7 @@ func (service *ControlPlaneService) createProfile(
 		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
-	idempotency, err := service.adminIdempotency(
+	idempotency, err := service.optionalAdminIdempotency(
 		principal, "profile.create", principal.ID, idempotencyKey, request, now,
 	)
 	if err != nil {
@@ -259,13 +287,11 @@ func (service *ControlPlaneService) createProfile(
 	}
 	profile.Revisions = []contracts.ProfileRevision{profile.CurrentRevision}
 	audit := service.newAudit(ctx, principal, "profile.created", "profile", profile.Name, "", now)
+	idempotency.AuditEvent = auditEventPointer(audit)
 	profile, result, err := service.store.CreateProfile(
 		ctx, profile, idempotency,
 	)
 	if err != nil {
-		return contracts.Profile{}, false, err
-	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 		return contracts.Profile{}, false, err
 	}
 	return profile, result.Replayed, nil
@@ -311,7 +337,7 @@ func (service *ControlPlaneService) reviseProfileAtRevision(
 		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
-	idempotency, err := service.adminIdempotency(
+	idempotency, err := service.optionalAdminIdempotency(
 		principal, "profile.revise", name, idempotencyKey,
 		struct {
 			Request          contracts.ReviseProfileRequest `json:"request"`
@@ -326,13 +352,11 @@ func (service *ControlPlaneService) reviseProfileAtRevision(
 		ID: service.newID("prv"), Spec: request.Spec, CreatedAt: now,
 	}
 	audit := service.newAudit(ctx, principal, "profile.revised", "profile", name, "", now)
+	idempotency.AuditEvent = auditEventPointer(audit)
 	profile, result, err := service.store.ReviseProfile(
 		ctx, name, revision, expectedRevision, now, idempotency,
 	)
 	if err != nil {
-		return contracts.Profile{}, false, err
-	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 		return contracts.Profile{}, false, err
 	}
 	return profile, result.Replayed, nil
@@ -372,7 +396,7 @@ func (service *ControlPlaneService) disableProfileAtRevision(
 	expectedRevision int64,
 ) (contracts.Profile, bool, error) {
 	now := service.now().UTC()
-	idempotency, err := service.adminIdempotency(
+	idempotency, err := service.optionalAdminIdempotency(
 		principal, "profile.disable", name, idempotencyKey,
 		struct {
 			ExpectedRevision int64 `json:"expectedRevision"`
@@ -383,13 +407,11 @@ func (service *ControlPlaneService) disableProfileAtRevision(
 		return contracts.Profile{}, false, err
 	}
 	audit := service.newAudit(ctx, principal, "profile.disabled", "profile", name, "", now)
+	idempotency.AuditEvent = auditEventPointer(audit)
 	profile, result, err := service.store.DisableProfile(
 		ctx, name, expectedRevision, now, idempotency,
 	)
 	if err != nil {
-		return contracts.Profile{}, false, err
-	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 		return contracts.Profile{}, false, err
 	}
 	return profile, result.Replayed, nil
@@ -591,6 +613,9 @@ func (service *ControlPlaneService) GetOperation(
 	principal contracts.Principal,
 	operationID string,
 ) (contracts.Operation, error) {
+	if principal.Kind == contracts.AuthorityKindTenantController && principal.TenantRef != "" {
+		return service.store.GetTenantOperation(ctx, principal.TenantRef, operationID)
+	}
 	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return contracts.Operation{}, ports.ErrAuthorizationDenied
 	}
@@ -1149,7 +1174,7 @@ func (service *ControlPlaneService) adminIdempotency(
 	now time.Time,
 ) (ports.AdminIdempotencyInput, error) {
 	if idempotencyKey == "" {
-		return ports.AdminIdempotencyInput{}, nil
+		return ports.AdminIdempotencyInput{}, invalidRequest(errors.New("SecondBox management Idempotency-Key is required"))
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return ports.AdminIdempotencyInput{}, err
@@ -1163,6 +1188,20 @@ func (service *ControlPlaneService) adminIdempotency(
 		Key: idempotencyKey, RequestHash: requestHash,
 		Now: now.UTC(), Ends: service.idempotencyExpiration(now),
 	}, nil
+}
+
+func (service *ControlPlaneService) optionalAdminIdempotency(
+	principal contracts.Principal,
+	operation string,
+	targetID string,
+	idempotencyKey string,
+	request any,
+	now time.Time,
+) (ports.AdminIdempotencyInput, error) {
+	if idempotencyKey == "" {
+		return ports.AdminIdempotencyInput{}, nil
+	}
+	return service.adminIdempotency(principal, operation, targetID, idempotencyKey, request, now)
 }
 
 func (service *ControlPlaneService) newAudit(

@@ -8,11 +8,8 @@ import {
 import {
   SecondBoxClient,
   type Profile,
-  type ProfileRevisionSpec,
   type Sandbox,
 } from "../../sdk/typescript/client.ts";
-
-const composeRunnerPoolName = "compose-live-pool";
 
 test("TypeScript SDK live control-plane contract", async () => {
   const { application, profile } = await newTypeScriptLiveSubjectFixture();
@@ -55,22 +52,19 @@ async function newTypeScriptLiveSubjectFixture(): Promise<{
   readonly profile: Profile;
 }> {
   const baseURL = requireLiveEnvironment("SECONDBOX_LIVE_BASE_URL");
-  const platformToken = requireLiveEnvironment("SECONDBOX_LIVE_PLATFORM_TOKEN");
+  const applicationToken = requireLiveEnvironment("SECONDBOX_LIVE_APPLICATION_TOKEN");
+  const tenantRef = requireLiveEnvironment("SECONDBOX_LIVE_TENANT_REF");
+  const subjectRef = requireLiveEnvironment("SECONDBOX_LIVE_SUBJECT_REF");
   const application = new SecondBox(new SecondBoxClient(
     baseURL,
-    platformToken,
+    applicationToken,
     fetch,
-    "sdk-live-typescript",
-    "sdk-live-typescript-subject",
+    tenantRef,
+    subjectRef,
   ));
 
   const profileName = "typescript-sdk-live";
-  const profile = await application.createProfile({
-    name: profileName,
-    spec: liveProfileRevisionSpec(),
-  }, {
-    idempotencyKey: "typescript-create-profile",
-  });
+  const profile = await application.getProfile(profileName);
   assert.notEqual(profile.currentRevision.id, "");
   assert.equal(profile.name, profileName);
 
@@ -83,47 +77,4 @@ function requireLiveEnvironment(name: string): string {
     throw new Error(`SecondBox TypeScript live SDK test requires ${name}`);
   }
   return value;
-}
-
-function liveProfileRevisionSpec(): ProfileRevisionSpec {
-  return {
-    pool: composeRunnerPoolName,
-    architecture: "amd64",
-    runtimeBundleDigest: `sha256:${"a".repeat(64)}`,
-    toolchainBundleDigest: `sha256:${"b".repeat(64)}`,
-    resources: {
-      cpuMillis: 1000,
-      memoryBytes: 2 ** 30,
-      workspaceBytes: 8 * 2 ** 30,
-      processLimit: 128,
-      concurrentOperations: 4,
-    },
-    startup: {
-      mode: "cold_boot",
-    },
-    lifecycle: {
-      initialState: "stopped",
-      drainGraceSeconds: 30,
-      idleSeconds: 300,
-      maximumDurationSeconds: 3600,
-      leaseSeconds: 60,
-    },
-    retention: {
-      snapshotLimit: 8,
-      snapshotRetentionSeconds: 86400,
-    },
-    execution: {
-      maximumDeadlineMilliseconds: 60000,
-      maximumBufferedOutputBytes: 2 ** 20,
-      streamWindowBytes: 65536,
-      maximumTransferBytes: 2 ** 30,
-      terminalDetachSeconds: 30,
-      dataPlaneTransport: "proxied",
-    },
-    network: {
-      mode: "deny_all",
-      destinations: [],
-    },
-    ports: [],
-  };
 }

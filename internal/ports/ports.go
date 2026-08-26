@@ -8,32 +8,45 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
+const (
+	TenantControllerBearerTokenPrefix = "secondbox_tenant_controller_"
+	ApplicationBearerTokenPrefix      = "secondbox_application_"
+)
+
 var (
-	ErrAuthenticationFailed  = errors.New("SecondBox credential authentication failed")
-	ErrAuthorizationDenied   = errors.New("SecondBox authorization denied")
-	ErrInvalidRequest        = errors.New("SecondBox request is invalid")
-	ErrProfileNotFound       = errors.New("SecondBox Profile not found")
-	ErrProfileDisabled       = errors.New("SecondBox Profile is disabled")
-	ErrRunnerPoolNotFound    = errors.New("SecondBox RunnerPool not found")
-	ErrRunnerPoolExists      = errors.New("SecondBox RunnerPool already exists")
-	ErrRunnerNotFound        = errors.New("SecondBox Runner not found")
-	ErrRunnerPoolUnavailable = errors.New("SecondBox compatible runner pool unavailable")
+	ErrAuthenticationFailed       = errors.New("SecondBox credential authentication failed")
+	ErrAuthorizationDenied        = errors.New("SecondBox authorization denied")
+	ErrManagementUnavailable      = errors.New("SecondBox durable management store is unavailable")
+	ErrManagementNotFound         = errors.New("SecondBox management resource not found")
+	ErrManagementConflict         = errors.New("SecondBox management resource conflicts with current state")
+	ErrInvalidLifecycleTransition = errors.New("SecondBox management lifecycle transition is invalid")
+	ErrResourceExpired            = errors.New("SecondBox management resource is expired")
+	ErrTenantSuspended            = errors.New("SecondBox Tenant is suspended")
+	ErrGrantEscalationDenied      = errors.New("SecondBox management grant exceeds its Tenant ceiling")
+	ErrInvalidRequest             = errors.New("SecondBox request is invalid")
+	ErrProfileNotFound            = errors.New("SecondBox Profile not found")
+	ErrProfileDisabled            = errors.New("SecondBox Profile is disabled")
+	ErrRunnerPoolNotFound         = errors.New("SecondBox RunnerPool not found")
+	ErrRunnerPoolExists           = errors.New("SecondBox RunnerPool already exists")
+	ErrRunnerNotFound             = errors.New("SecondBox Runner not found")
+	ErrRunnerPoolUnavailable      = errors.New("SecondBox compatible runner pool unavailable")
 	// ErrStartupModeUnsupported reports that the Profile's RunnerPool does not
 	// declare the capability its startup mode requires. It is not retryable:
 	// no Runner in that pool is admissible until an operator either declares the
 	// capability on the pool or revises the Profile's startup mode.
-	ErrStartupModeUnsupported      = errors.New("SecondBox RunnerPool does not support the Profile startup mode")
-	ErrSandboxNotFound             = errors.New("SecondBox Sandbox not found")
-	ErrSandboxNameConflict         = errors.New("SecondBox Sandbox name is already in use")
-	ErrIdempotencyConflict         = errors.New("SecondBox idempotency key payload conflict")
-	ErrQuotaExceeded               = errors.New("SecondBox quota exceeded")
-	ErrRevisionConflict            = errors.New("SecondBox resource revision conflict")
-	ErrLifecycleUnavailable        = errors.New("SecondBox lifecycle unavailable without a runner assignment")
-	ErrHomeRunnerUnavailable       = errors.New("SecondBox Sandbox home runner is unavailable")
-	ErrWorkspaceMutation           = errors.New("SecondBox Workspace has a conflicting local mutation")
-	ErrSandboxNotStopped           = errors.New("SecondBox Workspace relocation requires a stopped Sandbox")
-	ErrRelocationTargetUnavailable = errors.New("SecondBox Workspace relocation target is unavailable or incompatible")
-	ErrRelocationSnapshotsPresent  = errors.New("SecondBox Workspace relocation requires all Snapshots to be deleted")
+	ErrStartupModeUnsupported        = errors.New("SecondBox RunnerPool does not support the Profile startup mode")
+	ErrSandboxNotFound               = errors.New("SecondBox Sandbox not found")
+	ErrSandboxNameConflict           = errors.New("SecondBox Sandbox name is already in use")
+	ErrIdempotencyConflict           = errors.New("SecondBox idempotency key payload conflict")
+	ErrCredentialResponseUnavailable = errors.New("SecondBox credential response is unavailable")
+	ErrQuotaExceeded                 = errors.New("SecondBox quota exceeded")
+	ErrRevisionConflict              = errors.New("SecondBox resource revision conflict")
+	ErrLifecycleUnavailable          = errors.New("SecondBox lifecycle unavailable without a runner assignment")
+	ErrHomeRunnerUnavailable         = errors.New("SecondBox Sandbox home runner is unavailable")
+	ErrWorkspaceMutation             = errors.New("SecondBox Workspace has a conflicting local mutation")
+	ErrSandboxNotStopped             = errors.New("SecondBox Workspace relocation requires a stopped Sandbox")
+	ErrRelocationTargetUnavailable   = errors.New("SecondBox Workspace relocation target is unavailable or incompatible")
+	ErrRelocationSnapshotsPresent    = errors.New("SecondBox Workspace relocation requires all Snapshots to be deleted")
 	// ErrSerializationContention reports that a transaction lost a serialization
 	// race and the caller should try again later. It is an ordinary outcome of
 	// serializable isolation under concurrency, not a fault: a caller that treats
@@ -55,7 +68,16 @@ var (
 	ErrWaitExpired             = errors.New("SecondBox Sandbox wait deadline expired")
 )
 
-// AdminIdempotencyInput binds one administrative mutation to an exact durable response.
+// AuthenticatedApplicationAuthority is the verified non-secret application authority used by HTTP admission.
+type AuthenticatedApplicationAuthority struct {
+	ID            string
+	TenantRef     string
+	SubjectRef    string
+	Scopes        []string
+	ProfileGrants []string
+}
+
+// AdminIdempotencyInput binds one administrative mutation to an exact durable outcome.
 type AdminIdempotencyInput struct {
 	TenantRef   string
 	SubjectRef  string
@@ -65,9 +87,10 @@ type AdminIdempotencyInput struct {
 	RequestHash string
 	Now         time.Time
 	Ends        time.Time
+	AuditEvent  *contracts.AuditEvent
 }
 
-// AdminIdempotencyResult reports whether a stored response was replayed.
+// AdminIdempotencyResult reports whether a matching durable outcome was found.
 type AdminIdempotencyResult struct {
 	Replayed bool
 }

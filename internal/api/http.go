@@ -40,7 +40,7 @@ type HandlerConfig struct {
 	Service                   *service.ControlPlaneService
 	Logger                    *slog.Logger
 	PlatformToken             string
-	ApplicationAuthorities    []ApplicationAuthority
+	PersistedAuthorities      PersistedAuthorityAuthenticator
 	MaximumDataPlaneBodyBytes int64
 }
 
@@ -48,7 +48,7 @@ type handler struct {
 	service                   *service.ControlPlaneService
 	logger                    *slog.Logger
 	platformTokenHash         [sha256.Size]byte
-	applicationAuthorities    []resolvedApplicationAuthority
+	persistedAuthorities      PersistedAuthorityAuthenticator
 	maximumDataPlaneBodyBytes int64
 	timings                   *observability.TimingRecorder
 }
@@ -64,21 +64,17 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	if len(config.PlatformToken) < 24 {
 		return nil, errors.New("SecondBox HTTP platform token must contain at least 24 bytes")
 	}
+	if isTenantControllerBearerToken(config.PlatformToken) || isApplicationBearerToken(config.PlatformToken) {
+		return nil, errors.New("SecondBox HTTP platform token uses a reserved persisted-authority prefix")
+	}
 	if config.MaximumDataPlaneBodyBytes <= 0 {
 		return nil, errors.New("SecondBox HTTP data-plane body bound is required")
 	}
 	platformTokenHash := sha256.Sum256([]byte(config.PlatformToken))
-	applicationAuthorities, err := resolveApplicationAuthorities(
-		config.ApplicationAuthorities,
-		platformTokenHash,
-	)
-	if err != nil {
-		return nil, err
-	}
 	apiHandler := &handler{
 		service: config.Service, logger: config.Logger,
 		platformTokenHash:         platformTokenHash,
-		applicationAuthorities:    applicationAuthorities,
+		persistedAuthorities:      config.PersistedAuthorities,
 		maximumDataPlaneBodyBytes: config.MaximumDataPlaneBodyBytes,
 		timings:                   observability.NewTimingRecorder(),
 	}
@@ -86,6 +82,25 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.HandleFunc("GET /healthz", apiHandler.health)
 	mux.HandleFunc("GET /readyz", apiHandler.ready)
 	mux.HandleFunc("GET /metrics", apiHandler.metrics)
+	mux.Handle("GET /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.listTenants)))
+	mux.Handle("POST /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.createTenant)))
+	mux.Handle("GET /v1/tenants/{tenantRef}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.getTenant)))
+	mux.Handle("POST /v1/tenants/{tenantAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.tenantManagementAction)))
+	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.listTenantControllerAuthorities)))
+	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.createTenantControllerAuthority)))
+	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities/{authorityID}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.getTenantControllerAuthority)))
+	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities/{authorityAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.tenantControllerAuthorityManagementAction)))
+	mux.Handle("GET /v1/subjects", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.listSubjects)))
+	mux.Handle("POST /v1/subjects", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.createSubject)))
+	mux.Handle("GET /v1/subjects/{subjectRef}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getSubject)))
+	mux.Handle("PUT /v1/subjects/{subjectRef}/quota", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.updateSubjectQuota)))
+	mux.Handle("POST /v1/subjects/{subjectAction}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.subjectManagementAction)))
+	mux.Handle("GET /v1/application-authorities", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.listApplicationAuthorities)))
+	mux.Handle("POST /v1/application-authorities", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.createApplicationAuthority)))
+	mux.Handle("GET /v1/application-authorities/{authorityID}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getApplicationAuthority)))
+	mux.Handle("POST /v1/application-authorities/{authorityAction}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.applicationAuthorityManagementAction)))
+	mux.Handle("GET /v1/usage", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getTenantUsage)))
+	mux.Handle("GET /v1/deployment-usage", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.getDeploymentUsage)))
 	mux.Handle("GET /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.listProfiles)))
 	mux.Handle("POST /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.createProfile)))
 	mux.Handle("GET /v1/profiles/{profileName}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getProfile)))
@@ -130,7 +145,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("GET /v1/leases/{leaseID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getLease)))
 	mux.Handle("DELETE /v1/leases/{leaseID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.releaseLease)))
 	mux.Handle("POST /v1/leases/{leaseAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.renewLease)))
-	mux.Handle("GET /v1/operations/{operationID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOperation)))
+	mux.Handle("GET /v1/operations/{operationID}", apiHandler.authenticateOperationInspection(http.HandlerFunc(apiHandler.getOperation)))
 	mux.Handle("GET /v1/operations/{operationID}/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOperationTiming)))
 	return apiHandler.withRequestID(mux), nil
 }
@@ -442,7 +457,7 @@ func (apiHandler *handler) getProfile(writer http.ResponseWriter, request *http.
 }
 
 func (apiHandler *handler) mutateProfile(writer http.ResponseWriter, request *http.Request) {
-	name, action, ok := splitAction(request.PathValue("profileAction"))
+	name, action, ok := splitAction(request.PathValue("profileAction"), "revise", "disable")
 	if !ok {
 		apiHandler.writeError(writer, request, ports.ErrProfileNotFound)
 		return
@@ -546,7 +561,10 @@ func (apiHandler *handler) getSandbox(writer http.ResponseWriter, request *http.
 }
 
 func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *http.Request) {
-	sandboxID, action, ok := splitAction(request.PathValue("sandboxAction"))
+	sandboxID, action, ok := splitAction(
+		request.PathValue("sandboxAction"),
+		"start", "drain", "stop", "relocate", "restore", "wait", "inspect", "ping", "touch",
+	)
 	if !ok {
 		apiHandler.writeError(writer, request, ports.ErrSandboxNotFound)
 		return
@@ -744,7 +762,7 @@ func (apiHandler *handler) getLease(writer http.ResponseWriter, request *http.Re
 }
 
 func (apiHandler *handler) renewLease(writer http.ResponseWriter, request *http.Request) {
-	leaseID, action, ok := splitAction(request.PathValue("leaseAction"))
+	leaseID, action, ok := splitAction(request.PathValue("leaseAction"), "renew")
 	if !ok || action != "renew" {
 		apiHandler.writeError(writer, request, ports.ErrLeaseNotFound)
 		return
@@ -819,14 +837,22 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
 			return
 		}
-		authority, ok := authenticateApplicationAuthority(
-			apiHandler.applicationAuthorities,
-			presentedHash,
-		)
-		if !ok {
+		if isTenantControllerBearerToken(credential) {
 			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
 			return
 		}
+		if apiHandler.persistedAuthorities == nil || !isApplicationBearerToken(credential) {
+			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
+			return
+		}
+		persisted, err := apiHandler.persistedAuthorities.AuthenticateApplicationAuthority(
+			request.Context(), credential, time.Now().UTC(),
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		authority := resolvedPersistedApplicationAuthority(persisted)
 		if err := authorizeApplicationRequest(authority, request); err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
@@ -980,8 +1006,22 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusUnauthorized, "authentication_failed", "Port tunnel token is invalid", false
 	case errors.Is(err, ports.ErrAuthorizationDenied):
 		return http.StatusForbidden, "authorization_failed", "Authorization failed", false
+	case errors.Is(err, ports.ErrManagementUnavailable):
+		return http.StatusServiceUnavailable, "management_unavailable", "Management API is unavailable", false
 	case errors.Is(err, ports.ErrInvalidRequest):
 		return http.StatusBadRequest, "invalid_request", "Request is invalid", false
+	case errors.Is(err, ports.ErrManagementNotFound):
+		return http.StatusNotFound, "not_found", "Resource not found", false
+	case errors.Is(err, ports.ErrManagementConflict):
+		return http.StatusConflict, "state_conflict", "Management resource conflicts with current state", false
+	case errors.Is(err, ports.ErrInvalidLifecycleTransition):
+		return http.StatusConflict, "invalid_lifecycle_transition", "Management lifecycle transition is invalid", false
+	case errors.Is(err, ports.ErrResourceExpired):
+		return http.StatusConflict, "resource_expired", "Management resource is expired", false
+	case errors.Is(err, ports.ErrTenantSuspended):
+		return http.StatusConflict, "tenant_suspended", "Tenant is suspended", false
+	case errors.Is(err, ports.ErrGrantEscalationDenied):
+		return http.StatusForbidden, "grant_escalation_denied", "Requested grant exceeds the Tenant ceiling", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):
 		return http.StatusBadRequest, "invalid_request", "List page cursor is invalid", false
 	case errors.Is(err, ports.ErrPortPolicyDenied):
@@ -1018,6 +1058,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "state_conflict", "Sandbox name is already in use", false
 	case errors.Is(err, ports.ErrIdempotencyConflict):
 		return http.StatusConflict, "idempotency_conflict", "Idempotency key payload conflict", false
+	case errors.Is(err, ports.ErrCredentialResponseUnavailable):
+		return http.StatusConflict, "credential_response_unavailable", "Credential response is unavailable", false
 	case errors.Is(err, ports.ErrPortTokenConsumed):
 		return http.StatusConflict, "state_conflict", "Port tunnel token was already consumed", false
 	case errors.Is(err, runnercontrol.ErrFileChecksum):
@@ -1395,7 +1437,12 @@ func parseGeneration(request *http.Request) (int64, error) {
 	return generation, nil
 }
 
-func splitAction(value string) (string, string, bool) {
-	resource, action, ok := strings.Cut(value, ":")
-	return resource, action, ok && resource != "" && action != ""
+func splitAction(value string, actions ...string) (string, string, bool) {
+	for _, action := range actions {
+		suffix := ":" + action
+		if resource, ok := strings.CutSuffix(value, suffix); ok && resource != "" {
+			return resource, action, true
+		}
+	}
+	return "", "", false
 }

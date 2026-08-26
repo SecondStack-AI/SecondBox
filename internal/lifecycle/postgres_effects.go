@@ -549,7 +549,15 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		}
 		return err
 	}
-	tag, err := broker.pool.Exec(ctx, `
+	tx, err := broker.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle start completion transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := rowlock.SandboxQuota(ctx, tx, claim.SandboxID); err != nil {
+		return fmt.Errorf("SecondBox lifecycle start completion quota lock failed: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET lifecycle_action='start_instance',next_reconcile_at=$4,reconcile_owner='',
 		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
@@ -563,7 +571,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	}
 	if tag.RowsAffected() == 0 {
 		var currentInstanceID string
-		if err := broker.pool.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			SELECT current_instance_id FROM secondbox.sandboxes
 			WHERE id=$1 AND generation=$2`, claim.SandboxID, plan.generation,
 		).Scan(&currentInstanceID); err != nil {
@@ -572,6 +580,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		if currentInstanceID != assignment.InstanceID {
 			return ports.ErrRevisionConflict
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox lifecycle start completion commit failed: %w", err)
 	}
 	return nil
 }
@@ -613,7 +624,15 @@ func (broker *PostgresEffectBroker) deferInvalidProfileStart(
 		"profileRevisionId", plan.profileRevisionID,
 		"error", cause,
 	)
-	tag, err := broker.pool.Exec(ctx, `
+	tx, err := broker.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle invalid Profile deferral transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := rowlock.SandboxQuota(ctx, tx, claim.SandboxID); err != nil {
+		return fmt.Errorf("SecondBox lifecycle invalid Profile deferral quota lock failed: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL
 		WHERE id=$1 AND generation=$3 AND current_instance_id=''
@@ -626,6 +645,9 @@ func (broker *PostgresEffectBroker) deferInvalidProfileStart(
 	}
 	if tag.RowsAffected() != 1 {
 		return ports.ErrRevisionConflict
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox lifecycle invalid Profile deferral commit failed: %w", err)
 	}
 	return nil
 }
@@ -641,7 +663,15 @@ func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
 	generation int64,
 	nextReconcileAt time.Time,
 ) error {
-	tag, err := broker.pool.Exec(ctx, `
+	tx, err := broker.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle unavailable home Runner deferral transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := rowlock.SandboxQuota(ctx, tx, claim.SandboxID); err != nil {
+		return fmt.Errorf("SecondBox lifecycle unavailable home Runner deferral quota lock failed: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL
 		WHERE id=$1 AND generation=$3 AND current_instance_id=''
@@ -653,6 +683,9 @@ func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
 	}
 	if tag.RowsAffected() != 1 {
 		return ports.ErrRevisionConflict
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox lifecycle unavailable home Runner deferral commit failed: %w", err)
 	}
 	return nil
 }

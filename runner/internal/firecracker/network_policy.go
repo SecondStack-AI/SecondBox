@@ -149,6 +149,7 @@ func (e *NFTablesNetworkPolicyEnforcer) Install(ctx context.Context, cfg PolicyN
 		tapName,
 		cfg.GuestIP,
 		cfg.DNSAddress,
+		cfg.Policy.AllowsDNS(),
 		cfg.Policy.ProtectedPrefixes(),
 		destinations,
 		runnerGateways,
@@ -256,6 +257,7 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 		instance.cfg.TapName,
 		instance.cfg.GuestIP,
 		instance.cfg.DNSAddress,
+		instance.cfg.Policy.AllowsDNS(),
 		instance.cfg.Policy.ProtectedPrefixes(),
 		destinations,
 		instance.cfg.Policy.RunnerGatewayDestinations(),
@@ -343,6 +345,7 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 	}
 	script := fmt.Sprintf("delete table bridge %s\n%s", instance.table, renderNFTPolicy(
 		instance.table, instance.cfg.TapName, instance.cfg.GuestIP, instance.cfg.DNSAddress,
+		instance.cfg.Policy.AllowsDNS(),
 		instance.cfg.Policy.ProtectedPrefixes(), instance.cfg.Policy.Destinations(),
 		instance.cfg.Policy.RunnerGatewayDestinations(), instance.pins,
 	))
@@ -433,6 +436,7 @@ func renderNFTPolicy(
 	tapName string,
 	guestIP string,
 	dnsAddress netip.Addr,
+	allowDNS bool,
 	protected []netip.Prefix,
 	destinations []networkpolicy.Destination,
 	runnerGateways []networkpolicy.RunnerGatewayDestination,
@@ -471,7 +475,7 @@ func renderNFTPolicy(
 			dnsAddress,
 		)
 	}
-	if dnsAddress.IsValid() {
+	if allowDNS && dnsAddress.IsValid() {
 		family := "ip"
 		if dnsAddress.Is6() {
 			family = "ip6"

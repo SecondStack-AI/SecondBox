@@ -4,9 +4,11 @@ Profiles are server-owned policy. Application clients select an authorized profi
 
 ## HTTP authorities
 
-The deployment-wide `SECONDBOX_PLATFORM_TOKEN` is the operator authority. It may call administrative and application routes while asserting any bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. SecondBox stores and compares both references on every owned read and write. Operators keep this credential out of application services.
+The deployment-wide `SECONDBOX_PLATFORM_TOKEN` is the operator authority. It creates and manages Tenants, tenant-controller authorities, Profiles, RunnerPools, and Runners, and it may call application routes while asserting any bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. SecondBox stores and compares both references on every owned read and write. Operators keep this credential out of application services.
 
-`SECONDBOX_APPLICATION_AUTHORITIES_JSON` explicitly provisions zero or more application authorities. Each entry has a unique ID and token, one fixed tenant reference, one fixed subject reference, one or more exact Sandbox operation scopes, and one or more Profile grants. An application request must present the bound references exactly. It cannot call Profile mutation, Runner administration, or aggregate timing routes; it can read only granted Profiles and can create Sandboxes only from them. Owned resource queries remain restricted to its bound tenant and subject.
+A persisted tenant-controller authority has one server-generated bearer credential and is fixed to one Tenant. It manages that Tenant's Subjects, application authorities, and usage projection through the management routes. It cannot administer another Tenant, Profiles, RunnerPools, or Runners, and it cannot call ordinary Sandbox routes. The controller credential is returned only after successful creation or rotation; PostgreSQL retains only its public lookup identifier and one-way verifier.
+
+A persisted application authority has one server-generated bearer credential, a unique ID, one fixed tenant reference, one fixed subject reference, one or more exact Sandbox operation scopes, and one or more Profile grants. An application request must present the bound references exactly. It cannot call platform or tenant management, Profile mutation, Runner administration, deployment usage, or aggregate timing routes; it can read only granted Profiles and can create Sandboxes only from them. Owned resource queries remain restricted to its bound tenant and subject. Application credential creation and rotation also return the bearer token once and persist only its lookup identifier and verifier.
 
 Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:exec`, `sandbox:files`, `sandbox:ports`, and `sandbox:ports:direct`. Unknown routes and missing scopes fail closed.
 
@@ -28,12 +30,15 @@ Every ProfileRevision contains:
 - outbound network and DNS policy;
 - approved exposed ports, protocols, and session limits.
 
-SecondBox releases two explicitly selected standard Profile bundles:
+SecondBox releases three explicitly selected standard Profile bundles:
 
 - `agent-compartment` is bounded ephemeral compute for Flue-style agent turns. It starts immediately, has short idle and maximum-duration bounds, and exposes no ports.
 - `durable-coding` is a long-running coding workspace with larger inline CPU, memory, disk, process, operation, transfer, PTY-detach, Snapshot, and development-port bounds.
+- `agent-compartment-isolated` retains the bounded command, file, workspace, cancellation, and lifecycle capabilities of `agent-compartment` while denying all outbound network and DNS access and exposing no ports.
 
 The declarative resource engine materializes standard bundles as ordinary immutable ProfileRevisions. Selection is explicit in `[standard_resources]`; the control plane has no built-in defaults, reserved-name behavior, or request-time reconciler. Each release declares the complete ordered lineage and canonical spec digest, validates an installed prefix, and appends only missing revisions. Existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules.
+
+Tenant ceilings and application grants select these release-owned Profile names directly; they do not create tenant-specific Profile copies. A network-enabled RunnerPool maps to one operator-trusted egress context. Tenant-aware shared egress identity is outside this release.
 
 Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or transferring Workspace bytes off the Runner. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
 
@@ -55,8 +60,9 @@ Revisions recorded before the field existed are stamped `cold_boot` by migration
 
 ## Quotas
 
-`subject_quotas` is the only persisted quota set. It covers total Sandboxes, active Instances, vCPU, memory, Snapshots, exposed-port sessions, and concurrent data-plane operations for the asserted tenant and subject. Workspace and Snapshot filesystem allocation is governed by Runner storage-pressure admission rather than charged as uniquely retained bytes. Profile resource limits, including standard Profile limits, remain inline immutable execution policy rather than a second quota table. Admission and quota reservation are transactional. A concurrent race either commits one authorized reservation or returns a typed quota error; it never overcommits and repairs later.
+Tenant aggregate quota and Subject quota both cover total Sandboxes, active Instances, vCPU, memory, Snapshots, exposed-port sessions, and concurrent data-plane operations. Tenant quota additionally limits active Subjects and application authorities. Each chargeable admission reserves against the Tenant and Subject in one transaction and stable lock order; release and cleanup update both levels together. Workspace and Snapshot filesystem allocation is governed by Runner storage-pressure admission rather than charged as uniquely retained bytes. Profile resource limits, including standard Profile limits, remain inline immutable execution policy rather than a third quota set. A concurrent race either commits one authorized reservation or returns a typed quota error; it never overcommits and repairs later.
 
 Metrics use fixed-cardinality labels. Tenant refs, subject refs, Sandbox IDs, profile names, and workspace paths are audit fields rather than metric dimensions.
 
 See [Domain and lifecycle](domain-lifecycle.md), [API conventions](api-conventions.md), and [Security](security.md).
+Customer-shared tenant, delegated authority, aggregate quota, subject cleanup, and network-isolation behavior is defined in [customer-shared tenancy](customer-shared-tenancy.md).

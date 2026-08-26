@@ -78,6 +78,9 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 		{name: "aliased components", mutate: func(value *ArtifactManifest) {
 			value.MicroVM.ToolchainBundle.ManifestDigest = value.MicroVM.RuntimeBundle.ManifestDigest
 		}, want: "distinct identities"},
+		{name: "missing isolated standard bundle", mutate: func(value *ArtifactManifest) {
+			value.StandardBundles = value.StandardBundles[:2]
+		}, want: "agent-compartment-isolated"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -236,6 +239,7 @@ func validManifest() ArtifactManifest {
 		StandardBundles: []StandardBundleArtifact{
 			{Identity: identity, Name: "agent-compartment", Document: ref("agent-compartment.json"), Profiles: []StandardProfileIdentity{{Name: "agent-compartment", Revision: 1, SpecDigest: testDigest}}},
 			{Identity: identity, Name: "durable-coding", Document: ref("durable-coding.json"), Profiles: []StandardProfileIdentity{{Name: "durable-coding", Revision: 1, SpecDigest: testDigest}}},
+			{Identity: identity, Name: "agent-compartment-isolated", Document: ref("agent-compartment-isolated.json"), Profiles: []StandardProfileIdentity{{Name: "agent-compartment-isolated", Revision: 1, SpecDigest: testDigest}}},
 		},
 	}
 }

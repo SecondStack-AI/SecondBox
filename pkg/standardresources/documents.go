@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
 )
@@ -29,13 +30,13 @@ type BundleDocument struct {
 }
 
 func Documents(signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest string) ([]BundleDocument, error) {
-	result := make([]BundleDocument, 0, 2)
-	for _, name := range []string{AgentCompartment, DurableCoding} {
+	result := make([]BundleDocument, 0, len(BundleNames()))
+	for _, name := range BundleNames() {
 		profile, err := ProfileLineage(name, runtimeBundleDigest, toolchainBundleDigest)
 		if err != nil {
 			return nil, err
 		}
-		gateway := map[string]string{AgentCompartment: AgentGateway, DurableCoding: PlatformGateway}[name]
+		gateway := logicalGateway(name)
 		document := BundleDocument{SchemaVersion: BundleSchemaVersion, Name: name, Architecture: ArchitectureAMD64, RunnerPoolSelector: PoolAMD64, LogicalGateway: gateway, SignedManifestDigest: signedManifestDigest, RuntimeBundleDigest: runtimeBundleDigest, ToolchainBundleDigest: toolchainBundleDigest, Profile: profile, ParameterSchema: poolParameterSchema()}
 		if err := document.Validate(); err != nil {
 			return nil, err
@@ -87,10 +88,10 @@ func decodeDocument(data []byte) (BundleDocument, error) {
 // previously published bundle. It deliberately does not compare that lineage
 // with the current binary's append-only ProfileLineage.
 func (document BundleDocument) ValidateRecorded() error {
-	if document.SchemaVersion != BundleSchemaVersion || (document.Name != AgentCompartment && document.Name != DurableCoding) || document.Architecture != ArchitectureAMD64 || document.RunnerPoolSelector != PoolAMD64 || len(document.ParameterSchema) == 0 || !json.Valid(document.ParameterSchema) {
+	if document.SchemaVersion != BundleSchemaVersion || !slices.Contains(BundleNames(), document.Name) || document.Architecture != ArchitectureAMD64 || document.RunnerPoolSelector != PoolAMD64 || len(document.ParameterSchema) == 0 || !json.Valid(document.ParameterSchema) {
 		return errors.New("SecondBox recorded standard bundle identity or parameter schema is incomplete")
 	}
-	wantGateway := map[string]string{AgentCompartment: AgentGateway, DurableCoding: PlatformGateway}[document.Name]
+	wantGateway := logicalGateway(document.Name)
 	if document.LogicalGateway != wantGateway {
 		return fmt.Errorf("SecondBox recorded standard bundle %q logical gateway differs from release policy", document.Name)
 	}
@@ -122,10 +123,10 @@ func (document BundleDocument) ValidateRecorded() error {
 }
 
 func (document BundleDocument) Validate() error {
-	if document.SchemaVersion != BundleSchemaVersion || (document.Name != AgentCompartment && document.Name != DurableCoding) || document.Architecture != ArchitectureAMD64 || document.RunnerPoolSelector != PoolAMD64 || len(document.ParameterSchema) == 0 {
+	if document.SchemaVersion != BundleSchemaVersion || !slices.Contains(BundleNames(), document.Name) || document.Architecture != ArchitectureAMD64 || document.RunnerPoolSelector != PoolAMD64 || len(document.ParameterSchema) == 0 {
 		return errors.New("SecondBox standard bundle identity or parameter schema is incomplete")
 	}
-	wantGateway := map[string]string{AgentCompartment: AgentGateway, DurableCoding: PlatformGateway}[document.Name]
+	wantGateway := logicalGateway(document.Name)
 	if document.LogicalGateway != wantGateway {
 		return fmt.Errorf("SecondBox standard bundle %q logical gateway differs from release policy", document.Name)
 	}
@@ -152,4 +153,8 @@ func (document BundleDocument) Validate() error {
 
 func poolParameterSchema() json.RawMessage {
 	return json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["architectures","capabilities","capacityPolicy","state"],"properties":{"architectures":{"type":"array","contains":{"const":"amd64"}},"capabilities":{"type":"array","minItems":1,"items":{"type":"string"}},"capacityPolicy":{"type":"object","additionalProperties":{"type":"integer","minimum":0}},"state":{"const":"ready"}}}`)
+}
+
+func logicalGateway(name string) string {
+	return map[string]string{AgentCompartment: AgentGateway, DurableCoding: PlatformGateway}[name]
 }

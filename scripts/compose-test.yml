@@ -27,7 +27,6 @@ services:
         condition: service_healthy
     environment:
       SECONDBOX_PLATFORM_TOKEN: compose-test-platform-token-0000000000000000
-      SECONDBOX_APPLICATION_AUTHORITIES_JSON: "[]"
       SECONDBOX_DATABASE_URL: postgresql://secondbox:secondbox-compose-test-password@postgres:5432/secondbox_compose_test?sslmode=disable
       SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES: "10"
       SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS: "20"

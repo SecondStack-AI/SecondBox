@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -24,6 +25,7 @@ func newSessionEnvironment(t *testing.T) string {
 	t.Setenv(sessionPathEnvironment, path)
 	t.Setenv(sessionURLEnvironment, "")
 	t.Setenv(sessionTokenEnvironment, "")
+	t.Setenv(sessionAuthorityEnvironment, "")
 	t.Setenv(sessionTenantRefEnvironment, "")
 	t.Setenv(sessionSubjectRefEnvironment, "")
 	return path
@@ -233,6 +235,7 @@ func TestLoginVerifiesAndStoresCredentials(t *testing.T) {
 	}
 	want := sessionFile{
 		URL: server.URL, Token: "good-token",
+		Authority: string(sessionAuthorityApplication),
 		TenantRef: "tenant-1", SubjectRef: "subject-1",
 	}
 	if stored != want {
@@ -283,6 +286,57 @@ func TestLoginRejectedCredentialsAreNotStored(t *testing.T) {
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
 		t.Fatalf("configuration must not exist after a rejected login: %v", err)
+	}
+}
+
+func TestPlatformLoginRejectsControllerCredentialWithTypedError(t *testing.T) {
+	path := newSessionEnvironment(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/tenants" {
+			t.Errorf("platform verification path = %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/problem+json")
+		writer.WriteHeader(http.StatusForbidden)
+		_, _ = writer.Write([]byte(`{"code":"authority_kind_forbidden","title":"wrong authority kind"}`))
+	}))
+	defer server.Close()
+	session, err := resolveSession(cliSession{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runAuthorityLoginCommand(context.Background(), session, sessionAuthorityPlatform, []string{"--url", server.URL, "--token", "controller-token"}, io.Discard, server.Client())
+	var mismatch *cliSessionAuthorityError
+	if !errors.As(err, &mismatch) || mismatch.Required != sessionAuthorityPlatform {
+		t.Fatalf("platform login mismatch = %#v, %v", mismatch, err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("wrong credential kind was stored: %v", err)
+	}
+}
+
+func TestControllerLoginStoresOnlyTypedControllerCredential(t *testing.T) {
+	path := newSessionEnvironment(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/subjects" || request.Header.Get("Authorization") != "Bearer controller-token" {
+			t.Errorf("controller verification request = %s %#v", request.URL.Path, request.Header)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"items":[]}`))
+	}))
+	defer server.Close()
+	session, err := resolveSession(cliSession{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runAuthorityLoginCommand(context.Background(), session, sessionAuthorityTenantController, []string{"--url", server.URL, "--token", "controller-token"}, io.Discard, server.Client()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := readSessionFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Authority != string(sessionAuthorityTenantController) || stored.TenantRef != "" || stored.SubjectRef != "" {
+		t.Fatalf("stored controller session = %#v", stored)
 	}
 }
 
@@ -399,7 +453,7 @@ func TestLoginAccessibleFormPromptsOnlyForMissingValues(t *testing.T) {
 	if strings.Contains(transcript, "API endpoint") {
 		t.Fatalf("form prompted for supplied URL: %q", transcript)
 	}
-	for _, prompt := range []string{"Platform token", "Tenant reference", "Subject reference", path} {
+	for _, prompt := range []string{"Application token", "Tenant reference", "Subject reference", path} {
 		if !strings.Contains(transcript, prompt) {
 			t.Fatalf("form transcript lacks %q: %q", prompt, transcript)
 		}

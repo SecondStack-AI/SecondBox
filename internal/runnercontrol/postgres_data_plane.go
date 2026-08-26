@@ -11,6 +11,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -227,6 +228,9 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane admission transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane admission quota lock: %w", err)
+	}
 	lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
 		"\x1fdata-plane\x1f" + input.Operation + "\x1f" +
 		input.SandboxID + "\x1f" + input.IdempotencyKey
@@ -247,6 +251,9 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 			}
 			return session, true, nil
 		}
+	}
+	if err := rowlock.ActiveSubject(ctx, tx, input.TenantRef, input.SubjectRef, input.Now); err != nil {
+		return DataPlaneSession{}, false, err
 	}
 	projectCapacityKey := input.TenantRef + "\x1f" + input.SubjectRef + "\x1fdata-plane-capacity"
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, projectCapacityKey); err != nil {
@@ -519,6 +526,16 @@ func lookupDataPlaneReplay(
 	return session, true, err
 }
 
+func lockDataPlaneSessionQuota(ctx context.Context, tx pgx.Tx, sessionID string) error {
+	var tenantRef, subjectRef string
+	if err := tx.QueryRow(ctx, `
+		SELECT tenant_ref,subject_ref FROM secondbox.data_plane_sessions WHERE id=$1`, sessionID,
+	).Scan(&tenantRef, &subjectRef); err != nil {
+		return err
+	}
+	return rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef)
+}
+
 func lockDataPlaneAuthority(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -605,6 +622,30 @@ func lockDataPlaneAuthority(
 		session.DataPlaneAddress = endpoint.Address
 		session.DataPlaneCertificateSPKI = endpoint.CertificateSPKISHA256
 	}
+	var tenantState string
+	var tenantExpiresAt *time.Time
+	var tenantActive, tenantMaximum int64
+	if err := tx.QueryRow(ctx, `
+		SELECT tenant.state,tenant.expires_at,quota.max_concurrent_operations,
+		       (SELECT count(*) FROM secondbox.data_plane_sessions
+		        WHERE tenant_ref=$1 AND state IN ('pending','running','cancelling'))
+		FROM secondbox.tenants AS tenant
+		JOIN secondbox.tenant_quotas AS quota ON quota.tenant_ref=tenant.ref
+		WHERE tenant.ref=$1
+		FOR UPDATE OF tenant,quota`, input.TenantRef,
+	).Scan(&tenantState, &tenantExpiresAt, &tenantMaximum, &tenantActive); err != nil {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox Tenant operation quota lookup: %w", err)
+	}
+	if tenantState == contracts.TenantStateSuspended {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrTenantSuspended
+	}
+	if tenantState == contracts.TenantStateExpired ||
+		tenantExpiresAt != nil && !tenantExpiresAt.After(input.Now.UTC()) {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrResourceExpired
+	}
+	if tenantState != contracts.TenantStateActive {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrInvalidLifecycleTransition
+	}
 	var sandboxActive, subjectActive, subjectMaximum int64
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM secondbox.data_plane_sessions
@@ -625,7 +666,8 @@ func lockDataPlaneAuthority(
 	).Scan(&subjectMaximum, &subjectActive); err != nil {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox subject operation quota lookup: %w", err)
 	}
-	if sandboxActive >= spec.Resources.ConcurrentOperations || subjectActive >= subjectMaximum {
+	if sandboxActive >= spec.Resources.ConcurrentOperations || subjectActive >= subjectMaximum ||
+		tenantActive >= tenantMaximum {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrQuotaExceeded
 	}
 	return session, spec.Execution, nil

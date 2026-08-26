@@ -25,6 +25,11 @@ func (store *PostgresControlPlaneStore) RelocateSandbox(
 		return contracts.Operation{}, fmt.Errorf("SecondBox Workspace relocation transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := rowlock.TenantAndSubjectQuota(
+		ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef,
+	); err != nil {
+		return contracts.Operation{}, fmt.Errorf("SecondBox Workspace relocation quota lock failed: %w", err)
+	}
 	lockKey := input.Principal.TenantRef + "\x1f" + input.Principal.SubjectRef +
 		"\x1frelocate\x1f" + input.SandboxID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {

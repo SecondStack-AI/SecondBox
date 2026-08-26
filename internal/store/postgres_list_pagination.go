@@ -12,10 +12,16 @@ import (
 )
 
 const (
-	profileListCursorResource    = "profiles"
-	runnerPoolListCursorResource = "runner_pools"
-	runnerListCursorResource     = "runners"
-	sandboxListCursorResource    = "sandboxes"
+	profileListCursorResource                   = "profiles"
+	runnerPoolListCursorResource                = "runner_pools"
+	runnerListCursorResource                    = "runners"
+	sandboxListCursorResource                   = "sandboxes"
+	tenantListCursorResource                    = "tenants"
+	deploymentUsageTenantListCursorResource     = "deployment_usage_tenants"
+	tenantUsageSubjectListCursorResource        = "tenant_usage_subjects"
+	subjectListCursorResource                   = "subjects"
+	tenantControllerAuthorityListCursorResource = "tenant_controller_authorities"
+	applicationAuthorityListCursorResource      = "application_authorities"
 )
 
 type postgresListCursorBoundary struct {

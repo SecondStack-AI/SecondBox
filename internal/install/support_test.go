@@ -57,6 +57,15 @@ func TestInstallerSupportBundleIsBoundedCreateOnlyAndSecretRedacted(t *testing.T
 	if strings.Contains(combined, "support-secret-value") || !strings.Contains(combined, "plan-digest") && !strings.Contains(combined, "sha256:") {
 		t.Fatalf("support content redaction/identity failed: %q", combined)
 	}
+	for _, retired := range []string{
+		"application-" + "authorities.json",
+		"application-" + "authority",
+		"application_" + "authorities_file",
+	} {
+		if strings.Contains(combined, retired) {
+			t.Fatalf("support bundle retained static authority surface %q", retired)
+		}
+	}
 	if err := WriteSupportBundle(output, plan, receipt, nil); err == nil {
 		t.Fatal("support bundle overwrote an existing archive")
 	}

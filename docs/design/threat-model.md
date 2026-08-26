@@ -1,10 +1,10 @@
 # Threat model
 
-SecondBox treats guest workloads, network peers, mutable infrastructure, and stale distributed actors as hostile or fallible. The trusted upstream caller and operators are inside the platform boundary. Availability against an operator with database, platform-token, or Runner-host control is out of scope.
+SecondBox treats guest workloads, network peers, mutable infrastructure, and stale distributed actors as hostile or fallible. Customer operators and their tenant controllers are inside the platform boundary. Availability against an operator with database, platform-token, or Runner-host control is out of scope.
 
 ## Trust boundaries
 
-The HTTP boundary validates one deployment-wide platform token and accepts caller-asserted tenant and subject references. The caller is responsible for authenticating end users and authorizing those assertions. A caller bug or compromise can cross subjects; this is an explicit accepted risk.
+The HTTP boundary distinguishes three authorities. The platform token is deployment-wide. A persisted tenant-controller credential is fixed to one Tenant and can manage only its Subjects and application authorities. A persisted application credential is fixed to one Tenant, one Subject, exact Sandbox scopes, and explicit Profile grants; it must repeat its bound references on each request. The upstream controller remains responsible for authenticating end users and deciding which Subject receives work.
 
 PostgreSQL is the desired-state and ownership authority. Each home Runner's local filesystem is the durable-byte authority for its Workspaces and Snapshots. Signed immutable execution assets are release inputs verified and cached by each Runner. The outbound Runner gRPC boundary uses a separate pre-shared credential plus CA-signed mTLS identity. A privileged Runner host contains an additional Firecracker/jailer boundary around each untrusted guest.
 
@@ -15,7 +15,9 @@ The control-plane image has no reason to access KVM, TUN/TAP, host cgroups, host
 | Threat | Security property | Required control and evidence |
 | --- | --- | --- |
 | Stolen platform token | Bounded incident response | Secret storage, transport TLS, bounded request inputs, audit correlation, token replacement, and control-plane restart |
-| Incorrect ownership assertion | Visible accepted risk | Upstream authorization; exact tenant/subject scoping in every owned query; no claim that SecondBox independently verifies the assertion |
+| Stolen tenant-controller credential | Tenant-confined incident response | Persisted one-way verifier, current-state check on each request, fixed Tenant grant, audit correlation, rotation or revocation, and no Sandbox-route authority |
+| Stolen application credential | Subject-confined incident response | Persisted one-way verifier, exact bound headers, fixed scopes and Profile grants, immediate rotation or revocation, and non-enumerating cross-tenant reads |
+| Incorrect upstream Subject selection | Bounded delegated risk | Controller-created Subject identity and application authority; exact Tenant/Subject scoping in every owned query; no claim that SecondBox authenticates end users |
 | Request replay | Single intended mutation | Tenant/subject/operation-scoped idempotency keys, request fingerprints, transactional results, and bounded retention |
 | Stale Runner or duplicate assignment | Single generation authority | Monotonic generations, opaque fencing tokens, durable assignment state, authenticated Runner identity, and rejection before mutation |
 | Compromised Runner | Bounded blast radius | Explicit trust pools, credential replacement, drain and fencing, operator recovery of stable identity plus Workspace root, and no platform/database credentials |
@@ -23,16 +25,17 @@ The control-plane image has no reason to access KVM, TUN/TAP, host cgroups, host
 | Execution-asset substitution | Execution integrity | Trusted signing keys, SHA-256 manifests, staged verification, and atomic local publication |
 | Control-plane compromise | No direct compute-host access | Non-root container, dropped capabilities, read-only filesystem, no host devices or sockets, and distinct Runner authority |
 | Home-Runner disk loss | Explicit durability boundary | Reflink-store readiness, no empty or automatic cross-Runner fallback, source-required operator relocation, and consistent external backup of stable Runner identity plus Workspace root |
-| Resource exhaustion | Shared-service availability | Explicit per-subject quotas, request deadlines, payload/output limits, admission capacity, and backpressure |
+| Resource exhaustion | Shared-service availability | Atomic Tenant aggregate and Subject quotas, management-record ceilings, request deadlines, payload/output limits, admission capacity, and backpressure |
+| Abandoned Subject | Eventual resource release | Immediate admission denial on closure or expiry, authority revocation, one durable cleanup Operation, acknowledged Runner workspace removal, restart-safe retries, and operator-visible terminal failure |
 | Unauthenticated peer reaching a Runner data-plane listener | No admission without PostgreSQL | Framed single-use credential before any payload byte, bounded handshake time and message size, constant-time local rejection against assignment-bound session state, and credential consumption through the authenticated control connection |
 | Leaked Runner data-plane address | Confined ingress surface | Exact `sandbox:ports:direct` operation scope denied by default, per-authority grant, no Runner address in any other response or in Port evidence, and an advertised value that carries no Sandbox identity |
 | Direct Port connection outliving its authority | Single generation authority | Generation fence, Lease expiry, session deadline, operator drain, Instance termination, and control-connection loss each close every live socket for the affected session, with bounded proof of closure |
 
 ## Credential lifecycle
 
-The platform token, PostgreSQL credential, pre-shared Runner credential, Runner mTLS keys, artifact-signing keys, and guest runtime credentials are separate secrets. The deployment bootstrap creates the Compose development credentials and Runner PKI. Operators issue Runner certificates out of band; the Runner CA private key is not mounted into the control plane.
+The platform token, persisted tenant-controller and application bearer tokens, PostgreSQL credential, pre-shared Runner credential, Runner mTLS keys, artifact-signing keys, and guest runtime credentials are separate secrets. Production initialization materializes only the platform token; tenant controllers and application authorities are created after startup through authenticated management operations. The deployment bootstrap creates development Runner PKI. Operators issue Runner certificates out of band; the Runner CA private key is not mounted into the control plane.
 
-Replacing the platform token requires coordinated caller and control-plane rollout. Replacing the Runner credential requires restarting the control plane and every trusted Runner so no old authenticated stream remains. A CA compromise additionally requires replacing the CA, server credential, and Runner certificates.
+Replacing the platform token requires coordinated operator and control-plane rollout. Tenant-controller and application rotation or revocation takes effect on the next request without restarting the service; if a creation response is lost, the caller lists the non-secret record, revokes it, and creates a replacement because bearer material is not recoverable. Replacing the Runner credential requires restarting the control plane and every trusted Runner so no old authenticated stream remains. A CA compromise additionally requires replacing the CA, server credential, and Runner certificates.
 
 ## Detection and response
 

@@ -46,7 +46,7 @@ fi
 
 if [[ "$scenario_mode" == "suite" ]]; then
   export SECONDBOX_RUNNER_ID=scenario-runner
-  export SECONDBOX_RUNNER_POOL_ID=scenario-pool
+  export SECONDBOX_RUNNER_POOL_ID=standard-amd64
   export SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES=10
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS=20
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS=100000
@@ -389,22 +389,6 @@ export SECONDBOX_PLATFORM_TOKEN="scenario-platform-token-0000000000000000"
 # recovery sweeps during qualification.
 export SECONDBOX_SCENARIO_DATA_PLANE_POLL_INTERVAL_MILLISECONDS="${SECONDBOX_SCENARIO_DATA_PLANE_POLL_INTERVAL_MILLISECONDS:-250}"
 export SECONDBOX_SCENARIO_DIRECT_PORT_PROFILE="scenario-direct-port"
-export SECONDBOX_SCENARIO_DIRECT_PORT_TOKEN="scenario-direct-port-ingress-token-000000"
-export SECONDBOX_APPLICATION_AUTHORITIES_JSON
-SECONDBOX_APPLICATION_AUTHORITIES_JSON="$(
-  cat <<JSON
-[
-  {
-    "id": "scenario-direct-port-ingress",
-    "token": "$SECONDBOX_SCENARIO_DIRECT_PORT_TOKEN",
-    "tenantRef": "scenario-tenant",
-    "subjectRef": "scenario-subject",
-    "scopes": ["sandbox:read", "sandbox:lifecycle", "sandbox:ports", "sandbox:ports:direct"],
-    "profileGrants": ["$SECONDBOX_SCENARIO_DIRECT_PORT_PROFILE"]
-  }
-]
-JSON
-)"
 export SECONDBOX_LIVE_BASE_URL="http://127.0.0.1:$SECONDBOX_SCENARIO_API_PORT"
 export SECONDBOX_SCENARIO_DATABASE_URL="postgresql://secondbox:secondbox-scenario-password@127.0.0.1:$SECONDBOX_SCENARIO_DATABASE_PORT/secondbox_scenario?sslmode=disable"
 
@@ -609,6 +593,77 @@ sweep_host_orphans
 compose config --quiet
 compose up --detach --wait --wait-timeout 240 \
   postgres control-plane
+
+if [[ "$scenario_mode" == "suite" ]]; then
+  bootstrap_tenant="scenario-tenant"
+  bootstrap_subject="scenario-subject"
+  bootstrap_profile_grants='["agent-compartment-isolated","scenario-agent-compartment-network-enabled","scenario-control-restart","scenario-data-paths","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle"]'
+else
+  bootstrap_tenant="$(jq -er '.tenantRef' "$SECONDBOX_STRESS_CONFIG")"
+  bootstrap_subject="$(jq -er '.subjectRef' "$SECONDBOX_STRESS_CONFIG")"
+  bootstrap_profile_grants="$(jq -c '[.profileName]' "$SECONDBOX_STRESS_CONFIG")"
+fi
+bootstrap_expiry="$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) + timedelta(hours=24)).isoformat().replace("+00:00", "Z"))')"
+
+scenario_management_post() {
+  local token="$1"
+  local path="$2"
+  local idempotency_key="$3"
+  local body="$4"
+  curl --fail-with-body --silent --show-error \
+    --request POST \
+    --header "Authorization: Bearer $token" \
+    --header "Content-Type: application/json" \
+    --header "Idempotency-Key: $idempotency_key" \
+    --data "$body" \
+    "$SECONDBOX_LIVE_BASE_URL$path"
+}
+
+scenario_management_post "$SECONDBOX_PLATFORM_TOKEN" /v1/tenants scenario-bootstrap-tenant "$(jq -cn \
+  --arg ref "$bootstrap_tenant" \
+  --argjson profileGrants "$bootstrap_profile_grants" \
+  --argjson maxSandboxes "$SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES" \
+  --argjson maxActiveInstances "$SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES" \
+  --argjson maxCpuMillis "$SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS" \
+  --argjson maxMemoryBytes "$SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES" \
+  --argjson maxSnapshots "$SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS" \
+  --argjson maxPortSessions "$SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS" \
+  --argjson maxConcurrentOperations "$SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS" \
+  '{ref:$ref,allowedProfileGrants:$profileGrants,allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports","sandbox:ports:direct"],aggregateQuota:{maxSandboxes:$maxSandboxes,maxActiveInstances:$maxActiveInstances,maxCpuMillis:$maxCpuMillis,maxMemoryBytes:$maxMemoryBytes,maxSnapshots:$maxSnapshots,maxPortSessions:$maxPortSessions,maxConcurrentOperations:$maxConcurrentOperations,maxActiveSubjects:2,maxApplicationAuthorities:2},expiryPolicy:{maximumSubjectLifetimeSeconds:86400,maximumAuthorityLifetimeSeconds:86400},metadata:{harness:"scenario"}}')" >/dev/null
+
+controller_response="$(scenario_management_post "$SECONDBOX_PLATFORM_TOKEN" "/v1/tenants/$bootstrap_tenant/controller-authorities" scenario-bootstrap-controller "$(jq -cn --arg expiresAt "$bootstrap_expiry" '{expiresAt:$expiresAt,metadata:{harness:"scenario"}}')")"
+controller_token="$(jq -er '.bearerToken' <<<"$controller_response")"
+
+scenario_management_post "$controller_token" /v1/subjects scenario-bootstrap-subject "$(jq -cn \
+  --arg ref "$bootstrap_subject" \
+  --argjson maxSandboxes "$SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES" \
+  --argjson maxActiveInstances "$SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES" \
+  --argjson maxCpuMillis "$SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS" \
+  --argjson maxMemoryBytes "$SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES" \
+  --argjson maxSnapshots "$SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS" \
+  --argjson maxPortSessions "$SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS" \
+  --argjson maxConcurrentOperations "$SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS" \
+  '{ref:$ref,quota:{maxSandboxes:$maxSandboxes,maxActiveInstances:$maxActiveInstances,maxCpuMillis:$maxCpuMillis,maxMemoryBytes:$maxMemoryBytes,maxSnapshots:$maxSnapshots,maxPortSessions:$maxPortSessions,maxConcurrentOperations:$maxConcurrentOperations},metadata:{harness:"scenario"}}')" >/dev/null
+
+application_response="$(scenario_management_post "$controller_token" /v1/application-authorities scenario-bootstrap-application "$(jq -cn \
+  --arg subjectRef "$bootstrap_subject" \
+  --arg expiresAt "$bootstrap_expiry" \
+  --argjson profileGrants "$bootstrap_profile_grants" \
+  '{subjectRef:$subjectRef,scopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],profileGrants:$profileGrants,expiresAt:$expiresAt,metadata:{harness:"scenario"}}')")"
+export SECONDBOX_SCENARIO_APPLICATION_TOKEN
+SECONDBOX_SCENARIO_APPLICATION_TOKEN="$(jq -er '.bearerToken' <<<"$application_response")"
+export SECONDBOX_SCENARIO_TENANT_REF="$bootstrap_tenant"
+export SECONDBOX_SCENARIO_SUBJECT_REF="$bootstrap_subject"
+
+if [[ "$scenario_mode" == "suite" ]]; then
+  direct_port_application_response="$(scenario_management_post "$controller_token" /v1/application-authorities scenario-bootstrap-direct-port-application "$(jq -cn \
+    --arg subjectRef "$bootstrap_subject" \
+    --arg expiresAt "$bootstrap_expiry" \
+    --arg profileGrant "$SECONDBOX_SCENARIO_DIRECT_PORT_PROFILE" \
+    '{subjectRef:$subjectRef,scopes:["sandbox:read","sandbox:lifecycle","sandbox:ports","sandbox:ports:direct"],profileGrants:[$profileGrant],expiresAt:$expiresAt,metadata:{harness:"scenario-direct-port"}}')")"
+  export SECONDBOX_SCENARIO_DIRECT_PORT_TOKEN
+  SECONDBOX_SCENARIO_DIRECT_PORT_TOKEN="$(jq -er '.bearerToken' <<<"$direct_port_application_response")"
+fi
 
 if [[ "$scenario_mode" == "stress" ]]; then
   go run ./tests/scenario/stress \

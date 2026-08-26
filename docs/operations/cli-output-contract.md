@@ -31,9 +31,10 @@ without a classification fails command tests.
 
 | `secondbox` surface | stdin | stdout authority | stderr and exit owner |
 |---|---:|---|---|
-| `version`, `login`, `logout`, `whoami` | no | bounded human or explicit JSON/plain | CLI |
+| `version`, typed `platform/controller/application login`, `logout`, `whoami` | no | bounded human or explicit JSON/plain | CLI |
+| bounded Tenant, controller-authority, Subject, application-authority, and usage reads | no | human only when explicitly selected or eligible; otherwise original API JSON | API errors; CLI exit |
 | bounded `profiles`, `runner-pools`, `runners`, `sandboxes`, `snapshots`, `leases`, and `ports` list/get aliases | request body only where declared | human only when explicitly selected or eligible; otherwise original API JSON | API errors; CLI exit |
-| mutating aliases and `resources check/apply` | optional request/file input | machine JSON | API/CLI |
+| management mutations, mutating Sandbox aliases, and `resources check/apply` | optional request/file input | machine JSON; credential creation and rotation include the one-time bearer token | API/CLI |
 | `operation OPERATION_ID` | operation-defined | original response bytes | API |
 | `files read`, logs | no | raw file or log bytes | CLI/API |
 | `run`, `exec`, `shell`, `sandbox shell`, `exec stream` | guest stdin/control stream | guest stdout/control bytes | guest stderr and guest exit status |
@@ -62,6 +63,13 @@ secondbox files read ... > workspace-file
 Use `--output json` in new scripts when a bounded command also has a human
 view. Use the generic `operation` command when byte-for-byte access to a public
 operation response is required.
+
+Stored sessions include an explicit authority kind. A platform session cannot
+be populated with a controller credential, a controller session cannot be used
+for Sandbox commands, and only an application session stores Tenant and Subject
+references. Authority reads and lists never print bearer material. Creation and
+rotation output is the only recovery point for a generated bearer token; route
+redirected JSON immediately into protected secret handling.
 
 ## Release footprint measurement
 

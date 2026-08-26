@@ -51,7 +51,7 @@ func (apiHandler *handler) createSandboxExecStream(writer http.ResponseWriter, r
 }
 
 func (apiHandler *handler) cancelSandboxExecStream(writer http.ResponseWriter, request *http.Request) {
-	sessionID, action, ok := splitAction(request.PathValue("execSessionAction"))
+	sessionID, action, ok := splitAction(request.PathValue("execSessionAction"), "cancel")
 	if !ok || action != "cancel" {
 		apiHandler.writeError(writer, request, runnercontrol.ErrDataPlaneNotFound)
 		return

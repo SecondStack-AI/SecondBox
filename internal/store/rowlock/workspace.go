@@ -1,6 +1,6 @@
-// Package rowlock owns the invariant PostgreSQL lock order for local Workspace
-// mutations. Every caller locks Sandbox, then Workspace, then Snapshot when
-// present before acquiring any operation-specific rows.
+// Package rowlock owns the invariant PostgreSQL lock order for durable resource
+// mutations. Every caller locks quota ledgers before Sandbox, then Workspace,
+// then Snapshot when present, before acquiring operation-specific rows.
 package rowlock
 
 import (
@@ -45,6 +45,9 @@ func SandboxWorkspaceForSubject(
 	subjectRef string,
 	sandboxID string,
 ) (SandboxWorkspace, error) {
+	if err := TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return SandboxWorkspace{}, err
+	}
 	var locked SandboxWorkspace
 	locked.SandboxID = sandboxID
 	if err := tx.QueryRow(ctx, `
@@ -76,15 +79,24 @@ func SandboxWorkspaceByID(
 	tx pgx.Tx,
 	sandboxID string,
 ) (SandboxWorkspace, error) {
+	var tenantRef, subjectRef string
+	if err := tx.QueryRow(ctx, `
+		SELECT tenant_ref,subject_ref FROM secondbox.sandboxes WHERE id=$1`, sandboxID,
+	).Scan(&tenantRef, &subjectRef); err != nil {
+		return SandboxWorkspace{}, err
+	}
+	if err := TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
+		return SandboxWorkspace{}, err
+	}
 	var locked SandboxWorkspace
 	locked.SandboxID = sandboxID
 	if err := tx.QueryRow(ctx, `
 		SELECT tenant_ref,subject_ref,workspace_id,profile_revision_id,state,desired_state,generation,revision,
 		       current_instance_id,COALESCE(reconcile_owner,'')
 		FROM secondbox.sandboxes
-		WHERE id=$1
+		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3
 		FOR UPDATE`,
-		sandboxID,
+		sandboxID, tenantRef, subjectRef,
 	).Scan(
 		&locked.TenantRef, &locked.SubjectRef,
 		&locked.WorkspaceID, &locked.ProfileRevisionID, &locked.SandboxState,

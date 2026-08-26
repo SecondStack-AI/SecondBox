@@ -17,7 +17,7 @@ secondbox logs follow \
 
 These local commands do not require or transmit API credentials. The path must be an absolute regular file; symbolic links are rejected initially and after replacement. Following survives ordinary regular-file truncation and replacement and ends when the CLI process is interrupted.
 
-The credentialed commands below show fully explicit flags. Each of `--url`, `--token`, `--tenant-ref`, and `--subject-ref` may instead come from the environment or from stored configuration; see [SDK, CLI, and Flue quick starts](sdk-cli-and-flue.md).
+The credentialed commands below show fully explicit application flags. Each of `--url`, `--token`, `--tenant-ref`, and `--subject-ref` may instead come from the environment or a stored application session; see [SDK, CLI, and Flue quick starts](sdk-cli-and-flue.md). Platform and tenant-controller sessions are typed separately and do not accept caller tenancy assertions.
 
 ## Signals
 
@@ -34,6 +34,8 @@ Scrape and probe endpoints only from a trusted monitoring network. Although they
 ## Timing inspection
 
 The authenticated timing projection uses the same persisted Operation, Assignment progress, and Exec-session evidence that backs the database-derived metrics. The API portion uses the same fixed-cardinality in-process recorder as `/metrics`.
+
+An application authority with `sandbox:read` may inspect only its bound Subject's Sandbox and Operation timing. A tenant controller may inspect its own Subject cleanup Operation. Only the platform token may read the aggregate deployment timing summary; application and controller credentials are denied from that route.
 
 Read a bounded Sandbox history:
 
@@ -87,7 +89,7 @@ artifact bundle and never substitutes mock compute.
 
 ## Bounded support bundles
 
-The support collector includes the three unauthenticated probes, their HTTP status, an authenticated aggregate timing summary, and a bounded tail of the configured control-plane JSON log. It never collects process environments, environment files, credentials, database contents, workspaces, runner credentials, or guest files. The platform token is sent only to the aggregate timing route and is never written to the archive.
+The support collector includes the three unauthenticated probes, their HTTP status, an authenticated aggregate timing summary, and a bounded tail of the configured control-plane JSON log. It never collects process environments, environment files, credentials, authority verifier rows, database contents, workspaces, runner credentials, or guest files. The platform token is sent only to the aggregate timing route and is never written to the archive. Tenant and Subject references can appear in the reviewed log tail and audit export, but never as metric labels or qualification-evidence fields.
 
 ```sh
 export SECONDBOX_SUPPORT_BASE_URL=http://127.0.0.1:8080

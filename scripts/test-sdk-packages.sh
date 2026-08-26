@@ -8,7 +8,7 @@ trap 'rm -rf "$test_root"' EXIT
 typescript_root="$test_root/typescript"
 mkdir -p "$typescript_root"
 package_json="$(npm pack "$repo_root/sdk/typescript" --silent --json --pack-destination "$typescript_root")"
-tarball_name="$(jq -er '.[0].filename' <<<"$package_json")"
+tarball_name="$(jq -er 'first(.[].filename)' <<<"$package_json")"
 (
     cd "$typescript_root"
     npm init --yes >/dev/null

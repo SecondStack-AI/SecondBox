@@ -23,7 +23,7 @@ func RetentionChoiceForm(target *string) HuhForm {
 }
 
 func StandardBundleSelectionForm(accepted *bool) HuhForm {
-	return HuhForm{Groups: []GroupSpec{{Title: "Release-owned standard Profiles", Fields: []FieldSpec{{Kind: FieldConfirm, Title: "Install agent-compartment and durable-coding?", Description: "Explicitly select both immutable standard bundles required by the guided topology and smoke test.", BoolValue: accepted, RequireAffirmative: true}}}}}
+	return HuhForm{Groups: []GroupSpec{{Title: "Release-owned standard Profiles", Fields: []FieldSpec{{Kind: FieldConfirm, Title: "Install all three standard Profiles?", Description: "Explicitly select agent-compartment, durable-coding, and agent-compartment-isolated for the guided topology.", BoolValue: accepted, RequireAffirmative: true}}}}}
 }
 
 func CapacityReviewForm(summary string, accepted *bool) HuhForm {

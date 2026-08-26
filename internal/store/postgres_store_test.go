@@ -66,6 +66,32 @@ func openStoreTest(t *testing.T) *PostgresControlPlaneStore {
 	return controlPlaneStore
 }
 
+func ensureStoreTestQuotaLedgers(
+	t *testing.T,
+	store *PostgresControlPlaneStore,
+	tenantRef string,
+	subjectRef string,
+	now time.Time,
+) {
+	t.Helper()
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.tenant_quotas (
+			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
+			max_application_authorities,updated_at
+		) VALUES ($1,100,100,100000,1099511627776,100,100,100,100,100,$3)
+		ON CONFLICT (tenant_ref) DO NOTHING;
+		INSERT INTO secondbox.subject_quotas (
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
+		) VALUES ($1,$2,100,100,100000,1099511627776,100,100,100,$3)
+		ON CONFLICT (tenant_ref,subject_ref) DO NOTHING`,
+		pgx.QueryExecModeSimpleProtocol, tenantRef, subjectRef, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReadMetricsSnapshotAggregatesOperationDurations(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `DELETE FROM secondbox.operations`); err != nil {
@@ -134,13 +160,15 @@ func TestPostgresStoreRevisionConflictAndIdempotencyReplay(t *testing.T) {
 	idempotency := ports.AdminIdempotencyInput{
 		TenantRef: "tenant", SubjectRef: "subject", Operation: "profile.create",
 		TargetID: profile.Name, Key: "store-create-profile", RequestHash: "request-a",
-		Now: now, Ends: now.Add(time.Hour),
+		Now: now, Ends: now.Add(time.Hour), AuditEvent: adminTestAudit("store-create-profile", now),
 	}
 	created, result, err := controlPlaneStore.CreateProfile(t.Context(), profile, idempotency)
 	if err != nil || result.Replayed || created.Name != profile.Name {
 		t.Fatalf("create Profile = %#v replay=%v error=%v", created, result.Replayed, err)
 	}
-	replayed, result, err := controlPlaneStore.CreateProfile(t.Context(), profile, idempotency)
+	replayInput := idempotency
+	replayInput.AuditEvent = adminTestAudit("store-create-profile-replay", now)
+	replayed, result, err := controlPlaneStore.CreateProfile(t.Context(), profile, replayInput)
 	if err != nil || !result.Replayed || replayed.CurrentRevision.ID != profile.CurrentRevision.ID {
 		t.Fatalf("replay Profile = %#v replay=%v error=%v", replayed, result.Replayed, err)
 	}

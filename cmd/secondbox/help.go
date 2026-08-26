@@ -9,7 +9,10 @@ func secondboxHelp() cliui.Help {
 		Commands: []cliui.Pair{
 			{Key: "help", Value: "show this help"},
 			{Key: "version", Value: "show CLI version information"},
-			{Key: "login | logout | whoami", Value: "manage the local authenticated session"},
+			{Key: "platform login | controller login | application login", Value: "verify and store one typed authority"},
+			{Key: "logout | whoami", Value: "inspect or remove the local authenticated session"},
+			{Key: "tenant", Value: "manage tenants and tenant-controller authorities"},
+			{Key: "subject | application-authority | usage", Value: "manage one authenticated tenant"},
 			{Key: "run", Value: "run a command in a temporary Sandbox"},
 			{Key: "exec", Value: "execute in an existing Sandbox"},
 			{Key: "shell | sandbox shell", Value: "attach an interactive Sandbox terminal"},
@@ -23,7 +26,8 @@ func secondboxHelp() cliui.Help {
 		},
 		Options: []cliui.Pair{
 			{Key: "--url URL", Value: "SecondBox API endpoint"},
-			{Key: "--token TOKEN", Value: "platform token; prefer login or config"},
+			{Key: "--token TOKEN", Value: "bearer token; prefer a typed login or config"},
+			{Key: "--authority-kind KIND", Value: "platform, tenant_controller, or application"},
 			{Key: "--tenant-ref REF", Value: "trusted caller tenant reference"},
 			{Key: "--subject-ref REF", Value: "trusted caller subject reference"},
 			{Key: "--output auto|json|plain", Value: "select adaptive, machine, or stable text output"},

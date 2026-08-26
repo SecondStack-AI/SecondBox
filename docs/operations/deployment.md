@@ -14,7 +14,7 @@ From a clean checkout:
 just deploy-development-up .tmp/secondbox-development
 ```
 
-The command creates the directory only when it is absent, writes a mode-`0600` manifest and mode-`0700` secret directory, generates independent local authorities and Runner PKI, explicitly selects both reviewed development standard bundles, builds the control-plane image, renders and validates the environment, starts loopback-only PostgreSQL and the control plane, requires `/readyz`, and applies the selected resources. It refuses an existing directory without `secondbox.toml` and never rewrites an existing manifest, secret, identity, workspace, or execution asset.
+The command creates the directory only when it is absent, writes a mode-`0600` manifest and mode-`0700` secret directory, generates a platform token and Runner PKI, explicitly selects the three reviewed development standard bundles, builds the control-plane image, renders and validates the environment, starts loopback-only PostgreSQL and the control plane, requires `/readyz`, and applies the selected resources. It refuses an existing directory without `secondbox.toml` and never rewrites an existing manifest, secret, identity, workspace, or execution asset. It does not create a Tenant, Subject, tenant controller, or application authority.
 
 Development initialization alone is available as:
 
@@ -25,6 +25,18 @@ just deploy-config .tmp/secondbox-development/secondbox.toml
 
 The reviewed development topology intentionally starts no privileged Runner. Runner enrollment and host qualification remain separate operations on a qualified Linux host.
 
+Create development tenancy only as an observable post-start step. The repository helper follows the same platform login, Tenant and controller creation, controller login, Subject and application-authority creation, application login, and authenticated Sandbox-list sequence as the qualified scenario harness:
+
+```sh
+scripts/bootstrap-development-tenancy.sh \
+  "$(realpath ./secondbox)" \
+  http://127.0.0.1:8080 \
+  "$(realpath .tmp/secondbox-development/secrets/platform-token)" \
+  development development agent-compartment-isolated
+```
+
+The command prints the two one-time bearer tokens in one JSON response. Capture it in a protected secret store; neither token can be read back from SecondBox.
+
 ## The deployment manifest
 
 [`deploy/secondbox.example.toml`](../../deploy/secondbox.example.toml) documents `schema_version = 1` and every accepted field. The manifest has seven decision groups:
@@ -33,7 +45,7 @@ The reviewed development topology intentionally starts no privileged Runner. Run
 2. `database`: bundled or external PostgreSQL and the authority required by that choice;
 3. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
 4. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
-5. `applications`: platform and application authorities;
+5. `applications`: the platform-token secret reference;
 6. `standard_resources`: verified release manifest, explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
 7. `policy` and `overrides`: subject quota limits, data-plane retention, contested recovery/rollout settings, and intentionally selected tuning overrides.
 
@@ -56,7 +68,7 @@ Runner host paths are different: they are typed absolute values interpreted on t
 
 ### Authority, policy, tuning, and compiled facts
 
-Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, the seven subject quota limits, and data-plane retention. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
+Required deployment authority has no default. This includes identities, the platform and Runner credentials, endpoints, process and storage paths, signed-asset catalog, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, the seven deployment fallback Subject quota limits, and data-plane retention. Tenant aggregate ceilings and explicit Subject quotas are persisted management resources created after startup; they are not deployment-manifest fields. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
@@ -84,7 +96,7 @@ An incomplete production initialization is intentionally unusable and reports ev
 - bundled or external database authority, with `sslmode=verify-full` for an external database;
 - zero or more explicit immutable Runner declarations and their placement;
 - an operator-supplied signed-asset catalog, verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
-- independent platform, application, and Runner enrollment authorities;
+- independent platform and Runner enrollment authorities;
 - all seven subject quota limits;
 - retention, contested recovery/rollout policy, and any intentional tuning overrides.
 
@@ -96,7 +108,7 @@ secondbox-deploy init --mode production \
   /secure/secondbox-deployment
 ```
 
-No generated development authority is accepted as a production default. Any dependency image selected in production is immutable by digest.
+Production initialization materializes only the explicitly supplied platform authority. It creates no implicit Tenant, Subject, tenant controller, or application authority. After startup, use the authenticated management CLI sequence documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). No generated development authority is accepted as a production default. Any dependency image selected in production is immutable by digest.
 
 ## Rendering and Compose
 
@@ -303,7 +315,7 @@ Review these relationships before enrollment:
 - Put `state_host_directory` on a dedicated non-root XFS or Btrfs filesystem with reflink support. For same-host placement, `workspace_host_directory` must be its `workspaces` child and `workspace_root` must be `/var/lib/secondbox-runner/workspaces`. Compose binds the common storage root once so Workspace images, jail state, run state, and snapshot templates retain one mount identity.
 - Leave the filesystem target named by `identity_host_directory` absent before `runner-init`. The command validates the declaration without the same-host identity preflight, then creates that exact target; create the artifact and Runner storage host directories first, and run full manifest validation after enrollment.
 - Set `pool_id` to the `name` of the selected `[[standard_resources.runner_pools]]` inventory that admits the Runner architecture and capabilities.
-- Map every logical gateway required by the selected standard bundles in `network_policy_runner_gateways`. The mapping is Runner-local `domain=IP` authority; it is not inferred from DNS or the control plane.
+- Map every logical gateway required by the selected standard bundles in `network_policy_runner_gateways`. The mapping is Runner-local `domain=IP` authorization, not guest-side name resolution. The Runner DNS proxy only forwards to its configured upstream, rejects answers resolving to protected addresses, and does not synthesize the logical gateway domain. Production qualification must prove the deployment's own guest resolution and gateway reachability.
 
 Issue one declared identity and protected environment handoff:
 
@@ -316,11 +328,24 @@ secondbox-deploy runner-init \
 
 The command signs a client certificate carrying `spiffe://secondbox/runner/<runner-id>`, writes the matching key, CA certificate, and canonical systemd environment, then atomically installs the directory. It refuses an undeclared ID, an existing target, a same-host target that differs from the declared identity directory, or mismatched CA evidence. Copying and activating a remote handoff on its Runner host is an explicit operator action.
 
-Selected RunnerPools and standard Profile lineages are checked and applied after the control plane becomes ready. A repeated deployment is a no-op; an interrupted application resumes from the verified installed prefix. Each Runner in a selected pool maps the standard Profile's logical gateway in `network_policy_runner_gateways`. See [declarative resources](declarative-resources.md).
+Selected RunnerPools and standard Profile lineages are checked and applied after the control plane becomes ready. A repeated deployment is a no-op; an interrupted application resumes from the verified installed prefix. Each Runner in a selected pool maps the standard Profile's logical gateway in `network_policy_runner_gateways`; that mapping does not add a DNS record. See [declarative resources](declarative-resources.md).
 
 ## Recovery and replacement
 
-PostgreSQL owns desired state, authoritative home assignments, generations, Leases, profiles, audit, and reconciliation. Each home Runner's reflink-capable workspace root owns its Workspaces and local Snapshots. Ordinary lifecycle and recovery never relocate a Sandbox; only the operator-initiated stopped-Sandbox relocation Operation may change its home. PostgreSQL cannot reconstruct a lost unbacked Runner workspace filesystem.
+Replacing v0.5.2 with v0.6.0 in place is unsupported. v0.6.0 is a clean-install
+boundary: stop workloads, back up PostgreSQL and each Runner identity plus its
+workspace root, preserve or explicitly migrate workload data outside the guided
+installer, remove the v0.5.2 deployment through its recorded uninstall
+procedure, and perform a complete v0.6.0 production initialization. The
+installer does not import v0.5.2 authorities, manifests, receipts, Profiles, or
+desired state. Workspace files are usable only when an operator has separately
+preserved and migrated them under a reviewed v0.6.0 Runner home; PostgreSQL
+alone cannot reconstruct them. Once v0.6.0 migrations or resources have been
+created, rollback means restoring a complete, consistent v0.5.2 database and
+Runner-filesystem backup. Running v0.5.2 binaries against v0.6.0 state is not a
+rollback path.
+
+PostgreSQL owns Tenants, Subjects, delegated authority verifiers, two-level quota, cleanup Operations, desired state, authoritative home assignments, generations, Leases, Profiles, audit, and reconciliation. Each home Runner's reflink-capable workspace root owns its Workspaces and local Snapshots. Ordinary lifecycle and recovery never relocate a Sandbox; only the operator-initiated stopped-Sandbox relocation Operation may change its home. PostgreSQL cannot reconstruct a lost unbacked Runner workspace filesystem.
 
 Before replacement, take and verify a PostgreSQL backup and quiescent backups of every affected Runner identity plus workspace root. Restore each stable Runner identity and workspace root as one consistent unit. The generated environment can be reproduced from `secondbox.toml` and its referenced secret material; it is not backup authority.
 

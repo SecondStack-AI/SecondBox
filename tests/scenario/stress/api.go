@@ -18,6 +18,7 @@ import (
 
 type stressDriver struct {
 	config          stressConfig
+	admin           *secondboxclient.Client
 	client          *secondboxclient.Client
 	runtimeDigest   string
 	toolchainDigest string
@@ -28,7 +29,7 @@ type stressDriver struct {
 
 func (driver *stressDriver) prepare(ctx context.Context) error {
 	pool, err := scenarioharness.RequestJSON[secondboxclient.RunnerPool](
-		ctx, driver.client, "createRunnerPool", secondboxclient.CallOptions{
+		ctx, driver.admin, "createRunnerPool", secondboxclient.CallOptions{
 			Body: scenarioharness.JSONBody(secondboxclient.CreateRunnerPoolRequest{
 				Name: driver.config.RunnerPoolName, State: "ready",
 				Architectures: []string{"amd64"},
@@ -48,7 +49,7 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 		return fmt.Errorf("SecondBox stress RunnerPool projection is unexpected: %#v", pool)
 	}
 	profile, err := scenarioharness.RequestJSON[secondboxclient.Profile](
-		ctx, driver.client, "createProfile", secondboxclient.CallOptions{
+		ctx, driver.admin, "createProfile", secondboxclient.CallOptions{
 			Headers: scenarioharness.IdempotencyHeaders("stress-prepare-profile"),
 			Body: scenarioharness.JSONBody(secondboxclient.CreateProfileRequest{
 				Name: driver.config.ProfileName,
@@ -109,7 +110,7 @@ func (driver *stressDriver) waitForRunner(ctx context.Context) error {
 	var lastPage secondboxclient.RunnerPage
 	for time.Now().Before(deadline) {
 		page, err := scenarioharness.RequestJSON[secondboxclient.RunnerPage](
-			ctx, driver.client, "listRunners", secondboxclient.CallOptions{
+			ctx, driver.admin, "listRunners", secondboxclient.CallOptions{
 				QueryParameters: url.Values{
 					"pool":  {driver.config.RunnerPoolName},
 					"limit": {"200"},
@@ -123,7 +124,7 @@ func (driver *stressDriver) waitForRunner(ctx context.Context) error {
 		for _, runner := range page.Items {
 			if runner.State == "ready" {
 				pool, poolErr := scenarioharness.RequestJSON[secondboxclient.RunnerPool](
-					ctx, driver.client, "getRunnerPool", secondboxclient.CallOptions{
+					ctx, driver.admin, "getRunnerPool", secondboxclient.CallOptions{
 						PathParameters: map[string]string{"runnerPoolName": driver.config.RunnerPoolName},
 					},
 				)

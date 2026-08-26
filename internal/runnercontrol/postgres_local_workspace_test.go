@@ -3011,6 +3011,28 @@ func openRunnerControlDatabase(
 		admin.Close(t.Context())
 		t.Fatal(err)
 	}
+	setup, err := pgx.Connect(t.Context(), testURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.Exec(t.Context(), `
+		INSERT INTO secondbox.tenant_quotas (
+			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
+			max_application_authorities,updated_at
+		) VALUES ('tenant',100,100,100000,1099511627776,100,100,100,100,100,now());
+		INSERT INTO secondbox.subject_quotas (
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
+		) VALUES ('tenant','subject',100,100,100000,1099511627776,100,100,100,now())`,
+		pgx.QueryExecModeSimpleProtocol,
+	); err != nil {
+		setup.Close(t.Context())
+		t.Fatal(err)
+	}
+	if err := setup.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	runnerStore, err := NewPostgresStateStore(t.Context(), testURL)
 	if err != nil {
 		t.Fatal(err)

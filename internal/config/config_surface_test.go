@@ -15,7 +15,6 @@ var requiredControlPlaneEnvironment = map[string]string{
 	"SECONDBOX_LOG_PATH":                                  "/tmp/secondbox.log",
 	"SECONDBOX_PLATFORM_TOKEN":                            "platform-token-0000000000000000",
 	"SECONDBOX_RUNNER_CREDENTIAL":                         "runner-credential-00000000000000000000",
-	"SECONDBOX_APPLICATION_AUTHORITIES_JSON":              "[]",
 	"SECONDBOX_RUNNER_SERVER_CERTIFICATE":                 "/tmp/server.crt",
 	"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY":                 "/tmp/server.key",
 	"SECONDBOX_RUNNER_CA_CERTIFICATE":                     "/tmp/ca.crt",
@@ -48,8 +47,8 @@ func setRequiredControlPlaneEnvironment(t *testing.T) {
 }
 
 func TestFromEnvironmentRequiresExactlyDeploymentAuthorityAndContestedSettings(t *testing.T) {
-	if got := len(requiredControlPlaneEnvironment); got != 23 {
-		t.Fatalf("required environment count = %d, want 23", got)
+	if got := len(requiredControlPlaneEnvironment); got != 22 {
+		t.Fatalf("required environment count = %d, want 22", got)
 	}
 	for absent := range requiredControlPlaneEnvironment {
 		t.Run(absent, func(t *testing.T) {
@@ -85,8 +84,20 @@ func TestEnvironmentSurfaceHasAnExplicitFinalCategory(t *testing.T) {
 		}
 		seen[name] = "removed compiled fact"
 	}
-	if got := len(seen); got != 40 {
-		t.Fatalf("classified environment surface = %d names, want 40", got)
+	if got := len(seen); got != 39 {
+		t.Fatalf("classified environment surface = %d names, want 39", got)
+	}
+}
+
+func TestEnvironmentSurfaceDoesNotAcceptRetiredStaticAuthorityInput(t *testing.T) {
+	retired := "SECONDBOX_APPLICATION_" + "AUTHORITIES_JSON"
+	if _, accepted := requiredControlPlaneEnvironment[retired]; accepted {
+		t.Fatalf("retired static authority input %s remains required", retired)
+	}
+	for _, name := range CategoryCEnvironmentNames() {
+		if name == retired {
+			t.Fatalf("retired static authority input %s remains an override", retired)
+		}
 	}
 }
 

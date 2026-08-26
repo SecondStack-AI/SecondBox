@@ -1,12 +1,12 @@
 # Security model
 
-SecondBox assumes guest workloads and network peers may be malicious. Its control plane is also a trusted subsystem: operators holding the platform token may assert any tenant and subject reference. Application authorities are narrower and cannot change their configured ownership, operation scopes, or Profile grants. SecondBox does not authenticate end users or duplicate an upstream identity graph.
+SecondBox assumes guest workloads and network peers may be malicious. Its control plane is also a trusted subsystem. The platform token is deployment-wide, tenant-controller authorities are fixed to one Tenant, and application authorities are fixed to one Tenant, one Subject, exact Sandbox scopes, and explicit Profile grants. SecondBox does not authenticate end users or duplicate an upstream identity graph.
 
 ## Principals and authority
 
-The HTTP API accepts the deployment-wide `SECONDBOX_PLATFORM_TOKEN` as its operator authority. Every operator request also supplies bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. PostgreSQL queries scope owned resources, idempotency, quota, and audit records to both values.
+The HTTP API accepts the deployment-wide `SECONDBOX_PLATFORM_TOKEN` as its operator authority. Operators use it to establish Tenant ceilings, delegate tenant-controller authorities, mutate Profiles and RunnerPools, administer Runners, and inspect deployment-wide usage and timing. Platform-token application requests may also supply bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. PostgreSQL queries scope owned resources, idempotency, quota, and audit records to both values.
 
-Explicit application authorities use independent bearer credentials. Each is statically bound to fixed tenant and subject references, exact Sandbox operation scopes, and an allowlist of Profile names. Header mismatch, administrative access, an ungranted Profile, or a missing scope is denied before the route handler. This protects subjects and Profiles from another correctly configured application credential; compromise of the platform token remains deployment-wide compromise.
+Tenant-controller and application authorities use independent server-generated bearer credentials. PostgreSQL stores a public lookup identifier and one-way verifier, never recoverable token material, and resolves current state and expiry on every newly admitted request. A controller is fixed to one Tenant and has one code-owned management grant. Each application authority is fixed to tenant and subject references, exact Sandbox operation scopes, and an allowlist of Profile names. Header mismatch, administrative access, an ungranted Profile, or a missing scope is denied before the route handler. Revocation and expiry take effect without a process restart. Compromise of an application credential is subject-scoped, compromise of a controller is tenant-scoped, and compromise of the platform token remains deployment-wide compromise.
 
 Runner authority is separate. A Runner establishes an outbound TLS 1.3 connection, presents a CA-signed client identity, and proves the deployment-wide pre-shared Runner credential. The control plane compares the certificate identity, configured Runner identity, and protocol identity. HTTP tokens are never accepted on this channel, and Runner credentials are never accepted by the HTTP API.
 
@@ -18,7 +18,7 @@ One Port operation scope is a capability rather than an operation permission. `s
 
 The control plane has database authority and can schedule Runners, so compromise is severe. It remains unprivileged and has no KVM, TUN/TAP, host cgroups, host paths, container-engine socket, Runner private keys, or Runner shell access. The Runner CA private key stays outside the control-plane deployment.
 
-Idempotency, subject quota reservation, generation checks, ownership checks, and optimistic concurrency are transactional. A stale Lease, stream, Instance, Assignment, or reconciliation claim cannot mutate a newer generation. Audit records capture security-sensitive mutations without storing credentials or workspace content.
+Idempotency, two-level Tenant and Subject quota reservation, generation checks, ownership checks, and optimistic concurrency are transactional. A stale Lease, stream, Instance, Assignment, or reconciliation claim cannot mutate a newer generation. Subject closure and expiry create one restart-safe cleanup Operation whose Runner workspace removal must be acknowledged. Audit records capture security-sensitive mutations and denials without storing credentials or workspace content.
 
 ## Runner and guest boundary
 
@@ -36,7 +36,7 @@ durable operation receipts. Except for the bounded operator-initiated stopped-Sa
 paths. Loss of an unbacked home-Runner filesystem loses its Sandboxes and local
 Snapshots; PostgreSQL recovery alone is insufficient.
 
-All work is deadline- and size-bounded. Per-subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success. On a direct Port connection, backpressure is TCP flow control on the caller leg and the retained guest-protocol credit window on the guest leg, so no unbounded buffer exists on either.
+All work is deadline- and size-bounded. Tenant aggregate and Subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success. On a direct Port connection, backpressure is TCP flow control on the caller leg and the retained guest-protocol credit window on the guest leg, so no unbounded buffer exists on either.
 
 Port evidence is transport independent. Both transports keep payload-free session accounting, terminal state, correlation, acknowledgement state, and admission replay until the session deadline. Both emit fixed-shape Runner evidence at admitted open and close, neither persists per-frame payloads, and payload reconstruction is outside the forensic boundary. No Port evidence record can contain a payload byte, a credential, a fencing token, or a Runner address.
 

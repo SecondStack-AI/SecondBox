@@ -12,7 +12,7 @@ import (
 
 func TestLoginCLIRecordsDigestForPurgeFence(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/sandboxes" || request.Header.Get("Authorization") != "Bearer platform-token" {
+		if request.URL.Path != "/v1/tenants" || request.URL.Query().Get("limit") != "1" || request.Header.Get("Authorization") != "Bearer platform-token" {
 			t.Errorf("CLI authority verification request = %s, %q", request.URL.Path, request.Header.Get("Authorization"))
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -32,14 +32,14 @@ func TestLoginCLIRecordsDigestForPurgeFence(t *testing.T) {
 	if err := os.MkdirAll(configDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	oldConfiguration := []byte("{\n  \"url\": \"http://127.0.0.1:9000\",\n  \"token\": \"older-token\",\n  \"tenantRef\": \"older-tenant\",\n  \"subjectRef\": \"older-subject\"\n}\n")
+	oldConfiguration := []byte("{\n  \"url\": \"http://127.0.0.1:9000\",\n  \"token\": \"older-token\",\n  \"authorityKind\": \"platform\"\n}\n")
 	if err := os.WriteFile(configPath, oldConfiguration, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	plan := InstallPlan{
 		HostFacts: HostFacts{InvokingUID: uid, InvokingGID: gid},
 		Network:   NetworkPlan{APIAddress: strings.TrimPrefix(server.URL, "http://")},
-		CLI:       CLIPlan{ConfigPath: configPath, TenantRef: "tenant", SubjectRef: "subject"},
+		CLI:       CLIPlan{ConfigPath: configPath},
 		Paths: []PlannedPath{
 			plannedPath("cli-config-root", configRoot, PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
 			plannedPath("cli-config-directory", configDirectory, PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
@@ -62,6 +62,10 @@ func TestLoginCLIRecordsDigestForPurgeFence(t *testing.T) {
 	if string(content) == string(oldConfiguration) || strings.Contains(string(content), "older-token") {
 		t.Fatal("older SecondBox CLI configuration was not atomically upgraded")
 	}
+	if !strings.Contains(string(content), `"authorityKind": "platform"`) ||
+		strings.Contains(string(content), "tenantRef") || strings.Contains(string(content), "subjectRef") {
+		t.Fatalf("installed CLI configuration is not platform-only:\n%s", content)
+	}
 }
 
 func TestValidateCLIConfigurationTargetRefusesUnrelatedFile(t *testing.T) {
@@ -73,7 +77,7 @@ func TestValidateCLIConfigurationTargetRefusesUnrelatedFile(t *testing.T) {
 	}
 	plan := InstallPlan{
 		HostFacts: HostFacts{InvokingUID: int64(os.Getuid()), InvokingGID: int64(os.Getgid())},
-		CLI:       CLIPlan{ConfigPath: path, TenantRef: "tenant", SubjectRef: "subject"},
+		CLI:       CLIPlan{ConfigPath: path},
 		Paths:     []PlannedPath{plannedPath("cli-config", path, PathUserDeployment, ResourceFile, 0o600, int64(os.Getuid()), int64(os.Getgid()), false, true)},
 	}
 	if err := validateCLIConfigurationTarget(plan); err == nil || !strings.Contains(err.Error(), "not a SecondBox session document") {
@@ -85,6 +89,30 @@ func TestValidateCLIConfigurationTargetRefusesUnrelatedFile(t *testing.T) {
 	}
 	if string(content) != string(original) {
 		t.Fatal("unrelated CLI configuration was modified")
+	}
+}
+
+func TestValidateCLIConfigurationTargetRefusesApplicationCredentialAsPlatform(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.json")
+	content := []byte("{\n  \"url\": \"https://secondbox.example\",\n  \"token\": \"application-token\",\n  \"authorityKind\": \"application\"\n}\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := InstallPlan{
+		HostFacts: HostFacts{InvokingUID: int64(os.Getuid()), InvokingGID: int64(os.Getgid())},
+		CLI:       CLIPlan{ConfigPath: path},
+		Paths:     []PlannedPath{plannedPath("cli-config", path, PathUserDeployment, ResourceFile, 0o600, int64(os.Getuid()), int64(os.Getgid()), false, true)},
+	}
+	if err := validateCLIConfigurationTarget(plan); err == nil || !strings.Contains(err.Error(), "must contain a platform authority") {
+		t.Fatalf("application credential replacement error = %v", err)
+	}
+	actual, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(actual) != string(content) {
+		t.Fatal("rejected application credential was modified")
 	}
 }
 

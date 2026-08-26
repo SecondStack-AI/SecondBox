@@ -258,6 +258,118 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	}
 }
 
+func TestBufferedExecTransportSetupFailureReleasesConcurrentOperationQuota(t *testing.T) {
+	quota := generousQuota()
+	quota.MaxConcurrentOperations = 2
+	controlPlane, databaseStore := newControlPlaneFixture(t, quota)
+	admin := fixtureAdmin(t, controlPlane)
+	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "data-plane-setup-failure")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-data-plane-setup-failure")
+	scopes := []string{"sandbox:read", "sandbox:lifecycle", "sandbox:exec"}
+	if _, err := updateFixtureServiceAccount(
+		t, controlPlane, t.Context(), admin, project.ID, account.ID,
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
+	); err != nil {
+		t.Fatal(err)
+	}
+	key, err := createFixtureAPIKey(
+		t, controlPlane, t.Context(), admin, project.ID, account.ID,
+		fixtureCreateAPIKeyRequest{Name: "data-plane-setup-failure", Scopes: scopes},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := authenticateCredential(t, controlPlane, key.Credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "data-plane-setup-failure-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := seedDataPlaneReadyAssignment(t, sandbox, time.Now().UTC())
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 2 << 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	newDataPlaneService := func(liveDataPlane *runnercontrol.LiveDataPlaneBroker) *service.ControlPlaneService {
+		dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
+			Store: databaseStore, PlatformToken: testPlatformToken,
+			DefaultSubjectQuota: quota,
+			Now:                 time.Now, NewID: service.NewOpaqueID,
+			NewCredentialMaterial: service.NewCredentialMaterial,
+			DataPlaneStore:        relay, LiveDataPlane: liveDataPlane,
+			DataPlanePollInterval: time.Millisecond,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dataPlaneService
+	}
+	request := contracts.BufferedExecRequest{
+		Command:     contracts.ExecCommand{Mode: "shell", Command: "true"},
+		Environment: map[string]string{}, DeadlineMilliseconds: 1_000,
+		MaximumOutputBytes: 1_024,
+	}
+	unavailableService := newDataPlaneService(nil)
+	for attempt := int64(0); attempt <= quota.MaxConcurrentOperations; attempt++ {
+		_, _, err := unavailableService.ExecuteSandboxCommand(
+			t.Context(), principal, fmt.Sprintf("setup-failure-request-%d", attempt),
+			sandbox.ID, sandbox.Generation, "",
+			fmt.Sprintf("setup-failure-idempotency-%d", attempt), request,
+		)
+		if !errors.Is(err, runnercontrol.ErrLiveDataPlaneUnavailable) {
+			t.Fatalf("transport setup attempt %d error = %v, want live data-plane unavailable", attempt, err)
+		}
+	}
+	usage, err := unavailableService.GetSubjectUsage(t.Context(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Usage.ConcurrentOperations != 0 {
+		t.Fatalf("concurrent-operation usage after setup failures = %d, want 0", usage.Usage.ConcurrentOperations)
+	}
+
+	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
+	availableService := newDataPlaneService(liveDataPlane)
+	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo)
+	defer detachFake()
+	fakeContext, stopFake := context.WithCancel(t.Context())
+	defer stopFake()
+	fakeErrors := make(chan error, 1)
+	go func() { fakeErrors <- fake.run(fakeContext) }()
+	outcome, _, err := availableService.ExecuteSandboxCommand(
+		t.Context(), principal, "setup-recovered-request", sandbox.ID,
+		sandbox.Generation, "", "setup-recovered-idempotency", request,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exited, ok := outcome.(contracts.ExecExited); !ok || exited.ExitCode != 0 {
+		t.Fatalf("recovered Exec outcome = %#v", outcome)
+	}
+	usage, err = availableService.GetSubjectUsage(t.Context(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Usage.ConcurrentOperations != 0 {
+		t.Fatalf("concurrent-operation usage after recovered Exec = %d, want 0", usage.Usage.ConcurrentOperations)
+	}
+	stopFake()
+	select {
+	case err := <-fakeErrors:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fake Runner did not stop")
+	}
+}
+
 func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
