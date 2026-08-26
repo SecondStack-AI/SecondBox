@@ -7,7 +7,10 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -208,6 +211,123 @@ func TestInstalledSmokeRequiresAuthenticatedRunnerPoolAndRunnerReadiness(t *test
 	pool.ReadyRunnerCount = 0
 	if _, err := installedSmokeEvidence(plan, pool, runner); err == nil {
 		t.Fatal("unready RunnerPool was accepted")
+	}
+}
+
+func TestInstalledSmokeUsesRealCLIInspectionGrammar(t *testing.T) {
+	const platformToken = "installer-platform-token-at-least-24-bytes"
+	plan := install.InstallPlan{
+		OperationID: "install_0123456789abcdef",
+		CLI:         install.CLIPlan{ConfigPath: filepath.Join(t.TempDir(), "config.json")},
+		Paths: []install.PlannedPath{{
+			Name: "secondbox-binary", Path: filepath.Join(t.TempDir(), "secondbox"),
+		}},
+	}
+	pool := contracts.RunnerPool{
+		Name: standardresources.PoolAMD64, State: contracts.RunnerPoolStateReady,
+		ReadyRunnerCount: 1,
+	}
+	runner := contracts.Runner{
+		ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64,
+		State: "ready", CredentialState: "pre_shared",
+		Architectures: []string{standardresources.ArchitectureAMD64},
+		Capabilities:  []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"},
+		Capacity: map[string]int64{
+			"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes,
+			"DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1,
+			"Operations": install.DurableCodingConcurrentOperations,
+		},
+	}
+	requests := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer "+platformToken {
+			http.Error(writer, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		requests <- request.URL.Path
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/runner-pools/" + standardresources.PoolAMD64:
+			_ = json.NewEncoder(writer).Encode(pool)
+		case "/v1/runners/" + runner.ID:
+			_ = json.NewEncoder(writer).Encode(runner)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	configuration, err := json.Marshal(map[string]string{
+		"url": server.URL, "token": platformToken, "authorityKind": "platform",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plan.CLI.ConfigPath, configuration, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", installerPlannedPath(plan, "secondbox-binary"), "./cmd/secondbox")
+	build.Dir = repositoryRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build real SecondBox CLI: %v: %s", err, output)
+	}
+
+	evidence, err := runInstalledSmoke(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence["qualification"] != "authenticated-runner-readiness" ||
+		evidence["runnerId"] != runner.ID || evidence["runnerPool"] != pool.Name {
+		t.Fatalf("real CLI qualification evidence = %#v", evidence)
+	}
+	updateEvidence, err := runInstalledUpdateSmoke(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateEvidence["qualification"] != "authenticated-runner-readiness" ||
+		updateEvidence["postUpdateState"] != "runner-ready" {
+		t.Fatalf("real CLI update qualification evidence = %#v", updateEvidence)
+	}
+	wantRequests := []string{
+		"/v1/runner-pools/" + standardresources.PoolAMD64, "/v1/runners/" + runner.ID,
+		"/v1/runner-pools/" + standardresources.PoolAMD64, "/v1/runners/" + runner.ID,
+	}
+	for index, want := range wantRequests {
+		if got := <-requests; got != want {
+			t.Fatalf("real CLI qualification request %d = %q, want %q", index, got, want)
+		}
+	}
+}
+
+func TestQualifiedGuestUsesRunnerReadinessAndExplicitWorkloadEvidence(t *testing.T) {
+	path := filepath.Join("..", "..", "tests", "installer", "qualified-guest.sh")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`qualification == "authenticated-runner-readiness"`,
+		`.evidence.runnerId`, `.evidence.runnerPool`, `.evidence.runnerState`,
+		`.evidence.runnerCredentialState`, `.evidence.runnerPoolState`,
+		`.evidence.runnerPoolReadyRunners`, `.evidence.coldBootCapacity`,
+		`.evidence.concurrentOperationCapacity`,
+		`create_qualification_workload`, `postUpdateState == "runner-ready"`,
+	} {
+		if !bytes.Contains(content, []byte(required)) {
+			t.Errorf("qualified guest lacks %q", required)
+		}
+	}
+	for _, retired := range []string{`.evidence.output`, `.evidence.exitStatus`, `.evidence.sandboxId`} {
+		if bytes.Contains(content, []byte(retired)) {
+			t.Errorf("qualified guest retains retired installer evidence %q", retired)
+		}
+	}
+	check := exec.CommandContext(t.Context(), "bash", "-n", path)
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("qualified guest syntax: %v: %s", err, output)
 	}
 }
 
