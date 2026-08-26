@@ -103,18 +103,15 @@ fn serve() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let exit_handle = vm.exit_handle();
     let _ = vmm_exit.set(vm.exit_handle());
-    let control_flush_workspace = workspace
-        .try_clone()
-        .map_err(|error| format!("clone Workspace for control-loss flush: {error}"))?;
+    let control_flush_workspace = workspace;
     let control_vmm_exit = vmm_exit.clone();
     let control_vmm_stopped = vmm_stopped.clone();
     let control_shutting_down = shutting_down.clone();
     thread::Builder::new()
         .name("secondbox-helper-control".into())
         .spawn(move || {
-            if let Err(error) = supervise_instance(
+            match supervise_instance(
                 control,
-                workspace,
                 console,
                 state,
                 start_request_id,
@@ -122,20 +119,36 @@ fn serve() -> Result<(), String> {
                 exit_handle,
                 control_shutting_down.clone(),
             ) {
-                control_shutting_down.store(true, Ordering::Release);
-                eprintln!(
-                    "SecondBox Microsandbox helper control: {}",
-                    bounded_diagnostic(&error)
-                );
-                // A lost control socket is parent loss by another door; take
-                // the same coordinated exit so dirty Workspace writes reach
-                // the image before the process ends.
-                coordinated_loss_exit(
-                    &control_vmm_exit,
-                    &control_vmm_stopped,
-                    &control_flush_workspace,
-                    1,
-                );
+                Ok(true) => {
+                    // A requested shutdown ends through the same coordinated
+                    // exit as parent loss: stop the VMM, await its
+                    // acknowledgment, then flush the Workspace and let the
+                    // sync result decide the reported status.
+                    control_shutting_down.store(true, Ordering::Release);
+                    coordinated_loss_exit(
+                        &control_vmm_exit,
+                        &control_vmm_stopped,
+                        &control_flush_workspace,
+                        0,
+                    );
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    control_shutting_down.store(true, Ordering::Release);
+                    eprintln!(
+                        "SecondBox Microsandbox helper control: {}",
+                        bounded_diagnostic(&error)
+                    );
+                    // A lost control socket is parent loss by another door;
+                    // take the same coordinated exit so dirty Workspace
+                    // writes reach the image before the process ends.
+                    coordinated_loss_exit(
+                        &control_vmm_exit,
+                        &control_vmm_stopped,
+                        &control_flush_workspace,
+                        1,
+                    );
+                }
             }
         })
         .map_err(|error| format!("start helper control thread: {error}"))?;
@@ -166,14 +179,13 @@ fn serve() -> Result<(), String> {
 #[allow(clippy::too_many_arguments)]
 fn supervise_instance(
     mut control: UnixStream,
-    workspace: File,
     console: Arc<AgentConsole>,
     mut state: ProtocolState,
     start_request_id: u64,
     materialization_digest: String,
     exit_handle: msb_krun::ExitHandle,
     shutting_down: Arc<AtomicBool>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let agent = AgentSession::connect(console)?;
     agent.probe_workspace()?;
     write_frame(
@@ -225,8 +237,13 @@ fn supervise_instance(
         match envelope.message.as_ref() {
             Some(Message::Shutdown(request)) => {
                 agent.shutdown()?;
-                workspace.sync_all().map_err(|error| error.to_string())?;
                 write_terminal(&mut control, &envelope, true, 0, "shutdown-requested")?;
+                // Give the guest until its flush deadline to quiesce, then
+                // stop the VMM and flush behind the confirmed stop: the
+                // caller routes this through the coordinated exit, so the
+                // authoritative Workspace sync happens only after the VMM
+                // has left its vCPU loop and its result decides the exit
+                // status a replacement attachment will observe.
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -237,17 +254,9 @@ fn supervise_instance(
                         .saturating_sub(now_ms)
                         .min(4_000),
                 );
-                let final_workspace = workspace.try_clone().map_err(|error| {
-                    format!("clone Workspace for forced shutdown flush: {error}")
-                })?;
-                thread::spawn(move || {
-                    thread::sleep(delay);
-                    exit_handle.trigger();
-                    thread::sleep(Duration::from_millis(250));
-                    let _ = final_workspace.sync_all();
-                    process::exit(0);
-                });
-                return Ok(());
+                thread::sleep(delay);
+                let _ = exit_handle;
+                return Ok(true);
             }
             Some(Message::Exec(request)) => {
                 relay_exec(&agent, &mut control, &envelope, request)?;
