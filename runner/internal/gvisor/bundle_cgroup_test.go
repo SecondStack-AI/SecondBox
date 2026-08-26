@@ -30,3 +30,12 @@ func TestResolveSandboxCgroupParentFallsBackToVisibleRoot(t *testing.T) {
 		t.Fatalf("undelegated ancestry parent = %q", parent)
 	}
 }
+
+func TestSandboxCgroupDirectoryScopesByProfile(t *testing.T) {
+	if sandboxCgroupDirectory(0) == sandboxCgroupDirectory(1) {
+		t.Fatal("profiles must own distinct sandbox cgroup directories")
+	}
+	if instanceCgroupPath(0, "instance-a") == instanceCgroupPath(1, "instance-a") {
+		t.Fatal("instance cgroup paths must differ across profiles")
+	}
+}

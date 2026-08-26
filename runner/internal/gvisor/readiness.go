@@ -40,7 +40,7 @@ func (backend *AssignmentBackend) runPlatformProbe(ctx context.Context) error {
 	if _, err := ReconcileStaleLoops(backend.config.WorkspaceRoot); err != nil {
 		return fmt.Errorf("SecondBox gVisor stale attachment reconciliation: %w", err)
 	}
-	if err := reconcileStaleCgroups(); err != nil {
+	if err := reconcileStaleCgroups(backend.config.NetworkProfile); err != nil {
 		return fmt.Errorf("SecondBox gVisor stale cgroup reconciliation: %w", err)
 	}
 	if err := ensureHostNetworkPlumbing(ctx, dnsAddressForProfile(backend.config.NetworkProfile)); err != nil {

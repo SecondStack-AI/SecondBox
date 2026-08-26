@@ -109,7 +109,7 @@ suite_pid="$!"
 nested_cgroup=""
 nested_limits=""
 for _ in $(seq 1 120); do
-  candidate="$(find /sys/fs/cgroup/kubepods.slice -maxdepth 4 -type d -name secondbox-gvisor 2>/dev/null | head -1)"
+  candidate="$(find /sys/fs/cgroup/kubepods.slice -maxdepth 4 -type d -name 'secondbox-gvisor-p*' 2>/dev/null | head -1)"
   if [[ -n "$candidate" ]]; then
     instance="$(find "$candidate" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)"
     if [[ -n "$instance" ]]; then
@@ -133,7 +133,7 @@ echo "nested sandbox limits: $nested_limits"
 ! findmnt -rn | grep -q 'secondbox-gvisor.*workspace' ||
   fail "a Workspace mount leaked into the host mount table"
 
-leftover="$(find /sys/fs/cgroup/kubepods.slice -maxdepth 5 -type d -name 'secondbox-gvisor' 2>/dev/null | head -1)"
+leftover="$(find /sys/fs/cgroup/kubepods.slice -maxdepth 5 -type d -name 'secondbox-gvisor-p*' 2>/dev/null | head -1)"
 if [[ -n "$leftover" ]] && find "$leftover" -mindepth 1 -maxdepth 1 -type d | grep -q .; then
   fail "sandbox cgroups were not cleaned up: $leftover"
 fi

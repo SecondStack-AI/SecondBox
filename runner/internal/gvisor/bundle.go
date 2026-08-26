@@ -128,10 +128,18 @@ func sandboxCgroupParent() string {
 	})
 }
 
+// sandboxCgroupDirectory names this runner's sandbox cgroup container. It
+// carries the network profile because runners sharing one host can resolve
+// the same delegating ancestor, and each runner may sweep or own only its
+// profile's directory.
+func sandboxCgroupDirectory(profile uint32) string {
+	return fmt.Sprintf("secondbox-gvisor-p%d", profile)
+}
+
 // instanceCgroupPath names the per-Instance cgroup relative to the cgroup
 // filesystem root; launch and teardown must agree on it.
-func instanceCgroupPath(instanceID string) string {
-	return filepath.Join(sandboxCgroupParent(), "secondbox-gvisor", instanceID)
+func instanceCgroupPath(profile uint32, instanceID string) string {
+	return filepath.Join(sandboxCgroupParent(), sandboxCgroupDirectory(profile), instanceID)
 }
 
 // removeInstanceCgroup sweeps the per-Instance cgroup after compute exit.
@@ -139,8 +147,8 @@ func instanceCgroupPath(instanceID string) string {
 // directory behind, so teardown always sweeps and tolerates absence. The
 // kernel returns EBUSY while the last sandbox processes drain, so removal
 // retries across a short bound before reporting the leak.
-func removeInstanceCgroup(instanceID string) error {
-	path := filepath.Join("/sys/fs/cgroup", instanceCgroupPath(instanceID))
+func removeInstanceCgroup(profile uint32, instanceID string) error {
+	path := filepath.Join("/sys/fs/cgroup", instanceCgroupPath(profile, instanceID))
 	var joined error
 	for attempt := 0; attempt < 40; attempt++ {
 		if attempt > 0 {
@@ -166,9 +174,11 @@ func removeInstanceCgroup(instanceID string) error {
 }
 
 // reconcileStaleCgroups removes Instance cgroups left by an earlier runner
-// generation; none can be live before this backend launches compute.
-func reconcileStaleCgroups() error {
-	root := filepath.Join("/sys/fs/cgroup", sandboxCgroupParent(), "secondbox-gvisor")
+// generation of the same network profile; none of those can be live before
+// this backend launches compute, and other profiles' directories belong to
+// other runners.
+func reconcileStaleCgroups(profile uint32) error {
+	root := filepath.Join("/sys/fs/cgroup", sandboxCgroupParent(), sandboxCgroupDirectory(profile))
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -179,7 +189,7 @@ func reconcileStaleCgroups() error {
 	var joined error
 	for _, entry := range entries {
 		if entry.IsDir() {
-			joined = errors.Join(joined, removeInstanceCgroup(entry.Name()))
+			joined = errors.Join(joined, removeInstanceCgroup(profile, entry.Name()))
 		}
 	}
 	if err := os.Remove(root); err != nil && !errors.Is(err, os.ErrNotExist) {
