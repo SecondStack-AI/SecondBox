@@ -80,7 +80,11 @@ boundary and capacity required for later Sandbox admission.
 
 Updates are explicit and operator-initiated; there is no automatic background updater. Use the target release's bootstrap so the temporary, checksum-verified `secondbox-deploy` binary understands that release's update contract even when the installed binary is older.
 
-First stop every live Sandbox. The updater refuses to change desired state, leases, or workload lifecycle on the operator's behalf. Then run the read-only check against the operation directory printed by the original installer:
+First stop every live Sandbox. The updater refuses to change desired state, leases, or workload lifecycle on the operator's behalf.
+
+Take and verify a PostgreSQL backup before activating a target release: migrations are forward-only, and a target that carries a representation change (such as the vCPU conversion in migration `0016`) leaves the database unreadable by the source release's binaries. Rolling back after activation means restoring that backup and redeploying the source release; there is no in-place downgrade. On the single host the updater stops the Runner with the rest of the Compose project and restarts the upgraded Runner after the control plane, which is exactly the required generation-3 rollout order; a multi-runner deployment must stop every Runner before activating and start the upgraded Runners only after the upgraded control plane is ready, because a mixed-generation fleet is refused.
+
+Then run the read-only check against the operation directory printed by the original installer:
 
 ```sh
 operation=/absolute/path/to/secondbox-install-operation

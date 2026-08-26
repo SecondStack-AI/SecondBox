@@ -148,17 +148,19 @@ build; the digest is the identity, not a cache.
 
 ## Enrollment and credential issuance
 
-Enrollment follows the standard declared-Runner procedure in
-[deployment](deployment.md): declare the macOS Runner and its dedicated arm64 pool in
-`secondbox.toml`, then issue its identity and protected environment handoff with
-`secondbox-deploy runner-init <manifest> <runner-id> <handoff-directory>`. The command signs the
-client certificate for `spiffe://secondbox/runner/<runner-id>`, writes the matching key, CA
-certificate, and canonical environment, and refuses an undeclared ID or mismatched CA evidence.
-Copy the handoff to the macOS host as an explicit operator action, install it under an
-operator-owned root (for example `/opt/secondbox-runner-identity`), and point
-`SECONDBOX_RUNNER_CLIENT_CERTIFICATE`, `SECONDBOX_RUNNER_CLIENT_KEY`, and
-`SECONDBOX_RUNNER_CONTROL_PLANE_CA` at the installed files. Runner and application credentials
-remain different authorities; never reuse an application bearer credential for enrollment.
+`secondbox-deploy runner-init` declares, signs, and renders Firecracker-shaped Linux Runners
+only; it does not yet render a Microsandbox declaration or a macOS environment. For a macOS
+Runner, issue the identity manually with the deployment's Runner CA — the same authority
+`runner-init` uses: sign a client certificate whose URI SAN is
+`spiffe://secondbox/runner/<runner-id>`, using the deployment's `runner-ca.crt` and
+`runner-ca.key`, and provision the pre-shared Runner enrollment credential the control plane is
+configured with. Copy the certificate, key, and CA certificate to the macOS host as an explicit
+operator action, install them under an operator-owned root (for example
+`/opt/secondbox-runner-identity`), and point `SECONDBOX_RUNNER_CLIENT_CERTIFICATE`,
+`SECONDBOX_RUNNER_CLIENT_KEY`, and `SECONDBOX_RUNNER_CONTROL_PLANE_CA` at the installed files.
+The complete environment is composed from this document rather than rendered by a tool. Runner
+and application credentials remain different authorities; never reuse an application bearer
+credential for enrollment.
 
 ## Persistent service management
 
