@@ -124,6 +124,10 @@ func (connection *helperPortConnection) Read(ctx context.Context, maximum int) (
 		deadline = value
 	}
 	_ = connection.process.control.SetReadDeadline(deadline)
+	if connection.closed.Load() {
+		_ = connection.process.control.SetReadDeadline(time.Now())
+		return nil, fmt.Errorf("SecondBox Microsandbox Port connection is closed")
+	}
 	// Cancellation without a deadline must still interrupt a pending read.
 	// The callback is joined and the shared deadline restored before the
 	// gate releases, so it cannot race a later operation.
@@ -192,6 +196,13 @@ func (connection *helperPortConnection) Write(ctx context.Context, data []byte) 
 	if err := connection.process.control.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
+	// Close stores its intent before installing the bounded deadline, so a
+	// writer whose fallback deadline could have overwritten it observes the
+	// intent here and yields instead of extending the bound.
+	if connection.closed.Load() {
+		_ = connection.process.control.SetWriteDeadline(time.Now())
+		return fmt.Errorf("SecondBox Microsandbox Port connection is closed")
+	}
 	// Cancellation inside the frame write must interrupt the pending
 	// operation instead of blocking the caller and Close behind the fallback
 	// deadline. The callback is joined and the shared deadline restored
@@ -243,6 +254,17 @@ func (connection *helperPortConnection) Close() error {
 			Message: &microsandboxprotocol.Envelope_Cancel{Cancel: &microsandboxprotocol.CancelRequest{TargetRequestId: connection.requestID}},
 		})
 		<-connection.writeGate
+		if err != nil {
+			// The cancellation never reached the helper; the shared stream
+			// is desynchronized and no terminal can be trusted. Close it
+			// immediately so nothing reuses the corrupted channel.
+			err = errors.Join(err, connection.process.control.Close())
+			connection.process.requestMu.Unlock()
+			connection.release()
+			connection.closeErr = err
+			return
+		}
+		_ = connection.process.control.SetReadDeadline(time.Now().Add(5 * time.Second))
 		connection.readGate <- struct{}{}
 		_ = connection.process.control.SetReadDeadline(time.Now().Add(5 * time.Second))
 		for connection.terminal == nil {
