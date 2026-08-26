@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -465,7 +466,14 @@ func verifyImageIdentity(image *os.File, expectedUUID string, capacityBytes int6
 // attachLoopDescriptor creates a loop device from the inherited descriptor
 // with autoclear armed, so a crashed supervisor cannot leak the device once
 // every holder is gone.
+// loopAttachMu serializes this runner's get-free/bind sequences so its own
+// concurrent starts never race each other to the same unreserved index; the
+// bounded retry below remains for races against other processes on the host.
+var loopAttachMu sync.Mutex
+
 func attachLoopDescriptor(image *os.File) (string, *os.File, error) {
+	loopAttachMu.Lock()
+	defer loopAttachMu.Unlock()
 	controlDevice, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
 	if err != nil {
 		return "", nil, fmt.Errorf("open loop control: %w", err)

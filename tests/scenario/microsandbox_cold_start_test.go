@@ -179,9 +179,20 @@ func microsandboxHelperPeakRSSKiB(t *testing.T, helperPID int) int {
 	if os.Getenv("SECONDBOX_SCENARIO_SERVICE_CONTROL") != "" {
 		output = scenarioComposeOutput(t, "helper-rss-kib", strconv.Itoa(helperPID))
 	} else {
+		// The compute may be a process tree (the gVisor mount supervisor
+		// parents the runsc sentry and gofer), so the sample sums peak RSS
+		// across the helper and every descendant rather than the outer
+		// process alone; a childless Microsandbox helper sums to itself.
 		output = scenarioComposeOutput(
-			t, "exec", "-T", "secondbox-runner", "awk",
-			`$1 == "VmHWM:" { print $2 }`, fmt.Sprintf("/proc/%d/status", helperPID),
+			t, "exec", "-T", "secondbox-runner", "sh", "-c",
+			`peak=0
+walk() {
+  v=$(awk '$1=="VmHWM:"{print $2}' "/proc/$1/status" 2>/dev/null)
+  [ -n "$v" ] && peak=$((peak+v))
+  for child in $(cat /proc/$1/task/*/children 2>/dev/null); do walk "$child"; done
+}
+walk "$0"
+echo "$peak"`, strconv.Itoa(helperPID),
 		)
 	}
 	value, err := strconv.Atoi(strings.TrimSpace(string(output)))

@@ -48,6 +48,18 @@ func TestValidateRuntimeDirRefusesDestructivePaths(t *testing.T) {
 		t.Error("symlinked runtime directory was accepted")
 	}
 
+	aliasedWorkspace := filepath.Join(root, "real-workspaces")
+	if err := os.Mkdir(aliasedWorkspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspaceLink := filepath.Join(root, "workspace-link")
+	if err := os.Symlink(aliasedWorkspace, workspaceLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRuntimeDir(filepath.Join(aliasedWorkspace, "runtime"), workspaceLink, flatRoot); err == nil {
+		t.Error("runtime directory beneath a symlink-aliased workspace root was accepted")
+	}
+
 	valid := filepath.Join(root, "runtime")
 	if err := os.Mkdir(valid, 0o700); err != nil {
 		t.Fatal(err)

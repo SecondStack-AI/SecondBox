@@ -92,8 +92,22 @@ func validateRuntimeDir(runtimeDir, workspaceRoot, flatRoot string) error {
 		"WorkspaceStore root": workspaceRoot,
 		"flat root":           flatRoot,
 	} {
+		// Overlap is checked on the configured spelling and on the fully
+		// resolved path: a protected root reachable through a symlink
+		// beneath the runtime directory would otherwise evade the lexical
+		// check and be destroyed by startup reconciliation.
 		if pathsOverlap(runtimeDir, protected) {
 			return fmt.Errorf("SecondBox gVisor runtime directory must be disjoint from the %s", name)
+		}
+		resolved, err := filepath.EvalSymlinks(protected)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("SecondBox gVisor %s resolution: %w", name, err)
+		}
+		if pathsOverlap(runtimeDir, resolved) {
+			return fmt.Errorf("SecondBox gVisor runtime directory must be disjoint from the resolved %s", name)
 		}
 	}
 	return nil

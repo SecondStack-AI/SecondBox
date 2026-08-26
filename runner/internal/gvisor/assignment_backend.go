@@ -567,7 +567,9 @@ func (backend *AssignmentBackend) StartAssignment(
 	cleanup.disarm(networkCleanup)
 	cleanup.disarm(workspaceCleanup)
 	cleanup.push(func() error {
-		err := backend.destroyInstance(active)
+		// Start-failure teardown runs after the launch context may already
+		// be gone; it keeps its own bounded escalation waits instead.
+		err := backend.destroyInstance(context.Background(), active)
 		if errors.Is(err, errSupervisorExitUnconfirmed) {
 			retainUnconfirmed()
 		}
@@ -715,12 +717,12 @@ func (backend *AssignmentBackend) launchInstance(
 	select {
 	case err := <-ready:
 		if err != nil {
-			return nil, errors.Join(err, backend.destroyInstance(active))
+			return nil, errors.Join(err, backend.destroyInstance(ctx, active))
 		}
 	case <-ctx.Done():
-		return nil, errors.Join(ctx.Err(), backend.destroyInstance(active))
+		return nil, errors.Join(ctx.Err(), backend.destroyInstance(ctx, active))
 	case <-time.After(60 * time.Second):
-		return nil, errors.Join(fmt.Errorf("supervisor ready deadline exceeded"), backend.destroyInstance(active))
+		return nil, errors.Join(fmt.Errorf("supervisor ready deadline exceeded"), backend.destroyInstance(ctx, active))
 	}
 	// Only after the synchronous ready read may the status consumer own the
 	// stream; two concurrent readers would race for the ready line.
@@ -801,7 +803,7 @@ var errSupervisorExitUnconfirmed = errors.New("SecondBox gVisor supervisor exit 
 // destroyInstance force-stops the supervisor tree and releases the Workspace
 // attachment only after the supervisor has exited (its exit proves the mount
 // and loop device are gone).
-func (backend *AssignmentBackend) destroyInstance(active *activeAssignment) error {
+func (backend *AssignmentBackend) destroyInstance(ctx context.Context, active *activeAssignment) error {
 	if active.session != nil {
 		_ = active.session.Close()
 	}
@@ -809,10 +811,19 @@ func (backend *AssignmentBackend) destroyInstance(active *activeAssignment) erro
 	_ = active.handles.Control.Close()
 	select {
 	case <-active.done:
+	case <-ctx.Done():
+		_ = syscallKillGroup(active.handles.Command.Process.Pid)
+		select {
+		case <-active.done:
+		case <-time.After(supervisorStopBound):
+			return errSupervisorExitUnconfirmed
+		}
 	case <-time.After(supervisorStopBound):
 		_ = syscallKillGroup(active.handles.Command.Process.Pid)
 		select {
 		case <-active.done:
+		case <-ctx.Done():
+			return errSupervisorExitUnconfirmed
 		case <-time.After(supervisorStopBound):
 			return errSupervisorExitUnconfirmed
 		}
@@ -1009,14 +1020,25 @@ func (backend *AssignmentBackend) FenceAssignment(
 	// and lets runsc exit; the supervisor then detaches and exits.
 	_, _ = active.handles.Control.Write([]byte{controlTerminate})
 	var err error
-	select {
-	case <-active.done:
-	case <-time.After(time.Until(deadline)):
-		_, _ = active.handles.Control.Write([]byte{controlKill})
-		_ = active.handles.Control.Close()
+	// Every escalation wait also honors the caller's context, so fencing a
+	// sequence of unresponsive supervisors can never stack fixed waits past
+	// the runner's shutdown deadline: cancellation escalates immediately.
+	waitDone := func(bound time.Duration) bool {
+		timer := time.NewTimer(bound)
+		defer timer.Stop()
 		select {
 		case <-active.done:
-		case <-time.After(supervisorStopBound):
+			return true
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return false
+		}
+	}
+	if !waitDone(time.Until(deadline)) {
+		_, _ = active.handles.Control.Write([]byte{controlKill})
+		_ = active.handles.Control.Close()
+		if !waitDone(supervisorStopBound) {
 			_ = syscallKillGroup(active.handles.Command.Process.Pid)
 			// A supervisor stuck in uninterruptible I/O cannot confirm its
 			// exit; preserve the assignment state and report the cleanup

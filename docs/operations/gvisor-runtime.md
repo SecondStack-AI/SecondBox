@@ -22,6 +22,13 @@ The gVisor mode requires loop-device, `nft`, and `ip` availability and reports a
 and virtualization as passing observations rather than blockers. The Firecracker preflight is
 unchanged.
 
+The host must run the unified cgroup v2 hierarchy with the `cpu`, `memory`, and `pids`
+controllers enabled on the runner's branch, and the runner's service identity must be able to
+create sandbox cgroups there with writable `cpu.max` and `memory.max` controls (under systemd,
+run the runner with `Delegate=yes` or as root). Readiness proves this by creating and removing
+a disposable sandbox cgroup with those controls on every pass; a host without delegated,
+writable controllers stays permanently unready.
+
 When Docker shares the host, its firewall sets the forward hook to a drop policy. The runner
 inserts one admission rule into Docker's designated `DOCKER-USER` extension chain accepting only
 connections the runner's own fail-closed policy tables have already marked; hosts without Docker
@@ -42,8 +49,19 @@ rootfs/
 - Build the guest agent from the repository with CGO disabled:
   `CGO_ENABLED=0 go build -o bin/secondbox-guest-agent ./cmd/secondbox-guest-agent` under
   `runner/`.
-- `rootfs/` is the flattened extract of the reviewed source OCI image. Its digest must equal the
-  materialization's `flatRootDigest`, computed by `runner/cmd/secondbox-flat-root-digest`.
+- `rootfs/` is the flattened extract of the reviewed source OCI image. Extract it
+  provenance-preserving from the exact digest-pinned image rather than a rebuilt tag:
+
+  ```sh
+  container="$(docker create <source-image>@sha256:<reviewed digest>)"
+  mkdir rootfs && docker export "$container" | tar -x -C rootfs
+  docker rm "$container"
+  ```
+
+  Its digest must equal the materialization's `flatRootDigest`, computed by
+  `runner/cmd/secondbox-flat-root-digest`. The qualification drivers below consume this same
+  build directory: the CI `buildx` image publishes nothing an operator can qualify from, so
+  assemble the directory locally for both enrollment and qualification.
 
 ## Operator-owned resources
 
@@ -176,6 +194,13 @@ never copied from a document.
    Runner through the control plane only when its Workspaces have been relocated or are no
    longer needed. The WorkspaceStore root is the durable authority; never delete it as part of
    a runner restart or upgrade.
+
+   Upgrades have no in-place path either: every Sandbox pins its exact Profile revision and
+   backend materialization, so replacing `bin/runsc`, the guest agent, or `rootfs/` under a
+   live materialization is unsupported and would strand the Sandboxes pinned to it. Deploy a
+   new build directory beside the old one under a new materialization digest, keep the old
+   assets until every Sandbox pinned to them has been deleted or relocated, and treat the
+   forward-only database migrations as unrollbackable without the pre-upgrade backup.
 
    Relocation is the only path off a gVisor runner: RunnerPools seal to one backend kind, so
    no Sandbox can switch to a Firecracker pool in place, and a gVisor Workspace relocates only

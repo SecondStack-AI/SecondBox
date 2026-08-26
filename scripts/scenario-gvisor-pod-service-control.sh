@@ -258,8 +258,17 @@ arguments=("${strip_profile[@]}")
 case "${arguments[0]}" in
   helper-rss-kib)
     (( ${#arguments[@]} == 2 )) || fail "helper-rss-kib requires one PID"
-    kubectl exec secondbox-runner -- \
-      awk '$1 == "VmHWM:" { print $2 }' "/proc/${arguments[1]}/status"
+    # Sum peak RSS across the compute process tree: the mount supervisor
+    # parents the runsc sentry and gofer, whose memory is the measurement.
+    kubectl exec secondbox-runner -- sh -c '
+peak=0
+walk() {
+  v=$(awk '"'"'$1=="VmHWM:"{print $2}'"'"' "/proc/$1/status" 2>/dev/null)
+  [ -n "$v" ] && peak=$((peak+v))
+  for child in $(cat /proc/$1/task/*/children 2>/dev/null); do walk "$child"; done
+}
+walk "$0"
+echo "$peak"' "${arguments[1]}"
     ;;
   start|up)
     service="${arguments[${#arguments[@]}-1]}"
