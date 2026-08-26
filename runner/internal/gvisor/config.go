@@ -5,6 +5,7 @@ package gvisor
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,6 +55,56 @@ const (
 	agentArtifactID = "guest-agent"
 )
 
+// maximumRuntimeDirLength keeps every per-Instance Unix socket path -
+// "<runtimeDir>/<16-hex instance>/sockets/protocol.sock" - inside sun_path,
+// so no assignment can fail on socket-path length after readiness advertised.
+const maximumRuntimeDirLength = 107 - len("/0123456789abcdef/sockets/protocol.sock")
+
+// validateRuntimeDir refuses runtime directories whose startup reconciliation
+// - which removes every child - could destroy durable or unrelated data: the
+// filesystem root, symlinked paths, and any path that contains or is
+// contained by the WorkspaceStore root or the immutable flat root.
+func validateRuntimeDir(runtimeDir, workspaceRoot, flatRoot string) error {
+	if runtimeDir == "/" || filepath.Dir(runtimeDir) == "/" {
+		return fmt.Errorf("SecondBox gVisor runtime directory must be at least two levels below the filesystem root")
+	}
+	if len(runtimeDir) > maximumRuntimeDirLength {
+		return fmt.Errorf("SecondBox gVisor runtime directory exceeds %d bytes; per-Instance socket paths would exceed the Unix socket limit", maximumRuntimeDirLength)
+	}
+	if info, err := os.Lstat(runtimeDir); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("SecondBox gVisor runtime directory must not be a symlink")
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("SecondBox gVisor runtime directory must be a directory")
+		}
+		resolved, err := filepath.EvalSymlinks(runtimeDir)
+		if err != nil {
+			return fmt.Errorf("SecondBox gVisor runtime directory resolution: %w", err)
+		}
+		if resolved != runtimeDir {
+			return fmt.Errorf("SecondBox gVisor runtime directory must not traverse symlinks")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("SecondBox gVisor runtime directory inspection: %w", err)
+	}
+	for name, protected := range map[string]string{
+		"WorkspaceStore root": workspaceRoot,
+		"flat root":           flatRoot,
+	} {
+		if pathsOverlap(runtimeDir, protected) {
+			return fmt.Errorf("SecondBox gVisor runtime directory must be disjoint from the %s", name)
+		}
+	}
+	return nil
+}
+
+func pathsOverlap(left, right string) bool {
+	return left == right ||
+		strings.HasPrefix(left, right+string(filepath.Separator)) ||
+		strings.HasPrefix(right, left+string(filepath.Separator))
+}
+
 func validateConfig(config Config) (validatedConfig, error) {
 	for name, value := range map[string]string{
 		"runsc":                    config.RunscPath,
@@ -67,6 +118,9 @@ func validateConfig(config Config) (validatedConfig, error) {
 		if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
 			return validatedConfig{}, fmt.Errorf("SecondBox gVisor %s path must be clean and absolute", name)
 		}
+	}
+	if err := validateRuntimeDir(config.RuntimeDir, config.WorkspaceRoot, config.FlatRootPath); err != nil {
+		return validatedConfig{}, err
 	}
 	if config.MaximumVCPUs == 0 || config.MaximumMemoryBytes == 0 || config.MaximumDiskBytes == 0 ||
 		config.MaximumInstances == 0 || config.MaximumOperations == 0 {

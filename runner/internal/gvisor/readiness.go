@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -41,7 +42,31 @@ func (backend *AssignmentBackend) probePlatform(ctx context.Context) error {
 	if err := probeLoopAllocation(backend.config.RuntimeDir); err != nil {
 		return fmt.Errorf("SecondBox gVisor loop devices are unavailable: %w", err)
 	}
+	if err := probeCgroupControls(backend.config.NetworkProfile); err != nil {
+		return fmt.Errorf("SecondBox gVisor cgroup resource controls: %w", err)
+	}
 	return nil
+}
+
+// probeCgroupControls proves a sandbox cgroup can actually be created with
+// writable CPU and memory controls before ResourceLimitsReady is advertised:
+// an unprepared host would otherwise register successfully and then fail
+// every assignment at launch.
+func probeCgroupControls(profile uint32) error {
+	probe := filepath.Join("/sys/fs/cgroup", sandboxCgroupParent(), sandboxCgroupDirectory(profile), "readiness-probe")
+	if err := os.MkdirAll(probe, 0o755); err != nil {
+		return fmt.Errorf("create probe cgroup: %w", err)
+	}
+	defer func() { _ = os.Remove(probe) }()
+	for control, value := range map[string]string{
+		"cpu.max":    "max 100000",
+		"memory.max": "max",
+	} {
+		if err := os.WriteFile(filepath.Join(probe, control), []byte(value+"\n"), 0o644); err != nil {
+			return fmt.Errorf("write probe %s: %w", control, err)
+		}
+	}
+	return os.Remove(probe)
 }
 
 // probeLoopAllocation proves a loop device can actually be allocated, opened,

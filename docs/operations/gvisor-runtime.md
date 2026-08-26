@@ -86,7 +86,11 @@ export SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 
 `SECONDBOX_GVISOR_NETWORK_PROFILE` (default `0`) separates runners sharing one host network
 namespace: each profile selects its own DNS proxy address, link-local slot space, and veth and
-namespace names. A single runner per host keeps the default.
+namespace names. A single runner per host keeps the default. Valid profiles are `0`-`15`, every
+runner in the same host network namespace **must** use a unique profile, and each profile bounds
+the runner at 63 concurrent Instances (its link-local slot space). A reused profile is not
+detected: startup reconciliation sweeps the profile's networks and cgroups and would tear down
+another live runner's Instances.
 
 Also set every required runner protocol address, RunnerPool ID, runner identity, mTLS
 certificate, private key, CA, enabled feature, and evidence setting. These are deployment
@@ -172,6 +176,12 @@ never copied from a document.
    Runner through the control plane only when its Workspaces have been relocated or are no
    longer needed. The WorkspaceStore root is the durable authority; never delete it as part of
    a runner restart or upgrade.
+
+   Relocation is the only path off a gVisor runner: RunnerPools seal to one backend kind, so
+   no Sandbox can switch to a Firecracker pool in place, and a gVisor Workspace relocates only
+   to another runner with matching gVisor materialization and free capacity. Provision that
+   destination capacity before decommissioning the final gVisor runner, or its durable
+   Sandboxes remain stranded until an eligible runner enrolls.
 
    Startup also modifies host-wide networking state that per-Instance teardown deliberately
    leaves in place; remove it only when decommissioning the host as a runner entirely:
