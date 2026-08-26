@@ -42,7 +42,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 secondbox-runner \
     && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/secondbox-runner --create-home --shell /usr/sbin/nologin secondbox-runner \
-    && install -d -m 0700 /var/lib/secondbox-runner
+    && install -d -m 0700 /var/lib/secondbox-runner \
+    # The privileged runner sees host /dev; console and session-management
+    # binaries must not exist in an image that could reach host consoles.
+    && rm -f /usr/lib/systemd/systemd /usr/sbin/agetty /sbin/agetty /usr/bin/login /bin/login /usr/sbin/sulogin /sbin/sulogin /usr/sbin/getty /sbin/getty \
+    && test ! -e /usr/lib/systemd/systemd \
+    && test ! -e /usr/sbin/agetty \
+    && test ! -e /sbin/agetty \
+    && test ! -e /usr/bin/login \
+    && test ! -e /usr/sbin/sulogin
 
 LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondBox" \
       org.opencontainers.image.title="SecondBox gVisor runner" \

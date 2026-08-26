@@ -144,6 +144,65 @@ func destroyInstanceNetwork(ctx context.Context, network instanceNetwork) error 
 	return joined
 }
 
+// reconcileStaleNetworks removes this network profile's leftovers from an
+// earlier runner generation: instance namespaces, host veths, and the
+// per-Instance policy tables whose rules reference the profile's links. None
+// of those can be live before this backend launches compute, and other
+// profiles' resources belong to other runners.
+func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
+	var joined error
+	namespacePrefix := fmt.Sprintf("%s%d-", namespaceNamePrefix, profile)
+	if output, err := exec.CommandContext(ctx, "ip", "netns", "list").Output(); err == nil {
+		for _, line := range strings.Split(string(output), "\n") {
+			name := strings.Fields(line)
+			if len(name) > 0 && strings.HasPrefix(name[0], namespacePrefix) {
+				joined = errors.Join(joined, ipCommand(ctx, "netns", "delete", name[0]))
+			}
+		}
+	}
+	vethPrefix := fmt.Sprintf("%s%d-", hostVethNamePrefix, profile)
+	if output, err := exec.CommandContext(ctx, "ip", "-o", "link", "show").Output(); err == nil {
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			name := strings.TrimSuffix(fields[1], ":")
+			name, _, _ = strings.Cut(name, "@")
+			if strings.HasPrefix(name, vethPrefix) {
+				joined = errors.Join(joined, ipCommand(ctx, "link", "delete", name))
+			}
+		}
+	}
+	if output, err := exec.CommandContext(ctx, "nft", "list", "tables").Output(); err == nil {
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) != 3 || fields[0] != "table" || fields[1] != "inet" ||
+				!strings.HasPrefix(fields[2], "secondbox_") {
+				continue
+			}
+			listing, listErr := exec.CommandContext(ctx, "nft", "list", "table", "inet", fields[2]).Output()
+			if listErr != nil || !strings.Contains(string(listing), `"`+vethPrefix) {
+				continue
+			}
+			for _, arguments := range [][]string{
+				{"delete", "table", "inet", fields[2]},
+				{"delete", "table", "ip", fields[2] + natTableSuffix},
+			} {
+				if deleteOutput, deleteErr := exec.CommandContext(ctx, "nft", arguments...).CombinedOutput(); deleteErr != nil &&
+					!strings.Contains(string(deleteOutput), "No such file") {
+					joined = errors.Join(joined, fmt.Errorf("delete stale policy table %s: %w: %s",
+						arguments[3], deleteErr, bytes.TrimSpace(deleteOutput)))
+				}
+			}
+		}
+	}
+	if joined != nil {
+		return fmt.Errorf("reconcile stale profile networks: %w", joined)
+	}
+	return nil
+}
+
 // ensureHostNetworkPlumbing prepares the runner-owned pieces every Instance
 // shares: the DNS dummy interface, IPv4 forwarding, and admission through a
 // coexisting Docker firewall.

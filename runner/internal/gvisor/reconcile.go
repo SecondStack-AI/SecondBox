@@ -91,3 +91,25 @@ func detachLoopDevice(devicePath string) error {
 	}
 	return nil
 }
+
+// reconcileStaleRuntimeDirectories removes per-Instance runtime state left by
+// an earlier runner generation. The runtime directory is exclusively this
+// runner's, and every attachment those directories described was already
+// reconciled, so nothing under it can be live before compute launches.
+func reconcileStaleRuntimeDirectories(runtimeDir string) error {
+	entries, err := os.ReadDir(runtimeDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read stale runtime directories: %w", err)
+	}
+	var joined error
+	for _, entry := range entries {
+		joined = errors.Join(joined, os.RemoveAll(filepath.Join(runtimeDir, entry.Name())))
+	}
+	if joined != nil {
+		return fmt.Errorf("remove stale runtime directories: %w", joined)
+	}
+	return nil
+}

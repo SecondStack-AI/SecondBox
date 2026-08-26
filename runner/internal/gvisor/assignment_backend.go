@@ -49,6 +49,7 @@ type activeAssignment struct {
 	reservation    capacityReservation
 	backendRef     string
 	readyPublished bool
+	exitPending    bool
 	fenced         bool
 	terminalSent   bool
 	operations     map[uint64]context.CancelFunc
@@ -749,12 +750,23 @@ const supervisorStopBound = 15 * time.Second
 
 func (backend *AssignmentBackend) MarkAssignmentReady(fence *runnerprotocol.AssignmentFence) error {
 	backend.mu.Lock()
-	defer backend.mu.Unlock()
 	active, exists := backend.assignments[fence.GetAssignmentId()]
 	if !exists || !sameFence(active.fence, fence) || active.fenced {
+		backend.mu.Unlock()
 		return fmt.Errorf("SecondBox gVisor ready assignment fence is stale")
 	}
 	active.readyPublished = true
+	// A supervisor that already exited before readiness left its termination
+	// pending; publishing it here keeps the service from treating a dead
+	// Instance as silently ready.
+	publishExit := active.exitPending && !active.terminalSent
+	if publishExit {
+		active.terminalSent = true
+	}
+	backend.mu.Unlock()
+	if publishExit {
+		backend.publishSupervisorExit(active)
+	}
 	return nil
 }
 
@@ -762,11 +774,26 @@ func (backend *AssignmentBackend) observeExit(active *activeAssignment) {
 	<-active.done
 	backend.mu.Lock()
 	current, exists := backend.assignments[active.fence.AssignmentId]
-	if !exists || current != active || active.fenced || !active.readyPublished || active.terminalSent {
+	if !exists || current != active || active.fenced || active.terminalSent {
+		backend.mu.Unlock()
+		return
+	}
+	if !active.readyPublished {
+		// Readiness has not been acknowledged yet; retain the exit so
+		// MarkAssignmentReady publishes it instead of losing it.
+		active.exitPending = true
 		backend.mu.Unlock()
 		return
 	}
 	active.terminalSent = true
+	backend.mu.Unlock()
+	backend.publishSupervisorExit(active)
+}
+
+// publishSupervisorExit emits the unexpected-exit evidence and terminal for
+// an assignment whose terminalSent flag the caller has already claimed.
+func (backend *AssignmentBackend) publishSupervisorExit(active *activeAssignment) {
+	backend.mu.Lock()
 	terminal := runnercontrol.BackendInstanceTerminal{
 		Fence:          cloneFence(active.fence),
 		Correlation:    proto.Clone(active.correlation).(*runnerprotocol.Correlation),

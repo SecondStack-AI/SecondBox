@@ -93,6 +93,59 @@ certificate, private key, CA, enabled feature, and evidence setting. These are d
 authority and have no application defaults. The runner requires root for loop attachment, mount
 and network namespaces, and nftables; the control plane must never run with that authority.
 
+## End-to-end host bring-up
+
+The complete host path, in order; every digest is computed from the operator's reviewed assets,
+never copied from a document.
+
+1. Compute and pin the identities from the build directory:
+
+   ```sh
+   cd runner && go run ./cmd/secondbox-flat-root-digest /opt/secondbox-gvisor/rootfs
+   sha256sum /opt/secondbox-gvisor/bin/runsc /opt/secondbox-gvisor/bin/secondbox-guest-agent
+   printf 'sha256:%s\n' "$(jq --compact-output --join-output . \
+     /etc/secondbox/gvisor-linux-amd64.materialization.json | sha256sum | awk '{print $1}')"
+   ```
+
+   Record the flat-root digest and launch-artifact digests in the reviewed materialization
+   manifest, then pin the canonical manifest digest in
+   `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST`.
+
+2. Apply the reviewed public resources (the dedicated pool and Profile derived from
+   `runner/deploy/gvisor-linux-amd64.resources.json`):
+
+   ```sh
+   secondbox resources check --file /absolute/path/to/reviewed-gvisor.resources.json
+   secondbox resources apply --file /absolute/path/to/reviewed-gvisor.resources.json
+   ```
+
+3. Issue the Runner identity. On a guided single-host deployment, declare the Runner in
+   `secondbox.toml` and run
+   `secondbox-deploy runner-init <manifest> <runner-id> <handoff-directory>`; note that
+   `runner-init` renders a Firecracker-shaped environment, so keep only the identity files
+   (certificate, key, CA) and the enrollment credential from the handoff and compose the gVisor
+   environment from this document. Install the identity under an operator-owned root such as
+   `/opt/secondbox-runner-identity`.
+
+4. Export the complete environment from this document plus the runner protocol settings
+   (control-plane address and server name, credential, identity paths, pool ID, data-plane
+   addresses, log paths, concurrency and storage-pressure bounds), then start the runner as a
+   root systemd service whose unit states that exact environment. Readiness is observable:
+
+   ```sh
+   curl -fsS http://127.0.0.1:8080/metrics | grep runner
+   secondbox runners list --pool <gvisor-pool>
+   ```
+
+   The Runner appears `ready` only after its materialization revalidation, loop and cgroup
+   reconciliation, host network plumbing, and the `runsc` boot probe all pass.
+
+5. Tear down without losing Workspaces: stop the systemd unit (the backend fences and flushes
+   every Instance), leave `SECONDBOX_RUNNER_WORKSPACE_ROOT` untouched, and decommission the
+   Runner through the control plane only when its Workspaces have been relocated or are no
+   longer needed. The WorkspaceStore root is the durable authority; never delete it as part of
+   a runner restart or upgrade.
+
 ## Kubernetes pod install path
 
 The gVisor runner is also qualified as a privileged, node-pinned pod on a Kubernetes node

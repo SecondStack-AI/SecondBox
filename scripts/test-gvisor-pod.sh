@@ -115,6 +115,21 @@ for _ in $(seq 1 120); do
     if [[ -n "$instance" ]]; then
       nested_cgroup="$instance"
       nested_limits="cpu.max=$(cat "$instance/cpu.max" 2>/dev/null) memory.max=$(cat "$instance/memory.max" 2>/dev/null)"
+      # The suite launches one-vCPU, 256 MiB Instances; the nested limits must
+      # state exactly those values or the per-sandbox enforcement regressed.
+      [[ "$(cat "$instance/cpu.max" 2>/dev/null)" == "100000 100000" ]] ||
+        fail "nested sandbox cpu.max is not the one-vCPU quota: $(cat "$instance/cpu.max" 2>/dev/null)"
+      [[ "$(cat "$instance/memory.max" 2>/dev/null)" == "268435456" ]] ||
+        fail "nested sandbox memory.max is not the 256 MiB limit: $(cat "$instance/memory.max" 2>/dev/null)"
+      # While the sandbox is live, its Workspace mount must exist only inside
+      # the supervisor's private mount namespace: the host and pod tables must
+      # show no runtime mountpoint and no loop-backed Workspace mount.
+      if findmnt -rn -o TARGET,SOURCE | grep -E '/mnt$' | grep -q 'secondbox'; then
+        fail "a Workspace runtime mountpoint is visible in the host mount table"
+      fi
+      if findmnt -rn -o SOURCE | grep -q '^/dev/loop.*workspace'; then
+        fail "a loop-backed Workspace mount is visible in the host mount table"
+      fi
       break
     fi
   fi
@@ -130,7 +145,7 @@ printf '%s\n' "$suite_log" | grep -q '^exit=0$' || fail "qualification suite fai
 echo "nested sandbox cgroup: $nested_cgroup"
 echo "nested sandbox limits: $nested_limits"
 
-! findmnt -rn | grep -q 'secondbox-gvisor.*workspace' ||
+! findmnt -rn -o TARGET | grep -q 'secondbox-gvisor' ||
   fail "a Workspace mount leaked into the host mount table"
 
 leftover="$(find /sys/fs/cgroup/kubepods.slice -maxdepth 5 -type d -name 'secondbox-gvisor-p*' 2>/dev/null | head -1)"

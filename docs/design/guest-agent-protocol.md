@@ -4,7 +4,7 @@ The guest-agent protocol is the runner-to-guest control and data-plane boundary.
 
 `contracts/guest/v1/guest.proto` is the canonical schema. Each supported protocol generation has a committed descriptor set and frozen request, response, event, and negative binary fixtures. The runner test matrix exercises the current runner against every supported released guest generation.
 
-The generated image exposes this canonical bidirectional gRPC stream on a dedicated, explicitly configured vsock port. The separate HTTP guest-control port is limited to bootstrap and legacy lifecycle operations; it is not a guest-protocol fallback. Firecracker's host-side Unix socket CONNECT framing is transport only and does not replace the `Hello`/`Welcome` binding.
+The generated Firecracker image exposes this canonical bidirectional gRPC stream on a dedicated, explicitly configured vsock port; the experimental gVisor backend exposes the same stream on gofer-served Unix sockets passed into the sandbox. The separate HTTP guest-control port is limited to bootstrap and legacy lifecycle operations; it is not a guest-protocol fallback. Neither Firecracker's host-side Unix socket CONNECT framing nor the gVisor socket pass-through replaces the `Hello`/`Welcome` binding: the negotiated Instance, generation, nonce, and protocol identities are identical on both transports.
 
 ## One negotiated connection generation
 

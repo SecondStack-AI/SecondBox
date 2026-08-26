@@ -1,6 +1,15 @@
 // Package pid1 keeps the guest agent correct when it is a sandbox's initial
 // process: orphaned grandchildren reparent to PID 1 and must be reaped, and
 // shutdown must propagate to every process remaining in the PID namespace.
+//
+// Reaping is idle-gated: while any managed command runs, orphan reaping
+// pauses entirely, because a global wait would race os/exec's own Wait and
+// corrupt managed exit statuses. The accepted consequence is that orphaned
+// grandchildren stay zombies until the managed command finishes; they are
+// bounded by the sandbox's process ceiling and reaped at the next idle
+// window. Reaping only non-managed PIDs would require wait-by-PID over the
+// full process table and is a deliberate non-goal at this scope.
+//
 // Every entry point is a no-op when the agent is not PID 1, so microVM guests
 // running under an init are unchanged.
 package pid1

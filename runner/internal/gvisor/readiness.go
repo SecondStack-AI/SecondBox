@@ -43,6 +43,12 @@ func (backend *AssignmentBackend) runPlatformProbe(ctx context.Context) error {
 	if err := reconcileStaleCgroups(backend.config.NetworkProfile); err != nil {
 		return fmt.Errorf("SecondBox gVisor stale cgroup reconciliation: %w", err)
 	}
+	if err := reconcileStaleNetworks(ctx, backend.config.NetworkProfile); err != nil {
+		return fmt.Errorf("SecondBox gVisor stale network reconciliation: %w", err)
+	}
+	if err := reconcileStaleRuntimeDirectories(backend.config.RuntimeDir); err != nil {
+		return fmt.Errorf("SecondBox gVisor stale runtime reconciliation: %w", err)
+	}
 	if err := ensureHostNetworkPlumbing(ctx, dnsAddressForProfile(backend.config.NetworkProfile)); err != nil {
 		return fmt.Errorf("SecondBox gVisor host network plumbing: %w", err)
 	}

@@ -1,6 +1,6 @@
 # Service boundaries
 
-SecondBox is a self-hostable network service for durable isolated Sandboxes. The public durable resource is a `Sandbox`; Firecracker compute is a replaceable `Instance` attached to one fenced Sandbox generation.
+SecondBox is a self-hostable network service for durable isolated Sandboxes. The public durable resource is a `Sandbox`; compute — a Firecracker microVM on the production backend, a gVisor sentry sandbox or Microsandbox microVM on the experimental backends — is a replaceable `Instance` attached to one fenced Sandbox generation.
 
 ## Components
 
@@ -8,7 +8,7 @@ The unprivileged control plane serves the HTTP API, resolves the deployment-wide
 
 The runner is a separately deployed privileged process on a qualified host. It selects exactly one private compute backend at startup, establishes an outbound mutually authenticated connection to the control plane, advertises only locally revalidated materializations, and owns backend composition, its reflink-capable WorkspaceStore, and process cleanup. Firecracker remains the production backend while the experimental Microsandbox and gVisor backends are qualified Linux-first; the gVisor backend serves hosts without KVM. A runner accepts only fully resolved assignments and local-workspace commands addressed to its authenticated stable identity. It does not resolve profiles, authenticate HTTP callers, or choose ownership policy.
 
-The guest agent runs inside each released Firecracker image. It performs bounded command, filesystem, PTY, activity, and port operations for the runner over the independently versioned guest protocol. It has no control-plane database credentials.
+The guest agent runs inside each Instance: baked into the released Firecracker image and reached over vsock, or injected as a bind-mounted binary and reached over gofer-served Unix sockets on the experimental gVisor backend. It performs bounded command, filesystem, PTY, activity, and port operations for the runner over the independently versioned guest protocol, with the same negotiated identity guarantees on either transport. It has no control-plane database credentials.
 
 ## Trust and network boundaries
 
