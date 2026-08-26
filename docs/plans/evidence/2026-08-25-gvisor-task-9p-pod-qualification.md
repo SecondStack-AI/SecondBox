@@ -2,8 +2,8 @@
 
 Date: 2026-08-26 (UTC)
 
-Source commit: `5eec773bf` (clean tree; both scenario evidence files record
-`repositoryDirty: false` at this commit)
+Source commit: `c5a6bd676` (clean tree; both scenario evidence files record
+`repositoryDirty: false` at this commit, re-run after the branch was rebased onto main)
 
 Result: pass — the spike closes with both environments qualified.
 
@@ -29,14 +29,14 @@ On the no-KVM QEMU node (Debian 13, kernel `6.12.101+deb13-cloud-amd64`, K3s `v1
 containerd `2.3.2-k3s2`):
 
 - `test-scenario-gvisor` (host placement): 22 scenarios passed —
-  `2026-08-25-gvisor-task-9p-linux-scenario.json`. 30 cold starts: start-to-ready p50 424.5 ms,
-  p95 668.9 ms — `2026-08-25-gvisor-task-9p-cold-starts.json`.
+  `2026-08-25-gvisor-task-9p-linux-scenario.json`. 30 cold starts: start-to-ready p50 413.2 ms,
+  p95 468.8 ms — `2026-08-25-gvisor-task-9p-cold-starts.json`.
 - `test-scenario-gvisor-pod` (pod placement): the same 22 scenarios passed, including
   Snapshot/restore, runner-kill reconciliation, concurrency, the rejection matrix, the network
   policy matrix with real external egress through pod and node NAT, and Workspace relocation
   between two runner pods on distinct network profiles —
-  `2026-08-25-gvisor-task-9p-pod-scenario.json`. 30 cold starts inside the pod: p50 440.1 ms,
-  p95 569.7 ms — `2026-08-25-gvisor-task-9p-pod-cold-starts.json`.
+  `2026-08-25-gvisor-task-9p-pod-scenario.json`. 30 cold starts inside the pod: p50 398.7 ms,
+  p95 456.8 ms — `2026-08-25-gvisor-task-9p-pod-cold-starts.json`.
 - `test-gvisor-pod` and the backend qualification suites (`TestQualified|TestAttachment`) also
   passed at the same commit, with sandbox cgroups observed nested at
   `kubepods-pod<uid>.slice/secondbox-gvisor-p0/<instance>` under per-sandbox limits.
@@ -53,7 +53,7 @@ outside the repository so evidence stays commit-exact.
   against a freshly rebuilt pinned Microsandbox bundle (helper, agentd, libkrunfw, flat root).
 - `just test-scenario` (Firecracker): 22 of 23 scenarios passed on deimos;
   `TestScenarioNetworkPolicyDenyAndAllowList` failed with the guest unable to resolve the
-  allow-listed domain. The identical focused test fails identically at the branch base commit
+  allow-listed domain. The identical focused test fails identically at the pre-rebase branch base commit
   `dd3f8e76e` on the same host, so the failure is environmental (this host also runs a live
   SecondBox deployment) and not introduced by this branch.
 - `just verify-generated`, `just lint`, `just test`, `just test-contract`,
