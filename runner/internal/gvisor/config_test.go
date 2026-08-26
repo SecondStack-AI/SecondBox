@@ -70,4 +70,7 @@ func TestValidateRuntimeDirRefusesDestructivePaths(t *testing.T) {
 	if err := validateRuntimeDir(filepath.Join(root, "absent"), workspaceRoot, flatRoot); err != nil {
 		t.Errorf("not-yet-created runtime directory rejected: %v", err)
 	}
+	if err := validateRuntimeDir(filepath.Join(linked, "absent", "runtime"), workspaceRoot, flatRoot); err == nil {
+		t.Error("nonexistent runtime directory beneath a symlinked ancestor was accepted")
+	}
 }

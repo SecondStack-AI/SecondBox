@@ -1028,7 +1028,7 @@ func (backend *AssignmentBackend) FenceAssignment(
 			backend.mu.Unlock()
 			return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor fence token or generation mismatch")
 		}
-		if current.handles != nil {
+		if current.handles != nil && current.launched == nil {
 			active = current
 			break
 		}
@@ -1128,12 +1128,20 @@ func (backend *AssignmentBackend) FenceAssignment(
 	evidenceErr := backend.emitLifecycle(ctx, active, "teardown", "control:shutdown", outcome, terminalKind)
 	backend.mu.Lock()
 	err = errors.Join(err, evidenceErr, active.evidenceErr)
+	if err != nil {
+		// Durability-critical cleanup failed: the assignment stays
+		// registered as a fenced failure record with its reservation and
+		// Workspace attachment retained, so nothing can reuse the capacity
+		// or the Workspace over surviving compute or unflushed state. A
+		// fence retry re-enters this tail - every step tolerates already-
+		// released resources - and only a fully clean pass releases.
+		active.fenced = true
+		backend.mu.Unlock()
+		return runnercontrol.FenceEvidence{}, err
+	}
 	delete(backend.assignments, command.Fence.AssignmentId)
 	backend.releaseLocked(active.reservation)
 	backend.mu.Unlock()
-	if err != nil {
-		return runnercontrol.FenceEvidence{}, err
-	}
 	return runnercontrol.FenceEvidence{
 		Result:                    runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_STOPPED,
 		TerminationEvidenceDigest: fenceDigest(command.Fence),

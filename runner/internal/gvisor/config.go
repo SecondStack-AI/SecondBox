@@ -87,6 +87,31 @@ func validateRuntimeDir(runtimeDir, workspaceRoot, flatRoot string) error {
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("SecondBox gVisor runtime directory inspection: %w", err)
+	} else {
+		// The directory does not exist yet, so MkdirAll will walk whatever
+		// ancestors do: the deepest existing ancestor must itself resolve
+		// symlink-free, or creation could be redirected beneath a protected
+		// root that the lexical overlap checks below cannot see.
+		ancestor := filepath.Dir(runtimeDir)
+		for {
+			if _, statErr := os.Lstat(ancestor); statErr == nil {
+				break
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				return fmt.Errorf("SecondBox gVisor runtime directory ancestor inspection: %w", statErr)
+			}
+			parent := filepath.Dir(ancestor)
+			if parent == ancestor {
+				break
+			}
+			ancestor = parent
+		}
+		resolved, resolveErr := filepath.EvalSymlinks(ancestor)
+		if resolveErr != nil {
+			return fmt.Errorf("SecondBox gVisor runtime directory ancestor resolution: %w", resolveErr)
+		}
+		if resolved != ancestor {
+			return fmt.Errorf("SecondBox gVisor runtime directory ancestors must not traverse symlinks")
+		}
 	}
 	for name, protected := range map[string]string{
 		"WorkspaceStore root": workspaceRoot,
