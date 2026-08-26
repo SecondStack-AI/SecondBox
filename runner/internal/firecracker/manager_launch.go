@@ -1123,12 +1123,53 @@ func (m *Manager) deliverStartupSecrets(ctx context.Context, inst *instance, san
 		if err := controlClient.HardenPostRestore(ctx, time.Now().UTC()); err != nil {
 			return fmt.Errorf("seed guest entropy and clock: %w", err)
 		}
+		if err := m.installColdBootResolver(ctx, inst, controlClient); err != nil {
+			return err
+		}
 	}
 	timer.mark("guest_entropy_ready")
 	if err := controlClient.ApplySecrets(ctx, bundle); err != nil {
 		return fmt.Errorf("apply runtime secrets: %w", err)
 	}
 	timer.mark("startup_secrets_applied")
+	return nil
+}
+
+// installColdBootResolver gives every networked cold boot the same explicit
+// runner-controlled resolver identity as snapshot resume. The host performs
+// this before readiness so release bundles whose init predates resolver
+// materialization remain safe and functional without rotating the immutable
+// runtime and toolchain digests pinned by existing Sandboxes.
+func (m *Manager) installColdBootResolver(ctx context.Context, inst *instance, controlClient ControlClient) error {
+	if strings.TrimSpace(inst.tapName) == "" {
+		return nil
+	}
+	nameserver := bridgeAddress(m.cfg.MicroVMBridgeCIDR)
+	if !nameserver.Is4() {
+		return fmt.Errorf("install cold-boot guest resolver: runner bridge has no IPv4 DNS identity")
+	}
+	response, err := controlClient.ExecuteTool(ctx, ToolExecRequest{
+		Operation: ToolOpExec,
+		Command:   "/bin/sh",
+		Args: []string{
+			"-ceu",
+			`printf 'nameserver %s\noptions attempts:1 timeout:2\n' "$SECONDBOX_NAMESERVER" > /etc/resolv.conf
+chmod 0644 /etc/resolv.conf`,
+		},
+		Env:           map[string]string{"SECONDBOX_NAMESERVER": nameserver.String()},
+		TimeoutMillis: 5000,
+	})
+	if err != nil {
+		return fmt.Errorf("install cold-boot guest resolver: %w", err)
+	}
+	if response.TimedOut || response.ExitCode != 0 {
+		return fmt.Errorf(
+			"install cold-boot guest resolver: exit code %d timed out %t: %s",
+			response.ExitCode,
+			response.TimedOut,
+			strings.TrimSpace(response.Stderr),
+		)
+	}
 	return nil
 }
 
