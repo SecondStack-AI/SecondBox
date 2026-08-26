@@ -105,7 +105,7 @@ create_qualification_workload() {
   SECONDBOX_CONFIG="$platform_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$platform_token" \
     "$binary" --output json platform login >/dev/null
   jq -n --arg ref "$tenant_ref" \
-    '{ref:$ref,allowedProfileGrants:["durable-coding"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:{maxSandboxes:1,maxActiveInstances:1,maxCpuMillis:4000,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16,maxActiveSubjects:1,maxApplicationAuthorities:1},expiryPolicy:{maximumSubjectLifetimeSeconds:21600,maximumAuthorityLifetimeSeconds:21600},metadata:{qualification:"installer-qualified-workload"}}' >"$root/tenant.json"
+    '{ref:$ref,allowedProfileGrants:["durable-coding"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:4,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16,maxActiveSubjects:1,maxApplicationAuthorities:1},expiryPolicy:{maximumSubjectLifetimeSeconds:21600,maximumAuthorityLifetimeSeconds:21600},metadata:{qualification:"installer-qualified-workload"}}' >"$root/tenant.json"
   SECONDBOX_CONFIG="$platform_config" "$binary" --output json tenant create \
     --file "$root/tenant.json" --idempotency-key "qualified-tenant-$key_suffix" >/dev/null
   jq -n --arg expiresAt "$expiry" '{expiresAt:$expiresAt,metadata:{qualification:"installer-qualified-workload"}}' >"$root/controller-request.json"
@@ -115,7 +115,7 @@ create_qualification_workload() {
   SECONDBOX_CONFIG="$controller_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$controller_token" \
     "$binary" --output json controller login >/dev/null
   jq -n --arg ref "$subject_ref" \
-    '{ref:$ref,quota:{maxSandboxes:1,maxActiveInstances:1,maxCpuMillis:4000,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16},metadata:{qualification:"installer-qualified-workload"}}' >"$root/subject.json"
+    '{ref:$ref,quota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:4,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16},metadata:{qualification:"installer-qualified-workload"}}' >"$root/subject.json"
   SECONDBOX_CONFIG="$controller_config" "$binary" --output json subject create \
     --file "$root/subject.json" --idempotency-key "qualified-subject-$key_suffix" >/dev/null
   jq -n --arg subjectRef "$subject_ref" --arg expiresAt "$expiry" \

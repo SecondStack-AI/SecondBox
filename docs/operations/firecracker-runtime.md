@@ -14,6 +14,8 @@ The in-guest service is reached over Firecracker vsock. Assignment identity and 
 
 Runner configuration has no defaults. Every setting consumed by the service must be explicitly present and non-empty.
 
+Compute backend selection: `SECONDBOX_COMPUTE_BACKEND` must state `firecracker` explicitly. A runner refuses to start without it, selects exactly one backend for its lifetime, and its RunnerPool seals to that backend kind on first advertisement.
+
 Control stream identity and mTLS:
 
 ```text

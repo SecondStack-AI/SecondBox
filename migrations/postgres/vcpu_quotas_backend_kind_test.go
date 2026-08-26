@@ -179,6 +179,19 @@ func TestVCPUConversionFloorsQuotaAndProfileAtOneVCPU(t *testing.T) {
 	}
 }
 
+// TestVCPUConversionPreservesZeroQuotas proves a deny-everything CPU quota
+// converts to exactly zero: rounding it up would silently widen
+// authorization after upgrade.
+func TestVCPUConversionPreservesZeroQuotas(t *testing.T) {
+	connection := newGuardDatabase(t)
+	applyMigrations(t, connection, vcpuConversionLineage...)
+	seedSubjectQuota(t, connection, "max_cpu_millis", 0)
+	applyMigrations(t, connection, "0019_vcpu_quotas_and_backend_kind.sql")
+	if got := subjectQuotaVCPUs(t, connection); got != 0 {
+		t.Errorf("zero quota max_vcpu_count = %d, want 0", got)
+	}
+}
+
 // TestVCPUConversionSurvivesMaximumMilliUnitValues proves the ceiling
 // division cannot overflow for any previously valid bigint milli-unit value.
 func TestVCPUConversionSurvivesMaximumMilliUnitValues(t *testing.T) {

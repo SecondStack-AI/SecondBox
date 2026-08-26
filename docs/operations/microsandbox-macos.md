@@ -165,12 +165,13 @@ faith from a document:
 
 - Record each launch artifact's SHA-256 (`shasum -a 256` on macOS) for the helper and `agentd`
   entries in `launchArtifacts`.
-- Compute the canonical materialization digest over the reviewed manifest's compact JSON and pin
-  it in the environment:
+- Compute the canonical materialization digest exactly as runner startup computes it and pin it
+  in the environment. The digest covers the typed manifest, not the file bytes, so hashing the
+  JSON yourself produces the wrong value whenever key order or formatting differs:
 
   ```sh
-  printf 'sha256:%s\n' "$(jq --compact-output --join-output . \
-    /etc/secondbox/microsandbox-arm64.materialization.json | shasum -a 256 | awk '{print $1}')"
+  go run github.com/SecondStack-AI/SecondBox/runner/cmd/secondbox-materialization-digest \
+    /etc/secondbox/microsandbox-arm64.materialization.json
   export SECONDBOX_MICROSANDBOX_MATERIALIZATION_DIGEST=sha256:...
   ```
 

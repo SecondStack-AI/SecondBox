@@ -4,20 +4,20 @@
 -- converts an existing database to exactly what a fresh deployment records.
 --
 -- Milli-unit values convert by rounding up to the whole vCPU that already
--- covered the stated allowance. Quota and Profile values additionally floor at
--- one vCPU so no subject or revision converts to an unschedulable zero: the
--- conversion may only widen an allowance, never strand recorded usage above a
--- shrunken limit.
+-- covered the stated allowance, so no converted quota shrinks below recorded
+-- usage and a zero quota stays exactly zero: rounding a deny-everything
+-- allowance up would silently widen authorization. Profile resources alone
+-- floor at one vCPU, because a revision must remain schedulable.
 ALTER TABLE secondbox.subject_quotas RENAME COLUMN max_cpu_millis TO max_vcpu_count;
 UPDATE secondbox.subject_quotas
-SET max_vcpu_count = GREATEST(1, max_vcpu_count / 1000 + CASE WHEN max_vcpu_count % 1000 > 0 THEN 1 ELSE 0 END);
+SET max_vcpu_count = max_vcpu_count / 1000 + CASE WHEN max_vcpu_count % 1000 > 0 THEN 1 ELSE 0 END;
 
 -- Tenant aggregate quotas bound the same CPU dimension one level up and
 -- convert identically so a tenant ceiling keeps covering every subject
 -- allowance it covered before.
 ALTER TABLE secondbox.tenant_quotas RENAME COLUMN max_cpu_millis TO max_vcpu_count;
 UPDATE secondbox.tenant_quotas
-SET max_vcpu_count = GREATEST(1, max_vcpu_count / 1000 + CASE WHEN max_vcpu_count % 1000 > 0 THEN 1 ELSE 0 END);
+SET max_vcpu_count = max_vcpu_count / 1000 + CASE WHEN max_vcpu_count % 1000 > 0 THEN 1 ELSE 0 END;
 
 -- The Tenant row keeps its own copy of the aggregate quota document, which is
 -- decoded on every read, so its recorded key converts with the ledger.
@@ -25,9 +25,8 @@ UPDATE secondbox.tenants
 SET aggregate_quota_json = jsonb_set(
         aggregate_quota_json - 'maxCpuMillis',
         '{maxVcpuCount}',
-        to_jsonb(GREATEST(1,
-            ((aggregate_quota_json->>'maxCpuMillis')::bigint) / 1000
-            + CASE WHEN ((aggregate_quota_json->>'maxCpuMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END)))
+        to_jsonb(((aggregate_quota_json->>'maxCpuMillis')::bigint) / 1000
+            + CASE WHEN ((aggregate_quota_json->>'maxCpuMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END))
 WHERE aggregate_quota_json ? 'maxCpuMillis';
 
 -- Subject rows keep the same decoded-quota copy and convert the same way.
@@ -35,9 +34,8 @@ UPDATE secondbox.subjects
 SET quota_json = jsonb_set(
         quota_json - 'maxCpuMillis',
         '{maxVcpuCount}',
-        to_jsonb(GREATEST(1,
-            ((quota_json->>'maxCpuMillis')::bigint) / 1000
-            + CASE WHEN ((quota_json->>'maxCpuMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END)))
+        to_jsonb(((quota_json->>'maxCpuMillis')::bigint) / 1000
+            + CASE WHEN ((quota_json->>'maxCpuMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END))
 WHERE quota_json ? 'maxCpuMillis';
 
 -- Profile revisions are immutable statements of intent; rewriting the unit is
