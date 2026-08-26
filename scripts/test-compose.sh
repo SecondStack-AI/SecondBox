@@ -189,7 +189,7 @@ create_live_profile() {
   local body
   body="$(jq -cn \
     --arg name "$name" \
-    '{name:$name,spec:{pool:"compose-live-pool",architecture:"amd64",runtimeBundleDigest:("sha256:"+("a"*64)),toolchainBundleDigest:("sha256:"+("b"*64)),resources:{cpuMillis:1000,memoryBytes:1073741824,workspaceBytes:8589934592,processLimit:128,concurrentOperations:4},startup:{mode:"cold_boot"},lifecycle:{initialState:"stopped",drainGraceSeconds:30,idleSeconds:300,maximumDurationSeconds:3600,leaseSeconds:60},retention:{snapshotLimit:8,snapshotRetentionSeconds:86400},execution:{maximumDeadlineMilliseconds:60000,maximumBufferedOutputBytes:1048576,streamWindowBytes:65536,maximumTransferBytes:1073741824,terminalDetachSeconds:30,dataPlaneTransport:"proxied"},network:{mode:"deny_all",destinations:[]},ports:[]}}')"
+    '{name:$name,spec:{pool:"compose-live-pool",architecture:"amd64",runtimeBundleDigest:("sha256:"+("a"*64)),toolchainBundleDigest:("sha256:"+("b"*64)),resources:{vcpuCount:1,memoryBytes:1073741824,workspaceBytes:8589934592,concurrentOperations:4},startup:{mode:"cold_boot"},lifecycle:{initialState:"stopped",drainGraceSeconds:30,idleSeconds:300,maximumDurationSeconds:3600,leaseSeconds:60},retention:{snapshotLimit:8,snapshotRetentionSeconds:86400},execution:{maximumDeadlineMilliseconds:60000,maximumBufferedOutputBytes:1048576,streamWindowBytes:65536,maximumTransferBytes:1073741824,terminalDetachSeconds:30,dataPlaneTransport:"proxied"},network:{mode:"deny_all",destinations:[]},ports:[]}}')"
   curl --fail-with-body --silent --show-error \
     --request POST \
     --header "Authorization: Bearer $platform_token" \
