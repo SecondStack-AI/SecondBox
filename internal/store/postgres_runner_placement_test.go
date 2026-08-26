@@ -546,6 +546,8 @@ func TestScanRunnerPlacementCandidateSeparatesLegacyFromMalformedCache(t *testin
 		"unknown fields only":   `{"somethingElse":[]}`,
 		"null materializations": `{"materializations":null}`,
 		"null digests":          `{"artifactDigests":null}`,
+		"null entry":            `{"materializations":[null]}`,
+		"incomplete entry":      `{"materializations":[{}]}`,
 	} {
 		if _, err := scanRunnerPlacementCandidate(placementScanFixture{cacheJSON: malformed}, "test", false); err == nil ||
 			!strings.Contains(err.Error(), "artifact cache") {

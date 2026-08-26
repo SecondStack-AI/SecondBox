@@ -300,6 +300,12 @@ func decodeArtifactCacheEvidence(cacheJSON []byte) ([]placementMaterialization, 
 		if err := json.Unmarshal(entries, &materializations); err != nil || materializations == nil {
 			return nil, fmt.Errorf("artifact cache materialization evidence must be an array: %w", err)
 		}
+		for _, entry := range materializations {
+			if entry.BackendKind == "" || entry.Architecture == "" ||
+				entry.RuntimeDigest == "" || entry.ToolchainDigest == "" || entry.Digest == "" {
+				return nil, fmt.Errorf("artifact cache materialization entry is incomplete")
+			}
+		}
 		recognized = true
 	}
 	if !recognized {

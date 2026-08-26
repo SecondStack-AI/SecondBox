@@ -229,9 +229,12 @@ func acquireGate(ctx context.Context, gate chan struct{}) error {
 func (connection *helperPortConnection) Close() error {
 	connection.closeOnce.Do(func() {
 		connection.closed.Store(true)
+		// The bounded deadline lands before the gate so a context-less
+		// in-flight write is interrupted instead of delaying fencing for
+		// the fallback deadline; the cancel frame and terminal drain then
+		// run under the same bound.
+		_ = connection.process.control.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		connection.writeGate <- struct{}{}
-		// A full socket or interrupted prior frame must not hang fencing:
-		// the cancel frame and terminal drain run under bounded deadlines.
 		_ = connection.process.control.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		sequence := connection.nextSequence
 		connection.nextSequence++
@@ -265,6 +268,13 @@ func (connection *helperPortConnection) Close() error {
 			}
 		}
 		<-connection.readGate
+		if err != nil {
+			// A failed or partial cancel frame leaves the shared control
+			// stream desynchronized; closing it is terminal for the helper
+			// session, which is strictly safer than letting later requests
+			// reuse a corrupted stream.
+			err = errors.Join(err, connection.process.control.Close())
+		}
 		connection.process.requestMu.Unlock()
 		connection.release()
 		connection.closeErr = err

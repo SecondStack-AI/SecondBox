@@ -514,6 +514,7 @@ func (backend *AssignmentBackend) StartAssignment(
 		return result, err
 	}
 	backend.mu.Lock()
+	active.fenced = claim.fenced
 	backend.assignments[assignment.Fence.AssignmentId] = active
 	backend.startupSamples = append(backend.startupSamples, time.Since(started))
 	backend.mu.Unlock()
@@ -585,8 +586,10 @@ func (backend *AssignmentBackend) FenceAssignment(
 			break
 		}
 		// A pending claimed launch holds no process or operation state yet;
-		// fencing waits for the launch to settle and then fences whatever it
-		// produced.
+		// fencing records its intent on the claim — rejecting further
+		// replays immediately — then waits for the launch to settle and
+		// fences whatever it produced.
+		current.fenced = true
 		pendingLaunch := current.launched
 		backend.mu.Unlock()
 		select {
