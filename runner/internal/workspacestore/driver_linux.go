@@ -210,7 +210,6 @@ func (linuxDriver) ResetSparse(file *os.File, capacity int64) error {
 func (linuxDriver) CompactSparse(*os.File, int64) error { return nil }
 
 func (linuxDriver) TryLock(file *os.File) error     { return platformTryLock(file) }
-func (linuxDriver) Unlock(file *os.File) error      { return platformUnlock(file) }
 func (linuxDriver) SyncDirectory(path string) error { return platformSyncDirectory(path) }
 func (linuxDriver) ChildDescriptorPath(descriptor int) string {
 	return platformChildDescriptorPath(descriptor)
@@ -219,8 +218,6 @@ func (linuxDriver) ChildDescriptorPath(descriptor int) string {
 func platformTryLock(file *os.File) error {
 	return unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 }
-
-func platformUnlock(file *os.File) error { return unix.Flock(int(file.Fd()), unix.LOCK_UN) }
 
 func platformSyncDirectory(path string) error {
 	directory, err := os.Open(path)

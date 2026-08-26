@@ -203,9 +203,12 @@ func (attachment *Attachment) Close() error {
 		attachment.file = nil
 	}
 	if attachment.lock != nil {
-		if err := attachment.driver.Unlock(attachment.lock); err != nil && first == nil {
-			first = err
-		}
+		// Never explicitly release the writer flock: a compute backend's
+		// helper inherits a duplicate of this descriptor sharing the same
+		// open-file description, so an explicit unlock would surrender the
+		// fence while that helper may still be flushing the image. Closing
+		// this descriptor lets the kernel release the lock only when the
+		// last holder - the helper included - has closed it.
 		if err := attachment.lock.Close(); err != nil && first == nil {
 			first = err
 		}

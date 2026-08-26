@@ -343,7 +343,6 @@ func (darwinDriver) CompactSparse(file *os.File, capacity int64) error {
 }
 
 func (darwinDriver) TryLock(file *os.File) error     { return platformTryLock(file) }
-func (darwinDriver) Unlock(file *os.File) error      { return platformUnlock(file) }
 func (darwinDriver) SyncDirectory(path string) error { return platformSyncDirectory(path) }
 func (darwinDriver) ChildDescriptorPath(descriptor int) string {
 	return platformChildDescriptorPath(descriptor)
@@ -352,8 +351,6 @@ func (darwinDriver) ChildDescriptorPath(descriptor int) string {
 func platformTryLock(file *os.File) error {
 	return unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 }
-
-func platformUnlock(file *os.File) error { return unix.Flock(int(file.Fd()), unix.LOCK_UN) }
 
 func platformSyncDirectory(path string) error {
 	directory, err := os.Open(path)

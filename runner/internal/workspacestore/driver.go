@@ -17,7 +17,6 @@ type platformDriver interface {
 	ResetSparse(*os.File, int64) error
 	CompactSparse(*os.File, int64) error
 	TryLock(*os.File) error
-	Unlock(*os.File) error
 	SyncDirectory(string) error
 	ChildDescriptorPath(int) string
 }
@@ -28,7 +27,6 @@ type injectedDriver struct {
 }
 
 func (driver injectedDriver) TryLock(file *os.File) error     { return platformTryLock(file) }
-func (driver injectedDriver) Unlock(file *os.File) error      { return platformUnlock(file) }
 func (driver injectedDriver) SyncDirectory(path string) error { return platformSyncDirectory(path) }
 func (driver injectedDriver) ChildDescriptorPath(descriptor int) string {
 	return platformChildDescriptorPath(descriptor)

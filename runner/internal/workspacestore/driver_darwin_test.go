@@ -109,14 +109,11 @@ func TestDarwinDriverUsesAPFSCloneLocksAndDescriptorIdentity(t *testing.T) {
 	if err := platformTryLock(lockB); !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
 		t.Fatalf("second writer lock = %v", err)
 	}
-	if err := platformUnlock(lockA); err != nil {
+	if err := lockA.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := platformTryLock(lockB); err != nil {
-		t.Fatalf("writer lock did not release after unlock: %v", err)
-	}
-	if err := platformUnlock(lockB); err != nil {
-		t.Fatal(err)
+		t.Fatalf("writer lock did not release when its last descriptor closed: %v", err)
 	}
 	if err := platformSyncDirectory(root); err != nil {
 		t.Fatal(err)

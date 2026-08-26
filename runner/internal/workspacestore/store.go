@@ -1905,14 +1905,10 @@ func closeLockedFile(lock *os.File) error {
 	if lock == nil {
 		return nil
 	}
-	var first error
-	if err := platformUnlock(lock); err != nil {
-		first = err
-	}
-	if err := lock.Close(); err != nil && first == nil {
-		first = err
-	}
-	return first
+	// Closing the descriptor releases its flock once the last holder of the
+	// open-file description is gone; an explicit unlock would instead drop
+	// the fence early for any child that inherited a duplicate.
+	return lock.Close()
 }
 
 func atomicJSON(path string, value any) error {
