@@ -198,6 +198,9 @@ func TestScenarioSandboxRejectsUncachedLogicalMaterializationTuple(t *testing.T)
 	spec.RuntimeBundleDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 	profile := createScenarioProfile(t, fixture, "scenario-uncached-materialization", spec)
 
+	// Home placement requires an exact materialization of the Profile's
+	// pinned execution assets, so a tuple no Runner holds is refused before
+	// a Sandbox or any compute exists.
 	var operation contracts.Operation
 	err := fixture.subject.RequestJSON(
 		context.Background(),
@@ -211,27 +214,11 @@ func TestScenarioSandboxRejectsUncachedLogicalMaterializationTuple(t *testing.T)
 		},
 		&operation,
 	)
-	if err != nil || operation.ID == "" || operation.SandboxID == "" {
-		t.Fatalf("SecondBox scenario uncached materialization durable request = error %v operation %#v", err, operation)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	sandbox := scenarioJSON[contracts.Sandbox](
-		t, ctx, fixture.subject, "getSandbox",
-		secondboxclient.CallOptions{PathParameters: map[string]string{"sandboxId": operation.SandboxID}},
-	)
-	handle := secondboxclient.NewSandboxHandle(fixture.subject, sandbox)
-	t.Cleanup(func() { cleanupScenarioSandbox(t, fixture.subject, handle) })
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		current, refreshErr := handle.Refresh(ctx)
-		if refreshErr != nil {
-			t.Fatal(refreshErr)
-		}
-		if current.Instance != nil {
-			t.Fatalf("SecondBox uncached materialization created an Instance: %#v", current.Instance)
-		}
-		time.Sleep(100 * time.Millisecond)
+	var apiError *secondboxclient.APIError
+	if !errors.As(err, &apiError) ||
+		apiError.Problem == nil ||
+		apiError.Problem.Code != "home_runner_unavailable" {
+		t.Fatalf("SecondBox scenario uncached materialization admission = %#v, raw error=%v", apiError, err)
 	}
 	runnerAfter := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
 	if runnerAfter.SandboxStartSampleCount != runnerBefore.SandboxStartSampleCount {
