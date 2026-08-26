@@ -27,7 +27,7 @@ var vcpuConversionLineage = []string{
 // milliUnitSpec is a Profile revision as recorded before the vCPU conversion;
 // vcpuSpec is what a fresh deployment records for the same allowance.
 const (
-	milliUnitSpec = `{"pool":"standard-amd64","architecture":"amd64","startup":{"mode":"cold_boot"},"resources":{"cpuMillis":1500,"memoryBytes":1073741824}}`
+	milliUnitSpec = `{"pool":"standard-amd64","architecture":"amd64","startup":{"mode":"cold_boot"},"resources":{"cpuMillis":1500,"processLimit":64,"memoryBytes":1073741824}}`
 	vcpuSpec      = `{"pool":"standard-amd64","architecture":"amd64","startup":{"mode":"cold_boot"},"resources":{"vcpuCount":2,"memoryBytes":1073741824}}`
 )
 
@@ -79,6 +79,27 @@ func TestVCPUConversionConvergesOnFreshAndUpgradedSchemas(t *testing.T) {
 		t.Errorf("converted reserved-capacity document = %s", reserved)
 	}
 
+	var capacityPolicy string
+	if err := upgraded.QueryRow(t.Context(), `
+		SELECT capacity_policy_json::text FROM secondbox.runner_pools WHERE name='pool-vcpu'`,
+	).Scan(&capacityPolicy); err != nil {
+		t.Fatal(err)
+	}
+	if capacityPolicy != `{"maxSandboxes": 8, "maxVcpuCount": 16}` {
+		t.Errorf("converted pool capacity policy = %s", capacityPolicy)
+	}
+
+	var processLimitRetained bool
+	if err := upgraded.QueryRow(t.Context(), `
+		SELECT spec_json->'resources' ? 'processLimit'
+		FROM secondbox.profile_revisions WHERE id='revision-milli'`,
+	).Scan(&processLimitRetained); err != nil {
+		t.Fatal(err)
+	}
+	if processLimitRetained {
+		t.Error("removed processLimit field survived the conversion")
+	}
+
 	for _, table := range []string{"runner_pools", "runners"} {
 		var sealed string
 		if err := upgraded.QueryRow(t.Context(),
@@ -122,6 +143,19 @@ func TestVCPUConversionFloorsQuotaAndProfileAtOneVCPU(t *testing.T) {
 	}
 }
 
+// TestVCPUConversionSurvivesMaximumMilliUnitValues proves the ceiling
+// division cannot overflow for any previously valid bigint milli-unit value.
+func TestVCPUConversionSurvivesMaximumMilliUnitValues(t *testing.T) {
+	connection := newGuardDatabase(t)
+	applyMigrations(t, connection, vcpuConversionLineage...)
+	const nearMaximum = int64(9223372036854775807) - 7
+	seedSubjectQuota(t, connection, "max_cpu_millis", nearMaximum)
+	applyMigrations(t, connection, "0016_vcpu_quotas_and_backend_kind.sql")
+	if got := subjectQuotaVCPUs(t, connection); got != nearMaximum/1000+1 {
+		t.Errorf("near-maximum quota max_vcpu_count = %d, want %d", got, nearMaximum/1000+1)
+	}
+}
+
 func subjectQuotaVCPUs(t *testing.T, connection *pgx.Conn) int64 {
 	t.Helper()
 	var maxVCPUs int64
@@ -155,7 +189,7 @@ func seedRunnerCapacity(t *testing.T, connection *pgx.Conn, capacityJSON, reserv
 		INSERT INTO secondbox.runner_pools (
 			name,state,architectures_json,capabilities_json,capacity_policy_json,
 			ready_runner_count,revision,created_at,updated_at)
-		VALUES ('pool-vcpu','ready','["amd64"]','[]','{}',1,1,$1,$1)`,
+		VALUES ('pool-vcpu','ready','["amd64"]','[]','{"maxSandboxes":8,"maxCpuMillis":16000}',1,1,$1,$1)`,
 		seeded,
 	); err != nil {
 		t.Fatal(err)

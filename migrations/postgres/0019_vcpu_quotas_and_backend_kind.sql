@@ -10,7 +10,7 @@
 -- shrunken limit.
 ALTER TABLE secondbox.subject_quotas RENAME COLUMN max_cpu_millis TO max_vcpu_count;
 UPDATE secondbox.subject_quotas
-SET max_vcpu_count = GREATEST(1, (max_vcpu_count + 999) / 1000);
+SET max_vcpu_count = GREATEST(1, max_vcpu_count / 1000 + CASE WHEN max_vcpu_count % 1000 > 0 THEN 1 ELSE 0 END);
 
 -- Profile revisions are immutable statements of intent; rewriting the unit is
 -- a representation change of the same allowance, not a new policy. The guard
@@ -20,8 +20,17 @@ UPDATE secondbox.profile_revisions
 SET spec_json = jsonb_set(
         spec_json #- '{resources,cpuMillis}',
         '{resources,vcpuCount}',
-        to_jsonb(GREATEST(1, (((spec_json->'resources'->>'cpuMillis')::bigint) + 999) / 1000)))
+        to_jsonb(GREATEST(1,
+            ((spec_json->'resources'->>'cpuMillis')::bigint) / 1000
+            + CASE WHEN ((spec_json->'resources'->>'cpuMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END)))
 WHERE spec_json->'resources' ? 'cpuMillis';
+
+-- The Profile process limit is removed everywhere: guest process counts are
+-- not host PIDs and the backend owns its host PID ceiling, so a retained
+-- legacy field would state a promise no fresh deployment makes.
+UPDATE secondbox.profile_revisions
+SET spec_json = spec_json #- '{resources,processLimit}'
+WHERE spec_json->'resources' ? 'processLimit';
 
 -- Runner capacity documents marshal with Go field names. Advertised capacity
 -- is replaced on the next enrollment, but reserved capacity survives a
@@ -31,14 +40,25 @@ UPDATE secondbox.runners
 SET capacity_json = jsonb_set(
         capacity_json - 'CPUMillis',
         '{VCPUCount}',
-        to_jsonb((((capacity_json->>'CPUMillis')::bigint) + 999) / 1000))
+        to_jsonb(((capacity_json->>'CPUMillis')::bigint) / 1000
+            + CASE WHEN ((capacity_json->>'CPUMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END))
 WHERE capacity_json ? 'CPUMillis';
 UPDATE secondbox.runners
 SET reserved_capacity_json = jsonb_set(
         reserved_capacity_json - 'CPUMillis',
         '{VCPUCount}',
-        to_jsonb((((reserved_capacity_json->>'CPUMillis')::bigint) + 999) / 1000))
+        to_jsonb(((reserved_capacity_json->>'CPUMillis')::bigint) / 1000
+            + CASE WHEN ((reserved_capacity_json->>'CPUMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END))
 WHERE reserved_capacity_json ? 'CPUMillis';
+
+-- RunnerPool capacity policies recorded the same milli-unit key.
+UPDATE secondbox.runner_pools
+SET capacity_policy_json = jsonb_set(
+        capacity_policy_json - 'maxCpuMillis',
+        '{maxVcpuCount}',
+        to_jsonb(((capacity_policy_json->>'maxCpuMillis')::bigint) / 1000
+            + CASE WHEN ((capacity_policy_json->>'maxCpuMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END))
+WHERE capacity_policy_json ? 'maxCpuMillis';
 
 -- Every RunnerPool and Runner records which compute backend it serves. The
 -- empty default means "not yet sealed": existing pools seal to a backend kind
