@@ -8,6 +8,13 @@ The default policy denies all outbound destinations. An explicit allow policy ma
 
 The Runner owns the guest TAP, bridge forwarding rules, and policy-aware DNS proxy. Each assignment gets a separate nftables table keyed by a collision-resistant instance identity. The table permits established replies, runner DNS on the bridge address, and exact policy destinations, then drops all other guest egress and unsolicited traffic toward the TAP. Protected destination drops precede allow rules, so an overlapping allow cannot override them. The current Firecracker path uses per-TAP firewall isolation on the Runner bridge; it does not create a separate Linux network namespace per Sandbox.
 
+The DNS proxy forwards guest questions to the configured upstream and pins only
+answers allowed by the Sandbox policy. It rejects answers resolving to protected
+addresses. A Runner logical-gateway mapping is authorization input for network
+policy, not a DNS record: the proxy does not synthesize guest answers for the
+logical domain. Network-enabled production deployments must provide and qualify
+their own upstream resolution and gateway reachability.
+
 ## DNS
 
 DNS resolution is coupled to destination enforcement:

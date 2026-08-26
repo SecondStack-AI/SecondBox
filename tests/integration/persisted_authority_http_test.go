@@ -67,14 +67,10 @@ func TestPersistedAuthorityHTTPRestartRevocationExpiryRotationAndTenantIsolation
 		secondApplication.BearerToken, string(secondTenant), "same-local-subject", "persisted-scope-denied",
 		map[string]any{"profile": "coding", "metadata": map[string]string{}},
 	), http.StatusForbidden)
-	assertHTTPStatusAndClose(t, applicationRequest(
-		t, http.MethodGet, server.URL+"/v1/profiles/ungranted",
-		firstApplication.BearerToken, string(firstTenant), "same-local-subject", "", nil,
-	), http.StatusForbidden)
-	assertHTTPStatusAndClose(t, applicationRequest(
-		t, http.MethodGet, server.URL+"/v1/runners",
-		firstApplication.BearerToken, string(firstTenant), "same-local-subject", "", nil,
-	), http.StatusForbidden)
+	assertCrossAuthorityDenials(
+		t, server.URL, firstApplication.BearerToken, controller.BearerToken,
+		string(firstTenant), string(secondTenant), "same-local-subject",
+	)
 	assertHTTPStatusAndClose(t, applicationRequest(
 		t, http.MethodGet, server.URL+"/v1/sandboxes",
 		"retired-static-token-material-000000", string(firstTenant), "same-local-subject", "", nil,
@@ -87,13 +83,6 @@ func TestPersistedAuthorityHTTPRestartRevocationExpiryRotationAndTenantIsolation
 	)
 	controllerAssertion.Header.Set("X-SecondBox-Tenant-Ref", string(secondTenant))
 	assertHTTPStatusAndClose(t, doHTTP(t, controllerAssertion), http.StatusForbidden)
-	assertHTTPStatusAndClose(t, bearerRequest(
-		t, http.MethodGet, server.URL+"/v1/subjects", firstApplication.BearerToken,
-	), http.StatusUnauthorized)
-	assertHTTPStatusAndClose(t, applicationRequest(
-		t, http.MethodGet, server.URL+"/v1/sandboxes",
-		controller.BearerToken, string(firstTenant), "same-local-subject", "", nil,
-	), http.StatusUnauthorized)
 	server.Close()
 	databaseStore.Close()
 
@@ -181,6 +170,56 @@ func TestPersistedAuthorityHTTPRestartRevocationExpiryRotationAndTenantIsolation
 	}
 	if _, err := secondControllerClient.GetApplicationAuthority(t.Context(), "application-http-absent"); secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodeNotFound {
 		t.Fatalf("absent application read = %v", err)
+	}
+}
+
+// assertCrossAuthorityDenials keeps the complete fixed authority hierarchy in
+// one greppable integration matrix. The routes intentionally cross each public
+// administrative boundary before proving reference binding on ordinary routes.
+func assertCrossAuthorityDenials(
+	t *testing.T,
+	baseURL string,
+	applicationToken string,
+	controllerToken string,
+	tenantRef string,
+	otherTenantRef string,
+	subjectRef string,
+) {
+	t.Helper()
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		token      string
+		tenantRef  string
+		subjectRef string
+		body       any
+		want       int
+	}{
+		{name: "application_cannot_call_platform_management", method: http.MethodGet, path: "/v1/tenants", token: applicationToken, want: http.StatusUnauthorized},
+		{name: "application_cannot_call_tenant_management", method: http.MethodGet, path: "/v1/subjects", token: applicationToken, want: http.StatusUnauthorized},
+		{name: "application_cannot_mutate_profiles", method: http.MethodPost, path: "/v1/profiles", token: applicationToken, tenantRef: tenantRef, subjectRef: subjectRef, body: map[string]any{}, want: http.StatusForbidden},
+		{name: "application_cannot_read_aggregate_timing", method: http.MethodGet, path: "/v1/timings?windowSeconds=60", token: applicationToken, tenantRef: tenantRef, subjectRef: subjectRef, want: http.StatusForbidden},
+		{name: "application_cannot_administer_runner_pools", method: http.MethodGet, path: "/v1/runner-pools", token: applicationToken, tenantRef: tenantRef, subjectRef: subjectRef, want: http.StatusForbidden},
+		{name: "application_cannot_administer_runners", method: http.MethodGet, path: "/v1/runners", token: applicationToken, tenantRef: tenantRef, subjectRef: subjectRef, want: http.StatusForbidden},
+		{name: "application_cannot_assert_another_tenant", method: http.MethodGet, path: "/v1/sandboxes", token: applicationToken, tenantRef: otherTenantRef, subjectRef: subjectRef, want: http.StatusForbidden},
+		{name: "application_cannot_assert_another_subject", method: http.MethodGet, path: "/v1/sandboxes", token: applicationToken, tenantRef: tenantRef, subjectRef: "another-subject", want: http.StatusForbidden},
+		{name: "controller_cannot_call_sandbox_routes", method: http.MethodGet, path: "/v1/sandboxes", token: controllerToken, tenantRef: tenantRef, subjectRef: subjectRef, want: http.StatusUnauthorized},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.tenantRef == "" {
+				assertHTTPStatusAndClose(t, bearerRequest(
+					t, testCase.method, baseURL+testCase.path, testCase.token,
+				), testCase.want)
+				return
+			}
+			assertHTTPStatusAndClose(t, applicationRequest(
+				t, testCase.method, baseURL+testCase.path, testCase.token,
+				testCase.tenantRef, testCase.subjectRef,
+				"cross-authority-"+testCase.name, testCase.body,
+			), testCase.want)
+		})
 	}
 }
 

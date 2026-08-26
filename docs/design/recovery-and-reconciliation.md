@@ -48,6 +48,12 @@ They inspect nonterminal Operations, Workspace mutation slots, current Runner
 connections, Assignment leases, desired and observed Sandbox state, and durable
 local-workspace results.
 
+Tenant-controller and application authentication also resumes from PostgreSQL.
+Each newly admitted request resolves the persisted lookup identifier, verifies
+the secret, and checks current Tenant, Subject, authority, and expiry state. A
+restart neither revives a revoked credential nor requires credentials to be
+rendered back into process configuration.
+
 A PostgreSQL outage rejects mutations and pauses reconciliation. The system does
 not continue from stale caches. Ordinary Sandbox start, stop, Snapshot, and
 restore depend on PostgreSQL plus the owning Runner's local state.
@@ -119,6 +125,22 @@ Lease expiry removes authority for that generation but does not delete a
 Sandbox. Before counting useful activity, lifecycle claiming transactionally
 expires due Leases and closes sessions bound to released, expired, or fenced
 Leases, so abandoned session rows cannot suppress reclamation.
+
+## Subject expiry and cleanup
+
+Closing a Subject immediately revokes its remaining application authorities
+and denies new admission. Closing or cleanup retries return the same durable
+state rather than starting untracked deletion. Subject expiry performs the same
+closure and creates one stable cleanup Operation even when the upstream
+lifecycle controller is unavailable.
+
+The cleanup worker persists and resumes explicit stages for active-session
+cancellation, Snapshot deletion, Sandbox stop and deletion, quota and Lease
+release, Runner-owned Workspace removal, and acknowledgement. A control-plane
+restart or Runner disconnect leaves the Operation pending. A reconnecting home
+Runner replays stable effects and receipts; success is recorded only after no
+owned Runner workspace state remains. Irrecoverable local loss is a visible
+terminal error, never fabricated cleanup success.
 
 ## Snapshot retention
 

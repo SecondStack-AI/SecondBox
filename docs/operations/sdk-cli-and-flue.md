@@ -53,6 +53,66 @@ go build -o ./dist/secondbox ./cmd/secondbox
   sandboxes list
 ```
 
+### Clean-install authority bootstrap
+
+A clean production install contains only the platform token. Create delegated
+authority after `/readyz` succeeds. Use separate mode-`0600` configuration files
+so no helper can reinterpret a controller or application credential as the
+platform token:
+
+```sh
+export SECONDBOX_URL=https://secondbox.example
+export PLATFORM_CONFIG=/protected/secondbox-platform.json
+export CONTROLLER_CONFIG=/protected/secondbox-controller.json
+export APPLICATION_CONFIG=/protected/secondbox-application.json
+
+SECONDBOX_CONFIG="$PLATFORM_CONFIG" \
+  secondbox platform login --url "$SECONDBOX_URL" --token "$SECONDBOX_PLATFORM_TOKEN"
+SECONDBOX_CONFIG="$PLATFORM_CONFIG" \
+  secondbox --output json tenant create \
+  --file /protected/tenant.json --idempotency-key tenant-create
+SECONDBOX_CONFIG="$PLATFORM_CONFIG" \
+  secondbox --output json tenant controller-authority create tenant-a \
+  --file /protected/controller.json --idempotency-key controller-create \
+  > /protected/controller-credential.json
+
+SECONDBOX_CONFIG="$CONTROLLER_CONFIG" secondbox controller login \
+  --url "$SECONDBOX_URL" \
+  --token "$(jq -er '.bearerToken' /protected/controller-credential.json)"
+SECONDBOX_CONFIG="$CONTROLLER_CONFIG" \
+  secondbox --output json subject create \
+  --file /protected/subject.json --idempotency-key subject-create
+SECONDBOX_CONFIG="$CONTROLLER_CONFIG" \
+  secondbox --output json application-authority create \
+  --file /protected/application.json --idempotency-key application-create \
+  > /protected/application-credential.json
+
+SECONDBOX_CONFIG="$APPLICATION_CONFIG" secondbox application login \
+  --url "$SECONDBOX_URL" \
+  --token "$(jq -er '.bearerToken' /protected/application-credential.json)" \
+  --tenant-ref tenant-a --subject-ref subject-a
+SECONDBOX_CONFIG="$APPLICATION_CONFIG" secondbox sandboxes list --query limit=1
+```
+
+`tenant.json` states the complete Profile and scope ceilings, aggregate quota,
+expiry policy, and metadata. `controller.json` states its expiry and metadata.
+`subject.json` states the Subject quota, optional expiry, and metadata.
+`application.json` binds that Subject, exact scopes, Profile grants, expiry, and
+metadata. No command supplies a Tenant header to a controller route.
+
+The qualified scenario creates two application authorities for its bootstrap
+Subject. The general authority has `sandbox:read`, `sandbox:lifecycle`,
+`sandbox:exec`, `sandbox:files`, and `sandbox:ports`. The direct-Port authority
+has only `sandbox:read`, `sandbox:lifecycle`, `sandbox:ports`, and
+`sandbox:ports:direct`, and is granted only the direct-Port Profile. Keep these
+tokens in separate application configurations; the direct transport grant is
+never added to the general credential.
+
+Credential output is one-time. If creation succeeds but the response is lost,
+list the non-secret authority by its correlation metadata or idempotency
+identity, revoke it, and create a replacement. Reads, lists, diagnostics, and
+database inspection cannot recover bearer material.
+
 ### Credentials
 
 Every command resolves the endpoint, token, tenant reference, and subject reference from the first source that supplies each value: the explicit flag, then the environment, then stored configuration. A value absent from all three is reported by the command that requires it, naming every source.
@@ -66,12 +126,12 @@ Every command resolves the endpoint, token, tenant reference, and subject refere
 
 `SECONDBOX_TOKEN` is deliberately distinct from the `SECONDBOX_PLATFORM_TOKEN` that `secondboxd` reads. A shell configured to run the control plane does not thereby hand its deployment token to the CLI.
 
-`login` verifies the credentials against the deployment before storing them, so a wrong token fails immediately with the server's problem detail and nothing is written:
+Typed `platform login`, `controller login`, and `application login` verify the credential against the matching deployment route before storing it, so a wrong authority kind or token fails immediately with the server's problem detail and nothing is written. The unqualified `login` command is the application form:
 
 ```sh
 ./dist/secondbox login \
   --url http://127.0.0.1:8080 \
-  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --token "$SECONDBOX_APPLICATION_TOKEN" \
   --tenant-ref "$TENANT_REF" \
   --subject-ref "$SUBJECT_REF"
 

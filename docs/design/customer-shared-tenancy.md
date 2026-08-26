@@ -6,7 +6,7 @@ One SecondBox deployment serves multiple SecondStack installations inside one cu
 The deployment is not owned by any one SecondStack installation, and it never serves unrelated customer trust domains.
 The control plane and PostgreSQL hold shared management state, while one or more customer-operated Runners provide compute and durable workspace storage.
 
-This document defines the management and isolation contract for that shared deployment.
+This document describes the implemented management and isolation contract for that shared deployment.
 The Sandbox, Instance, Lease, Profile, RunnerPool, and Runner contracts remain as described in the other design documents.
 
 ## Deployment ownership
@@ -26,7 +26,7 @@ Customers that require physical separation use separate RunnerPools or Runner ho
 ## Management resources
 
 `secondbox.tenants` stores one stable, uninterpreted tenant reference, lifecycle state, allowed Profile grants, allowed application scopes, aggregate quota, expiry policy, bounded metadata, revision, and timestamps.
-A tenant normally represents one independent SecondStack installation.
+A tenant represents one independent SecondStack installation in the qualified deployment flow.
 An installation group such as a preview service can use one tenant and create one subject for each managed environment.
 
 `secondbox.subjects` stores a tenant-scoped subject reference, lifecycle state, subject quota, optional expiry, bounded metadata, revision, and timestamps.
@@ -123,8 +123,15 @@ They may share a Runner with a network-enabled tenant because the Runner compile
 
 A network-enabled Profile can use only the Runner gateway configured for its RunnerPool trust context.
 The current Runner gateway carries one SecondStack deployment's workload identity and cannot safely route another installation through that deployment's credential broker.
-The first shared-service release therefore supports one network-enabled SecondStack egress context per RunnerPool and any number of network-disabled tenants.
-A tenant-aware shared gateway requires a separate authenticated capability and routing design.
+SecondBox v0.6.0 supports one network-enabled SecondStack egress context per RunnerPool and any number of network-disabled tenants.
+It does not implement a tenant-aware shared gateway.
+
+The Runner gateway mapping authorizes one logical domain and port at a protected
+Runner-local address; it does not create guest-side name resolution. The DNS
+proxy forwards questions to its configured upstream only and rejects answers
+that resolve to protected addresses. A production deployment supplies and
+qualifies its own logical gateway DNS answer, destination authentication, and
+reachability.
 
 ## Availability and recovery
 

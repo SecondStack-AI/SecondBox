@@ -39,7 +39,9 @@ func (service *ControlPlaneService) openDataPlaneStream(
 	switch session.Transport {
 	case contracts.DataPlaneTransportProxied:
 		if service.liveDataPlane == nil {
-			return nil, runnercontrol.ErrLiveDataPlaneUnavailable
+			return nil, service.abortDataPlaneSetup(
+				ctx, session, nil, runnercontrol.ErrLiveDataPlaneUnavailable,
+			)
 		}
 		responseCreditBytes := int64(0)
 		replayedThrough := uint64(0)
@@ -60,22 +62,54 @@ func (service *ControlPlaneService) openDataPlaneStream(
 			session.StreamWindowBytes, responseCreditBytes, replayedThrough,
 		)
 		if err != nil {
-			return nil, err
+			return nil, service.abortDataPlaneSetup(ctx, session, nil, err)
 		}
+		proxied := &proxiedDataPlaneStream{stream: stream}
 		if session.State == "pending" {
 			if _, err := service.dataPlaneStore.StartDataPlaneSession(
 				ctx, session.TenantRef, session.SubjectRef, session.ID, service.now().UTC(),
 			); err != nil {
-				stream.Close()
-				return nil, err
+				return nil, service.abortDataPlaneSetup(ctx, session, proxied, err)
 			}
 		}
-		return &proxiedDataPlaneStream{stream: stream}, nil
+		return proxied, nil
 	case contracts.DataPlaneTransportDirect:
-		return service.openDirectDataPlaneStream(ctx, session)
+		stream, err := service.openDirectDataPlaneStream(ctx, session)
+		if err != nil {
+			return nil, service.abortDataPlaneSetup(ctx, session, nil, err)
+		}
+		return stream, nil
 	default:
-		return nil, errors.New("SecondBox data-plane session transport is invalid")
+		return nil, service.abortDataPlaneSetup(
+			ctx, session, nil,
+			errors.New("SecondBox data-plane session transport is invalid"),
+		)
 	}
+}
+
+func (service *ControlPlaneService) abortDataPlaneSetup(
+	ctx context.Context,
+	session runnercontrol.DataPlaneSession,
+	stream dataPlaneStream,
+	setupErr error,
+) error {
+	var closeErr error
+	if stream != nil {
+		closeErr = stream.Close()
+	}
+	if session.State != "pending" {
+		// A running session has already reached the Runner, so an attachment
+		// failure is not proof that the operation failed.
+		return errors.Join(setupErr, closeErr)
+	}
+	_, cancelErr := service.dataPlaneStore.CancelDataPlaneSession(
+		context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
+		session.ID, "data-plane setup failed", service.now().UTC(),
+	)
+	if cancelErr != nil {
+		cancelErr = fmt.Errorf("SecondBox data-plane setup cancellation: %w", cancelErr)
+	}
+	return errors.Join(setupErr, closeErr, cancelErr)
 }
 
 type proxiedDataPlaneStream struct {
@@ -238,7 +272,6 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
-	defer stream.Close()
 	if err := stream.Send(&runnerv1.ControlPlaneToRunner{
 		Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
 			Fence: dataPlaneFence(session), OperationId: session.ID, StreamId: session.StreamID,
@@ -246,8 +279,11 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 			Payload: &runnerv1.ExecFrame_Open{Open: proto.Clone(open).(*runnerv1.ExecOpen)},
 		}},
 	}); err != nil {
-		return runnercontrol.DataPlaneSession{}, err
+		return runnercontrol.DataPlaneSession{}, service.abortDataPlaneSetup(
+			ctx, session, stream, err,
+		)
 	}
+	defer stream.Close()
 	message, err := stream.Receive(operationCtx)
 	if err != nil {
 		if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
@@ -295,7 +331,10 @@ func (service *ControlPlaneService) OpenSandboxExecStream(
 	}
 	var request contracts.StreamingExecRequest
 	if err := json.Unmarshal(session.RequestJSON, &request); err != nil {
-		return nil, fmt.Errorf("SecondBox streaming Exec request decoding: %w", err)
+		return nil, service.abortDataPlaneSetup(
+			ctx, session, nil,
+			fmt.Errorf("SecondBox streaming Exec request decoding: %w", err),
+		)
 	}
 	open := publicExecOpen(
 		request.Command, request.Cwd, request.Environment, session.DeadlineAt,
@@ -318,8 +357,7 @@ func (service *ControlPlaneService) OpenSandboxExecStream(
 			Payload: &runnerv1.ExecFrame_Open{Open: open},
 		}},
 	}); err != nil {
-		_ = stream.Close()
-		return nil, err
+		return nil, service.abortDataPlaneSetup(ctx, session, stream, err)
 	}
 	return result, nil
 }
@@ -543,7 +581,10 @@ func (service *ControlPlaneService) OpenSandboxTerminalStream(
 	}
 	var request contracts.CreateTerminalRequest
 	if err := json.Unmarshal(session.RequestJSON, &request); err != nil {
-		return nil, fmt.Errorf("SecondBox Terminal request decoding: %w", err)
+		return nil, service.abortDataPlaneSetup(
+			ctx, session, nil,
+			fmt.Errorf("SecondBox Terminal request decoding: %w", err),
+		)
 	}
 	stream, err := service.openDataPlaneStream(ctx, session)
 	if err != nil {
@@ -579,8 +620,7 @@ func (service *ControlPlaneService) OpenSandboxTerminalStream(
 				Payload: &runnerv1.ExecFrame_Open{Open: open},
 			}},
 		}); err != nil {
-			_ = stream.Close()
-			return nil, err
+			return nil, service.abortDataPlaneSetup(ctx, session, stream, err)
 		}
 	}
 	if err := stream.Send(&runnerv1.ControlPlaneToRunner{
@@ -593,40 +633,43 @@ func (service *ControlPlaneService) OpenSandboxTerminalStream(
 			}},
 		}},
 	}); err != nil {
-		_ = stream.Close()
-		return nil, err
+		return nil, service.abortDataPlaneSetup(ctx, session, stream, err)
 	}
 	message, err := stream.Receive(ctx)
 	if err != nil {
-		_ = stream.Close()
-		return nil, err
+		return nil, service.abortDataPlaneSetup(ctx, session, stream, err)
 	}
 	frame := message.GetPty()
 	if frame == nil || frame.OperationId != session.ID || frame.StreamId != session.StreamID ||
 		!proto.Equal(frame.Fence, dataPlaneFence(session)) ||
 		!proto.Equal(frame.Correlation, dataPlaneCorrelation(session)) || frame.GetAttachResult() == nil {
-		_ = stream.Close()
-		return nil, errors.New("SecondBox Terminal attachment result is invalid")
+		return nil, service.abortDataPlaneSetup(
+			ctx, session, stream,
+			errors.New("SecondBox Terminal attachment result is invalid"),
+		)
 	}
 	switch frame.GetAttachResult().Kind {
 	case runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED:
 		nextSend, err := terminalAttachNextClientSequence(session, frame.GetAttachResult())
 		if err != nil {
-			_ = stream.Close()
-			return nil, err
+			return nil, service.abortDataPlaneSetup(ctx, session, stream, err)
 		}
 		result.nextSend = nextSend
 		result.startCheckpointing()
 		return result, nil
 	case runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_REPLAY_EVICTED:
-		_ = stream.Close()
-		return nil, runnercontrol.ErrTerminalReplayEvicted
+		return nil, service.abortDataPlaneSetup(
+			ctx, session, stream, runnercontrol.ErrTerminalReplayEvicted,
+		)
 	case runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ALREADY_ATTACHED:
-		_ = stream.Close()
-		return nil, runnercontrol.ErrTerminalAttached
+		return nil, service.abortDataPlaneSetup(
+			ctx, session, stream, runnercontrol.ErrTerminalAttached,
+		)
 	default:
-		_ = stream.Close()
-		return nil, errors.New("SecondBox Terminal attachment was rejected")
+		return nil, service.abortDataPlaneSetup(
+			ctx, session, stream,
+			errors.New("SecondBox Terminal attachment was rejected"),
+		)
 	}
 }
 
@@ -951,7 +994,6 @@ func (service *ControlPlaneService) executeFileDataPlane(
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
-	defer stream.Close()
 	sequence := uint64(1)
 	if err := stream.Send(&runnerv1.ControlPlaneToRunner{
 		Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
@@ -960,8 +1002,11 @@ func (service *ControlPlaneService) executeFileDataPlane(
 			Payload: &runnerv1.FileFrame_Open{Open: proto.Clone(open).(*runnerv1.FileOpen)},
 		}},
 	}); err != nil {
-		return runnercontrol.DataPlaneSession{}, err
+		return runnercontrol.DataPlaneSession{}, service.abortDataPlaneSetup(
+			ctx, session, stream, err,
+		)
 	}
+	defer stream.Close()
 	for offset := 0; offset < len(content); {
 		sequence++
 		size := min(liveDataPlaneChunkBytes, len(content)-offset)

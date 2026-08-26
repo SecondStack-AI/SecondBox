@@ -1,7 +1,7 @@
 ---
 title: Customer-Shared Tenancy
 date: 2026-08-25
-status: planned
+status: complete
 owner: SecondBox
 provenance: Customer-shared SecondBox architecture review, 2026-08-25
 ---
@@ -147,11 +147,11 @@ Add a standard Profile for consumers that need compute and workspace capabilitie
 
 Close the one pull request only after the full customer-shared path works through source-free artifacts on a clean deployment. Validate security properties across two tenants and ensure current architecture and operator documentation describes implemented behavior rather than prospective design.
 
-- [ ] Add an end-to-end two-tenant scenario that creates controllers, subjects, and application authorities; runs same-named Sandboxes concurrently; and proves every read, mutation, execution, file, Port, and diagnostic boundary is tenant-scoped.
-- [ ] Prove authority revocation, subject close, expiry reconciliation, quota release, durable cleanup, control-plane restart, and Runner reconnect while resources in the other tenant remain usable.
-- [ ] Prove application credentials cannot call management, Profile mutation, aggregate timing, Runner administration, or another subject's routes, and that tenant controllers cannot call Sandbox routes.
-- [ ] Run the isolated/network-enabled concurrent scenario on a qualified KVM Runner and capture bounded evidence without tenant identifiers in metric labels or secrets in artifacts.
-- [ ] Update authorization, service-boundary, security, threat-model, recovery, deployment, backup, diagnostics, CLI, declarative-resource, downstream-integration, and release documentation to match the implemented contract.
-- [ ] Remove prospective wording from [Customer-shared tenancy](../design/customer-shared-tenancy.md), reconcile linked design documents, and verify their claims against tests and operator commands.
-- [ ] Stage v0.6.0 release artifacts and verify OpenAPI, Go SDK, TypeScript SDK, binaries, OCI images, standard bundles, source-free suite, SBOMs, attestations, and qualification evidence all carry one immutable release identity.
-- [ ] Run every command in `Validation Commands`, resolve failures without weakening gates, and leave the branch ready for its single implementation pull request and subsequent release publication.
+- [x] Add an end-to-end two-tenant scenario that creates controllers, subjects, and application authorities; runs same-named Sandboxes concurrently; and proves every read, mutation, execution, file, Port, and diagnostic boundary is tenant-scoped.
+- [x] Prove authority revocation, subject close, expiry reconciliation, quota release, durable cleanup, control-plane restart, and Runner reconnect while resources in the other tenant remain usable.
+- [x] Prove application credentials cannot call management, Profile mutation, aggregate timing, Runner administration, or another subject's routes, and that tenant controllers cannot call Sandbox routes.
+- [x] Run the isolated/network-enabled concurrent scenario on a qualified KVM Runner and capture bounded evidence without tenant identifiers in metric labels or secrets in artifacts.
+- [x] Update authorization, service-boundary, security, threat-model, recovery, deployment, backup, diagnostics, CLI, declarative-resource, downstream-integration, and release documentation to match the implemented contract.
+- [x] Remove prospective wording from [Customer-shared tenancy](../design/customer-shared-tenancy.md), reconcile linked design documents, and verify their claims against tests and operator commands.
+- [x] Stage v0.6.0 release artifacts and verify OpenAPI, Go SDK, TypeScript SDK, binaries, OCI images, standard bundles, source-free suite, SBOMs, attestations, and qualification evidence all carry one immutable release identity.
+- [x] Run every command in `Validation Commands`, resolve failures without weakening gates, and leave the branch ready for its single implementation pull request and subsequent release publication.
