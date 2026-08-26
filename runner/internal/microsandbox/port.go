@@ -42,6 +42,13 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 		return nil, err
 	}
 	process := active.process
+	// The helper serves one request at a time on its single control
+	// connection and its request handlers read frames inline, so this lock is
+	// held for the tunnel's lifetime and other operations on the same
+	// Instance queue behind it. Lifting that requires a helper protocol
+	// revision (response multiplexing or independent channels), which means
+	// re-pinning the reviewed helper build; the serialization is documented
+	// as a known limitation of the experimental backend.
 	process.requestMu.Lock()
 	requestID := process.nextRequestID
 	process.nextRequestID++

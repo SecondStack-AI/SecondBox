@@ -112,6 +112,68 @@ ephemeral runtime paths short, and identity checks tolerate macOS's `/var` to `/
 canonicalization while still comparing the held descriptor's inode. The WorkspaceStore alone
 resolves host paths and passes `/dev/fd/<n>` attachments to compute.
 
+## Known limitations
+
+The helper serves one request at a time over its single control channel. An open Port tunnel
+therefore serializes every other Exec, file, and Port operation on the same Sandbox until the
+tunnel closes; concurrent operations queue rather than fail. Lifting this requires a helper
+protocol revision and a re-pinned helper build, and is out of scope for the experimental
+backend.
+
+## Materialization and digest verification
+
+Every value the runner verifies is computed from the operator's reviewed build, never taken on
+faith from a document:
+
+- Compute the flat-root digest with the repository tool and record it as `flatRootDigest`:
+
+  ```sh
+  cd runner && go run ./cmd/secondbox-flat-root-digest /opt/secondbox-microsandbox/rootfs
+  ```
+
+- Record each launch artifact's SHA-256 (`shasum -a 256` on macOS) for the helper and `agentd`
+  entries in `launchArtifacts`.
+- Compute the canonical materialization digest over the reviewed manifest's compact JSON and pin
+  it in the environment:
+
+  ```sh
+  printf 'sha256:%s\n' "$(jq --compact-output --join-output . \
+    /etc/secondbox/microsandbox-arm64.materialization.json | shasum -a 256 | awk '{print $1}')"
+  export SECONDBOX_MICROSANDBOX_MATERIALIZATION_DIGEST=sha256:...
+  ```
+
+The runner revalidates the manifest digest and every launch artifact before it advertises, and
+refuses to start on any mismatch. Repeat the computation after every change to the reviewed
+build; the digest is the identity, not a cache.
+
+## Enrollment and credential issuance
+
+Enrollment follows the standard declared-Runner procedure in
+[deployment](deployment.md): declare the macOS Runner and its dedicated arm64 pool in
+`secondbox.toml`, then issue its identity and protected environment handoff with
+`secondbox-deploy runner-init <manifest> <runner-id> <handoff-directory>`. The command signs the
+client certificate for `spiffe://secondbox/runner/<runner-id>`, writes the matching key, CA
+certificate, and canonical environment, and refuses an undeclared ID or mismatched CA evidence.
+Copy the handoff to the macOS host as an explicit operator action, install it under an
+operator-owned root (for example `/opt/secondbox-runner-identity`), and point
+`SECONDBOX_RUNNER_CLIENT_CERTIFICATE`, `SECONDBOX_RUNNER_CLIENT_KEY`, and
+`SECONDBOX_RUNNER_CONTROL_PLANE_CA` at the installed files. Runner and application credentials
+remain different authorities; never reuse an application bearer credential for enrollment.
+
+## Persistent service management
+
+Run the native runner as a `launchd` daemon under the dedicated unprivileged identity. Install an
+operator-reviewed plist (for example
+`/Library/LaunchDaemons/ai.secondstack.secondbox.runner.plist`) that states the exact
+`secondbox-runner` program path, the complete environment from this document, `UserName` set to
+the dedicated identity, `KeepAlive` for supervised restart, and `StandardOutPath`/
+`StandardErrorPath` under the operator-owned log root. Manage it with
+`launchctl bootstrap system <plist>`, `launchctl bootout system/<label>`, and
+`launchctl kickstart -k system/<label>` for a supervised restart. The environment file produced
+by the handoff is deployment authority: regenerate the plist's environment block from it rather
+than editing values in place, and keep the identity directory readable only by the runner's
+user.
+
 ## Qualification before enrollment
 
 ```sh
