@@ -177,13 +177,16 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 	// DNS proxy; without it the proxy discovers the host resolver.
 	dnsUpstream := strings.TrimSpace(os.Getenv("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM"))
 	// The network profile keeps runners sharing one host network namespace
-	// apart; a single runner per host keeps the default 0.
-	networkProfile := uint64(0)
-	if raw := strings.TrimSpace(os.Getenv("SECONDBOX_GVISOR_NETWORK_PROFILE")); raw != "" {
-		networkProfile, err = strconv.ParseUint(raw, 10, 32)
-		if err != nil {
-			return GVisorComposition{}, 0, fmt.Errorf("SECONDBOX_GVISOR_NETWORK_PROFILE must be a base-10 integer")
-		}
+	// apart. It must be stated explicitly - runner configuration has no
+	// defaults, and a silently shared profile 0 would let reconciliation on
+	// one runner tear down another runner's live networks and cgroups.
+	raw := strings.TrimSpace(os.Getenv("SECONDBOX_GVISOR_NETWORK_PROFILE"))
+	if raw == "" {
+		return GVisorComposition{}, 0, fmt.Errorf("SECONDBOX_GVISOR_NETWORK_PROFILE must be set explicitly; runners sharing a host network namespace need unique profiles")
+	}
+	networkProfile, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil {
+		return GVisorComposition{}, 0, fmt.Errorf("SECONDBOX_GVISOR_NETWORK_PROFILE must be a base-10 integer")
 	}
 	return GVisorComposition{
 		RunscPath:             values["SECONDBOX_GVISOR_RUNSC_PATH"],

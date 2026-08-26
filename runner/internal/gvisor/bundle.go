@@ -137,9 +137,12 @@ func sandboxCgroupDirectory(profile uint32) string {
 }
 
 // instanceCgroupPath names the per-Instance cgroup relative to the cgroup
-// filesystem root; launch and teardown must agree on it.
+// filesystem root; launch and teardown must agree on it. The component is a
+// fixed-length digest of the Instance ID, never the ID itself, so no
+// identifier shape - path separators, dot components, or overlong names -
+// can address anything outside the runner-owned subtree.
 func instanceCgroupPath(profile uint32, instanceID string) string {
-	return filepath.Join(sandboxCgroupParent(), sandboxCgroupDirectory(profile), instanceID)
+	return filepath.Join(sandboxCgroupParent(), sandboxCgroupDirectory(profile), shortInstanceDirName(instanceID))
 }
 
 // removeInstanceCgroup sweeps the per-Instance cgroup after compute exit.

@@ -18,8 +18,13 @@ Check a candidate host with the installer preflight in its gVisor mode:
 secondbox-deploy install --check --backend gvisor
 ```
 
-The gVisor mode requires loop-device, `nft`, and `ip` availability and reports absent KVM, TUN,
-and virtualization as passing observations rather than blockers. The Firecracker preflight is
+The gVisor mode enforces the same host baseline as every guided preflight - an active systemd,
+the minimum host CPU count and memory, and a dedicated reflink-capable filesystem with enough
+free capacity and compatible mount options for the WorkspaceStore root - plus loop-device,
+`nft`, `ip`, and ext4-toolchain (`mkfs.ext4`, `e2fsck`) availability, and it reports absent
+KVM, TUN, and virtualization as passing observations rather than blockers. It skips the
+Firecracker-only container-engine and jailer UID-range checks. Run `--check` and read every
+finding: each carries its own remedy. The Firecracker preflight is
 unchanged.
 
 The host must run the unified cgroup v2 hierarchy with the `cpu`, `memory`, and `pids`
@@ -98,6 +103,7 @@ export SECONDBOX_GVISOR_MATERIALIZATION_DIGEST=sha256:OPERATOR_CANONICAL_DIGEST
 # a Workspace or asset path; the runner refuses /, first-level, symlinked,
 # overlong, and WorkspaceStore- or flat-root-overlapping values.
 export SECONDBOX_GVISOR_RUNTIME_DIR=/run/secondbox-gvisor
+export SECONDBOX_GVISOR_NETWORK_PROFILE=0
 export SECONDBOX_GVISOR_MAXIMUM_VCPUS=8
 export SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES=8589934592
 export SECONDBOX_GVISOR_MAXIMUM_DISK_BYTES=34359738368
@@ -106,9 +112,9 @@ export SECONDBOX_GVISOR_MAXIMUM_OPERATIONS=32
 export SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 ```
 
-`SECONDBOX_GVISOR_NETWORK_PROFILE` (default `0`) separates runners sharing one host network
-namespace: each profile selects its own DNS proxy address, link-local slot space, and veth and
-namespace names. A single runner per host keeps the default. Valid profiles are `0`-`15`, every
+`SECONDBOX_GVISOR_NETWORK_PROFILE` separates runners sharing one host network namespace: each
+profile selects its own DNS proxy address, link-local slot space, and veth and namespace names.
+It must be set explicitly - there is no default - and a single runner per host states `0`. Valid profiles are `0`-`15`, every
 runner in the same host network namespace **must** use a unique profile, and each profile bounds
 the runner at 63 concurrent Instances (its link-local slot space). A reused profile is not
 detected: startup reconciliation sweeps the profile's networks and cgroups and would tear down

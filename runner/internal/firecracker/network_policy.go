@@ -477,12 +477,12 @@ func (e *NFTablesNetworkPolicyEnforcer) Remove(ctx context.Context, instanceID s
 	}
 	script := e.deletePolicyTable(table)
 	output, err := e.command(ctx, e.nftPath, []string{"-f", "-"}, script)
-	if err != nil {
-		if strings.Contains(string(output), "No such file or directory") {
-			return nil
-		}
+	if err != nil && !strings.Contains(string(output), "No such file or directory") {
 		return fmt.Errorf("remove nftables policy for %s: %w: %s", instanceID, err, strings.TrimSpace(string(output)))
 	}
+	// An already-missing table counts as removed, and its in-memory entry
+	// must go with it: a retained canceled entry would answer DNS decisions
+	// for whichever Instance later reuses this slot's guest address.
 	e.mu.Lock()
 	delete(e.instances, instanceID)
 	e.mu.Unlock()

@@ -351,7 +351,7 @@ func validateDNSResponse(query dnsValidatedQuestion, message []byte) ([]netip.Ad
 	if err != nil ||
 		!header.Response ||
 		header.ID != query.header.ID ||
-		header.RCode != dnsmessage.RCodeSuccess {
+		(header.RCode != dnsmessage.RCodeSuccess && header.RCode != dnsmessage.RCodeNameError) {
 		return nil, 0, fmt.Errorf("DNS response header does not match the query")
 	}
 	question, err := parser.Question()
@@ -401,6 +401,12 @@ func validateDNSResponse(query dnsValidatedQuestion, message []byte) ([]netip.Ad
 				recordTTLs[resource.Header.Name] = minimumPositiveTTL(recordTTLs[resource.Header.Name], resource.Header.TTL)
 			}
 		}
+	}
+	// A name-error response is only ever forwarded as the strictly empty
+	// negative answer below; one that also carries resolving records is
+	// contradictory and stays rejected as injection.
+	if header.RCode == dnsmessage.RCodeNameError && (len(addressRecords) != 0 || len(cnames) != 0) {
+		return nil, 0, fmt.Errorf("DNS name-error response must carry no answers")
 	}
 	owner := query.question.Name
 	seen := make(map[dnsmessage.Name]bool)

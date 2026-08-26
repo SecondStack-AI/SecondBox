@@ -15,6 +15,23 @@ policy, not a DNS record: the proxy does not synthesize guest answers for the
 logical domain. Network-enabled production deployments must provide and qualify
 their own upstream resolution and gateway reachability.
 
+## Backend topologies
+
+The Firecracker backend implements the outbound contract with per-TAP bridge-family firewall
+isolation on the Runner bridge, as described above. The experimental gVisor backend implements
+the same contract with a different topology: each Instance runs in its own Linux network
+namespace connected by a routed veth pair, the shared enforcer renders the identical fail-closed
+policy into `inet`-family tables (with a paired `ip`-family NAT table for masqueraded egress),
+and the policy-aware DNS proxy listens on a per-profile address of the Runner's `sbxgv-dns`
+dummy interface instead of a bridge address. Runners sharing a host network namespace are
+separated by an explicit network profile in `0`-`15`; each profile owns a link-local `/30` slot
+space bounding it at 63 concurrent Instances, and operators must keep those link-local ranges,
+the veth and namespace name prefixes, and the per-profile DNS addresses free of conflicting
+host use. Per-Instance teardown removes the namespace, veth, and both policy-table families,
+and startup reconciliation sweeps any profile-scoped leftovers, including orphaned NAT-only
+tables. DNS pinning, protected-destination precedence, and the deny-all default are identical
+across both backends.
+
 ## DNS
 
 DNS resolution is coupled to destination enforcement:

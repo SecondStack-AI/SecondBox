@@ -123,10 +123,25 @@ func createInstanceNetwork(ctx context.Context, network instanceNetwork) error {
 	}
 	for _, step := range steps {
 		if err := ipCommand(ctx, step...); err != nil {
-			return errors.Join(err, destroyInstanceNetwork(context.Background(), network))
+			// The partial creation is destroyed under its own bound - the
+			// caller's context may already be expired - and its result
+			// surfaces so the caller releases the slot only over verified
+			// clean ground.
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), networkTeardownBound)
+			defer cancel()
+			return errors.Join(err, destroyInstanceNetwork(cleanupCtx, network))
 		}
 	}
 	return nil
+}
+
+// destroyInstanceNetworkResidue verifies a failed creation left no namespace
+// or veth behind, destroying any residue under its own bound; only a nil
+// return proves the slot's resources are gone.
+func destroyInstanceNetworkResidue(network instanceNetwork) error {
+	ctx, cancel := context.WithTimeout(context.Background(), networkTeardownBound)
+	defer cancel()
+	return destroyInstanceNetwork(ctx, network)
 }
 
 func destroyInstanceNetwork(ctx context.Context, network instanceNetwork) error {

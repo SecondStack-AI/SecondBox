@@ -53,7 +53,21 @@ func (backend *AssignmentBackend) probePlatform(ctx context.Context) error {
 // an unprepared host would otherwise register successfully and then fail
 // every assignment at launch.
 func probeCgroupControls(profile uint32) error {
-	probe := filepath.Join("/sys/fs/cgroup", sandboxCgroupParent(), sandboxCgroupDirectory(profile), "readiness-probe")
+	base := filepath.Join("/sys/fs/cgroup", sandboxCgroupParent())
+	branch := filepath.Join(base, sandboxCgroupDirectory(profile))
+	probe := filepath.Join(branch, "readiness-probe")
+	if err := os.MkdirAll(branch, 0o755); err != nil {
+		return fmt.Errorf("create sandbox cgroup branch: %w", err)
+	}
+	// On a clean unified hierarchy no ancestor delegates the CPU and memory
+	// controllers yet, so a child created first would simply lack cpu.max
+	// and memory.max; enable them down the runner-owned branch before the
+	// probe child exists, exactly as sandbox creation requires.
+	for _, ancestor := range []string{base, branch} {
+		if err := os.WriteFile(filepath.Join(ancestor, "cgroup.subtree_control"), []byte("+cpu +memory\n"), 0o644); err != nil {
+			return fmt.Errorf("enable cpu and memory controllers on %s: %w", ancestor, err)
+		}
+	}
 	if err := os.MkdirAll(probe, 0o755); err != nil {
 		return fmt.Errorf("create probe cgroup: %w", err)
 	}

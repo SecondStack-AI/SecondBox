@@ -102,6 +102,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_GVISOR_MAXIMUM_INSTANCES":                 "8",
 		"SECONDBOX_GVISOR_MAXIMUM_OPERATIONS":                "64",
 		"SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES": "8589934592",
+		"SECONDBOX_GVISOR_NETWORK_PROFILE":                   "0",
 	}
 	for name, value := range complete {
 		t.Setenv(name, value)
@@ -140,6 +141,10 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		t.Setenv("SECONDBOX_GVISOR_NETWORK_PROFILE", "one")
 		if _, _, err := loadGVisorComposition(); err == nil {
 			t.Fatal("malformed network profile was accepted")
+		}
+		t.Setenv("SECONDBOX_GVISOR_NETWORK_PROFILE", "")
+		if _, _, err := loadGVisorComposition(); err == nil {
+			t.Fatal("an omitted network profile was accepted; sharing profile 0 silently lets reconciliation cross runners")
 		}
 	})
 

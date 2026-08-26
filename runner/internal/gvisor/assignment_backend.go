@@ -848,7 +848,13 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 		return instanceNetwork{}, nil, capacityAssignment(err)
 	}
 	if err := createInstanceNetwork(ctx, network); err != nil {
-		backend.releaseNetworkSlot(network)
+		// createInstanceNetwork destroys its partial resources and joins
+		// any destruction failure into err; the slot may only return to the
+		// allocator when that cleanup verifiably succeeded, otherwise a
+		// reused slot could collide with the stale namespace or veth.
+		if destroyErr := destroyInstanceNetworkResidue(network); destroyErr == nil {
+			backend.releaseNetworkSlot(network)
+		}
 		return instanceNetwork{}, nil, infrastructureAssignment(err)
 	}
 	supervisorProcess := &atomic.Pointer[os.Process]{}
