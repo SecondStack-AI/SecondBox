@@ -52,6 +52,21 @@ func TestReadAcceptedUsesNoFollowOwnershipModeAndDigestFence(t *testing.T) {
 	}
 }
 
+func TestInspectOperationReleaseVersionRoutesLegacyPlanWithoutDecodingIt(t *testing.T) {
+	directory := t.TempDir()
+	plan := []byte(`{"schemaVersion":"secondbox.install.plan/v1","release":{"version":"0.5.2"},"tenantRef":"legacy-tenant"}`)
+	if err := os.WriteFile(filepath.Join(directory, "install-plan.json"), plan, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	version, err := InspectOperationReleaseVersionReadOnly(directory, os.Getuid())
+	if err != nil || version != "0.5.2" {
+		t.Fatalf("inspected release = %q, %v", version, err)
+	}
+	if _, err := DecodePlan(plan); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("legacy plan unexpectedly decoded as current: %v", err)
+	}
+}
+
 func TestReadAcceptedRejectsSymlinkedPathComponentsAndHardlinks(t *testing.T) {
 	directory, _, digest := acceptedFixture(t)
 	linkParent := t.TempDir()

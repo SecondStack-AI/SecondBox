@@ -169,6 +169,13 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 	if dependencies.TargetVersion == "0.0.0-development" || dependencies.TargetVersion == "development" {
 		return errors.New("SecondBox installer update: a published qualified target-release binary is required")
 	}
+	sourceVersion, err := install.InspectOperationReleaseVersionReadOnly(absolute, dependencies.OwnerUID)
+	if err != nil {
+		return err
+	}
+	if err := validateGuidedUpdateSourceVersion(sourceVersion); err != nil {
+		return err
+	}
 	var targetVerified releaseverify.VerifiedRelease
 	var targetPlan install.ReleasePlan
 	if !resume {
@@ -324,12 +331,8 @@ func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt in
 	if receipt.Status != install.OperationSucceeded || len(receipt.CompletedStages) != len(install.StageSequence) {
 		return errors.New("SecondBox installer update: only a successful complete guided installation can be updated")
 	}
-	sourceComparison, err := releasecontract.CompareVersions(plan.Release.Version, minimumGuidedUpdateSourceVersion)
-	if err != nil {
+	if err := validateGuidedUpdateSourceVersion(plan.Release.Version); err != nil {
 		return err
-	}
-	if sourceComparison < 0 {
-		return fmt.Errorf("SecondBox installer update: v0.6.0 clean-install boundary: active release %s predates v%s; perform a clean reinstall; import and compatibility modes are not available", plan.Release.Version, minimumGuidedUpdateSourceVersion)
 	}
 	comparison, err := releasecontract.CompareVersions(target.Version, plan.Release.Version)
 	if err != nil {
@@ -361,6 +364,17 @@ func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt in
 	}
 	if len(active) != 0 {
 		return fmt.Errorf("SecondBox installer update: stop every Sandbox before updating; still active: %s", strings.Join(active, ", "))
+	}
+	return nil
+}
+
+func validateGuidedUpdateSourceVersion(version string) error {
+	comparison, err := releasecontract.CompareVersions(version, minimumGuidedUpdateSourceVersion)
+	if err != nil {
+		return err
+	}
+	if comparison < 0 {
+		return fmt.Errorf("SecondBox installer update: v0.6.0 clean-install boundary: active release %s predates v%s; perform a clean reinstall; import and compatibility modes are not available", version, minimumGuidedUpdateSourceVersion)
 	}
 	return nil
 }

@@ -241,8 +241,8 @@ if [[ "$phase" == install ]]; then
       ' "$plan" >/dev/null
       update_attempt='succeeded'
     else
-      grep -F 'update target changes execution assets pinned by existing Sandbox Profile revisions' "$qualification_root/update-check-${mode}.log" >/dev/null || {
-        echo 'qualified update check failed for a reason other than execution-asset incompatibility' >&2
+      grep -Eq 'update target changes execution assets pinned by existing Sandbox Profile revisions|v0\.6\.0 clean-install boundary: .*perform a clean reinstall' "$qualification_root/update-check-${mode}.log" || {
+        echo 'qualified update check failed for a reason other than an expected release incompatibility' >&2
         exit 1
       }
       jq -e --arg source "$source_version" '.release.version == $source' "$plan" >/dev/null
