@@ -425,18 +425,20 @@ func (backend *AssignmentBackend) StartAssignment(
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox Sandbox already has an unfenced assignment"))
 		}
 	}
-	claim := &activeAssignment{fence: cloneFence(assignment.Fence), launched: make(chan struct{})}
-	claim.launchDone = sync.OnceFunc(func() { close(claim.launched) })
+	launched := make(chan struct{})
+	claim := &activeAssignment{fence: cloneFence(assignment.Fence), launched: launched}
+	claim.launchDone = sync.OnceFunc(func() { close(launched) })
 	backend.assignments[assignmentID] = claim
 	backend.mu.Unlock()
 	defer func() {
-		if resultErr != nil {
-			backend.mu.Lock()
-			if backend.assignments[assignmentID] == claim {
-				delete(backend.assignments, assignmentID)
-			}
-			backend.mu.Unlock()
+		backend.mu.Lock()
+		if resultErr != nil && backend.assignments[assignmentID] == claim {
+			delete(backend.assignments, assignmentID)
 		}
+		// A settled claim never re-enters a launch wait: nil marks it
+		// terminal for fencing and replay checks.
+		claim.launched = nil
+		backend.mu.Unlock()
 		claim.launchDone()
 	}()
 	if err := backend.validateAssignmentClaimed(ctx, assignment, claim); err != nil {
@@ -507,18 +509,29 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := backend.emitLifecycle(ctx, active, "ready", "control:1", "completed", "ready"); err != nil {
 		return result, infrastructureAssignment(err)
 	}
-	// The claim stays in the map until every fallible startup step has
-	// succeeded: a replay can never observe the active entry (and return
-	// success) while READY can still fail and remove the assignment.
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
-		return result, err
-	}
+	// The READY exchange races the control plane's acknowledgment, which
+	// reaches MarkAssignmentReady concurrently, so the real assignment must
+	// be resolvable before progress fires — but it carries the still-open
+	// launch gate so replay waiters observe success only after READY
+	// succeeds, and it inherits any fencing intent recorded on the claim.
 	backend.mu.Lock()
 	active.fenced = claim.fenced
+	active.launched = claim.launched
 	backend.assignments[assignment.Fence.AssignmentId] = active
 	backend.startupSamples = append(backend.startupSamples, time.Since(started))
 	backend.mu.Unlock()
 	go backend.observeExit(active)
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
+		backend.mu.Lock()
+		if backend.assignments[assignment.Fence.AssignmentId] == active {
+			delete(backend.assignments, assignment.Fence.AssignmentId)
+		}
+		backend.mu.Unlock()
+		return result, err
+	}
+	backend.mu.Lock()
+	active.launched = nil
+	backend.mu.Unlock()
 	cleanup.clear()
 	return runnercontrol.BackendInstance{BackendKind: "microsandbox", BackendReference: active.backendRef}, nil
 }
@@ -527,7 +540,7 @@ func (backend *AssignmentBackend) MarkAssignmentReady(fence *runnerprotocol.Assi
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 	active, exists := backend.assignments[fence.GetAssignmentId()]
-	if !exists || active.launched != nil || !sameFence(active.fence, fence) || active.fenced {
+	if !exists || active.process == nil || !sameFence(active.fence, fence) || active.fenced {
 		return fmt.Errorf("SecondBox Microsandbox ready assignment fence is stale")
 	}
 	active.readyPublished = true
@@ -581,9 +594,16 @@ func (backend *AssignmentBackend) FenceAssignment(
 			backend.mu.Unlock()
 			return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox Microsandbox fence token or generation mismatch")
 		}
-		if current.launched == nil {
+		if current.process != nil {
 			active = current
 			break
+		}
+		if current.launched == nil {
+			backend.mu.Unlock()
+			return runnercontrol.FenceEvidence{
+				Result:                    runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED,
+				TerminationEvidenceDigest: fenceDigest(command.Fence),
+			}, nil
 		}
 		// A pending claimed launch holds no process or operation state yet;
 		// fencing records its intent on the claim — rejecting further
@@ -694,7 +714,7 @@ func (backend *AssignmentBackend) acquireOperation(
 ) (*activeAssignment, context.Context, func(), error) {
 	backend.mu.Lock()
 	active := backend.assignments[fence.GetAssignmentId()]
-	if active == nil || active.launched != nil || active.fenced || !sameFence(active.fence, fence) {
+	if active == nil || active.process == nil || active.fenced || !sameFence(active.fence, fence) {
 		backend.mu.Unlock()
 		return nil, nil, nil, fmt.Errorf("SecondBox Microsandbox operation fence is stale")
 	}
