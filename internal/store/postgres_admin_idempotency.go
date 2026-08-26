@@ -74,6 +74,11 @@ func insertAdminIdempotency(
 	response any,
 ) (ports.AdminIdempotencyResult, error) {
 	if input.Key == "" {
+		if input.AuditEvent != nil {
+			if err := insertAuditEvent(ctx, tx, *input.AuditEvent); err != nil {
+				return ports.AdminIdempotencyResult{}, err
+			}
+		}
 		return ports.AdminIdempotencyResult{}, nil
 	}
 	tenantRef, subjectRef := adminIdempotencyRefs(input)
@@ -92,6 +97,16 @@ func insertAdminIdempotency(
 		input.Now.UTC(), input.Ends.UTC(),
 	); err != nil {
 		return ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox admin idempotency insert failed: %w", err)
+	}
+	if input.AuditEvent == nil {
+		return ports.AdminIdempotencyResult{}, errors.New("SecondBox admin mutation audit event is required")
+	}
+	event := *input.AuditEvent
+	if event.ResourceID == "" {
+		event.ResourceID = adminResponseResourceID(response)
+	}
+	if err := insertAuditEvent(ctx, tx, event); err != nil {
+		return ports.AdminIdempotencyResult{}, err
 	}
 	return ports.AdminIdempotencyResult{}, nil
 }

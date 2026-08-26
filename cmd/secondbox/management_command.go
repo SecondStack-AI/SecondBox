@@ -257,14 +257,15 @@ func runApplicationAuthorityCommand(ctx context.Context, session cliSession, arg
 }
 
 func runTenantUsageCommand(ctx context.Context, session cliSession, args []string, output io.Writer, httpClient *http.Client) error {
-	if len(args) != 0 {
-		return errors.New("SecondBox usage accepts no arguments")
-	}
 	client, err := requireManagementSession(session, sessionAuthorityTenantController, httpClient)
 	if err != nil {
 		return err
 	}
-	usage, err := client.GetTenantUsage(ctx)
+	options, err := parseManagementPageOptions("tenant usage", args, false)
+	if err != nil {
+		return err
+	}
+	usage, err := client.GetTenantUsage(ctx, options.page)
 	if err != nil {
 		return err
 	}

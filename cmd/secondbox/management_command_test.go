@@ -127,7 +127,7 @@ func TestManagementCommandActionsUseGeneratedRoutes(t *testing.T) {
 		{name: "application list", authority: controller, args: []string{"application-authority", "list", "--subject-ref", "subject-a", "--limit", "2"}, method: http.MethodGet, path: "/v1/application-authorities", query: "limit=2&subjectRef=subject-a"},
 		{name: "application rotate", authority: controller, args: []string{"application-authority", "rotate", "application-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/application-authorities/application-a:rotate", mutation: true},
 		{name: "application revoke", authority: controller, args: []string{"application-authority", "revoke", "application-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/application-authorities/application-a:revoke", mutation: true},
-		{name: "tenant usage", authority: controller, args: []string{"tenant", "usage"}, method: http.MethodGet, path: "/v1/usage"},
+		{name: "tenant usage", authority: controller, args: []string{"tenant", "usage"}, method: http.MethodGet, path: "/v1/usage", query: "limit=100"},
 		{name: "deployment usage", authority: platform, args: []string{"deployment", "usage", "--limit", "2"}, method: http.MethodGet, path: "/v1/deployment-usage", query: "limit=2"},
 	}
 	for _, test := range tests {

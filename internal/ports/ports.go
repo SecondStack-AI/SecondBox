@@ -87,6 +87,7 @@ type AdminIdempotencyInput struct {
 	RequestHash string
 	Now         time.Time
 	Ends        time.Time
+	AuditEvent  *contracts.AuditEvent
 }
 
 // AdminIdempotencyResult reports whether a matching durable outcome was found.

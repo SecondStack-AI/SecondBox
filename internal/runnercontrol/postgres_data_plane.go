@@ -252,6 +252,9 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 			return session, true, nil
 		}
 	}
+	if err := rowlock.ActiveSubject(ctx, tx, input.TenantRef, input.SubjectRef, input.Now); err != nil {
+		return DataPlaneSession{}, false, err
+	}
 	projectCapacityKey := input.TenantRef + "\x1f" + input.SubjectRef + "\x1fdata-plane-capacity"
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, projectCapacityKey); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane capacity lock: %w", err)

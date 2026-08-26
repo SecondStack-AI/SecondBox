@@ -29,6 +29,7 @@ func (service *ControlPlaneService) CreateTenant(ctx context.Context, principal 
 	if err != nil {
 		return contracts.Tenant{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "tenant.created", "tenant", request.Ref, request.Ref, now))
 	tenant := contracts.Tenant{
 		Ref: request.Ref, State: contracts.TenantStateActive,
 		AllowedProfileGrants:     sortedUnique(request.AllowedProfileGrants),
@@ -40,9 +41,6 @@ func (service *ControlPlaneService) CreateTenant(ctx context.Context, principal 
 	tenant, result, err := service.store.CreateManagedTenant(ctx, tenant, idempotency)
 	if err != nil {
 		return contracts.Tenant{}, false, service.managementDenied(ctx, principal, "tenant.created", "tenant", request.Ref, request.Ref, err)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, "tenant.created", "tenant", tenant.Ref, tenant.Ref, now)); err != nil {
-		return contracts.Tenant{}, false, err
 	}
 	return tenant, result.Replayed, nil
 }
@@ -80,12 +78,10 @@ func (service *ControlPlaneService) setTenantState(ctx context.Context, principa
 	if err != nil {
 		return contracts.Tenant{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, auditAction, "tenant", tenantRef, tenantRef, now))
 	tenant, result, err := service.store.SetTenantState(ctx, tenantRef, targetState, expectedRevision, now, idempotency)
 	if err != nil {
 		return contracts.Tenant{}, false, service.managementDenied(ctx, principal, auditAction, "tenant", tenantRef, tenantRef, err)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, auditAction, "tenant", tenantRef, tenantRef, now)); err != nil {
-		return contracts.Tenant{}, false, err
 	}
 	return tenant, result.Replayed, nil
 }
@@ -112,12 +108,10 @@ func (service *ControlPlaneService) CreateTenantControllerAuthority(ctx context.
 		Metadata: cloneMetadata(request.Metadata), ExpiresAt: &request.ExpiresAt,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "tenant_controller_authority.created", "tenant_controller_authority", authority.ID, tenantRef, now))
 	response, result, err := service.store.CreateManagedTenantControllerAuthority(ctx, authority, idempotency)
 	if err != nil {
 		return contracts.TenantControllerCredentialResponse{}, false, service.managementDenied(ctx, principal, "tenant_controller_authority.created", "tenant_controller_authority", authority.ID, tenantRef, err)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, "tenant_controller_authority.created", "tenant_controller_authority", response.Authority.ID, tenantRef, now)); err != nil {
-		return contracts.TenantControllerCredentialResponse{}, false, err
 	}
 	return response, result.Replayed, nil
 }
@@ -140,12 +134,10 @@ func (service *ControlPlaneService) RotateTenantControllerAuthority(ctx context.
 	if err != nil {
 		return contracts.TenantControllerCredentialResponse{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "tenant_controller_authority.rotated", "tenant_controller_authority", authorityID, tenantRef, now))
 	response, result, err := service.store.RotateManagedTenantControllerAuthority(ctx, tenantRef, authorityID, expectedRevision, now, idempotency)
 	if err != nil {
 		return contracts.TenantControllerCredentialResponse{}, false, service.managementDenied(ctx, principal, "tenant_controller_authority.rotated", "tenant_controller_authority", authorityID, tenantRef, err)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, "tenant_controller_authority.rotated", "tenant_controller_authority", authorityID, tenantRef, now)); err != nil {
-		return contracts.TenantControllerCredentialResponse{}, false, err
 	}
 	return response, result.Replayed, nil
 }
@@ -160,12 +152,10 @@ func (service *ControlPlaneService) RevokeTenantControllerAuthority(ctx context.
 	if err != nil {
 		return contracts.TenantControllerAuthority{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "tenant_controller_authority.revoked", "tenant_controller_authority", authorityID, tenantRef, now))
 	authority, result, err := service.store.RevokeManagedTenantControllerAuthority(ctx, tenantRef, authorityID, expectedRevision, now, idempotency)
 	if err != nil {
 		return contracts.TenantControllerAuthority{}, false, service.managementDenied(ctx, principal, "tenant_controller_authority.revoked", "tenant_controller_authority", authorityID, tenantRef, err)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, "tenant_controller_authority.revoked", "tenant_controller_authority", authorityID, tenantRef, now)); err != nil {
-		return contracts.TenantControllerAuthority{}, false, err
 	}
 	return authority, result.Replayed, nil
 }
@@ -179,6 +169,7 @@ func (service *ControlPlaneService) CreateSubject(ctx context.Context, principal
 	if err != nil {
 		return contracts.Subject{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "subject.created", "subject", request.Ref, principal.TenantRef, now))
 	subject := contracts.Subject{
 		TenantRef: principal.TenantRef, Ref: request.Ref, State: contracts.SubjectStateActive,
 		CleanupState: contracts.SubjectCleanupStateNone, Quota: request.Quota,
@@ -188,9 +179,6 @@ func (service *ControlPlaneService) CreateSubject(ctx context.Context, principal
 	subject, result, err := service.store.CreateManagedSubject(ctx, subject, idempotency)
 	if err != nil {
 		return contracts.Subject{}, false, service.managementDenied(ctx, principal, "subject.created", "subject", request.Ref, principal.TenantRef, err)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, "subject.created", "subject", subject.Ref, principal.TenantRef, now)); err != nil {
-		return contracts.Subject{}, false, err
 	}
 	return subject, result.Replayed, nil
 }
@@ -229,6 +217,7 @@ func (service *ControlPlaneService) UpdateSubjectQuota(
 	if err != nil {
 		return contracts.Subject{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "subject.quota_updated", "subject", subjectRef, principal.TenantRef, now))
 	subject, result, err := service.store.UpdateManagedSubjectQuota(
 		ctx, principal.TenantRef, subjectRef, request.Quota, expectedRevision, now, idempotency,
 	)
@@ -236,11 +225,6 @@ func (service *ControlPlaneService) UpdateSubjectQuota(
 		return contracts.Subject{}, false, service.managementDenied(
 			ctx, principal, "subject.quota_updated", "subject", subjectRef, principal.TenantRef, err,
 		)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(
-		ctx, principal, "subject.quota_updated", "subject", subjectRef, principal.TenantRef, now,
-	)); err != nil {
-		return contracts.Subject{}, false, err
 	}
 	return subject, result.Replayed, nil
 }
@@ -266,6 +250,7 @@ func (service *ControlPlaneService) CloseSubject(
 	if err != nil {
 		return contracts.Subject{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "subject.closed", "subject", subjectRef, principal.TenantRef, now))
 	subject, result, err := service.store.CloseManagedSubject(
 		ctx, principal.TenantRef, subjectRef, expectedRevision, now, idempotency,
 	)
@@ -273,11 +258,6 @@ func (service *ControlPlaneService) CloseSubject(
 		return contracts.Subject{}, false, service.managementDenied(
 			ctx, principal, "subject.closed", "subject", subjectRef, principal.TenantRef, err,
 		)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(
-		ctx, principal, "subject.closed", "subject", subjectRef, principal.TenantRef, now,
-	)); err != nil {
-		return contracts.Subject{}, false, err
 	}
 	return subject, result.Replayed, nil
 }
@@ -303,6 +283,7 @@ func (service *ControlPlaneService) CleanupSubject(
 	if err != nil {
 		return contracts.Operation{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "subject.cleanup_requested", "operation", "", principal.TenantRef, now))
 	operation := contracts.Operation{
 		ID: service.newID("op"), TenantRef: principal.TenantRef, SubjectRef: subjectRef,
 		Kind: "subject_cleanup", State: contracts.OperationStatePending,
@@ -316,20 +297,22 @@ func (service *ControlPlaneService) CleanupSubject(
 			ctx, principal, "subject.cleanup_requested", "subject", subjectRef, principal.TenantRef, err,
 		)
 	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(
-		ctx, principal, "subject.cleanup_requested", "operation", stored.ID, principal.TenantRef, now,
-	)); err != nil {
-		return contracts.Operation{}, false, err
-	}
 	return stored, result.Replayed || stored.ID != operation.ID, nil
 }
 
 // GetTenantUsage returns aggregate and per-Subject usage for the authenticated tenant.
-func (service *ControlPlaneService) GetTenantUsage(ctx context.Context, principal contracts.Principal) (contracts.TenantUsage, error) {
+func (service *ControlPlaneService) GetTenantUsage(
+	ctx context.Context,
+	principal contracts.Principal,
+	limit int,
+	cursor string,
+) (contracts.TenantUsage, error) {
 	if principal.Kind != contracts.AuthorityKindTenantController || principal.TenantRef == "" {
 		return contracts.TenantUsage{}, ports.ErrAuthorizationDenied
 	}
-	return service.store.GetTenantUsage(ctx, principal.TenantRef, service.now().UTC())
+	return service.store.GetTenantUsage(
+		ctx, principal.TenantRef, boundedLimit(limit), cursor, service.now().UTC(),
+	)
 }
 
 // GetDeploymentUsage returns deployment-wide usage to the platform operator.
@@ -360,12 +343,10 @@ func (service *ControlPlaneService) CreateApplicationAuthority(ctx context.Conte
 		ProfileGrants: sortedUnique(request.ProfileGrants), Metadata: cloneMetadata(request.Metadata),
 		ExpiresAt: &request.ExpiresAt, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "application_authority.created", "application_authority", authority.ID, principal.TenantRef, now))
 	response, result, err := service.store.CreateManagedApplicationAuthority(ctx, authority, idempotency)
 	if err != nil {
 		return contracts.ApplicationCredentialResponse{}, false, service.managementDenied(ctx, principal, "application_authority.created", "application_authority", authority.ID, principal.TenantRef, err)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, "application_authority.created", "application_authority", response.Authority.ID, principal.TenantRef, now)); err != nil {
-		return contracts.ApplicationCredentialResponse{}, false, err
 	}
 	return response, result.Replayed, nil
 }
@@ -391,12 +372,10 @@ func (service *ControlPlaneService) RotateApplicationAuthority(ctx context.Conte
 	if err != nil {
 		return contracts.ApplicationCredentialResponse{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "application_authority.rotated", "application_authority", authorityID, principal.TenantRef, now))
 	response, result, err := service.store.RotateManagedApplicationAuthority(ctx, principal.TenantRef, authorityID, expectedRevision, now, idempotency)
 	if err != nil {
 		return contracts.ApplicationCredentialResponse{}, false, service.managementDenied(ctx, principal, "application_authority.rotated", "application_authority", authorityID, principal.TenantRef, err)
-	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, "application_authority.rotated", "application_authority", authorityID, principal.TenantRef, now)); err != nil {
-		return contracts.ApplicationCredentialResponse{}, false, err
 	}
 	return response, result.Replayed, nil
 }
@@ -409,14 +388,16 @@ func (service *ControlPlaneService) RevokeApplicationAuthority(ctx context.Conte
 	if err != nil {
 		return contracts.ApplicationAuthority{}, false, err
 	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "application_authority.revoked", "application_authority", authorityID, principal.TenantRef, now))
 	authority, result, err := service.store.RevokeManagedApplicationAuthority(ctx, principal.TenantRef, authorityID, expectedRevision, now, idempotency)
 	if err != nil {
 		return contracts.ApplicationAuthority{}, false, service.managementDenied(ctx, principal, "application_authority.revoked", "application_authority", authorityID, principal.TenantRef, err)
 	}
-	if err := service.store.AppendAuditEvent(ctx, service.newAudit(ctx, principal, "application_authority.revoked", "application_authority", authorityID, principal.TenantRef, now)); err != nil {
-		return contracts.ApplicationAuthority{}, false, err
-	}
 	return authority, result.Replayed, nil
+}
+
+func auditEventPointer(event contracts.AuditEvent) *contracts.AuditEvent {
+	return &event
 }
 
 func (service *ControlPlaneService) managementDenied(ctx context.Context, principal contracts.Principal, action, resourceKind, resourceID, tenantRef string, err error) error {

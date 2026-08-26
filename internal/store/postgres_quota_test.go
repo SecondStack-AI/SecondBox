@@ -139,7 +139,7 @@ func TestManagedTenantRecordQuotaIsAtomicIsolatedAndReleases(t *testing.T) {
 				created, _, err := controlPlaneStore.CreateManagedSubject(t.Context(), subject, ports.AdminIdempotencyInput{
 					TenantRef: tenantRef, Operation: "subject.create", TargetID: subject.Ref,
 					Key: "subject-key-" + subject.Ref, RequestHash: "subject-hash-" + subject.Ref,
-					Now: now, Ends: now.Add(time.Hour),
+					Now: now, Ends: now.Add(time.Hour), AuditEvent: adminTestAudit("subject-key-"+subject.Ref, now),
 				})
 				if err != nil {
 					failures <- err
@@ -198,7 +198,7 @@ func TestManagedTenantRecordQuotaIsAtomicIsolatedAndReleases(t *testing.T) {
 				TenantRef: authority.TenantRef, SubjectRef: authority.SubjectRef,
 				Operation: "application_authority.create", TargetID: authority.ID,
 				Key: "authority-key-" + authority.ID, RequestHash: "authority-hash-" + authority.ID,
-				Now: now, Ends: now.Add(time.Hour),
+				Now: now, Ends: now.Add(time.Hour), AuditEvent: adminTestAudit("authority-key-"+authority.ID, now),
 			})
 			if err != nil {
 				applicationFailures <- err
@@ -231,7 +231,7 @@ func TestManagedTenantRecordQuotaIsAtomicIsolatedAndReleases(t *testing.T) {
 			TenantRef: "record-quota-a", SubjectRef: createdA[0].Ref,
 			Operation: "application_authority.revoke", TargetID: admitted[0].Authority.ID,
 			Key: "authority-release", RequestHash: "authority-release-hash",
-			Now: now.Add(time.Minute), Ends: now.Add(time.Hour),
+			Now: now.Add(time.Minute), Ends: now.Add(time.Hour), AuditEvent: adminTestAudit("authority-release", now.Add(time.Minute)),
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestManagedTenantRecordQuotaIsAtomicIsolatedAndReleases(t *testing.T) {
 		TenantRef: replacement.TenantRef, SubjectRef: replacement.SubjectRef,
 		Operation: "application_authority.create", TargetID: replacement.ID,
 		Key: "authority-replacement", RequestHash: "authority-replacement-hash",
-		Now: replacement.CreatedAt, Ends: now.Add(time.Hour),
+		Now: replacement.CreatedAt, Ends: now.Add(time.Hour), AuditEvent: adminTestAudit("authority-replacement", replacement.CreatedAt),
 	}); err != nil {
 		t.Fatalf("ApplicationAuthority admission after release: %v", err)
 	}

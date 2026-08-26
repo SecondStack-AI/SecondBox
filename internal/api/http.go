@@ -457,7 +457,7 @@ func (apiHandler *handler) getProfile(writer http.ResponseWriter, request *http.
 }
 
 func (apiHandler *handler) mutateProfile(writer http.ResponseWriter, request *http.Request) {
-	name, action, ok := splitAction(request.PathValue("profileAction"))
+	name, action, ok := splitAction(request.PathValue("profileAction"), "revise", "disable")
 	if !ok {
 		apiHandler.writeError(writer, request, ports.ErrProfileNotFound)
 		return
@@ -561,7 +561,10 @@ func (apiHandler *handler) getSandbox(writer http.ResponseWriter, request *http.
 }
 
 func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *http.Request) {
-	sandboxID, action, ok := splitAction(request.PathValue("sandboxAction"))
+	sandboxID, action, ok := splitAction(
+		request.PathValue("sandboxAction"),
+		"start", "drain", "stop", "relocate", "restore", "wait", "inspect", "ping", "touch",
+	)
 	if !ok {
 		apiHandler.writeError(writer, request, ports.ErrSandboxNotFound)
 		return
@@ -759,7 +762,7 @@ func (apiHandler *handler) getLease(writer http.ResponseWriter, request *http.Re
 }
 
 func (apiHandler *handler) renewLease(writer http.ResponseWriter, request *http.Request) {
-	leaseID, action, ok := splitAction(request.PathValue("leaseAction"))
+	leaseID, action, ok := splitAction(request.PathValue("leaseAction"), "renew")
 	if !ok || action != "renew" {
 		apiHandler.writeError(writer, request, ports.ErrLeaseNotFound)
 		return
@@ -1434,7 +1437,12 @@ func parseGeneration(request *http.Request) (int64, error) {
 	return generation, nil
 }
 
-func splitAction(value string) (string, string, bool) {
-	resource, action, ok := strings.Cut(value, ":")
-	return resource, action, ok && resource != "" && action != ""
+func splitAction(value string, actions ...string) (string, string, bool) {
+	for _, action := range actions {
+		suffix := ":" + action
+		if resource, ok := strings.CutSuffix(value, suffix); ok && resource != "" {
+			return resource, action, true
+		}
+	}
+	return "", "", false
 }

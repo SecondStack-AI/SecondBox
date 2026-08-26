@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -288,7 +289,7 @@ func TestPostgresCredentialIdempotencyStoresOnlyAuthorityAndRejectsReplay(t *tes
 		return ports.AdminIdempotencyInput{
 			TenantRef: tenant.Ref, SubjectRef: subject.Ref, Operation: operation,
 			TargetID: targetID, Key: key, RequestHash: requestHash,
-			Now: now, Ends: now.Add(time.Hour),
+			Now: now, Ends: now.Add(time.Hour), AuditEvent: adminTestAudit(key, now),
 		}
 	}
 
@@ -303,8 +304,24 @@ func TestPostgresCredentialIdempotencyStoresOnlyAuthorityAndRejectsReplay(t *tes
 	if err != nil || controller.BearerToken == "" {
 		t.Fatalf("create managed controller = %#v error=%v", controller, err)
 	}
+	controlPlaneStore.Close()
+	restartedStore, err := NewPostgresControlPlaneStore(t.Context(), storeTestDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restartedStore.Close)
+	controlPlaneStore = restartedStore
 	if _, result, err := controlPlaneStore.CreateManagedTenantControllerAuthority(t.Context(), controllerAuthority, controllerCreateIdempotency); !errors.Is(err, ports.ErrCredentialResponseUnavailable) || !result.Replayed {
-		t.Fatalf("replay managed controller replay=%t error=%v", result.Replayed, err)
+		t.Fatalf("replay managed controller after restart replay=%t error=%v", result.Replayed, err)
+	}
+	var controllerCreateAuditEvents int
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.audit_events WHERE id=$1`, controllerCreateIdempotency.AuditEvent.ID,
+	).Scan(&controllerCreateAuditEvents); err != nil {
+		t.Fatal(err)
+	}
+	if controllerCreateAuditEvents != 1 {
+		t.Fatalf("controller creation audit events after replay = %d", controllerCreateAuditEvents)
 	}
 	conflictingControllerCreate := controllerCreateIdempotency
 	conflictingControllerCreate.RequestHash = "different-controller-create-hash"
@@ -367,6 +384,90 @@ func TestPostgresCredentialIdempotencyStoresOnlyAuthorityAndRejectsReplay(t *tes
 	}
 	if controllerCount != 1 || applicationCount != 1 || secretRecordCount != 0 {
 		t.Fatalf("credential idempotency records controllers=%d applications=%d secret_records=%d", controllerCount, applicationCount, secretRecordCount)
+	}
+}
+
+func TestTenantUsagePaginatesBeyondHistoricalSubjectChurn(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	tenant := managementTestTenant("usage-history-tenant", now)
+	if _, err := controlPlaneStore.CreateTenant(t.Context(), tenant); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 205 {
+		subject := managementTestSubject(tenant.Ref, fmt.Sprintf("historical-%03d", index), now.Add(time.Duration(index)*time.Millisecond))
+		if _, err := controlPlaneStore.CreateSubject(t.Context(), subject); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+			UPDATE secondbox.subjects SET state=$3,cleanup_state=$4
+			WHERE tenant_ref=$1 AND ref=$2`, tenant.Ref, subject.Ref,
+			contracts.SubjectStateClosed, contracts.SubjectCleanupStateSucceeded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active := managementTestSubject(tenant.Ref, "active-subject", now.Add(time.Second))
+	if _, err := controlPlaneStore.CreateSubject(t.Context(), active); err != nil {
+		t.Fatal(err)
+	}
+
+	var cursor string
+	seen := 0
+	for {
+		usage, err := controlPlaneStore.GetTenantUsage(t.Context(), tenant.Ref, 100, cursor, now.Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if usage.Usage.ActiveSubjects != 1 {
+			t.Fatalf("active Subject usage = %d", usage.Usage.ActiveSubjects)
+		}
+		seen += len(usage.Subjects)
+		if usage.NextCursor == nil {
+			break
+		}
+		cursor = *usage.NextCursor
+	}
+	if seen != 206 {
+		t.Fatalf("paginated Subject usage count = %d", seen)
+	}
+}
+
+func TestManagedMutationRollsBackWhenItsAuditCannotCommit(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	tenant := managementTestTenant("atomic-audit-tenant", now)
+	if _, err := controlPlaneStore.CreateTenant(t.Context(), tenant); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := adminTestAudit("atomic-audit", now)
+	if err := controlPlaneStore.AppendAuditEvent(t.Context(), *duplicate); err != nil {
+		t.Fatal(err)
+	}
+	input := ports.AdminIdempotencyInput{
+		TenantRef: tenant.Ref, Operation: "tenant.suspend", TargetID: tenant.Ref,
+		Key: "atomic-audit", RequestHash: "atomic-audit-hash", Now: now,
+		Ends: now.Add(time.Hour), AuditEvent: duplicate,
+	}
+	if _, _, err := controlPlaneStore.SetTenantState(
+		t.Context(), tenant.Ref, contracts.TenantStateSuspended, tenant.Revision, now, input,
+	); err == nil {
+		t.Fatal("Tenant mutation committed without its audit event")
+	}
+	stored, err := controlPlaneStore.GetTenant(t.Context(), tenant.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != contracts.TenantStateActive || stored.Revision != tenant.Revision {
+		t.Fatalf("Tenant changed after audit failure = %#v", stored)
+	}
+	var idempotencyRecords int
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.idempotency_records
+		WHERE operation=$1 AND idempotency_key=$2`, input.Operation, input.Key).Scan(&idempotencyRecords); err != nil {
+		t.Fatal(err)
+	}
+	if idempotencyRecords != 0 {
+		t.Fatalf("idempotency records committed after audit failure = %d", idempotencyRecords)
 	}
 }
 

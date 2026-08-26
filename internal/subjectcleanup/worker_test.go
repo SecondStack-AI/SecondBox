@@ -256,8 +256,7 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 	instanceID := "instance-contention-" + suffix
 	assignmentID := "assignment-contention-" + suffix
 	connectionID := "connection-contention-" + suffix
-	insertCleanupTestSubject(t, pool, tenantRef, subjectRef, "closed", "pending", now.Add(time.Hour), now)
-	insertCleanupTestOperation(t, pool, operationID, tenantRef, subjectRef, "pending", now)
+	insertCleanupTestSubject(t, pool, tenantRef, subjectRef, "active", "none", now.Add(time.Hour), now)
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.tenants (
 			ref,state,allowed_profile_grants_json,allowed_application_scopes_json,
@@ -268,7 +267,7 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 			'{}',1,$2,$2);
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
-		) VALUES ($3,'contention-profile-' || $9,1,
+		) VALUES ($3,'contention-profile-' || $8,1,
 			'{"pool":"contention-pool","architecture":"amd64","resources":{"cpuMillis":1000,"memoryBytes":1073741824,"workspaceBytes":1073741824,"processLimit":128,"concurrentOperations":1024},"startup":{"mode":"cold_boot"},"lifecycle":{"initialState":"stopped","drainGraceSeconds":30,"idleSeconds":300,"maximumDurationSeconds":3600,"leaseSeconds":60},"retention":{"snapshotLimit":8,"snapshotRetentionSeconds":86400},"execution":{"maximumDeadlineMilliseconds":60000,"maximumBufferedOutputBytes":1048576,"streamWindowBytes":65536,"maximumTransferBytes":1048576,"terminalDetachSeconds":30,"dataPlaneTransport":"proxied"}}',$2);
 		INSERT INTO secondbox.runners (
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
@@ -277,57 +276,50 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES ($4,'contention-pool',$4,'ready','["amd64"]','["compute","local-workspace"]',
-			'{}','[1]',1,1,'test',$11,0,'active','{}','[]',0,0,$2,1,$2,$2);
+			'{}','[1]',1,1,'test',$10,0,'active','{}','[]',0,0,$2,1,$2,$2);
 		INSERT INTO secondbox.runner_connections (
 			id,runner_id,credential_serial,protocol_version,state,last_sequence,
 			last_control_sequence,connected_at,last_seen_at,disconnected_at
-		) VALUES ($11,$4,'serial-contention-' || $9,1,'active',0,0,$2,$2,NULL);
-		UPDATE secondbox.subjects SET cleanup_operation_id=$5
-		WHERE tenant_ref=$1 AND ref=$6;
-		INSERT INTO secondbox.subject_cleanup_operations (
-			operation_id,tenant_ref,subject_ref,stage,reconcile_owner,
-			reconcile_claim_expires_at,next_reconcile_at,retry_count,retry_limit,
-			created_at,updated_at
-		) VALUES ($5,$1,$6,'release_resources','',$2,$2,0,20,$2,$2);
+		) VALUES ($10,$4,'serial-contention-' || $8,1,'active',0,0,$2,$2,NULL);
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
 			logical_capacity_bytes,generation,mutation_kind,mutation_id,
 			mutation_effect_id,mutation_operation_id,mutation_expected_generation,
 			mutation_target_generation,mutation_state,local_receipt_json,created_at,updated_at
-		) VALUES ($7,$1,$6,$8,$4,'ready',1073741824,1,'','','','',NULL,NULL,'','{}',$2,$2);
+		) VALUES ($6,$1,$5,$7,$4,'ready',1073741824,1,'','','','',NULL,NULL,'','{}',$2,$2);
 		INSERT INTO secondbox.sandboxes (
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES ($8,$1,$6,'contention-profile-' || $9,$3,'ready','running',1,$7,$12,'{}','{}',1,$2,$2);
+		) VALUES ($7,$1,$5,'contention-profile-' || $8,$3,'ready','running',1,$6,$11,'{}','{}',1,$2,$2);
 		INSERT INTO secondbox.instances (
 			id,sandbox_id,generation,state,guest_liveness,termination_reason,
 			created_at,updated_at,ready_at,guest_heartbeat_at,maximum_duration_at,stopped_at
-		) VALUES ($12,$8,1,'ready','ready','',$2,$2,$2,$2,$2::timestamptz + interval '1 hour',NULL);
+		) VALUES ($11,$7,1,'ready','ready','',$2,$2,$2,$2,$2::timestamptz + interval '1 hour',NULL);
 		INSERT INTO secondbox.assignments (
 			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
 			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
 			next_reconcile_at,revision,created_at,updated_at
-		) VALUES ($13,$8,$12,$4,$3,'firecracker','contention-backend',1,$14,'ready',
+		) VALUES ($12,$7,$11,$4,$3,'firecracker','contention-backend',1,$13,'ready',
 			'{}','{}','{}','',0,8,$2::timestamptz + interval '1 hour',$2::timestamptz + interval '1 hour','',
 			$2::timestamptz + interval '1 hour',$2::timestamptz + interval '1 hour',1,$2,$2);
 		UPDATE secondbox.tenant_quotas
 		SET max_concurrent_operations=2048,max_application_authorities=2048
 		WHERE tenant_ref=$1;
 		UPDATE secondbox.subject_quotas SET max_concurrent_operations=2048
-		WHERE tenant_ref=$1 AND subject_ref=$6;
+		WHERE tenant_ref=$1 AND subject_ref=$5;
 		INSERT INTO secondbox.application_authorities (
 			id,lookup_id,tenant_ref,subject_ref,state,scopes_json,profile_grants_json,
 			metadata_json,expires_at,revision,token_verifier_sha256,created_at,updated_at
 		)
-		SELECT 'contention-authority-' || value || '-' || $9,
-		       'apa_contention_' || value || '_' || $9,$1,$6,'active','[]','[]','{}',
-		       $2::timestamptz - interval '1 second',1,$10,$2,$2
+		SELECT 'contention-authority-' || value || '-' || $8,
+		       'apa_contention_' || value || '_' || $8,$1,$5,'active','[]','[]','{}',
+		       $2::timestamptz - interval '1 second',1,$9,$2,$2
 		FROM generate_series(1,64) AS value`,
 		pgx.QueryExecModeSimpleProtocol,
-		tenantRef, now, profileRevisionID, runnerID, operationID, subjectRef,
+		tenantRef, now, profileRevisionID, runnerID, subjectRef,
 		workspaceID, sandboxID, suffix, make([]byte, 32), connectionID,
 		instanceID, assignmentID, []byte("01234567890123456789012345678901"),
 	); err != nil {
@@ -442,7 +434,9 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 		t.Fatalf("data-plane admission after quota release: %v", exactAdmission.err)
 	}
 
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	// The concurrent phase shares the database with parallel test packages
+	// under preship, so the bound must absorb suite-level contention.
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
 	errorsFound := make(chan error, 512)
 	var admitted atomic.Int64
@@ -533,6 +527,29 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 	}
 	if admitted.Load() == 0 {
 		t.Fatal("concurrent data-plane admissions never reached the ready Sandbox")
+	}
+
+	closedAt := now.Add(time.Minute)
+	insertCleanupTestOperation(t, pool, operationID, tenantRef, subjectRef, "pending", closedAt)
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.subjects
+		SET state='closed',cleanup_state='pending',cleanup_operation_id=$3,
+		    revision=revision+1,updated_at=$4
+		WHERE tenant_ref=$1 AND ref=$2;
+		INSERT INTO secondbox.subject_cleanup_operations (
+			operation_id,tenant_ref,subject_ref,stage,reconcile_owner,
+			reconcile_claim_expires_at,next_reconcile_at,retry_count,retry_limit,
+			created_at,updated_at
+		) VALUES ($3,$1,$2,'release_resources','',$4,$4,0,20,$4,$4)`,
+		pgx.QueryExecModeSimpleProtocol, tenantRef, subjectRef, operationID, closedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := dataPlaneStore.AdmitDataPlane(t.Context(), admission(999, closedAt)); !errors.Is(err, ports.ErrInvalidLifecycleTransition) {
+		t.Fatalf("data-plane admission after Subject closure = %v", err)
+	}
+	if _, err := worker.RunOnce(t.Context(), closedAt.Add(time.Second)); err != nil {
+		t.Fatalf("cleanup after typed closed-Subject admission denial: %v", err)
 	}
 }
 

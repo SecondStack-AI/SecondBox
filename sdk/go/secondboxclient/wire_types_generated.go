@@ -888,6 +888,7 @@ const (
 
 type TenantUsage struct {
 	Limits     TenantQuota      `json:"limits"`
+	NextCursor *string          `json:"nextCursor,omitempty"`
 	ObservedAt Timestamp        `json:"observedAt"`
 	Subjects   []SubjectUsage   `json:"subjects"`
 	TenantRef  OwnershipRef     `json:"tenantRef"`

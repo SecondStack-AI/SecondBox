@@ -74,6 +74,9 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession replay lookup: %w", err)
 	}
+	if err := rowlock.ActiveSubject(ctx, tx, input.TenantRef, input.SubjectRef, input.Now); err != nil {
+		return PortTunnel{}, false, err
+	}
 	for _, capacityKey := range []string{
 		input.TenantRef + "\x1f" + input.SubjectRef + "\x1fport-session-capacity",
 		input.TenantRef + "\x1f" + input.SubjectRef +

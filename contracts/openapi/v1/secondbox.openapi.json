@@ -194,8 +194,8 @@
       "get": {
         "tags": ["TenantUsage"], "operationId": "getTenantUsage", "security": [{"tenantControllerBearer": []}],
         "description": "Returns aggregate and per-Subject usage for the tenant fixed by the authenticated controller.",
-        "parameters": [{"$ref": "#/components/parameters/RequestID"}],
-        "responses": {"200": {"$ref": "#/components/responses/TenantUsageOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+        "parameters": [{"$ref": "#/components/parameters/PageLimit"}, {"$ref": "#/components/parameters/PageCursor"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/TenantUsageOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
       }
     },
     "/v1/deployment-usage": {
@@ -2169,6 +2169,7 @@
           "limits": {"$ref": "#/components/schemas/TenantQuota"},
           "usage": {"$ref": "#/components/schemas/TenantQuotaUsage"},
           "subjects": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/SubjectUsage"}},
+          "nextCursor": {"type": "string", "minLength": 1, "maxLength": 512},
           "observedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },

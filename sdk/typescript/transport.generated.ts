@@ -870,6 +870,7 @@ export type TenantState = "active" | "suspended" | "expired";
 
 export interface TenantUsage {
   readonly limits: TenantQuota;
+  readonly nextCursor?: string;
   readonly observedAt: Timestamp;
   readonly subjects: readonly SubjectUsage[];
   readonly tenantRef: OwnershipRef;

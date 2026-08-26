@@ -1,9 +1,13 @@
 package integration_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +19,141 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
+
+func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	databaseStore, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databaseStore.Close)
+	controlPlane := newManagementControlPlane(t, databaseStore, now)
+	server := contractServer(t, persistedHTTPHandler(t, controlPlane, databaseStore))
+	t.Cleanup(server.Close)
+	operator, err := secondboxclient.NewSecondBoxClient(server.URL, testPlatformToken, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := now.Add(time.Hour)
+	tenantRequest := secondboxclient.CreateTenantRequest{
+		Ref: "missing-key-tenant", AllowedProfileGrants: []string{"coding"},
+		AllowedApplicationScopes: []string{"sandbox:read"},
+		AggregateQuota:           secondboxclient.TenantQuota{MaxSandboxes: 10, MaxActiveInstances: 10, MaxCpuMillis: 10000, MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10, MaxActiveSubjects: 10, MaxApplicationAuthorities: 10},
+		ExpiryPolicy:             secondboxclient.TenantExpiryPolicy{MaximumSubjectLifetimeSeconds: 3600, MaximumAuthorityLifetimeSeconds: 3600},
+		Metadata:                 map[string]string{}, ExpiresAt: &expiresAt,
+	}
+	tenant, err := operator.CreateTenant(t.Context(), tenantRequest, "missing-key-setup-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := operator.CreateTenantControllerAuthority(t.Context(), tenant.Ref, secondboxclient.CreateTenantControllerAuthorityRequest{ExpiresAt: expiresAt, Metadata: map[string]string{}}, "missing-key-setup-controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerClient, err := secondboxclient.NewSecondBoxTenantControllerClient(server.URL, controller.BearerToken, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectRequest := secondboxclient.CreateSubjectRequest{Ref: "missing-key-subject", Quota: secondboxclient.SubjectQuota{MaxSandboxes: 2, MaxActiveInstances: 2, MaxCpuMillis: 2000, MaxMemoryBytes: 2 << 30, MaxSnapshots: 2, MaxPortSessions: 2, MaxConcurrentOperations: 2}, Metadata: map[string]string{}, ExpiresAt: &expiresAt}
+	subject, err := controllerClient.CreateSubject(t.Context(), subjectRequest, "missing-key-setup-subject")
+	if err != nil {
+		t.Fatal(err)
+	}
+	applicationRequest := secondboxclient.CreateApplicationAuthorityRequest{SubjectRef: subject.Ref, Scopes: []string{"sandbox:read"}, ProfileGrants: []string{"coding"}, Metadata: map[string]string{}, ExpiresAt: expiresAt}
+	application, err := controllerClient.CreateApplicationAuthority(t.Context(), applicationRequest, "missing-key-setup-application")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type mutation struct {
+		name, method, path, token string
+		body                      any
+		revision                  int64
+	}
+	mutations := []mutation{
+		{"tenant create", http.MethodPost, "/v1/tenants", testPlatformToken, tenantRequest, 0},
+		{"tenant action", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + ":suspend", testPlatformToken, nil, tenant.Revision},
+		{"controller create", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities", testPlatformToken, secondboxclient.CreateTenantControllerAuthorityRequest{ExpiresAt: expiresAt, Metadata: map[string]string{}}, 0},
+		{"controller rotate", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities/" + controller.Authority.ID + ":rotate", testPlatformToken, nil, controller.Authority.Revision},
+		{"controller revoke", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities/" + controller.Authority.ID + ":revoke", testPlatformToken, nil, controller.Authority.Revision},
+		{"subject create", http.MethodPost, "/v1/subjects", controller.BearerToken, subjectRequest, 0},
+		{"subject quota", http.MethodPut, "/v1/subjects/" + string(subject.Ref) + "/quota", controller.BearerToken, secondboxclient.UpdateSubjectQuotaRequest{Quota: subject.Quota}, subject.Revision},
+		{"subject close", http.MethodPost, "/v1/subjects/" + string(subject.Ref) + ":close", controller.BearerToken, nil, subject.Revision},
+		{"subject cleanup", http.MethodPost, "/v1/subjects/" + string(subject.Ref) + ":cleanup", controller.BearerToken, nil, subject.Revision},
+		{"application create", http.MethodPost, "/v1/application-authorities", controller.BearerToken, applicationRequest, 0},
+		{"application rotate", http.MethodPost, "/v1/application-authorities/" + application.Authority.ID + ":rotate", controller.BearerToken, nil, application.Authority.Revision},
+		{"application revoke", http.MethodPost, "/v1/application-authorities/" + application.Authority.ID + ":revoke", controller.BearerToken, nil, application.Authority.Revision},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			var body []byte
+			if mutation.body != nil {
+				body, err = json.Marshal(mutation.body)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			request, err := http.NewRequestWithContext(t.Context(), mutation.method, server.URL+mutation.path, bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer "+mutation.token)
+			if mutation.body != nil {
+				request.Header.Set("Content-Type", "application/json")
+			}
+			if mutation.revision > 0 {
+				request.Header.Set("If-Match", fmt.Sprintf(`"revision-%d"`, mutation.revision))
+			}
+			response, err := server.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			var problem secondboxclient.Problem
+			if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusBadRequest || problem.Code != secondboxclient.ProblemCodeInvalidRequest {
+				t.Fatalf("missing Idempotency-Key response = %d %#v", response.StatusCode, problem)
+			}
+		})
+	}
+}
+
+func TestManagementOwnershipReferencesRoundTripThroughEncodedActionRoutes(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	databaseStore, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databaseStore.Close)
+	controlPlane := newManagementControlPlane(t, databaseStore, now)
+	server := httptest.NewServer(persistedHTTPHandler(t, controlPlane, databaseStore))
+	t.Cleanup(server.Close)
+	operator, err := secondboxclient.NewSecondBoxClient(server.URL, testPlatformToken, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := now.Add(time.Hour)
+	request := secondboxclient.CreateTenantRequest{
+		Ref: "customer/west:production", AllowedProfileGrants: []string{"coding"},
+		AllowedApplicationScopes: []string{"sandbox:read"}, Metadata: map[string]string{}, ExpiresAt: &expiresAt,
+		AggregateQuota: secondboxclient.TenantQuota{MaxSandboxes: 1, MaxActiveInstances: 1, MaxCpuMillis: 1000, MaxMemoryBytes: 1 << 30, MaxSnapshots: 1, MaxPortSessions: 1, MaxConcurrentOperations: 1, MaxActiveSubjects: 1, MaxApplicationAuthorities: 1},
+		ExpiryPolicy:   secondboxclient.TenantExpiryPolicy{MaximumSubjectLifetimeSeconds: 3600, MaximumAuthorityLifetimeSeconds: 3600},
+	}
+	tenant, err := operator.CreateTenant(t.Context(), request, "encoded-reference-create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := operator.GetTenant(t.Context(), tenant.Ref)
+	if err != nil || read.Ref != tenant.Ref {
+		t.Fatalf("encoded Tenant read = %#v error=%v", read, err)
+	}
+	suspended, err := operator.SuspendTenant(t.Context(), tenant.Ref, tenant.Revision, "encoded-reference-suspend")
+	if err != nil || suspended.State != secondboxclient.TenantStateSuspended {
+		t.Fatalf("encoded Tenant action = %#v error=%v", suspended, err)
+	}
+}
 
 func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)

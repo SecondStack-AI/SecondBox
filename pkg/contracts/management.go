@@ -67,6 +67,7 @@ type TenantUsage struct {
 	Limits     TenantQuota      `json:"limits"`
 	Usage      TenantQuotaUsage `json:"usage"`
 	Subjects   []SubjectUsage   `json:"subjects"`
+	NextCursor *string          `json:"nextCursor,omitempty"`
 	ObservedAt time.Time        `json:"observedAt"`
 }
 

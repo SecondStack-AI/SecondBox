@@ -119,7 +119,7 @@ type ManagementStore interface {
 	RevokeManagedApplicationAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.ApplicationAuthority, ports.AdminIdempotencyResult, error)
 	GetTenantControllerAuthority(context.Context, string, string) (contracts.TenantControllerAuthority, error)
 	GetApplicationAuthority(context.Context, string, string) (contracts.ApplicationAuthority, error)
-	GetTenantUsage(context.Context, string, time.Time) (contracts.TenantUsage, error)
+	GetTenantUsage(context.Context, string, int, string, time.Time) (contracts.TenantUsage, error)
 	GetDeploymentUsage(context.Context, int, string, time.Time) (contracts.DeploymentUsage, error)
 }
 
@@ -272,7 +272,7 @@ func (service *ControlPlaneService) createProfile(
 		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
-	idempotency, err := service.adminIdempotency(
+	idempotency, err := service.optionalAdminIdempotency(
 		principal, "profile.create", principal.ID, idempotencyKey, request, now,
 	)
 	if err != nil {
@@ -287,13 +287,11 @@ func (service *ControlPlaneService) createProfile(
 	}
 	profile.Revisions = []contracts.ProfileRevision{profile.CurrentRevision}
 	audit := service.newAudit(ctx, principal, "profile.created", "profile", profile.Name, "", now)
+	idempotency.AuditEvent = auditEventPointer(audit)
 	profile, result, err := service.store.CreateProfile(
 		ctx, profile, idempotency,
 	)
 	if err != nil {
-		return contracts.Profile{}, false, err
-	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 		return contracts.Profile{}, false, err
 	}
 	return profile, result.Replayed, nil
@@ -339,7 +337,7 @@ func (service *ControlPlaneService) reviseProfileAtRevision(
 		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
-	idempotency, err := service.adminIdempotency(
+	idempotency, err := service.optionalAdminIdempotency(
 		principal, "profile.revise", name, idempotencyKey,
 		struct {
 			Request          contracts.ReviseProfileRequest `json:"request"`
@@ -354,13 +352,11 @@ func (service *ControlPlaneService) reviseProfileAtRevision(
 		ID: service.newID("prv"), Spec: request.Spec, CreatedAt: now,
 	}
 	audit := service.newAudit(ctx, principal, "profile.revised", "profile", name, "", now)
+	idempotency.AuditEvent = auditEventPointer(audit)
 	profile, result, err := service.store.ReviseProfile(
 		ctx, name, revision, expectedRevision, now, idempotency,
 	)
 	if err != nil {
-		return contracts.Profile{}, false, err
-	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 		return contracts.Profile{}, false, err
 	}
 	return profile, result.Replayed, nil
@@ -400,7 +396,7 @@ func (service *ControlPlaneService) disableProfileAtRevision(
 	expectedRevision int64,
 ) (contracts.Profile, bool, error) {
 	now := service.now().UTC()
-	idempotency, err := service.adminIdempotency(
+	idempotency, err := service.optionalAdminIdempotency(
 		principal, "profile.disable", name, idempotencyKey,
 		struct {
 			ExpectedRevision int64 `json:"expectedRevision"`
@@ -411,13 +407,11 @@ func (service *ControlPlaneService) disableProfileAtRevision(
 		return contracts.Profile{}, false, err
 	}
 	audit := service.newAudit(ctx, principal, "profile.disabled", "profile", name, "", now)
+	idempotency.AuditEvent = auditEventPointer(audit)
 	profile, result, err := service.store.DisableProfile(
 		ctx, name, expectedRevision, now, idempotency,
 	)
 	if err != nil {
-		return contracts.Profile{}, false, err
-	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 		return contracts.Profile{}, false, err
 	}
 	return profile, result.Replayed, nil
@@ -1180,7 +1174,7 @@ func (service *ControlPlaneService) adminIdempotency(
 	now time.Time,
 ) (ports.AdminIdempotencyInput, error) {
 	if idempotencyKey == "" {
-		return ports.AdminIdempotencyInput{}, nil
+		return ports.AdminIdempotencyInput{}, invalidRequest(errors.New("SecondBox management Idempotency-Key is required"))
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return ports.AdminIdempotencyInput{}, err
@@ -1194,6 +1188,20 @@ func (service *ControlPlaneService) adminIdempotency(
 		Key: idempotencyKey, RequestHash: requestHash,
 		Now: now.UTC(), Ends: service.idempotencyExpiration(now),
 	}, nil
+}
+
+func (service *ControlPlaneService) optionalAdminIdempotency(
+	principal contracts.Principal,
+	operation string,
+	targetID string,
+	idempotencyKey string,
+	request any,
+	now time.Time,
+) (ports.AdminIdempotencyInput, error) {
+	if idempotencyKey == "" {
+		return ports.AdminIdempotencyInput{}, nil
+	}
+	return service.adminIdempotency(principal, operation, targetID, idempotencyKey, request, now)
 }
 
 func (service *ControlPlaneService) newAudit(

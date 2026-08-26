@@ -160,13 +160,15 @@ func TestPostgresStoreRevisionConflictAndIdempotencyReplay(t *testing.T) {
 	idempotency := ports.AdminIdempotencyInput{
 		TenantRef: "tenant", SubjectRef: "subject", Operation: "profile.create",
 		TargetID: profile.Name, Key: "store-create-profile", RequestHash: "request-a",
-		Now: now, Ends: now.Add(time.Hour),
+		Now: now, Ends: now.Add(time.Hour), AuditEvent: adminTestAudit("store-create-profile", now),
 	}
 	created, result, err := controlPlaneStore.CreateProfile(t.Context(), profile, idempotency)
 	if err != nil || result.Replayed || created.Name != profile.Name {
 		t.Fatalf("create Profile = %#v replay=%v error=%v", created, result.Replayed, err)
 	}
-	replayed, result, err := controlPlaneStore.CreateProfile(t.Context(), profile, idempotency)
+	replayInput := idempotency
+	replayInput.AuditEvent = adminTestAudit("store-create-profile-replay", now)
+	replayed, result, err := controlPlaneStore.CreateProfile(t.Context(), profile, replayInput)
 	if err != nil || !result.Replayed || replayed.CurrentRevision.ID != profile.CurrentRevision.ID {
 		t.Fatalf("replay Profile = %#v replay=%v error=%v", replayed, result.Replayed, err)
 	}

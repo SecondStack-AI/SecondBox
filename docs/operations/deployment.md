@@ -332,6 +332,19 @@ Selected RunnerPools and standard Profile lineages are checked and applied after
 
 ## Recovery and replacement
 
+Replacing v0.5.2 with v0.6.0 in place is unsupported. v0.6.0 is a clean-install
+boundary: stop workloads, back up PostgreSQL and each Runner identity plus its
+workspace root, preserve or explicitly migrate workload data outside the guided
+installer, remove the v0.5.2 deployment through its recorded uninstall
+procedure, and perform a complete v0.6.0 production initialization. The
+installer does not import v0.5.2 authorities, manifests, receipts, Profiles, or
+desired state. Workspace files are usable only when an operator has separately
+preserved and migrated them under a reviewed v0.6.0 Runner home; PostgreSQL
+alone cannot reconstruct them. Once v0.6.0 migrations or resources have been
+created, rollback means restoring a complete, consistent v0.5.2 database and
+Runner-filesystem backup. Running v0.5.2 binaries against v0.6.0 state is not a
+rollback path.
+
 PostgreSQL owns Tenants, Subjects, delegated authority verifiers, two-level quota, cleanup Operations, desired state, authoritative home assignments, generations, Leases, Profiles, audit, and reconciliation. Each home Runner's reflink-capable workspace root owns its Workspaces and local Snapshots. Ordinary lifecycle and recovery never relocate a Sandbox; only the operator-initiated stopped-Sandbox relocation Operation may change its home. PostgreSQL cannot reconstruct a lost unbacked Runner workspace filesystem.
 
 Before replacement, take and verify a PostgreSQL backup and quiescent backups of every affected Runner identity plus workspace root. Restore each stable Runner identity and workspace root as one consistent unit. The generated environment can be reproduced from `secondbox.toml` and its referenced secret material; it is not backup authority.

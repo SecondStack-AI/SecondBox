@@ -10,11 +10,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	postgresmigrations "github.com/SecondStack-AI/SecondBox/migrations/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestActiveSubjectMapsAbsentSubjectToManagementNotFound(t *testing.T) {
+	pool := openRowlockTestPool(t)
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if err := ActiveSubject(t.Context(), tx, "absent-tenant", "absent-subject", time.Now()); !errors.Is(err, ports.ErrManagementNotFound) {
+		t.Fatalf("absent Subject admission = %v", err)
+	}
+}
 
 var rowlockTestDatabaseURL string
 

@@ -162,6 +162,100 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 	}
 }
 
+func TestSubjectCloseSerializedBeforeSandboxAdmissionRejectsAuthenticatedRequest(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	project, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "subject-close-admission")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "subject-close-admission-profile")
+	principal := authenticateCredential(t, controlPlane, credential)
+
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	locker, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Rollback(t.Context())
+	if _, err := locker.Exec(t.Context(), `
+		SELECT tenant_ref FROM secondbox.tenant_quotas WHERE tenant_ref=$1 FOR UPDATE`, project.ID); err != nil {
+		t.Fatal(err)
+	}
+	closingStore, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL+"&application_name=subject-close-admission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closingStore.Close()
+	subject, err := databaseStore.GetSubject(t.Context(), project.ID, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeAudit := contracts.AuditEvent{
+		ID: newFixtureID("audit-close"), TenantRef: project.ID, SubjectRef: account.ID,
+		ActorKind: "tenant_controller", ActorID: "race-controller", Action: "subject.closed",
+		ResourceKind: "subject", ResourceID: account.ID, Outcome: "succeeded",
+		RequestID: newFixtureID("request-close"), Details: map[string]string{}, CreatedAt: time.Now().UTC(),
+	}
+	closed := make(chan error, 1)
+	go func() {
+		_, _, closeErr := closingStore.CloseManagedSubject(t.Context(), project.ID, account.ID, subject.Revision, time.Now().UTC(), ports.AdminIdempotencyInput{
+			TenantRef: project.ID, SubjectRef: account.ID, Operation: "subject.close", TargetID: account.ID,
+			Key: "subject-close-admission", RequestHash: "subject-close-admission", Now: time.Now().UTC(),
+			Ends: time.Now().UTC().Add(time.Hour), AuditEvent: &closeAudit,
+		})
+		closed <- closeErr
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting bool
+		if err := pool.QueryRow(t.Context(), `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE application_name='subject-close-admission' AND wait_event_type='Lock'
+			)`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Subject close did not reach the quota lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	started := make(chan struct{})
+	created := make(chan error, 1)
+	go func() {
+		close(started)
+		_, _, createErr := controlPlane.CreateSandbox(t.Context(), principal, "subject-close-admission", contracts.CreateSandboxRequest{
+			Profile: profile.Name, Metadata: map[string]string{},
+		})
+		created <- createErr
+	}()
+	<-started
+	if err := locker.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatalf("Subject close = %v", err)
+	}
+	if err := <-created; !errors.Is(err, ports.ErrInvalidLifecycleTransition) {
+		t.Fatalf("Sandbox admission after serialized Subject close = %v", err)
+	}
+	var sandboxes int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.sandboxes WHERE tenant_ref=$1 AND subject_ref=$2`,
+		project.ID, account.ID).Scan(&sandboxes); err != nil {
+		t.Fatal(err)
+	}
+	if sandboxes != 0 {
+		t.Fatalf("Sandboxes committed after Subject close = %d", sandboxes)
+	}
+}
+
 func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)

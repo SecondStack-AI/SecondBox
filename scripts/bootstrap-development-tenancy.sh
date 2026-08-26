@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 if [[ "$#" -ne 6 ]]; then
   echo "usage: scripts/bootstrap-development-tenancy.sh SECONDBOX_CLI URL PLATFORM_TOKEN_FILE TENANT_REF SUBJECT_REF PROFILE" >&2

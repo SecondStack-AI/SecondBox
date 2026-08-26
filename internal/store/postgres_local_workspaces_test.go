@@ -1421,6 +1421,15 @@ func seedLocalWorkspacePolicyAndRunner(
 			max_active_subjects=EXCLUDED.max_active_subjects,
 			max_application_authorities=EXCLUDED.max_application_authorities,
 			updated_at=EXCLUDED.updated_at;
+		INSERT INTO secondbox.subjects (
+			tenant_ref,ref,state,cleanup_state,cleanup_operation_id,quota_json,
+			metadata_json,expires_at,revision,created_at,updated_at
+		) VALUES (
+			'tenant-local','subject-local','active','none','',
+			'{"maxSandboxes":100,"maxActiveInstances":100,"maxCpuMillis":100000,"maxMemoryBytes":1099511627776,"maxSnapshots":100,"maxPortSessions":100,"maxConcurrentOperations":100}',
+			'{}',NULL,1,$2,$2
+		) ON CONFLICT (tenant_ref,ref) DO UPDATE SET
+			state='active',cleanup_state='none',expires_at=NULL,updated_at=EXCLUDED.updated_at;
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
 		) VALUES ('revision-local','profile-local',1,$1,$2)

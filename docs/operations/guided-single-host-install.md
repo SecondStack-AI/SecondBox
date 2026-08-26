@@ -64,15 +64,17 @@ After confirmation, the installer displays the precise privileged list and invok
 
 It never formats a physical block device, installs distribution packages, edits shell profiles, creates jailer accounts, or gives the control plane host privileges. The separately deployed Runner container remains the only privileged compute component and executes `secondbox-runner` directly as PID 1.
 
-## Files, services, and first Sandbox
+## Files, services, and installation qualification
 
 The plan records the exact operation directory, manifest, secrets, Runner identity, reflink-capable Runner storage root, verified artifact directory, Runner state paths, Workspace, optional filesystem image and mount unit, CLI configuration, and installed binary paths. Before downloading release bytes, the installer checks both binary destinations and the CLI configuration destination. A missing target is created, an exact release binary is adopted, and an older executable is replaced atomically only when its embedded Go main-package and module identities are exactly the corresponding SecondBox CLI. An existing configuration is replaced atomically only when it has the reviewed mode and ownership and strictly decodes as a complete platform session document. Any unrelated file, symbolic link, ownership change, permission change, malformed configuration, or application credential in that platform target is refused without modification. A purged installation removes the reviewed, receipt-managed CLI binaries and configuration even when they replaced an older SecondBox release. The verified assets, run/jail/cache state, and Workspace are sibling subtrees on the selected filesystem; WorkspaceStore remains the only component that resolves paths beneath the Workspace subtree. The installer creates unique platform, Runner-enrollment, and Runner-PKI authority in protected referenced files. No secret value enters the plan, receipt, command arguments, or installer output.
 
-It then pulls exactly the control-plane, Runner, microVM-artifact, installer-tools, and PostgreSQL images by digest; verifies every release object and the fixed microVM bundle allowlist; publishes the artifact directory atomically on Runner storage; generates the explicit manifest; enrolls the Runner; starts Compose; logs in the local CLI; waits for advertised cold-boot capacity; and runs:
+It then pulls exactly the control-plane, Runner, microVM-artifact, installer-tools, and PostgreSQL images by digest; verifies every release object and the fixed microVM bundle allowlist; publishes the artifact directory atomically on Runner storage; generates the explicit manifest; enrolls the Runner; starts Compose; logs in the local CLI; waits for advertised cold-boot capacity; and uses the authenticated platform session to read the exact release-owned RunnerPool and installed Runner. Qualification succeeds only when the pool is ready and the Runner is ready with its pre-shared credential, required capabilities, architecture, and advertised cold-boot and concurrent-operation capacity. Those identities and states are recorded in the receipt.
 
-```sh
-secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
-```
+The installer does not create a Tenant, Subject, application authority, or
+Sandbox. After installation, bootstrap those resources explicitly through the
+management API before qualifying a workload. This preserves platform-only
+production initialization while still proving the authenticated Runner control
+boundary and capacity required for later Sandbox admission.
 
 ## Update a completed installation
 

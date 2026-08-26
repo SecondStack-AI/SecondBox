@@ -18,6 +18,7 @@ const (
 	sandboxListCursorResource                   = "sandboxes"
 	tenantListCursorResource                    = "tenants"
 	deploymentUsageTenantListCursorResource     = "deployment_usage_tenants"
+	tenantUsageSubjectListCursorResource        = "tenant_usage_subjects"
 	subjectListCursorResource                   = "subjects"
 	tenantControllerAuthorityListCursorResource = "tenant_controller_authorities"
 	applicationAuthorityListCursorResource      = "application_authorities"

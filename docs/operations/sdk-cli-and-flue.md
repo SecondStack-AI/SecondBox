@@ -61,6 +61,7 @@ so no helper can reinterpret a controller or application credential as the
 platform token:
 
 ```sh
+umask 077
 export SECONDBOX_URL=https://secondbox.example
 export PLATFORM_CONFIG=/protected/secondbox-platform.json
 export CONTROLLER_CONFIG=/protected/secondbox-controller.json
@@ -92,7 +93,12 @@ SECONDBOX_CONFIG="$APPLICATION_CONFIG" secondbox application login \
   --token "$(jq -er '.bearerToken' /protected/application-credential.json)" \
   --tenant-ref tenant-a --subject-ref subject-a
 SECONDBOX_CONFIG="$APPLICATION_CONFIG" secondbox sandboxes list --query limit=1
+rm -f -- /protected/controller-credential.json /protected/application-credential.json
 ```
+
+The credential response files are created with mode `0600` by the restrictive
+umask. Delete them immediately after the typed logins have written and verified
+the protected configuration files, as shown above.
 
 `tenant.json` states the complete Profile and scope ceilings, aggregate quota,
 expiry policy, and metadata. `controller.json` states its expiry and metadata.
@@ -121,10 +127,19 @@ Every command resolves the endpoint, token, tenant reference, and subject refere
 | --- | --- |
 | `--url` | `SECONDBOX_URL` |
 | `--token` | `SECONDBOX_TOKEN` |
+| `--authority-kind` | `SECONDBOX_AUTHORITY_KIND` |
 | `--tenant-ref` | `SECONDBOX_TENANT_REF` |
 | `--subject-ref` | `SECONDBOX_SUBJECT_REF` |
 
 `SECONDBOX_TOKEN` is deliberately distinct from the `SECONDBOX_PLATFORM_TOKEN` that `secondboxd` reads. A shell configured to run the control plane does not thereby hand its deployment token to the CLI.
+
+`--authority-kind` and `SECONDBOX_AUTHORITY_KIND` accept exactly `platform`,
+`tenant_controller`, or `application`. Supply the kind whenever an explicit
+flag or environment token replaces a stored token, because the CLI deliberately
+discards a stored authority kind in that case. Application sessions infer
+`application` only when both tenant and Subject references are present;
+platform and tenant-controller sessions are never inferred. Typed login writes
+the matching kind, so commands using an unchanged stored session need no flag.
 
 Typed `platform login`, `controller login`, and `application login` verify the credential against the matching deployment route before storing it, so a wrong authority kind or token fails immediately with the server's problem detail and nothing is written. The unqualified `login` command is the application form:
 

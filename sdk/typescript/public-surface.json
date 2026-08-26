@@ -996,7 +996,9 @@
       "tenantRef",
       "usage"
     ],
-    "optional": []
+    "optional": [
+      "nextCursor"
+    ]
   },
   "TerminalAttachedFrame": {
     "required": [

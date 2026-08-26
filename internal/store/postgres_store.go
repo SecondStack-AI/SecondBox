@@ -1399,6 +1399,9 @@ func lockTenantAndSubjectQuotaForAdmission(
 	if state != contracts.TenantStateActive {
 		return contracts.TenantQuota{}, contracts.QuotaLimits{}, ports.ErrInvalidLifecycleTransition
 	}
+	if err := rowlock.ActiveSubject(ctx, tx, tenantRef, subjectRef, now); err != nil {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, err
+	}
 	return tenantQuota, subjectQuota, nil
 }
 

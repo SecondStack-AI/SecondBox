@@ -2,9 +2,13 @@ package rowlock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -46,6 +50,34 @@ func TenantAndSubjectQuota(
 		WHERE tenant_ref=$1 AND subject_ref=$2 FOR UPDATE`, tenantRef, subjectRef,
 	).Scan(&lockedSubjectRef); err != nil {
 		return fmt.Errorf("SecondBox Subject quota ledger lock failed: %w", err)
+	}
+	return nil
+}
+
+// ActiveSubject locks and validates the Subject after its quota ledger and
+// before quota-bearing domain rows.
+func ActiveSubject(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+	subjectRef string,
+	now time.Time,
+) error {
+	var state string
+	var expiresAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT state,expires_at FROM secondbox.subjects
+		WHERE tenant_ref=$1 AND ref=$2 FOR UPDATE`, tenantRef, subjectRef,
+	).Scan(&state, &expiresAt); errors.Is(err, pgx.ErrNoRows) {
+		return ports.ErrManagementNotFound
+	} else if err != nil {
+		return fmt.Errorf("SecondBox Subject admission lock failed: %w", err)
+	}
+	if state == contracts.SubjectStateExpired || expiresAt != nil && !expiresAt.After(now.UTC()) {
+		return ports.ErrResourceExpired
+	}
+	if state != contracts.SubjectStateActive {
+		return ports.ErrInvalidLifecycleTransition
 	}
 	return nil
 }

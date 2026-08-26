@@ -108,7 +108,7 @@ func (apiHandler *handler) listTenants(writer http.ResponseWriter, request *http
 }
 
 func (apiHandler *handler) tenantManagementAction(writer http.ResponseWriter, request *http.Request) {
-	tenantRef, action, ok := splitAction(request.PathValue("tenantAction"))
+	tenantRef, action, ok := splitAction(request.PathValue("tenantAction"), "suspend", "reactivate")
 	if !ok || action != "suspend" && action != "reactivate" {
 		http.NotFound(writer, request)
 		return
@@ -179,7 +179,7 @@ func (apiHandler *handler) listTenantControllerAuthorities(writer http.ResponseW
 }
 
 func (apiHandler *handler) tenantControllerAuthorityManagementAction(writer http.ResponseWriter, request *http.Request) {
-	authorityID, action, ok := splitAction(request.PathValue("authorityAction"))
+	authorityID, action, ok := splitAction(request.PathValue("authorityAction"), "rotate", "revoke")
 	if !ok || action != "rotate" && action != "revoke" {
 		http.NotFound(writer, request)
 		return
@@ -279,7 +279,14 @@ func (apiHandler *handler) updateSubjectQuota(writer http.ResponseWriter, reques
 }
 
 func (apiHandler *handler) getTenantUsage(writer http.ResponseWriter, request *http.Request) {
-	usage, err := apiHandler.service.GetTenantUsage(request.Context(), requestPrincipal(request))
+	limit, err := queryLimit(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	usage, err := apiHandler.service.GetTenantUsage(
+		request.Context(), requestPrincipal(request), limit, request.URL.Query().Get("cursor"),
+	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
@@ -304,7 +311,7 @@ func (apiHandler *handler) getDeploymentUsage(writer http.ResponseWriter, reques
 }
 
 func (apiHandler *handler) subjectManagementAction(writer http.ResponseWriter, request *http.Request) {
-	subjectRef, action, ok := splitAction(request.PathValue("subjectAction"))
+	subjectRef, action, ok := splitAction(request.PathValue("subjectAction"), "close", "cleanup")
 	if !ok || action != "close" && action != "cleanup" {
 		http.NotFound(writer, request)
 		return
@@ -345,7 +352,7 @@ func (apiHandler *handler) subjectManagementAction(writer http.ResponseWriter, r
 }
 
 func (apiHandler *handler) applicationAuthorityManagementAction(writer http.ResponseWriter, request *http.Request) {
-	authorityID, action, ok := splitAction(request.PathValue("authorityAction"))
+	authorityID, action, ok := splitAction(request.PathValue("authorityAction"), "rotate", "revoke")
 	if !ok || action != "rotate" && action != "revoke" {
 		http.NotFound(writer, request)
 		return

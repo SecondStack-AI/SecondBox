@@ -47,6 +47,16 @@ func TestResponseWriteClientDisconnectLogsAndDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestSplitActionUsesOnlyTheFinalKnownSuffix(t *testing.T) {
+	resource, action, ok := splitAction("tenant/west:blue:suspend", "suspend", "reactivate")
+	if !ok || resource != "tenant/west:blue" || action != "suspend" {
+		t.Fatalf("split action = %q %q %t", resource, action, ok)
+	}
+	if _, _, ok := splitAction("tenant:suspend/child", "suspend"); ok {
+		t.Fatal("non-final action marker was accepted")
+	}
+}
+
 func TestHomeRunnerUnavailableCarriesTypedRetryBackoff(t *testing.T) {
 	apiHandler := &handler{
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

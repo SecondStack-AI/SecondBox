@@ -2,13 +2,17 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
+
+var adminTestAuditSequence atomic.Int64
 
 func TestSubjectCloseIsAtomicIdempotentAndCleanupHasOneIdentity(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
@@ -121,7 +125,16 @@ func adminTestInput(tenantRef, subjectRef, operation, key string, now time.Time)
 	return ports.AdminIdempotencyInput{
 		TenantRef: tenantRef, SubjectRef: subjectRef, Operation: operation,
 		TargetID: subjectRef, Key: key, RequestHash: key + "-hash",
-		Now: now, Ends: now.Add(time.Hour),
+		Now: now, Ends: now.Add(time.Hour), AuditEvent: adminTestAudit(key, now),
+	}
+}
+
+func adminTestAudit(key string, now time.Time) *contracts.AuditEvent {
+	return &contracts.AuditEvent{
+		ID: fmt.Sprintf("audit-%s-%d", key, adminTestAuditSequence.Add(1)), ActorKind: "test", ActorID: "store-test",
+		Action: "store.test", ResourceKind: "test", ResourceID: key,
+		Outcome: "succeeded", RequestID: "request-" + key,
+		Details: map[string]string{}, CreatedAt: now,
 	}
 }
 

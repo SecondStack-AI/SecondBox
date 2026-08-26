@@ -566,8 +566,17 @@ func (store *PostgresControlPlaneStore) CreateManagedSubjectCleanup(
 func (store *PostgresControlPlaneStore) GetTenantUsage(
 	ctx context.Context,
 	tenantRef string,
+	limit int,
+	cursor string,
 	observedAt time.Time,
 ) (contracts.TenantUsage, error) {
+	boundary, err := store.resolvePostgresListCursor(
+		ctx, tenantUsageSubjectListCursorResource, tenantRef, cursor,
+		`SELECT created_at FROM secondbox.subjects WHERE tenant_ref=$1 AND ref=$2`, tenantRef,
+	)
+	if err != nil {
+		return contracts.TenantUsage{}, err
+	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return contracts.TenantUsage{}, fmt.Errorf("SecondBox Tenant usage transaction failed: %w", err)
@@ -590,9 +599,11 @@ func (store *PostgresControlPlaneStore) GetTenantUsage(
 		JOIN secondbox.subject_quotas AS quota
 		  ON quota.tenant_ref=subject.tenant_ref AND quota.subject_ref=subject.ref
 		WHERE subject.tenant_ref=$1
+		  AND (NOT $2 OR (subject.created_at,subject.ref) > ($3,$4))
 		ORDER BY subject.created_at,subject.ref
-		LIMIT 201
-		FOR UPDATE OF quota`, tenantRef)
+		LIMIT $5
+		FOR UPDATE OF quota`, tenantRef, boundary.Active,
+		boundary.CreatedAt, boundary.ItemKey, limit+1)
 	if err != nil {
 		return contracts.TenantUsage{}, fmt.Errorf("SecondBox Tenant Subject usage list failed: %w", err)
 	}
@@ -619,8 +630,16 @@ func (store *PostgresControlPlaneStore) GetTenantUsage(
 		return contracts.TenantUsage{}, fmt.Errorf("SecondBox Tenant Subject usage rows failed: %w", err)
 	}
 	rows.Close()
-	if len(subjectLimits) > 200 {
-		return contracts.TenantUsage{}, errors.New("SecondBox Tenant usage exceeds the 200 Subject response bound")
+	var nextCursor *string
+	if len(subjectLimits) > limit {
+		subjectLimits = subjectLimits[:limit]
+		value, err := encodePostgresListNextCursor(
+			tenantUsageSubjectListCursorResource, tenantRef, subjectLimits[limit-1].ref,
+		)
+		if err != nil {
+			return contracts.TenantUsage{}, err
+		}
+		nextCursor = value
 	}
 	subjects := make([]contracts.SubjectUsage, 0, len(subjectLimits))
 	for _, item := range subjectLimits {
@@ -643,7 +662,7 @@ func (store *PostgresControlPlaneStore) GetTenantUsage(
 	}
 	return contracts.TenantUsage{
 		TenantRef: tenantRef, Limits: limits, Usage: usage,
-		Subjects: subjects, ObservedAt: observedAt.UTC(),
+		Subjects: subjects, NextCursor: nextCursor, ObservedAt: observedAt.UTC(),
 	}, nil
 }
 

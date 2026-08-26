@@ -120,6 +120,7 @@ func (client *Client) Do(
 	options RequestOptions,
 ) (*http.Response, error) {
 	path := metadata.PathTemplate
+	rawPath := metadata.PathTemplate
 	for {
 		start := strings.IndexByte(path, '{')
 		if start < 0 {
@@ -138,9 +139,13 @@ func (client *Client) Do(
 				name, metadata.OperationID,
 			)
 		}
-		path = path[:start] + url.PathEscape(value) + path[end+1:]
+		rawStart := strings.IndexByte(rawPath, '{')
+		rawEndOffset := strings.IndexByte(rawPath[rawStart:], '}')
+		rawEnd := rawStart + rawEndOffset
+		path = path[:start] + value + path[end+1:]
+		rawPath = rawPath[:rawStart] + url.PathEscape(value) + rawPath[rawEnd+1:]
 	}
-	endpoint := client.baseURL.ResolveReference(&url.URL{Path: path})
+	endpoint := client.baseURL.ResolveReference(&url.URL{Path: path, RawPath: rawPath})
 	endpoint.RawQuery = options.QueryParameters.Encode()
 	contentType := options.ContentType
 	if options.Body != nil && contentType == "" && len(metadata.RequestBody) == 1 {

@@ -155,9 +155,20 @@ func (client *Client) RevokeApplicationAuthority(ctx context.Context, authorityI
 	return authority, err
 }
 
-func (client *Client) GetTenantUsage(ctx context.Context) (TenantUsage, error) {
+func (client *Client) GetTenantUsage(ctx context.Context, supplied ...PageOptions) (TenantUsage, error) {
+	if len(supplied) > 1 {
+		return TenantUsage{}, errors.New("SecondBox Tenant usage accepts at most one page option")
+	}
+	options := PageOptions{}
+	if len(supplied) == 1 {
+		options = supplied[0]
+	}
+	query, err := pageQuery(options)
+	if err != nil {
+		return TenantUsage{}, err
+	}
 	var usage TenantUsage
-	err := client.RequestJSON(ctx, "getTenantUsage", CallOptions{}, &usage)
+	err = client.RequestJSON(ctx, "getTenantUsage", CallOptions{QueryParameters: query}, &usage)
 	return usage, err
 }
 
