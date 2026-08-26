@@ -306,6 +306,18 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	if strings.TrimSpace(assignment.WorkspaceId) == "" || !completeFence(assignment.Fence) {
 		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment Workspace or fence identity is incomplete"))
 	}
+	// A replay of the active fence is valid regardless of the original
+	// deadline: the Instance already exists, so validation short-circuits
+	// before any expiry or capacity reasoning about a new launch.
+	backend.mu.Lock()
+	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
+		defer backend.mu.Unlock()
+		if sameFence(active.fence, assignment.Fence) {
+			return nil
+		}
+		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment ID was reused with different fencing"))
+	}
+	backend.mu.Unlock()
 	if assignment.DeadlineUnixMs == 0 || time.Now().UnixMilli() >= int64(assignment.DeadlineUnixMs) {
 		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment deadline has expired"))
 	}
@@ -343,12 +355,6 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	}
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
-	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
-		if sameFence(active.fence, assignment.Fence) {
-			return nil
-		}
-		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment ID was reused with different fencing"))
-	}
 	for _, active := range backend.assignments {
 		if active != ownClaim && active.fence.SandboxId == assignment.Fence.SandboxId && !active.fenced {
 			return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox Sandbox already has an unfenced assignment"))
@@ -404,6 +410,12 @@ func (backend *AssignmentBackend) StartAssignment(
 			return runnercontrol.BackendInstance{BackendKind: "microsandbox", BackendReference: reference}, nil
 		}
 		return result, infrastructureAssignment(fmt.Errorf("SecondBox Microsandbox replayed start observed a failed launch"))
+	}
+	for _, active := range backend.assignments {
+		if active.fence.SandboxId == assignment.Fence.SandboxId && !active.fenced {
+			backend.mu.Unlock()
+			return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox Sandbox already has an unfenced assignment"))
+		}
 	}
 	claim := &activeAssignment{fence: cloneFence(assignment.Fence), launched: make(chan struct{})}
 	claim.launchDone = sync.OnceFunc(func() { close(claim.launched) })
@@ -491,7 +503,9 @@ func (backend *AssignmentBackend) StartAssignment(
 	backend.assignments[assignment.Fence.AssignmentId] = active
 	backend.startupSamples = append(backend.startupSamples, time.Since(started))
 	backend.mu.Unlock()
-	claim.launchDone()
+	// The deferred launchDone wakes replay waiters only after the remaining
+	// fallible startup steps: a failure below removes the assignment before
+	// any replay can observe success.
 	go backend.observeExit(active)
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
 		backend.mu.Lock()
@@ -507,7 +521,7 @@ func (backend *AssignmentBackend) MarkAssignmentReady(fence *runnerprotocol.Assi
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 	active, exists := backend.assignments[fence.GetAssignmentId()]
-	if !exists || !sameFence(active.fence, fence) || active.fenced {
+	if !exists || active.launched != nil || !sameFence(active.fence, fence) || active.fenced {
 		return fmt.Errorf("SecondBox Microsandbox ready assignment fence is stale")
 	}
 	active.readyPublished = true
@@ -547,17 +561,35 @@ func (backend *AssignmentBackend) FenceAssignment(
 		return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox Microsandbox fence identity is required")
 	}
 	backend.mu.Lock()
-	active, exists := backend.assignments[command.Fence.AssignmentId]
-	if !exists {
+	var active *activeAssignment
+	for {
+		current, exists := backend.assignments[command.Fence.AssignmentId]
+		if !exists {
+			backend.mu.Unlock()
+			return runnercontrol.FenceEvidence{
+				Result:                    runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED,
+				TerminationEvidenceDigest: fenceDigest(command.Fence),
+			}, nil
+		}
+		if !sameFence(current.fence, command.Fence) {
+			backend.mu.Unlock()
+			return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox Microsandbox fence token or generation mismatch")
+		}
+		if current.launched == nil {
+			active = current
+			break
+		}
+		// A pending claimed launch holds no process or operation state yet;
+		// fencing waits for the launch to settle and then fences whatever it
+		// produced.
+		pendingLaunch := current.launched
 		backend.mu.Unlock()
-		return runnercontrol.FenceEvidence{
-			Result:                    runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED,
-			TerminationEvidenceDigest: fenceDigest(command.Fence),
-		}, nil
-	}
-	if !sameFence(active.fence, command.Fence) {
-		backend.mu.Unlock()
-		return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox Microsandbox fence token or generation mismatch")
+		select {
+		case <-pendingLaunch:
+		case <-ctx.Done():
+			return runnercontrol.FenceEvidence{}, ctx.Err()
+		}
+		backend.mu.Lock()
 	}
 	active.fenced = true
 	cancels := make([]context.CancelFunc, 0, len(active.operations))
@@ -654,7 +686,7 @@ func (backend *AssignmentBackend) acquireOperation(
 ) (*activeAssignment, context.Context, func(), error) {
 	backend.mu.Lock()
 	active := backend.assignments[fence.GetAssignmentId()]
-	if active == nil || active.fenced || !sameFence(active.fence, fence) {
+	if active == nil || active.launched != nil || active.fenced || !sameFence(active.fence, fence) {
 		backend.mu.Unlock()
 		return nil, nil, nil, fmt.Errorf("SecondBox Microsandbox operation fence is stale")
 	}

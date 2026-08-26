@@ -952,6 +952,12 @@ fn coordinated_loss_exit(
         vmm_confirmed_stopped = *acknowledged;
         drop(acknowledged);
     }
+    if !vmm_confirmed_stopped {
+        // An unacknowledged VMM may still be dirtying the image; a concurrent
+        // final sync could persist a torn state. Exit reporting failure and
+        // leave recovery to the next attachment's journal replay.
+        process::exit(1);
+    }
     let Ok(flush_workspace) = workspace.try_clone() else {
         process::exit(1);
     };
@@ -966,8 +972,8 @@ fn coordinated_loss_exit(
         process::exit(1);
     }
     let status = match flushed.recv_timeout(PARENT_LOSS_FLUSH_BOUND) {
-        Ok(Ok(())) if vmm_confirmed_stopped => success_status,
-        Ok(Ok(())) | Ok(Err(_)) | Err(_) => 1,
+        Ok(Ok(())) => success_status,
+        Ok(Err(_)) | Err(_) => 1,
     };
     process::exit(status);
 }

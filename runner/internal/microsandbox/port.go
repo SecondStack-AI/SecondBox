@@ -24,8 +24,10 @@ type helperPortConnection struct {
 	nextSequence uint64
 	release      func()
 	closed       atomic.Bool
-	readMu       sync.Mutex
-	writeMu      sync.Mutex
+	// readGate and writeGate serialize the two directions of the shared
+	// helper connection; unlike a mutex, acquisition observes cancellation.
+	readGate  chan struct{}
+	writeGate chan struct{}
 	buffer       bytes.Buffer
 	sawEOF       bool
 	terminal     error
@@ -85,7 +87,11 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 		return nil, fmt.Errorf("SecondBox Microsandbox open guest Port: %w", err)
 	}
 	_ = process.control.SetDeadline(time.Time{})
-	connection := &helperPortConnection{backend: backend, active: active, fence: cloneFence(fence), process: process, requestID: requestID, nextSequence: 1, release: release}
+	connection := &helperPortConnection{
+		backend: backend, active: active, fence: cloneFence(fence), process: process,
+		requestID: requestID, nextSequence: 1, release: release,
+		readGate: make(chan struct{}, 1), writeGate: make(chan struct{}, 1),
+	}
 	context.AfterFunc(opCtx, func() { _ = connection.Close() })
 	return connection, nil
 }
@@ -94,8 +100,10 @@ func (connection *helperPortConnection) Read(ctx context.Context, maximum int) (
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	connection.readMu.Lock()
-	defer connection.readMu.Unlock()
+	if err := acquireGate(ctx, connection.readGate); err != nil {
+		return nil, err
+	}
+	defer func() { <-connection.readGate }()
 	if connection.closed.Load() {
 		return nil, fmt.Errorf("SecondBox Microsandbox Port connection is closed")
 	}
@@ -116,13 +124,20 @@ func (connection *helperPortConnection) Read(ctx context.Context, maximum int) (
 		deadline = value
 	}
 	_ = connection.process.control.SetReadDeadline(deadline)
-	// Cancellation without a deadline must still interrupt a pending read;
-	// every later operation sets its own fresh deadline before using the
-	// shared connection.
+	// Cancellation without a deadline must still interrupt a pending read.
+	// The callback is joined and the shared deadline restored before the
+	// gate releases, so it cannot race a later operation.
+	interrupted := make(chan struct{})
 	stopCancelInterrupt := context.AfterFunc(ctx, func() {
+		defer close(interrupted)
 		_ = connection.process.control.SetReadDeadline(time.Now())
 	})
-	defer stopCancelInterrupt()
+	defer func() {
+		if !stopCancelInterrupt() {
+			<-interrupted
+			_ = connection.process.control.SetReadDeadline(time.Time{})
+		}
+	}()
 	for {
 		event, err := microsandboxprotocol.ReadFrame(connection.process.control)
 		if err != nil {
@@ -157,9 +172,11 @@ func (connection *helperPortConnection) Write(ctx context.Context, data []byte) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	connection.writeMu.Lock()
-	defer connection.writeMu.Unlock()
-	// Close records closure before taking this lock, so a write racing Close
+	if err := acquireGate(ctx, connection.writeGate); err != nil {
+		return err
+	}
+	defer func() { <-connection.writeGate }()
+	// Close records closure before taking this gate, so a write racing Close
 	// can never send a stale request ID onto the shared helper channel after
 	// serialization has been released.
 	if connection.closed.Load() {
@@ -175,38 +192,52 @@ func (connection *helperPortConnection) Write(ctx context.Context, data []byte) 
 	if err := connection.process.control.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
-	// Cancellation while waiting on the lock or inside the frame write must
-	// interrupt the pending operation instead of blocking the caller and
-	// Close behind the fallback deadline; every later operation sets its own
-	// fresh deadline before using the shared connection.
+	// Cancellation inside the frame write must interrupt the pending
+	// operation instead of blocking the caller and Close behind the fallback
+	// deadline. The callback is joined and the shared deadline restored
+	// before the gate releases, so it cannot race a later operation.
+	interrupted := make(chan struct{})
 	stopCancelInterrupt := context.AfterFunc(ctx, func() {
+		defer close(interrupted)
 		_ = connection.process.control.SetWriteDeadline(time.Now())
 	})
-	defer stopCancelInterrupt()
 	sequence := connection.nextSequence
 	connection.nextSequence++
 	err := microsandboxprotocol.WriteFrame(connection.process.control, &microsandboxprotocol.Envelope{
 		ProtocolVersion: microsandboxprotocol.Version, RequestId: connection.requestID, StreamId: connection.requestID, Sequence: sequence,
 		Message: &microsandboxprotocol.Envelope_StreamData{StreamData: &microsandboxprotocol.StreamData{Data: bytes.Clone(data), Channel: microsandboxprotocol.StreamChannel_STREAM_CHANNEL_TCP}},
 	})
-	if ctxErr := ctx.Err(); ctxErr != nil && err != nil {
-		return ctxErr
+	if !stopCancelInterrupt() {
+		<-interrupted
+		_ = connection.process.control.SetWriteDeadline(time.Time{})
+		if err != nil {
+			err = ctx.Err()
+		}
 	}
 	return err
+}
+
+func acquireGate(ctx context.Context, gate chan struct{}) error {
+	select {
+	case gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (connection *helperPortConnection) Close() error {
 	connection.closeOnce.Do(func() {
 		connection.closed.Store(true)
-		connection.writeMu.Lock()
+		connection.writeGate <- struct{}{}
 		sequence := connection.nextSequence
 		connection.nextSequence++
 		err := microsandboxprotocol.WriteFrame(connection.process.control, &microsandboxprotocol.Envelope{
 			ProtocolVersion: microsandboxprotocol.Version, RequestId: connection.requestID, StreamId: connection.requestID, Sequence: sequence,
 			Message: &microsandboxprotocol.Envelope_Cancel{Cancel: &microsandboxprotocol.CancelRequest{TargetRequestId: connection.requestID}},
 		})
-		connection.writeMu.Unlock()
-		connection.readMu.Lock()
+		<-connection.writeGate
+		connection.readGate <- struct{}{}
 		_ = connection.process.control.SetReadDeadline(time.Now().Add(5 * time.Second))
 		for connection.terminal == nil {
 			event, readErr := microsandboxprotocol.ReadFrame(connection.process.control)
@@ -230,7 +261,7 @@ func (connection *helperPortConnection) Close() error {
 				}
 			}
 		}
-		connection.readMu.Unlock()
+		<-connection.readGate
 		connection.process.requestMu.Unlock()
 		connection.release()
 		connection.closeErr = err

@@ -101,8 +101,9 @@ export SECONDBOX_MICROSANDBOX_MAXIMUM_OPERATIONS=32
 export SECONDBOX_MICROSANDBOX_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 ```
 
-The complete required runner environment beyond the backend block above is the following set;
-every value is deployment authority with no application default. The scenario service control in
+The complete runner environment the native Microsandbox composition consumes, beyond the
+backend block above, is exactly the following set; every value is deployment authority with no
+application default. The scenario service control in
 `scripts/scenario-microsandbox-macos-service-control.sh` composes exactly this environment for
 the qualification suite and is the executable reference for a working assembly.
 
@@ -115,15 +116,19 @@ the qualification suite and is the executable reference for a working assembly.
 | `SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS` / `SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME` | The control plane's Runner gRPC endpoint and its server certificate name. |
 | `SECONDBOX_RUNNER_CREDENTIAL` | The pre-shared Runner enrollment credential configured on the control plane. |
 | `SECONDBOX_RUNNER_CLIENT_CERTIFICATE` / `SECONDBOX_RUNNER_CLIENT_KEY` / `SECONDBOX_RUNNER_CONTROL_PLANE_CA` | The installed identity files from the issuance procedure above. |
-| `SECONDBOX_RUNNER_ENABLED_FEATURES` | The feature list the control plane enables (for example `exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy`). |
-| `SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS` / `SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL` | Operator-selected heartbeat cadences (the guest interval is a Go duration of at most 60s). |
 | `SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS` / `SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS` | The data-plane listener and the address the control plane's clients can reach it at. |
+| `SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS` / `SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES` | Admission concurrency bounds for starts and Workspace creations. |
 | `SECONDBOX_RUNNER_LOG_DIR` / `SECONDBOX_RUNNER_LOG_PATH` | Operator-owned log directory and JSONL log file beneath it. |
 | `SECONDBOX_RUNNER_WORKSPACE_ROOT` | The APFS WorkspaceStore root from this document. |
-| `SECONDBOX_RUNNER_SANDBOX_MAX_VCPUS` / `..._MAX_MEMORY_MIB` / `..._MAX_DISK_MIB` / `..._MEMORY_BUDGET_MIB` | Per-Sandbox ceilings and the host memory budget the operator allocates. |
-| `SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX` / `..._GLOBAL` / `..._STARTS` / `..._WORKSPACE_CREATES` / `..._OPERATIONS_GLOBAL` | Concurrency bounds; global instance and operation bounds must not exceed the backend maxima above. |
-| `SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES` | The file data-plane transfer bound. |
-| `SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT` / `..._WARNING_PERCENT` / `..._ADMISSION_DENY_PERCENT` | WorkspaceStore pressure thresholds in ascending order. |
+
+Instance and operation capacity, per-Instance vCPU, memory, and disk ceilings, and the Workspace
+template size come only from the `SECONDBOX_MICROSANDBOX_MAXIMUM_*` and
+`SECONDBOX_MICROSANDBOX_WORKSPACE_TEMPLATE_CAPACITY_BYTES` values above. The
+`SECONDBOX_RUNNER_SANDBOX_*`, storage-pressure, file-transfer, guest-heartbeat, and remaining
+`SECONDBOX_RUNNER_MAX_CONCURRENT_*` variables are Firecracker-only and are ignored by this
+backend — do not set them expecting enforcement. `SECONDBOX_RUNNER_ENABLED_FEATURES` and
+`SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS` are control-plane settings, not runner
+environment; the control plane negotiates them onto the connection.
 
 Run the native runner as a dedicated unprivileged identity; Darwin rejects a
 root runner because Hypervisor.framework and APFS clonefile do not require Linux's KVM, cgroup,

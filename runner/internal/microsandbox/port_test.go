@@ -12,7 +12,9 @@ import (
 // guards that keep a racing caller from writing a stale request ID onto the
 // shared helper channel after Close released its serialization.
 func TestHelperPortConnectionRejectsUseAfterCloseAndCancellation(t *testing.T) {
-	connection := &helperPortConnection{}
+	connection := &helperPortConnection{
+		readGate: make(chan struct{}, 1), writeGate: make(chan struct{}, 1),
+	}
 	connection.closed.Store(true)
 	if err := connection.Write(context.Background(), []byte("stale")); err == nil ||
 		!strings.Contains(err.Error(), "closed") {
@@ -23,7 +25,9 @@ func TestHelperPortConnectionRejectsUseAfterCloseAndCancellation(t *testing.T) {
 		t.Fatalf("read after close = %v", err)
 	}
 
-	open := &helperPortConnection{}
+	open := &helperPortConnection{
+		readGate: make(chan struct{}, 1), writeGate: make(chan struct{}, 1),
+	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := open.Write(cancelled, []byte("late")); err != context.Canceled {
@@ -41,7 +45,10 @@ func TestHelperPortConnectionWriteCancellationInterruptsBlockedFrames(t *testing
 	local, remote := net.Pipe()
 	defer local.Close()
 	defer remote.Close()
-	connection := &helperPortConnection{process: &helperProcess{control: local}, nextSequence: 1}
+	connection := &helperPortConnection{
+		process: &helperProcess{control: local}, nextSequence: 1,
+		readGate: make(chan struct{}, 1), writeGate: make(chan struct{}, 1),
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	completed := make(chan error, 1)

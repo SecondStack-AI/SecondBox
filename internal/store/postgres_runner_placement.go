@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -193,21 +194,11 @@ func scanRunnerPlacementCandidate(
 	); err != nil {
 		return runnerPlacementCandidate{}, err
 	}
-	var cacheEvidence struct {
-		Materializations []placementMaterialization `json:"materializations"`
+	materializations, err := decodeArtifactCacheEvidence(cacheJSON)
+	if err != nil {
+		return runnerPlacementCandidate{}, fmt.Errorf("%s %w", errorPrefix, err)
 	}
-	if err := json.Unmarshal(cacheJSON, &cacheEvidence); err != nil {
-		// Earlier releases recorded a bare digest array; that legacy shape
-		// means "no proven materializations" and simply keeps the candidate
-		// incompatible until it re-registers. Anything else is corrupted
-		// current-format evidence and must surface, not read as unavailable.
-		var legacyDigests []string
-		if legacyErr := json.Unmarshal(cacheJSON, &legacyDigests); legacyErr != nil {
-			return runnerPlacementCandidate{}, fmt.Errorf("%s artifact cache evidence is malformed: %w", errorPrefix, err)
-		}
-	} else {
-		candidate.materializations = cacheEvidence.Materializations
-	}
+	candidate.materializations = materializations
 	for _, item := range []struct {
 		name  string
 		value []byte
@@ -271,6 +262,50 @@ func runnerPlacementCompatible(
 		candidate.allocatable.DiskBytes-reserved.DiskBytes >= spec.Resources.WorkspaceBytes &&
 		candidate.allocatable.Instances-reserved.Instances >= 1 &&
 		candidate.allocatable.Operations-reserved.Operations >= spec.Resources.ConcurrentOperations
+}
+
+// decodeArtifactCacheEvidence reads a runner's artifact cache. The legacy
+// bare digest-array shape means "no proven materializations" and keeps the
+// candidate incompatible until it re-registers; the current shape is an
+// object carrying at least one recognized evidence field with its exact
+// type. Anything else — null, an empty object, unknown-only fields, or a
+// wrong field type — is corrupted evidence and surfaces as an error rather
+// than reading as ordinary unavailability.
+func decodeArtifactCacheEvidence(cacheJSON []byte) ([]placementMaterialization, error) {
+	trimmed := bytes.TrimSpace(cacheJSON)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("artifact cache evidence is empty")
+	}
+	if trimmed[0] == '[' {
+		var legacyDigests []string
+		if err := json.Unmarshal(trimmed, &legacyDigests); err != nil {
+			return nil, fmt.Errorf("artifact cache evidence is malformed: %w", err)
+		}
+		return nil, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &raw); err != nil || raw == nil {
+		return nil, fmt.Errorf("artifact cache evidence is malformed: %w", err)
+	}
+	recognized := false
+	var materializations []placementMaterialization
+	if digests, exists := raw["artifactDigests"]; exists {
+		var decoded []string
+		if err := json.Unmarshal(digests, &decoded); err != nil {
+			return nil, fmt.Errorf("artifact cache digest evidence is malformed: %w", err)
+		}
+		recognized = true
+	}
+	if entries, exists := raw["materializations"]; exists {
+		if err := json.Unmarshal(entries, &materializations); err != nil {
+			return nil, fmt.Errorf("artifact cache materialization evidence is malformed: %w", err)
+		}
+		recognized = true
+	}
+	if !recognized {
+		return nil, fmt.Errorf("artifact cache evidence carries no recognized fields")
+	}
+	return materializations, nil
 }
 
 func placementHasMaterialization(candidate runnerPlacementCandidate, spec contracts.ProfileRevisionSpec) bool {
