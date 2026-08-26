@@ -167,6 +167,28 @@ jobs:
       - name: Test guest image policy
         run: scripts/test-image-policy.sh
 
+  gvisor-runner-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build gVisor runner image
+        run: |
+          # The default docker driver cannot export OCI layout; a
+          # docker-container builder can.
+          docker buildx create --name secondbox-oci --driver docker-container --use
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --build-arg "RELEASE_VERSION=ci" --build-arg "SOURCE_COMMIT=${GITHUB_SHA}" \
+            --file runner/Dockerfile.gvisor \
+            --output "type=oci,dest=/tmp/runner-gvisor.oci.tar" \
+            --metadata-file /tmp/runner-gvisor.oci.json .
+          echo "gVisor runner image digest: $(jq -er '."containerimage.digest"' /tmp/runner-gvisor.oci.json)"
+      - name: Upload gVisor runner image digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runner-gvisor-oci-metadata
+          path: /tmp/runner-gvisor.oci.json
+          if-no-files-found: error
+
   build-artifacts:
     runs-on: ubuntu-latest
     steps:

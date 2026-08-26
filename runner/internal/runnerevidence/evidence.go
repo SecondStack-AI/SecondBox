@@ -46,12 +46,15 @@ type Record struct {
 	Materialization   string `json:"materializationDigest,omitempty"`
 	Stage             string `json:"stage,omitempty"`
 	StreamID          string `json:"streamId,omitempty"`
-	HelperPID         int    `json:"helperPid,omitempty"`
-	ExitCode          int    `json:"exitCode,omitempty"`
-	Signal            int    `json:"signal,omitempty"`
-	HelperReason      string `json:"helperReason,omitempty"`
-	StderrDigest      string `json:"stderrDigest,omitempty"`
-	EventTailDigest   string `json:"eventTailDigest,omitempty"`
+	// HelperPID is the backend's local compute supervisor process: the
+	// Microsandbox helper for that backend and the supervised runsc process
+	// for gVisor. Lifecycle evidence always requires a live local identity.
+	HelperPID       int    `json:"helperPid,omitempty"`
+	ExitCode        int    `json:"exitCode,omitempty"`
+	Signal          int    `json:"signal,omitempty"`
+	HelperReason    string `json:"helperReason,omitempty"`
+	StderrDigest    string `json:"stderrDigest,omitempty"`
+	EventTailDigest string `json:"eventTailDigest,omitempty"`
 }
 
 type Sink interface {

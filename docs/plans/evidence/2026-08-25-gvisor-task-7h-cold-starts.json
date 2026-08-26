@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "d1787b517394b4cc1fe6a7cabf4f0f249d48b6fb",
+  "completedAt": "2026-08-25T23:20:09.336228739Z",
+  "backendVersion": "runsc-release-20260817.0",
+  "hostPlatform": "linux-x86_64",
+  "materializationDigest": "sha256:6ba6deda93b10023f4fd672890f45fcc8e36fe72ee98e9bb9b9f1b87ed2ca3f3",
+  "samples": 30,
+  "startToReadyMilliseconds": {
+    "samples": 30,
+    "p50": 483.801,
+    "p95": 645.63,
+    "max": 966.368
+  },
+  "bootStages": [
+    {
+      "stage": "artifact_verify",
+      "samples": 30,
+      "p50Milliseconds": 133.07,
+      "p95Milliseconds": 144.924
+    },
+    {
+      "stage": "compute_launch",
+      "samples": 30,
+      "p50Milliseconds": 0.045,
+      "p95Milliseconds": 0.074
+    },
+    {
+      "stage": "guest_negotiation",
+      "samples": 30,
+      "p50Milliseconds": 172.958,
+      "p95Milliseconds": 231.749
+    },
+    {
+      "stage": "network_setup",
+      "samples": 30,
+      "p50Milliseconds": 50.863,
+      "p95Milliseconds": 63.66
+    },
+    {
+      "stage": "ready",
+      "samples": 30,
+      "p50Milliseconds": 88.729,
+      "p95Milliseconds": 149.109
+    },
+    {
+      "stage": "runner_admission",
+      "samples": 30,
+      "p50Milliseconds": 28.534,
+      "p95Milliseconds": 40.892
+    },
+    {
+      "stage": "workspace_attach",
+      "samples": 30,
+      "p50Milliseconds": 0.165,
+      "p95Milliseconds": 0.222
+    }
+  ],
+  "peakHelperRssKiB": {
+    "samples": 30,
+    "p50": 14148,
+    "p95": 14224,
+    "max": 14280
+  }
+}

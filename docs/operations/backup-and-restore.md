@@ -25,8 +25,16 @@ Before capturing a runner:
 2. stop or otherwise quiesce every affected Sandbox;
 3. capture `SECONDBOX_RUNNER_WORKSPACE_ROOT` and the stable runner identity as
    one consistent recovery point;
-4. restore both to the same logical runner identity;
-5. validate the WorkspaceStore inventory and start a stopped Sandbox before
+4. include every operator-local immutable backend asset the runner's Sandboxes
+   are pinned to in the same recovery unit: for a gVisor runner that is the
+   build directory (`bin/runsc`, `bin/secondbox-guest-agent`, `rootfs/`), the
+   materialization manifest, its pinned digest, and the runner's environment
+   configuration - a restored Workspace root cannot resume its Sandboxes
+   without the exact materialization they are pinned to. On the Kubernetes
+   placement, the image digest reference, node-local build directory, and the
+   identity Secret form that unit;
+5. restore all of it to the same logical runner identity;
+6. validate the WorkspaceStore inventory and start a stopped Sandbox before
    returning the runner to service.
 
 Restoring the files under a different runner ID is not supported. Losing an

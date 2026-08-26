@@ -292,6 +292,9 @@ func (p *runnerDNSProxy) exchange(
 	if err != nil {
 		return nil, err
 	}
+	if len(addresses) == 0 {
+		return response, nil
+	}
 	if err := p.observe(ctx, guestIP, validatedQuery.question.Name.String(), addresses, ttl); err != nil {
 		return nil, err
 	}
@@ -348,7 +351,7 @@ func validateDNSResponse(query dnsValidatedQuestion, message []byte) ([]netip.Ad
 	if err != nil ||
 		!header.Response ||
 		header.ID != query.header.ID ||
-		header.RCode != dnsmessage.RCodeSuccess {
+		(header.RCode != dnsmessage.RCodeSuccess && header.RCode != dnsmessage.RCodeNameError) {
 		return nil, 0, fmt.Errorf("DNS response header does not match the query")
 	}
 	question, err := parser.Question()
@@ -399,6 +402,12 @@ func validateDNSResponse(query dnsValidatedQuestion, message []byte) ([]netip.Ad
 			}
 		}
 	}
+	// A name-error response is only ever forwarded as the strictly empty
+	// negative answer below; one that also carries resolving records is
+	// contradictory and stays rejected as injection.
+	if header.RCode == dnsmessage.RCodeNameError && (len(addressRecords) != 0 || len(cnames) != 0) {
+		return nil, 0, fmt.Errorf("DNS name-error response must carry no answers")
+	}
 	owner := query.question.Name
 	seen := make(map[dnsmessage.Name]bool)
 	var chainTTL uint32
@@ -416,6 +425,15 @@ func validateDNSResponse(query dnsValidatedQuestion, message []byte) ([]netip.Ad
 		}
 		target, found := cnames[owner]
 		if !found {
+			// A strictly empty answer (an empty NOERROR or NXDOMAIN, commonly
+			// the AAAA half of a dual query) is forwarded without pinning
+			// anything: strict resolvers fail the whole lookup when it is
+			// refused instead, and forwarding it admits no destination. Any
+			// answer carrying records that do not resolve the question stays
+			// rejected as injection.
+			if len(addressRecords) == 0 && len(cnames) == 0 {
+				return nil, 0, nil
+			}
 			return nil, 0, fmt.Errorf("DNS response has no address on the validated owner chain")
 		}
 		if cnameTTLs[owner] == 0 {

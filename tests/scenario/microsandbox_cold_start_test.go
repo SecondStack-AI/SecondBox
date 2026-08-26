@@ -19,6 +19,15 @@ import (
 
 const microsandboxColdStartSamples = 30
 
+// coldStartMaterializationDigestVariable names the digest input for the
+// backend under qualification; the cold-start evidence records it verbatim.
+func coldStartMaterializationDigestVariable() string {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "gvisor" {
+		return "SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST"
+	}
+	return "SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"
+}
+
 type microsandboxColdStartEvidence struct {
 	SchemaVersion         int                          `json:"schemaVersion"`
 	SourceCommit          string                       `json:"sourceCommit"`
@@ -41,8 +50,8 @@ type microsandboxLifecycleLog struct {
 	HostPlatform   string `json:"hostPlatform"`
 }
 
-func TestScenarioMicrosandboxRecordsThirtyColdStarts(t *testing.T) {
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "microsandbox" {
+func TestScenarioColdBootBackendRecordsThirtyColdStarts(t *testing.T) {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "firecracker" {
 		return
 	}
 	fixture := newScenarioFixture(t)
@@ -115,7 +124,7 @@ func TestScenarioMicrosandboxRecordsThirtyColdStarts(t *testing.T) {
 		CompletedAt:           time.Now().UTC().Format(time.RFC3339Nano),
 		BackendVersion:        backendVersion,
 		HostPlatform:          hostPlatform,
-		MaterializationDigest: requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"),
+		MaterializationDigest: requireScenarioEnvironment(t, coldStartMaterializationDigestVariable()),
 		Samples:               len(startToReady),
 		StartToReady: snapshotResumeDuration{
 			Samples: len(startToReady),
@@ -170,9 +179,20 @@ func microsandboxHelperPeakRSSKiB(t *testing.T, helperPID int) int {
 	if os.Getenv("SECONDBOX_SCENARIO_SERVICE_CONTROL") != "" {
 		output = scenarioComposeOutput(t, "helper-rss-kib", strconv.Itoa(helperPID))
 	} else {
+		// The compute may be a process tree (the gVisor mount supervisor
+		// parents the runsc sentry and gofer), so the sample sums peak RSS
+		// across the helper and every descendant rather than the outer
+		// process alone; a childless Microsandbox helper sums to itself.
 		output = scenarioComposeOutput(
-			t, "exec", "-T", "secondbox-runner", "awk",
-			`$1 == "VmHWM:" { print $2 }`, fmt.Sprintf("/proc/%d/status", helperPID),
+			t, "exec", "-T", "secondbox-runner", "sh", "-c",
+			`peak=0
+walk() {
+  v=$(awk '$1=="VmHWM:"{print $2}' "/proc/$1/status" 2>/dev/null)
+  [ -n "$v" ] && peak=$((peak+v))
+  for child in $(cat /proc/$1/task/*/children 2>/dev/null); do walk "$child"; done
+}
+walk "$0"
+echo "$peak"`, strconv.Itoa(helperPID),
 		)
 	}
 	value, err := strconv.Atoi(strings.TrimSpace(string(output)))

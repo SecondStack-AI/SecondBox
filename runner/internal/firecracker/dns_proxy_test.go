@@ -79,6 +79,55 @@ func TestValidateDNSResponseFollowsBoundedCNAMEChain(t *testing.T) {
 	}
 }
 
+// TestValidateDNSResponseForwardsNXDOMAIN proves a genuine name-error
+// response passes validation as the strictly empty negative answer - strict
+// resolvers fail whole dual-stack lookups when it is refused - while a
+// name-error that also carries resolving records stays rejected as injection.
+func TestValidateDNSResponseForwardsNXDOMAIN(t *testing.T) {
+	_, validated := testDNSQuery(t, 61, "absent.example.com.", dnsmessage.TypeA)
+	builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{
+		ID: 61, Response: true, RCode: dnsmessage.RCodeNameError,
+	})
+	if err := builder.StartQuestions(); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Question(validated.question); err != nil {
+		t.Fatal(err)
+	}
+	response, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	addresses, ttl, err := validateDNSResponse(validated, response)
+	if err != nil {
+		t.Fatalf("NXDOMAIN response was rejected: %v", err)
+	}
+	if len(addresses) != 0 || ttl != 0 {
+		t.Fatalf("NXDOMAIN forwarded with pins: %v ttl=%s", addresses, ttl)
+	}
+
+	contradictory := dnsmessage.NewBuilder(nil, dnsmessage.Header{
+		ID: 61, Response: true, RCode: dnsmessage.RCodeNameError,
+	})
+	if err := contradictory.StartQuestions(); err != nil {
+		t.Fatal(err)
+	}
+	if err := contradictory.Question(validated.question); err != nil {
+		t.Fatal(err)
+	}
+	if err := contradictory.StartAnswers(); err != nil {
+		t.Fatal(err)
+	}
+	testAddA(t, &contradictory, "absent.example.com.", [4]byte{192, 0, 2, 7}, 30)
+	answered, err := contradictory.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := validateDNSResponse(validated, answered); err == nil {
+		t.Fatal("name-error response carrying answers was accepted")
+	}
+}
+
 func TestDNSMessageBoundsAndWorkerCap(t *testing.T) {
 	if _, err := validateDNSQuery(make([]byte, runnerDNSMaximumMessageBytes+1)); err == nil {
 		t.Fatal("oversized query was accepted")

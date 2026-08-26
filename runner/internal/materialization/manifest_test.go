@@ -56,3 +56,72 @@ func TestLoadRejectsWrongPinnedMaterializationDigest(t *testing.T) {
 		t.Fatalf("wrong pinned materialization digest error = %v", err)
 	}
 }
+
+func TestManifestValidatesGVisorIdentity(t *testing.T) {
+	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	manifest := Manifest{
+		SchemaVersion:           SchemaVersion,
+		Key:                     Key{BackendKind: BackendGVisor, GuestArchitecture: "amd64", RuntimeManifestDigest: digest, ToolchainManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		SourceOCIManifestDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		FlatRootDigest:          "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		LaunchArtifacts:         []LaunchArtifact{{ID: "runsc", SHA256: digest}},
+		AgentProtocolGeneration: 1,
+		AgentFeatures:           []string{"exec", "files"},
+		BackendBuildID:          "gvisor-runner-v1",
+		HelperBuildID:           "runsc-release-20260817.0",
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	withoutFlatRoot := manifest
+	withoutFlatRoot.FlatRootDigest = ""
+	if err := withoutFlatRoot.Validate(); err == nil {
+		t.Fatal("gVisor materialization without a flat root digest was accepted")
+	}
+	withoutHelper := manifest
+	withoutHelper.HelperBuildID = ""
+	if err := withoutHelper.Validate(); err == nil {
+		t.Fatal("gVisor materialization without a runsc identity was accepted")
+	}
+}
+
+func TestManifestRejectsFirecrackerWithOCIBackendIdentity(t *testing.T) {
+	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	manifest := Manifest{
+		SchemaVersion:           SchemaVersion,
+		Key:                     Key{BackendKind: BackendFirecracker, GuestArchitecture: "amd64", RuntimeManifestDigest: digest, ToolchainManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		FlatRootDigest:          "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		LaunchArtifacts:         []LaunchArtifact{{ID: "kernel", SHA256: digest}},
+		AgentProtocolGeneration: 1,
+		AgentFeatures:           []string{"exec"},
+		BackendBuildID:          "firecracker-v1",
+	}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("Firecracker materialization carrying OCI-backend identity was accepted")
+	}
+}
+
+func TestExperimentalGVisorMaterializationFixture(t *testing.T) {
+	path := filepath.Join("..", "..", "deploy", "gvisor-linux-amd64.materialization.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture Manifest
+	if err := json.Unmarshal(content, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := fixture.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Key.BackendKind != BackendGVisor ||
+		loaded.Key.GuestArchitecture != "amd64" ||
+		loaded.HelperBuildID != "runsc-release-20260817.0" {
+		t.Fatalf("experimental gVisor materialization identity = %#v", loaded)
+	}
+}

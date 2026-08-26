@@ -20,6 +20,8 @@ func newPlatformAssignmentBackend(
 	switch composition.BackendKind {
 	case "microsandbox":
 		return newMicrosandboxAssignmentBackend(composition, workspaceStore)
+	case "gvisor":
+		return newGVisorAssignmentBackend(composition, workspaceStore)
 	case "firecracker":
 		manager, err := firecracker.New(composition.Firecracker)
 		if err != nil {

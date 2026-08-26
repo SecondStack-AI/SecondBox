@@ -87,6 +87,17 @@ func (backend *AssignmentBackend) OpenPort(
 	if err != nil {
 		return nil, err
 	}
+	return OpenPortOverSession(ctx, session, fence.AssignmentId, open)
+}
+
+// OpenPortOverSession opens one generation-fenced guest Port relay on any
+// retained negotiated guest session; the caller supplies fence validation.
+func OpenPortOverSession(
+	ctx context.Context,
+	session *GuestProtocolSession,
+	assignmentID string,
+	open *runnerprotocol.PortOpen,
+) (runnercontrol.PortConnection, error) {
 	if open == nil || open.GuestPort == 0 || open.GuestPort > 65535 ||
 		(open.Protocol != "tcp" && open.Protocol != "http") || open.IdleTimeoutMs == 0 {
 		return nil, fmt.Errorf("SecondBox Firecracker Port Open is invalid")
@@ -106,7 +117,7 @@ func (backend *AssignmentBackend) OpenPort(
 		return nil, err
 	}
 	operationBinding := &guestv1.OperationBinding{
-		Connection: binding, AssignmentId: fence.AssignmentId,
+		Connection: binding, AssignmentId: assignmentID,
 		OperationId: operationID, StreamId: operationID + "-port", Sequence: 1,
 	}
 	connection := &guestPortConnection{

@@ -4,14 +4,18 @@ umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scenario_backend="${SECONDBOX_SCENARIO_COMPUTE_BACKEND:-firecracker}"
-if [[ "$scenario_backend" != "firecracker" && "$scenario_backend" != "microsandbox" ]]; then
-  echo "SecondBox scenario prerequisite failed: SECONDBOX_SCENARIO_COMPUTE_BACKEND must be firecracker or microsandbox" >&2
+if [[ "$scenario_backend" != "firecracker" && "$scenario_backend" != "microsandbox" && "$scenario_backend" != "gvisor" ]]; then
+  echo "SecondBox scenario prerequisite failed: SECONDBOX_SCENARIO_COMPUTE_BACKEND must be firecracker, microsandbox, or gvisor" >&2
   exit 1
 fi
 export SECONDBOX_SCENARIO_COMPUTE_BACKEND="$scenario_backend"
 scenario_host_platform="${SECONDBOX_SCENARIO_HOST_PLATFORM:-linux}"
 if [[ "$scenario_host_platform" != "linux" && "$scenario_host_platform" != "darwin" ]]; then
   echo "SecondBox scenario prerequisite failed: SECONDBOX_SCENARIO_HOST_PLATFORM must be linux or darwin" >&2
+  exit 1
+fi
+if [[ "$scenario_backend" == "gvisor" && "$scenario_host_platform" != "linux" ]]; then
+  echo "SecondBox scenario prerequisite failed: the gVisor scenario supports Linux only" >&2
   exit 1
 fi
 if [[ "$scenario_host_platform" == "darwin" && "$scenario_backend" != "microsandbox" ]]; then
@@ -22,18 +26,50 @@ native_macos=false
 if [[ "$scenario_host_platform" == "darwin" ]]; then
   native_macos=true
 fi
+# The gVisor runner also qualifies as a privileged Kubernetes pod. In that
+# placement the runner lives outside Compose and a service-control script
+# translates every runner lifecycle verb, exactly like the native macOS path.
+runner_placement="${SECONDBOX_SCENARIO_RUNNER_PLACEMENT:-compose}"
+if [[ "$runner_placement" != "compose" && "$runner_placement" != "pod" ]]; then
+  echo "SecondBox scenario SECONDBOX_SCENARIO_RUNNER_PLACEMENT must be compose or pod" >&2
+  exit 1
+fi
+if [[ "$runner_placement" == "pod" && "$scenario_backend" != "gvisor" ]]; then
+  echo "SecondBox scenario pod placement is qualified only for the gvisor backend" >&2
+  exit 1
+fi
+runner_external=false
+if [[ "$native_macos" == "true" || "$runner_placement" == "pod" ]]; then
+  runner_external=true
+fi
 export SECONDBOX_SCENARIO_HOST_PLATFORM="$scenario_host_platform"
 qualification_evidence="$repo_root/.tmp/scenario-qualification-evidence.json"
 if [[ "$scenario_backend" == "microsandbox" ]]; then
   qualification_evidence="$repo_root/.tmp/microsandbox-$scenario_host_platform-scenario-qualification-evidence.json"
+elif [[ "$scenario_backend" == "gvisor" ]]; then
+  qualification_evidence="$repo_root/.tmp/gvisor-$scenario_host_platform-scenario-qualification-evidence.json"
+  if [[ "$runner_placement" == "pod" ]]; then
+    qualification_evidence="$repo_root/.tmp/gvisor-pod-$scenario_host_platform-scenario-qualification-evidence.json"
+  fi
 fi
 snapshot_resume_evidence="$repo_root/.tmp/2026-08-07-snapshot-resume-end-to-end.json"
 microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-13-microsandbox-$scenario_host_platform-cold-starts.json"
+if [[ "$scenario_backend" == "gvisor" ]]; then
+  microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-25-gvisor-$scenario_host_platform-cold-starts.json"
+  if [[ "$runner_placement" == "pod" ]]; then
+    microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-25-gvisor-pod-$scenario_host_platform-cold-starts.json"
+  fi
+fi
 rm -f -- "$qualification_evidence" "$snapshot_resume_evidence" "$microsandbox_cold_start_evidence"
 compose_file="$repo_root/scripts/scenario-compose.yml"
 compose_override_file=""
 if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
   compose_override_file="$repo_root/scripts/scenario-microsandbox-compose.yml"
+elif [[ "$scenario_backend" == "gvisor" ]]; then
+  compose_override_file="$repo_root/scripts/scenario-gvisor-compose.yml"
+  if [[ "$runner_placement" == "pod" ]]; then
+    compose_override_file="$repo_root/scripts/scenario-gvisor-pod-compose.yml"
+  fi
 fi
 scenario_root="$repo_root/.tmp/scenario"
 scenario_mode="${SECONDBOX_SCENARIO_MODE:-suite}"
@@ -113,6 +149,14 @@ if [[ "$scenario_mode" == "suite" ]]; then
       SECONDBOX_SCENARIO_SANDBOX_DISK_MIB * 1024 * 1024 * SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL
     ))
     export SECONDBOX_SCENARIO_MICROSANDBOX_WORKSPACE_TEMPLATE_CAPACITY_BYTES=$(( 64 * 1024 * 1024 ))
+  elif [[ "$scenario_backend" == "gvisor" ]]; then
+    export SECONDBOX_SCENARIO_SANDBOX_DISK_MIB=64
+    export SECONDBOX_SCENARIO_GVISOR_MAXIMUM_VCPUS=$SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL
+    export SECONDBOX_SCENARIO_GVISOR_MAXIMUM_MEMORY_BYTES=$(( 2048 * 1024 * 1024 ))
+    export SECONDBOX_SCENARIO_GVISOR_MAXIMUM_DISK_BYTES=$((
+      SECONDBOX_SCENARIO_SANDBOX_DISK_MIB * 1024 * 1024 * SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL
+    ))
+    export SECONDBOX_SCENARIO_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=$(( 64 * 1024 * 1024 ))
   fi
 else
   for variable in \
@@ -187,14 +231,19 @@ if [[ "$native_macos" == "true" ]]; then
   [[ "$(sysctl -n kern.hv_support)" == "1" ]] ||
     fail "Hypervisor.framework support is required"
 else
-  required_devices=(/dev/kvm)
-  if [[ "$scenario_backend" == "firecracker" ]]; then
-    required_devices+=(/dev/net/tun)
+  if [[ "$scenario_backend" == "gvisor" ]]; then
+    [[ ! -e /dev/kvm ]] ||
+      fail "the gVisor scenario qualifies hosts without /dev/kvm"
+  else
+    required_devices=(/dev/kvm)
+    if [[ "$scenario_backend" == "firecracker" ]]; then
+      required_devices+=(/dev/net/tun)
+    fi
+    for device in "${required_devices[@]}"; do
+      [[ -c "$device" && -r "$device" && -w "$device" ]] ||
+        fail "$device must be a readable and writable character device"
+    done
   fi
-  for device in "${required_devices[@]}"; do
-    [[ -c "$device" && -r "$device" && -w "$device" ]] ||
-      fail "$device must be a readable and writable character device"
-  done
 fi
 if [[ "$scenario_backend" == "firecracker" ]]; then
   [[ -r /sys/fs/cgroup/cgroup.controllers ]] ||
@@ -208,17 +257,25 @@ if [[ "$scenario_backend" == "firecracker" ]]; then
   : "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SecondBox Firecracker scenario requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY}"
   : "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SecondBox Firecracker scenario requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256}"
 else
+  : "${SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST:?SecondBox scenario requires SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST}"
+  : "${SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST:?SecondBox scenario requires SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST}"
+  if [[ "$scenario_backend" == "microsandbox" ]]; then
   : "${SECONDBOX_SCENARIO_MICROSANDBOX_BUILD:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_MICROSANDBOX_BUILD}"
   : "${SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION}"
   : "${SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST}"
-  : "${SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST}"
-  : "${SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST}"
+  fi
   # The base Compose service contains ignored Firecracker mounts. Bind explicit
   # existing local Microsandbox inputs to those targets so Compose can validate
   # one shared topology without introducing a signature requirement.
-  export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$SECONDBOX_SCENARIO_MICROSANDBOX_BUILD"
-  export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION"
-  export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"
+  if [[ "$scenario_backend" == "gvisor" ]]; then
+    export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$SECONDBOX_SCENARIO_GVISOR_BUILD"
+    export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION"
+    export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST"
+  else
+    export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$SECONDBOX_SCENARIO_MICROSANDBOX_BUILD"
+    export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION"
+    export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"
+  fi
 fi
 
 artifacts_dir="$SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR"
@@ -302,6 +359,27 @@ if [[ "$scenario_backend" == "firecracker" ]]; then
   fi
   architecture="$(jq -er '.architecture' "$artifacts_dir/manifest.json")" ||
     fail "artifact manifest lacks architecture"
+elif [[ "$scenario_backend" == "gvisor" ]]; then
+  : "${SECONDBOX_SCENARIO_GVISOR_BUILD:?SecondBox gVisor scenario requires SECONDBOX_SCENARIO_GVISOR_BUILD}"
+  : "${SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION:?SecondBox gVisor scenario requires SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION}"
+  : "${SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST:?SecondBox gVisor scenario requires SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST}"
+  materialization="$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION"
+  [[ "sha256:$(jq --compact-output --join-output . "$materialization" | sha256_stream | awk '{print $1}')" == "$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST" ]] ||
+    fail "gVisor materialization digest differs from its pinned identity"
+  [[ "$(jq -er '.schemaVersion' "$materialization")" == "secondbox.runner/backend-materialization/v1" &&
+     "$(jq -er '.key.backendKind' "$materialization")" == "gvisor" ]] ||
+    fail "gVisor materialization schema or backend kind is invalid"
+  runtime_digest="$SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"
+  toolchain_digest="$SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"
+  runtime_artifact_id="gvisor-runtime"
+  toolchain_artifact_id="gvisor-toolchain"
+  runtime_features='[]'
+  toolchain_features='[]'
+  guest_protocol_minimum=1
+  guest_protocol_maximum=1
+  architecture="$(jq -er '.key.guestArchitecture' "$materialization")" ||
+    fail "gVisor materialization lacks key.guestArchitecture"
+  manifest_digest="$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST"
 else
   materialization="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION"
   [[ "sha256:$(jq --compact-output --join-output . "$materialization" | sha256_stream | awk '{print $1}')" == "$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST" ]] ||
@@ -335,7 +413,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -trimpath -buildvcs=false -o "$scenario_root/secondboxd" "$repo_root/cmd/secondboxd"
 chmod 0755 "$scenario_root/secondboxd"
 runner_dockerfile="$repo_root/runner/Dockerfile"
-if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
+if [[ "$scenario_backend" != "firecracker" && "$native_macos" != "true" ]]; then
   (
     cd "$repo_root/runner"
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
@@ -344,6 +422,9 @@ if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; the
   )
   chmod 0755 "$scenario_root/secondbox-runner"
   runner_dockerfile="$repo_root/runner/Dockerfile.microsandbox-scenario"
+  if [[ "$scenario_backend" == "gvisor" ]]; then
+    runner_dockerfile="$repo_root/runner/Dockerfile.gvisor-scenario"
+  fi
 fi
 if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; then
   # The snapshot-resume template publisher is compiled on the host, where the
@@ -359,7 +440,7 @@ if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; th
 fi
 if [[ "$native_macos" != "true" ]]; then
   runner_build_arguments=(--quiet --file "$runner_dockerfile" --tag "$runner_image")
-  if [[ "$scenario_backend" == "microsandbox" ]]; then
+  if [[ "$scenario_backend" != "firecracker" ]]; then
     runner_build_arguments+=(--build-context "scenario=$scenario_root")
   fi
   docker build "${runner_build_arguments[@]}" "$repo_root" >/dev/null
@@ -368,6 +449,9 @@ else
   [[ "$(cd "$SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD" && pwd -P)" == "$SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD" ]] ||
     fail "SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD must be a clean absolute path"
   export SECONDBOX_SCENARIO_SERVICE_CONTROL="$repo_root/scripts/scenario-microsandbox-macos-service-control.sh"
+fi
+if [[ "$runner_placement" == "pod" ]]; then
+  export SECONDBOX_SCENARIO_SERVICE_CONTROL="$repo_root/scripts/scenario-gvisor-pod-service-control.sh"
 fi
 
 run_dir="$(mktemp -d "$scenario_root/run.XXXXXX")"
@@ -436,7 +520,7 @@ export SECONDBOX_RUNNER_CA_CERTIFICATE="$pki_dir/runner-ca.crt"
 export SECONDBOX_RUNNER_CA_PRIVATE_KEY="$pki_dir/runner-ca.key"
 export SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS=2
 "$repo_root/scripts/issue-scenario-runner-identity.sh" "$identity_dir" >/dev/null
-if [[ "$scenario_backend" == "microsandbox" ]]; then
+if [[ "$scenario_backend" != "firecracker" ]]; then
   SECONDBOX_RUNNER_ID=scenario-runner-relocation \
     "$repo_root/scripts/issue-scenario-runner-identity.sh" "$relocation_identity_dir" >/dev/null
 fi
@@ -602,7 +686,7 @@ collect_diagnostics() {
   [[ -n "$diagnostics_dir" ]] || return 0
   mkdir -m 0700 -- "$diagnostics_dir" ||
     return 1
-  if [[ "$native_macos" == "true" ]]; then
+  if [[ "$runner_external" == "true" ]]; then
     "$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs secondbox-runner \
       >"$diagnostics_dir/runner.jsonl" || return 1
   else
@@ -630,7 +714,7 @@ cleanup() {
     if ! compose ps --all >&2; then
       echo "SecondBox scenario could not collect container state" >&2
     fi
-    if [[ "$native_macos" == "true" ]]; then
+    if [[ "$runner_external" == "true" ]]; then
       "$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs secondbox-runner >&2 ||
         echo "SecondBox scenario could not collect native runner application logs" >&2
     elif ! compose exec --no-TTY secondbox-runner \
@@ -644,7 +728,7 @@ cleanup() {
       'find /var/lib/secondbox-runner/firecracker-log -type f -exec tail -n 200 {} +' >&2; then
       echo "SecondBox scenario could not collect Firecracker logs" >&2
     fi
-    if [[ "$native_macos" == "true" ]]; then
+    if [[ "$runner_external" == "true" ]]; then
       failure_logs=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs --tail 200 control-plane secondbox-runner postgres)
     else
       failure_logs=(compose logs --tail 200 control-plane secondbox-runner postgres)
@@ -656,7 +740,7 @@ cleanup() {
   # The Runner container restarts unless it is stopped and every start reapplies
   # host networking, so the bridge can only be removed once the container can no
   # longer come back and recreate it.
-  if [[ "$native_macos" == "true" ]]; then
+  if [[ "$runner_external" == "true" ]]; then
     runner_stop_command=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" stop secondbox-runner)
     "$SECONDBOX_SCENARIO_SERVICE_CONTROL" stop secondbox-runner-relocation >/dev/null 2>&1 || true
   else
@@ -676,7 +760,7 @@ cleanup() {
     status=1
   fi
   compose_down_arguments=(down --volumes --remove-orphans)
-  if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
+  if [[ "$scenario_backend" != "firecracker" && "$runner_external" != "true" ]]; then
     # Docker Compose excludes inactive profile services from `down`. The
     # relocation runner may be stopped but still retain the locally built
     # image, so activate its profile for complete topology cleanup.
@@ -739,6 +823,11 @@ cleanup() {
     wall_clock_seconds="$(( $(date +%s) - scenario_started_epoch ))"
     if [[ "$scenario_backend" == "firecracker" ]]; then
       evidence_suite="test-scenario"
+    elif [[ "$scenario_backend" == "gvisor" ]]; then
+      evidence_suite="test-scenario-gvisor"
+      if [[ "$runner_placement" == "pod" ]]; then
+        evidence_suite="test-scenario-gvisor-pod"
+      fi
     else
       evidence_suite="test-scenario-microsandbox-$scenario_host_platform"
     fi
@@ -769,13 +858,14 @@ cleanup() {
           tun: {required: false}
         } else {
           platform: "linux-amd64",
-          kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
+          kvm: (if $backend == "gvisor" then {required: false, present: false}
+            else {path: "/dev/kvm", present: true, readable: true, writable: true} end),
           tun: (if $backend == "firecracker" then
             {path: "/dev/net/tun", present: true, readable: true, writable: true}
           else {required: false} end)
         } end),
         qualifiedAt: $qualifiedAt
-      } + if $backend == "microsandbox" then {backend: $backend} else {} end' \
+      } + if $backend != "firecracker" then {backend: $backend} else {} end' \
       >"$qualification_evidence_temporary" ||
       ! mv -- "$qualification_evidence_temporary" "$qualification_evidence"; then
       rm -f -- "$qualification_evidence_temporary" "$qualification_evidence"
@@ -910,7 +1000,7 @@ if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; th
   echo "SecondBox scenario snapshot-resume template: $SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ID"
 fi
 
-if [[ "$native_macos" == "true" ]]; then
+if [[ "$runner_external" == "true" ]]; then
   "$SECONDBOX_SCENARIO_SERVICE_CONTROL" up --detach --wait --wait-timeout 300 secondbox-runner
 else
   compose up --detach --wait --wait-timeout 300 secondbox-runner

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/pid1"
 	"golang.org/x/sys/unix"
 )
 
@@ -350,7 +351,7 @@ func (c *protocolConnection) runExec(ctx context.Context, state *protocolExecSta
 			stdin = ptyProcess
 		}
 	} else {
-		startErr = cmd.Start()
+		startErr = pid1.GuardedStart(cmd.Start)
 	}
 	if startErr != nil {
 		if sendErr := c.sendExec(state, &guestv1.ExecFrame{
@@ -414,6 +415,7 @@ func (c *protocolConnection) runExec(ctx context.Context, state *protocolExecSta
 		}
 	} else {
 		waitErr = cmd.Wait()
+		pid1.Release()
 	}
 	close(processDone)
 

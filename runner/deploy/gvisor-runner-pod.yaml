@@ -1,0 +1,163 @@
+# Reference privileged gVisor runner pod. This manifest is the qualified
+# surface for running the SecondBox gVisor runner on Kubernetes; broader
+# manifests (Deployments, operators, admission wiring) remain operator-authored
+# and unqualified. Replace every OPERATOR_* placeholder with reviewed values.
+#
+# Shape, in the order the qualification proved it:
+# - one privileged, node-pinned pod per runner on a dedicated tainted node
+#   pool without KVM;
+# - sandbox cgroups nest inside this pod's slice, so the pod's resource
+#   requests and limits must equal the node's declared sandbox budget plus the
+#   runner's own overhead;
+# - the WorkspaceStore root is a node-local reflink-capable (Btrfs/XFS)
+#   volume; Workspace mounts stay inside the pod's mount namespaces;
+# - the data plane is proxied through the control plane by default. The
+#   optional hostPort below is the qualified direct-transport path; delete it
+#   to stay proxied-only.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secondbox-gvisor-runner
+  labels:
+    app.kubernetes.io/name: secondbox-gvisor-runner
+spec:
+  restartPolicy: Always
+  terminationGracePeriodSeconds: 45
+  # Pin to one node of a dedicated pool: each runner owns its node's sandbox
+  # budget, loop devices, and workspace volume.
+  nodeName: OPERATOR_NODE_NAME
+  tolerations:
+    - key: secondbox.ai/gvisor-runner
+      operator: Exists
+      effect: NoSchedule
+  containers:
+    - name: runner
+      image: OPERATOR_REGISTRY/secondbox/runner-gvisor@sha256:OPERATOR_IMAGE_DIGEST
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        privileged: true
+      resources:
+        # Equal to the node's declared sandbox budget plus runner overhead;
+        # per-sandbox cgroups nest under this pod's slice and are capped by it.
+        requests:
+          cpu: "OPERATOR_SANDBOX_BUDGET_CPU"
+          memory: OPERATOR_SANDBOX_BUDGET_MEMORY
+        limits:
+          cpu: "OPERATOR_SANDBOX_BUDGET_CPU"
+          memory: OPERATOR_SANDBOX_BUDGET_MEMORY
+      # The data plane is proxied through the control plane by default: no
+      # hostPort is published and the advertised address stays loopback. The
+      # qualified direct-transport option is an explicit operator overlay that
+      # adds `ports: [{containerPort: 9500, hostPort: 9500}]` and changes the
+      # advertised address to the routable node address.
+      readinessProbe:
+        exec:
+          command: ["/usr/local/bin/secondbox-runner", "-healthcheck", "-healthcheck-timeout", "5s"]
+        initialDelaySeconds: 3
+        periodSeconds: 5
+        timeoutSeconds: 6
+        failureThreshold: 12
+      env:
+        - name: SECONDBOX_COMPUTE_BACKEND
+          value: "gvisor"
+        - name: SECONDBOX_RUNNER_ID
+          value: "OPERATOR_RUNNER_ID"
+        - name: SECONDBOX_RUNNER_POOL_ID
+          value: "OPERATOR_GVISOR_POOL_ID"
+        - name: SECONDBOX_RUNNER_SOFTWARE_VERSION
+          value: "OPERATOR_RELEASE_VERSION_OR_COMMIT"
+        - name: SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS
+          value: "OPERATOR_CONCURRENT_STARTS"
+        - name: SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES
+          value: "OPERATOR_CONCURRENT_WORKSPACE_CREATES"
+        - name: SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS
+          value: "OPERATOR_CONTROL_PLANE_HOST:9443"
+        - name: SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME
+          value: "OPERATOR_CONTROL_PLANE_SERVER_NAME"
+        - name: SECONDBOX_RUNNER_CREDENTIAL
+          valueFrom:
+            secretKeyRef:
+              name: secondbox-gvisor-runner-identity
+              key: credential
+        - name: SECONDBOX_RUNNER_CLIENT_CERTIFICATE
+          value: /opt/secondbox-runner-identity/runner.crt
+        - name: SECONDBOX_RUNNER_CLIENT_KEY
+          value: /opt/secondbox-runner-identity/runner.key
+        - name: SECONDBOX_RUNNER_CONTROL_PLANE_CA
+          value: /opt/secondbox-runner-identity/runner-ca.crt
+        - name: SECONDBOX_RUNNER_LOG_DIR
+          value: /var/lib/secondbox-runner/log
+        - name: SECONDBOX_RUNNER_LOG_PATH
+          value: /var/lib/secondbox-runner/log/runner.jsonl
+        - name: SECONDBOX_RUNNER_WORKSPACE_ROOT
+          value: /w
+        - name: SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
+          value: "0.0.0.0:9500"
+        # Proxied-only default: the listener stays pod-local and the
+        # advertised address is loopback, so the control-plane proxy is the
+        # sole data path. The direct-transport overlay replaces this with the
+        # routable node address alongside its hostPort.
+        - name: SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS
+          value: "127.0.0.1:9500"
+        - name: SECONDBOX_GVISOR_RUNSC_PATH
+          value: /usr/local/bin/runsc
+        - name: SECONDBOX_GVISOR_AGENT_PATH
+          value: /usr/local/bin/secondbox-guest-agent
+        - name: SECONDBOX_GVISOR_FLAT_ROOT_PATH
+          value: /opt/secondbox-gvisor/rootfs
+        - name: SECONDBOX_GVISOR_MATERIALIZATION_PATH
+          value: /opt/secondbox-gvisor/materialization.json
+        - name: SECONDBOX_GVISOR_MATERIALIZATION_DIGEST
+          value: "sha256:OPERATOR_CANONICAL_MATERIALIZATION_DIGEST"
+        - name: SECONDBOX_GVISOR_RUNTIME_DIR
+          value: /run/secondbox-gvisor
+        - name: SECONDBOX_GVISOR_MAXIMUM_VCPUS
+          value: "OPERATOR_MAXIMUM_VCPUS"
+        - name: SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES
+          value: "OPERATOR_MAXIMUM_MEMORY_BYTES"
+        - name: SECONDBOX_GVISOR_MAXIMUM_DISK_BYTES
+          value: "OPERATOR_MAXIMUM_DISK_BYTES"
+        - name: SECONDBOX_GVISOR_MAXIMUM_INSTANCES
+          value: "OPERATOR_MAXIMUM_INSTANCES"
+        - name: SECONDBOX_GVISOR_MAXIMUM_OPERATIONS
+          value: "OPERATOR_MAXIMUM_OPERATIONS"
+        - name: SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES
+          value: "OPERATOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES"
+        # Keep 0 unless more than one runner pod shares this node's network
+        # namespace; distinct profiles separate their DNS proxies, slot
+        # spaces, and link names.
+        - name: SECONDBOX_GVISOR_NETWORK_PROFILE
+          value: "0"
+      volumeMounts:
+        - name: identity
+          mountPath: /opt/secondbox-runner-identity
+          readOnly: true
+        - name: gvisor-materialized
+          mountPath: /opt/secondbox-gvisor
+          readOnly: true
+        - name: state
+          mountPath: /var/lib/secondbox-runner
+        - name: workspace
+          mountPath: /w
+  volumes:
+    # Per-runner identity: the mTLS keypair and CA. The runner credential
+    # rides the same Secret as its own key.
+    - name: identity
+      secret:
+        secretName: secondbox-gvisor-runner-identity
+        defaultMode: 0o400
+    # The digest-pinned flat root and materialization manifest, materialized
+    # onto the node by the operator's artifact flow.
+    - name: gvisor-materialized
+      hostPath:
+        path: /var/lib/secondbox-gvisor-materialized
+        type: Directory
+    - name: state
+      hostPath:
+        path: /var/lib/secondbox-runner
+        type: DirectoryOrCreate
+    # Node-local reflink-capable (Btrfs/XFS) volume for the WorkspaceStore.
+    - name: workspace
+      hostPath:
+        path: /var/lib/secondbox-workspaces
+        type: Directory

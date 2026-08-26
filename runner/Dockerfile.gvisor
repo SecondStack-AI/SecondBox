@@ -1,0 +1,72 @@
+# The gVisor runner image: the runner, the guest agent, the pinned runsc
+# release, and the ext4/loop/nftables toolchain the backend drives on the
+# host. No hypervisor, kernel, or TAP tooling ships here; the image serves
+# no-KVM hosts and the privileged runner pod, and the flat root plus the
+# materialization manifest arrive as digest-verified operator inputs.
+ARG RELEASE_VERSION
+ARG SOURCE_COMMIT
+ARG PUBLIC_CONTRACT_DIGEST
+
+FROM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS runner-builder
+
+ARG RELEASE_VERSION
+ARG SOURCE_COMMIT
+
+WORKDIR /src/runner
+COPY runner/go.mod runner/go.sum ./
+RUN go mod download && go mod verify
+COPY runner/ ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+      -ldflags="-X main.releaseVersion=${RELEASE_VERSION} -X main.sourceCommit=${SOURCE_COMMIT}" \
+      -o /out/secondbox-runner ./cmd/secondbox-runner \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+      -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent
+
+FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c AS runsc-release
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --chmod=0755 runner/scripts/fetch-runsc.sh /usr/local/bin/fetch-runsc
+RUN /usr/local/bin/fetch-runsc --output /out
+
+FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c
+
+ARG RELEASE_VERSION
+ARG SOURCE_COMMIT
+ARG PUBLIC_CONTRACT_DIGEST
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates e2fsprogs iproute2 nftables procps util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 secondbox-runner \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/secondbox-runner --create-home --shell /usr/sbin/nologin secondbox-runner \
+    && install -d -m 0700 /var/lib/secondbox-runner \
+    # The privileged runner sees host /dev; console and session-management
+    # binaries must not exist in an image that could reach host consoles.
+    && rm -f /usr/lib/systemd/systemd /usr/sbin/agetty /sbin/agetty /usr/bin/login /bin/login /usr/sbin/sulogin /sbin/sulogin /usr/sbin/getty /sbin/getty \
+    && test ! -e /usr/lib/systemd/systemd \
+    && test ! -e /usr/sbin/agetty \
+    && test ! -e /sbin/agetty \
+    && test ! -e /usr/bin/login \
+    && test ! -e /usr/sbin/sulogin
+
+LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondBox" \
+      org.opencontainers.image.title="SecondBox gVisor runner" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      ai.secondstack.secondbox.public-contract-digest="${PUBLIC_CONTRACT_DIGEST}"
+
+COPY --from=runner-builder /out/secondbox-runner /usr/local/bin/secondbox-runner
+COPY --from=runner-builder /out/secondbox-guest-agent /usr/local/bin/secondbox-guest-agent
+COPY --from=runsc-release /out/runsc /usr/local/bin/runsc
+COPY LICENSE /usr/share/licenses/secondbox-runner/LICENSE
+
+# The gVisor runner holds loop, mount-namespace, and nftables authority, so it
+# runs as root; the runsc sandboxes it launches are the isolation boundary.
+USER 0:0
+WORKDIR /var/lib/secondbox-runner
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=4 CMD ["/usr/local/bin/secondbox-runner", "-healthcheck", "-healthcheck-timeout", "5s"]
+ENTRYPOINT ["/usr/local/bin/secondbox-runner"]

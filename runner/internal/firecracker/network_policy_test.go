@@ -307,6 +307,45 @@ func TestNFTablesNetworkPolicyEnforcerFailsHardAndRemovesState(t *testing.T) {
 	}
 }
 
+// TestNFTablesRemoveDropsStateWhenTablesAreAlreadyAbsent proves an
+// already-missing table still clears the Instance's in-memory entry: a
+// retained canceled entry would answer DNS pin decisions for whichever
+// Instance later reuses the slot's guest address.
+func TestNFTablesRemoveDropsStateWhenTablesAreAlreadyAbsent(t *testing.T) {
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode: networkpolicy.ModeDenyAll,
+	}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := true
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		nftPath: "/usr/sbin/nft",
+		now:     time.Now,
+		run: func(context.Context, string, []string, string) ([]byte, error) {
+			if install {
+				return nil, nil
+			}
+			return []byte(`Error: No such file or directory; delete table inet secondbox_x`), errors.New("exit status 1")
+		},
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "fc-reuse-1", TapName: "sbtap9", GuestIP: "10.20.0.9", Policy: compiled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	install = false
+	if err := enforcer.Remove(context.Background(), "fc-reuse-1"); err != nil {
+		t.Fatalf("remove with absent tables = %v", err)
+	}
+	enforcer.mu.Lock()
+	_, retained := enforcer.instances["fc-reuse-1"]
+	enforcer.mu.Unlock()
+	if retained {
+		t.Fatal("canceled Instance entry survived an already-absent table removal")
+	}
+}
+
 func TestNFTablesNetworkPolicyPinsAreSandboxScopedAndExpire(t *testing.T) {
 	compile := func() *networkpolicy.CompiledPolicy {
 		policy, err := networkpolicy.Compile(networkpolicy.Policy{

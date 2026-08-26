@@ -99,7 +99,7 @@ for _ in range(50):
     except OSError:
         time.sleep(0.1)
 raise SystemExit(1)'`
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "firecracker" {
 		serverCommand = `nohup sh -c 'while :; do { printf "HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\n"; cat /workspace/port-response.txt; } | nc -l -p 8080; done' >/workspace/port-server.log 2>&1 </dev/null & sleep 1`
 	}
 	server := executeScenarioCommand(
@@ -438,7 +438,7 @@ func TestScenarioNetworkPolicyDenyAndAllowList(t *testing.T) {
 	denied, _ := createScenarioSandbox(t, fixture, denyProfile, "network-deny")
 	waitForSandbox(t, ctx, denied, secondboxclient.SandboxStateReady)
 	networkProbe := "curl --silent --show-error --connect-timeout 3 --max-time 5 http://example.com/ >/dev/null"
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "firecracker" {
 		networkProbe = "wget -q -T 5 -O /dev/null http://example.com/"
 	}
 	deniedOutcome := executeScenarioCommand(

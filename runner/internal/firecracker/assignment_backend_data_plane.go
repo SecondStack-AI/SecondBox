@@ -24,6 +24,20 @@ func (b *AssignmentBackend) ExecuteStreaming(
 	if err != nil {
 		return nil, err
 	}
+	return ExecuteStreamingOverSession(ctx, session, fence.AssignmentId, open, controls, emit)
+}
+
+// ExecuteStreamingOverSession bridges one runner streaming Exec onto any
+// retained negotiated guest session; every backend that holds a
+// GuestProtocolSession shares this translation.
+func ExecuteStreamingOverSession(
+	ctx context.Context,
+	session *GuestProtocolSession,
+	assignmentID string,
+	open *runnerprotocol.ExecOpen,
+	controls <-chan runnercontrol.ExecControl,
+	emit func(runnerprotocol.ExecOutputChannel, []byte) error,
+) (*runnerprotocol.ExecTerminal, error) {
 	request, err := guestExecRequest(open)
 	if err != nil {
 		return nil, err
@@ -57,7 +71,7 @@ func (b *AssignmentBackend) ExecuteStreaming(
 	}()
 	result, err := session.ExecuteStreaming(
 		ctx,
-		fence.AssignmentId,
+		assignmentID,
 		request,
 		guestControls,
 		func(channel guestv1.ExecOutputChannel, data []byte) error {
@@ -82,6 +96,19 @@ func (b *AssignmentBackend) ExecutePTY(
 	if err != nil {
 		return nil, err
 	}
+	return ExecutePTYOverSession(ctx, session, fence.AssignmentId, open, controls, emit)
+}
+
+// ExecutePTYOverSession bridges one runner Terminal operation onto any
+// retained negotiated guest session.
+func ExecutePTYOverSession(
+	ctx context.Context,
+	session *GuestProtocolSession,
+	assignmentID string,
+	open *runnerprotocol.ExecOpen,
+	controls <-chan runnercontrol.PTYControl,
+	emit func([]byte) error,
+) (*runnerprotocol.ExecTerminal, error) {
 	request, err := guestExecRequest(open)
 	if err != nil {
 		return nil, err
@@ -112,7 +139,7 @@ func (b *AssignmentBackend) ExecutePTY(
 		}
 	}()
 	result, err := session.ExecutePTY(
-		ctx, fence.AssignmentId, request, guestControls, emit,
+		ctx, assignmentID, request, guestControls, emit,
 	)
 	if err != nil {
 		return nil, err
@@ -132,12 +159,23 @@ func (b *AssignmentBackend) ExecuteBuffered(
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}
+	return ExecuteBufferedOverSession(ctx, session, fence.AssignmentId, open)
+}
+
+// ExecuteBufferedOverSession bridges one runner buffered Exec onto any
+// retained negotiated guest session.
+func ExecuteBufferedOverSession(
+	ctx context.Context,
+	session *GuestProtocolSession,
+	assignmentID string,
+	open *runnerprotocol.ExecOpen,
+) (runnercontrol.BufferedExecResult, error) {
 	request, err := guestExecRequest(open)
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}
 	request.Streaming = false
-	result, err := session.ExecuteBuffered(ctx, fence.AssignmentId, request)
+	result, err := session.ExecuteBuffered(ctx, assignmentID, request)
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}
@@ -235,6 +273,18 @@ func (b *AssignmentBackend) ExecuteFile(
 	if err != nil {
 		return runnercontrol.FileOperationResult{}, err
 	}
+	return ExecuteFileOverSession(ctx, session, fence.AssignmentId, open, content)
+}
+
+// ExecuteFileOverSession bridges the complete runner v1 filesystem subset
+// onto any retained negotiated guest session.
+func ExecuteFileOverSession(
+	ctx context.Context,
+	session *GuestProtocolSession,
+	assignmentID string,
+	open *runnerprotocol.FileOpen,
+	content []byte,
+) (runnercontrol.FileOperationResult, error) {
 	if open == nil {
 		return runnercontrol.FileOperationResult{}, fmt.Errorf("SecondBox Firecracker File Open is required")
 	}
@@ -249,7 +299,7 @@ func (b *AssignmentBackend) ExecuteFile(
 	if open.Operation == runnerprotocol.FileOperation_FILE_OPERATION_WRITE {
 		request.CreateMode = runnerFileCreateMode
 	}
-	result, err := session.ExecuteFileOperation(ctx, fence.AssignmentId, request, content)
+	result, err := session.ExecuteFileOperation(ctx, assignmentID, request, content)
 	if err != nil {
 		return runnercontrol.FileOperationResult{}, err
 	}

@@ -10,4 +10,6 @@ SecondBox does not ship Helm charts, Deployments, Services, Jobs, PodDisruptionB
 
 Firecracker runners require qualified Linux hosts with KVM, cgroup, networking, storage, and cleanup capabilities. The supported v1 runner deployment is a standalone binary or systemd-managed service on those hosts. A future runner DaemonSet or Kubernetes-native sandbox backend requires its own qualification and does not inherit support from the control plane's portability.
 
+The experimental gVisor runner is additionally qualified as a privileged, node-pinned pod on a Kubernetes node without KVM. The qualified surface is exactly the reference manifest at `runner/deploy/gvisor-runner-pod.yaml`: one privileged pod per dedicated tainted node, sandbox cgroups nested inside the pod budget, a node-local reflink volume, a per-runner identity Secret, the proxied data plane by default, and hostPort as the only qualified direct-transport option. Broader Kubernetes manifests around it remain operator-authored and outside qualification. See the [gVisor runtime](gvisor-runtime.md) document.
+
 See [service boundaries](../design/service-boundaries.md), [runner protocol](../design/runner-protocol.md), and [Firecracker runtime](firecracker-runtime.md).

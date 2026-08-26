@@ -10,8 +10,8 @@ if [[ "${SECONDBOX_COMPUTE_BACKEND:-}" == "firecracker" ]]; then
     SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT
     SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT
   )
-elif [[ "${SECONDBOX_COMPUTE_BACKEND:-}" != "microsandbox" ]]; then
-  echo "SECONDBOX_COMPUTE_BACKEND must be firecracker or microsandbox" >&2
+elif [[ "${SECONDBOX_COMPUTE_BACKEND:-}" != "microsandbox" && "${SECONDBOX_COMPUTE_BACKEND:-}" != "gvisor" ]]; then
+  echo "SECONDBOX_COMPUTE_BACKEND must be firecracker, microsandbox, or gvisor" >&2
   exit 2
 fi
 for variable in "${required_paths[@]}"; do
@@ -23,7 +23,7 @@ done
 
 install -d -o 10001 -g 10001 -m 0750 "$SECONDBOX_RUNNER_WORKSPACE_ROOT"
 install -d -o 10001 -g 10001 -m 0750 "$SECONDBOX_RUNNER_LOG_DIR"
-if [[ "$SECONDBOX_COMPUTE_BACKEND" == "microsandbox" ]]; then
+if [[ "$SECONDBOX_COMPUTE_BACKEND" != "firecracker" ]]; then
   exec /usr/local/bin/secondbox-runner
 fi
 install -d -o 0 -g 0 -m 0700 \

@@ -1243,3 +1243,105 @@ func task4ID(prefix string) string {
 func task4IDForIndex(prefix string, index int) string {
 	return prefix + "-" + big.NewInt(task4Sequence.Add(1)).String() + "-" + big.NewInt(int64(index)).String()
 }
+
+// TestRunnerPoolSealsToGVisorAndRejectsOtherBackends proves the third backend
+// kind registers through the same evidence validation and seals a pool exactly
+// like the first two, with no sealing-mechanism change.
+func TestRunnerPoolSealsToGVisorAndRejectsOtherBackends(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	poolName := task4ID("gvisor-sealed-pool")
+	task4InsertRunnerPool(t, poolName, now)
+	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+
+	register := func(runnerID, connectionID string, registration *runnerv1.RunnerRegistration) error {
+		issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
+		if err != nil {
+			return err
+		}
+		if err := stateStore.OpenConnection(t.Context(), issued.Identity, connectionID, 1, now); err != nil {
+			return err
+		}
+		_, err = stateStore.RecordRegistration(t.Context(), registration, now)
+		return err
+	}
+
+	gvisorRunner, gvisorConnection := task4ID("gvisor-runner"), task4ID("gvisor-connection")
+	gvisorRegistration := task4Registration(gvisorRunner, gvisorConnection, poolName)
+	gvisorRegistration.BackendKind = runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR
+	gvisorRegistration.Materializations[0].BackendKind = gvisorRegistration.BackendKind
+	gvisorRegistration.Materializations[0].SourceOciManifestDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	gvisorRegistration.Materializations[0].FlatRootDigest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	gvisorRegistration.Materializations[0].HelperBuildId = "runsc-release-20260817.0"
+	if err := register(gvisorRunner, gvisorConnection, gvisorRegistration); err != nil {
+		t.Fatal(err)
+	}
+
+	databasePool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databasePool.Close)
+	var sealedKind string
+	if err := databasePool.QueryRow(t.Context(), `SELECT backend_kind FROM secondbox.runner_pools WHERE name=$1`, poolName).Scan(&sealedKind); err != nil {
+		t.Fatal(err)
+	}
+	if sealedKind != "gvisor" {
+		t.Fatalf("sealed backend kind = %q", sealedKind)
+	}
+
+	firecrackerRunner, firecrackerConnection := task4ID("firecracker-into-gvisor"), task4ID("firecracker-into-gvisor-connection")
+	mismatch := task4Registration(firecrackerRunner, firecrackerConnection, poolName)
+	if err := register(firecrackerRunner, firecrackerConnection, mismatch); err == nil || !strings.Contains(err.Error(), "sealed to a different compute backend") {
+		t.Fatalf("firecracker into gvisor pool registration error = %v", err)
+	}
+}
+
+// TestGVisorRegistrationRequiresOCIMaterializationEvidence proves the evidence
+// branch: a gVisor registration without the digest-pinned OCI identity is
+// rejected before the pool seals.
+func TestGVisorRegistrationRequiresOCIMaterializationEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 30, 0, 0, time.UTC)
+	poolName := task4ID("gvisor-evidence-pool")
+	task4InsertRunnerPool(t, poolName, now)
+	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+
+	runnerID, connectionID := task4ID("gvisor-incomplete-runner"), task4ID("gvisor-incomplete-connection")
+	registration := task4Registration(runnerID, connectionID, poolName)
+	registration.BackendKind = runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR
+	registration.Materializations[0].BackendKind = registration.BackendKind
+	// The OCI identity fields stay empty: this must fail prerequisites.
+	issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.OpenConnection(t.Context(), issued.Identity, connectionID, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stateStore.RecordRegistration(t.Context(), registration, now); err == nil {
+		t.Fatal("gVisor registration without OCI materialization evidence was accepted")
+	}
+	var sealedKind string
+	databasePool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databasePool.Close)
+	if err := databasePool.QueryRow(t.Context(), `SELECT backend_kind FROM secondbox.runner_pools WHERE name=$1`, poolName).Scan(&sealedKind); err != nil {
+		t.Fatal(err)
+	}
+	if sealedKind != "" {
+		t.Fatalf("pool sealed to %q by a rejected registration", sealedKind)
+	}
+}

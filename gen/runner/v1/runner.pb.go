@@ -143,6 +143,7 @@ const (
 	ComputeBackendKind_COMPUTE_BACKEND_KIND_UNSPECIFIED  ComputeBackendKind = 0
 	ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER  ComputeBackendKind = 1
 	ComputeBackendKind_COMPUTE_BACKEND_KIND_MICROSANDBOX ComputeBackendKind = 2
+	ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR       ComputeBackendKind = 3
 )
 
 // Enum value maps for ComputeBackendKind.
@@ -151,11 +152,13 @@ var (
 		0: "COMPUTE_BACKEND_KIND_UNSPECIFIED",
 		1: "COMPUTE_BACKEND_KIND_FIRECRACKER",
 		2: "COMPUTE_BACKEND_KIND_MICROSANDBOX",
+		3: "COMPUTE_BACKEND_KIND_GVISOR",
 	}
 	ComputeBackendKind_value = map[string]int32{
 		"COMPUTE_BACKEND_KIND_UNSPECIFIED":  0,
 		"COMPUTE_BACKEND_KIND_FIRECRACKER":  1,
 		"COMPUTE_BACKEND_KIND_MICROSANDBOX": 2,
+		"COMPUTE_BACKEND_KIND_GVISOR":       3,
 	}
 )
 
@@ -2211,15 +2214,21 @@ type BackendMaterializationEvidence struct {
 	RuntimeManifestDigest   string                 `protobuf:"bytes,4,opt,name=runtime_manifest_digest,json=runtimeManifestDigest,proto3" json:"runtime_manifest_digest,omitempty"`
 	ToolchainManifestDigest string                 `protobuf:"bytes,5,opt,name=toolchain_manifest_digest,json=toolchainManifestDigest,proto3" json:"toolchain_manifest_digest,omitempty"`
 	MaterializationDigest   string                 `protobuf:"bytes,6,opt,name=materialization_digest,json=materializationDigest,proto3" json:"materialization_digest,omitempty"`
-	SourceOciManifestDigest string                 `protobuf:"bytes,7,opt,name=source_oci_manifest_digest,json=sourceOciManifestDigest,proto3" json:"source_oci_manifest_digest,omitempty"`
-	FlatRootDigest          string                 `protobuf:"bytes,8,opt,name=flat_root_digest,json=flatRootDigest,proto3" json:"flat_root_digest,omitempty"`
-	AgentProtocolGeneration uint32                 `protobuf:"varint,9,opt,name=agent_protocol_generation,json=agentProtocolGeneration,proto3" json:"agent_protocol_generation,omitempty"`
-	AgentFeatures           []string               `protobuf:"bytes,10,rep,name=agent_features,json=agentFeatures,proto3" json:"agent_features,omitempty"`
-	BackendBuildId          string                 `protobuf:"bytes,11,opt,name=backend_build_id,json=backendBuildId,proto3" json:"backend_build_id,omitempty"`
-	HelperBuildId           string                 `protobuf:"bytes,12,opt,name=helper_build_id,json=helperBuildId,proto3" json:"helper_build_id,omitempty"`
-	VerifiedAtUnixMs        uint64                 `protobuf:"varint,13,opt,name=verified_at_unix_ms,json=verifiedAtUnixMs,proto3" json:"verified_at_unix_ms,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// source_oci_manifest_digest and flat_root_digest are required for the
+	// Microsandbox and gVisor kinds, whose root filesystems are materialized
+	// from a digest-pinned OCI reference; Firecracker leaves them empty.
+	SourceOciManifestDigest string   `protobuf:"bytes,7,opt,name=source_oci_manifest_digest,json=sourceOciManifestDigest,proto3" json:"source_oci_manifest_digest,omitempty"`
+	FlatRootDigest          string   `protobuf:"bytes,8,opt,name=flat_root_digest,json=flatRootDigest,proto3" json:"flat_root_digest,omitempty"`
+	AgentProtocolGeneration uint32   `protobuf:"varint,9,opt,name=agent_protocol_generation,json=agentProtocolGeneration,proto3" json:"agent_protocol_generation,omitempty"`
+	AgentFeatures           []string `protobuf:"bytes,10,rep,name=agent_features,json=agentFeatures,proto3" json:"agent_features,omitempty"`
+	BackendBuildId          string   `protobuf:"bytes,11,opt,name=backend_build_id,json=backendBuildId,proto3" json:"backend_build_id,omitempty"`
+	// helper_build_id carries the backend's pinned local launch-runtime
+	// identity: the Rust helper build for Microsandbox and the pinned runsc
+	// release digest for gVisor. Firecracker leaves it empty.
+	HelperBuildId    string `protobuf:"bytes,12,opt,name=helper_build_id,json=helperBuildId,proto3" json:"helper_build_id,omitempty"`
+	VerifiedAtUnixMs uint64 `protobuf:"varint,13,opt,name=verified_at_unix_ms,json=verifiedAtUnixMs,proto3" json:"verified_at_unix_ms,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *BackendMaterializationEvidence) Reset() {
@@ -9356,11 +9365,12 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"+PROTOCOL_REJECTION_KIND_VERSION_UNSUPPORTED\x10\x01\x12/\n" +
 	"+PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED\x10\x02\x12-\n" +
 	")PROTOCOL_REJECTION_KIND_IDENTITY_MISMATCH\x10\x03\x12)\n" +
-	"%PROTOCOL_REJECTION_KIND_INVALID_HELLO\x10\x04*\x87\x01\n" +
+	"%PROTOCOL_REJECTION_KIND_INVALID_HELLO\x10\x04*\xa8\x01\n" +
 	"\x12ComputeBackendKind\x12$\n" +
 	" COMPUTE_BACKEND_KIND_UNSPECIFIED\x10\x00\x12$\n" +
 	" COMPUTE_BACKEND_KIND_FIRECRACKER\x10\x01\x12%\n" +
-	"!COMPUTE_BACKEND_KIND_MICROSANDBOX\x10\x02*\xf7\x02\n" +
+	"!COMPUTE_BACKEND_KIND_MICROSANDBOX\x10\x02\x12\x1f\n" +
+	"\x1bCOMPUTE_BACKEND_KIND_GVISOR\x10\x03*\xf7\x02\n" +
 	"\x16RunnerReadinessFailure\x12(\n" +
 	"$RUNNER_READINESS_FAILURE_UNSPECIFIED\x10\x00\x12'\n" +
 	"#RUNNER_READINESS_FAILURE_HYPERVISOR\x10\x01\x12&\n" +

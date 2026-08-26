@@ -8,18 +8,44 @@ The default policy denies all outbound destinations. An explicit allow policy ma
 
 The Runner owns the guest TAP, bridge forwarding rules, and policy-aware DNS proxy. Each assignment gets a separate nftables table keyed by a collision-resistant instance identity. The table permits established replies, runner DNS on the bridge address, and exact policy destinations, then drops all other guest egress and unsolicited traffic toward the TAP. Protected destination drops precede allow rules, so an overlapping allow cannot override them. The current Firecracker path uses per-TAP firewall isolation on the Runner bridge; it does not create a separate Linux network namespace per Sandbox.
 
-The DNS proxy forwards guest questions to the configured upstream and pins only
-answers allowed by the Sandbox policy. It rejects answers resolving to protected
-addresses. A Runner logical-gateway mapping is authorization input for network
+The DNS proxy is backend-neutral: it listens on the Runner bridge address for
+Firecracker guests and on the per-profile `sbxgv-dns` address for gVisor
+guests, and forwards guest questions to the configured upstream, pinning only
+answers allowed by the Sandbox policy. It rejects answers resolving to
+protected addresses. Strictly empty negative responses - an empty NOERROR and
+a validated NXDOMAIN carrying no resolving records - are forwarded to the
+guest without pinning anything, because strict resolvers fail whole
+dual-stack lookups when the negative half is refused; a name-error response
+that carries resolving records stays rejected as injection. A Runner logical-gateway mapping is authorization input for network
 policy, not a DNS record: the proxy does not synthesize guest answers for the
 logical domain. Network-enabled production deployments must provide and qualify
 their own upstream resolution and gateway reachability.
+
+## Backend topologies
+
+The Firecracker backend implements the outbound contract with per-TAP bridge-family firewall
+isolation on the Runner bridge, as described above. The experimental gVisor backend implements
+the same contract with a different topology: each Instance runs in its own Linux network
+namespace connected by a routed veth pair, the shared enforcer renders the identical fail-closed
+policy into `inet`-family tables (with a paired `ip`-family NAT table for masqueraded egress),
+and the policy-aware DNS proxy listens on a per-profile address of the Runner's `sbxgv-dns`
+dummy interface instead of a bridge address. Runners sharing a host network namespace are
+separated by an explicit network profile in `0`-`15`. The reserved link-local ranges are
+exact: profile `N` owns the `/24` at `169.254.(104+N).0` - `169.254.104.0/24` through
+`169.254.119.0/24` across all profiles - carved into per-Instance `/30` subnets (host side
+`.1`, guest side `.2`), bounding each profile at 63 concurrent Instances, and its DNS proxy
+binds `169.254.99.(53+N)` on `sbxgv-dns`. Operators must keep these ranges, the `gvh` (host) and
+`gvg` (guest) veth prefixes, the `sbxgv` network-namespace prefix, and the `169.254.99.*`
+proxy addresses free of conflicting host use. Per-Instance teardown removes the namespace, veth, and both policy-table families,
+and startup reconciliation sweeps any profile-scoped leftovers, including orphaned NAT-only
+tables. DNS pinning, protected-destination precedence, and the deny-all default are identical
+across both backends.
 
 ## DNS
 
 DNS resolution is coupled to destination enforcement:
 
-- the guest kernel receives only the Runner bridge DNS address, and nftables permits UDP/TCP port 53 only to that address;
+- the guest kernel receives only the Runner's DNS proxy address - the bridge address for Firecracker guests, the per-profile `169.254.99.(53+N)` address on `sbxgv-dns` for gVisor guests - and nftables permits UDP/TCP port 53 only to that address;
 - the proxy forwards accepted queries to the explicitly configured `SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM`;
 - a domain allow does not install an address rule at assignment start; the rule appears only after that Sandbox sends an exact allowed-name query through the proxy;
 - private, link-local, loopback, unspecified, metadata, and Runner-host answers are rejected;
@@ -30,7 +56,7 @@ DNS resolution is coupled to destination enforcement:
 - direct IP use requires an explicit CIDR unless the same Sandbox first created a live address pin through an observed allowed-domain query;
 - rebinding from a public answer to a forbidden address is rejected.
 
-The DNS boundary accepts one IN A or AAAA question per message. Responses must match the transaction and echoed question and succeed without an error RCODE. Only address records owned by the exact question or its bounded, loop-free CNAME chain can create pins; unrelated answer and additional records cannot. Message size, concurrent UDP queries and TCP connections, CNAME depth, and I/O time are bounded. Listener death marks network policy unhealthy and fences active instances.
+The DNS boundary accepts one IN A or AAAA question per message. Responses must match the transaction and echoed question, and carry either a success RCODE or a validated NXDOMAIN with no resolving records: strictly empty negative responses (an empty NOERROR or such an NXDOMAIN) are forwarded to the guest without creating any pin, because strict resolvers fail whole dual-stack lookups when the negative half is refused. Only address records owned by the exact question or its bounded, loop-free CNAME chain can create pins; unrelated answer and additional records cannot, and a name-error response carrying resolving records is rejected as injection. Message size, concurrent UDP queries and TCP connections, CNAME depth, and I/O time are bounded. Listener death marks network policy unhealthy and fences active instances.
 
 There is no unrestricted resolver fallback. A DNS outage fails the attempted connection rather than bypassing policy.
 

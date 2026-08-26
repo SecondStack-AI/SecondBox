@@ -81,6 +81,70 @@ test-microsandbox-probe-ext4-linux build_dir work_dir:
     }
     "$probe" ext4-descriptor-uuid --work-dir "{{work_dir}}"
 
+build-gvisor-probe output:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    output="{{output}}"
+    [[ -n "$output" ]] || { echo "SecondBox gVisor probe build requires an output directory" >&2; exit 1; }
+    mkdir -p -- "$output/bin"
+    scripts/fetch-runsc.sh --output "$output/bin"
+    CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe" ./gvisor-probe
+    CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe-guest" ./gvisor-probe/guest
+    CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe-agent" ./gvisor-probe/agentharness
+    CGO_ENABLED=0 go build -o "$output/bin/secondbox-guest-agent" ./cmd/secondbox-guest-agent
+    echo "SecondBox gVisor probe build complete: $output/bin"
+
+test-gvisor-probe build_dir work_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$(uname -s)" == "Linux" ]] || {
+      echo "SecondBox gVisor probe requires Linux" >&2
+      exit 1
+    }
+    [[ ! -e /dev/kvm ]] || {
+      echo "SecondBox gVisor probe qualification requires a host without /dev/kvm" >&2
+      exit 1
+    }
+    build_dir="{{build_dir}}"
+    work_dir="{{work_dir}}"
+    probe="$build_dir/bin/secondbox-gvisor-probe"
+    guest="$build_dir/bin/secondbox-gvisor-probe-guest"
+    agent="$build_dir/bin/secondbox-gvisor-probe-agent"
+    runsc="$build_dir/bin/runsc"
+    [[ -x "$probe" ]] || { echo "SecondBox gVisor probe binary is missing: $probe" >&2; exit 1; }
+    [[ -x "$guest" ]] || { echo "SecondBox gVisor probe guest binary is missing: $guest" >&2; exit 1; }
+    [[ -x "$agent" ]] || { echo "SecondBox gVisor probe agent binary is missing: $agent" >&2; exit 1; }
+    [[ -x "$runsc" ]] || { echo "SecondBox pinned runsc binary is missing: $runsc" >&2; exit 1; }
+    mkdir -- "$work_dir"
+    "$probe" -runsc "$runsc" -guest "$guest" -agent "$agent" -work "$work_dir/probe" all
+
+test-gvisor build_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$(uname -s)" == "Linux" ]] || {
+      echo "SecondBox gVisor qualification requires Linux" >&2
+      exit 1
+    }
+    [[ ! -e /dev/kvm ]] || {
+      echo "SecondBox gVisor qualification requires a host without /dev/kvm" >&2
+      exit 1
+    }
+    [[ "$(id -u)" == "0" ]] || {
+      echo "SecondBox gVisor qualification requires root for loop devices, mounts, and cgroups" >&2
+      exit 1
+    }
+    [[ -n "${SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM:-}" ]] || {
+      echo "SecondBox gVisor qualification requires SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM on a reflink-capable filesystem" >&2
+      exit 1
+    }
+    build_dir="{{build_dir}}"
+    [[ -x "$build_dir/bin/runsc" && -x "$build_dir/bin/secondbox-guest-agent" && -d "$build_dir/rootfs" ]] || {
+      echo "SecondBox gVisor qualification requires bin/runsc, bin/secondbox-guest-agent, and rootfs in $build_dir" >&2
+      exit 1
+    }
+    SECONDBOX_GVISOR_QUALIFICATION=1 SECONDBOX_GVISOR_BUILD="$build_dir" \
+      go test ./internal/gvisor/ -count=1 -v -run 'TestAttachment|TestQualifiedGVisor'
+
 test-microsandbox-probe-linux build_dir work_dir:
     #!/usr/bin/env bash
     set -euo pipefail

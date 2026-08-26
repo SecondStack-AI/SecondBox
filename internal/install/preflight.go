@@ -57,6 +57,12 @@ type PreflightProbes struct {
 	CPUCount     int
 	InvokingUID  int64
 	InvokingGID  int64
+	// Backend selects the compute-backend host requirements: "firecracker"
+	// (the default when empty) requires KVM, TUN, and hardware
+	// virtualization; "gvisor" requires none of those and instead requires
+	// loop devices, nftables, and iproute2 for its host attachment and
+	// routed-veth policy path.
+	Backend string
 }
 
 type systemFilesystemProbe struct{}
@@ -204,13 +210,24 @@ func Preflight(ctx context.Context, probes PreflightProbes) (HostFacts, error) {
 		add("kernel", FindingPass, "Kernel observed", facts.KernelVersion, "")
 	}
 	preflightSystemd(ctx, probes, &facts, add)
-	preflightDocker(ctx, probes, &facts, add)
+	if probes.Backend != "gvisor" {
+		// The gVisor host profile runs the runner as a systemd service and
+		// needs no container engine; Docker and Compose stay Firecracker
+		// installer requirements.
+		preflightDocker(ctx, probes, &facts, add)
+	}
 	preflightCgroup(probes, &facts, add)
 	preflightDevices(probes, &facts, add)
 	preflightCPUAndMemory(probes, &facts, add)
 	preflightMounts(probes, &facts, add)
 	preflightNetwork(ctx, probes, &facts, add)
-	preflightUsers(probes, &facts, add)
+	if probes.Backend != "gvisor" {
+		// Jailer UID ranges exist for Firecracker's per-instance jails; the
+		// gVisor backend runs runsc under the service identity and has no
+		// subordinate-ID requirement, so an otherwise valid host must not be
+		// rejected for lacking one.
+		preflightUsers(probes, &facts, add)
+	}
 	preflightUtilities(probes, &facts, add)
 	if facts.HostIdentity == "" {
 		facts.HostIdentity = "unavailable"
@@ -355,10 +372,28 @@ func preflightCgroup(p PreflightProbes, f *HostFacts, add func(string, FindingCl
 	}
 }
 func preflightDevices(p PreflightProbes, f *HostFacts, add func(string, FindingClass, string, string, string)) {
-	for _, item := range []struct {
+	requiredDevices := []struct {
 		id, path string
 		target   *bool
-	}{{"kvm", "/dev/kvm", &f.KVMAccessible}, {"tun", "/dev/net/tun", &f.TUNAccessible}} {
+	}{{"kvm", "/dev/kvm", &f.KVMAccessible}, {"tun", "/dev/net/tun", &f.TUNAccessible}}
+	if p.Backend == "gvisor" {
+		// The gVisor Runner needs no hypervisor or TAP devices; its host
+		// attachment binds Workspace images to loop devices.
+		requiredDevices = requiredDevices[:0]
+		requiredDevices = append(requiredDevices, struct {
+			id, path string
+			target   *bool
+		}{"loop_control", "/dev/loop-control", new(bool)})
+		for _, tool := range []string{"nft", "ip"} {
+			if _, err := p.Process.LookPath(tool); err != nil {
+				add("gvisor_"+tool, FindingBlocked, tool+" is unavailable", errorText(err),
+					"Install nftables and iproute2 for the gVisor network-policy path.")
+			} else {
+				add("gvisor_"+tool, FindingPass, tool+" is available", "", "")
+			}
+		}
+	}
+	for _, item := range requiredDevices {
 		info, err := p.Filesystem.Lstat(item.path)
 		if err != nil || info.Mode()&os.ModeDevice == 0 {
 			add(item.id, FindingBlocked, item.path+" is unavailable", errorText(err), "Expose the host device to the installer and Runner.")
@@ -386,6 +421,11 @@ func preflightCPUAndMemory(p PreflightProbes, f *HostFacts, add func(string, Fin
 	if err == nil && (strings.Contains(text, " vmx ") || strings.Contains(text, " svm ") || strings.Contains(text, "\nflags") && (strings.Contains(text, "vmx") || strings.Contains(text, "svm"))) {
 		f.Virtualization = "hardware"
 		add("virtualization", FindingPass, "CPU virtualization is available", "", "")
+	} else if p.Backend == "gvisor" {
+		// The sentry's systrap platform runs without hardware virtualization;
+		// this is exactly the host class the gVisor Runner qualifies.
+		f.Virtualization = "none"
+		add("virtualization", FindingPass, "CPU virtualization is absent and not required by the gVisor backend", "", "")
 	} else {
 		add("virtualization", FindingBlocked, "CPU virtualization is unavailable", errorText(err), "Enable VT-x/AMD-V and nested virtualization when applicable.")
 	}
@@ -530,7 +570,22 @@ func preflightNetwork(ctx context.Context, p PreflightProbes, f *HostFacts, add 
 			}
 		}
 	}
-	if len(f.DNSUpstreams) == 0 {
+	if p.Backend == "gvisor" {
+		// The gVisor runner's automatic resolver discovery accepts only
+		// IPv4 nameservers, so an IPv6-only host would pass a generic
+		// upstream check and then fail runner startup.
+		ipv4 := make([]string, 0, len(f.DNSUpstreams))
+		for _, upstream := range f.DNSUpstreams {
+			if address := net.ParseIP(upstream); address != nil && address.To4() != nil {
+				ipv4 = append(ipv4, upstream)
+			}
+		}
+		if len(ipv4) == 0 {
+			add("dns_upstream", FindingNeedsAction, "No IPv4 DNS upstream was observed", errorText(resolvErr), "Configure an IPv4 resolver, or set SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM to an explicit IPv4 address and port.")
+		} else {
+			add("dns_upstream", FindingPass, "IPv4 DNS upstream observed", strings.Join(ipv4, ","), "")
+		}
+	} else if len(f.DNSUpstreams) == 0 {
 		add("dns_upstream", FindingNeedsAction, "No non-loopback DNS upstream was observed", errorText(resolvErr), "Configure a non-loopback DNS upstream for microVM networking.")
 	} else {
 		add("dns_upstream", FindingPass, "Non-loopback DNS upstream observed", strings.Join(f.DNSUpstreams, ","), "")
@@ -620,7 +675,13 @@ func preflightUsers(p PreflightProbes, f *HostFacts, add func(string, FindingCla
 }
 func preflightUtilities(p PreflightProbes, f *HostFacts, add func(string, FindingClass, string, string, string)) {
 	missing := []string{}
-	for _, name := range []string{"docker", "systemctl", "systemd-analyze", "ip", "ss"} {
+	required := []string{"docker", "systemctl", "systemd-analyze", "ip", "ss"}
+	if p.Backend == "gvisor" {
+		// No container engine, but the WorkspaceStore's ext4 toolchain is a
+		// hard runtime dependency of the loop-attachment path.
+		required = []string{"systemctl", "systemd-analyze", "ip", "ss", "mkfs.ext4", "e2fsck"}
+	}
+	for _, name := range required {
 		path, err := p.Process.LookPath(name)
 		if err != nil {
 			missing = append(missing, name)

@@ -21,11 +21,18 @@ const (
 	currentGuestProtocolGeneration uint32 = 1
 	guestConnectionNonceByteCount         = 32
 	maxGuestHeartbeatInterval             = 60 * time.Second
+	// guestUnixSocketPathBound keeps direct socket paths inside
+	// sockaddr_un's sun_path limit.
+	guestUnixSocketPathBound = 107
 )
 
 type GuestProtocolNegotiation struct {
-	UDSPath                         string
-	Port                            uint32
+	UDSPath string
+	Port    uint32
+	// DirectUnixSocket dials UDSPath as a plain filesystem Unix socket with
+	// no Firecracker vsock CONNECT framing and no port. This is the gVisor
+	// transport, where the agent listens on a gofer-passed host socket.
+	DirectUnixSocket                bool
 	InstanceID                      string
 	SandboxID                       string
 	SandboxGeneration               uint64
@@ -76,7 +83,14 @@ func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiatio
 	if strings.TrimSpace(request.UDSPath) == "" {
 		return nil, fmt.Errorf("guest protocol UDS path is required")
 	}
-	if request.Port == 0 {
+	if request.DirectUnixSocket {
+		if request.Port != 0 {
+			return nil, fmt.Errorf("guest protocol direct Unix socket takes no port")
+		}
+		if len(request.UDSPath) > guestUnixSocketPathBound {
+			return nil, fmt.Errorf("guest protocol Unix socket path exceeds %d bytes", guestUnixSocketPathBound)
+		}
+	} else if request.Port == 0 {
 		return nil, fmt.Errorf("guest protocol vsock port is required")
 	}
 	if strings.TrimSpace(request.InstanceID) == "" ||
@@ -102,6 +116,10 @@ func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiatio
 	connection, err := grpc.NewClient(
 		"passthrough:///secondbox-guest",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			if request.DirectUnixSocket {
+				var dialer net.Dialer
+				return dialer.DialContext(ctx, "unix", request.UDSPath)
+			}
 			return dialFirecrackerVsock(ctx, request.UDSPath, request.Port)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

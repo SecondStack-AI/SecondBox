@@ -24,6 +24,15 @@ test-microsandbox-probe-ext4-linux build_dir work_dir:
 test-microsandbox-probe-linux build_dir work_dir:
     just -f runner/Justfile test-microsandbox-probe-linux "{{build_dir}}" "{{work_dir}}"
 
+build-gvisor-probe output:
+    just -f runner/Justfile build-gvisor-probe "{{output}}"
+
+test-gvisor-probe build_dir work_dir:
+    just -f runner/Justfile test-gvisor-probe "{{build_dir}}" "{{work_dir}}"
+
+test-gvisor build_dir:
+    just -f runner/Justfile test-gvisor "{{build_dir}}"
+
 lint:
     golangci-lint run ./...
     cd runner && golangci-lint run --config ../.golangci.yml ./...
@@ -120,6 +129,15 @@ test-scenario-microsandbox-linux:
 
 test-scenario-microsandbox-macos:
     scripts/test-scenario-microsandbox-macos.sh
+
+test-scenario-gvisor:
+    scripts/test-scenario-gvisor.sh
+
+test-gvisor-pod:
+    scripts/test-gvisor-pod.sh
+
+test-scenario-gvisor-pod:
+    scripts/test-scenario-gvisor-pod.sh
 
 prepare-stress:
     scripts/prepare-stress.sh
