@@ -187,23 +187,27 @@ func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
 	} else {
 		for _, line := range strings.Split(string(output), "\n") {
 			fields := strings.Fields(line)
-			if len(fields) != 3 || fields[0] != "table" || fields[1] != "inet" ||
-				!strings.HasPrefix(fields[2], "secondbox_") {
+			if len(fields) != 3 || fields[0] != "table" {
 				continue
 			}
-			listing, listErr := exec.CommandContext(ctx, "nft", "list", "table", "inet", fields[2]).Output()
+			family, name := fields[1], fields[2]
+			// The inet policy table and its ip NAT twin are swept
+			// independently: an orphaned NAT-only table (its inet twin
+			// already gone) must be found through its own family listing.
+			switch {
+			case family == "inet" && strings.HasPrefix(name, "secondbox_"):
+			case family == "ip" && strings.HasPrefix(name, "secondbox_") && strings.HasSuffix(name, natTableSuffix):
+			default:
+				continue
+			}
+			listing, listErr := exec.CommandContext(ctx, "nft", "list", "table", family, name).Output()
 			if listErr != nil || !strings.Contains(string(listing), `"`+vethPrefix) {
 				continue
 			}
-			for _, arguments := range [][]string{
-				{"delete", "table", "inet", fields[2]},
-				{"delete", "table", "ip", fields[2] + natTableSuffix},
-			} {
-				if deleteOutput, deleteErr := exec.CommandContext(ctx, "nft", arguments...).CombinedOutput(); deleteErr != nil &&
-					!strings.Contains(string(deleteOutput), "No such file") {
-					joined = errors.Join(joined, fmt.Errorf("delete stale policy table %s: %w: %s",
-						arguments[3], deleteErr, bytes.TrimSpace(deleteOutput)))
-				}
+			if deleteOutput, deleteErr := exec.CommandContext(ctx, "nft", "delete", "table", family, name).CombinedOutput(); deleteErr != nil &&
+				!strings.Contains(string(deleteOutput), "No such file") {
+				joined = errors.Join(joined, fmt.Errorf("delete stale policy table %s: %w: %s",
+					name, deleteErr, bytes.TrimSpace(deleteOutput)))
 			}
 		}
 	}
@@ -245,9 +249,18 @@ func ensureHostNetworkPlumbing(ctx context.Context, dnsAddress string) error {
 func ensureDockerForwardAdmission(ctx context.Context) error {
 	listing, err := exec.CommandContext(ctx, "nft", "list", "chain", "ip", "filter", "DOCKER-USER").CombinedOutput()
 	if err != nil {
-		return nil
+		// Only a genuinely absent chain means Docker does not manage this
+		// host's forward hook; permission, cancellation, or nftables
+		// failures must fail readiness rather than admit Sandboxes whose
+		// forwarding Docker will silently drop.
+		text := string(listing)
+		if strings.Contains(text, "No such file or directory") ||
+			strings.Contains(text, "does not exist") {
+			return nil
+		}
+		return fmt.Errorf("inspect the Docker firewall admission chain: %w: %s", err, bytes.TrimSpace(listing))
 	}
-	if strings.Contains(string(listing), allowedInetMark) {
+	if strings.Contains(string(listing), "ct mark "+allowedInetMark) && strings.Contains(string(listing), "accept") {
 		return nil
 	}
 	script := fmt.Sprintf("insert rule ip filter DOCKER-USER ct mark %s counter accept\n", allowedInetMark)
@@ -370,6 +383,24 @@ func renderInetAllow(
 // any replacement rendering that follows in the same script.
 func deleteInetPolicyTables(table string) string {
 	return fmt.Sprintf("delete table inet %s\ndelete table ip %s%s\n", table, table, natTableSuffix)
+}
+
+// removeResidualPolicyTables deletes each per-Instance policy table family
+// independently, tolerating only a genuinely absent table: a partial pair
+// left by an aborted atomic delete must not survive slot release.
+func removeResidualPolicyTables(ctx context.Context, table string) error {
+	var joined error
+	for _, arguments := range [][]string{
+		{"delete", "table", "inet", table},
+		{"delete", "table", "ip", table + natTableSuffix},
+	} {
+		if output, err := exec.CommandContext(ctx, "nft", arguments...).CombinedOutput(); err != nil &&
+			!strings.Contains(string(output), "No such file") {
+			joined = errors.Join(joined, fmt.Errorf("delete residual policy table %s: %w: %s",
+				arguments[3], err, bytes.TrimSpace(output)))
+		}
+	}
+	return joined
 }
 
 // writeGuestResolvConf points the sandbox resolver at the runner DNS proxy.

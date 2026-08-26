@@ -876,17 +876,28 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 	return network, supervisorProcess, nil
 }
 
+// networkTeardownBound caps every nft and ip invocation during teardown:
+// the cleanup must run even after the caller's deadline, but a wedged tool
+// must not block fencing or runner shutdown indefinitely.
+const networkTeardownBound = 30 * time.Second
+
 func (backend *AssignmentBackend) teardownInstanceNetwork(instanceID string, network instanceNetwork) error {
-	removeErr := backend.enforcer.Remove(context.Background(), instanceID)
-	destroyErr := destroyInstanceNetwork(context.Background(), network)
-	if removeErr == nil && destroyErr == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), networkTeardownBound)
+	defer cancel()
+	removeErr := backend.enforcer.Remove(ctx, instanceID)
+	// The enforcer deletes both family tables in one atomic script, so a
+	// single already-missing table aborts it while its twin survives; sweep
+	// each family independently so no orphan outlives the released slot.
+	residualErr := removeResidualPolicyTables(ctx, firecracker.PolicyTableName(instanceID))
+	destroyErr := destroyInstanceNetwork(ctx, network)
+	if removeErr == nil && residualErr == nil && destroyErr == nil {
 		// The slot returns to the allocator only once its resources are
 		// verifiably gone; a failed teardown keeps the slot leaked so a
 		// later assignment cannot collide with stale links or tables. The
 		// next runner start reconciles the leftovers and the slot space.
 		backend.releaseNetworkSlot(network)
 	}
-	return errors.Join(removeErr, destroyErr)
+	return errors.Join(removeErr, residualErr, destroyErr)
 }
 
 const supervisorStopBound = 15 * time.Second

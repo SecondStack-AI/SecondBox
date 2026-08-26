@@ -503,6 +503,10 @@ func (e *NFTablesNetworkPolicyEnforcer) command(
 	return command.CombinedOutput()
 }
 
+// PolicyTableName reports the per-Instance policy table name so backend
+// renderers pairing extra family tables with it can sweep their residuals.
+func PolicyTableName(instanceID string) string { return nftTableName(instanceID) }
+
 func nftTableName(instanceID string) string {
 	digest := sha256.Sum256([]byte(instanceID))
 	var result strings.Builder

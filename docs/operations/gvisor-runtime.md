@@ -93,6 +93,10 @@ export SECONDBOX_GVISOR_AGENT_PATH=/opt/secondbox-gvisor/bin/secondbox-guest-age
 export SECONDBOX_GVISOR_FLAT_ROOT_PATH=/opt/secondbox-gvisor/rootfs
 export SECONDBOX_GVISOR_MATERIALIZATION_PATH=/etc/secondbox/gvisor-linux-amd64.materialization.json
 export SECONDBOX_GVISOR_MATERIALIZATION_DIGEST=sha256:OPERATOR_CANONICAL_DIGEST
+# Dedicated and disposable: startup reconciliation recursively removes every
+# child of this directory. Never share it with other services or point it at
+# a Workspace or asset path; the runner refuses /, first-level, symlinked,
+# overlong, and WorkspaceStore- or flat-root-overlapping values.
 export SECONDBOX_GVISOR_RUNTIME_DIR=/run/secondbox-gvisor
 export SECONDBOX_GVISOR_MAXIMUM_VCPUS=8
 export SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES=8589934592
@@ -252,6 +256,19 @@ remains operator-authored and unqualified.
 - Provide the per-runner identity (mTLS keypair, CA, and runner credential) as a Secret; the
   flat root and materialization manifest arrive on the node through the operator's reviewed
   artifact flow.
+- The materialization must hash the exact binaries **inside the deployed image**, not a local
+  rebuild: `Dockerfile.gvisor` builds the guest agent with its own flags, so a locally built
+  binary hashes differently and leaves the runner permanently unready on digest mismatch.
+  Extract the deployed binaries from the pinned image and record their digests in the
+  manifest:
+
+  ```sh
+  container="$(docker create <registry>/secondbox/runner-gvisor@sha256:<pinned digest>)"
+  docker cp "$container":/usr/local/bin/runsc ./bin/runsc
+  docker cp "$container":/usr/local/bin/secondbox-guest-agent ./bin/secondbox-guest-agent
+  docker rm "$container"
+  sha256sum bin/runsc bin/secondbox-guest-agent
+  ```
 - The data plane is proxied through the control plane by default in clusters. The only
   qualified direct-transport option is the manifest's hostPort entry, which exposes the
   runner's data-plane listener on its node; remove it to stay proxied-only.
