@@ -153,8 +153,20 @@ without KVM. The qualified surface is the reference manifest at
 `runner/deploy/gvisor-runner-pod.yaml`; anything broader — Deployments, operators, charts —
 remains operator-authored and unqualified.
 
-- Use the gVisor runner image built from `runner/Dockerfile.gvisor` (CI builds and records its
-  digest); pin the pod to the exact image digest.
+- Build and publish the gVisor runner image yourself; CI builds the image and records its
+  digest as workflow metadata (`runner-gvisor-oci-metadata`) but publishes no registry copy.
+  From the reviewed source commit:
+
+  ```sh
+  docker buildx create --name secondbox-oci --driver docker-container --use
+  docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+    --build-arg RELEASE_VERSION=<version> --build-arg SOURCE_COMMIT=$(git rev-parse HEAD) \
+    --file runner/Dockerfile.gvisor \
+    --tag <registry>/secondbox/runner-gvisor:<version> --push .
+  ```
+
+  Record the pushed digest (`docker buildx imagetools inspect`) and pin the pod to that exact
+  digest reference.
 - Dedicate a tainted node pool: one runner pod per node, tolerating the pool taint, with a
   node-local reflink-capable volume for the WorkspaceStore.
 - Set the pod's resource requests and limits equal to the node's declared sandbox budget plus

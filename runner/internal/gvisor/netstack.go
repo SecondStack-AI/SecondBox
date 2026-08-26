@@ -131,10 +131,14 @@ func createInstanceNetwork(ctx context.Context, network instanceNetwork) error {
 
 func destroyInstanceNetwork(ctx context.Context, network instanceNetwork) error {
 	// Deleting the namespace removes the moved veth end; deleting the host
-	// veth removes the pair when the namespace was never populated.
+	// veth removes the pair when the namespace was never populated. Only a
+	// confirmed already-absent resource is tolerated; every other failure
+	// surfaces so the slot stays leaked instead of colliding later.
 	var joined error
-	if err := exec.CommandContext(ctx, "ip", "link", "delete", network.hostVeth).Run(); err == nil {
-		joined = nil
+	if output, err := exec.CommandContext(ctx, "ip", "link", "delete", network.hostVeth).CombinedOutput(); err != nil &&
+		!strings.Contains(string(output), "Cannot find device") {
+		joined = errors.Join(joined, fmt.Errorf("delete host veth %s: %w: %s",
+			network.hostVeth, err, bytes.TrimSpace(output)))
 	}
 	if output, err := exec.CommandContext(ctx, "ip", "netns", "delete", network.namespaceName).CombinedOutput(); err != nil &&
 		!strings.Contains(string(output), "No such file") {
@@ -152,7 +156,9 @@ func destroyInstanceNetwork(ctx context.Context, network instanceNetwork) error 
 func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
 	var joined error
 	namespacePrefix := fmt.Sprintf("%s%d-", namespaceNamePrefix, profile)
-	if output, err := exec.CommandContext(ctx, "ip", "netns", "list").Output(); err == nil {
+	if output, err := exec.CommandContext(ctx, "ip", "netns", "list").Output(); err != nil {
+		joined = errors.Join(joined, fmt.Errorf("list network namespaces: %w", err))
+	} else {
 		for _, line := range strings.Split(string(output), "\n") {
 			name := strings.Fields(line)
 			if len(name) > 0 && strings.HasPrefix(name[0], namespacePrefix) {
@@ -161,7 +167,9 @@ func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
 		}
 	}
 	vethPrefix := fmt.Sprintf("%s%d-", hostVethNamePrefix, profile)
-	if output, err := exec.CommandContext(ctx, "ip", "-o", "link", "show").Output(); err == nil {
+	if output, err := exec.CommandContext(ctx, "ip", "-o", "link", "show").Output(); err != nil {
+		joined = errors.Join(joined, fmt.Errorf("list links: %w", err))
+	} else {
 		for _, line := range strings.Split(string(output), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) < 2 {
@@ -174,7 +182,9 @@ func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
 			}
 		}
 	}
-	if output, err := exec.CommandContext(ctx, "nft", "list", "tables").Output(); err == nil {
+	if output, err := exec.CommandContext(ctx, "nft", "list", "tables").Output(); err != nil {
+		joined = errors.Join(joined, fmt.Errorf("list nftables tables: %w", err))
+	} else {
 		for _, line := range strings.Split(string(output), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) != 3 || fields[0] != "table" || fields[1] != "inet" ||

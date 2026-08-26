@@ -42,6 +42,7 @@ type GVisorComposition struct {
 	MaximumInstances      uint32
 	MaximumOperations     uint32
 	NetworkProfile        uint32
+	DNSUpstream           string
 }
 
 type MicrosandboxComposition struct {
@@ -172,6 +173,9 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 	if err != nil {
 		return GVisorComposition{}, 0, err
 	}
+	// The generic runner DNS upstream override applies to this backend's
+	// DNS proxy; without it the proxy discovers the host resolver.
+	dnsUpstream := strings.TrimSpace(os.Getenv("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM"))
 	// The network profile keeps runners sharing one host network namespace
 	// apart; a single runner per host keeps the default 0.
 	networkProfile := uint64(0)
@@ -190,7 +194,7 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		MaterializationDigest: digest,
 		MaximumVCPUs:          uint32(vcpus), MaximumMemoryBytes: memory, MaximumDiskBytes: disk,
 		MaximumInstances: uint32(instances), MaximumOperations: uint32(operations),
-		NetworkProfile: uint32(networkProfile),
+		NetworkProfile: uint32(networkProfile), DNSUpstream: dnsUpstream,
 	}, int64(template), nil
 }
 

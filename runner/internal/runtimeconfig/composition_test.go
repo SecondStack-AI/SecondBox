@@ -123,6 +123,14 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		t.Fatalf("gVisor composition = %#v templateBytes=%d", composition, templateBytes)
 	}
 
+	t.Run("dns upstream", func(t *testing.T) {
+		t.Setenv("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM", "10.201.0.10:53")
+		composition, _, err := loadGVisorComposition()
+		if err != nil || composition.DNSUpstream != "10.201.0.10:53" {
+			t.Fatalf("dns upstream composition = %#v, %v", composition, err)
+		}
+	})
+
 	t.Run("network profile", func(t *testing.T) {
 		t.Setenv("SECONDBOX_GVISOR_NETWORK_PROFILE", "1")
 		composition, _, err := loadGVisorComposition()

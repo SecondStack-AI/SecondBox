@@ -57,6 +57,7 @@ type activeAssignment struct {
 	done           chan struct{}
 	exitMu         sync.Mutex
 	computeOutcome string
+	statusDrained  chan struct{}
 	computeCode    string
 	evidenceErr    error
 }
@@ -72,8 +73,8 @@ type AssignmentBackend struct {
 	startupSamples    []time.Duration
 	evidence          runnerevidence.Sink
 	runnerID          string
-	platformProbe     sync.Once
-	platformProbeErr  error
+	platformProbeMu   sync.Mutex
+	platformProbed    bool
 	networkSlots      map[uint32]bool
 	enforcer          *firecracker.NFTablesNetworkPolicyEnforcer
 }
@@ -623,12 +624,14 @@ func (backend *AssignmentBackend) launchInstance(
 	}
 	// Only after the synchronous ready read may the status consumer own the
 	// stream; two concurrent readers would race for the ready line.
+	active.statusDrained = make(chan struct{})
 	go backend.consumeStatus(active)
 	return active, nil
 }
 
 // consumeStatus retains bounded compute-exit evidence from the supervisor.
 func (backend *AssignmentBackend) consumeStatus(active *activeAssignment) {
+	defer close(active.statusDrained)
 	for {
 		status, err := active.handles.ReadStatusLine()
 		if err != nil {
@@ -640,6 +643,19 @@ func (backend *AssignmentBackend) consumeStatus(active *activeAssignment) {
 			active.computeCode = status.Fields["code"]
 			active.exitMu.Unlock()
 		}
+	}
+}
+
+// awaitStatusDrain gives the status consumer a bounded window to record the
+// final compute-exit line after the supervisor exits, so terminal evidence
+// carries the actual outcome and code instead of racing the queued status.
+func awaitStatusDrain(active *activeAssignment) {
+	if active.statusDrained == nil {
+		return
+	}
+	select {
+	case <-active.statusDrained:
+	case <-time.After(2 * time.Second):
 	}
 }
 
@@ -742,7 +758,13 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 func (backend *AssignmentBackend) teardownInstanceNetwork(instanceID string, network instanceNetwork) error {
 	removeErr := backend.enforcer.Remove(context.Background(), instanceID)
 	destroyErr := destroyInstanceNetwork(context.Background(), network)
-	backend.releaseNetworkSlot(network)
+	if removeErr == nil && destroyErr == nil {
+		// The slot returns to the allocator only once its resources are
+		// verifiably gone; a failed teardown keeps the slot leaked so a
+		// later assignment cannot collide with stale links or tables. The
+		// next runner start reconciles the leftovers and the slot space.
+		backend.releaseNetworkSlot(network)
+	}
 	return errors.Join(removeErr, destroyErr)
 }
 
@@ -793,6 +815,7 @@ func (backend *AssignmentBackend) observeExit(active *activeAssignment) {
 // publishSupervisorExit emits the unexpected-exit evidence and terminal for
 // an assignment whose terminalSent flag the caller has already claimed.
 func (backend *AssignmentBackend) publishSupervisorExit(active *activeAssignment) {
+	awaitStatusDrain(active)
 	backend.mu.Lock()
 	terminal := runnercontrol.BackendInstanceTerminal{
 		Fence:          cloneFence(active.fence),
@@ -858,9 +881,19 @@ func (backend *AssignmentBackend) FenceAssignment(
 		case <-active.done:
 		case <-time.After(supervisorStopBound):
 			_ = syscallKillGroup(active.handles.Command.Process.Pid)
-			<-active.done
+			// A supervisor stuck in uninterruptible I/O cannot confirm its
+			// exit; preserve the assignment state and report the cleanup
+			// failure instead of hanging fencing and shutdown forever.
+			select {
+			case <-active.done:
+			case <-ctx.Done():
+				return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor supervisor exit unconfirmed after force kill: %w", ctx.Err())
+			case <-time.After(supervisorStopBound):
+				return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor supervisor exit unconfirmed after force kill; assignment state preserved")
+			}
 		}
 	}
+	awaitStatusDrain(active)
 	err = errors.Join(err, active.handles.CloseParentSide(), active.workspace.Close(),
 		backend.teardownInstanceNetwork(active.fence.InstanceId, active.network),
 		removeInstanceCgroup(backend.config.NetworkProfile, active.fence.InstanceId), os.RemoveAll(active.instanceDir))

@@ -12,15 +12,23 @@ import (
 	"syscall"
 )
 
-// probePlatform proves the real environment once per process: the pinned
-// runsc reports its expected release, the sentry platform can boot and tear
-// down a trivial sandbox with no KVM requirement, loop devices are usable,
-// and startup reconciliation has cleared any stale attachment leftovers.
+// probePlatform proves the real environment: the pinned runsc reports its
+// expected release, the sentry platform can boot and tear down a trivial
+// sandbox with no KVM requirement, loop devices are usable, and startup
+// reconciliation has cleared any stale leftovers. Only success is cached: a
+// transient failure retries on the next readiness pass instead of pinning
+// the runner unready until restart.
 func (backend *AssignmentBackend) probePlatform(ctx context.Context) error {
-	backend.platformProbe.Do(func() {
-		backend.platformProbeErr = backend.runPlatformProbe(ctx)
-	})
-	return backend.platformProbeErr
+	backend.platformProbeMu.Lock()
+	defer backend.platformProbeMu.Unlock()
+	if backend.platformProbed {
+		return nil
+	}
+	if err := backend.runPlatformProbe(ctx); err != nil {
+		return err
+	}
+	backend.platformProbed = true
+	return nil
 }
 
 func (backend *AssignmentBackend) runPlatformProbe(ctx context.Context) error {
