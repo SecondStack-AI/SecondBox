@@ -472,8 +472,9 @@ func (backend *AssignmentBackend) StartAssignment(
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor Sandbox already has an unfenced assignment"))
 		}
 	}
-	claim := &activeAssignment{fence: cloneFence(assignment.Fence), launched: make(chan struct{}), done: make(chan struct{})}
-	claim.launchDone = sync.OnceFunc(func() { close(claim.launched) })
+	launched := make(chan struct{})
+	claim := &activeAssignment{fence: cloneFence(assignment.Fence), launched: launched, done: make(chan struct{})}
+	claim.launchDone = sync.OnceFunc(func() { close(launched) })
 	backend.assignments[assignmentID] = claim
 	backend.mu.Unlock()
 	retainClaim := false
@@ -584,18 +585,29 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := backend.emitLifecycle(ctx, active, "ready", "control:1", "completed", "ready"); err != nil {
 		return result, infrastructureAssignment(err)
 	}
-	// The claim stays in the map until every fallible startup step has
-	// succeeded, and the published assignment inherits any fencing intent
-	// recorded on the claim while it launched.
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
-		return result, err
-	}
+	// The READY exchange races the control plane's acknowledgment, which
+	// reaches MarkAssignmentReady concurrently, so the real assignment must
+	// be resolvable before progress fires — but it carries the still-open
+	// launch gate so replay waiters observe success only after READY
+	// succeeds, and it inherits any fencing intent recorded on the claim.
 	backend.mu.Lock()
 	active.fenced = claim.fenced
+	active.launched = claim.launched
 	backend.assignments[assignment.Fence.AssignmentId] = active
 	backend.startupSamples = append(backend.startupSamples, time.Since(started))
 	backend.mu.Unlock()
 	go backend.observeExit(active)
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
+		backend.mu.Lock()
+		if backend.assignments[assignment.Fence.AssignmentId] == active {
+			delete(backend.assignments, assignment.Fence.AssignmentId)
+		}
+		backend.mu.Unlock()
+		return result, err
+	}
+	backend.mu.Lock()
+	active.launched = nil
+	backend.mu.Unlock()
 	cleanup.clear()
 	return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: active.backendRef}, nil
 }
@@ -867,7 +879,7 @@ const supervisorStopBound = 15 * time.Second
 func (backend *AssignmentBackend) MarkAssignmentReady(fence *runnerprotocol.AssignmentFence) error {
 	backend.mu.Lock()
 	active, exists := backend.assignments[fence.GetAssignmentId()]
-	if !exists || active.launched != nil || !sameFence(active.fence, fence) || active.fenced {
+	if !exists || active.handles == nil || !sameFence(active.fence, fence) || active.fenced {
 		backend.mu.Unlock()
 		return fmt.Errorf("SecondBox gVisor ready assignment fence is stale")
 	}
@@ -948,16 +960,16 @@ func (backend *AssignmentBackend) FenceAssignment(
 			backend.mu.Unlock()
 			return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor fence token or generation mismatch")
 		}
-		if current.launched == nil {
-			if current.handles == nil {
-				// A retained unconfirmed-exit tombstone: its supervisor may
-				// still be alive holding the Workspace lock, so nothing can
-				// be fenced or released until a runner restart reconciles.
-				backend.mu.Unlock()
-				return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor assignment awaits restart reconciliation after an unconfirmed supervisor exit")
-			}
+		if current.handles != nil {
 			active = current
 			break
+		}
+		if current.launched == nil {
+			// A retained unconfirmed-exit tombstone: its supervisor may
+			// still be alive holding the Workspace lock, so nothing can
+			// be fenced or released until a runner restart reconciles.
+			backend.mu.Unlock()
+			return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor assignment awaits restart reconciliation after an unconfirmed supervisor exit")
 		}
 		// A pending claimed launch holds no supervisor or operation state
 		// yet; fencing records its intent on the claim — rejecting further
@@ -1092,7 +1104,7 @@ func (backend *AssignmentBackend) acquireOperation(
 ) (*activeAssignment, context.Context, func(), error) {
 	backend.mu.Lock()
 	active := backend.assignments[fence.GetAssignmentId()]
-	if active == nil || active.launched != nil || active.fenced || !sameFence(active.fence, fence) {
+	if active == nil || active.handles == nil || active.fenced || !sameFence(active.fence, fence) {
 		backend.mu.Unlock()
 		return nil, nil, nil, fmt.Errorf("SecondBox gVisor operation fence is stale")
 	}

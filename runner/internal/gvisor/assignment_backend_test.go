@@ -24,6 +24,7 @@ func TestMarkAssignmentReadyPublishesARetainedSupervisorExit(t *testing.T) {
 		fence:       cloneFence(fence),
 		correlation: &runnerprotocol.Correlation{},
 		backendRef:  "gvisor:test",
+		handles:     &SupervisorHandles{},
 		done:        done,
 	}
 	backend := &AssignmentBackend{
