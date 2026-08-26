@@ -38,7 +38,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 	tenantRequest := secondboxclient.CreateTenantRequest{
 		Ref: "missing-key-tenant", AllowedProfileGrants: []string{"coding"},
 		AllowedApplicationScopes: []string{"sandbox:read"},
-		AggregateQuota:           secondboxclient.TenantQuota{MaxSandboxes: 10, MaxActiveInstances: 10, MaxCpuMillis: 10000, MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10, MaxActiveSubjects: 10, MaxApplicationAuthorities: 10},
+		AggregateQuota:           secondboxclient.TenantQuota{MaxSandboxes: 10, MaxActiveInstances: 10, MaxVcpuCount: 10, MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10, MaxActiveSubjects: 10, MaxApplicationAuthorities: 10},
 		ExpiryPolicy:             secondboxclient.TenantExpiryPolicy{MaximumSubjectLifetimeSeconds: 3600, MaximumAuthorityLifetimeSeconds: 3600},
 		Metadata:                 map[string]string{}, ExpiresAt: &expiresAt,
 	}
@@ -54,7 +54,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	subjectRequest := secondboxclient.CreateSubjectRequest{Ref: "missing-key-subject", Quota: secondboxclient.SubjectQuota{MaxSandboxes: 2, MaxActiveInstances: 2, MaxCpuMillis: 2000, MaxMemoryBytes: 2 << 30, MaxSnapshots: 2, MaxPortSessions: 2, MaxConcurrentOperations: 2}, Metadata: map[string]string{}, ExpiresAt: &expiresAt}
+	subjectRequest := secondboxclient.CreateSubjectRequest{Ref: "missing-key-subject", Quota: secondboxclient.SubjectQuota{MaxSandboxes: 2, MaxActiveInstances: 2, MaxVcpuCount: 2, MaxMemoryBytes: 2 << 30, MaxSnapshots: 2, MaxPortSessions: 2, MaxConcurrentOperations: 2}, Metadata: map[string]string{}, ExpiresAt: &expiresAt}
 	subject, err := controllerClient.CreateSubject(t.Context(), subjectRequest, "missing-key-setup-subject")
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestManagementOwnershipReferencesRoundTripThroughEncodedActionRoutes(t *tes
 	request := secondboxclient.CreateTenantRequest{
 		Ref: "customer/west:production", AllowedProfileGrants: []string{"coding"},
 		AllowedApplicationScopes: []string{"sandbox:read"}, Metadata: map[string]string{}, ExpiresAt: &expiresAt,
-		AggregateQuota: secondboxclient.TenantQuota{MaxSandboxes: 1, MaxActiveInstances: 1, MaxCpuMillis: 1000, MaxMemoryBytes: 1 << 30, MaxSnapshots: 1, MaxPortSessions: 1, MaxConcurrentOperations: 1, MaxActiveSubjects: 1, MaxApplicationAuthorities: 1},
+		AggregateQuota: secondboxclient.TenantQuota{MaxSandboxes: 1, MaxActiveInstances: 1, MaxVcpuCount: 1, MaxMemoryBytes: 1 << 30, MaxSnapshots: 1, MaxPortSessions: 1, MaxConcurrentOperations: 1, MaxActiveSubjects: 1, MaxApplicationAuthorities: 1},
 		ExpiryPolicy:   secondboxclient.TenantExpiryPolicy{MaximumSubjectLifetimeSeconds: 3600, MaximumAuthorityLifetimeSeconds: 3600},
 	}
 	tenant, err := operator.CreateTenant(t.Context(), request, "encoded-reference-create")
@@ -176,7 +176,7 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 			Ref: ref, AllowedProfileGrants: []string{"coding", "management-quota-profile"},
 			AllowedApplicationScopes: []string{"sandbox:read", "sandbox:lifecycle"},
 			AggregateQuota: secondboxclient.TenantQuota{
-				MaxSandboxes: 8, MaxActiveInstances: 8, MaxCpuMillis: 8000,
+				MaxSandboxes: 8, MaxActiveInstances: 8, MaxVcpuCount: 8,
 				MaxMemoryBytes: 8 << 30, MaxSnapshots: 8, MaxPortSessions: 8,
 				MaxConcurrentOperations: 8, MaxActiveSubjects: 8, MaxApplicationAuthorities: 8,
 			},
@@ -268,7 +268,7 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 	subjectRequest := secondboxclient.CreateSubjectRequest{
 		Ref: "shared-subject", Metadata: map[string]string{"environment": "preview"}, ExpiresAt: &subjectExpiry,
 		Quota: secondboxclient.SubjectQuota{
-			MaxSandboxes: 2, MaxActiveInstances: 2, MaxCpuMillis: 2000,
+			MaxSandboxes: 2, MaxActiveInstances: 2, MaxVcpuCount: 2,
 			MaxMemoryBytes: 2 << 30, MaxSnapshots: 2, MaxPortSessions: 2, MaxConcurrentOperations: 2,
 		},
 	}
@@ -700,7 +700,7 @@ func newManagementControlPlane(t *testing.T, databaseStore *store.PostgresContro
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: contracts.QuotaLimits{
-			MaxSandboxes: 1, MaxActiveInstances: 1, MaxCPUMillis: 1000,
+			MaxSandboxes: 1, MaxActiveInstances: 1, MaxVCPUCount: 1,
 			MaxMemoryBytes: 1 << 30, MaxSnapshots: 1, MaxPortSessions: 1, MaxConcurrentOperations: 1,
 		},
 		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,

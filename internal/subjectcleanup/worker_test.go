@@ -262,13 +262,13 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 			ref,state,allowed_profile_grants_json,allowed_application_scopes_json,
 			aggregate_quota_json,expiry_policy_json,metadata_json,revision,created_at,updated_at
 		) VALUES ($1,'active','[]','[]',
-			'{"maxSandboxes":100,"maxActiveInstances":100,"maxCpuMillis":100000,"maxMemoryBytes":1099511627776,"maxSnapshots":100,"maxPortSessions":100,"maxConcurrentOperations":100,"maxActiveSubjects":100,"maxApplicationAuthorities":100}',
+			'{"maxSandboxes":100,"maxActiveInstances":100,"maxVcpuCount":100,"maxMemoryBytes":1099511627776,"maxSnapshots":100,"maxPortSessions":100,"maxConcurrentOperations":100,"maxActiveSubjects":100,"maxApplicationAuthorities":100}',
 			'{"maximumSubjectLifetimeSeconds":3600,"maximumAuthorityLifetimeSeconds":3600}',
 			'{}',1,$2,$2);
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
 		) VALUES ($3,'contention-profile-' || $8,1,
-			'{"pool":"contention-pool","architecture":"amd64","resources":{"cpuMillis":1000,"memoryBytes":1073741824,"workspaceBytes":1073741824,"processLimit":128,"concurrentOperations":1024},"startup":{"mode":"cold_boot"},"lifecycle":{"initialState":"stopped","drainGraceSeconds":30,"idleSeconds":300,"maximumDurationSeconds":3600,"leaseSeconds":60},"retention":{"snapshotLimit":8,"snapshotRetentionSeconds":86400},"execution":{"maximumDeadlineMilliseconds":60000,"maximumBufferedOutputBytes":1048576,"streamWindowBytes":65536,"maximumTransferBytes":1048576,"terminalDetachSeconds":30,"dataPlaneTransport":"proxied"}}',$2);
+			'{"pool":"contention-pool","architecture":"amd64","resources":{"vcpuCount":1,"memoryBytes":1073741824,"workspaceBytes":1073741824,"concurrentOperations":1024},"startup":{"mode":"cold_boot"},"lifecycle":{"initialState":"stopped","drainGraceSeconds":30,"idleSeconds":300,"maximumDurationSeconds":3600,"leaseSeconds":60},"retention":{"snapshotLimit":8,"snapshotRetentionSeconds":86400},"execution":{"maximumDeadlineMilliseconds":60000,"maximumBufferedOutputBytes":1048576,"streamWindowBytes":65536,"maximumTransferBytes":1048576,"terminalDetachSeconds":30,"dataPlaneTransport":"proxied"}}',$2);
 		INSERT INTO secondbox.runners (
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
@@ -770,13 +770,13 @@ func insertCleanupTestSubject(t *testing.T, pool *pgxpool.Pool, tenantRef, subje
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.tenant_quotas (
-			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			tenant_ref,max_sandboxes,max_active_instances,max_vcpu_count,max_memory_bytes,
 			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
 			max_application_authorities,updated_at
 		) VALUES ($1,10,10,10000,10737418240,10,10,10,10,10,$7)
 		ON CONFLICT (tenant_ref) DO NOTHING;
 		INSERT INTO secondbox.subject_quotas (
-			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_vcpu_count,
 			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES ($1,$2,4,4,4000,4294967296,4,4,4,$7);
 		INSERT INTO secondbox.subjects (
@@ -784,7 +784,7 @@ func insertCleanupTestSubject(t *testing.T, pool *pgxpool.Pool, tenantRef, subje
 			expires_at,revision,created_at,updated_at
 		) VALUES ($1,$2,$3,$4,'',$5,'{}',$6,1,$7,$7)`,
 		pgx.QueryExecModeSimpleProtocol, tenantRef, subjectRef, state, cleanupState,
-		`{"maxSandboxes":4,"maxActiveInstances":4,"maxCpuMillis":4000,"maxMemoryBytes":4294967296,"maxSnapshots":4,"maxPortSessions":4,"maxConcurrentOperations":4}`,
+		`{"maxSandboxes":4,"maxActiveInstances":4,"maxVcpuCount":4,"maxMemoryBytes":4294967296,"maxSnapshots":4,"maxPortSessions":4,"maxConcurrentOperations":4}`,
 		expiresAt, now,
 	); err != nil {
 		t.Fatal(err)

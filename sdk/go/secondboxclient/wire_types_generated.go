@@ -556,11 +556,11 @@ const (
 type QuotaUsage struct {
 	ActiveInstances      int64 `json:"activeInstances"`
 	ConcurrentOperations int64 `json:"concurrentOperations"`
-	CPUMillis            int64 `json:"cpuMillis"`
 	MemoryBytes          int64 `json:"memoryBytes"`
 	PortSessions         int64 `json:"portSessions"`
 	Sandboxes            int64 `json:"sandboxes"`
 	Snapshots            int64 `json:"snapshots"`
+	VcpuCount            int64 `json:"vcpuCount"`
 }
 
 type RelocateSandboxRequest struct {
@@ -763,11 +763,11 @@ type SubjectPage struct {
 type SubjectQuota struct {
 	MaxActiveInstances      int64 `json:"maxActiveInstances"`
 	MaxConcurrentOperations int64 `json:"maxConcurrentOperations"`
-	MaxCpuMillis            int64 `json:"maxCpuMillis"`
 	MaxMemoryBytes          int64 `json:"maxMemoryBytes"`
 	MaxPortSessions         int64 `json:"maxPortSessions"`
 	MaxSandboxes            int64 `json:"maxSandboxes"`
 	MaxSnapshots            int64 `json:"maxSnapshots"`
+	MaxVcpuCount            int64 `json:"maxVcpuCount"`
 }
 
 type SubjectState = string
@@ -859,11 +859,11 @@ type TenantQuota struct {
 	MaxActiveSubjects         int64 `json:"maxActiveSubjects"`
 	MaxApplicationAuthorities int64 `json:"maxApplicationAuthorities"`
 	MaxConcurrentOperations   int64 `json:"maxConcurrentOperations"`
-	MaxCpuMillis              int64 `json:"maxCpuMillis"`
 	MaxMemoryBytes            int64 `json:"maxMemoryBytes"`
 	MaxPortSessions           int64 `json:"maxPortSessions"`
 	MaxSandboxes              int64 `json:"maxSandboxes"`
 	MaxSnapshots              int64 `json:"maxSnapshots"`
+	MaxVcpuCount              int64 `json:"maxVcpuCount"`
 }
 
 type TenantQuotaUsage struct {
@@ -871,11 +871,11 @@ type TenantQuotaUsage struct {
 	ActiveSubjects         int64 `json:"activeSubjects"`
 	ApplicationAuthorities int64 `json:"applicationAuthorities"`
 	ConcurrentOperations   int64 `json:"concurrentOperations"`
-	CPUMillis              int64 `json:"cpuMillis"`
 	MemoryBytes            int64 `json:"memoryBytes"`
 	PortSessions           int64 `json:"portSessions"`
 	Sandboxes              int64 `json:"sandboxes"`
 	Snapshots              int64 `json:"snapshots"`
+	VcpuCount              int64 `json:"vcpuCount"`
 }
 
 type TenantState = string

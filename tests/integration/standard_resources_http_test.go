@@ -44,7 +44,7 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controllerClient.CreateSubject(t.Context(), secondboxclient.CreateSubjectRequest{Ref: "standard-isolated-subject", Quota: secondboxclient.SubjectQuota{MaxSandboxes: 10, MaxActiveInstances: 10, MaxCpuMillis: 10000, MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10}, Metadata: map[string]string{}}, "standard-isolated-subject"); err != nil {
+	if _, err := controllerClient.CreateSubject(t.Context(), secondboxclient.CreateSubjectRequest{Ref: "standard-isolated-subject", Quota: secondboxclient.SubjectQuota{MaxSandboxes: 10, MaxActiveInstances: 10, MaxVcpuCount: 10, MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10}, Metadata: map[string]string{}}, "standard-isolated-subject"); err != nil {
 		t.Fatal(err)
 	}
 	application, err := controllerClient.CreateApplicationAuthority(t.Context(), secondboxclient.CreateApplicationAuthorityRequest{SubjectRef: "standard-isolated-subject", Scopes: []string{"sandbox:read", "sandbox:lifecycle"}, ProfileGrants: []string{standardresources.AgentCompartmentIsolated}, Metadata: map[string]string{}, ExpiresAt: now.Add(30 * time.Minute)}, "standard-isolated-application")
@@ -122,7 +122,7 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	}
 	pinnedRevisionID := sandbox.ProfileRevisionID
 	third := second
-	third.Resources.CPUMillis++
+	third.Resources.VCPUCount++
 	thirdDigest, err := resourceapply.SpecDigest(third)
 	if err != nil {
 		t.Fatal(err)

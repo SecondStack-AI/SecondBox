@@ -49,7 +49,7 @@ func TestQuotaWouldExceedEverySubjectLimit(t *testing.T) {
 
 func TestTenantQuotaWouldExceedEveryDataPlaneLimit(t *testing.T) {
 	base := contracts.TenantQuota{
-		MaxSandboxes: 10, MaxActiveInstances: 10, MaxCPUMillis: 10,
+		MaxSandboxes: 10, MaxActiveInstances: 10, MaxVCPUCount: 10,
 		MaxMemoryBytes: 10, MaxSnapshots: 10, MaxPortSessions: 10,
 		MaxConcurrentOperations: 10,
 	}
@@ -59,7 +59,7 @@ func TestTenantQuotaWouldExceedEveryDataPlaneLimit(t *testing.T) {
 	}{
 		"sandboxes":             {usage: contracts.TenantQuotaUsage{Sandboxes: 10}, delta: quotaUsage{sandboxes: 1}},
 		"active instances":      {usage: contracts.TenantQuotaUsage{ActiveInstances: 10}, delta: quotaUsage{activeInstances: 1}},
-		"CPU":                   {usage: contracts.TenantQuotaUsage{CPUMillis: 10}, delta: quotaUsage{cpuMillis: 1}},
+		"CPU":                   {usage: contracts.TenantQuotaUsage{VCPUCount: 10}, delta: quotaUsage{vcpuCount: 1}},
 		"memory":                {usage: contracts.TenantQuotaUsage{MemoryBytes: 10}, delta: quotaUsage{memoryBytes: 1}},
 		"snapshots":             {usage: contracts.TenantQuotaUsage{Snapshots: 10}, delta: quotaUsage{snapshots: 1}},
 		"port sessions":         {usage: contracts.TenantQuotaUsage{PortSessions: 10}, delta: quotaUsage{portSessions: 1}},
@@ -73,7 +73,7 @@ func TestTenantQuotaWouldExceedEveryDataPlaneLimit(t *testing.T) {
 		})
 	}
 	if tenantDataPlaneQuotaWouldExceed(base, contracts.TenantQuotaUsage{}, quotaUsage{
-		sandboxes: 1, activeInstances: 1, cpuMillis: 1, memoryBytes: 1,
+		sandboxes: 1, activeInstances: 1, vcpuCount: 1, memoryBytes: 1,
 		snapshots: 1, portSessions: 1, concurrentOperations: 1,
 	}) {
 		t.Fatal("in-limit Tenant reservation was rejected")
@@ -82,14 +82,14 @@ func TestTenantQuotaWouldExceedEveryDataPlaneLimit(t *testing.T) {
 
 func TestSubjectQuotaCoversCommittedUsageEveryDimension(t *testing.T) {
 	quota := contracts.QuotaLimits{
-		MaxSandboxes: 10, MaxActiveInstances: 10, MaxCPUMillis: 10,
+		MaxSandboxes: 10, MaxActiveInstances: 10, MaxVCPUCount: 10,
 		MaxMemoryBytes: 10, MaxSnapshots: 10, MaxPortSessions: 10,
 		MaxConcurrentOperations: 10,
 	}
 	tests := map[string]quotaUsage{
 		"sandboxes":             {sandboxes: 11},
 		"active instances":      {activeInstances: 11},
-		"CPU":                   {cpuMillis: 11},
+		"CPU":                   {vcpuCount: 11},
 		"memory":                {memoryBytes: 11},
 		"snapshots":             {snapshots: 11},
 		"port sessions":         {portSessions: 11},
@@ -103,7 +103,7 @@ func TestSubjectQuotaCoversCommittedUsageEveryDimension(t *testing.T) {
 		})
 	}
 	if !subjectQuotaCoversUsage(quota, quotaUsage{
-		sandboxes: 10, activeInstances: 10, cpuMillis: 10, memoryBytes: 10,
+		sandboxes: 10, activeInstances: 10, vcpuCount: 10, memoryBytes: 10,
 		snapshots: 10, portSessions: 10, concurrentOperations: 10,
 	}) {
 		t.Fatal("quota equal to committed usage was rejected")

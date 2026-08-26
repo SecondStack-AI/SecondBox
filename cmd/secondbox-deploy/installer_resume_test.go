@@ -196,7 +196,7 @@ func TestInstalledSmokeRequiresAuthenticatedRunnerPoolAndRunnerReadiness(t *test
 		Architectures: []string{standardresources.ArchitectureAMD64},
 		Capabilities:  []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"},
 		Capacity: map[string]int64{
-			"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes,
+			"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes,
 			"DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1,
 			"Operations": install.DurableCodingConcurrentOperations,
 		},
@@ -233,7 +233,7 @@ func TestInstalledSmokeUsesRealCLIInspectionGrammar(t *testing.T) {
 		Architectures: []string{standardresources.ArchitectureAMD64},
 		Capabilities:  []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"},
 		Capacity: map[string]int64{
-			"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes,
+			"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes,
 			"DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1,
 			"Operations": install.DurableCodingConcurrentOperations,
 		},

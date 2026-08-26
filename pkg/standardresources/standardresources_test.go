@@ -148,7 +148,7 @@ func TestAgentCompartmentIsolatedCanonicalRevisionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := profile.Revisions[0].SpecDigest, "sha256:59693b73e62e21d3ce705060edba3e13301eaf8e14c00d90792ab78afa74be6c"; got != want {
+	if got, want := profile.Revisions[0].SpecDigest, "sha256:e5e27b42fdf23c91929529d9a19afe599823ba1c3b5553159affa1f35286ae75"; got != want {
 		t.Fatalf("agent-compartment-isolated revision 1 digest = %q, want %q", got, want)
 	}
 }
@@ -174,7 +174,7 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 	if agent.Revisions[0].SpecDigest != "sha256:0724aee520173710db793ad365db28cdb6905f2a5fecb2cb785c475443f98ed4" {
 		t.Fatalf("changed bundle rewrote agent revision 1: %#v", agent.Revisions)
 	}
-	if isolated.Revisions[0].SpecDigest != "sha256:59693b73e62e21d3ce705060edba3e13301eaf8e14c00d90792ab78afa74be6c" {
+	if isolated.Revisions[0].SpecDigest != "sha256:e5e27b42fdf23c91929529d9a19afe599823ba1c3b5553159affa1f35286ae75" {
 		t.Fatalf("changed bundle rewrote isolated revision 1: %#v", isolated.Revisions)
 	}
 	for _, profile := range []resourceapply.Profile{agent, coding, isolated} {

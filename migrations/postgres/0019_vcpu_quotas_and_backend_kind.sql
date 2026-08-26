@@ -12,6 +12,34 @@ ALTER TABLE secondbox.subject_quotas RENAME COLUMN max_cpu_millis TO max_vcpu_co
 UPDATE secondbox.subject_quotas
 SET max_vcpu_count = GREATEST(1, max_vcpu_count / 1000 + CASE WHEN max_vcpu_count % 1000 > 0 THEN 1 ELSE 0 END);
 
+-- Tenant aggregate quotas bound the same CPU dimension one level up and
+-- convert identically so a tenant ceiling keeps covering every subject
+-- allowance it covered before.
+ALTER TABLE secondbox.tenant_quotas RENAME COLUMN max_cpu_millis TO max_vcpu_count;
+UPDATE secondbox.tenant_quotas
+SET max_vcpu_count = GREATEST(1, max_vcpu_count / 1000 + CASE WHEN max_vcpu_count % 1000 > 0 THEN 1 ELSE 0 END);
+
+-- The Tenant row keeps its own copy of the aggregate quota document, which is
+-- decoded on every read, so its recorded key converts with the ledger.
+UPDATE secondbox.tenants
+SET aggregate_quota_json = jsonb_set(
+        aggregate_quota_json - 'maxCpuMillis',
+        '{maxVcpuCount}',
+        to_jsonb(GREATEST(1,
+            ((aggregate_quota_json->>'maxCpuMillis')::bigint) / 1000
+            + CASE WHEN ((aggregate_quota_json->>'maxCpuMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END)))
+WHERE aggregate_quota_json ? 'maxCpuMillis';
+
+-- Subject rows keep the same decoded-quota copy and convert the same way.
+UPDATE secondbox.subjects
+SET quota_json = jsonb_set(
+        quota_json - 'maxCpuMillis',
+        '{maxVcpuCount}',
+        to_jsonb(GREATEST(1,
+            ((quota_json->>'maxCpuMillis')::bigint) / 1000
+            + CASE WHEN ((quota_json->>'maxCpuMillis')::bigint) % 1000 > 0 THEN 1 ELSE 0 END)))
+WHERE quota_json ? 'maxCpuMillis';
+
 -- Profile revisions are immutable statements of intent; rewriting the unit is
 -- a representation change of the same allowance, not a new policy. The guard
 -- keeps this idempotent and converges an upgraded database on exactly the

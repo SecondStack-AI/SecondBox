@@ -247,12 +247,12 @@ func seedRowlockFixture(t *testing.T, pool *pgxpool.Pool, suffix string) rowlock
 	now := time.Now().UTC()
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.tenant_quotas (
-			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			tenant_ref,max_sandboxes,max_active_instances,max_vcpu_count,max_memory_bytes,
 			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
 			max_application_authorities,updated_at
 		) VALUES ($2,10,10,10000,10737418240,10,10,10,10,10,$5);
 		INSERT INTO secondbox.subject_quotas (
-			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_vcpu_count,
 			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES ($2,$3,10,10,10000,10737418240,10,10,10,$5);
 		INSERT INTO secondbox.workspaces (

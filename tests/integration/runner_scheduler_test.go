@@ -1079,13 +1079,13 @@ func task4InsertSchedulableSandbox(
 	workspaceID := task4ID("workspace")
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.tenant_quotas (
-			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			tenant_ref,max_sandboxes,max_active_instances,max_vcpu_count,max_memory_bytes,
 			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
 			max_application_authorities,updated_at
 		) VALUES ('task4-project',100,100,100000,1099511627776,100,100,100,100,100,$4)
 		ON CONFLICT (tenant_ref) DO NOTHING;
 		INSERT INTO secondbox.subject_quotas (
-			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_vcpu_count,
 			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES ('task4-project','task4-subject',100,100,100000,1099511627776,100,100,100,$4)
 		ON CONFLICT (tenant_ref,subject_ref) DO NOTHING;

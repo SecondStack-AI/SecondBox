@@ -253,7 +253,7 @@ func bootstrapPersistedHTTPAuthority(
 	}
 	if _, err := controllerClient.CreateSubject(t.Context(), secondboxclient.CreateSubjectRequest{
 		Ref: "same-local-subject", Quota: secondboxclient.SubjectQuota{
-			MaxSandboxes: 10, MaxActiveInstances: 10, MaxCpuMillis: 10000, MaxMemoryBytes: 10 << 30,
+			MaxSandboxes: 10, MaxActiveInstances: 10, MaxVcpuCount: 10, MaxMemoryBytes: 10 << 30,
 			MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10,
 		}, Metadata: map[string]string{"case": suffix},
 	}, "persisted-http-subject-"+suffix); err != nil {
@@ -274,7 +274,7 @@ func persistedHTTPTenantRequest(ref secondboxclient.OwnershipRef) secondboxclien
 		Ref: ref, AllowedProfileGrants: []string{"coding"},
 		AllowedApplicationScopes: []string{"sandbox:read", "sandbox:lifecycle"},
 		AggregateQuota: secondboxclient.TenantQuota{
-			MaxSandboxes: 10, MaxActiveInstances: 10, MaxCpuMillis: 10000,
+			MaxSandboxes: 10, MaxActiveInstances: 10, MaxVcpuCount: 10,
 			MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10,
 			MaxConcurrentOperations: 10, MaxActiveSubjects: 10, MaxApplicationAuthorities: 10,
 		},

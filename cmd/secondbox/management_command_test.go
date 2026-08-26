@@ -18,9 +18,9 @@ import (
 )
 
 func TestManagementCommandsUseTypedAuthoritiesAndGeneratedRoutes(t *testing.T) {
-	tenantRequest := writeManagementRequestFixture(t, `{"ref":"tenant-a","allowedProfileGrants":["durable-coding"],"allowedApplicationScopes":["sandbox:read"],"aggregateQuota":{"maxSandboxes":1,"maxActiveInstances":1,"maxCpuMillis":1000,"maxMemoryBytes":1073741824,"maxSnapshots":1,"maxPortSessions":1,"maxConcurrentOperations":1,"maxActiveSubjects":1,"maxApplicationAuthorities":1},"expiryPolicy":{"maximumSubjectLifetimeSeconds":3600,"maximumAuthorityLifetimeSeconds":3600},"metadata":{}}`)
+	tenantRequest := writeManagementRequestFixture(t, `{"ref":"tenant-a","allowedProfileGrants":["durable-coding"],"allowedApplicationScopes":["sandbox:read"],"aggregateQuota":{"maxSandboxes":1,"maxActiveInstances":1,"maxVcpuCount":1,"maxMemoryBytes":1073741824,"maxSnapshots":1,"maxPortSessions":1,"maxConcurrentOperations":1,"maxActiveSubjects":1,"maxApplicationAuthorities":1},"expiryPolicy":{"maximumSubjectLifetimeSeconds":3600,"maximumAuthorityLifetimeSeconds":3600},"metadata":{}}`)
 	controllerRequest := writeManagementRequestFixture(t, `{"expiresAt":"2026-08-26T00:00:00Z","metadata":{}}`)
-	subjectRequest := writeManagementRequestFixture(t, `{"ref":"subject-a","quota":{"maxSandboxes":1,"maxActiveInstances":1,"maxCpuMillis":1000,"maxMemoryBytes":1073741824,"maxSnapshots":1,"maxPortSessions":1,"maxConcurrentOperations":1},"metadata":{}}`)
+	subjectRequest := writeManagementRequestFixture(t, `{"ref":"subject-a","quota":{"maxSandboxes":1,"maxActiveInstances":1,"maxVcpuCount":1,"maxMemoryBytes":1073741824,"maxSnapshots":1,"maxPortSessions":1,"maxConcurrentOperations":1},"metadata":{}}`)
 	applicationRequest := writeManagementRequestFixture(t, `{"subjectRef":"subject-a","scopes":["sandbox:read"],"profileGrants":["durable-coding"],"expiresAt":"2026-08-26T00:00:00Z","metadata":{}}`)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

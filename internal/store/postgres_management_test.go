@@ -479,7 +479,7 @@ func managementTestTenant(ref string, now time.Time) contracts.Tenant {
 			"sandbox:read", "sandbox:lifecycle", "sandbox:exec", "sandbox:files", "sandbox:ports",
 		},
 		AggregateQuota: contracts.TenantQuota{
-			MaxSandboxes: 10, MaxActiveInstances: 10, MaxCPUMillis: 10000,
+			MaxSandboxes: 10, MaxActiveInstances: 10, MaxVCPUCount: 10,
 			MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10,
 			MaxConcurrentOperations: 10, MaxActiveSubjects: 10, MaxApplicationAuthorities: 10,
 		},
@@ -495,7 +495,7 @@ func managementTestSubject(tenantRef string, subjectRef string, now time.Time) c
 		TenantRef: tenantRef, Ref: subjectRef,
 		State: contracts.SubjectStateActive, CleanupState: contracts.SubjectCleanupStateNone,
 		Quota: contracts.QuotaLimits{
-			MaxSandboxes: 2, MaxActiveInstances: 2, MaxCPUMillis: 2000,
+			MaxSandboxes: 2, MaxActiveInstances: 2, MaxVCPUCount: 2,
 			MaxMemoryBytes: 2 << 30, MaxSnapshots: 2, MaxPortSessions: 2,
 			MaxConcurrentOperations: 2,
 		},

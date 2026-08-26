@@ -39,7 +39,7 @@ type TenantExpiryPolicy struct {
 type TenantQuota struct {
 	MaxSandboxes              int64 `json:"maxSandboxes"`
 	MaxActiveInstances        int64 `json:"maxActiveInstances"`
-	MaxCPUMillis              int64 `json:"maxCpuMillis"`
+	MaxVCPUCount              int64 `json:"maxVcpuCount"`
 	MaxMemoryBytes            int64 `json:"maxMemoryBytes"`
 	MaxSnapshots              int64 `json:"maxSnapshots"`
 	MaxPortSessions           int64 `json:"maxPortSessions"`
@@ -52,7 +52,7 @@ type TenantQuota struct {
 type TenantQuotaUsage struct {
 	Sandboxes              int64 `json:"sandboxes"`
 	ActiveInstances        int64 `json:"activeInstances"`
-	CPUMillis              int64 `json:"cpuMillis"`
+	VCPUCount              int64 `json:"vcpuCount"`
 	MemoryBytes            int64 `json:"memoryBytes"`
 	Snapshots              int64 `json:"snapshots"`
 	PortSessions           int64 `json:"portSessions"`

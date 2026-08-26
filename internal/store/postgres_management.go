@@ -374,10 +374,10 @@ func (store *PostgresControlPlaneStore) UpdateManagedSubjectQuota(
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota update failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE secondbox.subject_quotas SET
-		max_sandboxes=$3,max_active_instances=$4,max_cpu_millis=$5,max_memory_bytes=$6,
+		max_sandboxes=$3,max_active_instances=$4,max_vcpu_count=$5,max_memory_bytes=$6,
 		max_snapshots=$7,max_port_sessions=$8,max_concurrent_operations=$9,updated_at=$10
 		WHERE tenant_ref=$1 AND subject_ref=$2`, tenantRef, subjectRef,
-		quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxCPUMillis,
+		quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxVCPUCount,
 		quota.MaxMemoryBytes, quota.MaxSnapshots, quota.MaxPortSessions,
 		quota.MaxConcurrentOperations, subject.UpdatedAt); err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota ledger update failed: %w", err)
@@ -592,7 +592,7 @@ func (store *PostgresControlPlaneStore) GetTenantUsage(
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT subject.ref,
-		       quota.max_sandboxes,quota.max_active_instances,quota.max_cpu_millis,
+		       quota.max_sandboxes,quota.max_active_instances,quota.max_vcpu_count,
 		       quota.max_memory_bytes,quota.max_snapshots,quota.max_port_sessions,
 		       quota.max_concurrent_operations
 		FROM secondbox.subjects AS subject
@@ -616,7 +616,7 @@ func (store *PostgresControlPlaneStore) GetTenantUsage(
 		var item subjectLimit
 		if err := rows.Scan(
 			&item.ref, &item.limits.MaxSandboxes, &item.limits.MaxActiveInstances,
-			&item.limits.MaxCPUMillis, &item.limits.MaxMemoryBytes,
+			&item.limits.MaxVCPUCount, &item.limits.MaxMemoryBytes,
 			&item.limits.MaxSnapshots, &item.limits.MaxPortSessions,
 			&item.limits.MaxConcurrentOperations,
 		); err != nil {
@@ -651,7 +651,7 @@ func (store *PostgresControlPlaneStore) GetTenantUsage(
 			TenantRef: tenantRef, SubjectRef: item.ref, Limits: item.limits,
 			Usage: contracts.QuotaUsage{
 				Sandboxes: reserved.sandboxes, ActiveInstances: reserved.activeInstances,
-				CPUMillis: reserved.cpuMillis, MemoryBytes: reserved.memoryBytes,
+				VCPUCount: reserved.vcpuCount, MemoryBytes: reserved.memoryBytes,
 				Snapshots: reserved.snapshots, PortSessions: reserved.portSessions,
 				ConcurrentOperations: reserved.concurrentOperations,
 			},
@@ -689,7 +689,7 @@ func (store *PostgresControlPlaneStore) GetDeploymentUsage(
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT tenant.ref,
-		       quota.max_sandboxes,quota.max_active_instances,quota.max_cpu_millis,
+		       quota.max_sandboxes,quota.max_active_instances,quota.max_vcpu_count,
 		       quota.max_memory_bytes,quota.max_snapshots,quota.max_port_sessions,
 		       quota.max_concurrent_operations,quota.max_active_subjects,
 		       quota.max_application_authorities
@@ -706,7 +706,7 @@ func (store *PostgresControlPlaneStore) GetDeploymentUsage(
 	for rows.Next() {
 		var item contracts.TenantAggregateUsage
 		if err := rows.Scan(&item.TenantRef, &item.Limits.MaxSandboxes,
-			&item.Limits.MaxActiveInstances, &item.Limits.MaxCPUMillis,
+			&item.Limits.MaxActiveInstances, &item.Limits.MaxVCPUCount,
 			&item.Limits.MaxMemoryBytes, &item.Limits.MaxSnapshots,
 			&item.Limits.MaxPortSessions, &item.Limits.MaxConcurrentOperations,
 			&item.Limits.MaxActiveSubjects, &item.Limits.MaxApplicationAuthorities); err != nil {
@@ -1585,11 +1585,11 @@ func insertTenantQuota(
 	now time.Time,
 ) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.tenant_quotas (
-		tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+		tenant_ref,max_sandboxes,max_active_instances,max_vcpu_count,max_memory_bytes,
 		max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
 		max_application_authorities,updated_at
 	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, tenantRef,
-		quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxCPUMillis,
+		quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxVCPUCount,
 		quota.MaxMemoryBytes, quota.MaxSnapshots, quota.MaxPortSessions,
 		quota.MaxConcurrentOperations, quota.MaxActiveSubjects,
 		quota.MaxApplicationAuthorities, now.UTC()); err != nil {
@@ -1714,7 +1714,7 @@ func managedAuthorityExpiryAllowed(tenant contracts.Tenant, now time.Time, expir
 func subjectQuotaWithinTenant(subject contracts.QuotaLimits, tenant contracts.TenantQuota) bool {
 	return subject.MaxSandboxes <= tenant.MaxSandboxes &&
 		subject.MaxActiveInstances <= tenant.MaxActiveInstances &&
-		subject.MaxCPUMillis <= tenant.MaxCPUMillis &&
+		subject.MaxVCPUCount <= tenant.MaxVCPUCount &&
 		subject.MaxMemoryBytes <= tenant.MaxMemoryBytes &&
 		subject.MaxSnapshots <= tenant.MaxSnapshots &&
 		subject.MaxPortSessions <= tenant.MaxPortSessions &&

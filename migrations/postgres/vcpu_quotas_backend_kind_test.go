@@ -22,6 +22,9 @@ var vcpuConversionLineage = []string{
 	"0013_lifecycle_fence_command_kind.sql",
 	"0014_lifecycle_quiescent_schedule.sql",
 	"0015_profile_startup_mode.sql",
+	"0016_persisted_authorities.sql",
+	"0017_tenant_aggregate_quotas.sql",
+	"0018_subject_cleanup.sql",
 }
 
 // milliUnitSpec is a Profile revision as recorded before the vCPU conversion;
@@ -38,7 +41,9 @@ const (
 // to converge rather than the column rename.
 func TestVCPUConversionConvergesOnFreshAndUpgradedSchemas(t *testing.T) {
 	upgraded := newGuardDatabase(t)
-	applyMigrations(t, upgraded, vcpuConversionLineage...)
+	applyMigrations(t, upgraded, vcpuConversionLineage[:len(vcpuConversionLineage)-2]...)
+	seedTenantLedger(t, upgraded)
+	applyMigrations(t, upgraded, "0017_tenant_aggregate_quotas.sql", "0018_subject_cleanup.sql")
 	seedProfileRevision(t, upgraded, "revision-milli", 1, milliUnitSpec)
 	seedSubjectQuota(t, upgraded, "max_cpu_millis", 1500)
 	seedRunnerCapacity(t, upgraded,
@@ -100,6 +105,37 @@ func TestVCPUConversionConvergesOnFreshAndUpgradedSchemas(t *testing.T) {
 		t.Error("removed processLimit field survived the conversion")
 	}
 
+	var tenantLedgerVCPUs int64
+	if err := upgraded.QueryRow(t.Context(), `
+		SELECT max_vcpu_count FROM secondbox.tenant_quotas WHERE tenant_ref='tenant-ledger'`,
+	).Scan(&tenantLedgerVCPUs); err != nil {
+		t.Fatal(err)
+	}
+	if tenantLedgerVCPUs != 2 {
+		t.Errorf("converted tenant ledger max_vcpu_count = %d, want 2 (1500 milli-units rounded up)", tenantLedgerVCPUs)
+	}
+	var aggregateVCPUs, subjectDocumentVCPUs int64
+	var aggregateMilliRetained, subjectMilliRetained bool
+	if err := upgraded.QueryRow(t.Context(), `
+		SELECT (tenant.aggregate_quota_json->>'maxVcpuCount')::bigint,
+		       tenant.aggregate_quota_json ? 'maxCpuMillis',
+		       (subject.quota_json->>'maxVcpuCount')::bigint,
+		       subject.quota_json ? 'maxCpuMillis'
+		FROM secondbox.tenants AS tenant
+		JOIN secondbox.subjects AS subject ON subject.tenant_ref=tenant.ref
+		WHERE tenant.ref='tenant-ledger'`,
+	).Scan(&aggregateVCPUs, &aggregateMilliRetained, &subjectDocumentVCPUs, &subjectMilliRetained); err != nil {
+		t.Fatal(err)
+	}
+	if aggregateVCPUs != 2 || aggregateMilliRetained {
+		t.Errorf("converted tenant aggregate quota document maxVcpuCount = %d (maxCpuMillis retained: %v), want 2 without milli-units",
+			aggregateVCPUs, aggregateMilliRetained)
+	}
+	if subjectDocumentVCPUs != 2 || subjectMilliRetained {
+		t.Errorf("converted subject quota document maxVcpuCount = %d (maxCpuMillis retained: %v), want 2 without milli-units",
+			subjectDocumentVCPUs, subjectMilliRetained)
+	}
+
 	for _, table := range []string{"runner_pools", "runners"} {
 		var sealed string
 		if err := upgraded.QueryRow(t.Context(),
@@ -150,7 +186,7 @@ func TestVCPUConversionSurvivesMaximumMilliUnitValues(t *testing.T) {
 	applyMigrations(t, connection, vcpuConversionLineage...)
 	const nearMaximum = int64(9223372036854775807) - 7
 	seedSubjectQuota(t, connection, "max_cpu_millis", nearMaximum)
-	applyMigrations(t, connection, "0016_vcpu_quotas_and_backend_kind.sql")
+	applyMigrations(t, connection, "0019_vcpu_quotas_and_backend_kind.sql")
 	if got := subjectQuotaVCPUs(t, connection); got != nearMaximum/1000+1 {
 		t.Errorf("near-maximum quota max_vcpu_count = %d, want %d", got, nearMaximum/1000+1)
 	}
@@ -177,6 +213,32 @@ func seedSubjectQuota(t *testing.T, connection *pgx.Conn, cpuColumn string, cpuV
 			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at)
 		VALUES ('tenant-vcpu','subject-vcpu',8,4,$1,8589934592,4,4,8,$2)`,
 		cpuValue, seeded,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedTenantLedger(t *testing.T, connection *pgx.Conn) {
+	t.Helper()
+	seeded := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	if _, err := connection.Exec(t.Context(), `
+		INSERT INTO secondbox.tenants (
+			ref,state,allowed_profile_grants_json,allowed_application_scopes_json,
+			aggregate_quota_json,expiry_policy_json,metadata_json,revision,created_at,updated_at)
+		VALUES ('tenant-ledger','active','["durable-coding"]','["sandbox:read"]',
+			'{"maxSandboxes":8,"maxActiveInstances":4,"maxCpuMillis":1500,"maxMemoryBytes":8589934592,"maxSnapshots":4,"maxPortSessions":4,"maxConcurrentOperations":8,"maxActiveSubjects":4,"maxApplicationAuthorities":4}',
+			'{"maximumSubjectLifetimeSeconds":3600,"maximumAuthorityLifetimeSeconds":3600}','{}',1,$1,$1)`,
+		seeded,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Exec(t.Context(), `
+		INSERT INTO secondbox.subjects (
+			tenant_ref,ref,state,cleanup_state,quota_json,metadata_json,revision,created_at,updated_at)
+		VALUES ('tenant-ledger','subject-ledger','active','none',
+			'{"maxSandboxes":4,"maxActiveInstances":2,"maxCpuMillis":1500,"maxMemoryBytes":4294967296,"maxSnapshots":2,"maxPortSessions":2,"maxConcurrentOperations":4}',
+			'{}',1,$1,$1)`,
+		seeded,
 	); err != nil {
 		t.Fatal(err)
 	}

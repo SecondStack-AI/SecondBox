@@ -87,7 +87,7 @@ architectures = ['amd64']
 capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
 state = 'ready'
 max_sandboxes = 20
-max_cpu_millis = 80000
+max_vcpu_count = 80
 max_memory_bytes = 171798691840
 
 [overrides]

@@ -1968,11 +1968,11 @@
       },
       "SubjectQuota": {
         "type": "object", "additionalProperties": false,
-        "required": ["maxSandboxes", "maxActiveInstances", "maxCpuMillis", "maxMemoryBytes", "maxSnapshots", "maxPortSessions", "maxConcurrentOperations"],
+        "required": ["maxSandboxes", "maxActiveInstances", "maxVcpuCount", "maxMemoryBytes", "maxSnapshots", "maxPortSessions", "maxConcurrentOperations"],
         "properties": {
           "maxSandboxes": {"type": "integer", "format": "int64", "minimum": 0},
           "maxActiveInstances": {"type": "integer", "format": "int64", "minimum": 0},
-          "maxCpuMillis": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxVcpuCount": {"type": "integer", "format": "int64", "minimum": 0},
           "maxMemoryBytes": {"type": "integer", "format": "int64", "minimum": 0},
           "maxSnapshots": {"type": "integer", "format": "int64", "minimum": 0},
           "maxPortSessions": {"type": "integer", "format": "int64", "minimum": 0},
@@ -1981,11 +1981,11 @@
       },
       "TenantQuota": {
         "type": "object", "additionalProperties": false,
-        "required": ["maxSandboxes", "maxActiveInstances", "maxCpuMillis", "maxMemoryBytes", "maxSnapshots", "maxPortSessions", "maxConcurrentOperations", "maxActiveSubjects", "maxApplicationAuthorities"],
+        "required": ["maxSandboxes", "maxActiveInstances", "maxVcpuCount", "maxMemoryBytes", "maxSnapshots", "maxPortSessions", "maxConcurrentOperations", "maxActiveSubjects", "maxApplicationAuthorities"],
         "properties": {
           "maxSandboxes": {"type": "integer", "format": "int64", "minimum": 0},
           "maxActiveInstances": {"type": "integer", "format": "int64", "minimum": 0},
-          "maxCpuMillis": {"type": "integer", "format": "int64", "minimum": 0},
+          "maxVcpuCount": {"type": "integer", "format": "int64", "minimum": 0},
           "maxMemoryBytes": {"type": "integer", "format": "int64", "minimum": 0},
           "maxSnapshots": {"type": "integer", "format": "int64", "minimum": 0},
           "maxPortSessions": {"type": "integer", "format": "int64", "minimum": 0},
@@ -1996,11 +1996,11 @@
       },
       "QuotaUsage": {
         "type": "object", "additionalProperties": false,
-        "required": ["sandboxes", "activeInstances", "cpuMillis", "memoryBytes", "snapshots", "portSessions", "concurrentOperations"],
+        "required": ["sandboxes", "activeInstances", "vcpuCount", "memoryBytes", "snapshots", "portSessions", "concurrentOperations"],
         "properties": {
           "sandboxes": {"type": "integer", "format": "int64", "minimum": 0},
           "activeInstances": {"type": "integer", "format": "int64", "minimum": 0},
-          "cpuMillis": {"type": "integer", "format": "int64", "minimum": 0},
+          "vcpuCount": {"type": "integer", "format": "int64", "minimum": 0},
           "memoryBytes": {"type": "integer", "format": "int64", "minimum": 0},
           "snapshots": {"type": "integer", "format": "int64", "minimum": 0},
           "portSessions": {"type": "integer", "format": "int64", "minimum": 0},
@@ -2009,11 +2009,11 @@
       },
       "TenantQuotaUsage": {
         "type": "object", "additionalProperties": false,
-        "required": ["sandboxes", "activeInstances", "cpuMillis", "memoryBytes", "snapshots", "portSessions", "concurrentOperations", "activeSubjects", "applicationAuthorities"],
+        "required": ["sandboxes", "activeInstances", "vcpuCount", "memoryBytes", "snapshots", "portSessions", "concurrentOperations", "activeSubjects", "applicationAuthorities"],
         "properties": {
           "sandboxes": {"type": "integer", "format": "int64", "minimum": 0},
           "activeInstances": {"type": "integer", "format": "int64", "minimum": 0},
-          "cpuMillis": {"type": "integer", "format": "int64", "minimum": 0},
+          "vcpuCount": {"type": "integer", "format": "int64", "minimum": 0},
           "memoryBytes": {"type": "integer", "format": "int64", "minimum": 0},
           "snapshots": {"type": "integer", "format": "int64", "minimum": 0},
           "portSessions": {"type": "integer", "format": "int64", "minimum": 0},

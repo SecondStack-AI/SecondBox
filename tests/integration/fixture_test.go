@@ -257,7 +257,7 @@ func createProjectAccountAndCredential(
 func tenantQuotaForSubjectQuota(quota contracts.QuotaLimits) contracts.TenantQuota {
 	return contracts.TenantQuota{
 		MaxSandboxes: quota.MaxSandboxes, MaxActiveInstances: quota.MaxActiveInstances,
-		MaxCPUMillis: quota.MaxCPUMillis, MaxMemoryBytes: quota.MaxMemoryBytes,
+		MaxVCPUCount: quota.MaxVCPUCount, MaxMemoryBytes: quota.MaxMemoryBytes,
 		MaxSnapshots: quota.MaxSnapshots, MaxPortSessions: quota.MaxPortSessions,
 		MaxConcurrentOperations: quota.MaxConcurrentOperations,
 		MaxActiveSubjects:       100, MaxApplicationAuthorities: 100,
@@ -346,7 +346,7 @@ func seedFixtureHomeRunner(t *testing.T, poolName string, runnerID string) {
 			  "Instances":1000,"Operations":1000}',
 			'[3]',1,1,'fixture','fixture-connection',1,'active',
 			'{"VCPUCount":0,"MemoryBytes":0,"DiskBytes":0,"Instances":0,"Operations":0}',
-			'{"artifactDigests":["sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"materializations":[{"backendKind":"firecracker","architecture":"amd64","runtimeDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolchainDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]}',
+			'{"artifactDigests":["sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"materializations":[{"backendKind":"firecracker","architecture":"amd64","runtimeDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolchainDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"backendKind":"firecracker","architecture":"amd64","runtimeDigest":"sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335","toolchainDigest":"sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4","digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}]}',
 			'firecracker',0,0,$3,1,$3,$3
 		)
 		ON CONFLICT (id) DO UPDATE SET
