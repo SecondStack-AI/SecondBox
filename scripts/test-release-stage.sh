@@ -70,42 +70,42 @@ export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$fingerprint"
 # rather than an opportunistic check: without it the third staging would silently
 # repeat the byte-ordered ones and assert nothing.
 dictionary_locale="en_US.UTF-8"
-collation_sample=$'SHA256SUMS\nagent-compartment.standard-bundle.json\nsecondbox-deploy_0.6.0_linux_amd64\nsecondbox_0.6.0_linux_amd64'
+collation_sample=$'SHA256SUMS\nagent-compartment.standard-bundle.json\nsecondbox-deploy_0.7.0_linux_amd64\nsecondbox_0.7.0_linux_amd64'
 if [[ "$(LC_ALL="$dictionary_locale" sort <<<"$collation_sample" 2>/dev/null)" == "$(LC_ALL=C sort <<<"$collation_sample")" ]]; then
   echo "release staging locale test requires a dictionary-collating $dictionary_locale locale; generate it and rerun" >&2
   exit 1
 fi
-LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.6.0 "$stage_one" >/dev/null
-LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.6.0 "$stage_two" >/dev/null
-LC_ALL="$dictionary_locale" "$repo_root/scripts/release-stage.sh" --test-mode 0.6.0 "$stage_dictionary_locale" >/dev/null
-LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.6.0 "$stage_installer_candidate" >/dev/null
+LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_one" >/dev/null
+LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_two" >/dev/null
+LC_ALL="$dictionary_locale" "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_dictionary_locale" >/dev/null
+LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.7.0 "$stage_installer_candidate" >/dev/null
 
-jq -e '.candidate == true and .installerQualificationEvidence == {location:"",digest:""}' "$stage_installer_candidate/secondbox-0.6.0-artifact-manifest.json" >/dev/null
-[[ ! -e "$stage_installer_candidate/secondbox-0.6.0-installer-qualification-evidence.json" ]] || { echo "installer candidate claimed final qualification evidence" >&2; exit 1; }
-candidate_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$stage_installer_candidate/secondbox-0.6.0-artifact-manifest.json")"
-final_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$stage_one/secondbox-0.6.0-artifact-manifest.json")"
+jq -e '.candidate == true and .installerQualificationEvidence == {location:"",digest:""}' "$stage_installer_candidate/secondbox-0.7.0-artifact-manifest.json" >/dev/null
+[[ ! -e "$stage_installer_candidate/secondbox-0.7.0-installer-qualification-evidence.json" ]] || { echo "installer candidate claimed final qualification evidence" >&2; exit 1; }
+candidate_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$stage_installer_candidate/secondbox-0.7.0-artifact-manifest.json")"
+final_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$stage_one/secondbox-0.7.0-artifact-manifest.json")"
 [[ "$candidate_subject" == "$final_subject" ]] || { echo "installer candidate and final release subjects differ" >&2; exit 1; }
 
 for stage in "$stage_one" "$stage_two" "$stage_dictionary_locale"; do
   go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage"
-  source_commit="$(jq -er '.sourceCommit' "$stage/secondbox-0.6.0-artifact-manifest.json")"
-  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v5" and .version == "0.6.0" and (.installerTools.reference | startswith("ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:")) and (.installBootstrap.location | endswith("/v0.6.0/install.sh")) and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.6.0-qualification-evidence.json")) and (.installerQualificationEvidence.location | endswith("/secondbox-0.6.0-installer-qualification-evidence.json"))' "$stage/secondbox-0.6.0-artifact-manifest.json" >/dev/null
+  source_commit="$(jq -er '.sourceCommit' "$stage/secondbox-0.7.0-artifact-manifest.json")"
+  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v5" and .version == "0.7.0" and .runnerProtocol == {minimum:3,maximum:3} and (.installerTools.reference | startswith("ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:")) and (.installBootstrap.location | endswith("/v0.7.0/install.sh")) and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.7.0-qualification-evidence.json")) and (.installerQualificationEvidence.location | endswith("/secondbox-0.7.0-installer-qualification-evidence.json"))' "$stage/secondbox-0.7.0-artifact-manifest.json" >/dev/null
   jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.standard-bundle/v2" and .profile.revisions[-1].spec.runtimeBundleDigest == $runtime and .profile.revisions[-1].spec.toolchainBundleDigest == $toolchain and (.profile.revisions[-1].spec.runtimeBundleDigest != .profile.revisions[-1].spec.toolchainBundleDigest)' "$stage/durable-coding.standard-bundle.json" >/dev/null
   jq -e '.name == "agent-compartment-isolated" and .logicalGateway == "" and .profile.name == "agent-compartment-isolated" and .profile.revisions[-1].spec.network == {mode:"deny_all",destinations:[]} and .profile.revisions[-1].spec.ports == []' "$stage/agent-compartment-isolated.standard-bundle.json" >/dev/null
-  jq -e --arg commit "$source_commit" '.schemaVersion == "secondbox.release/qualification-evidence/v1" and .sourceCommit == $commit and .repositoryDirty == false and .suite == "test-scenario" and .passCount == 16 and .wallClockSeconds == 1 and .qualifiedAt == "1970-01-01T00:00:00Z" and .host.kvm.present and .host.tun.present and .host.workspaceFilesystem.type == "xfs"' "$stage/secondbox-0.6.0-qualification-evidence.json" >/dev/null
-  jq -e --arg commit "$source_commit" '.schemaVersion == "secondbox.release/installer-qualification-evidence/v1" and .sourceCommit == $commit and .repositoryDirty == false and .suite == "test-installer-qualified" and .passCount == 24 and .wallClockSeconds == 1 and .rebootPassed == true and .host.kvm.present and .host.tun.present and .host.workspaceFilesystem.type == "xfs"' "$stage/secondbox-0.6.0-installer-qualification-evidence.json" >/dev/null
-  jq -e --arg commit "$source_commit" '.version == "0.6.0" and .sourceCommit == $commit and .typeScriptPackage == "secondstack-ai-secondbox-0.6.0.tgz" and .goModuleArchive == "secondbox-0.6.0-go-module.tar.gz"' "$stage/secondbox-0.6.0-package-metadata.json" >/dev/null
-  jq -e --arg commit "$source_commit" '.name == "SecondBox-0.6.0" and .packages == [{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:"0.6.0",downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}] and (.creationInfo.comment | endswith($commit))' "$stage/secondbox-0.6.0.spdx.json" >/dev/null
+  jq -e --arg commit "$source_commit" '.schemaVersion == "secondbox.release/qualification-evidence/v1" and .sourceCommit == $commit and .repositoryDirty == false and .suite == "test-scenario" and .passCount == 16 and .wallClockSeconds == 1 and .qualifiedAt == "1970-01-01T00:00:00Z" and .host.kvm.present and .host.tun.present and .host.workspaceFilesystem.type == "xfs"' "$stage/secondbox-0.7.0-qualification-evidence.json" >/dev/null
+  jq -e --arg commit "$source_commit" '.schemaVersion == "secondbox.release/installer-qualification-evidence/v1" and .sourceCommit == $commit and .repositoryDirty == false and .suite == "test-installer-qualified" and .passCount == 24 and .wallClockSeconds == 1 and .rebootPassed == true and .host.kvm.present and .host.tun.present and .host.workspaceFilesystem.type == "xfs"' "$stage/secondbox-0.7.0-installer-qualification-evidence.json" >/dev/null
+  jq -e --arg commit "$source_commit" '.version == "0.7.0" and .sourceCommit == $commit and .typeScriptPackage == "secondstack-ai-secondbox-0.7.0.tgz" and .goModuleArchive == "secondbox-0.7.0-go-module.tar.gz"' "$stage/secondbox-0.7.0-package-metadata.json" >/dev/null
+  jq -e --arg commit "$source_commit" '.name == "SecondBox-0.7.0" and .packages == [{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:"0.7.0",downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}] and (.creationInfo.comment | endswith($commit))' "$stage/secondbox-0.7.0.spdx.json" >/dev/null
   for image in control-plane runner installer-tools microvm-artifacts; do
-    jq -e --arg commit "$source_commit" '.version == "0.6.0" and .sourceCommit == $commit' "$stage/$image.oci.json" >/dev/null
+    jq -e --arg commit "$source_commit" '.version == "0.7.0" and .sourceCommit == $commit' "$stage/$image.oci.json" >/dev/null
   done
-  tar -xOf "$stage/secondstack-ai-secondbox-0.6.0.tgz" package/package.json | jq -e '.version == "0.6.0"' >/dev/null
-  [[ "$(sha256sum "$stage/secondbox-0.6.0-openapi.json" | awk '{print "sha256:"$1}')" == "$(jq -er '.openapi.digest' "$stage/secondbox-0.6.0-artifact-manifest.json")" ]]
-  rg -q 'secondbox-0.6.0-qualification-evidence.json$' "$stage/SHA256SUMS"
-  rg -q 'secondbox-0.6.0-installer-qualification-evidence.json$' "$stage/SHA256SUMS"
+  tar -xOf "$stage/secondstack-ai-secondbox-0.7.0.tgz" package/package.json | jq -e '.version == "0.7.0"' >/dev/null
+  [[ "$(sha256sum "$stage/secondbox-0.7.0-openapi.json" | awk '{print "sha256:"$1}')" == "$(jq -er '.openapi.digest' "$stage/secondbox-0.7.0-artifact-manifest.json")" ]]
+  rg -q 'secondbox-0.7.0-qualification-evidence.json$' "$stage/SHA256SUMS"
+  rg -q 'secondbox-0.7.0-installer-qualification-evidence.json$' "$stage/SHA256SUMS"
   rg -q 'install.sh$' "$stage/SHA256SUMS"
-  rg -q "version='0.6.0'" "$stage/install.sh"
-  rg -q "expected_sha256='$(sha256sum "$stage/secondbox-deploy_0.6.0_linux_amd64" | awk '{print $1}')'" "$stage/install.sh"
+  rg -q "version='0.7.0'" "$stage/install.sh"
+  rg -q "expected_sha256='$(sha256sum "$stage/secondbox-deploy_0.7.0_linux_amd64" | awk '{print $1}')'" "$stage/install.sh"
   rg -qF '"$binary" "$command" "$@" &' "$stage/install.sh"
   rg -qF "trap 'terminate TERM 143' TERM" "$stage/install.sh"
   if rg -qF '/proc/self/fd' "$stage/install.sh" || rg -qF 'exec "$binary"' "$stage/install.sh"; then
@@ -147,7 +147,7 @@ if go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_one" >/dev
   echo "release verifier accepted checksum drift" >&2
   exit 1
 fi
-printf 'tampered\n' >>"$stage_two/secondbox-0.6.0-qualification-evidence.json"
+printf 'tampered\n' >>"$stage_two/secondbox-0.7.0-qualification-evidence.json"
 if go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_two" >/dev/null 2>&1; then
   echo "release verifier accepted qualification-evidence checksum drift" >&2
   exit 1
