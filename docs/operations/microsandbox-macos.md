@@ -101,9 +101,31 @@ export SECONDBOX_MICROSANDBOX_MAXIMUM_OPERATIONS=32
 export SECONDBOX_MICROSANDBOX_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 ```
 
-Also set every required runner protocol address, RunnerPool ID, runner identity, mTLS certificate,
-private key, CA, enabled feature, and evidence setting. These are deployment authority and have no
-application defaults. Run the native runner as a dedicated unprivileged identity; Darwin rejects a
+The complete required runner environment beyond the backend block above is the following set;
+every value is deployment authority with no application default. The scenario service control in
+`scripts/scenario-microsandbox-macos-service-control.sh` composes exactly this environment for
+the qualification suite and is the executable reference for a working assembly.
+
+| Variable | Value source |
+| --- | --- |
+| `SECONDBOX_COMPUTE_BACKEND` | Literal `microsandbox`. |
+| `SECONDBOX_RUNNER_ID` | The Runner identity declared to the control plane; must match the certificate's `spiffe://secondbox/runner/<runner-id>`. |
+| `SECONDBOX_RUNNER_POOL_ID` | The `name` of the dedicated arm64 RunnerPool from the applied resources file. |
+| `SECONDBOX_RUNNER_SOFTWARE_VERSION` | The exact source identity of the deployed runner build (release version or commit). |
+| `SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS` / `SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME` | The control plane's Runner gRPC endpoint and its server certificate name. |
+| `SECONDBOX_RUNNER_CREDENTIAL` | The pre-shared Runner enrollment credential configured on the control plane. |
+| `SECONDBOX_RUNNER_CLIENT_CERTIFICATE` / `SECONDBOX_RUNNER_CLIENT_KEY` / `SECONDBOX_RUNNER_CONTROL_PLANE_CA` | The installed identity files from the issuance procedure above. |
+| `SECONDBOX_RUNNER_ENABLED_FEATURES` | The feature list the control plane enables (for example `exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy`). |
+| `SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS` / `SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL` | Operator-selected heartbeat cadences (the guest interval is a Go duration of at most 60s). |
+| `SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS` / `SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS` | The data-plane listener and the address the control plane's clients can reach it at. |
+| `SECONDBOX_RUNNER_LOG_DIR` / `SECONDBOX_RUNNER_LOG_PATH` | Operator-owned log directory and JSONL log file beneath it. |
+| `SECONDBOX_RUNNER_WORKSPACE_ROOT` | The APFS WorkspaceStore root from this document. |
+| `SECONDBOX_RUNNER_SANDBOX_MAX_VCPUS` / `..._MAX_MEMORY_MIB` / `..._MAX_DISK_MIB` / `..._MEMORY_BUDGET_MIB` | Per-Sandbox ceilings and the host memory budget the operator allocates. |
+| `SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX` / `..._GLOBAL` / `..._STARTS` / `..._WORKSPACE_CREATES` / `..._OPERATIONS_GLOBAL` | Concurrency bounds; global instance and operation bounds must not exceed the backend maxima above. |
+| `SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES` | The file data-plane transfer bound. |
+| `SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT` / `..._WARNING_PERCENT` / `..._ADMISSION_DENY_PERCENT` | WorkspaceStore pressure thresholds in ascending order. |
+
+Run the native runner as a dedicated unprivileged identity; Darwin rejects a
 root runner because Hypervisor.framework and APFS clonefile do not require Linux's KVM, cgroup,
 namespace, or TAP authority. Never run the control plane with Hypervisor or WorkspaceStore access.
 
@@ -113,6 +135,11 @@ canonicalization while still comparing the held descriptor's inode. The Workspac
 resolves host paths and passes `/dev/fd/<n>` attachments to compute.
 
 ## Known limitations
+
+Workspace file writes never follow a leaf symlink, but the guest agent's filesystem protocol is
+pathname-only: a process already executing inside the guest can race a parent-directory swap
+against a write. The race is contained inside the guest (such a process can already write guest
+files directly); handle-relative beneath semantics require an agent protocol revision.
 
 The helper serves one request at a time over its single control channel. An open Port tunnel
 therefore serializes every other Exec, file, and Port operation on the same Sandbox until the

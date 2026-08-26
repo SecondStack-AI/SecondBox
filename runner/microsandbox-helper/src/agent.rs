@@ -433,7 +433,12 @@ impl AgentSession {
                     // leaf exists (removal unlinks a symlink itself, never
                     // its target), then create the file exclusively so a
                     // raced-in replacement fails the open instead of
-                    // redirecting the write outside /workspace.
+                    // redirecting the write outside /workspace. The agentd
+                    // filesystem protocol is pathname-only, so a concurrent
+                    // parent-directory swap remains a guest-internal race a
+                    // process already executing inside the guest could win;
+                    // beneath/no-follow semantics need a protocol revision
+                    // and are recorded as a known limitation.
                     let _ = fs_request(&self.client, FsOp::Remove { path: path.clone() }).await;
                     let handle = fs_handle(
                         &self.client,

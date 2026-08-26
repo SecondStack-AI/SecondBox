@@ -7,7 +7,7 @@ use std::{
     },
     process,
     sync::{
-        Arc, OnceLock,
+        Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -40,7 +40,7 @@ const WORKSPACE_FD: RawFd = 4;
 const LIFECYCLE_FD: RawFd = 5;
 const LOCK_FD: RawFd = 7;
 const PARENT_LOSS_FLUSH_BOUND: Duration = Duration::from_secs(4);
-const VMM_STOP_SETTLE: Duration = Duration::from_millis(250);
+const VMM_STOP_BOUND: Duration = Duration::from_secs(2);
 
 fn main() {
     let action = std::env::args().nth(1).unwrap_or_default();
@@ -75,10 +75,12 @@ fn serve() -> Result<(), String> {
     let _workspace_writer_lock = inherited_raw_descriptor(LOCK_FD)?;
     let shutting_down = Arc::new(AtomicBool::new(false));
     let vmm_exit: Arc<OnceLock<msb_krun::ExitHandle>> = Arc::new(OnceLock::new());
+    let vmm_stopped: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(false), Condvar::new()));
     monitor_parent(
         shutting_down.clone(),
         workspace.try_clone().map_err(|error| error.to_string())?,
         vmm_exit.clone(),
+        vmm_stopped.clone(),
     )?;
     let envelope = read_frame(&mut control)
         .map_err(|error| error.to_string())?
@@ -105,6 +107,7 @@ fn serve() -> Result<(), String> {
         .try_clone()
         .map_err(|error| format!("clone Workspace for control-loss flush: {error}"))?;
     let control_vmm_exit = vmm_exit.clone();
+    let control_vmm_stopped = vmm_stopped.clone();
     let control_shutting_down = shutting_down.clone();
     thread::Builder::new()
         .name("secondbox-helper-control".into())
@@ -127,11 +130,24 @@ fn serve() -> Result<(), String> {
                 // A lost control socket is parent loss by another door; take
                 // the same coordinated exit so dirty Workspace writes reach
                 // the image before the process ends.
-                coordinated_loss_exit(&control_vmm_exit, &control_flush_workspace, 1);
+                coordinated_loss_exit(
+                    &control_vmm_exit,
+                    &control_vmm_stopped,
+                    &control_flush_workspace,
+                    1,
+                );
             }
         })
         .map_err(|error| format!("start helper control thread: {error}"))?;
-    match vm.enter() {
+    let entered = vm.enter();
+    // The VMM has left its vCPU loop whenever enter returns; acknowledge that
+    // to any coordinated exit waiting to flush behind a stopped guest.
+    {
+        let (stopped, notify) = &*vmm_stopped;
+        *stopped.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        notify.notify_all();
+    }
+    match entered {
         Ok(never) => match never {},
         Err(error) => {
             // A coordinated loss exit stops the VMM and then flushes from its
@@ -888,6 +904,7 @@ fn monitor_parent(
     shutting_down: Arc<AtomicBool>,
     workspace: File,
     vmm_exit: Arc<OnceLock<msb_krun::ExitHandle>>,
+    vmm_stopped: Arc<(Mutex<bool>, Condvar)>,
 ) -> Result<(), String> {
     let mut lifecycle = inherited_file(LIFECYCLE_FD, false)?;
     thread::Builder::new()
@@ -896,24 +913,44 @@ fn monitor_parent(
             let mut byte = [0_u8; 1];
             while lifecycle.read(&mut byte).is_ok_and(|count| count != 0) {}
             shutting_down.store(true, Ordering::Release);
-            coordinated_loss_exit(&vmm_exit, &workspace, 0);
+            coordinated_loss_exit(&vmm_exit, &vmm_stopped, &workspace, 0);
         })
         .map_err(|error| format!("start parent watchdog: {error}"))?;
     Ok(())
 }
 
-/// The single exit for parent or control loss: stop the VMM so no guest write
-/// races the final sync, flush the Workspace within a bound, then exit. The
-/// inherited writer lock releases only when the process ends, so a
-/// replacement runner cannot attach the image before this completes.
+/// The single exit for parent or control loss: stop the VMM and wait for its
+/// acknowledgment so no guest write races the final sync, flush the Workspace
+/// within a bound, then exit. The inherited writer lock releases only when
+/// the process ends, so a replacement runner cannot attach the image before
+/// this completes.
 fn coordinated_loss_exit(
     vmm_exit: &OnceLock<msb_krun::ExitHandle>,
+    vmm_stopped: &(Mutex<bool>, Condvar),
     workspace: &File,
     success_status: i32,
 ) -> ! {
+    let mut vmm_confirmed_stopped = true;
     if let Some(handle) = vmm_exit.get() {
         handle.trigger();
-        thread::sleep(VMM_STOP_SETTLE);
+        // The main thread acknowledges through the condvar when enter()
+        // returns; only a confirmed stop lets the exit report success,
+        // because an unacknowledged VMM may still dirty the image.
+        let (stopped, notify) = &*vmm_stopped;
+        let mut acknowledged = stopped.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let deadline = std::time::Instant::now() + VMM_STOP_BOUND;
+        while !*acknowledged {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (next, _timeout) = notify
+                .wait_timeout(acknowledged, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            acknowledged = next;
+        }
+        vmm_confirmed_stopped = *acknowledged;
+        drop(acknowledged);
     }
     let Ok(flush_workspace) = workspace.try_clone() else {
         process::exit(1);
@@ -929,8 +966,8 @@ fn coordinated_loss_exit(
         process::exit(1);
     }
     let status = match flushed.recv_timeout(PARENT_LOSS_FLUSH_BOUND) {
-        Ok(Ok(())) => success_status,
-        Ok(Err(_)) | Err(_) => 1,
+        Ok(Ok(())) if vmm_confirmed_stopped => success_status,
+        Ok(Ok(())) | Ok(Err(_)) | Err(_) => 1,
     };
     process::exit(status);
 }

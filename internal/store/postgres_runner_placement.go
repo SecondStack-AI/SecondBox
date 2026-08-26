@@ -196,10 +196,16 @@ func scanRunnerPlacementCandidate(
 	var cacheEvidence struct {
 		Materializations []placementMaterialization `json:"materializations"`
 	}
-	// A cache written by an earlier release decodes to no materializations,
-	// which makes the candidate incompatible until it re-registers rather
-	// than failing every selection over it.
-	if err := json.Unmarshal(cacheJSON, &cacheEvidence); err == nil {
+	if err := json.Unmarshal(cacheJSON, &cacheEvidence); err != nil {
+		// Earlier releases recorded a bare digest array; that legacy shape
+		// means "no proven materializations" and simply keeps the candidate
+		// incompatible until it re-registers. Anything else is corrupted
+		// current-format evidence and must surface, not read as unavailable.
+		var legacyDigests []string
+		if legacyErr := json.Unmarshal(cacheJSON, &legacyDigests); legacyErr != nil {
+			return runnerPlacementCandidate{}, fmt.Errorf("%s artifact cache evidence is malformed: %w", errorPrefix, err)
+		}
+	} else {
 		candidate.materializations = cacheEvidence.Materializations
 	}
 	for _, item := range []struct {

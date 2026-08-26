@@ -2,8 +2,10 @@ package microsandbox
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestHelperPortConnectionRejectsUseAfterCloseAndCancellation proves the
@@ -29,5 +31,35 @@ func TestHelperPortConnectionRejectsUseAfterCloseAndCancellation(t *testing.T) {
 	}
 	if _, err := open.Read(cancelled, 1); err != context.Canceled {
 		t.Fatalf("cancelled read = %v", err)
+	}
+}
+
+// TestHelperPortConnectionWriteCancellationInterruptsBlockedFrames proves a
+// cancelled context interrupts a frame write blocked on the shared helper
+// connection instead of holding the serialization for the fallback deadline.
+func TestHelperPortConnectionWriteCancellationInterruptsBlockedFrames(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	connection := &helperPortConnection{process: &helperProcess{control: local}, nextSequence: 1}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	completed := make(chan error, 1)
+	go func() {
+		completed <- connection.Write(ctx, []byte("blocked-frame"))
+	}()
+	select {
+	case err := <-completed:
+		t.Fatalf("write completed without a reader: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-completed:
+		if err == nil {
+			t.Fatal("cancelled blocked write returned success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not interrupt the blocked frame write")
 	}
 }

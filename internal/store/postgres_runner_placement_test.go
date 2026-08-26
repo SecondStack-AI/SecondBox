@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -508,5 +509,42 @@ func TestRunnerPlacementRequiresExactBackendMaterialization(t *testing.T) {
 				t.Fatalf("compatibility = %t, want %t", got, testCase.want)
 			}
 		})
+	}
+}
+
+type placementScanFixture struct{ cacheJSON string }
+
+func (fixture placementScanFixture) Scan(destinations ...any) error {
+	*(destinations[0].(*string)) = "runner-scan"
+	*(destinations[1].(*string)) = "pool"
+	*(destinations[2].(*string)) = "ready"
+	*(destinations[3].(*string)) = "active"
+	*(destinations[4].(*string)) = "connection"
+	*(destinations[5].(*string)) = "firecracker"
+	*(destinations[6].(*[]byte)) = []byte(`["amd64"]`)
+	*(destinations[7].(*[]byte)) = []byte(`["compute"]`)
+	*(destinations[8].(*[]byte)) = []byte(`["1"]`)
+	*(destinations[9].(*[]byte)) = []byte(`{}`)
+	*(destinations[10].(*[]byte)) = []byte(`{}`)
+	*(destinations[11].(*[]byte)) = []byte(fixture.cacheJSON)
+	return nil
+}
+
+// TestScanRunnerPlacementCandidateSeparatesLegacyFromMalformedCache proves the
+// evidence-decoding contract: the legacy digest-array shape reads as
+// unmaterialized, while corrupted current-format evidence surfaces as an
+// error instead of ordinary unavailability.
+func TestScanRunnerPlacementCandidateSeparatesLegacyFromMalformedCache(t *testing.T) {
+	legacy, err := scanRunnerPlacementCandidate(placementScanFixture{cacheJSON: `["sha256:abc"]`}, "test", false)
+	if err != nil || len(legacy.materializations) != 0 {
+		t.Fatalf("legacy cache candidate = %#v, %v", legacy, err)
+	}
+	if _, err := scanRunnerPlacementCandidate(placementScanFixture{cacheJSON: `{"materializations":"corrupt"}`}, "test", false); err == nil ||
+		!strings.Contains(err.Error(), "artifact cache evidence is malformed") {
+		t.Fatalf("malformed cache error = %v", err)
+	}
+	current, err := scanRunnerPlacementCandidate(placementScanFixture{cacheJSON: placementTestCacheJSON}, "test", false)
+	if err != nil || len(current.materializations) != 1 {
+		t.Fatalf("current cache candidate = %#v, %v", current, err)
 	}
 }

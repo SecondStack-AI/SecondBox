@@ -116,6 +116,13 @@ func (connection *helperPortConnection) Read(ctx context.Context, maximum int) (
 		deadline = value
 	}
 	_ = connection.process.control.SetReadDeadline(deadline)
+	// Cancellation without a deadline must still interrupt a pending read;
+	// every later operation sets its own fresh deadline before using the
+	// shared connection.
+	stopCancelInterrupt := context.AfterFunc(ctx, func() {
+		_ = connection.process.control.SetReadDeadline(time.Now())
+	})
+	defer stopCancelInterrupt()
 	for {
 		event, err := microsandboxprotocol.ReadFrame(connection.process.control)
 		if err != nil {
@@ -168,12 +175,24 @@ func (connection *helperPortConnection) Write(ctx context.Context, data []byte) 
 	if err := connection.process.control.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
+	// Cancellation while waiting on the lock or inside the frame write must
+	// interrupt the pending operation instead of blocking the caller and
+	// Close behind the fallback deadline; every later operation sets its own
+	// fresh deadline before using the shared connection.
+	stopCancelInterrupt := context.AfterFunc(ctx, func() {
+		_ = connection.process.control.SetWriteDeadline(time.Now())
+	})
+	defer stopCancelInterrupt()
 	sequence := connection.nextSequence
 	connection.nextSequence++
-	return microsandboxprotocol.WriteFrame(connection.process.control, &microsandboxprotocol.Envelope{
+	err := microsandboxprotocol.WriteFrame(connection.process.control, &microsandboxprotocol.Envelope{
 		ProtocolVersion: microsandboxprotocol.Version, RequestId: connection.requestID, StreamId: connection.requestID, Sequence: sequence,
 		Message: &microsandboxprotocol.Envelope_StreamData{StreamData: &microsandboxprotocol.StreamData{Data: bytes.Clone(data), Channel: microsandboxprotocol.StreamChannel_STREAM_CHANNEL_TCP}},
 	})
+	if ctxErr := ctx.Err(); ctxErr != nil && err != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func (connection *helperPortConnection) Close() error {
