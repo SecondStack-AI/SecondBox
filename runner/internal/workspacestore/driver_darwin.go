@@ -165,7 +165,7 @@ func (driver darwinDriver) Format(
 // e2fsprogs formatter has written zero-filled ext4 regions to APFS. Punching an
 // all-zero, filesystem-block-aligned extent preserves the exact image bytes.
 func compactDarwinSparseFile(file *os.File, capacity int64) error {
-	if file == nil || capacity < minimumExt4Bytes || capacity%darwinSparseBlockBytes != 0 {
+	if file == nil || capacity < legacyMinimumExt4Bytes || capacity%darwinSparseBlockBytes != 0 {
 		return fmt.Errorf("%w: SecondBox WorkspaceStore APFS sparse compaction input is invalid", ErrStorageIncompatible)
 	}
 	buffer := make([]byte, darwinSparseScanBytes)
@@ -326,7 +326,7 @@ func darwinSocketpair() ([2]int, error) {
 }
 
 func (darwinDriver) ResetSparse(file *os.File, capacity int64) error {
-	if file == nil || capacity < minimumExt4Bytes {
+	if file == nil || capacity < legacyMinimumExt4Bytes {
 		return ErrStorageIncompatible
 	}
 	if err := file.Truncate(0); err != nil {

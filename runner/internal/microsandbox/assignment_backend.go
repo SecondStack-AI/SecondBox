@@ -515,12 +515,26 @@ func (backend *AssignmentBackend) StartAssignment(
 	// launch gate so replay waiters observe success only after READY
 	// succeeds, and it inherits any fencing intent recorded on the claim.
 	backend.mu.Lock()
+	fencedDuringLaunch := claim.fenced
 	active.fenced = claim.fenced
 	active.launched = claim.launched
 	backend.assignments[assignment.Fence.AssignmentId] = active
 	backend.startupSamples = append(backend.startupSamples, time.Since(started))
 	backend.mu.Unlock()
 	go backend.observeExit(active)
+	if fencedDuringLaunch {
+		// A fence recorded its intent while this launch was in flight; the
+		// awaiting fence must win. Aborting before READY tears the compute
+		// down through the pushed cleanup, the claim settles empty, and the
+		// fence reports ALREADY_STOPPED - never STOPPED racing a READY
+		// success.
+		backend.mu.Lock()
+		if backend.assignments[assignment.Fence.AssignmentId] == active {
+			delete(backend.assignments, assignment.Fence.AssignmentId)
+		}
+		backend.mu.Unlock()
+		return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment was fenced during launch"))
+	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
 		backend.mu.Lock()
 		if backend.assignments[assignment.Fence.AssignmentId] == active {

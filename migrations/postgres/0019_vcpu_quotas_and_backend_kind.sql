@@ -8,6 +8,14 @@
 -- usage and a zero quota stays exactly zero: rounding a deny-everything
 -- allowance up would silently widen authorization. Profile resources alone
 -- floor at one vCPU, because a revision must remain schedulable.
+--
+-- Rounding is per row, so aggregates can land above their converted bound:
+-- two 500-milli Profiles each become one whole vCPU while a 1000-milli quota
+-- becomes one vCPU, leaving existing reservations transiently over their
+-- limit. Admission treats a quota as a ceiling for NEW work only - nothing
+-- running is stopped - so such subjects simply cannot start additional
+-- compute until usage drains or an operator widens the quota; the release
+-- notes direct operators to review converted quotas after upgrading.
 ALTER TABLE secondbox.subject_quotas RENAME COLUMN max_cpu_millis TO max_vcpu_count;
 UPDATE secondbox.subject_quotas
 SET max_vcpu_count = max_vcpu_count / 1000 + CASE WHEN max_vcpu_count % 1000 > 0 THEN 1 ELSE 0 END;

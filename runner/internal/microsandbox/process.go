@@ -277,6 +277,20 @@ func (process *helperProcess) shutdown(ctx context.Context) error {
 	if value, ok := ctx.Deadline(); ok {
 		deadline = value
 	}
+	// Cancellation before the deadline advances the socket deadline
+	// immediately so a disconnected control stream cannot delay fencing
+	// until the original command deadline; the callback settles before the
+	// deadline is trusted again.
+	shutdownCancelSettled := make(chan struct{})
+	stopShutdownCancel := context.AfterFunc(ctx, func() {
+		defer close(shutdownCancelSettled)
+		_ = process.control.SetDeadline(time.Now())
+	})
+	defer func() {
+		if !stopShutdownCancel() {
+			<-shutdownCancelSettled
+		}
+	}()
 	err := process.control.SetDeadline(deadline)
 	if err == nil {
 		err = microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{

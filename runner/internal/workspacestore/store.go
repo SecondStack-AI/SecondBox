@@ -27,7 +27,14 @@ const (
 	snapshotImageMode    = 0o400
 	ext4MagicOffset      = 1024 + 0x38
 	ext4UUIDOffset       = 1024 + 0x68
-	minimumExt4Bytes     = 64 << 20
+	// minimumExt4Bytes bounds NEW capacity requests: the qualified Linux
+	// mke2fs composition needs 64 MiB for its reserved metadata. Manifests
+	// recorded by earlier releases remain valid down to the previous 16 MiB
+	// floor and are validated against legacyMinimumExt4Bytes instead - the
+	// public Profile contract still admits those Workspaces, and a raised
+	// creation floor must never reclassify them as corrupt.
+	minimumExt4Bytes       = 64 << 20
+	legacyMinimumExt4Bytes = 16 << 20
 )
 
 var logicalIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -1467,7 +1474,7 @@ func (store *Store) publishCurrentManifest(workspaceID string, manifest currentM
 	if manifest.FormatVersion != currentManifestFormatVersion ||
 		manifest.WorkspaceID != workspaceID ||
 		manifest.Generation < 1 ||
-		manifest.CapacityBytes < minimumExt4Bytes {
+		manifest.CapacityBytes < legacyMinimumExt4Bytes {
 		return fmt.Errorf("%w: invalid current manifest", ErrCorruptState)
 	}
 	if _, err := store.validatedVersionPath(workspaceID, manifest.Image); err != nil {
@@ -1492,7 +1499,7 @@ func (store *Store) readCurrentManifest(workspaceID string) (currentManifest, er
 	if manifest.FormatVersion != currentManifestFormatVersion ||
 		manifest.WorkspaceID != workspaceID ||
 		manifest.Generation < 1 ||
-		manifest.CapacityBytes < minimumExt4Bytes {
+		manifest.CapacityBytes < legacyMinimumExt4Bytes {
 		return currentManifest{}, fmt.Errorf("%w: invalid current manifest", ErrCorruptState)
 	}
 	if _, err := store.validatedVersionPath(workspaceID, manifest.Image); err != nil {
@@ -1514,7 +1521,7 @@ func (store *Store) readSnapshotManifest(snapshotID string) (snapshotManifest, e
 		manifest.SnapshotID != snapshotID ||
 		validateID(manifest.WorkspaceID) != nil ||
 		manifest.Generation < 1 ||
-		manifest.CapacityBytes < minimumExt4Bytes {
+		manifest.CapacityBytes < legacyMinimumExt4Bytes {
 		return snapshotManifest{}, fmt.Errorf("%w: invalid Snapshot manifest", ErrCorruptState)
 	}
 	return manifest, nil
@@ -1530,7 +1537,7 @@ func (store *Store) readStagedRestore(workspaceID string, operationID string) (s
 		staged.OperationID != operationID ||
 		validateID(staged.SnapshotID) != nil ||
 		staged.NextGeneration != staged.ExpectedGeneration+1 ||
-		staged.CapacityBytes < minimumExt4Bytes {
+		staged.CapacityBytes < legacyMinimumExt4Bytes {
 		return stagedRestore{}, fmt.Errorf("%w: invalid staged restore", ErrCorruptState)
 	}
 	if _, err := store.validatedVersionPath(workspaceID, staged.Image); err != nil {
@@ -1548,7 +1555,7 @@ func (store *Store) readRollback(workspaceID string, operationID string) (rollba
 		rollback.WorkspaceID != workspaceID ||
 		rollback.OperationID != operationID ||
 		rollback.NextGeneration != rollback.PreviousGeneration+1 ||
-		rollback.CapacityBytes < minimumExt4Bytes {
+		rollback.CapacityBytes < legacyMinimumExt4Bytes {
 		return rollbackManifest{}, fmt.Errorf("%w: invalid rollback manifest", ErrCorruptState)
 	}
 	if _, err := store.validatedVersionPath(workspaceID, rollback.PreviousImage); err != nil {

@@ -41,6 +41,12 @@ const LIFECYCLE_FD: RawFd = 5;
 const LOCK_FD: RawFd = 7;
 const PARENT_LOSS_FLUSH_BOUND: Duration = Duration::from_secs(4);
 const VMM_STOP_BOUND: Duration = Duration::from_secs(2);
+/// The quiesce sleep before a requested shutdown must leave room inside the
+/// caller's flush deadline for the VMM stop acknowledgment and the final
+/// Workspace sync, or the runner's kill at that same deadline could release
+/// the writer fence over an unflushed image.
+const SHUTDOWN_CLEANUP_RESERVE_MS: u64 =
+    VMM_STOP_BOUND.as_millis() as u64 + PARENT_LOSS_FLUSH_BOUND.as_millis() as u64;
 
 fn main() {
     let action = std::env::args().nth(1).unwrap_or_default();
@@ -238,12 +244,15 @@ fn supervise_instance(
             Some(Message::Shutdown(request)) => {
                 agent.shutdown()?;
                 write_terminal(&mut control, &envelope, true, 0, "shutdown-requested")?;
-                // Give the guest until its flush deadline to quiesce, then
+                // Give the guest part of its flush deadline to quiesce, then
                 // stop the VMM and flush behind the confirmed stop: the
                 // caller routes this through the coordinated exit, so the
                 // authoritative Workspace sync happens only after the VMM
                 // has left its vCPU loop and its result decides the exit
-                // status a replacement attachment will observe.
+                // status a replacement attachment will observe. The quiesce
+                // sleep reserves the stop-and-sync bounds inside the same
+                // deadline the runner enforces with its kill, so cleanup can
+                // always start early enough to finish.
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -252,6 +261,7 @@ fn supervise_instance(
                     request
                         .flush_deadline_unix_ms
                         .saturating_sub(now_ms)
+                        .saturating_sub(SHUTDOWN_CLEANUP_RESERVE_MS)
                         .min(4_000),
                 );
                 thread::sleep(delay);

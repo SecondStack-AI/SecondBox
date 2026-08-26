@@ -193,7 +193,7 @@ func platformLinkDescriptor(file *os.File, destination string) error {
 }
 
 func (linuxDriver) ResetSparse(file *os.File, capacity int64) error {
-	if file == nil || capacity < minimumExt4Bytes {
+	if file == nil || capacity < legacyMinimumExt4Bytes {
 		return ErrStorageIncompatible
 	}
 	if err := unix.Fallocate(

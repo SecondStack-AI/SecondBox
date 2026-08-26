@@ -264,6 +264,24 @@ func acquireGate(ctx context.Context, gate chan struct{}) error {
 func (connection *helperPortConnection) Close() error {
 	connection.closeOnce.Do(func() {
 		connection.closed.Store(true)
+		// terminal is written by Read under the read gate, so the check
+		// holds it too; the bounded deadline first interrupts any blocked
+		// reader instead of stalling the close.
+		_ = connection.process.control.SetReadDeadline(time.Now().Add(5 * time.Second))
+		connection.readGate <- struct{}{}
+		terminalSeen := connection.terminal != nil
+		<-connection.readGate
+		if terminalSeen {
+			// The helper already delivered this tunnel's terminal and left
+			// the relay; a Cancel now would be rejected with a diagnostic
+			// that the next serialized operation consumes as its own
+			// response. The exchange is complete - just release.
+			_ = connection.process.control.SetReadDeadline(time.Time{})
+			connection.process.releaseRequest()
+			connection.release()
+			return
+		}
+		_ = connection.process.control.SetReadDeadline(time.Time{})
 		// The bounded deadline lands before the gate so a context-less
 		// in-flight write is interrupted instead of delaying fencing for
 		// the fallback deadline; the cancel frame and terminal drain then

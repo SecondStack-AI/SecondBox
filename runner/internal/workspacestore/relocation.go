@@ -169,7 +169,9 @@ func (store *Store) BeginRelocationImport(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if request.Generation == 0 || request.CapacityBytes < minimumExt4Bytes {
+	// Imports carry Workspaces recorded by any supported source runner, so
+	// they are bounded by the legacy floor, not the raised creation floor.
+	if request.Generation == 0 || request.CapacityBytes < legacyMinimumExt4Bytes {
 		return nil, ErrStorageIncompatible
 	}
 	if err := validateMutation(request.Mutation); err != nil {
@@ -447,13 +449,17 @@ func (relocation *relocationImport) Complete(size uint64, checksum string) (Rece
 		return Receipt{}, err
 	}
 	relocation.receipt = receipt
-	if err := relocation.cleanupStaging(); err != nil {
-		return Receipt{}, err
-	}
-	if err := closeLockedFile(relocation.lock); err != nil {
-		return Receipt{}, err
-	}
+	// The import is durably committed; the writer lock must not outlive this
+	// call on any return path, or the committed Workspace would stay
+	// exclusively locked until the runner exits (Abort refuses cleanup once
+	// the receipt exists). Staging cleanup failures are reported alongside
+	// the release, never instead of it.
+	stagingErr := relocation.cleanupStaging()
+	lockErr := closeLockedFile(relocation.lock)
 	relocation.lock = nil
+	if err := errors.Join(stagingErr, lockErr); err != nil {
+		return Receipt{}, err
+	}
 	return receipt, nil
 }
 
