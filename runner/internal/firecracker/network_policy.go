@@ -45,6 +45,7 @@ type PolicyScriptRenderer func(
 	interfaceName string,
 	guestIP string,
 	dnsAddress netip.Addr,
+	allowDNS bool,
 	protected []netip.Prefix,
 	destinations []networkpolicy.Destination,
 	runnerGateways []networkpolicy.RunnerGatewayDestination,
@@ -108,6 +109,7 @@ func (e *NFTablesNetworkPolicyEnforcer) deletePolicyTable(table string) string {
 func (e *NFTablesNetworkPolicyEnforcer) renderPolicy(
 	table, interfaceName, guestIP string,
 	dnsAddress netip.Addr,
+	allowDNS bool,
 	protected []netip.Prefix,
 	destinations []networkpolicy.Destination,
 	runnerGateways []networkpolicy.RunnerGatewayDestination,
@@ -117,7 +119,7 @@ func (e *NFTablesNetworkPolicyEnforcer) renderPolicy(
 	if render == nil {
 		render = renderNFTPolicy
 	}
-	return render(table, interfaceName, guestIP, dnsAddress, protected, destinations, runnerGateways, pins)
+	return render(table, interfaceName, guestIP, dnsAddress, allowDNS, protected, destinations, runnerGateways, pins)
 }
 
 func (e *NFTablesNetworkPolicyEnforcer) Ready(ctx context.Context) error {

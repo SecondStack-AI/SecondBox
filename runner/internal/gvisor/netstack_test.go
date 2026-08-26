@@ -85,6 +85,7 @@ func TestRenderInetPolicyFailsClosed(t *testing.T) {
 	script := renderInetPolicy(
 		"sbx_test", "gvh3", "169.254.104.14",
 		netip.MustParseAddr(dnsAddressForProfile(0)),
+		compiled.AllowsDNS(),
 		compiled.ProtectedPrefixes(),
 		compiled.Destinations(),
 		compiled.RunnerGatewayDestinations(),
@@ -137,6 +138,7 @@ func TestRenderInetPolicyDenyAll(t *testing.T) {
 	script := renderInetPolicy(
 		"sbx_deny", "gvh0", "169.254.104.2",
 		netip.MustParseAddr(dnsAddressForProfile(0)),
+		compiled.AllowsDNS(),
 		compiled.ProtectedPrefixes(),
 		compiled.Destinations(),
 		compiled.RunnerGatewayDestinations(),

@@ -287,6 +287,7 @@ func renderInetPolicy(
 	interfaceName string,
 	guestIP string,
 	dnsAddress netip.Addr,
+	allowDNS bool,
 	protected []netip.Prefix,
 	destinations []networkpolicy.Destination,
 	runnerGateways []networkpolicy.RunnerGatewayDestination,
@@ -302,7 +303,7 @@ func renderInetPolicy(
 	fmt.Fprintf(&script, "add rule inet %s forward iifname %q ip saddr != %s drop\n", table, interfaceName, guestIP)
 	fmt.Fprintf(&script, "add rule inet %s input iifname %q ip saddr != %s drop\n", table, interfaceName, guestIP)
 	fmt.Fprintf(&script, "add rule inet %s forward oifname %q ct state established,related accept\n", table, interfaceName)
-	if dnsAddress.IsValid() {
+	if allowDNS && dnsAddress.IsValid() {
 		family := "ip"
 		if dnsAddress.Is6() {
 			family = "ip6"
