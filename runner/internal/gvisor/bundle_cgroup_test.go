@@ -2,7 +2,12 @@
 
 package gvisor
 
-import "testing"
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestResolveSandboxCgroupParentPicksNearestDelegatingAncestor(t *testing.T) {
 	podAncestry := map[string]string{
@@ -37,5 +42,23 @@ func TestSandboxCgroupDirectoryScopesByProfile(t *testing.T) {
 	}
 	if instanceCgroupPath(0, "instance-a") == instanceCgroupPath(1, "instance-a") {
 		t.Fatal("instance cgroup paths must differ across profiles")
+	}
+}
+
+// TestRemoveCgroupDirectoryClearsDiscoveredNamesLiterally proves reconcile
+// sweeps stale children by their literal on-disk names: the digest naming for
+// fresh Instances must never be applied twice, or stale directories would
+// survive and leave the profile root ENOTEMPTY.
+func TestRemoveCgroupDirectoryClearsDiscoveredNamesLiterally(t *testing.T) {
+	root := t.TempDir()
+	stale := filepath.Join(root, shortInstanceDirName("instance-9"))
+	if err := os.MkdirAll(filepath.Join(stale, "leaf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCgroupDirectory(stale); err != nil {
+		t.Fatalf("literal removal failed: %v", err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale directory survived: %v", err)
 	}
 }

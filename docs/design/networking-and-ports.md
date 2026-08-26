@@ -8,9 +8,15 @@ The default policy denies all outbound destinations. An explicit allow policy ma
 
 The Runner owns the guest TAP, bridge forwarding rules, and policy-aware DNS proxy. Each assignment gets a separate nftables table keyed by a collision-resistant instance identity. The table permits established replies, runner DNS on the bridge address, and exact policy destinations, then drops all other guest egress and unsolicited traffic toward the TAP. Protected destination drops precede allow rules, so an overlapping allow cannot override them. The current Firecracker path uses per-TAP firewall isolation on the Runner bridge; it does not create a separate Linux network namespace per Sandbox.
 
-The DNS proxy forwards guest questions to the configured upstream and pins only
-answers allowed by the Sandbox policy. It rejects answers resolving to protected
-addresses. A Runner logical-gateway mapping is authorization input for network
+The DNS proxy is backend-neutral: it listens on the Runner bridge address for
+Firecracker guests and on the per-profile `sbxgv-dns` address for gVisor
+guests, and forwards guest questions to the configured upstream, pinning only
+answers allowed by the Sandbox policy. It rejects answers resolving to
+protected addresses. Strictly empty negative responses - an empty NOERROR and
+a validated NXDOMAIN carrying no resolving records - are forwarded to the
+guest without pinning anything, because strict resolvers fail whole
+dual-stack lookups when the negative half is refused; a name-error response
+that carries resolving records stays rejected as injection. A Runner logical-gateway mapping is authorization input for network
 policy, not a DNS record: the proxy does not synthesize guest answers for the
 logical domain. Network-enabled production deployments must provide and qualify
 their own upstream resolution and gateway reachability.
@@ -24,9 +30,12 @@ namespace connected by a routed veth pair, the shared enforcer renders the ident
 policy into `inet`-family tables (with a paired `ip`-family NAT table for masqueraded egress),
 and the policy-aware DNS proxy listens on a per-profile address of the Runner's `sbxgv-dns`
 dummy interface instead of a bridge address. Runners sharing a host network namespace are
-separated by an explicit network profile in `0`-`15`; each profile owns a link-local `/30` slot
-space bounding it at 63 concurrent Instances, and operators must keep those link-local ranges,
-the veth and namespace name prefixes, and the per-profile DNS addresses free of conflicting
+separated by an explicit network profile in `0`-`15`. The reserved link-local ranges are
+exact: profile `N` owns the `/24` at `169.254.(104+N).0` - `169.254.104.0/24` through
+`169.254.119.0/24` across all profiles - carved into per-Instance `/30` subnets (host side
+`.1`, guest side `.2`), bounding each profile at 63 concurrent Instances, and its DNS proxy
+binds `169.254.99.(53+N)` on `sbxgv-dns`. Operators must keep these ranges, the `gvh`/`gvg`
+veth and namespace name prefixes, and the `169.254.99.*` proxy addresses free of conflicting
 host use. Per-Instance teardown removes the namespace, veth, and both policy-table families,
 and startup reconciliation sweeps any profile-scoped leftovers, including orphaned NAT-only
 tables. DNS pinning, protected-destination precedence, and the deny-all default are identical

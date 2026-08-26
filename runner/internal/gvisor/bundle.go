@@ -151,7 +151,10 @@ func instanceCgroupPath(profile uint32, instanceID string) string {
 // kernel returns EBUSY while the last sandbox processes drain, so removal
 // retries across a short bound before reporting the leak.
 func removeInstanceCgroup(profile uint32, instanceID string) error {
-	path := filepath.Join("/sys/fs/cgroup", instanceCgroupPath(profile, instanceID))
+	return removeCgroupDirectory(filepath.Join("/sys/fs/cgroup", instanceCgroupPath(profile, instanceID)))
+}
+
+func removeCgroupDirectory(path string) error {
 	var joined error
 	for attempt := 0; attempt < 40; attempt++ {
 		if attempt > 0 {
@@ -173,7 +176,7 @@ func removeInstanceCgroup(profile uint32, instanceID string) error {
 		}
 		joined = errors.Join(joined, err)
 	}
-	return fmt.Errorf("remove Instance cgroup %s: %w", instanceID, joined)
+	return fmt.Errorf("remove Instance cgroup %s: %w", path, joined)
 }
 
 // reconcileStaleCgroups removes Instance cgroups left by an earlier runner
@@ -192,7 +195,11 @@ func reconcileStaleCgroups(profile uint32) error {
 	var joined error
 	for _, entry := range entries {
 		if entry.IsDir() {
-			joined = errors.Join(joined, removeInstanceCgroup(profile, entry.Name()))
+			// Discovered names are already the on-disk digest components (or
+			// legacy leftovers); remove them by their literal validated path
+			// - hashing them again would sweep nothing and leave the profile
+			// root ENOTEMPTY forever.
+			joined = errors.Join(joined, removeCgroupDirectory(filepath.Join(root, entry.Name())))
 		}
 	}
 	if err := os.Remove(root); err != nil && !errors.Is(err, os.ErrNotExist) {
