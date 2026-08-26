@@ -34,9 +34,9 @@ separated by an explicit network profile in `0`-`15`. The reserved link-local ra
 exact: profile `N` owns the `/24` at `169.254.(104+N).0` - `169.254.104.0/24` through
 `169.254.119.0/24` across all profiles - carved into per-Instance `/30` subnets (host side
 `.1`, guest side `.2`), bounding each profile at 63 concurrent Instances, and its DNS proxy
-binds `169.254.99.(53+N)` on `sbxgv-dns`. Operators must keep these ranges, the `gvh`/`gvg`
-veth and namespace name prefixes, and the `169.254.99.*` proxy addresses free of conflicting
-host use. Per-Instance teardown removes the namespace, veth, and both policy-table families,
+binds `169.254.99.(53+N)` on `sbxgv-dns`. Operators must keep these ranges, the `gvh` (host) and
+`gvg` (guest) veth prefixes, the `sbxgv` network-namespace prefix, and the `169.254.99.*`
+proxy addresses free of conflicting host use. Per-Instance teardown removes the namespace, veth, and both policy-table families,
 and startup reconciliation sweeps any profile-scoped leftovers, including orphaned NAT-only
 tables. DNS pinning, protected-destination precedence, and the deny-all default are identical
 across both backends.
@@ -45,7 +45,7 @@ across both backends.
 
 DNS resolution is coupled to destination enforcement:
 
-- the guest kernel receives only the Runner bridge DNS address, and nftables permits UDP/TCP port 53 only to that address;
+- the guest kernel receives only the Runner's DNS proxy address - the bridge address for Firecracker guests, the per-profile `169.254.99.(53+N)` address on `sbxgv-dns` for gVisor guests - and nftables permits UDP/TCP port 53 only to that address;
 - the proxy forwards accepted queries to the explicitly configured `SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM`;
 - a domain allow does not install an address rule at assignment start; the rule appears only after that Sandbox sends an exact allowed-name query through the proxy;
 - private, link-local, loopback, unspecified, metadata, and Runner-host answers are rejected;
@@ -56,7 +56,7 @@ DNS resolution is coupled to destination enforcement:
 - direct IP use requires an explicit CIDR unless the same Sandbox first created a live address pin through an observed allowed-domain query;
 - rebinding from a public answer to a forbidden address is rejected.
 
-The DNS boundary accepts one IN A or AAAA question per message. Responses must match the transaction and echoed question and succeed without an error RCODE. Only address records owned by the exact question or its bounded, loop-free CNAME chain can create pins; unrelated answer and additional records cannot. Message size, concurrent UDP queries and TCP connections, CNAME depth, and I/O time are bounded. Listener death marks network policy unhealthy and fences active instances.
+The DNS boundary accepts one IN A or AAAA question per message. Responses must match the transaction and echoed question, and carry either a success RCODE or a validated NXDOMAIN with no resolving records: strictly empty negative responses (an empty NOERROR or such an NXDOMAIN) are forwarded to the guest without creating any pin, because strict resolvers fail whole dual-stack lookups when the negative half is refused. Only address records owned by the exact question or its bounded, loop-free CNAME chain can create pins; unrelated answer and additional records cannot, and a name-error response carrying resolving records is rejected as injection. Message size, concurrent UDP queries and TCP connections, CNAME depth, and I/O time are bounded. Listener death marks network policy unhealthy and fences active instances.
 
 There is no unrestricted resolver fallback. A DNS outage fails the attempted connection rather than bypassing policy.
 

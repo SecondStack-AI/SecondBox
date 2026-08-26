@@ -1,10 +1,10 @@
 {
   "schemaVersion": "secondbox.release/qualification-evidence/v1",
-  "sourceCommit": "9aacd8d738e1d16a141614c5026443a91e543748",
+  "sourceCommit": "7cbe5e88cca9d133bceb122862850ef587d37495",
   "repositoryDirty": false,
   "suite": "test-scenario-gvisor-pod",
-  "passCount": 22,
-  "wallClockSeconds": 263,
+  "passCount": 23,
+  "wallClockSeconds": 361,
   "host": {
     "workspaceFilesystem": {
       "mount": "/var/lib/secondbox-reflink /dev/loop0 btrfs rw,relatime,discard=async,space_cache=v2,subvolid=5,subvol=/",
@@ -19,6 +19,6 @@
       "required": false
     }
   },
-  "qualifiedAt": "2026-08-26T04:42:12Z",
+  "qualifiedAt": "2026-08-26T10:27:46Z",
   "backend": "gvisor"
 }

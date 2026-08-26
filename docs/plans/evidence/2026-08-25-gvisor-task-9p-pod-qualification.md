@@ -2,9 +2,9 @@
 
 Date: 2026-08-26 (UTC)
 
-Source commit: `9aacd8d73` (clean tree; both scenario evidence files record
-`repositoryDirty: false` at this commit, re-run after the branch was rebased onto main and the
-Dark Review remediation landed)
+Source commit: `7cbe5e88c` (clean tree; both scenario evidence files record
+`repositoryDirty: false` at this commit, re-run after the branch was rebased onto the v0.6.0
+tenancy merge and the full Dark Review remediation landed)
 
 Result: pass — the spike closes with both environments qualified.
 
@@ -29,18 +29,22 @@ Result: pass — the spike closes with both environments qualified.
 On the no-KVM QEMU node (Debian 13, kernel `6.12.101+deb13-cloud-amd64`, K3s `v1.36.3+k3s1`,
 containerd `2.3.2-k3s2`):
 
-- `test-scenario-gvisor` (host placement): 22 scenarios passed —
-  `2026-08-25-gvisor-task-9p-linux-scenario.json`. 30 cold starts: start-to-ready p50 404.3 ms,
-  p95 478.9 ms — `2026-08-25-gvisor-task-9p-cold-starts.json`.
-- `test-scenario-gvisor-pod` (pod placement): the same 22 scenarios passed, including
+- `test-scenario-gvisor` (host placement): 23 backend scenarios passed (31 including the
+  shared tenancy scenarios; the network-enabled egress-gateway fencing scenario is skipped on
+  bridge-less backends) — `2026-08-25-gvisor-task-9p-linux-scenario.json`. 30 cold starts:
+  start-to-ready p50 397.088 ms, p95 455.703 ms; peak compute-tree RSS (supervisor with its runsc
+  sentry and gofer) p50 162000 KiB — `2026-08-25-gvisor-task-9p-cold-starts.json`.
+- `test-scenario-gvisor-pod` (pod placement): the same scenarios passed, including
   Snapshot/restore, runner-kill reconciliation, concurrency, the rejection matrix, the network
   policy matrix with real external egress through pod and node NAT, and Workspace relocation
   between two runner pods on distinct network profiles —
-  `2026-08-25-gvisor-task-9p-pod-scenario.json`. 30 cold starts inside the pod: p50 422.6 ms,
-  p95 946.6 ms — `2026-08-25-gvisor-task-9p-pod-cold-starts.json`.
+  `2026-08-25-gvisor-task-9p-pod-scenario.json`. 30 cold starts inside the pod: p50 395.799 ms,
+  p95 449.249 ms; peak compute-tree RSS p50 161008 KiB —
+  `2026-08-25-gvisor-task-9p-pod-cold-starts.json`.
 - `test-gvisor-pod` and the backend qualification suites (`TestQualified|TestAttachment`) also
   passed at the same commit, with sandbox cgroups observed nested at
-  `kubepods-pod<uid>.slice/secondbox-gvisor-p0/<instance>` under per-sandbox limits.
+  `kubepods-pod<uid>.slice/secondbox-gvisor-p<profile>/<instance-digest>` under per-sandbox
+  limits.
 
 Qualification surfaced two fixes recorded on this branch: sandbox cgroup directories are
 scoped per network profile (runners sharing a host and one delegating cgroup ancestor must not
