@@ -103,13 +103,15 @@ never copied from a document.
    ```sh
    cd runner && go run ./cmd/secondbox-flat-root-digest /opt/secondbox-gvisor/rootfs
    sha256sum /opt/secondbox-gvisor/bin/runsc /opt/secondbox-gvisor/bin/secondbox-guest-agent
-   printf 'sha256:%s\n' "$(jq --compact-output --join-output . \
-     /etc/secondbox/gvisor-linux-amd64.materialization.json | sha256sum | awk '{print $1}')"
+   go run ./cmd/secondbox-materialization-digest \
+     /etc/secondbox/gvisor-linux-amd64.materialization.json
    ```
 
    Record the flat-root digest and launch-artifact digests in the reviewed materialization
-   manifest, then pin the canonical manifest digest in
-   `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST`.
+   manifest, then pin the digest the repository tool prints in
+   `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST`. The tool computes the canonical digest exactly as
+   runner startup does — over the decoded manifest, independent of the file's key order — so a
+   reordered but equivalent manifest never produces a pin startup rejects.
 
 2. Apply the reviewed public resources (the dedicated pool and Profile derived from
    `runner/deploy/gvisor-linux-amd64.resources.json`):
@@ -127,10 +129,27 @@ never copied from a document.
    environment from this document. Install the identity under an operator-owned root such as
    `/opt/secondbox-runner-identity`.
 
-4. Export the complete environment from this document plus the runner protocol settings
-   (control-plane address and server name, credential, identity paths, pool ID, data-plane
-   addresses, log paths, concurrency and storage-pressure bounds), then start the runner as a
-   root systemd service whose unit states that exact environment. Readiness is observable:
+4. Export the complete environment and start the runner as a root systemd service whose unit
+   states exactly these variables — this is the full set the gVisor composition consumes, and
+   `runner/deploy/gvisor-runner-pod.yaml` states the same set for the pod placement:
+
+   | Variable | Value source |
+   | --- | --- |
+   | `SECONDBOX_COMPUTE_BACKEND` | Literal `gvisor`. |
+   | `SECONDBOX_RUNNER_ID` / `SECONDBOX_RUNNER_POOL_ID` | The declared Runner identity (matching its certificate SPIFFE ID) and the dedicated pool name. |
+   | `SECONDBOX_RUNNER_SOFTWARE_VERSION` | The exact source identity of the deployed runner build. |
+   | `SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS` / `..._SERVER_NAME` / `..._CA` | The control plane's Runner gRPC endpoint, its certificate name, and the CA file. |
+   | `SECONDBOX_RUNNER_CREDENTIAL` / `..._CLIENT_CERTIFICATE` / `..._CLIENT_KEY` | The enrollment credential and installed identity files. |
+   | `SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS` / `..._ADVERTISED_ADDRESS` | The data-plane listener and its reachable advertised address. |
+   | `SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS` / `..._WORKSPACE_CREATES` | Admission concurrency bounds. |
+   | `SECONDBOX_RUNNER_LOG_DIR` / `SECONDBOX_RUNNER_LOG_PATH` | Operator-owned log directory and JSONL file. |
+   | `SECONDBOX_RUNNER_WORKSPACE_ROOT` | The reflink-capable WorkspaceStore root. |
+   | `SECONDBOX_GVISOR_*` (all values from the environment block above) | The backend block, including capacity maxima, the materialization pin, the runtime directory, the network profile, and the optional `SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM` resolver override. |
+
+   Instance capacity and per-Instance ceilings come only from the `SECONDBOX_GVISOR_MAXIMUM_*`
+   values; the `SECONDBOX_RUNNER_SANDBOX_*`, storage-pressure, file-transfer, and remaining
+   concurrency variables are Firecracker-only and ignored by this backend. Readiness is
+   observable:
 
    ```sh
    curl -fsS http://127.0.0.1:8080/metrics | grep runner

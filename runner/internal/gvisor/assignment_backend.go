@@ -48,6 +48,10 @@ type activeAssignment struct {
 	instanceDir    string
 	reservation    capacityReservation
 	backendRef     string
+	// launched closes when the claimed start finishes (successfully
+	// registered or removed after failure); nil on a completed assignment.
+	launched       chan struct{}
+	launchDone     func()
 	readyPublished bool
 	exitPending    bool
 	fenced         bool
@@ -330,6 +334,14 @@ func (backend *AssignmentBackend) ValidateAssignment(
 	ctx context.Context,
 	assignment *runnerprotocol.AssignmentCommand,
 ) error {
+	return backend.validateAssignmentClaimed(ctx, assignment, nil)
+}
+
+func (backend *AssignmentBackend) validateAssignmentClaimed(
+	ctx context.Context,
+	assignment *runnerprotocol.AssignmentCommand,
+	ownClaim *activeAssignment,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -340,12 +352,16 @@ func (backend *AssignmentBackend) ValidateAssignment(
 		return incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment Workspace or fence identity is incomplete"))
 	}
 	// An already-active assignment replays validly under its exact fence,
-	// including after its original admission deadline.
+	// including after its original admission deadline, unless fencing has
+	// begun; the claiming start passes its own claim through.
 	backend.mu.Lock()
-	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists {
-		same := sameFence(active.fence, assignment.Fence)
+	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
+		same, fenced := sameFence(active.fence, assignment.Fence), active.fenced
 		backend.mu.Unlock()
 		if same {
+			if fenced {
+				return infrastructureAssignment(fmt.Errorf("SecondBox gVisor replayed assignment is being fenced"))
+			}
 			return nil
 		}
 		return incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment ID was reused with different fencing"))
@@ -389,7 +405,7 @@ func (backend *AssignmentBackend) ValidateAssignment(
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 	for _, active := range backend.assignments {
-		if active.fence.SandboxId == assignment.Fence.SandboxId && !active.fenced {
+		if active != ownClaim && active.fence.SandboxId == assignment.Fence.SandboxId && !active.fenced {
 			return incompatibleAssignment(fmt.Errorf("SecondBox gVisor Sandbox already has an unfenced assignment"))
 		}
 	}
@@ -408,21 +424,71 @@ func (backend *AssignmentBackend) StartAssignment(
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (result runnercontrol.BackendInstance, resultErr error) {
 	started := time.Now()
-	if assignment == nil || assignment.Fence == nil {
+	if assignment == nil || assignment.Fence == nil || !completeFence(assignment.Fence) {
 		return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment is incomplete"))
 	}
+	// At-least-once command delivery replays starts, and identical starts can
+	// arrive concurrently. The assignment is claimed atomically before any
+	// validation: a replay of the active unfenced fence returns the existing
+	// backend reference even past the original deadline, a replay racing a
+	// fence rejects, and a concurrent identical start waits for the claimed
+	// launch instead of launching a second sandbox.
+	assignmentID := assignment.Fence.AssignmentId
 	backend.mu.Lock()
-	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists {
-		same := sameFence(active.fence, assignment.Fence)
-		reference := active.backendRef
+	if existing, exists := backend.assignments[assignmentID]; exists {
+		if !sameFence(existing.fence, assignment.Fence) {
+			backend.mu.Unlock()
+			return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment ID was reused with different fencing"))
+		}
+		if existing.fenced {
+			backend.mu.Unlock()
+			return result, infrastructureAssignment(fmt.Errorf("SecondBox gVisor replayed assignment is being fenced"))
+		}
+		pendingLaunch := existing.launched
+		reference := existing.backendRef
 		backend.mu.Unlock()
-		if same {
+		if pendingLaunch != nil {
+			select {
+			case <-pendingLaunch:
+			case <-ctx.Done():
+				return result, ctx.Err()
+			}
+			backend.mu.Lock()
+			reference = ""
+			if current, still := backend.assignments[assignmentID]; still &&
+				sameFence(current.fence, assignment.Fence) && !current.fenced {
+				reference = current.backendRef
+			}
+			backend.mu.Unlock()
+		}
+		if reference != "" {
 			return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: reference}, nil
 		}
-		return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment ID was reused with different fencing"))
+		return result, infrastructureAssignment(fmt.Errorf("SecondBox gVisor replayed start observed a failed launch"))
 	}
+	for _, active := range backend.assignments {
+		if active.fence.SandboxId == assignment.Fence.SandboxId && !active.fenced {
+			backend.mu.Unlock()
+			return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor Sandbox already has an unfenced assignment"))
+		}
+	}
+	claim := &activeAssignment{fence: cloneFence(assignment.Fence), launched: make(chan struct{}), done: make(chan struct{})}
+	claim.launchDone = sync.OnceFunc(func() { close(claim.launched) })
+	backend.assignments[assignmentID] = claim
 	backend.mu.Unlock()
-	if err := backend.ValidateAssignment(ctx, assignment); err != nil {
+	retainClaim := false
+	defer func() {
+		backend.mu.Lock()
+		if resultErr != nil && !retainClaim && backend.assignments[assignmentID] == claim {
+			delete(backend.assignments, assignmentID)
+		}
+		// A settled claim never re-enters a launch wait: nil marks it
+		// terminal for fencing and replay checks.
+		claim.launched = nil
+		backend.mu.Unlock()
+		claim.launchDone()
+	}()
+	if err := backend.validateAssignmentClaimed(ctx, assignment, claim); err != nil {
 		return result, err
 	}
 	reservation := capacityReservation{
@@ -433,12 +499,29 @@ func (backend *AssignmentBackend) StartAssignment(
 		return result, capacityAssignment(err)
 	}
 	cleanup := &cleanupStack{}
-	cleanup.push(func() error {
+	capacityCleanup := cleanup.push(func() error {
 		backend.release(reservation)
 		return nil
 	})
+	retainUnconfirmed := func() {
+		// An unconfirmed supervisor keeps its Workspace lock, network, and
+		// capacity: releasing them beneath a possibly live sandbox would
+		// hand the Workspace to a new writer. The claim stays in the map,
+		// fenced, so the assignment remains tracked until a runner restart
+		// reconciles it.
+		retainClaim = true
+		cleanup.disarm(capacityCleanup)
+		backend.mu.Lock()
+		claim.fenced = true
+		backend.assignments[assignmentID] = claim
+		backend.mu.Unlock()
+	}
 	defer func() {
 		if resultErr != nil {
+			if errors.Is(resultErr, errSupervisorExitUnconfirmed) {
+				retainUnconfirmed()
+				cleanup.clear()
+			}
 			resultErr = errors.Join(resultErr, cleanup.run())
 		}
 	}()
@@ -483,7 +566,11 @@ func (backend *AssignmentBackend) StartAssignment(
 	cleanup.disarm(networkCleanup)
 	cleanup.disarm(workspaceCleanup)
 	cleanup.push(func() error {
-		return backend.destroyInstance(active)
+		err := backend.destroyInstance(active)
+		if errors.Is(err, errSupervisorExitUnconfirmed) {
+			retainUnconfirmed()
+		}
+		return err
 	})
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION); err != nil {
 		return result, err
@@ -497,17 +584,18 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := backend.emitLifecycle(ctx, active, "ready", "control:1", "completed", "ready"); err != nil {
 		return result, infrastructureAssignment(err)
 	}
+	// The claim stays in the map until every fallible startup step has
+	// succeeded, and the published assignment inherits any fencing intent
+	// recorded on the claim while it launched.
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
+		return result, err
+	}
 	backend.mu.Lock()
+	active.fenced = claim.fenced
 	backend.assignments[assignment.Fence.AssignmentId] = active
 	backend.startupSamples = append(backend.startupSamples, time.Since(started))
 	backend.mu.Unlock()
 	go backend.observeExit(active)
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
-		backend.mu.Lock()
-		delete(backend.assignments, assignment.Fence.AssignmentId)
-		backend.mu.Unlock()
-		return result, err
-	}
 	cleanup.clear()
 	return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: active.backendRef}, nil
 }
@@ -692,6 +780,12 @@ func (backend *AssignmentBackend) negotiateSession(
 	})
 }
 
+// errSupervisorExitUnconfirmed marks a teardown that could not confirm the
+// supervisor's exit: the Workspace writer lock, network resources, and the
+// capacity reservation must stay held rather than being released beneath a
+// possibly live sandbox.
+var errSupervisorExitUnconfirmed = errors.New("SecondBox gVisor supervisor exit unconfirmed after force kill")
+
 // destroyInstance force-stops the supervisor tree and releases the Workspace
 // attachment only after the supervisor has exited (its exit proves the mount
 // and loop device are gone).
@@ -708,7 +802,7 @@ func (backend *AssignmentBackend) destroyInstance(active *activeAssignment) erro
 		select {
 		case <-active.done:
 		case <-time.After(supervisorStopBound):
-			return fmt.Errorf("SecondBox gVisor supervisor did not exit after force kill")
+			return errSupervisorExitUnconfirmed
 		}
 	}
 	closeErr := errors.Join(active.handles.CloseParentSide(), active.workspace.Close())
@@ -773,7 +867,7 @@ const supervisorStopBound = 15 * time.Second
 func (backend *AssignmentBackend) MarkAssignmentReady(fence *runnerprotocol.AssignmentFence) error {
 	backend.mu.Lock()
 	active, exists := backend.assignments[fence.GetAssignmentId()]
-	if !exists || !sameFence(active.fence, fence) || active.fenced {
+	if !exists || active.launched != nil || !sameFence(active.fence, fence) || active.fenced {
 		backend.mu.Unlock()
 		return fmt.Errorf("SecondBox gVisor ready assignment fence is stale")
 	}
@@ -840,17 +934,44 @@ func (backend *AssignmentBackend) FenceAssignment(
 		return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor fence identity is required")
 	}
 	backend.mu.Lock()
-	active, exists := backend.assignments[command.Fence.AssignmentId]
-	if !exists {
+	var active *activeAssignment
+	for {
+		current, exists := backend.assignments[command.Fence.AssignmentId]
+		if !exists {
+			backend.mu.Unlock()
+			return runnercontrol.FenceEvidence{
+				Result:                    runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED,
+				TerminationEvidenceDigest: fenceDigest(command.Fence),
+			}, nil
+		}
+		if !sameFence(current.fence, command.Fence) {
+			backend.mu.Unlock()
+			return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor fence token or generation mismatch")
+		}
+		if current.launched == nil {
+			if current.handles == nil {
+				// A retained unconfirmed-exit tombstone: its supervisor may
+				// still be alive holding the Workspace lock, so nothing can
+				// be fenced or released until a runner restart reconciles.
+				backend.mu.Unlock()
+				return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor assignment awaits restart reconciliation after an unconfirmed supervisor exit")
+			}
+			active = current
+			break
+		}
+		// A pending claimed launch holds no supervisor or operation state
+		// yet; fencing records its intent on the claim — rejecting further
+		// replays immediately — then waits for the launch to settle and
+		// fences whatever it produced.
+		current.fenced = true
+		pendingLaunch := current.launched
 		backend.mu.Unlock()
-		return runnercontrol.FenceEvidence{
-			Result:                    runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED,
-			TerminationEvidenceDigest: fenceDigest(command.Fence),
-		}, nil
-	}
-	if !sameFence(active.fence, command.Fence) {
-		backend.mu.Unlock()
-		return runnercontrol.FenceEvidence{}, fmt.Errorf("SecondBox gVisor fence token or generation mismatch")
+		select {
+		case <-pendingLaunch:
+		case <-ctx.Done():
+			return runnercontrol.FenceEvidence{}, ctx.Err()
+		}
+		backend.mu.Lock()
 	}
 	active.fenced = true
 	cancels := make([]context.CancelFunc, 0, len(active.operations))
@@ -971,7 +1092,7 @@ func (backend *AssignmentBackend) acquireOperation(
 ) (*activeAssignment, context.Context, func(), error) {
 	backend.mu.Lock()
 	active := backend.assignments[fence.GetAssignmentId()]
-	if active == nil || active.fenced || !sameFence(active.fence, fence) {
+	if active == nil || active.launched != nil || active.fenced || !sameFence(active.fence, fence) {
 		backend.mu.Unlock()
 		return nil, nil, nil, fmt.Errorf("SecondBox gVisor operation fence is stale")
 	}

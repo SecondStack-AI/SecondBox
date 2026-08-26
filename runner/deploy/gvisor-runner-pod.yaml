@@ -45,13 +45,11 @@ spec:
         limits:
           cpu: "OPERATOR_SANDBOX_BUDGET_CPU"
           memory: OPERATOR_SANDBOX_BUDGET_MEMORY
-      ports:
-        # Direct data-plane transport (optional): expose the runner's
-        # data-plane listener on the node. Remove this entry for the
-        # proxied-only default.
-        - containerPort: 9500
-          hostPort: 9500
-          protocol: TCP
+      # The data plane is proxied through the control plane by default: no
+      # hostPort is published and the advertised address stays loopback. The
+      # qualified direct-transport option is an explicit operator overlay that
+      # adds `ports: [{containerPort: 9500, hostPort: 9500}]` and changes the
+      # advertised address to the routable node address.
       readinessProbe:
         exec:
           command: ["/usr/local/bin/secondbox-runner", "-healthcheck", "-healthcheck-timeout", "5s"]
@@ -66,6 +64,12 @@ spec:
           value: "OPERATOR_RUNNER_ID"
         - name: SECONDBOX_RUNNER_POOL_ID
           value: "OPERATOR_GVISOR_POOL_ID"
+        - name: SECONDBOX_RUNNER_SOFTWARE_VERSION
+          value: "OPERATOR_RELEASE_VERSION_OR_COMMIT"
+        - name: SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS
+          value: "OPERATOR_CONCURRENT_STARTS"
+        - name: SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES
+          value: "OPERATOR_CONCURRENT_WORKSPACE_CREATES"
         - name: SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS
           value: "OPERATOR_CONTROL_PLANE_HOST:9443"
         - name: SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME
@@ -89,11 +93,12 @@ spec:
           value: /w
         - name: SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
           value: "0.0.0.0:9500"
-        # Proxied-only default: advertise nothing routable and keep the
-        # control-plane proxy as the sole data path, or advertise the node
-        # address when the hostPort direct transport is enabled.
+        # Proxied-only default: the listener stays pod-local and the
+        # advertised address is loopback, so the control-plane proxy is the
+        # sole data path. The direct-transport overlay replaces this with the
+        # routable node address alongside its hostPort.
         - name: SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS
-          value: "OPERATOR_NODE_ADDRESS:9500"
+          value: "127.0.0.1:9500"
         - name: SECONDBOX_GVISOR_RUNSC_PATH
           value: /usr/local/bin/runsc
         - name: SECONDBOX_GVISOR_AGENT_PATH

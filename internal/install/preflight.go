@@ -210,7 +210,12 @@ func Preflight(ctx context.Context, probes PreflightProbes) (HostFacts, error) {
 		add("kernel", FindingPass, "Kernel observed", facts.KernelVersion, "")
 	}
 	preflightSystemd(ctx, probes, &facts, add)
-	preflightDocker(ctx, probes, &facts, add)
+	if probes.Backend != "gvisor" {
+		// The gVisor host profile runs the runner as a systemd service and
+		// needs no container engine; Docker and Compose stay Firecracker
+		// installer requirements.
+		preflightDocker(ctx, probes, &facts, add)
+	}
 	preflightCgroup(probes, &facts, add)
 	preflightDevices(probes, &facts, add)
 	preflightCPUAndMemory(probes, &facts, add)
@@ -649,7 +654,13 @@ func preflightUsers(p PreflightProbes, f *HostFacts, add func(string, FindingCla
 }
 func preflightUtilities(p PreflightProbes, f *HostFacts, add func(string, FindingClass, string, string, string)) {
 	missing := []string{}
-	for _, name := range []string{"docker", "systemctl", "systemd-analyze", "ip", "ss"} {
+	required := []string{"docker", "systemctl", "systemd-analyze", "ip", "ss"}
+	if p.Backend == "gvisor" {
+		// No container engine, but the WorkspaceStore's ext4 toolchain is a
+		// hard runtime dependency of the loop-attachment path.
+		required = []string{"systemctl", "systemd-analyze", "ip", "ss", "mkfs.ext4", "e2fsck"}
+	}
+	for _, name := range required {
 		path, err := p.Process.LookPath(name)
 		if err != nil {
 			missing = append(missing, name)

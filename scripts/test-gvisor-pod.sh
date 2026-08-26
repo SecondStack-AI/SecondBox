@@ -122,14 +122,20 @@ for _ in $(seq 1 120); do
       [[ "$(cat "$instance/memory.max" 2>/dev/null)" == "268435456" ]] ||
         fail "nested sandbox memory.max is not the 256 MiB limit: $(cat "$instance/memory.max" 2>/dev/null)"
       # While the sandbox is live, its Workspace mount must exist only inside
-      # the supervisor's private mount namespace: the host and pod tables must
-      # show no runtime mountpoint and no loop-backed Workspace mount.
-      if findmnt -rn -o TARGET,SOURCE | grep -E '/mnt$' | grep -q 'secondbox'; then
+      # the supervisor's private mount namespace. The backend mounts each
+      # loop-attached image at <runtime>/<instance>/mnt, so the host table
+      # must show no target under the qualification runtime prefix and no
+      # ext4 mount whose source is a loop device backed by the reflink store.
+      if findmnt -rn -o TARGET | grep -q '^/run/sbxgv-\|/secondbox-gvisor/'; then
         fail "a Workspace runtime mountpoint is visible in the host mount table"
       fi
-      if findmnt -rn -o SOURCE | grep -q '^/dev/loop.*workspace'; then
-        fail "a loop-backed Workspace mount is visible in the host mount table"
-      fi
+      while read -r source target; do
+        backing="$(losetup -nO BACK-FILE "$source" 2>/dev/null || cat "/sys/block/$(basename "$source")/loop/backing_file" 2>/dev/null)"
+        case "$backing" in
+          "$SECONDBOX_GVISOR_POD_REFLINK"/*)
+            fail "a loop-backed Workspace mount is visible in the host mount table: $source -> $target" ;;
+        esac
+      done < <(findmnt -rn -t ext4 -o SOURCE,TARGET | grep '^/dev/loop' || true)
       break
     fi
   fi

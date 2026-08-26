@@ -375,6 +375,21 @@ func TestGVisorPreflightQualifiesHostsWithoutKVMOrTUN(t *testing.T) {
 			t.Fatalf("gvisor preflight must not require %q: %+v", finding.ID, finding)
 		}
 	}
+	for _, finding := range facts.Findings {
+		if finding.ID == "docker" || finding.ID == "docker_networks" || finding.ID == "compose" {
+			t.Fatalf("gvisor preflight must not require a container engine: %+v", finding)
+		}
+	}
+	utilities := findingByID(t, facts, "utilities")
+	if utilities.Class != FindingPass {
+		t.Fatalf("gvisor utilities finding = %+v", utilities)
+	}
+	if _, exists := facts.Utilities["mkfs.ext4"]; !exists {
+		t.Fatalf("gvisor utilities must include the ext4 toolchain: %+v", facts.Utilities)
+	}
+	if _, exists := facts.Utilities["docker"]; exists {
+		t.Fatal("gvisor utilities must not require docker")
+	}
 	for id, summary := range map[string]string{
 		"loop_control":   "/dev/loop-control is accessible",
 		"virtualization": "CPU virtualization is absent and not required by the gVisor backend",
