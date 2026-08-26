@@ -832,7 +832,7 @@ cleanup() {
       evidence_suite="test-scenario-microsandbox-$scenario_host_platform"
     fi
     if ! jq -n \
-      --arg schemaVersion "secondbox.release/qualification-evidence/v1" \
+      --arg schemaVersion "secondbox.release/qualification-evidence/v2" \
       --arg sourceCommit "$scenario_source_commit" \
       --argjson repositoryDirty "$scenario_repository_dirty" \
       --arg suite "$evidence_suite" \

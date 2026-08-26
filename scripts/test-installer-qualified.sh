@@ -52,7 +52,7 @@ workspace_mount="$(findmnt -n -o TARGET --target "$SECONDBOX_INSTALLER_EXISTING_
 workspace_type="$(findmnt -n -o FSTYPE --target "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT")"
 [[ "$workspace_type" == xfs || "$workspace_type" == btrfs ]] || { echo 'installer qualification workspace must be XFS or Btrfs' >&2; exit 1; }
 jq -n \
-  --arg schemaVersion 'secondbox.release/installer-qualification-evidence/v1' \
+  --arg schemaVersion 'secondbox.release/installer-qualification-evidence/v2' \
   --arg sourceCommit "$source_commit" \
   --arg releaseManifestDigest "$(jq -er .releaseManifestDigest "$temporary/driver-evidence.json")" \
   --arg filesystemIdentity "$(jq -er .filesystemIdentity "$temporary/driver-evidence.json")" \

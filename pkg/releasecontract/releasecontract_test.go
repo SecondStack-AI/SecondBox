@@ -141,6 +141,13 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 		t.Fatalf("missing host platform error = %v", err)
 	}
 	decoded.Host.Platform = "linux-amd64"
+	decoded.SchemaVersion = LegacyQualificationEvidenceSchema
+	decoded.Host.Platform = ""
+	if err := decoded.ValidateForRelease(testCommit); err != nil {
+		t.Fatalf("legacy v1 qualification evidence = %v", err)
+	}
+	decoded.SchemaVersion = QualificationEvidenceSchema
+	decoded.Host.Platform = "linux-amd64"
 	decoded.RepositoryDirty = true
 	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "dirty repository") {
 		t.Fatalf("dirty qualification evidence error = %v", err)
@@ -201,6 +208,35 @@ func TestInstallerQualificationEvidenceRequiresRebootAndPinnedRelease(t *testing
 	decoded.RebootPassed = false
 	if err := decoded.Validate(); err == nil {
 		t.Fatal("installer evidence without reboot recovery was accepted")
+	}
+	decoded.RebootPassed = true
+	decoded.SchemaVersion = LegacyInstallerQualificationEvidenceSchema
+	decoded.Host.Platform = ""
+	if err := decoded.ValidateForRelease(testCommit, testDigest); err != nil {
+		t.Fatalf("legacy v1 installer evidence = %v", err)
+	}
+}
+
+func TestRecordedInstallerQualificationAcceptsOnlyExactV060Waiver(t *testing.T) {
+	evidence := InstallerQualificationEvidence{
+		SchemaVersion: LegacyInstallerQualificationEvidenceSchema,
+		SourceCommit:  "92e409ddade89737afa75ec2b781dac5c8afbeab",
+		Suite:         "test-installer-qualified", PassCount: 2, WallClockSeconds: 1451,
+		Host: QualificationHostEvidence{
+			KVM:                 QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
+			TUN:                 QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
+			WorkspaceFilesystem: QualificationFilesystemEvidence{Mount: "/recorded/v0.6.0 btrfs", Type: "btrfs"},
+		},
+		ReleaseManifestDigest: "sha256:8cb794536dd6b1b45bb1471c21c2fefd062af276446bdd954a4ce1b53aa95197",
+		FilesystemIdentity:    "waived-after-two-complete-modes",
+		QualifiedAt:           "2026-08-26T14:53:50Z",
+	}
+	if err := evidence.ValidateRecordedForRelease(evidence.SourceCommit, evidence.ReleaseManifestDigest); err != nil {
+		t.Fatal(err)
+	}
+	evidence.PassCount++
+	if err := evidence.ValidateRecordedForRelease(evidence.SourceCommit, evidence.ReleaseManifestDigest); err == nil || !strings.Contains(err.Error(), "exact v0.6.0 waiver") {
+		t.Fatalf("mutated recorded waiver error = %v", err)
 	}
 }
 
