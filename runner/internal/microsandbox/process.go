@@ -238,6 +238,13 @@ func (process *helperProcess) acquireRequest(ctx context.Context) error {
 	}
 	select {
 	case process.requestGate <- struct{}{}:
+		// The select chooses arbitrarily when both are ready, so a canceled
+		// caller must never proceed with an acquired gate: it would clear
+		// deadlines and block on a stream nobody will interrupt.
+		if err := ctx.Err(); err != nil {
+			process.releaseRequest()
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -246,14 +253,19 @@ func (process *helperProcess) acquireRequest(ctx context.Context) error {
 
 func (process *helperProcess) releaseRequest() { <-process.requestGate }
 
+// reapBound caps every wait for a killed helper's reap: SIGKILL delivery is
+// prompt, so a longer stall means an unreapable process that must not pin
+// fencing.
+const reapBound = 2 * time.Second
+
 func (process *helperProcess) shutdown(ctx context.Context) error {
 	if err := process.acquireRequest(ctx); err != nil {
 		// The stream holder is stuck past the fencing deadline; the graceful
 		// frame exchange is forfeit and the helper is forced down so fencing
 		// completes on time.
 		killErr := process.command.Process.Kill()
-		<-process.done
-		return errors.Join(err, killErr, normalizeKilledExit(process.processWaitError()), process.closeResources())
+		waitErr := process.awaitExit(reapBound)
+		return errors.Join(err, killErr, waitErr, normalizeKilledExit(process.processWaitError()), process.closeResources())
 	}
 	requestID := process.nextRequestID
 	process.nextRequestID++
@@ -285,8 +297,21 @@ func (process *helperProcess) shutdown(ctx context.Context) error {
 		return errors.Join(err, normalizeProcessExit(process.processWaitError()), process.closeResources())
 	case <-ctx.Done():
 		killErr := process.command.Process.Kill()
-		<-process.done
-		return errors.Join(err, ctx.Err(), killErr, normalizeKilledExit(process.processWaitError()), process.closeResources())
+		waitErr := process.awaitExit(reapBound)
+		return errors.Join(err, ctx.Err(), killErr, waitErr, normalizeKilledExit(process.processWaitError()), process.closeResources())
+	}
+}
+
+// awaitExit waits for the helper's reap, bounded so an unreapable process
+// cannot pin fencing or shutdown: closing the runner-side resources below
+// invalidates the shared stream either way, and the leaked wait goroutine
+// resolves whenever the kernel finally delivers the exit.
+func (process *helperProcess) awaitExit(bound time.Duration) error {
+	select {
+	case <-process.done:
+		return nil
+	case <-time.After(bound):
+		return errors.New("SecondBox Microsandbox helper did not exit within the termination bound")
 	}
 }
 
@@ -514,11 +539,12 @@ func (process *helperProcess) forceStop() {
 		return
 	}
 	_ = process.command.Process.Kill()
-	select {
-	case <-process.done:
-	case <-time.After(5 * time.Second):
-	}
+	// Closing the runner-side resources first invalidates the shared stream
+	// for every waiter immediately; the bounded reap wait afterwards only
+	// tidies the process table and can never pin a caller's deadline on an
+	// unreapable helper.
 	_ = process.closeResources()
+	_ = process.awaitExit(reapBound)
 }
 
 func (process *helperProcess) processWaitError() error {

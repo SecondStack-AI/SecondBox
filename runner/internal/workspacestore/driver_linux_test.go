@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 func TestLinuxFormatterCompositionIsExplicit(t *testing.T) {
@@ -127,17 +125,20 @@ func TestWorkspaceLockProbeProcess(t *testing.T) {
 }
 
 // TestWriterFenceSurvivesParentCloseWhileChildHoldsDescriptor proves the
-// open-file-description behavior the writer fence depends on: a child that
-// inherited a duplicate of the locked descriptor keeps the exclusive flock
-// after the parent closes every descriptor of its own, and the fence releases
-// only when the child exits.
+// exact fence a compute backend relies on: a child inheriting the real
+// Attachment's writer-lock descriptor keeps the exclusive Workspace fence
+// after the parent attachment closes, so no replacement attachment succeeds
+// until the child exits.
 func TestWriterFenceSurvivesParentCloseWhileChildHoldsDescriptor(t *testing.T) {
-	root := t.TempDir()
-	lock, err := os.OpenFile(filepath.Join(root, "writer.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
+	store, _, _ := newFakeStore(t)
+	const workspaceID = "fence-inheritance"
+	if _, err := store.Create(t.Context(), CreateWorkspaceRequest{
+		Mutation: testMutation("fence-create", workspaceID), CapacityBytes: minimumExt4Bytes,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := platformTryLock(lock); err != nil {
+	attachment, err := store.Open(t.Context(), workspaceID, 1)
+	if err != nil {
 		t.Fatal(err)
 	}
 	stdin, stdinWriter, err := os.Pipe()
@@ -146,20 +147,15 @@ func TestWriterFenceSurvivesParentCloseWhileChildHoldsDescriptor(t *testing.T) {
 	}
 	child := exec.Command("cat")
 	child.Stdin = stdin
-	child.ExtraFiles = []*os.File{lock}
+	child.ExtraFiles = []*os.File{attachment.LockDescriptor()}
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
 	_ = stdin.Close()
-	if err := lock.Close(); err != nil {
+	if err := attachment.Close(); err != nil {
 		t.Fatal(err)
 	}
-	competitor, err := os.OpenFile(filepath.Join(root, "writer.lock"), os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer competitor.Close()
-	if err := platformTryLock(competitor); !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+	if _, err := store.Open(t.Context(), workspaceID, 1); !errors.Is(err, ErrActiveWriter) {
 		_ = stdinWriter.Close()
 		_ = child.Wait()
 		t.Fatalf("writer fence released while the child still held its inherited descriptor: %v", err)
@@ -170,7 +166,9 @@ func TestWriterFenceSurvivesParentCloseWhileChildHoldsDescriptor(t *testing.T) {
 	if err := child.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	if err := platformTryLock(competitor); err != nil {
+	replacement, err := store.Open(t.Context(), workspaceID, 1)
+	if err != nil {
 		t.Fatalf("writer fence did not release after the last inherited descriptor closed: %v", err)
 	}
+	_ = replacement.Close()
 }

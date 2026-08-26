@@ -13,12 +13,15 @@ import (
 )
 
 func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
-	release, err := developmentReleaseManifest()
+	// The source deployment is represented by the exact bytes a v0.6.0
+	// release recorded (frozen in testdata, independent of current
+	// generators); only the on-disk file placement is test-local.
+	releaseBytes, err := os.ReadFile(filepath.Join("testdata", "v060-release.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	releaseBytes, err := json.Marshal(release)
-	if err != nil {
+	var release releasecontract.ArtifactManifest
+	if err := json.Unmarshal(releaseBytes, &release); err != nil {
 		t.Fatal(err)
 	}
 	keyID := strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:"))

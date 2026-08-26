@@ -96,6 +96,20 @@ func TestFrozenV060PlanDecodesWithStableIdentity(t *testing.T) {
 	if string(reencoded) != string(frozen) {
 		t.Fatal("frozen v0.6.0 plan bytes did not survive a decode round-trip")
 	}
+	if plan.Release.Version != "0.6.0" {
+		t.Fatalf("frozen plan release version = %q, want 0.6.0", plan.Release.Version)
+	}
+	frozenReceipt, err := os.ReadFile(filepath.Join("testdata", "v060-receipt.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := DecodeReceipt(frozenReceipt, plan)
+	if err != nil {
+		t.Fatalf("frozen v0.6.0 receipt was rejected against the frozen plan: %v", err)
+	}
+	if receipt.PlanDigest != Digest(frozen) {
+		t.Fatalf("frozen receipt pins digest %s, want the frozen plan bytes' %s", receipt.PlanDigest, Digest(frozen))
+	}
 }
 
 func TestStrictCanonicalPlanAndReceiptIdentity(t *testing.T) {
