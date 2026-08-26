@@ -173,12 +173,16 @@ if [[ "$phase" == install ]]; then
   qualification_workload_config=''
   source_deploy=''
   if [[ "$mode" == existing_reflink_update ]]; then
+    source_version='0.6.0'
+    source_bootstrap_sha256='83f64289be964206563bebcc96796f081fa2d1b1d84915a5f6722ef1962f6593'
+    source_binary_digest='947d8f600d2fcd88c0d732f3b0b64839d7409e50ebd01655cb5bb9a9789aceeb'
     source_bootstrap="$qualification_root/source-install.sh"
-    curl --fail --location --proto '=https' --tlsv1.2 --output "$source_bootstrap" https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh
-    source_version="$(sed -n "s/^version='\([^']*\)'$/\1/p" "$source_bootstrap")"
-    source_binary_digest="$(sed -n "s/^expected_sha256='\([0-9a-f]\{64\}\)'$/\1/p" "$source_bootstrap")"
+    curl --fail --location --proto '=https' --tlsv1.2 --output "$source_bootstrap" "https://github.com/SecondStack-AI/SecondBox/releases/download/v${source_version}/install.sh"
+    printf '%s  %s\n' "$source_bootstrap_sha256" "$source_bootstrap" | sha256sum --check --status
+    bootstrap_version="$(sed -n "s/^version='\([^']*\)'$/\1/p" "$source_bootstrap")"
+    bootstrap_binary_digest="$(sed -n "s/^expected_sha256='\([0-9a-f]\{64\}\)'$/\1/p" "$source_bootstrap")"
     candidate_version="$(jq -er .version "$manifest")"
-    [[ -n "$source_version" && -n "$source_binary_digest" && "$source_version" != "$candidate_version" ]] || { echo 'qualified update requires a distinct latest public source release' >&2; exit 1; }
+    [[ "$bootstrap_version" == "$source_version" && "$bootstrap_binary_digest" == "$source_binary_digest" && "$source_version" != "$candidate_version" ]] || { echo 'qualified update source does not match the pinned v0.6.0 release' >&2; exit 1; }
     source_deploy="$qualification_root/secondbox-deploy-source"
     curl --fail --location --proto '=https' --tlsv1.2 --output "$source_deploy" "https://github.com/SecondStack-AI/SecondBox/releases/download/v${source_version}/secondbox-deploy_${source_version}_linux_amd64"
     printf '%s  %s\n' "$source_binary_digest" "$source_deploy" | sha256sum --check --status
