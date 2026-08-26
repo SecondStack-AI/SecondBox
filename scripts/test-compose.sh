@@ -169,14 +169,14 @@ management_post() {
 
 management_post "$platform_token" /v1/tenants compose-bootstrap-tenant "$(jq -cn \
   --arg ref "$bootstrap_tenant" \
-  '{ref:$ref,allowedProfileGrants:["go-sdk-live","typescript-sdk-live"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle"],aggregateQuota:{maxSandboxes:10,maxActiveInstances:10,maxCpuMillis:10000,maxMemoryBytes:10737418240,maxSnapshots:10,maxPortSessions:10,maxConcurrentOperations:10,maxActiveSubjects:2,maxApplicationAuthorities:2},expiryPolicy:{maximumSubjectLifetimeSeconds:3600,maximumAuthorityLifetimeSeconds:3600},metadata:{harness:"compose"}}')" >/dev/null
+  '{ref:$ref,allowedProfileGrants:["go-sdk-live","typescript-sdk-live"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle"],aggregateQuota:{maxSandboxes:10,maxActiveInstances:10,maxVcpuCount:10,maxMemoryBytes:10737418240,maxSnapshots:10,maxPortSessions:10,maxConcurrentOperations:10,maxActiveSubjects:2,maxApplicationAuthorities:2},expiryPolicy:{maximumSubjectLifetimeSeconds:3600,maximumAuthorityLifetimeSeconds:3600},metadata:{harness:"compose"}}')" >/dev/null
 
 controller_response="$(management_post "$platform_token" "/v1/tenants/$bootstrap_tenant/controller-authorities" compose-bootstrap-controller "$(jq -cn --arg expiresAt "$bootstrap_expiry" '{expiresAt:$expiresAt,metadata:{harness:"compose"}}')")"
 controller_token="$(jq -er '.bearerToken' <<<"$controller_response")"
 
 management_post "$controller_token" /v1/subjects compose-bootstrap-subject "$(jq -cn \
   --arg ref "$bootstrap_subject" \
-  '{ref:$ref,quota:{maxSandboxes:10,maxActiveInstances:10,maxCpuMillis:10000,maxMemoryBytes:10737418240,maxSnapshots:10,maxPortSessions:10,maxConcurrentOperations:10},metadata:{harness:"compose"}}')" >/dev/null
+  '{ref:$ref,quota:{maxSandboxes:10,maxActiveInstances:10,maxVcpuCount:10,maxMemoryBytes:10737418240,maxSnapshots:10,maxPortSessions:10,maxConcurrentOperations:10},metadata:{harness:"compose"}}')" >/dev/null
 
 application_response="$(management_post "$controller_token" /v1/application-authorities compose-bootstrap-application "$(jq -cn \
   --arg subjectRef "$bootstrap_subject" \

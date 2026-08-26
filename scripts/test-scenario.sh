@@ -80,7 +80,7 @@ fi
 if [[ "$scenario_mode" == "suite" ]]; then
   export SECONDBOX_RUNNER_ID=scenario-runner
   export SECONDBOX_COMPUTE_BACKEND="$scenario_backend"
-  export SECONDBOX_RUNNER_POOL_ID=scenario-pool
+  export SECONDBOX_RUNNER_POOL_ID=standard-amd64
   export SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES=10
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS=20
   export SECONDBOX_SCENARIO_SUBJECT_MAX_VCPU_COUNT=100000
@@ -806,7 +806,7 @@ compose up --detach --wait --wait-timeout 240 \
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
   bootstrap_subject="scenario-subject"
-  bootstrap_profile_grants='["agent-compartment-isolated","scenario-agent-compartment-network-enabled","scenario-control-restart","scenario-data-paths","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle"]'
+  bootstrap_profile_grants='["agent-compartment-isolated","scenario-agent-compartment-network-enabled","scenario-concurrent-instance-isolation","scenario-control-restart","scenario-data-paths","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-microsandbox-cold-start-observation","scenario-microsandbox-relocation","scenario-microsandbox-snapshot-resume-rejected","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle","scenario-uncached-materialization","scenario-unsupported-architecture"]'
 else
   bootstrap_tenant="$(jq -er '.tenantRef' "$SECONDBOX_STRESS_CONFIG")"
   bootstrap_subject="$(jq -er '.subjectRef' "$SECONDBOX_STRESS_CONFIG")"
@@ -833,12 +833,12 @@ scenario_management_post "$SECONDBOX_PLATFORM_TOKEN" /v1/tenants scenario-bootst
   --argjson profileGrants "$bootstrap_profile_grants" \
   --argjson maxSandboxes "$SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES" \
   --argjson maxActiveInstances "$SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES" \
-  --argjson maxCpuMillis "$SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS" \
+  --argjson maxVcpuCount "$SECONDBOX_SCENARIO_SUBJECT_MAX_VCPU_COUNT" \
   --argjson maxMemoryBytes "$SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES" \
   --argjson maxSnapshots "$SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS" \
   --argjson maxPortSessions "$SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS" \
   --argjson maxConcurrentOperations "$SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS" \
-  '{ref:$ref,allowedProfileGrants:$profileGrants,allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports","sandbox:ports:direct"],aggregateQuota:{maxSandboxes:$maxSandboxes,maxActiveInstances:$maxActiveInstances,maxCpuMillis:$maxCpuMillis,maxMemoryBytes:$maxMemoryBytes,maxSnapshots:$maxSnapshots,maxPortSessions:$maxPortSessions,maxConcurrentOperations:$maxConcurrentOperations,maxActiveSubjects:2,maxApplicationAuthorities:2},expiryPolicy:{maximumSubjectLifetimeSeconds:86400,maximumAuthorityLifetimeSeconds:86400},metadata:{harness:"scenario"}}')" >/dev/null
+  '{ref:$ref,allowedProfileGrants:$profileGrants,allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports","sandbox:ports:direct"],aggregateQuota:{maxSandboxes:$maxSandboxes,maxActiveInstances:$maxActiveInstances,maxVcpuCount:$maxVcpuCount,maxMemoryBytes:$maxMemoryBytes,maxSnapshots:$maxSnapshots,maxPortSessions:$maxPortSessions,maxConcurrentOperations:$maxConcurrentOperations,maxActiveSubjects:2,maxApplicationAuthorities:2},expiryPolicy:{maximumSubjectLifetimeSeconds:86400,maximumAuthorityLifetimeSeconds:86400},metadata:{harness:"scenario"}}')" >/dev/null
 
 controller_response="$(scenario_management_post "$SECONDBOX_PLATFORM_TOKEN" "/v1/tenants/$bootstrap_tenant/controller-authorities" scenario-bootstrap-controller "$(jq -cn --arg expiresAt "$bootstrap_expiry" '{expiresAt:$expiresAt,metadata:{harness:"scenario"}}')")"
 controller_token="$(jq -er '.bearerToken' <<<"$controller_response")"
@@ -847,12 +847,12 @@ scenario_management_post "$controller_token" /v1/subjects scenario-bootstrap-sub
   --arg ref "$bootstrap_subject" \
   --argjson maxSandboxes "$SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES" \
   --argjson maxActiveInstances "$SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES" \
-  --argjson maxCpuMillis "$SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS" \
+  --argjson maxVcpuCount "$SECONDBOX_SCENARIO_SUBJECT_MAX_VCPU_COUNT" \
   --argjson maxMemoryBytes "$SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES" \
   --argjson maxSnapshots "$SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS" \
   --argjson maxPortSessions "$SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS" \
   --argjson maxConcurrentOperations "$SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS" \
-  '{ref:$ref,quota:{maxSandboxes:$maxSandboxes,maxActiveInstances:$maxActiveInstances,maxCpuMillis:$maxCpuMillis,maxMemoryBytes:$maxMemoryBytes,maxSnapshots:$maxSnapshots,maxPortSessions:$maxPortSessions,maxConcurrentOperations:$maxConcurrentOperations},metadata:{harness:"scenario"}}')" >/dev/null
+  '{ref:$ref,quota:{maxSandboxes:$maxSandboxes,maxActiveInstances:$maxActiveInstances,maxVcpuCount:$maxVcpuCount,maxMemoryBytes:$maxMemoryBytes,maxSnapshots:$maxSnapshots,maxPortSessions:$maxPortSessions,maxConcurrentOperations:$maxConcurrentOperations},metadata:{harness:"scenario"}}')" >/dev/null
 
 application_response="$(scenario_management_post "$controller_token" /v1/application-authorities scenario-bootstrap-application "$(jq -cn \
   --arg subjectRef "$bootstrap_subject" \
