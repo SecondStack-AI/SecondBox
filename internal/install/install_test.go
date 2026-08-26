@@ -31,6 +31,44 @@ func validPlan(t *testing.T) InstallPlan {
 	return plan
 }
 
+// TestLegacyCapacitySpellingRoundTripsWithStableIdentity proves a plan whose
+// accepting release stated CPU in milli-units still decodes, keeps its exact
+// recorded spelling through re-encoding (so its digest and receipt identity
+// never move), and reads back as whole vCPUs through the accessors.
+func TestLegacyCapacitySpellingRoundTripsWithStableIdentity(t *testing.T) {
+	plan := validPlan(t)
+	plan.Capacity.MaxVCPUCount = 0
+	plan.Capacity.LegacyMaxCPUMillis = 32500
+	delete(plan.Capacity.SubjectQuotas, "maxVcpuCount")
+	plan.Capacity.SubjectQuotas["maxCpuMillis"] = 4500
+	encoded, err := Canonical(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodePlan(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reencoded, err := Canonical(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reencoded) != string(encoded) {
+		t.Fatal("legacy capacity spelling did not round-trip byte-for-byte")
+	}
+	if got := decoded.Capacity.VCPUCount(); got != 33 {
+		t.Fatalf("legacy capacity VCPUCount = %d, want 33 (32500 milli-units rounded up)", got)
+	}
+	if got := decoded.Capacity.SubjectQuotaVCPUCount(); got != 5 {
+		t.Fatalf("legacy subject quota vCPUs = %d, want 5 (4500 milli-units rounded up)", got)
+	}
+	conflicted := validPlan(t)
+	conflicted.Capacity.LegacyMaxCPUMillis = 1000
+	if err := conflicted.Validate(); err == nil {
+		t.Fatal("a plan stating both CPU spellings was accepted")
+	}
+}
+
 func TestStrictCanonicalPlanAndReceiptIdentity(t *testing.T) {
 	plan := validPlan(t)
 	if err := plan.Validate(); err != nil {

@@ -63,6 +63,33 @@ func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
 	if err := ValidateSingleHostUpdateSource(plan, release, releaseBytes, artifact); err != nil {
 		t.Fatal(err)
 	}
+	// A supported source release recorded the same assets with a per-asset
+	// signatureKeyId; that exact schema must validate as the same identity.
+	signedCatalog := struct {
+		Assets []signedSourceAsset `json:"assets"`
+	}{Assets: []signedSourceAsset{
+		signedComponentAsset(release.MicroVM.RuntimeBundle, keyID, release.GuestProtocol.Maximum),
+		signedComponentAsset(release.MicroVM.ToolchainBundle, keyID, release.GuestProtocol.Maximum),
+	}}
+	signedCatalogBytes, err := json.Marshal(signedCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, append(signedCatalogBytes, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSingleHostUpdateSource(plan, release, releaseBytes, artifact); err != nil {
+		t.Fatalf("signed source catalog schema was rejected: %v", err)
+	}
+	if err := os.WriteFile(catalogPath, []byte("{\"assets\":[]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSingleHostUpdateSource(plan, release, releaseBytes, artifact); err == nil {
+		t.Fatal("source catalog drift was accepted")
+	}
+	if err := os.WriteFile(catalogPath, append(catalogBytes, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(releasePath, []byte("drift\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

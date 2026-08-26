@@ -60,14 +60,50 @@ func ValidateSingleHostUpdateSource(plan install.InstallPlan, release releasecon
 	if err != nil {
 		return err
 	}
+	// Supported source releases from the clean-install boundary until the
+	// provider-neutral catalog recorded a signatureKeyId on every asset, so
+	// the source deployment is reconstructed in its own recorded schema too
+	// and either exact form proves the same release identity.
+	signedCatalog := struct {
+		Assets []signedSourceAsset `json:"assets"`
+	}{Assets: []signedSourceAsset{
+		signedComponentAsset(release.MicroVM.RuntimeBundle, artifact.SigningKeyID, release.GuestProtocol.Maximum),
+		signedComponentAsset(release.MicroVM.ToolchainBundle, artifact.SigningKeyID, release.GuestProtocol.Maximum),
+	}}
+	expectedSignedCatalog, err := json.Marshal(signedCatalog)
+	if err != nil {
+		return err
+	}
 	actualCatalog, err := readSingleHostPlannedFile(plan, "signed-asset-catalog")
-	if err != nil || !bytes.Equal(actualCatalog, append(expectedCatalog, '\n')) {
+	if err != nil || (!bytes.Equal(actualCatalog, append(expectedCatalog, '\n')) &&
+		!bytes.Equal(actualCatalog, append(expectedSignedCatalog, '\n'))) {
 		return manifestError("existing single-host signed-asset catalog differs from the verified release", err)
 	}
 	// The accepted plan/receipt ledger validates the active manifest's exact
 	// recorded bytes. Do not regenerate a source-era manifest with target-era
 	// code-owned policy, tuning, Compose assets, or Profile lineage here.
 	return nil
+}
+
+// signedSourceAsset reproduces the exact catalog schema written by source
+// releases that still recorded per-asset signing-key identity.
+type signedSourceAsset struct {
+	ArtifactID              string   `json:"artifactId"`
+	ManifestDigest          string   `json:"manifestDigest"`
+	SignatureKeyID          string   `json:"signatureKeyId"`
+	Architecture            string   `json:"architecture"`
+	GuestProtocolGeneration uint32   `json:"guestProtocolGeneration"`
+	MandatoryGuestFeatures  []string `json:"mandatoryGuestFeatures"`
+}
+
+func signedComponentAsset(component releasecontract.SignedComponent, keyID string, protocol uint32) signedSourceAsset {
+	asset := componentAsset(component, protocol)
+	return signedSourceAsset{
+		ArtifactID: asset.ArtifactID, ManifestDigest: asset.ManifestDigest,
+		SignatureKeyID: keyID, Architecture: asset.Architecture,
+		GuestProtocolGeneration: asset.GuestProtocolGeneration,
+		MandatoryGuestFeatures:  asset.MandatoryGuestFeatures,
+	}
 }
 
 func StageSingleHostUpdate(plan install.InstallPlan, update install.UpdateRecord, verified releaseverify.VerifiedRelease, artifact install.VerifiedArtifact) (StagedSingleHostUpdate, error) {

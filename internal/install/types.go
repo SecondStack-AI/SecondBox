@@ -195,9 +195,15 @@ type StoragePlan struct {
 	ImageSizeBytes         int64         `json:"imageSizeBytes,omitempty"`
 	MountUnitPath          string        `json:"mountUnitPath,omitempty"`
 }
+// CapacityPlan states the host's compute ceiling. Plan identity is the digest
+// of the exact recorded document, so a plan accepted by a release that stated
+// CPU in milli-units keeps that spelling on disk forever: LegacyMaxCPUMillis
+// round-trips it untouched and VCPUCount is the single read path that
+// normalizes either spelling to whole vCPUs. Exactly one spelling may be set.
 type CapacityPlan struct {
 	MaxSandboxes           int64            `json:"maxSandboxes"`
-	MaxVCPUCount           int64            `json:"maxVcpuCount"`
+	MaxVCPUCount           int64            `json:"maxVcpuCount,omitempty"`
+	LegacyMaxCPUMillis     int64            `json:"maxCpuMillis,omitempty"`
 	MaxMemoryBytes         int64            `json:"maxMemoryBytes"`
 	MaxWorkspaceBytes      int64            `json:"maxWorkspaceBytes"`
 	ConcurrentStarts       int64            `json:"concurrentStarts"`
@@ -205,6 +211,33 @@ type CapacityPlan struct {
 	StoragePressurePercent int64            `json:"storagePressurePercent"`
 	SubjectQuotas          map[string]int64 `json:"subjectQuotas"`
 }
+// VCPUCount reports the planned compute ceiling in whole vCPUs regardless of
+// which spelling the recorded plan used, rounding legacy milli-units up to
+// the whole vCPU that already covered the stated allowance.
+func (capacity CapacityPlan) VCPUCount() int64 {
+	if capacity.MaxVCPUCount > 0 {
+		return capacity.MaxVCPUCount
+	}
+	return ceilingVCPUs(capacity.LegacyMaxCPUMillis)
+}
+
+// SubjectQuotaVCPUCount reports the planned per-subject CPU quota in whole
+// vCPUs from either recorded spelling.
+func (capacity CapacityPlan) SubjectQuotaVCPUCount() int64 {
+	if value, recorded := capacity.SubjectQuotas["maxVcpuCount"]; recorded {
+		return value
+	}
+	return ceilingVCPUs(capacity.SubjectQuotas["maxCpuMillis"])
+}
+
+func ceilingVCPUs(milliUnits int64) int64 {
+	vcpus := milliUnits / 1000
+	if milliUnits%1000 > 0 {
+		vcpus++
+	}
+	return vcpus
+}
+
 type ComputePlan struct {
 	FirecrackerCPUTemplate string `json:"firecrackerCpuTemplate"`
 }
