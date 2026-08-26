@@ -116,12 +116,16 @@ spec:
       securityContext:
         privileged: true
       resources:
+        # Sized so both scenario runner pods - the primary and the
+        # relocation target - co-schedule on the 8-vCPU / 8-GiB
+        # qualification node beside the system pods; the scenario sandbox
+        # budget (2 vCPU / 2 GiB) nests comfortably inside.
         requests:
-          cpu: "4"
-          memory: 4Gi
+          cpu: "3"
+          memory: 3Gi
         limits:
-          cpu: "4"
-          memory: 4Gi
+          cpu: "3"
+          memory: 3Gi
       ports:
         - containerPort: $service_port
           hostPort: $service_port

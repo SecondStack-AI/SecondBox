@@ -215,8 +215,20 @@ func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
 			default:
 				continue
 			}
-			listing, listErr := exec.CommandContext(ctx, "nft", "list", "table", family, name).Output()
-			if listErr != nil || !strings.Contains(string(listing), `"`+vethPrefix) {
+			listing, listErr := exec.CommandContext(ctx, "nft", "list", "table", family, name).CombinedOutput()
+			if listErr != nil {
+				// The table was enumerated a moment ago; only its
+				// disappearance in between is tolerable. Any other
+				// inspection failure could leave stale policy attached to a
+				// reusable veth name behind a passing readiness.
+				if strings.Contains(string(listing), "No such file") {
+					continue
+				}
+				joined = errors.Join(joined, fmt.Errorf("inspect policy table %s %s: %w: %s",
+					family, name, listErr, bytes.TrimSpace(listing)))
+				continue
+			}
+			if !strings.Contains(string(listing), `"`+vethPrefix) {
 				continue
 			}
 			if deleteOutput, deleteErr := exec.CommandContext(ctx, "nft", "delete", "table", family, name).CombinedOutput(); deleteErr != nil &&

@@ -112,6 +112,12 @@ export SECONDBOX_GVISOR_MAXIMUM_OPERATIONS=32
 export SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 ```
 
+DNS resolution is IPv4-only end to end: automatic resolver discovery reads only IPv4
+nameservers from the host (an IPv6-only resolver leaves the runner unready), the
+`SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM` override accepts a literal IPv4 address and
+port (`10.0.0.53:53`) - never a hostname - and Sandbox egress carries no IPv6 route, so
+IPv6-only destinations are unreachable regardless of policy.
+
 `SECONDBOX_GVISOR_NETWORK_PROFILE` separates runners sharing one host network namespace: each
 profile selects its own DNS proxy address, link-local slot space, and veth and namespace names.
 It must be set explicitly - there is no default - and a single runner per host states `0`. Valid profiles are `0`-`15`, every
@@ -275,9 +281,11 @@ remains operator-authored and unqualified.
   docker rm "$container"
   sha256sum bin/runsc bin/secondbox-guest-agent
   ```
-- The data plane is proxied through the control plane by default in clusters. The only
-  qualified direct-transport option is the manifest's hostPort entry, which exposes the
-  runner's data-plane listener on its node; remove it to stay proxied-only.
+- The data plane is proxied through the control plane by default in clusters, and the
+  reference manifest publishes no port. The only qualified direct-transport option is adding
+  a `ports` entry to the runner container - `ports: [{containerPort: 9500, hostPort: 9500}]`
+  - and changing `SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS` from the loopback default
+  to a node address routable by data-plane clients; omit both to stay proxied-only.
 
 ## Qualification before enrollment
 

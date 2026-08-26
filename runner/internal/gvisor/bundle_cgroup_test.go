@@ -3,6 +3,7 @@
 package gvisor
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -60,5 +61,43 @@ func TestRemoveCgroupDirectoryClearsDiscoveredNamesLiterally(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale directory survived: %v", err)
+	}
+}
+
+// TestInstanceBundleRendersPidCeiling proves every Instance spec carries the
+// backend-owned host PID ceiling: without it a guest fork bomb could exhaust
+// the pod or host process budget while ResourceLimitsReady is advertised.
+func TestInstanceBundleRendersPidCeiling(t *testing.T) {
+	dir := t.TempDir()
+	bundle := instanceBundle{
+		BundleDir: dir, FlatRootPath: filepath.Join(dir, "rootfs"),
+		AgentBinaryPath: filepath.Join(dir, "agent"), WorkspaceMountpoint: filepath.Join(dir, "mnt"),
+		SocketDirectory: filepath.Join(dir, "sockets"), RuntimePrivateDir: filepath.Join(dir, "private"),
+		InstanceID: "ins_1", SandboxID: "sbx_1", SandboxGeneration: 1,
+		GuestBuildID: "build", ImageDigest: "sha256:a", ToolchainDigest: "sha256:b",
+		VCPUCount: 4, MemoryBytes: 1 << 30, CgroupsPath: "/x/y",
+		NetworkNamespacePath: filepath.Join(dir, "netns"), ResolvConfPath: filepath.Join(dir, "resolv.conf"),
+	}
+	if err := writeInstanceBundle(bundle); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Linux struct {
+			Resources struct {
+				Pids *struct {
+					Limit int64 `json:"limit"`
+				} `json:"pids"`
+			} `json:"resources"`
+		} `json:"linux"`
+	}
+	if err := json.Unmarshal(spec, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Linux.Resources.Pids == nil || decoded.Linux.Resources.Pids.Limit != instancePidCeiling(4) {
+		t.Fatalf("rendered pids limit = %+v, want %d", decoded.Linux.Resources.Pids, instancePidCeiling(4))
 	}
 }

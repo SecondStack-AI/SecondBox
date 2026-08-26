@@ -64,8 +64,8 @@ func probeCgroupControls(profile uint32) error {
 	// and memory.max; enable them down the runner-owned branch before the
 	// probe child exists, exactly as sandbox creation requires.
 	for _, ancestor := range []string{base, branch} {
-		if err := os.WriteFile(filepath.Join(ancestor, "cgroup.subtree_control"), []byte("+cpu +memory\n"), 0o644); err != nil {
-			return fmt.Errorf("enable cpu and memory controllers on %s: %w", ancestor, err)
+		if err := os.WriteFile(filepath.Join(ancestor, "cgroup.subtree_control"), []byte("+cpu +memory +pids\n"), 0o644); err != nil {
+			return fmt.Errorf("enable cpu, memory, and pids controllers on %s: %w", ancestor, err)
 		}
 	}
 	if err := os.MkdirAll(probe, 0o755); err != nil {
@@ -75,6 +75,7 @@ func probeCgroupControls(profile uint32) error {
 	for control, value := range map[string]string{
 		"cpu.max":    "max 100000",
 		"memory.max": "max",
+		"pids.max":   "max",
 	} {
 		if err := os.WriteFile(filepath.Join(probe, control), []byte(value+"\n"), 0o644); err != nil {
 			return fmt.Errorf("write probe %s: %w", control, err)

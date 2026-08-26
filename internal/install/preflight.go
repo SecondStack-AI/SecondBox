@@ -570,7 +570,22 @@ func preflightNetwork(ctx context.Context, p PreflightProbes, f *HostFacts, add 
 			}
 		}
 	}
-	if len(f.DNSUpstreams) == 0 {
+	if p.Backend == "gvisor" {
+		// The gVisor runner's automatic resolver discovery accepts only
+		// IPv4 nameservers, so an IPv6-only host would pass a generic
+		// upstream check and then fail runner startup.
+		ipv4 := make([]string, 0, len(f.DNSUpstreams))
+		for _, upstream := range f.DNSUpstreams {
+			if address := net.ParseIP(upstream); address != nil && address.To4() != nil {
+				ipv4 = append(ipv4, upstream)
+			}
+		}
+		if len(ipv4) == 0 {
+			add("dns_upstream", FindingNeedsAction, "No IPv4 DNS upstream was observed", errorText(resolvErr), "Configure an IPv4 resolver, or set SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM to an explicit IPv4 address and port.")
+		} else {
+			add("dns_upstream", FindingPass, "IPv4 DNS upstream observed", strings.Join(ipv4, ","), "")
+		}
+	} else if len(f.DNSUpstreams) == 0 {
 		add("dns_upstream", FindingNeedsAction, "No non-loopback DNS upstream was observed", errorText(resolvErr), "Configure a non-loopback DNS upstream for microVM networking.")
 	} else {
 		add("dns_upstream", FindingPass, "Non-loopback DNS upstream observed", strings.Join(f.DNSUpstreams, ","), "")

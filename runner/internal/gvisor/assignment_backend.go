@@ -63,7 +63,21 @@ type activeAssignment struct {
 	computeOutcome string
 	statusDrained  chan struct{}
 	computeCode    string
+	waitErr        error
 	evidenceErr    error
+}
+
+// supervisorExitError reports the reaped supervisor's exit result without
+// blocking; it is meaningful only after done has closed.
+func (active *activeAssignment) supervisorExitError() error {
+	select {
+	case <-active.done:
+		active.exitMu.Lock()
+		defer active.exitMu.Unlock()
+		return active.waitErr
+	default:
+		return nil
+	}
 }
 
 // AssignmentBackend composes one mount supervisor and runsc sandbox per
@@ -197,6 +211,11 @@ func resolveDNSUpstream(override string) (netip.AddrPort, error) {
 		upstream, err := netip.ParseAddrPort(override)
 		if err != nil {
 			return netip.AddrPort{}, fmt.Errorf("SecondBox gVisor DNS upstream override is invalid: %w", err)
+		}
+		if !upstream.Addr().Is4() {
+			// Guest DNS admission and egress are IPv4-only; a non-IPv4
+			// override would pass startup and fail every resolution.
+			return netip.AddrPort{}, fmt.Errorf("SecondBox gVisor DNS upstream override must be an IPv4 address and port")
 		}
 		return upstream, nil
 	}
@@ -593,12 +612,26 @@ func (backend *AssignmentBackend) StartAssignment(
 	// launch gate so replay waiters observe success only after READY
 	// succeeds, and it inherits any fencing intent recorded on the claim.
 	backend.mu.Lock()
+	fencedDuringLaunch := claim.fenced
 	active.fenced = claim.fenced
 	active.launched = claim.launched
 	backend.assignments[assignment.Fence.AssignmentId] = active
 	backend.startupSamples = append(backend.startupSamples, time.Since(started))
 	backend.mu.Unlock()
 	go backend.observeExit(active)
+	if fencedDuringLaunch {
+		// A fence recorded its intent while this launch was in flight; the
+		// awaiting fence must win. Aborting before READY tears the compute
+		// down through the pushed cleanup, the claim settles empty, and the
+		// fence reports ALREADY_STOPPED - never STOPPED racing a READY
+		// success.
+		backend.mu.Lock()
+		if backend.assignments[assignment.Fence.AssignmentId] == active {
+			delete(backend.assignments, assignment.Fence.AssignmentId)
+		}
+		backend.mu.Unlock()
+		return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment was fenced during launch"))
+	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
 		backend.mu.Lock()
 		if backend.assignments[assignment.Fence.AssignmentId] == active {
@@ -697,7 +730,10 @@ func (backend *AssignmentBackend) launchInstance(
 		done:          make(chan struct{}),
 	}
 	go func() {
-		_ = handles.Command.Wait()
+		waitErr := handles.Command.Wait()
+		active.exitMu.Lock()
+		active.waitErr = waitErr
+		active.exitMu.Unlock()
 		close(active.done)
 	}()
 
@@ -1052,7 +1088,9 @@ func (backend *AssignmentBackend) FenceAssignment(
 			return false
 		}
 	}
+	escalated := false
 	if !waitDone(time.Until(deadline)) {
+		escalated = true
 		_, _ = active.handles.Control.Write([]byte{controlKill})
 		_ = active.handles.Control.Close()
 		if !waitDone(supervisorStopBound) {
@@ -1070,6 +1108,16 @@ func (backend *AssignmentBackend) FenceAssignment(
 		}
 	}
 	awaitStatusDrain(active)
+	if !escalated {
+		// A gracefully terminated supervisor exits nonzero exactly when its
+		// own teardown - final sync, unmount, or loop detachment - failed;
+		// concealing that would report STOPPED success over possibly
+		// unflushed data. Escalated kills are expected to exit nonzero and
+		// carry no such signal.
+		if exitErr := active.supervisorExitError(); exitErr != nil {
+			err = errors.Join(err, fmt.Errorf("supervisor teardown reported failure: %w", exitErr))
+		}
+	}
 	err = errors.Join(err, active.handles.CloseParentSide(), active.workspace.Close(),
 		backend.teardownInstanceNetwork(active.fence.InstanceId, active.network),
 		removeInstanceCgroup(backend.config.NetworkProfile, active.fence.InstanceId), os.RemoveAll(active.instanceDir))

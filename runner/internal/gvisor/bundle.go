@@ -73,6 +73,11 @@ type ociNamespace struct {
 type ociResources struct {
 	CPU    *ociCPU    `json:"cpu,omitempty"`
 	Memory *ociMemory `json:"memory,omitempty"`
+	Pids   *ociPids   `json:"pids,omitempty"`
+}
+
+type ociPids struct {
+	Limit int64 `json:"limit"`
 }
 
 type ociCPU struct {
@@ -107,6 +112,17 @@ type instanceBundle struct {
 }
 
 const cgroupCPUPeriodMicros = 100_000
+
+// instancePidCeiling bounds the sandbox cgroup's host tasks. Guest process
+// counts are not host PIDs - the sentry multiplexes guest tasks - but the
+// sandbox tree (supervisor, runsc, gofer, per-vCPU systrap workers, and both
+// Go runtimes' thread pools) must not be able to exhaust the pod or host
+// process budget through unbounded thread growth. The headroom covers the
+// fixed processes and runtime pools; the per-vCPU term covers the platform
+// workers and syscall-blocked runtime threads that scale with compute.
+func instancePidCeiling(vcpus uint32) int64 {
+	return 384 + 32*int64(vcpus)
+}
 
 // sandboxCgroupParent resolves where per-Instance cgroups nest: the nearest
 // ancestor of the runner's own cgroup-v2 path that already delegates the cpu
@@ -285,6 +301,7 @@ func writeInstanceBundle(bundle instanceBundle) error {
 					Period: cgroupCPUPeriodMicros,
 				},
 				Memory: &ociMemory{Limit: int64(bundle.MemoryBytes)},
+				Pids:   &ociPids{Limit: instancePidCeiling(bundle.VCPUCount)},
 			},
 		},
 	}
