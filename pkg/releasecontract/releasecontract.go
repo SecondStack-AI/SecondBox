@@ -81,6 +81,7 @@ type QualificationFilesystemEvidence struct {
 }
 
 type QualificationHostEvidence struct {
+	Platform            string                          `json:"platform"`
 	KVM                 QualificationDeviceEvidence     `json:"kvm"`
 	TUN                 QualificationDeviceEvidence     `json:"tun"`
 	WorkspaceFilesystem QualificationFilesystemEvidence `json:"workspaceFilesystem"`
@@ -332,6 +333,9 @@ func (evidence QualificationEvidence) Validate() error {
 }
 
 func validateQualificationHost(label string, host QualificationHostEvidence) error {
+	if host.Platform != "linux-amd64" {
+		return contractError("%s evidence host platform must be linux-amd64", label)
+	}
 	for name, device := range map[string]QualificationDeviceEvidence{"KVM": host.KVM, "TUN": host.TUN} {
 		wantPath := "/dev/" + strings.ToLower(name)
 		if name == "TUN" {

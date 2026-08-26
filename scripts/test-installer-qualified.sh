@@ -61,7 +61,7 @@ jq -n \
   --arg workspaceType "$workspace_type" \
   --argjson passCount "$pass_count" \
   --argjson wallClockSeconds "$((finished-started))" \
-  '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:$passCount,wallClockSeconds:$wallClockSeconds,host:{kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:$workspaceMount,type:$workspaceType}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:$filesystemIdentity,rebootPassed:true,qualifiedAt:$qualifiedAt}' >"$evidence"
+  '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:$passCount,wallClockSeconds:$wallClockSeconds,host:{platform:"linux-amd64",kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:$workspaceMount,type:$workspaceType}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:$filesystemIdentity,rebootPassed:true,qualifiedAt:$qualifiedAt}' >"$evidence"
 rm -rf "$temporary"
 trap - ERR INT TERM
 echo "SecondBox installer qualification passed: $evidence"
