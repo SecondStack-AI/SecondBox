@@ -313,6 +313,9 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
 		defer backend.mu.Unlock()
 		if sameFence(active.fence, assignment.Fence) {
+			if active.fenced {
+				return infrastructureAssignment(fmt.Errorf("SecondBox Microsandbox replayed assignment is being fenced"))
+			}
 			return nil
 		}
 		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment ID was reused with different fencing"))
@@ -390,6 +393,10 @@ func (backend *AssignmentBackend) StartAssignment(
 			backend.mu.Unlock()
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment ID was reused with different fencing"))
 		}
+		if existing.fenced {
+			backend.mu.Unlock()
+			return result, infrastructureAssignment(fmt.Errorf("SecondBox Microsandbox replayed assignment is being fenced"))
+		}
 		pendingLaunch := existing.launched
 		reference := existing.backendRef
 		backend.mu.Unlock()
@@ -401,7 +408,8 @@ func (backend *AssignmentBackend) StartAssignment(
 			}
 			backend.mu.Lock()
 			reference = ""
-			if current, still := backend.assignments[assignmentID]; still && sameFence(current.fence, assignment.Fence) {
+			if current, still := backend.assignments[assignmentID]; still &&
+				sameFence(current.fence, assignment.Fence) && !current.fenced {
 				reference = current.backendRef
 			}
 			backend.mu.Unlock()
@@ -499,20 +507,17 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := backend.emitLifecycle(ctx, active, "ready", "control:1", "completed", "ready"); err != nil {
 		return result, infrastructureAssignment(err)
 	}
+	// The claim stays in the map until every fallible startup step has
+	// succeeded: a replay can never observe the active entry (and return
+	// success) while READY can still fail and remove the assignment.
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
+		return result, err
+	}
 	backend.mu.Lock()
 	backend.assignments[assignment.Fence.AssignmentId] = active
 	backend.startupSamples = append(backend.startupSamples, time.Since(started))
 	backend.mu.Unlock()
-	// The deferred launchDone wakes replay waiters only after the remaining
-	// fallible startup steps: a failure below removes the assignment before
-	// any replay can observe success.
 	go backend.observeExit(active)
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
-		backend.mu.Lock()
-		delete(backend.assignments, assignment.Fence.AssignmentId)
-		backend.mu.Unlock()
-		return result, err
-	}
 	cleanup.clear()
 	return runnercontrol.BackendInstance{BackendKind: "microsandbox", BackendReference: active.backendRef}, nil
 }

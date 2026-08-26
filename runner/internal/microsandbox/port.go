@@ -230,6 +230,9 @@ func (connection *helperPortConnection) Close() error {
 	connection.closeOnce.Do(func() {
 		connection.closed.Store(true)
 		connection.writeGate <- struct{}{}
+		// A full socket or interrupted prior frame must not hang fencing:
+		// the cancel frame and terminal drain run under bounded deadlines.
+		_ = connection.process.control.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		sequence := connection.nextSequence
 		connection.nextSequence++
 		err := microsandboxprotocol.WriteFrame(connection.process.control, &microsandboxprotocol.Envelope{

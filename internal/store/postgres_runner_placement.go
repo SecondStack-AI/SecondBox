@@ -291,14 +291,14 @@ func decodeArtifactCacheEvidence(cacheJSON []byte) ([]placementMaterialization, 
 	var materializations []placementMaterialization
 	if digests, exists := raw["artifactDigests"]; exists {
 		var decoded []string
-		if err := json.Unmarshal(digests, &decoded); err != nil {
-			return nil, fmt.Errorf("artifact cache digest evidence is malformed: %w", err)
+		if err := json.Unmarshal(digests, &decoded); err != nil || decoded == nil {
+			return nil, fmt.Errorf("artifact cache digest evidence must be an array: %w", err)
 		}
 		recognized = true
 	}
 	if entries, exists := raw["materializations"]; exists {
-		if err := json.Unmarshal(entries, &materializations); err != nil {
-			return nil, fmt.Errorf("artifact cache materialization evidence is malformed: %w", err)
+		if err := json.Unmarshal(entries, &materializations); err != nil || materializations == nil {
+			return nil, fmt.Errorf("artifact cache materialization evidence must be an array: %w", err)
 		}
 		recognized = true
 	}

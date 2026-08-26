@@ -540,10 +540,12 @@ func TestScanRunnerPlacementCandidateSeparatesLegacyFromMalformedCache(t *testin
 		t.Fatalf("legacy cache candidate = %#v, %v", legacy, err)
 	}
 	for name, malformed := range map[string]string{
-		"wrong field type":    `{"materializations":"corrupt"}`,
-		"null evidence":       `null`,
-		"empty object":        `{}`,
-		"unknown fields only": `{"somethingElse":[]}`,
+		"wrong field type":      `{"materializations":"corrupt"}`,
+		"null evidence":         `null`,
+		"empty object":          `{}`,
+		"unknown fields only":   `{"somethingElse":[]}`,
+		"null materializations": `{"materializations":null}`,
+		"null digests":          `{"artifactDigests":null}`,
 	} {
 		if _, err := scanRunnerPlacementCandidate(placementScanFixture{cacheJSON: malformed}, "test", false); err == nil ||
 			!strings.Contains(err.Error(), "artifact cache") {
