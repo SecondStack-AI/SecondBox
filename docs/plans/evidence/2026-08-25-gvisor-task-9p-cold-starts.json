@@ -1,65 +1,65 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "697a6ea60ffb6466266a6e0b5de4e569572a63c7",
-  "completedAt": "2026-08-26T04:05:44.862896512Z",
+  "sourceCommit": "9aacd8d738e1d16a141614c5026443a91e543748",
+  "completedAt": "2026-08-26T04:36:20.619028336Z",
   "backendVersion": "runsc-release-20260817.0",
   "hostPlatform": "linux-x86_64",
   "materializationDigest": "sha256:6ba6deda93b10023f4fd672890f45fcc8e36fe72ee98e9bb9b9f1b87ed2ca3f3",
   "samples": 30,
   "startToReadyMilliseconds": {
     "samples": 30,
-    "p50": 408.728,
-    "p95": 481.725,
-    "max": 499.714
+    "p50": 404.306,
+    "p95": 478.856,
+    "max": 490.27
   },
   "bootStages": [
     {
       "stage": "artifact_verify",
       "samples": 30,
-      "p50Milliseconds": 130.42,
-      "p95Milliseconds": 134.835
+      "p50Milliseconds": 131.247,
+      "p95Milliseconds": 132.995
     },
     {
       "stage": "compute_launch",
       "samples": 30,
-      "p50Milliseconds": 0.037,
-      "p95Milliseconds": 0.046
+      "p50Milliseconds": 0.036,
+      "p95Milliseconds": 0.044
     },
     {
       "stage": "guest_negotiation",
       "samples": 30,
-      "p50Milliseconds": 119.956,
-      "p95Milliseconds": 160.125
+      "p50Milliseconds": 115.958,
+      "p95Milliseconds": 165.717
     },
     {
       "stage": "network_setup",
       "samples": 30,
-      "p50Milliseconds": 46.761,
-      "p95Milliseconds": 56.245
+      "p50Milliseconds": 47.596,
+      "p95Milliseconds": 62.96
     },
     {
       "stage": "ready",
       "samples": 30,
-      "p50Milliseconds": 88.764,
-      "p95Milliseconds": 136.658
+      "p50Milliseconds": 87.892,
+      "p95Milliseconds": 143.198
     },
     {
       "stage": "runner_admission",
       "samples": 30,
-      "p50Milliseconds": 18.705,
-      "p95Milliseconds": 50.985
+      "p50Milliseconds": 18.837,
+      "p95Milliseconds": 32.051
     },
     {
       "stage": "workspace_attach",
       "samples": 30,
-      "p50Milliseconds": 0.146,
-      "p95Milliseconds": 0.195
+      "p50Milliseconds": 0.154,
+      "p95Milliseconds": 0.217
     }
   ],
   "peakHelperRssKiB": {
     "samples": 30,
-    "p50": 12772,
-    "p95": 14196,
-    "max": 14204
+    "p50": 12500,
+    "p95": 14260,
+    "max": 14272
   }
 }
