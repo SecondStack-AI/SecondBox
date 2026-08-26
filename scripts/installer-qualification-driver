@@ -57,7 +57,7 @@ repository_base_image_sha256="$("$repo_root/scripts/prepare-installer-qualificat
 [[ "$base_image_sha256" == "$repository_base_image_sha256" ]] || { echo 'qualification base image SHA-256 differs from the repository pin' >&2; exit 1; }
 printf '%s  %s\n' "$base_image_sha256" "$base_image" | sha256sum --check --status || { echo 'qualification base image digest mismatch' >&2; exit 1; }
 
-for command in virsh virt-install qemu-img cloud-localds ssh scp ssh-keygen jq sha256sum findmnt openssl python3 getent setfacl; do
+for command in virsh virt-install qemu-img cloud-localds ssh scp ssh-keygen jq sha256sum findmnt openssl python3 getent setfacl git patch tar go; do
   command -v "$command" >/dev/null || { echo "qualification host command is absent: $command" >&2; exit 1; }
 done
 [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || { echo 'qualification requires accessible /dev/kvm' >&2; exit 1; }
@@ -200,6 +200,22 @@ manifest="${manifests[0]}"
 jq -e '.candidate == true and .schemaVersion == "secondbox.release/artifact-manifest/v5"' "$manifest" >/dev/null || { echo 'qualification requires a v5 candidate artifact manifest' >&2; exit 1; }
 release_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$manifest")"
 candidate_manifest_digest="sha256:$(sha256sum "$manifest" | awk '{print $1}')"
+
+# v0.6.0 was published with an explicit, immutable installer-qualification
+# waiver after two modes passed. Its own deploy binary therefore cannot verify
+# its final manifest. Build a qualification-only adapter from the exact v0.6.0
+# source plus the repository-reviewed narrow waiver patch; the adapter still
+# fetches and installs every public v0.6.0 release object by its recorded digest.
+v060_source_commit='92e409ddade89737afa75ec2b781dac5c8afbeab'
+v060_source="$resource_root/v060-source"
+v060_adapter="$resource_root/secondbox-deploy-v0.6.0-recorded-waiver"
+mkdir "$v060_source"
+git -C "$repo_root" archive "$v060_source_commit" | tar -x -C "$v060_source"
+patch --directory "$v060_source" --strip 1 --input "$repo_root/tests/installer/v060-recorded-waiver.patch" >/dev/null
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go -C "$v060_source" build -trimpath -buildvcs=false \
+  -ldflags "-s -w -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.Version=0.6.0 -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.SourceCommit=$v060_source_commit" \
+  -o "$v060_adapter" ./cmd/secondbox-deploy
+jq -e --arg commit "$v060_source_commit" '.version == "0.6.0" and .sourceCommit == $commit' <("$v060_adapter" --output json version) >/dev/null
 
 ssh-keygen -q -t ed25519 -N '' -f "$resource_root/id_ed25519"
 public_key="$(<"$resource_root/id_ed25519.pub")"
@@ -368,12 +384,16 @@ EOF
   guest_ssh "secondbox@$address" 'sudo install -d -m 0755 /opt/secondbox-qualification && sudo chown secondbox:secondbox /opt/secondbox-qualification'
   run_interruptible guest_scp -r "$release_directory" "secondbox@$address:/opt/secondbox-qualification/release" >/dev/null
   guest_scp "$repo_root/tests/installer/qualified-guest.sh" "secondbox@$address:/opt/secondbox-qualification/qualified-guest.sh" >/dev/null
+  if [[ "$mode" == existing_reflink_update ]]; then
+    guest_scp "$v060_adapter" "secondbox@$address:/opt/secondbox-qualification/secondbox-deploy-v0.6.0-recorded-waiver" >/dev/null
+    guest_ssh "secondbox@$address" chmod 0755 /opt/secondbox-qualification/secondbox-deploy-v0.6.0-recorded-waiver
+  fi
   guest_ssh "secondbox@$address" chmod 0755 /opt/secondbox-qualification/qualified-guest.sh
-  run_interruptible guest_ssh "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh install "$mode" /opt/secondbox-qualification/release
+  run_interruptible guest_ssh "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh install "$mode" /opt/secondbox-qualification/release /opt/secondbox-qualification/secondbox-deploy-v0.6.0-recorded-waiver
   old_boot="$(guest_ssh "secondbox@$address" cat /proc/sys/kernel/random/boot_id)"
   virsh -c "$connection" reboot "$domain" >/dev/null
   wait_for_boot_change "$address" "$old_boot"
-  run_interruptible guest_ssh "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh verify "$mode" /opt/secondbox-qualification/release
+  run_interruptible guest_ssh "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh verify "$mode" /opt/secondbox-qualification/release /opt/secondbox-qualification/secondbox-deploy-v0.6.0-recorded-waiver
   run_interruptible guest_scp "secondbox@$address:/opt/secondbox-qualification/evidence-${mode}.json" "$guest_root/evidence.json" >/dev/null
   jq -e --arg mode "$mode" --arg manifestDigest "$candidate_manifest_digest" '.passed == true and .mode == $mode and .candidateManifestDigest == $manifestDigest and (.filesystemIdentity | length > 0)' "$guest_root/evidence.json" >/dev/null
   virsh -c "$connection" destroy "$domain" >/dev/null

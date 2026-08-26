@@ -19,9 +19,14 @@ trap 'report_qualified_guest_failure "$LINENO"' ERR
 phase="${1:-}"
 mode="${2:-}"
 release_directory="${3:-}"
+v060_adapter="${4:-}"
 [[ "$phase" == install || "$phase" == verify ]] || { echo 'qualified guest phase must be install or verify' >&2; exit 2; }
 [[ "$mode" == btrfs_image || "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_update ]] || { echo 'qualified guest mode is invalid' >&2; exit 2; }
 [[ "$release_directory" == /* && -d "$release_directory" && ! -L "$release_directory" ]] || { echo 'qualified guest release directory is unsafe' >&2; exit 1; }
+if [[ "$mode" == existing_reflink_update ]]; then
+  [[ "$v060_adapter" == /* && -f "$v060_adapter" && ! -L "$v060_adapter" && -x "$v060_adapter" ]] || { echo 'qualified guest requires the v0.6.0 recorded-waiver adapter' >&2; exit 1; }
+  jq -e '.version == "0.6.0" and .sourceCommit == "92e409ddade89737afa75ec2b781dac5c8afbeab"' <("$v060_adapter" --output json version) >/dev/null
+fi
 
 qualification_root="$HOME/.secondbox-installer-qualification"
 state="$qualification_root/state-${mode}.json"
@@ -188,7 +193,11 @@ if [[ "$phase" == install ]]; then
     printf '%s  %s\n' "$source_binary_digest" "$source_deploy" | sha256sum --check --status
     chmod 0755 "$source_deploy"
     install_log="$qualification_root/install-source-${mode}.log"
-    printf '1\ny\n1\ny\ny\n' | "$source_deploy" --accessible install >"$install_log" 2>&1
+    # The exact public binary is downloaded and digest-checked above. The
+    # qualification-only adapter is the same tagged source with only the
+    # published waiver recognition patch, allowing it to install the otherwise
+    # immutable public v0.6.0 release and establish a real update source.
+    printf '1\ny\n1\ny\ny\n' | "$v060_adapter" --accessible install >"$install_log" 2>&1
     operation="$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)"
     [[ -n "$operation" && -f "$operation/install-plan.json" && -f "$operation/install-receipt.json" ]] || { echo 'qualified source installation is absent' >&2; exit 1; }
     plan="$operation/install-plan.json"

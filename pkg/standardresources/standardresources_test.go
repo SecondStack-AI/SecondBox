@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
+	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
 func TestRecordedBundleAcceptsImmutablePrefixAfterPolicyAppends(t *testing.T) {
@@ -30,6 +31,45 @@ func TestRecordedBundleAcceptsImmutablePrefixAfterPolicyAppends(t *testing.T) {
 	}
 	if len(recorded.Profile.Revisions) != 1 || recorded.Profile.Revisions[0].SpecDigest != document.Profile.Revisions[0].SpecDigest {
 		t.Fatalf("recorded lineage = %#v", recorded.Profile.Revisions)
+	}
+}
+
+func TestRecordedBundleAuthenticatesLegacyCPUAndProcessFields(t *testing.T) {
+	legacySpec := legacyRecordedProfileRevisionSpec{
+		Pool: PoolAMD64, Architecture: ArchitectureAMD64,
+		RuntimeBundleDigest: v030RuntimeBundleDigest, ToolchainBundleDigest: v030ToolchainBundleDigest,
+		Resources: legacyRecordedResourcePolicy{CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 2 << 30, ProcessLimit: 64, ConcurrentOperations: 4},
+		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
+		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 10, IdleSeconds: 60, MaximumDurationSeconds: 900, LeaseSeconds: 60},
+		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 0, SnapshotRetentionSeconds: 3600},
+		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: 120000, MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 64 << 10, MaximumTransferBytes: 256 << 20, DataPlaneTransport: "proxied"},
+		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: AgentGateway, Port: 443}}},
+		Ports:     []secondboxclient.PortPolicy{},
+	}
+	rawSpec, err := json.Marshal(legacySpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := recordedProfileSpecIdentity(rawSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := RecordedBundleDocument{
+		SchemaVersion: BundleSchemaVersion, Name: AgentCompartment, Architecture: ArchitectureAMD64,
+		RunnerPoolSelector: PoolAMD64, LogicalGateway: AgentGateway,
+		SignedManifestDigest: "sha256:" + strings.Repeat("a", 64), RuntimeBundleDigest: v030RuntimeBundleDigest, ToolchainBundleDigest: v030ToolchainBundleDigest,
+		Profile:         RecordedProfile{Name: AgentCompartment, Revisions: []RecordedProfileRevision{{Number: 1, SpecDigest: digest, Spec: rawSpec}}},
+		ParameterSchema: json.RawMessage(`{"type":"object"}`),
+	}
+	content, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeDocument(content); err == nil || !strings.Contains(err.Error(), "cpuMillis") {
+		t.Fatalf("current decoder accepted legacy resources: %v", err)
+	}
+	if _, err := DecodeRecordedDocument(content); err != nil {
+		t.Fatal(err)
 	}
 }
 

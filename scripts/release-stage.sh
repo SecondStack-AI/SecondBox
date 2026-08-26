@@ -26,10 +26,10 @@ done
 version="$1"
 output_dir="$2"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-qualification_evidence_schema="secondbox.release/qualification-evidence/v1"
+qualification_evidence_schema="secondbox.release/qualification-evidence/v2"
 qualification_evidence_source="$repo_root/.tmp/scenario-qualification-evidence.json"
 qualification_evidence_name="secondbox-${version}-qualification-evidence.json"
-installer_qualification_evidence_schema="secondbox.release/installer-qualification-evidence/v1"
+installer_qualification_evidence_schema="secondbox.release/installer-qualification-evidence/v2"
 installer_qualification_evidence_source="$repo_root/.tmp/installer-qualification-evidence.json"
 installer_qualification_evidence_name="secondbox-${version}-installer-qualification-evidence.json"
 

@@ -194,16 +194,26 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 	}
 	if !manifest.Candidate {
 		installerEvidenceData := verifiedObjects[manifest.InstallerQualificationEvidence.Location]
-		installerEvidence, err := releasecontract.DecodeInstallerQualificationEvidence(installerEvidenceData)
-		if err != nil {
-			return err
-		}
 		qualificationSubject, err := manifest.InstallerQualificationSubjectDigest()
 		if err != nil {
 			return err
 		}
-		if err := installerEvidence.ValidateForRelease(manifest.SourceCommit, qualificationSubject); err != nil {
-			return err
+		if recorded {
+			installerEvidence, err := releasecontract.DecodeRecordedInstallerQualificationEvidence(installerEvidenceData)
+			if err != nil {
+				return err
+			}
+			if err := installerEvidence.ValidateRecordedForRelease(manifest.SourceCommit, qualificationSubject); err != nil {
+				return err
+			}
+		} else {
+			installerEvidence, err := releasecontract.DecodeInstallerQualificationEvidence(installerEvidenceData)
+			if err != nil {
+				return err
+			}
+			if err := installerEvidence.ValidateForRelease(manifest.SourceCommit, qualificationSubject); err != nil {
+				return err
+			}
 		}
 	}
 	for _, binary := range manifest.Binaries {
@@ -220,24 +230,43 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 		if err != nil {
 			return err
 		}
-		var document standardresources.BundleDocument
+		var documentName, profileName, signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest string
+		var profileNumbers []int64
+		var profileDigests []string
 		if recorded {
-			document, err = standardresources.DecodeRecordedDocument(data)
+			document, decodeErr := standardresources.DecodeRecordedDocument(data)
+			err = decodeErr
+			if err == nil {
+				documentName, profileName = document.Name, document.Profile.Name
+				signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest = document.SignedManifestDigest, document.RuntimeBundleDigest, document.ToolchainBundleDigest
+				for _, revision := range document.Profile.Revisions {
+					profileNumbers = append(profileNumbers, revision.Number)
+					profileDigests = append(profileDigests, revision.SpecDigest)
+				}
+			}
 		} else {
-			document, err = standardresources.DecodeDocument(data)
+			document, decodeErr := standardresources.DecodeDocument(data)
+			err = decodeErr
+			if err == nil {
+				documentName, profileName = document.Name, document.Profile.Name
+				signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest = document.SignedManifestDigest, document.RuntimeBundleDigest, document.ToolchainBundleDigest
+				for _, revision := range document.Profile.Revisions {
+					profileNumbers = append(profileNumbers, revision.Number)
+					profileDigests = append(profileDigests, revision.SpecDigest)
+				}
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("SecondBox release verification: standard bundle %s: %w", bundle.Name, err)
 		}
-		if document.Name != bundle.Name || document.Profile.Name != bundle.Name || len(document.Profile.Revisions) != len(bundle.Profiles) ||
-			document.SignedManifestDigest != manifest.MicroVM.SignedManifestDigest ||
-			document.RuntimeBundleDigest != manifest.MicroVM.RuntimeBundle.ManifestDigest ||
-			document.ToolchainBundleDigest != manifest.MicroVM.ToolchainBundle.ManifestDigest {
+		if documentName != bundle.Name || profileName != bundle.Name || len(profileNumbers) != len(bundle.Profiles) ||
+			signedManifestDigest != manifest.MicroVM.SignedManifestDigest ||
+			runtimeBundleDigest != manifest.MicroVM.RuntimeBundle.ManifestDigest ||
+			toolchainBundleDigest != manifest.MicroVM.ToolchainBundle.ManifestDigest {
 			return fmt.Errorf("SecondBox release verification: standard bundle %s identity mismatch", bundle.Name)
 		}
 		for index, profile := range bundle.Profiles {
-			revision := document.Profile.Revisions[index]
-			if profile.Name != bundle.Name || revision.Number != profile.Revision || revision.SpecDigest != profile.SpecDigest {
+			if profile.Name != bundle.Name || profileNumbers[index] != profile.Revision || profileDigests[index] != profile.SpecDigest {
 				return fmt.Errorf("SecondBox release verification: standard bundle %s Profile lineage mismatch", bundle.Name)
 			}
 		}

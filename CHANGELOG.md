@@ -15,6 +15,7 @@
 ### Fixed
 
 - Release qualification now preserves and validates the qualified Linux amd64 host platform in both scenario and installer evidence.
+- Recorded-release verification now recognizes the exact published v0.6.0 installer-qualification waiver only when authenticating that immutable release as a guided-update source. New scenario and installer evidence use v2 and require an explicit Linux amd64 host platform; valid v1 evidence remains readable without weakening current release staging.
 - Firecracker cold boots now install the runner-controlled DNS identity before readiness, including when using the unchanged v0.6.0 signed microVM bundle required by the v0.7.0 upgrade path.
 - Failed data-plane session setup (for example while a Runner reconnects after a control-plane restart) now releases its admitted concurrency reservation through the existing failure transitions instead of counting against tenant and Subject `maxConcurrentOperations` until retention cleanup ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
 - Management CLI commands now propagate API errors instead of rendering an empty result with exit success when a call fails ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).

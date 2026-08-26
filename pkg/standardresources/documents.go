@@ -2,6 +2,7 @@ package standardresources
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
+	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
 const BundleSchemaVersion = "secondbox.standard-bundle/v2"
@@ -27,6 +29,33 @@ type BundleDocument struct {
 	ToolchainBundleDigest string                `json:"toolchainBundleDigest"`
 	Profile               resourceapply.Profile `json:"profile"`
 	ParameterSchema       json.RawMessage       `json:"parameterSchema"`
+}
+
+// RecordedBundleDocument preserves the raw immutable Profile specs from a
+// published release. They are authenticated against their recorded digests
+// without decoding removed fields into the current operator-facing schema.
+type RecordedBundleDocument struct {
+	SchemaVersion         string          `json:"schemaVersion"`
+	Name                  string          `json:"name"`
+	Architecture          string          `json:"architecture"`
+	RunnerPoolSelector    string          `json:"runnerPoolSelector"`
+	LogicalGateway        string          `json:"logicalGateway"`
+	SignedManifestDigest  string          `json:"signedManifestDigest"`
+	RuntimeBundleDigest   string          `json:"runtimeBundleDigest"`
+	ToolchainBundleDigest string          `json:"toolchainBundleDigest"`
+	Profile               RecordedProfile `json:"profile"`
+	ParameterSchema       json.RawMessage `json:"parameterSchema"`
+}
+
+type RecordedProfile struct {
+	Name      string                    `json:"name"`
+	Revisions []RecordedProfileRevision `json:"revisions"`
+}
+
+type RecordedProfileRevision struct {
+	Number     int64           `json:"number"`
+	SpecDigest string          `json:"specDigest"`
+	Spec       json.RawMessage `json:"spec"`
 }
 
 func Documents(signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest string) ([]BundleDocument, error) {
@@ -60,34 +89,41 @@ func DecodeDocument(data []byte) (BundleDocument, error) {
 // DecodeRecordedDocument validates an immutable published bundle without
 // regenerating its Profile lineage from newer code-owned policy. The release
 // manifest remains responsible for binding every recorded revision identity.
-func DecodeRecordedDocument(data []byte) (BundleDocument, error) {
-	document, err := decodeDocument(data)
-	if err != nil {
-		return BundleDocument{}, err
+func DecodeRecordedDocument(data []byte) (RecordedBundleDocument, error) {
+	var document RecordedBundleDocument
+	if err := decodeStrictDocument(data, &document); err != nil {
+		return RecordedBundleDocument{}, err
 	}
 	if err := document.ValidateRecorded(); err != nil {
-		return BundleDocument{}, err
+		return RecordedBundleDocument{}, err
 	}
 	return document, nil
 }
 
 func decodeDocument(data []byte) (BundleDocument, error) {
 	var document BundleDocument
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&document); err != nil {
-		return BundleDocument{}, fmt.Errorf("SecondBox standard bundle decode failed: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return BundleDocument{}, errors.New("SecondBox standard bundle must contain one JSON value")
+	if err := decodeStrictDocument(data, &document); err != nil {
+		return BundleDocument{}, err
 	}
 	return document, nil
+}
+
+func decodeStrictDocument(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("SecondBox standard bundle decode failed: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("SecondBox standard bundle must contain one JSON value")
+	}
+	return nil
 }
 
 // ValidateRecorded proves the self-contained structure and digests of a
 // previously published bundle. It deliberately does not compare that lineage
 // with the current binary's append-only ProfileLineage.
-func (document BundleDocument) ValidateRecorded() error {
+func (document RecordedBundleDocument) ValidateRecorded() error {
 	if document.SchemaVersion != BundleSchemaVersion || !slices.Contains(BundleNames(), document.Name) || document.Architecture != ArchitectureAMD64 || document.RunnerPoolSelector != PoolAMD64 || len(document.ParameterSchema) == 0 || !json.Valid(document.ParameterSchema) {
 		return errors.New("SecondBox recorded standard bundle identity or parameter schema is incomplete")
 	}
@@ -110,16 +146,62 @@ func (document BundleDocument) ValidateRecorded() error {
 		if revision.Number != int64(index+1) || !recordedBundleDigestPattern.MatchString(revision.SpecDigest) {
 			return fmt.Errorf("SecondBox recorded standard bundle %q Profile lineage is invalid", document.Name)
 		}
-		digest, err := resourceapply.SpecDigest(revision.Spec)
-		if err != nil || digest != revision.SpecDigest || revision.Spec.Pool != PoolAMD64 || revision.Spec.Architecture != ArchitectureAMD64 {
+		identity, digest, err := recordedProfileSpecIdentity(revision.Spec)
+		if err != nil || digest != revision.SpecDigest || identity.Pool != PoolAMD64 || identity.Architecture != ArchitectureAMD64 {
 			return fmt.Errorf("SecondBox recorded standard bundle %q Profile revision %d is invalid", document.Name, revision.Number)
 		}
-	}
-	latest := document.Profile.Revisions[len(document.Profile.Revisions)-1].Spec
-	if latest.RuntimeBundleDigest != document.RuntimeBundleDigest || latest.ToolchainBundleDigest != document.ToolchainBundleDigest {
-		return fmt.Errorf("SecondBox recorded standard bundle %q latest Profile revision differs from its execution assets", document.Name)
+		if index == len(document.Profile.Revisions)-1 && (identity.RuntimeBundleDigest != document.RuntimeBundleDigest || identity.ToolchainBundleDigest != document.ToolchainBundleDigest) {
+			return fmt.Errorf("SecondBox recorded standard bundle %q latest Profile revision differs from its execution assets", document.Name)
+		}
 	}
 	return nil
+}
+
+type recordedSpecIdentity struct {
+	Pool                  string
+	Architecture          string
+	RuntimeBundleDigest   string
+	ToolchainBundleDigest string
+}
+
+type legacyRecordedProfileRevisionSpec struct {
+	Pool                  string                          `json:"pool"`
+	Architecture          string                          `json:"architecture"`
+	RuntimeBundleDigest   string                          `json:"runtimeBundleDigest"`
+	ToolchainBundleDigest string                          `json:"toolchainBundleDigest"`
+	Resources             legacyRecordedResourcePolicy    `json:"resources"`
+	Startup               secondboxclient.StartupPolicy   `json:"startup"`
+	Lifecycle             secondboxclient.LifecyclePolicy `json:"lifecycle"`
+	Retention             secondboxclient.RetentionPolicy `json:"retention"`
+	Execution             secondboxclient.ExecutionPolicy `json:"execution"`
+	Network               secondboxclient.NetworkPolicy   `json:"network"`
+	Ports                 []secondboxclient.PortPolicy    `json:"ports"`
+}
+
+type legacyRecordedResourcePolicy struct {
+	CPUMillis            int64 `json:"cpuMillis"`
+	MemoryBytes          int64 `json:"memoryBytes"`
+	WorkspaceBytes       int64 `json:"workspaceBytes"`
+	ProcessLimit         int64 `json:"processLimit"`
+	ConcurrentOperations int64 `json:"concurrentOperations"`
+}
+
+func recordedProfileSpecIdentity(raw json.RawMessage) (recordedSpecIdentity, string, error) {
+	var current secondboxclient.ProfileRevisionSpec
+	if err := decodeStrictDocument(raw, &current); err == nil {
+		digest, digestErr := resourceapply.SpecDigest(current)
+		return recordedSpecIdentity{Pool: current.Pool, Architecture: current.Architecture, RuntimeBundleDigest: current.RuntimeBundleDigest, ToolchainBundleDigest: current.ToolchainBundleDigest}, digest, digestErr
+	}
+	var legacy legacyRecordedProfileRevisionSpec
+	if err := decodeStrictDocument(raw, &legacy); err != nil {
+		return recordedSpecIdentity{}, "", err
+	}
+	canonical, err := json.Marshal(legacy)
+	if err != nil {
+		return recordedSpecIdentity{}, "", err
+	}
+	digest := sha256.Sum256(canonical)
+	return recordedSpecIdentity{Pool: legacy.Pool, Architecture: legacy.Architecture, RuntimeBundleDigest: legacy.RuntimeBundleDigest, ToolchainBundleDigest: legacy.ToolchainBundleDigest}, fmt.Sprintf("sha256:%x", digest), nil
 }
 
 func (document BundleDocument) Validate() error {

@@ -19,9 +19,11 @@ import (
 )
 
 const (
-	ArtifactManifestSchema               = "secondbox.release/artifact-manifest/v5"
-	QualificationEvidenceSchema          = "secondbox.release/qualification-evidence/v1"
-	InstallerQualificationEvidenceSchema = "secondbox.release/installer-qualification-evidence/v1"
+	ArtifactManifestSchema                     = "secondbox.release/artifact-manifest/v5"
+	QualificationEvidenceSchema                = "secondbox.release/qualification-evidence/v2"
+	LegacyQualificationEvidenceSchema          = "secondbox.release/qualification-evidence/v1"
+	InstallerQualificationEvidenceSchema       = "secondbox.release/installer-qualification-evidence/v2"
+	LegacyInstallerQualificationEvidenceSchema = "secondbox.release/installer-qualification-evidence/v1"
 
 	TypeScriptPackage   = "@secondstack-ai/secondbox"
 	GoModule            = "github.com/SecondStack-AI/SecondBox"
@@ -312,9 +314,20 @@ func DecodeInstallerQualificationEvidence(data []byte) (InstallerQualificationEv
 	return evidence, nil
 }
 
+// DecodeRecordedInstallerQualificationEvidence strictly decodes evidence for
+// a previously published release. Callers must still validate it against the
+// exact recorded release identity with ValidateRecordedForRelease.
+func DecodeRecordedInstallerQualificationEvidence(data []byte) (InstallerQualificationEvidence, error) {
+	var evidence InstallerQualificationEvidence
+	if err := decodeStrict(data, &evidence); err != nil {
+		return InstallerQualificationEvidence{}, contractError("decode installer qualification evidence: %v", err)
+	}
+	return evidence, nil
+}
+
 func (evidence QualificationEvidence) Validate() error {
-	if evidence.SchemaVersion != QualificationEvidenceSchema {
-		return contractError("qualification evidence schemaVersion must be %q", QualificationEvidenceSchema)
+	if evidence.SchemaVersion != QualificationEvidenceSchema && evidence.SchemaVersion != LegacyQualificationEvidenceSchema {
+		return contractError("qualification evidence schemaVersion must be %q or legacy %q", QualificationEvidenceSchema, LegacyQualificationEvidenceSchema)
 	}
 	if !commitPattern.MatchString(evidence.SourceCommit) {
 		return contractError("qualification evidence source commit must be a full lowercase Git object ID")
@@ -322,7 +335,7 @@ func (evidence QualificationEvidence) Validate() error {
 	if evidence.Suite != "test-scenario" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 {
 		return contractError("qualification evidence must describe a complete test-scenario run")
 	}
-	if err := validateQualificationHost("qualification", evidence.Host); err != nil {
+	if err := validateQualificationHost("qualification", evidence.Host, evidence.SchemaVersion == QualificationEvidenceSchema); err != nil {
 		return err
 	}
 	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
@@ -332,8 +345,8 @@ func (evidence QualificationEvidence) Validate() error {
 	return nil
 }
 
-func validateQualificationHost(label string, host QualificationHostEvidence) error {
-	if host.Platform != "linux-amd64" {
+func validateQualificationHost(label string, host QualificationHostEvidence, requirePlatform bool) error {
+	if (requirePlatform && host.Platform != "linux-amd64") || (!requirePlatform && host.Platform != "" && host.Platform != "linux-amd64") {
 		return contractError("%s evidence host platform must be linux-amd64", label)
 	}
 	for name, device := range map[string]QualificationDeviceEvidence{"KVM": host.KVM, "TUN": host.TUN} {
@@ -366,13 +379,13 @@ func (evidence QualificationEvidence) ValidateForRelease(sourceCommit string) er
 }
 
 func (evidence InstallerQualificationEvidence) Validate() error {
-	if evidence.SchemaVersion != InstallerQualificationEvidenceSchema {
-		return contractError("installer qualification evidence schemaVersion must be %q", InstallerQualificationEvidenceSchema)
+	if evidence.SchemaVersion != InstallerQualificationEvidenceSchema && evidence.SchemaVersion != LegacyInstallerQualificationEvidenceSchema {
+		return contractError("installer qualification evidence schemaVersion must be %q or legacy %q", InstallerQualificationEvidenceSchema, LegacyInstallerQualificationEvidenceSchema)
 	}
 	if !commitPattern.MatchString(evidence.SourceCommit) || evidence.Suite != "test-installer-qualified" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 || !digestPattern.MatchString(evidence.ReleaseManifestDigest) || strings.TrimSpace(evidence.FilesystemIdentity) == "" || !evidence.RebootPassed {
 		return contractError("installer qualification evidence must describe a complete qualified installer run")
 	}
-	if err := validateQualificationHost("installer qualification", evidence.Host); err != nil {
+	if err := validateQualificationHost("installer qualification", evidence.Host, evidence.SchemaVersion == InstallerQualificationEvidenceSchema); err != nil {
 		return err
 	}
 	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
@@ -394,6 +407,31 @@ func (evidence InstallerQualificationEvidence) ValidateForRelease(sourceCommit, 
 	}
 	if !digestPattern.MatchString(qualificationSubjectDigest) || evidence.ReleaseManifestDigest != qualificationSubjectDigest {
 		return contractError("installer qualification evidence release identity does not match release")
+	}
+	return nil
+}
+
+// ValidateRecordedForRelease recognizes the one immutable v0.6.0 installer
+// evidence waiver only while authenticating that exact release as an update
+// source. New releases and ordinary installation remain subject to Validate.
+func (evidence InstallerQualificationEvidence) ValidateRecordedForRelease(sourceCommit, qualificationSubjectDigest string) error {
+	strictErr := evidence.ValidateForRelease(sourceCommit, qualificationSubjectDigest)
+	if strictErr == nil {
+		return nil
+	}
+	if sourceCommit != "92e409ddade89737afa75ec2b781dac5c8afbeab" || qualificationSubjectDigest != "sha256:8cb794536dd6b1b45bb1471c21c2fefd062af276446bdd954a4ce1b53aa95197" {
+		return strictErr
+	}
+	if evidence.SchemaVersion != LegacyInstallerQualificationEvidenceSchema ||
+		evidence.SourceCommit != sourceCommit || evidence.RepositoryDirty ||
+		evidence.Suite != "test-installer-qualified" || evidence.PassCount != 2 || evidence.WallClockSeconds != 1451 ||
+		evidence.ReleaseManifestDigest != qualificationSubjectDigest ||
+		evidence.FilesystemIdentity != "waived-after-two-complete-modes" || evidence.RebootPassed ||
+		evidence.QualifiedAt != "2026-08-26T14:53:50Z" {
+		return contractError("recorded installer qualification evidence does not match the exact v0.6.0 waiver")
+	}
+	if err := validateQualificationHost("recorded installer qualification", evidence.Host, false); err != nil {
+		return err
 	}
 	return nil
 }
