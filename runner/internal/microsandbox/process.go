@@ -382,14 +382,37 @@ func (process *helperProcess) fileOperation(
 	defer process.requestMu.Unlock()
 	requestID := process.nextRequestID
 	process.nextRequestID++
+	deadline := time.Now().Add(24 * time.Hour)
+	if value, ok := ctx.Deadline(); ok {
+		deadline = value.Add(5 * time.Second)
+	}
 	if err := process.control.SetDeadline(time.Time{}); err != nil {
 		return nil, fmt.Errorf("SecondBox Microsandbox clear helper File deadline: %w", err)
+	}
+	// Every request and content frame writes under the caller's deadline and
+	// observes cancellation: a helper that stops reading must not pin this
+	// serialization past the fencing deadline. A frame that fails part-way
+	// leaves the shared stream desynchronized, so only helper termination is
+	// a safe recovery.
+	if err := process.control.SetWriteDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("SecondBox Microsandbox bound helper File writes: %w", err)
+	}
+	stopWriteCancel := context.AfterFunc(ctx, func() {
+		_ = process.control.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	})
+	failedWrite := func(action string, err error) ([]*microsandboxprotocol.Envelope, error) {
+		stopWriteCancel()
+		process.forceStop()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("SecondBox Microsandbox %s: %w", action, err)
 	}
 	if err := microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{
 		ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID,
 		Message: &microsandboxprotocol.Envelope_File{File: request},
 	}); err != nil {
-		return nil, fmt.Errorf("SecondBox Microsandbox write helper File request: %w", err)
+		return failedWrite("write helper File request", err)
 	}
 	if request.Operation == microsandboxprotocol.Operation_OPERATION_FILE_WRITE {
 		sequence := uint64(1)
@@ -401,7 +424,7 @@ func (process *helperProcess) fileOperation(
 					Data: bytes.Clone(content[:count]), Channel: microsandboxprotocol.StreamChannel_STREAM_CHANNEL_FILE,
 				}},
 			}); err != nil {
-				return nil, fmt.Errorf("SecondBox Microsandbox write helper File content: %w", err)
+				return failedWrite("write helper File content", err)
 			}
 			sequence++
 			content = content[count:]
@@ -412,12 +435,12 @@ func (process *helperProcess) fileOperation(
 				Eof: true, Channel: microsandboxprotocol.StreamChannel_STREAM_CHANNEL_FILE,
 			}},
 		}); err != nil {
-			return nil, fmt.Errorf("SecondBox Microsandbox finish helper File content: %w", err)
+			return failedWrite("finish helper File content", err)
 		}
 	}
-	deadline := time.Now().Add(24 * time.Hour)
-	if value, ok := ctx.Deadline(); ok {
-		deadline = value.Add(5 * time.Second)
+	stopWriteCancel()
+	if err := process.control.SetWriteDeadline(time.Time{}); err != nil {
+		return nil, err
 	}
 	if err := process.control.SetReadDeadline(deadline); err != nil {
 		return nil, err

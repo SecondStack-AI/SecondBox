@@ -64,14 +64,24 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 	if value, ok := opCtx.Deadline(); ok && value.Before(deadline) {
 		deadline = value
 	}
+	indeterminate := false
 	err = process.control.SetDeadline(deadline)
 	if err == nil {
 		err = microsandboxprotocol.WriteFrame(process.control, request)
+		indeterminate = err != nil
 	}
 	if err == nil {
 		var response *microsandboxprotocol.Envelope
 		response, err = microsandboxprotocol.ReadFrame(process.control)
-		if err == nil && (response.RequestId != requestID || response.GetTcpConnected() == nil) {
+		switch {
+		case err != nil:
+			// The open request reached the helper but its answer never
+			// arrived: the response is still owed on the shared stream.
+			indeterminate = true
+		case response.RequestId != requestID:
+			err = fmt.Errorf("mismatched TCP open response")
+			indeterminate = true
+		case response.GetTcpConnected() == nil:
 			if diagnostic := response.GetDiagnostic(); diagnostic != nil {
 				err = fmt.Errorf("%s: %s", diagnostic.Code, diagnostic.Text)
 			} else if terminal := response.GetTerminal(); terminal != nil {
@@ -82,6 +92,13 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 		}
 	}
 	if err != nil {
+		if indeterminate {
+			// An unanswered or desynchronized open leaves stale frames owed
+			// on the shared helper stream; any later operation would consume
+			// them as its own response. Only terminating the helper recovers
+			// a known-clean protocol state.
+			process.forceStop()
+		}
 		process.requestMu.Unlock()
 		release()
 		return nil, fmt.Errorf("SecondBox Microsandbox open guest Port: %w", err)
