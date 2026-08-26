@@ -27,8 +27,8 @@ const (
 	MinimumHostMemoryBytes            = int64(12 << 30)
 	HostMemoryReserveBytes            = int64(4 << 30)
 	MinimumHostCPUCount               = 6
-	HostCPUReserveMillis              = int64(2000)
-	DurableCodingCPUMillis            = standardresources.DurableCodingCPUMillis
+	HostVCPUReserveCount              = int64(2)
+	DurableCodingVCPUCount            = standardresources.DurableCodingVCPUCount
 	DurableCodingMemoryBytes          = standardresources.DurableCodingMemoryBytes
 	DurableCodingConcurrentOperations = standardresources.DurableCodingConcurrentOperations
 	SingleHostFirecrackerCPUTemplate  = "None"
@@ -232,14 +232,14 @@ func proposeCapacity(facts HostFacts, workspaceBytes int64) (CapacityPlan, error
 	if facts.CPUCount < MinimumHostCPUCount || facts.MemoryBytes < MinimumHostMemoryBytes || workspaceBytes < MinimumWorkspaceBytes {
 		return CapacityPlan{}, installerError("host capacity is insufficient for the durable-coding smoke Sandbox and control services", nil)
 	}
-	cpuMillis := int64(facts.CPUCount)*1000 - HostCPUReserveMillis
+	vcpuCount := int64(facts.CPUCount) - HostVCPUReserveCount
 	memory := facts.MemoryBytes - HostMemoryReserveBytes
-	sandboxes := min(cpuMillis/DurableCodingCPUMillis, memory/DurableCodingMemoryBytes, workspaceBytes/MinimumWorkspaceBytes)
+	sandboxes := min(vcpuCount/DurableCodingVCPUCount, memory/DurableCodingMemoryBytes, workspaceBytes/MinimumWorkspaceBytes)
 	active := min(sandboxes, int64(4))
 	runnerOperations := sandboxes * DurableCodingConcurrentOperations
 	subjectOperations := active * DurableCodingConcurrentOperations
-	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxCpuMillis": cpuMillis, "maxMemoryBytes": memory, "maxSnapshots": sandboxes * 10, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": subjectOperations}
-	return CapacityPlan{MaxSandboxes: sandboxes, MaxCPUMillis: cpuMillis, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
+	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxVcpuCount": vcpuCount, "maxMemoryBytes": memory, "maxSnapshots": sandboxes * 10, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": subjectOperations}
+	return CapacityPlan{MaxSandboxes: sandboxes, MaxVCPUCount: vcpuCount, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
 }
 
 func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, error) {

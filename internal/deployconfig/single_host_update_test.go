@@ -13,21 +13,24 @@ import (
 )
 
 func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
-	release, err := developmentReleaseManifest()
+	// The source deployment is represented by the exact bytes a v0.6.0
+	// release recorded (frozen in testdata, independent of current
+	// generators); only the on-disk file placement is test-local.
+	releaseBytes, err := os.ReadFile(filepath.Join("testdata", "v060-release.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	releaseBytes, err := json.Marshal(release)
-	if err != nil {
+	var release releasecontract.ArtifactManifest
+	if err := json.Unmarshal(releaseBytes, &release); err != nil {
 		t.Fatal(err)
 	}
 	keyID := strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:"))
 	artifact := install.VerifiedArtifact{SigningKeyID: keyID, ManifestDigest: release.MicroVM.SignedManifestDigest}
 	catalog := struct {
-		Assets []assetcatalog.SignedAsset `json:"assets"`
-	}{Assets: []assetcatalog.SignedAsset{
-		componentAsset(release.MicroVM.RuntimeBundle, keyID, release.GuestProtocol.Maximum),
-		componentAsset(release.MicroVM.ToolchainBundle, keyID, release.GuestProtocol.Maximum),
+		Assets []assetcatalog.Asset `json:"assets"`
+	}{Assets: []assetcatalog.Asset{
+		componentAsset(release.MicroVM.RuntimeBundle, release.GuestProtocol.Maximum),
+		componentAsset(release.MicroVM.ToolchainBundle, release.GuestProtocol.Maximum),
 	}}
 	catalogBytes, err := json.Marshal(catalog)
 	if err != nil {
@@ -61,6 +64,29 @@ func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
 		},
 	}
 	if err := ValidateSingleHostUpdateSource(plan, release, releaseBytes, artifact); err != nil {
+		t.Fatal(err)
+	}
+	// A supported source release recorded the same assets with a per-asset
+	// signatureKeyId; the exact bytes such a release wrote (frozen in
+	// testdata, independent of current reconstruction helpers) must validate
+	// as the same identity.
+	signedCatalogBytes, err := os.ReadFile(filepath.Join("testdata", "v060-signed-catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, signedCatalogBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSingleHostUpdateSource(plan, release, releaseBytes, artifact); err != nil {
+		t.Fatalf("signed source catalog schema was rejected: %v", err)
+	}
+	if err := os.WriteFile(catalogPath, []byte("{\"assets\":[]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSingleHostUpdateSource(plan, release, releaseBytes, artifact); err == nil {
+		t.Fatal("source catalog drift was accepted")
+	}
+	if err := os.WriteFile(catalogPath, append(catalogBytes, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(releasePath, []byte("drift\n"), 0o600); err != nil {

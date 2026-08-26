@@ -14,6 +14,8 @@ The in-guest service is reached over Firecracker vsock. Assignment identity and 
 
 Runner configuration has no defaults. Every setting consumed by the service must be explicitly present and non-empty.
 
+Compute backend selection: `SECONDBOX_COMPUTE_BACKEND` must state `firecracker` explicitly. A runner refuses to start without it, selects exactly one backend for its lifetime, and its RunnerPool seals to that backend kind on first advertisement.
+
 Control stream identity and mTLS:
 
 ```text
@@ -111,7 +113,7 @@ Startup verifies that the Firecracker binary exactly matches `runner/internal/fi
 
 The kernel, rootfs, shared image, manifest, signature, checksums, kernel provenance, rootfs source manifest, rootfs contract, package locks, and license inventories form one signed artifact directory. The runner requires an independently provisioned RSA public key and its lowercase DER SHA-256 fingerprint.
 
-Before registration, readiness verifies the signature, checksums, manifest paths and digests, signed architecture and guest-protocol range, rootfs contract, captured file identities, read-write KVM access, cgroup controllers, the configured bridge address, workspace storage, and cleanup health. An assignment is admitted only when its artifact ID, manifest digest, signature key ID, architecture, and guest protocol generation select that verified local artifact. Artifact mutation after startup fails health checks and assignment launch.
+Before registration, readiness verifies the signature, checksums, manifest paths and digests, signed architecture and guest-protocol range, rootfs contract, captured file identities, read-write KVM access, cgroup controllers, the configured bridge address, workspace storage, and cleanup health. Assignment admission is provider-neutral: an assignment is admitted only when its artifact ID, manifest digest, architecture, and guest protocol generation select a locally revalidated artifact. Signature verification is a separate Firecracker-specific step against the runner-local trust anchor; a signature-key identity never enters the shared admission identity. Artifact mutation after startup fails health checks and assignment launch.
 
 Build and verification inputs are explicit. Inspect the current required inputs with:
 
@@ -133,7 +135,7 @@ ${SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT}/firecracker/${instance_id}/root
 
 The jail contains only its kernel, rootfs clone, attached Workspace image, optional shared image, Firecracker configuration, API socket, and `guest.vsock`. Unix socket paths are checked before staging. The Runner resolves the private Workspace attachment inside the process and never copies or reformats it during start.
 
-The runner sets the configured cgroup version and parent on every jailed process. The host memory cgroup includes the guest allocation plus 10% or 256 MiB, whichever is larger. The CPU cgroup uses a 100 ms period and the exact Profile CPU millis plus 10% or 100 millis, whichever is larger, so bounded Firecracker emulation and I/O work does not consume the entire guest allowance. The PID cgroup uses the Profile process limit plus 32 jailer/VMM worker slots and two slots per vCPU. It also enforces the profile-resolved vCPU, memory, disk, and guest process limits in the Firecracker configuration and guest boot contract.
+The runner sets the configured cgroup version and parent on every jailed process. The host memory cgroup includes the guest allocation plus 10% or 256 MiB, whichever is larger. The CPU cgroup uses a 100 ms period with a quota of the Profile vCPU count times 1000 milli-units plus a 10% overhead allowance (floored at 100 milli-units), so bounded Firecracker emulation and I/O work does not consume the entire guest allowance. The PID cgroup is a backend-owned host ceiling of 32 jailer/VMM worker slots plus two slots per vCPU; guest processes are not host PIDs and no guest PID limit is promised or enforced. The runner also enforces the profile-resolved vCPU, memory, and disk limits in the Firecracker configuration and guest boot contract.
 
 Before launch, the Runner reserves a unique UID and persists it as root-owned per-Instance run state. Process launch, jailed artifact ownership, the Workspace hard link, and TAP ownership all use that exact UID. Normal teardown releases it only after the process and network cleanup complete. Startup orphan sweep reads the persisted UID before adopting and stopping a surviving process; missing, malformed, out-of-range, or conflicting evidence fails startup closed. Stale state for an already-dead process is removed without reserving its former UID.
 

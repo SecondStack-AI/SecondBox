@@ -33,7 +33,7 @@ type StandardRunnerPool struct {
 	Capabilities   []string `toml:"capabilities"`
 	State          string   `toml:"state"`
 	MaxSandboxes   *int64   `toml:"max_sandboxes"`
-	MaxCPUMillis   *int64   `toml:"max_cpu_millis"`
+	MaxVCPUCount   *int64   `toml:"max_vcpu_count"`
 	MaxMemoryBytes *int64   `toml:"max_memory_bytes"`
 }
 
@@ -53,8 +53,8 @@ type Deployment struct {
 	RunnerPublishedPort    *int64 `toml:"runner_published_port"`
 	RunnerListenAddress    string `toml:"runner_listen_address"`
 	LogPath                string `toml:"log_path"`
-	SignedAssetCatalog     string `toml:"signed_asset_catalog"`
-	SignedAssetCatalogPath string `toml:"signed_asset_catalog_path"`
+	AssetCatalog           string `toml:"signed_asset_catalog"`
+	AssetCatalogPath       string `toml:"signed_asset_catalog_path"`
 	DevelopmentWaitSeconds *int64 `toml:"development_prepare_wait_timeout_seconds"`
 }
 
@@ -89,7 +89,7 @@ type Policy struct {
 	RunnerEnabledFeatures                 string `toml:"runner_enabled_features"`
 	DefaultSubjectMaxSandboxes            *int64 `toml:"default_subject_max_sandboxes"`
 	DefaultSubjectMaxActiveInstances      *int64 `toml:"default_subject_max_active_instances"`
-	DefaultSubjectMaxCPUMillis            *int64 `toml:"default_subject_max_cpu_millis"`
+	DefaultSubjectMaxVCPUCount            *int64 `toml:"default_subject_max_vcpu_count"`
 	DefaultSubjectMaxMemoryBytes          *int64 `toml:"default_subject_max_memory_bytes"`
 	DefaultSubjectMaxSnapshots            *int64 `toml:"default_subject_max_snapshots"`
 	DefaultSubjectMaxPortSessions         *int64 `toml:"default_subject_max_port_sessions"`

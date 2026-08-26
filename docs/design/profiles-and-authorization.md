@@ -1,5 +1,7 @@
 # Profiles and authorization
 
+Profile resources state integer `vcpuCount`, guest memory, Workspace capacity, concurrency, duration, and output bounds. They make no universal CPU-share or guest PID-enforcement promise; those controls remain backend-specific. Profiles select a homogeneous RunnerPool but contain no backend kind.
+
 Profiles are server-owned policy. Application clients select an authorized profile name; they do not assemble compute policy in a Sandbox request.
 
 ## HTTP authorities

@@ -145,3 +145,121 @@ func TestScenarioSandboxRejectsRequirementsAboveRunnerCapacity(t *testing.T) {
 		t.Fatalf("SecondBox scenario over-capacity admission took %s", elapsed)
 	}
 }
+
+func TestScenarioSandboxRejectsUnsupportedArchitectureBeforeCompute(t *testing.T) {
+	fixture := newScenarioFixture(t)
+	ensureScenarioRunnerPool(t, fixture)
+	runnerBefore := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
+	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
+	if spec.Architecture == "arm64" {
+		spec.Architecture = "amd64"
+	} else {
+		spec.Architecture = "arm64"
+	}
+	profile := createScenarioProfile(t, fixture, "scenario-unsupported-architecture", spec)
+
+	var operation contracts.Operation
+	err := fixture.subject.RequestJSON(
+		context.Background(),
+		"createSandbox",
+		secondboxclient.CallOptions{
+			Headers: scenarioHeaders(uniqueScenarioKey(t, "unsupported-architecture")),
+			Body: scenarioBody(t, contracts.CreateSandboxRequest{
+				Profile:  profile.Name,
+				Metadata: map[string]string{"scenario": "unsupported-architecture"},
+			}),
+		},
+		&operation,
+	)
+	var apiError *secondboxclient.APIError
+	if !errors.As(err, &apiError) ||
+		apiError.StatusCode != http.StatusConflict ||
+		apiError.Problem == nil ||
+		apiError.Problem.Code != "execution_node_unavailable" ||
+		!apiError.Problem.Retryable ||
+		operation.ID != "" || operation.SandboxID != "" {
+		t.Fatalf("SecondBox unsupported architecture rejection = error %#v operation %#v", apiError, operation)
+	}
+	runnerAfter := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
+	if runnerAfter.SandboxStartSampleCount != runnerBefore.SandboxStartSampleCount {
+		t.Fatalf(
+			"SecondBox unsupported architecture reached compute: start samples %d -> %d",
+			runnerBefore.SandboxStartSampleCount,
+			runnerAfter.SandboxStartSampleCount,
+		)
+	}
+}
+
+func TestScenarioSandboxRejectsUncachedLogicalMaterializationTuple(t *testing.T) {
+	fixture := newScenarioFixture(t)
+	ensureScenarioRunnerPool(t, fixture)
+	runnerBefore := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
+	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
+	spec.RuntimeBundleDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	profile := createScenarioProfile(t, fixture, "scenario-uncached-materialization", spec)
+
+	// Home placement requires an exact materialization of the Profile's
+	// pinned execution assets, so a tuple no Runner holds is refused before
+	// a Sandbox or any compute exists.
+	var operation contracts.Operation
+	err := fixture.subject.RequestJSON(
+		context.Background(),
+		"createSandbox",
+		secondboxclient.CallOptions{
+			Headers: scenarioHeaders(uniqueScenarioKey(t, "uncached-materialization")),
+			Body: scenarioBody(t, contracts.CreateSandboxRequest{
+				Profile:  profile.Name,
+				Metadata: map[string]string{"scenario": "uncached-materialization"},
+			}),
+		},
+		&operation,
+	)
+	var apiError *secondboxclient.APIError
+	if !errors.As(err, &apiError) ||
+		apiError.Problem == nil ||
+		apiError.Problem.Code != "home_runner_unavailable" {
+		t.Fatalf("SecondBox scenario uncached materialization admission = %#v, raw error=%v", apiError, err)
+	}
+	runnerAfter := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
+	if runnerAfter.SandboxStartSampleCount != runnerBefore.SandboxStartSampleCount {
+		t.Fatalf(
+			"SecondBox uncached materialization reached compute: start samples %d -> %d",
+			runnerBefore.SandboxStartSampleCount,
+			runnerAfter.SandboxStartSampleCount,
+		)
+	}
+}
+
+func waitForScenarioRunnerStartupTimingSettled(
+	t *testing.T,
+	fixture scenarioFixture,
+	timeout time.Duration,
+) contracts.Runner {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	previous := waitForScenarioRunner(t, fixture, timeout)
+	stableHeartbeats := 0
+	for time.Now().Before(deadline) {
+		time.Sleep(250 * time.Millisecond)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		current := waitForScenarioRunner(t, fixture, remaining)
+		if current.LastSeenAt == nil || previous.LastSeenAt == nil ||
+			!current.LastSeenAt.After(*previous.LastSeenAt) {
+			continue
+		}
+		if current.SandboxStartSampleCount == previous.SandboxStartSampleCount {
+			stableHeartbeats++
+		} else {
+			stableHeartbeats = 0
+		}
+		previous = current
+		if stableHeartbeats == 2 {
+			return current
+		}
+	}
+	t.Fatalf("SecondBox scenario Runner startup timing did not settle within %s", timeout)
+	return contracts.Runner{}
+}

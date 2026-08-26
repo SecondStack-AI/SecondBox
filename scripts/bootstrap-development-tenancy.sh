@@ -35,7 +35,7 @@ SECONDBOX_CONFIG="$platform_config" SECONDBOX_URL="$endpoint" SECONDBOX_TOKEN="$
 jq -n \
   --arg ref "$tenant_ref" \
   --arg profile "$profile" \
-  '{ref:$ref,allowedProfileGrants:[$profile],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:{maxSandboxes:10,maxActiveInstances:10,maxCpuMillis:20000,maxMemoryBytes:21474836480,maxSnapshots:20,maxPortSessions:20,maxConcurrentOperations:20,maxActiveSubjects:10,maxApplicationAuthorities:20},expiryPolicy:{maximumSubjectLifetimeSeconds:86400,maximumAuthorityLifetimeSeconds:86400},metadata:{bootstrap:"development-post-start"}}' \
+  '{ref:$ref,allowedProfileGrants:[$profile],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:{maxSandboxes:10,maxActiveInstances:10,maxVcpuCount:20,maxMemoryBytes:21474836480,maxSnapshots:20,maxPortSessions:20,maxConcurrentOperations:20,maxActiveSubjects:10,maxApplicationAuthorities:20},expiryPolicy:{maximumSubjectLifetimeSeconds:86400,maximumAuthorityLifetimeSeconds:86400},metadata:{bootstrap:"development-post-start"}}' \
   >"$bootstrap_directory/tenant.json"
 SECONDBOX_CONFIG="$platform_config" "$cli_binary" --output json tenant create \
   --file "$bootstrap_directory/tenant.json" --idempotency-key "development-tenant-$tenant_ref" >/dev/null
@@ -50,7 +50,7 @@ SECONDBOX_CONFIG="$controller_config" SECONDBOX_URL="$endpoint" SECONDBOX_TOKEN=
   "$cli_binary" --output json controller login >/dev/null
 jq -n \
   --arg ref "$subject_ref" \
-  '{ref:$ref,quota:{maxSandboxes:10,maxActiveInstances:10,maxCpuMillis:20000,maxMemoryBytes:21474836480,maxSnapshots:20,maxPortSessions:20,maxConcurrentOperations:20},metadata:{bootstrap:"development-post-start"}}' \
+  '{ref:$ref,quota:{maxSandboxes:10,maxActiveInstances:10,maxVcpuCount:20,maxMemoryBytes:21474836480,maxSnapshots:20,maxPortSessions:20,maxConcurrentOperations:20},metadata:{bootstrap:"development-post-start"}}' \
   >"$bootstrap_directory/subject.json"
 SECONDBOX_CONFIG="$controller_config" "$cli_binary" --output json subject create \
   --file "$bootstrap_directory/subject.json" --idempotency-key "development-subject-$tenant_ref-$subject_ref" >/dev/null

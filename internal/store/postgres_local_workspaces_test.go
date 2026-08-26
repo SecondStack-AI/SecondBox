@@ -847,12 +847,12 @@ func TestSnapshotRestoreAdmissionPersistsEveryLocalPhaseIdentity(t *testing.T) {
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			reserved_capacity_json,artifact_cache_json,backend_kind,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			'runner-home','pool-local','runner-home','ready','["amd64"]',
 			'["compute","local-workspace"]','{}','[1]',1,1,'test','connection-home',0,
-			'active','{}','[]',0,0,$1,1,$1,$1
+			'active','{}','` + placementTestCacheJSON + `','firecracker',0,0,$1,1,$1,$1
 		) ON CONFLICT (id) DO UPDATE SET state='ready',last_seen_at=EXCLUDED.last_seen_at`,
 		now,
 	); err != nil {
@@ -1383,9 +1383,11 @@ func seedLocalWorkspacePolicyAndRunner(
 	t.Helper()
 	specJSON, err := json.Marshal(contracts.ProfileRevisionSpec{
 		Pool: "pool-local", Architecture: "amd64",
+		RuntimeBundleDigest:   placementTestRuntimeDigest,
+		ToolchainBundleDigest: placementTestToolchainDigest,
 		Resources: contracts.ResourcePolicy{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
-			ProcessLimit: 128, ConcurrentOperations: 4,
+			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
+			ConcurrentOperations: 4,
 		},
 		Startup: contracts.StartupPolicy{Mode: contracts.StartupModeColdBoot},
 		Lifecycle: contracts.LifecyclePolicy{
@@ -1406,14 +1408,14 @@ func seedLocalWorkspacePolicyAndRunner(
 		) VALUES ('tenant-local','active','[]','[]','{}','{}','{}',1,$2,$2)
 		ON CONFLICT (ref) DO UPDATE SET state='active',updated_at=EXCLUDED.updated_at;
 		INSERT INTO secondbox.tenant_quotas (
-			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			tenant_ref,max_sandboxes,max_active_instances,max_vcpu_count,max_memory_bytes,
 			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
 			max_application_authorities,updated_at
 		) VALUES ('tenant-local',100,100,100000,1099511627776,100,100,100,100,100,$2)
 		ON CONFLICT (tenant_ref) DO UPDATE SET
 			max_sandboxes=EXCLUDED.max_sandboxes,
 			max_active_instances=EXCLUDED.max_active_instances,
-			max_cpu_millis=EXCLUDED.max_cpu_millis,
+			max_vcpu_count=EXCLUDED.max_vcpu_count,
 			max_memory_bytes=EXCLUDED.max_memory_bytes,
 			max_snapshots=EXCLUDED.max_snapshots,
 			max_port_sessions=EXCLUDED.max_port_sessions,
@@ -1426,7 +1428,7 @@ func seedLocalWorkspacePolicyAndRunner(
 			metadata_json,expires_at,revision,created_at,updated_at
 		) VALUES (
 			'tenant-local','subject-local','active','none','',
-			'{"maxSandboxes":100,"maxActiveInstances":100,"maxCpuMillis":100000,"maxMemoryBytes":1099511627776,"maxSnapshots":100,"maxPortSessions":100,"maxConcurrentOperations":100}',
+			'{"maxSandboxes":100,"maxActiveInstances":100,"maxVcpuCount":100,"maxMemoryBytes":1099511627776,"maxSnapshots":100,"maxPortSessions":100,"maxConcurrentOperations":100}',
 			'{}',NULL,1,$2,$2
 		) ON CONFLICT (tenant_ref,ref) DO UPDATE SET
 			state='active',cleanup_state='none',expires_at=NULL,updated_at=EXCLUDED.updated_at;
@@ -1435,7 +1437,7 @@ func seedLocalWorkspacePolicyAndRunner(
 		) VALUES ('revision-local','profile-local',1,$1,$2)
 		ON CONFLICT (id) DO NOTHING;
 		INSERT INTO secondbox.subject_quotas (
-			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_vcpu_count,
 			max_memory_bytes,max_snapshots,
 			max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES (
@@ -1444,7 +1446,7 @@ func seedLocalWorkspacePolicyAndRunner(
 		) ON CONFLICT (tenant_ref,subject_ref) DO UPDATE SET
 			max_sandboxes=EXCLUDED.max_sandboxes,
 			max_active_instances=EXCLUDED.max_active_instances,
-			max_cpu_millis=EXCLUDED.max_cpu_millis,
+			max_vcpu_count=EXCLUDED.max_vcpu_count,
 			max_memory_bytes=EXCLUDED.max_memory_bytes,
 			max_snapshots=EXCLUDED.max_snapshots,
 			max_port_sessions=EXCLUDED.max_port_sessions,
@@ -1454,12 +1456,12 @@ func seedLocalWorkspacePolicyAndRunner(
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			reserved_capacity_json,artifact_cache_json,backend_kind,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			'runner-home','pool-local','runner-home','ready','["amd64"]',
 			'["compute","local-workspace"]','{}','[1]',1,1,'test','connection-home',0,
-			'active','{}','[]',0,0,$2,1,$2,$2
+			'active','{}','` + placementTestCacheJSON + `','firecracker',0,0,$2,1,$2,$2
 		) ON CONFLICT (id) DO UPDATE SET state='ready',last_seen_at=EXCLUDED.last_seen_at`,
 		pgx.QueryExecModeSimpleProtocol, string(specJSON), now,
 	); err != nil {

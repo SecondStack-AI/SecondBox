@@ -5,7 +5,9 @@ package scenario_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -48,7 +50,6 @@ type snapshotResumeEvidence struct {
 	ProfileMemoryMiB       int                          `json:"profileMemoryMiB"`
 	ProfileWorkspaceMiB    int                          `json:"profileWorkspaceMiB"`
 	ProfileVCPUs           int                          `json:"profileVcpus"`
-	ProfileProcessLimit    int                          `json:"profileProcessLimit"`
 	StartToReadyProjection int                          `json:"startToReadyProjectionMilliseconds"`
 	CreateToReadyProjectn  int                          `json:"createToReadyProjectionMilliseconds"`
 	Rungs                  []snapshotResumeRung         `json:"concurrencyRungs"`
@@ -93,6 +94,36 @@ func TestScenarioSnapshotResumeStartsStopsAndMeasures(t *testing.T) {
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)
 	runner := waitForScenarioRunner(t, fixture, 90*time.Second)
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+		if slices.Contains(runner.Capabilities, "snapshot-resume") {
+			t.Fatalf("SecondBox Microsandbox Runner unexpectedly advertises snapshot-resume: %v", runner.Capabilities)
+		}
+		profile := createScenarioProfile(
+			t,
+			fixture,
+			"scenario-microsandbox-snapshot-resume-rejected",
+			snapshotResumeProfileSpec(t),
+		)
+		var operation contracts.Operation
+		err := fixture.subject.RequestJSON(
+			context.Background(),
+			"createSandbox",
+			secondboxclient.CallOptions{
+				Headers: scenarioHeaders(uniqueScenarioKey(t, "microsandbox-resume-rejected")),
+				Body: scenarioBody(t, contracts.CreateSandboxRequest{
+					Profile:  profile.Name,
+					Metadata: map[string]string{"scenario": "microsandbox-resume-rejected"},
+				}),
+			},
+			&operation,
+		)
+		assertScenarioAPIError(t, err, http.StatusConflict, "startup_mode_unsupported")
+		var apiError *secondboxclient.APIError
+		if !errors.As(err, &apiError) || apiError.Problem.Retryable || operation.ID != "" || operation.SandboxID != "" {
+			t.Fatalf("SecondBox Microsandbox snapshot-resume rejection = error %#v operation %#v", apiError, operation)
+		}
+		return
+	}
 	if !slices.Contains(runner.Capabilities, "snapshot-resume") {
 		t.Fatalf(
 			"SecondBox scenario Runner does not advertise snapshot-resume: capabilities = %v; "+
@@ -116,7 +147,6 @@ func TestScenarioSnapshotResumeStartsStopsAndMeasures(t *testing.T) {
 		ProfileMemoryMiB:       scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_MEMORY_MIB"),
 		ProfileWorkspaceMiB:    scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_WORKSPACE_MIB"),
 		ProfileVCPUs:           scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS"),
-		ProfileProcessLimit:    scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_PROCESS_LIMIT"),
 		StartToReadyProjection: snapshotResumeStartToReadyProjectionMs,
 		CreateToReadyProjectn:  snapshotResumeCreateToReadyProjectionMs,
 	}
@@ -477,10 +507,9 @@ func snapshotResumeProfileSpec(t *testing.T) contracts.ProfileRevisionSpec {
 	t.Helper()
 	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
 	spec.Startup = contracts.StartupPolicy{Mode: contracts.StartupModeSnapshotResume}
-	spec.Resources.CPUMillis = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS")) * 1000
+	spec.Resources.VCPUCount = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS"))
 	spec.Resources.MemoryBytes = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_MEMORY_MIB")) << 20
 	spec.Resources.WorkspaceBytes = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_WORKSPACE_MIB")) << 20
-	spec.Resources.ProcessLimit = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_PROCESS_LIMIT"))
 	return spec
 }
 

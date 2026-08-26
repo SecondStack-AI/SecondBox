@@ -42,7 +42,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		RuntimeBundleDigest:   runtimeDigest,
 		ToolchainBundleDigest: toolchainDigest,
 		Resources: contracts.ResourcePolicy{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
+			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
 			ConcurrentOperations: 1,
 		},
 		Execution: contracts.ExecutionPolicy{
@@ -91,15 +91,15 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 	}
 	schedulerFailure := errors.New("captured automatic restart")
 	recordingScheduler := &recordingFailureScheduler{err: schedulerFailure}
-	catalog := fixedLifecycleAssetCatalog{assets: map[string]lifecycle.SignedAsset{
+	catalog := fixedLifecycleAssetCatalog{assets: map[string]lifecycle.Asset{
 		runtimeDigest: {
 			ArtifactID: "runtime", ManifestDigest: runtimeDigest,
-			SignatureKeyID: "release-key", Architecture: "amd64",
+			Architecture:            "amd64",
 			GuestProtocolGeneration: 1,
 		},
 		toolchainDigest: {
 			ArtifactID: "toolchain", ManifestDigest: toolchainDigest,
-			SignatureKeyID: "release-key", Architecture: "amd64",
+			Architecture:            "amd64",
 			GuestProtocolGeneration: 1,
 		},
 	}}
@@ -551,23 +551,23 @@ func (recorder *recordingFailureScheduler) Schedule(
 }
 
 type fixedLifecycleAssetCatalog struct {
-	assets map[string]lifecycle.SignedAsset
+	assets map[string]lifecycle.Asset
 }
 
 func (catalog fixedLifecycleAssetCatalog) Resolve(
 	digest string,
-) (lifecycle.SignedAsset, error) {
+) (lifecycle.Asset, error) {
 	asset, found := catalog.assets[digest]
 	if !found {
-		return lifecycle.SignedAsset{}, errors.New("missing fixed lifecycle asset")
+		return lifecycle.Asset{}, errors.New("missing fixed lifecycle asset")
 	}
 	return asset, nil
 }
 
 type unusedAssetCatalog struct{}
 
-func (unusedAssetCatalog) Resolve(string) (lifecycle.SignedAsset, error) {
-	return lifecycle.SignedAsset{}, errors.New("unused asset catalog")
+func (unusedAssetCatalog) Resolve(string) (lifecycle.Asset, error) {
+	return lifecycle.Asset{}, errors.New("unused asset catalog")
 }
 
 type noOpSessionCanceller struct{}
@@ -635,12 +635,12 @@ func seedLifecycleTestQuotaLedgers(t *testing.T, databaseURL string) {
 	defer connection.Close(t.Context())
 	if _, err := connection.Exec(t.Context(), `
 		INSERT INTO secondbox.tenant_quotas (
-			tenant_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			tenant_ref,max_sandboxes,max_active_instances,max_vcpu_count,max_memory_bytes,
 			max_snapshots,max_port_sessions,max_concurrent_operations,max_active_subjects,
 			max_application_authorities,updated_at
 		) VALUES ('tenant',100,100,100000,1099511627776,100,100,100,100,100,now());
 		INSERT INTO secondbox.subject_quotas (
-			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_vcpu_count,
 			max_memory_bytes,max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES ('tenant','subject',100,100,100000,1099511627776,100,100,100,now())`,
 		pgx.QueryExecModeSimpleProtocol,

@@ -530,7 +530,7 @@ func validateProfileGrants(grants []string) error {
 }
 
 func validSubjectQuota(quota contracts.QuotaLimits) bool {
-	return quota.MaxSandboxes >= 0 && quota.MaxActiveInstances >= 0 && quota.MaxCPUMillis >= 0 &&
+	return quota.MaxSandboxes >= 0 && quota.MaxActiveInstances >= 0 && quota.MaxVCPUCount >= 0 &&
 		quota.MaxMemoryBytes >= 0 && quota.MaxSnapshots >= 0 && quota.MaxPortSessions >= 0 &&
 		quota.MaxConcurrentOperations >= 0
 }
@@ -538,7 +538,7 @@ func validSubjectQuota(quota contracts.QuotaLimits) bool {
 func validTenantQuota(quota contracts.TenantQuota) bool {
 	return validSubjectQuota(contracts.QuotaLimits{
 		MaxSandboxes: quota.MaxSandboxes, MaxActiveInstances: quota.MaxActiveInstances,
-		MaxCPUMillis: quota.MaxCPUMillis, MaxMemoryBytes: quota.MaxMemoryBytes,
+		MaxVCPUCount: quota.MaxVCPUCount, MaxMemoryBytes: quota.MaxMemoryBytes,
 		MaxSnapshots: quota.MaxSnapshots, MaxPortSessions: quota.MaxPortSessions,
 		MaxConcurrentOperations: quota.MaxConcurrentOperations,
 	}) && quota.MaxActiveSubjects >= 0 && quota.MaxApplicationAuthorities >= 0

@@ -9,37 +9,37 @@ import (
 func TestSelectRunnerFiltersCompatibilityCapacityHealthAndDrain(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
-		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+		PoolName: "general", Architecture: "amd64",
 		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
 		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{CPUMillis: 2000, MemoryBytes: 4 << 30, DiskBytes: 20 << 30, Instances: 1},
+		Capacity:                 Capacity{VCPUCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30, Instances: 1},
 		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
 	}
 	candidates := []RunnerSnapshot{
 		{
-			ID: "runner-draining", PoolName: "general", Architecture: "amd64",
+			ID: "runner-draining", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
 			Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
 			DrainPhase: DrainPhaseDraining, LastHeartbeatAt: now,
-			GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+			GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 		},
 		{
-			ID: "runner-stale", PoolName: "general", Architecture: "amd64",
+			ID: "runner-stale", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
 			Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
 			DrainPhase: DrainPhaseActive, LastHeartbeatAt: now.Add(-31 * time.Second),
-			GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+			GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 		},
 		{
-			ID: "runner-too-small", PoolName: "general", Architecture: "amd64",
+			ID: "runner-too-small", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
 			Capabilities: readyCapabilities(),
-			Allocatable:  Capacity{CPUMillis: 1000, MemoryBytes: 2 << 30, DiskBytes: 10 << 30, Instances: 1},
+			Allocatable:  Capacity{VCPUCount: 1, MemoryBytes: 2 << 30, DiskBytes: 10 << 30, Instances: 1},
 			DrainPhase:   DrainPhaseActive, LastHeartbeatAt: now,
-			GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+			GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 		},
 		{
-			ID: "runner-compatible", PoolName: "general", Architecture: "amd64",
+			ID: "runner-compatible", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
 			Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
 			DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
-			GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+			GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 		},
 	}
 
@@ -55,16 +55,16 @@ func TestSelectRunnerFiltersCompatibilityCapacityHealthAndDrain(t *testing.T) {
 func TestSelectRunnerPrefersArtifactLocalityThenStableID(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
-		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+		PoolName: "general", Architecture: "amd64",
 		RequiredCapabilities:     []string{"local-workspace"},
 		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
+		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
 		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
 	}
 	base := RunnerSnapshot{
-		PoolName: "general", Architecture: "amd64", Capabilities: readyCapabilities(),
+		PoolName: "general", Architecture: "amd64", BackendKind: "firecracker", Capabilities: readyCapabilities(),
 		Allocatable: abundantCapacity(), DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
-		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 	}
 	candidates := []RunnerSnapshot{
 		withRunnerEvidence(base, "runner-z", []string{"sha256:runtime", "sha256:toolchain"}),
@@ -84,7 +84,7 @@ func TestSelectRunnerPrefersArtifactLocalityThenStableID(t *testing.T) {
 func TestSelectRunnerRejectsUnavailablePool(t *testing.T) {
 	_, err := SelectRunner(
 		Requirements{
-			PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+			PoolName: "general", Architecture: "amd64",
 			GuestProtocolGeneration: 1,
 		},
 		nil,
@@ -96,22 +96,48 @@ func TestSelectRunnerRejectsUnavailablePool(t *testing.T) {
 	}
 }
 
+func TestSelectRunnerRejectsMissingExactMaterialization(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	requirements := Requirements{
+		PoolName: "general", Architecture: "amd64",
+		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
+		GuestProtocolGeneration:  1,
+		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
+		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+	}
+	runner := RunnerSnapshot{
+		ID: "runner-materialized-for-other-toolchain", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+		Materializations: []MaterializationSnapshot{{
+			BackendKind: "firecracker", Architecture: "amd64",
+			RuntimeDigest: "sha256:runtime", ToolchainDigest: "sha256:different-toolchain",
+			Digest: "sha256:materialization",
+		}},
+	}
+
+	if _, err := SelectRunner(requirements, []RunnerSnapshot{runner}, now, 30*time.Second); !errors.Is(err, ErrNoCompatibleRunner) {
+		t.Fatalf("Runner without exact materialization selected: %v", err)
+	}
+}
+
 func TestSelectHomeRunnerNeverFallsBackToCompatibleReplacement(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
-		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+		PoolName: "general", Architecture: "amd64",
 		RequiredCapabilities:    []string{"local-workspace"},
 		GuestProtocolGeneration: 1,
 		Capacity: Capacity{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+			VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 			Instances: 1, Operations: 1,
 		},
 	}
 	replacement := RunnerSnapshot{
-		ID: "runner-replacement", PoolName: "general", Architecture: "amd64",
+		ID: "runner-replacement", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
 		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
 		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
-		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 	}
 	if _, err := SelectHomeRunner(
 		"runner-home", requirements, []RunnerSnapshot{replacement},
@@ -124,19 +150,19 @@ func TestSelectHomeRunnerNeverFallsBackToCompatibleReplacement(t *testing.T) {
 func TestSelectHomeRunnerRejectsDrainingHomeWithoutRelocation(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 30, 0, 0, time.UTC)
 	requirements := Requirements{
-		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+		PoolName: "general", Architecture: "amd64",
 		RequiredCapabilities:    []string{"local-workspace"},
 		GuestProtocolGeneration: 1,
 		Capacity: Capacity{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+			VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 			Instances: 1, Operations: 1,
 		},
 	}
 	home := RunnerSnapshot{
-		ID: "runner-home", PoolName: "general", Architecture: "amd64",
+		ID: "runner-home", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
 		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
 		DrainPhase: DrainPhaseDraining, LastHeartbeatAt: now,
-		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 	}
 	replacement := home
 	replacement.ID = "runner-replacement"
@@ -157,7 +183,15 @@ func readyCapabilities() map[string]bool {
 }
 
 func abundantCapacity() Capacity {
-	return Capacity{CPUMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8, Operations: 32}
+	return Capacity{VCPUCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8, Operations: 32}
+}
+
+func readyMaterializations() []MaterializationSnapshot {
+	return []MaterializationSnapshot{{
+		BackendKind: "firecracker", Architecture: "amd64",
+		RuntimeDigest: "sha256:runtime", ToolchainDigest: "sha256:toolchain",
+		Digest: "sha256:materialization",
+	}}
 }
 
 func withRunnerEvidence(
@@ -167,6 +201,7 @@ func withRunnerEvidence(
 ) RunnerSnapshot {
 	runner.ID = id
 	runner.ArtifactDigests = artifacts
+	runner.Materializations = readyMaterializations()
 	return runner
 }
 
@@ -177,18 +212,19 @@ func withRunnerEvidence(
 func TestSelectRunnerAdmitsSnapshotResumeOnlyOnAdvertisingRunners(t *testing.T) {
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
-		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+		PoolName: "general", Architecture: "amd64",
 		RequiredCapabilities: []string{
 			"network-policy", "storage", "cleanup", "local-workspace", "snapshot-resume",
 		},
-		GuestProtocolGeneration: 1,
-		Capacity:                Capacity{CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
+		GuestProtocolGeneration:  1,
+		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
+		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
 	}
 	coldOnly := RunnerSnapshot{
-		ID: "runner-cold-only", PoolName: "general", Architecture: "amd64",
+		ID: "runner-cold-only", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
 		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
 		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
-		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 	}
 	resumeCapable := coldOnly
 	resumeCapable.ID = "runner-resume"

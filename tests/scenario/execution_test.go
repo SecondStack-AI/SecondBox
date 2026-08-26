@@ -145,13 +145,30 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 		if len(firstChunk) == 0 || len(firstChunk) > 4096 {
 			t.Fatalf("SecondBox scenario first credited chunk bytes = %d", len(firstChunk))
 		}
-		if err := stream.GrantOutput(4096); err != nil {
-			t.Fatal(err)
-		}
-		output, outcome := receiveScenarioExec(t, stream)
 		total := len(firstChunk)
-		for _, frame := range output {
-			total += len(frame.data)
+		consumed := len(firstChunk)
+		var outcome secondboxclient.ExecOutcome
+		for {
+			// Replenish only bytes actually consumed. Output frame boundaries are
+			// backend- and guest-dependent, while the negotiated window is not.
+			if err := stream.GrantOutput(int64(consumed)); err != nil {
+				t.Fatal(err)
+			}
+			frame, err := stream.Receive()
+			if err != nil {
+				t.Fatalf("SecondBox scenario receive credited Exec stream: %v", err)
+			}
+			if frame.StreamOutputFrame != nil {
+				content := decodeScenarioOutput(t, frame.StreamOutputFrame.DataBase64)
+				consumed = len(content)
+				total += consumed
+				continue
+			}
+			if frame.StreamOutcomeFrame == nil {
+				t.Fatalf("SecondBox scenario unsupported credited Exec frame = %#v", frame)
+			}
+			outcome = frame.StreamOutcomeFrame.Outcome
+			break
 		}
 		if total != 5000 {
 			t.Fatalf("SecondBox scenario credited output bytes = %d, want 5000", total)

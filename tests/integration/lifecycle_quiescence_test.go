@@ -230,11 +230,19 @@ func TestReadySandboxSleepsToItsIdleDeadlineAndFires(t *testing.T) {
 	// The pinned Profile's idle timeout is measured from the last useful
 	// activity, so moving that origin backwards puts the real deadline just
 	// far enough ahead to be unambiguously later than the recovery poll.
-	idleTimeout := time.Duration(testProfileSpec(1000).Lifecycle.IdleSeconds) * time.Second
+	idleTimeout := time.Duration(testProfileSpec(1).Lifecycle.IdleSeconds) * time.Second
 	deadlineDistance := 3 * teardownPollInterval
+	idleOrigin := time.Now().UTC().Add(deadlineDistance - idleTimeout)
 	if _, err := fixture.pool.Exec(t.Context(), `
 		UPDATE secondbox.sandboxes SET last_activity_at=$2 WHERE id=$1`,
-		sandboxID, time.Now().UTC().Add(deadlineDistance-idleTimeout),
+		sandboxID, idleOrigin,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.instances SET ready_at=$2
+		WHERE id=(SELECT current_instance_id FROM secondbox.sandboxes WHERE id=$1)`,
+		sandboxID, idleOrigin,
 	); err != nil {
 		t.Fatal(err)
 	}

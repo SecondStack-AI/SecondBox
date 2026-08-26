@@ -30,7 +30,7 @@ func TestSubjectCloseAndCleanupHTTPAreImmediateIdempotentAndTenantIsolated(t *te
 			Ref: ref, AllowedProfileGrants: []string{"coding"},
 			AllowedApplicationScopes: []string{"sandbox:read", "sandbox:lifecycle"},
 			AggregateQuota: secondboxclient.TenantQuota{
-				MaxSandboxes: 4, MaxActiveInstances: 4, MaxCpuMillis: 4000,
+				MaxSandboxes: 4, MaxActiveInstances: 4, MaxVcpuCount: 4,
 				MaxMemoryBytes: 4 << 30, MaxSnapshots: 4, MaxPortSessions: 4,
 				MaxConcurrentOperations: 4, MaxActiveSubjects: 4, MaxApplicationAuthorities: 4,
 			},
@@ -66,7 +66,7 @@ func TestSubjectCloseAndCleanupHTTPAreImmediateIdempotentAndTenantIsolated(t *te
 	subjectRequest := secondboxclient.CreateSubjectRequest{
 		Ref: "preview", Metadata: map[string]string{},
 		Quota: secondboxclient.SubjectQuota{
-			MaxSandboxes: 2, MaxActiveInstances: 2, MaxCpuMillis: 2000,
+			MaxSandboxes: 2, MaxActiveInstances: 2, MaxVcpuCount: 2,
 			MaxMemoryBytes: 2 << 30, MaxSnapshots: 2, MaxPortSessions: 2,
 			MaxConcurrentOperations: 2,
 		},

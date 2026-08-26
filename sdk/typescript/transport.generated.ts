@@ -528,11 +528,11 @@ export type ProfileState = "enabled" | "disabled";
 export interface QuotaUsage {
   readonly activeInstances: number;
   readonly concurrentOperations: number;
-  readonly cpuMillis: number;
   readonly memoryBytes: number;
   readonly portSessions: number;
   readonly sandboxes: number;
   readonly snapshots: number;
+  readonly vcpuCount: number;
 }
 
 export interface RelocateSandboxRequest {
@@ -552,9 +552,8 @@ export interface RenewLeaseRequest {
 
 export interface ResourcePolicy {
   readonly concurrentOperations: number;
-  readonly cpuMillis: number;
   readonly memoryBytes: number;
-  readonly processLimit: number;
+  readonly vcpuCount: number;
   readonly workspaceBytes: number;
 }
 
@@ -766,11 +765,11 @@ export interface SubjectPage {
 export interface SubjectQuota {
   readonly maxActiveInstances: number;
   readonly maxConcurrentOperations: number;
-  readonly maxCpuMillis: number;
   readonly maxMemoryBytes: number;
   readonly maxPortSessions: number;
   readonly maxSandboxes: number;
   readonly maxSnapshots: number;
+  readonly maxVcpuCount: number;
 }
 
 export type SubjectState = "active" | "closing" | "closed" | "expired";
@@ -847,11 +846,11 @@ export interface TenantQuota {
   readonly maxActiveSubjects: number;
   readonly maxApplicationAuthorities: number;
   readonly maxConcurrentOperations: number;
-  readonly maxCpuMillis: number;
   readonly maxMemoryBytes: number;
   readonly maxPortSessions: number;
   readonly maxSandboxes: number;
   readonly maxSnapshots: number;
+  readonly maxVcpuCount: number;
 }
 
 export interface TenantQuotaUsage {
@@ -859,11 +858,11 @@ export interface TenantQuotaUsage {
   readonly activeSubjects: number;
   readonly applicationAuthorities: number;
   readonly concurrentOperations: number;
-  readonly cpuMillis: number;
   readonly memoryBytes: number;
   readonly portSessions: number;
   readonly sandboxes: number;
   readonly snapshots: number;
+  readonly vcpuCount: number;
 }
 
 export type TenantState = "active" | "suspended" | "expired";

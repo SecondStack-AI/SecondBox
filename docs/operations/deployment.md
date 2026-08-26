@@ -1,5 +1,9 @@
 # Deployment and runtime operations
 
+Each Runner selects one compute backend explicitly. RunnerPool backend homogeneity is control-plane-private and is sealed by the first healthy registration; operators cannot mutate or reset it. Profiles and public resources continue to name only the RunnerPool.
+
+Firecracker is the only supported production backend and the only one this guide deploys. The experimental Microsandbox backend has no supported deployment path on Linux: it is exercised through the repository's KVM qualification suites (`just test-microsandbox-linux`, `just test-scenario-microsandbox-linux`, both requiring a pinned local Microsandbox build, `/dev/kvm`, and a reflink-capable qualification filesystem), and its only documented operator procedure is the native macOS guide at [`microsandbox-macos.md`](microsandbox-macos.md), which also records the backend's environment contract and known limitations.
+
 SecondBox deploys one unprivileged control plane and separately managed privileged Firecracker Runners. Operators describe the deployment in one strict, versioned `secondbox.toml`; `secondbox-deploy` compiles that manifest into the process environments consumed by Compose, `secondboxd`, and remote Runner service managers. The generated environment is transport, not operator input.
 
 The standalone binary distribution includes `secondbox-deploy`; the commands below assume it is on `PATH`. The `Justfile` continues to use `go run ./cmd/secondbox-deploy` as a source-checkout developer path.

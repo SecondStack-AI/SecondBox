@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "secondbox.resources/v1",
+  "runnerPools": [
+    {
+      "name": "experimental-microsandbox-arm64",
+      "architectures": ["arm64"],
+      "capabilities": ["cleanup", "compute", "evidence", "exec-streaming", "file-streaming", "local-workspace", "network-policy", "port-proxy", "pty", "storage", "workspace-relocation"],
+      "capacityPolicy": {
+        "maxMemoryBytes": 8589934592,
+        "maxSandboxes": 4,
+        "maxVcpuCount": 8
+      },
+      "state": "ready",
+      "mutableFields": ["capacityPolicy", "state"]
+    }
+  ],
+  "profiles": [
+    {
+      "name": "experimental-microsandbox-arm64",
+      "revisions": [
+        {
+          "number": 1,
+          "specDigest": "sha256:10af5253a99a56146b4f6556e0847dab5dd853ba6c969436e91ef346f7d45580",
+          "spec": {
+            "pool": "experimental-microsandbox-arm64",
+            "architecture": "arm64",
+            "runtimeBundleDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "toolchainBundleDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "resources": {
+              "vcpuCount": 2,
+              "memoryBytes": 2147483648,
+              "workspaceBytes": 8589934592,
+              "concurrentOperations": 8
+            },
+            "startup": {"mode": "cold_boot"},
+            "lifecycle": {
+              "initialState": "running",
+              "drainGraceSeconds": 60,
+              "idleSeconds": 3600,
+              "maximumDurationSeconds": 86400,
+              "leaseSeconds": 300
+            },
+            "retention": {
+              "snapshotLimit": 8,
+              "snapshotRetentionSeconds": 604800
+            },
+            "execution": {
+              "maximumDeadlineMilliseconds": 3600000,
+              "maximumBufferedOutputBytes": 16777216,
+              "streamWindowBytes": 1048576,
+              "maximumTransferBytes": 1073741824,
+              "terminalDetachSeconds": 3600,
+              "dataPlaneTransport": "proxied"
+            },
+            "network": {"mode": "deny_all", "destinations": []},
+            "ports": []
+          }
+        }
+      ]
+    }
+  ]
+}

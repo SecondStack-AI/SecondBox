@@ -38,7 +38,7 @@ type EffectBrokerConfig struct {
 	HeartbeatTimeout        time.Duration
 	RetryLimit              int64
 	SerializationRetryLimit int
-	AssetCatalog            SignedAssetCatalog
+	AssetCatalog            AssetCatalog
 	SessionCanceller        ActiveSessionCanceller
 	NewID                   func(string) string
 	NewFencingToken         func() ([]byte, error)
@@ -449,17 +449,13 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	}
 	networkPolicy, err := assignmentNetworkPolicy(plan.spec.Network)
 	if err != nil {
-		return broker.deferInvalidProfileStart(
-			ctx, claim, plan, err, nextReconcileAt.UTC(),
-		)
+		return broker.failInvalidProfileStart(ctx, claim, plan, err, now.UTC())
 	}
 	assets, guestProtocolGeneration, err := resolveProfileAssets(
 		broker.config.AssetCatalog, plan.spec,
 	)
 	if err != nil {
-		return broker.deferInvalidProfileStart(
-			ctx, claim, plan, err, nextReconcileAt.UTC(),
-		)
+		return broker.failInvalidProfileStart(ctx, claim, plan, err, now.UTC())
 	}
 	// The Runner is told which backend prerequisites its Assignment needs. The
 	// startup mode travels separately, as its own field, because a Runner decides
@@ -485,9 +481,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		},
 		ProfileRevisionId: plan.profileRevisionID,
 		Requirements: &runnerv1.ProfileRequirements{
-			VcpuCount:            uint32((plan.spec.Resources.CPUMillis + 999) / 1000),
-			VcpuMillis:           uint32(plan.spec.Resources.CPUMillis),
-			ProcessLimit:         uint32(plan.spec.Resources.ProcessLimit),
+			VcpuCount:            uint32(plan.spec.Resources.VCPUCount),
 			MemoryBytes:          uint64(plan.spec.Resources.MemoryBytes),
 			DiskBytes:            uint64(plan.spec.Resources.WorkspaceBytes),
 			Architecture:         plan.spec.Architecture,
@@ -515,10 +509,10 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		WorkspaceID: plan.workspaceID, StartMutationID: startMutationID,
 		ProfileRevisionID: plan.profileRevisionID,
 		Requirements: scheduler.Requirements{
-			PoolName: plan.spec.Pool, BackendKind: "firecracker",
+			PoolName:     plan.spec.Pool,
 			Architecture: plan.spec.Architecture, RequiredCapabilities: placementCapabilities,
 			Capacity: scheduler.Capacity{
-				CPUMillis:   plan.spec.Resources.CPUMillis,
+				VCPUCount:   plan.spec.Resources.VCPUCount,
 				MemoryBytes: plan.spec.Resources.MemoryBytes,
 				DiskBytes:   plan.spec.Resources.WorkspaceBytes,
 				Instances:   1, Operations: plan.spec.Resources.ConcurrentOperations,
@@ -598,56 +592,89 @@ func (broker *PostgresEffectBroker) observeAtOrAfter(previous time.Time) (time.T
 	return observedAt, nil
 }
 
-// deferInvalidProfileStart quarantines a start whose pinned Profile cannot be
-// resolved into a valid assignment. The Profile is durable data, not a
-// transient fault: failing here would end the reconciler and stop the server,
-// so the Sandbox defers with backoff and the anomaly is logged for the
-// operator who has to repair or replace the Profile revision.
-//
-// The deferral leaves the Sandbox exactly where the caller last saw it —
-// stopped, still wanted running — so it holds the public revision and
-// updated_at where they are, on the same rule as an ordinary wait commit: a
-// commit that changes nothing observable must not invalidate a caller's
-// If-Match. The claim stays fenced by the claim's revision and worker, and
-// clearing reconcile_owner is what stops one claim from committing twice.
-func (broker *PostgresEffectBroker) deferInvalidProfileStart(
+// failInvalidProfileStart terminally quarantines a pinned Profile that cannot
+// be represented by the trusted asset catalog or network-policy contract.
+// This is durable incompatibility, not a transient scheduling condition. It
+// must release the Workspace start mutation and fail the originating
+// Operation before any Assignment or Instance exists, otherwise reconciliation
+// retries forever and even an operator-requested delete remains blocked.
+func (broker *PostgresEffectBroker) failInvalidProfileStart(
 	ctx context.Context,
 	claim ports.LifecycleReconcileClaim,
 	plan startPlan,
 	cause error,
-	nextReconcileAt time.Time,
+	now time.Time,
 ) error {
 	slog.WarnContext(
 		ctx,
-		"SecondBox lifecycle start was deferred by an invalid Profile",
+		"SecondBox lifecycle start was rejected by an invalid Profile",
 		"sandboxId", claim.SandboxID,
 		"profileRevisionId", plan.profileRevisionID,
 		"error", cause,
 	)
 	tx, err := broker.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("SecondBox lifecycle invalid Profile deferral transaction failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle invalid Profile failure transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	if err := rowlock.SandboxQuota(ctx, tx, claim.SandboxID); err != nil {
-		return fmt.Errorf("SecondBox lifecycle invalid Profile deferral quota lock failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle invalid Profile quota lock failed: %w", err)
 	}
-	tag, err := tx.Exec(ctx, `
-		UPDATE secondbox.sandboxes
-		SET next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL
-		WHERE id=$1 AND generation=$3 AND current_instance_id=''
-		  AND revision=$4 AND reconcile_owner=$5`,
-		claim.SandboxID, nextReconcileAt, plan.generation,
-		claim.Revision, claim.WorkerID,
-	)
-	if err != nil {
-		return fmt.Errorf("SecondBox lifecycle invalid Profile deferral failed: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, claim.SandboxID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ports.ErrRevisionConflict
 	}
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle invalid Profile lock failed: %w", err)
+	}
+	if locked.Revision != claim.Revision || locked.Generation != plan.generation ||
+		locked.CurrentInstanceID != "" || locked.ReconcileOwner != claim.WorkerID {
+		return ports.ErrRevisionConflict
+	}
+	if locked.Workspace.Mutation.State != "" {
+		if locked.Workspace.Mutation.Kind != "start" ||
+			locked.Workspace.Mutation.ExpectedGeneration != plan.generation {
+			return ports.ErrWorkspaceMutation
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET mutation_kind='',mutation_id='',mutation_effect_id='',
+			    mutation_operation_id='',mutation_expected_generation=NULL,
+			    mutation_target_generation=NULL,mutation_state='',updated_at=$2
+			WHERE id=$1 AND mutation_kind='start'
+			  AND mutation_expected_generation=$3`,
+			locked.WorkspaceID, now, plan.generation,
+		); err != nil {
+			return fmt.Errorf("SecondBox lifecycle invalid Profile Workspace release failed: %w", err)
+		}
+	}
+	const safeMessage = "Pinned Profile cannot be resolved to qualified execution assets"
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET state='failed',lifecycle_action='fail',
+		    lifecycle_termination_reason='startup_failed',
+		    lifecycle_failure_class='compatibility',
+		    lifecycle_failure_message=$2,next_reconcile_at=NULL,
+		    reconcile_owner='',reconcile_claim_expires_at=NULL,
+		    revision=revision+1,updated_at=$3
+		WHERE id=$1`, claim.SandboxID, safeMessage, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox lifecycle invalid Profile Sandbox failure failed: %w", err)
+	}
+	if plan.operationID != "" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.operations
+			SET state='failed',error_code='profile_unavailable',error_message=$2,
+			    retryable=false,started_at=COALESCE(started_at,$3),
+			    completed_at=$3,updated_at=$3
+			WHERE id=$1 AND state IN ('pending','running')`,
+			plan.operationID, safeMessage, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox lifecycle invalid Profile Operation failure failed: %w", err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("SecondBox lifecycle invalid Profile deferral commit failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle invalid Profile failure commit: %w", err)
 	}
 	return nil
 }
@@ -691,9 +718,9 @@ func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
 }
 
 func resolveProfileAssets(
-	catalog SignedAssetCatalog,
+	catalog AssetCatalog,
 	spec contracts.ProfileRevisionSpec,
-) ([]*runnerv1.SignedAssetReference, uint32, error) {
+) ([]*runnerv1.AssetReference, uint32, error) {
 	runtimeAsset, err := catalog.Resolve(spec.RuntimeBundleDigest)
 	if err != nil {
 		return nil, 0, err
@@ -709,16 +736,16 @@ func resolveProfileAssets(
 		runtimeAsset.GuestProtocolGeneration != toolchainAsset.GuestProtocolGeneration {
 		return nil, 0, errors.New("SecondBox signed asset catalog is incompatible with the pinned Profile")
 	}
-	assets := []*runnerv1.SignedAssetReference{
+	assets := []*runnerv1.AssetReference{
 		{
 			ArtifactId: runtimeAsset.ArtifactID, ManifestDigest: runtimeAsset.ManifestDigest,
-			SignatureKeyId: runtimeAsset.SignatureKeyID, Architecture: runtimeAsset.Architecture,
+			Architecture:            runtimeAsset.Architecture,
 			GuestProtocolGeneration: runtimeAsset.GuestProtocolGeneration,
 			MandatoryGuestFeatures:  append([]string(nil), runtimeAsset.MandatoryGuestFeatures...),
 		},
 		{
 			ArtifactId: toolchainAsset.ArtifactID, ManifestDigest: toolchainAsset.ManifestDigest,
-			SignatureKeyId: toolchainAsset.SignatureKeyID, Architecture: toolchainAsset.Architecture,
+			Architecture:            toolchainAsset.Architecture,
 			GuestProtocolGeneration: toolchainAsset.GuestProtocolGeneration,
 			MandatoryGuestFeatures:  append([]string(nil), toolchainAsset.MandatoryGuestFeatures...),
 		},

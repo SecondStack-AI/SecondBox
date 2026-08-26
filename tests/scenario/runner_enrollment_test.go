@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -18,14 +19,22 @@ import (
 func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 	fixture := newScenarioFixture(t)
 	pool := ensureScenarioRunnerPool(t, fixture)
+	wantPoolCapabilities := []string{
+		"cleanup", "compute", "local-workspace", "network-policy", "storage",
+	}
+	wantRunnerCapabilities := []string{
+		"compute", "network-policy", "storage", "cleanup", "local-workspace",
+	}
+	architecture := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_ARCHITECTURE")
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "firecracker" {
+		wantPoolCapabilities = append(wantPoolCapabilities[:4], "snapshot-resume", "storage")
+		wantRunnerCapabilities = append(wantRunnerCapabilities, "snapshot-resume")
+	}
 	if pool.Name != scenarioRunnerPool ||
 		pool.State != contracts.RunnerPoolStateReady ||
 		pool.ReadyRunnerCount > 1 ||
-		!slices.Equal(pool.Architectures, []string{"amd64"}) ||
-		!slices.Equal(pool.Capabilities, []string{
-			"cleanup", "compute", "local-workspace", "network-policy",
-			"snapshot-resume", "storage",
-		}) ||
+		!slices.Equal(pool.Architectures, []string{architecture}) ||
+		!slices.Equal(pool.Capabilities, wantPoolCapabilities) ||
 		pool.CapacityPolicy["maximumInstances"] != 8 {
 		t.Fatalf("SecondBox scenario created RunnerPool = %#v", pool)
 	}
@@ -35,18 +44,10 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 		runner.PoolName != scenarioRunnerPool ||
 		runner.State != "ready" ||
 		runner.CredentialState != "pre_shared" ||
-		!slices.Equal(runner.Architectures, []string{"amd64"}) {
+		!slices.Equal(runner.Architectures, []string{architecture}) {
 		t.Fatalf("SecondBox scenario enrolled Runner = %#v", runner)
 	}
-	for _, capability := range []string{
-		"compute", "network-policy", "storage", "cleanup", "local-workspace",
-		// The Runner advertises snapshot-resume only when the jailer is
-		// required and its cache already holds a template built from exactly
-		// the signed bundle it verified. The scenario publisher populates that
-		// cache before the Runner starts, so its absence here is a real
-		// regression rather than a missing fixture.
-		"snapshot-resume",
-	} {
+	for _, capability := range wantRunnerCapabilities {
 		if !slices.Contains(runner.Capabilities, capability) {
 			t.Fatalf("SecondBox scenario Runner capabilities = %v, missing %s", runner.Capabilities, capability)
 		}

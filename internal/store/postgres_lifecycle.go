@@ -165,9 +165,9 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		if err != nil {
 			return contracts.Operation{}, err
 		}
-		delta := quotaUsage{activeInstances: 1, cpuMillis: spec.Resources.CPUMillis, memoryBytes: spec.Resources.MemoryBytes}
+		delta := quotaUsage{activeInstances: 1, vcpuCount: spec.Resources.VCPUCount, memoryBytes: spec.Resources.MemoryBytes}
 		if subjectUsage.activeInstances+1 > subjectQuota.MaxActiveInstances ||
-			subjectUsage.cpuMillis+delta.cpuMillis > subjectQuota.MaxCPUMillis ||
+			subjectUsage.vcpuCount+delta.vcpuCount > subjectQuota.MaxVCPUCount ||
 			subjectUsage.memoryBytes+delta.memoryBytes > subjectQuota.MaxMemoryBytes ||
 			tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, delta) {
 			return contracts.Operation{}, ports.ErrQuotaExceeded

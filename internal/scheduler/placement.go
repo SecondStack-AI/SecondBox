@@ -17,7 +17,7 @@ const (
 
 // Capacity is runner compute that may be reserved by assignments.
 type Capacity struct {
-	CPUMillis   int64
+	VCPUCount   int64
 	MemoryBytes int64
 	DiskBytes   int64
 	Instances   int64
@@ -27,7 +27,6 @@ type Capacity struct {
 // Requirements are immutable ProfileRevision placement constraints.
 type Requirements struct {
 	PoolName                 string
-	BackendKind              string
 	Architecture             string
 	RequiredCapabilities     []string
 	Capacity                 Capacity
@@ -35,10 +34,20 @@ type Requirements struct {
 	PreferredArtifactDigests []string
 }
 
+// MaterializationSnapshot is one revalidated local backend composition.
+type MaterializationSnapshot struct {
+	BackendKind     string `json:"backendKind"`
+	Architecture    string `json:"architecture"`
+	RuntimeDigest   string `json:"runtimeDigest"`
+	ToolchainDigest string `json:"toolchainDigest"`
+	Digest          string `json:"digest"`
+}
+
 // RunnerSnapshot is one durable registration and latest heartbeat view.
 type RunnerSnapshot struct {
 	ID                   string
 	PoolName             string
+	BackendKind          string
 	Architecture         string
 	Capabilities         map[string]bool
 	Allocatable          Capacity
@@ -46,6 +55,7 @@ type RunnerSnapshot struct {
 	DrainPhase           string
 	LastHeartbeatAt      time.Time
 	ArtifactDigests      []string
+	Materializations     []MaterializationSnapshot
 	GuestProtocolMinimum uint32
 	GuestProtocolMaximum uint32
 }
@@ -83,8 +93,8 @@ func SelectRunner(
 		if leftFree.Instances != rightFree.Instances {
 			return leftFree.Instances > rightFree.Instances
 		}
-		if leftFree.CPUMillis != rightFree.CPUMillis {
-			return leftFree.CPUMillis > rightFree.CPUMillis
+		if leftFree.VCPUCount != rightFree.VCPUCount {
+			return leftFree.VCPUCount > rightFree.VCPUCount
 		}
 		if leftFree.MemoryBytes != rightFree.MemoryBytes {
 			return leftFree.MemoryBytes > rightFree.MemoryBytes
@@ -132,7 +142,10 @@ func compatible(
 		runner.LastHeartbeatAt.Before(now.Add(-heartbeatTimeout)) {
 		return false
 	}
-	if requirements.BackendKind != "firecracker" || !runner.Capabilities["compute"] {
+	if runner.BackendKind == "" || !runner.Capabilities["compute"] {
+		return false
+	}
+	if len(requirements.PreferredArtifactDigests) != 2 || !hasMaterialization(runner, requirements.PreferredArtifactDigests[0], requirements.PreferredArtifactDigests[1]) {
 		return false
 	}
 	if requirements.GuestProtocolGeneration == 0 ||
@@ -153,16 +166,26 @@ func compatible(
 		}
 	}
 	free := freeCapacity(runner)
-	return free.CPUMillis >= requirements.Capacity.CPUMillis &&
+	return free.VCPUCount >= requirements.Capacity.VCPUCount &&
 		free.MemoryBytes >= requirements.Capacity.MemoryBytes &&
 		free.DiskBytes >= requirements.Capacity.DiskBytes &&
 		free.Instances >= requirements.Capacity.Instances &&
 		free.Operations >= requirements.Capacity.Operations
 }
 
+func hasMaterialization(runner RunnerSnapshot, runtimeDigest, toolchainDigest string) bool {
+	for _, candidate := range runner.Materializations {
+		if candidate.BackendKind == runner.BackendKind && candidate.Architecture == runner.Architecture &&
+			candidate.RuntimeDigest == runtimeDigest && candidate.ToolchainDigest == toolchainDigest && candidate.Digest != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func freeCapacity(runner RunnerSnapshot) Capacity {
 	return Capacity{
-		CPUMillis:   runner.Allocatable.CPUMillis - runner.Reserved.CPUMillis,
+		VCPUCount:   runner.Allocatable.VCPUCount - runner.Reserved.VCPUCount,
 		MemoryBytes: runner.Allocatable.MemoryBytes - runner.Reserved.MemoryBytes,
 		DiskBytes:   runner.Allocatable.DiskBytes - runner.Reserved.DiskBytes,
 		Instances:   runner.Allocatable.Instances - runner.Reserved.Instances,

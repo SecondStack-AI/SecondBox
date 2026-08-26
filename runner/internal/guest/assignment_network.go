@@ -18,10 +18,8 @@ import (
 // interface present, link down, and address-less, and everything that makes that
 // interface this Sandbox's arrives here.
 //
-// It carries exactly what the cold-boot kernel `ip=` argument configures and
-// nothing more: address, prefix length, and an on-link default gateway. That
-// argument's trailing nameserver field reaches only /proc/net/pnp, which no
-// resolver in the guest reads, so there is no resolver identity to reproduce.
+// It carries exactly what the cold-boot kernel `ip=` argument configures:
+// address, prefix length, an on-link default gateway, and the runner DNS proxy.
 type AssignmentNetworkIdentity struct {
 	// Interface is the guest-visible name of the snapshotted interface. It is a
 	// template compatibility-key constant, not a per-Instance value.
@@ -36,6 +34,9 @@ type AssignmentNetworkIdentity struct {
 	AddressCIDR string `json:"addressCidr"`
 	// Gateway is the host bridge address. It must be on-link within AddressCIDR.
 	Gateway string `json:"gateway"`
+	// Nameserver is the runner DNS proxy on the same bridge. It must equal the
+	// Gateway so a resumed guest cannot be directed around runner DNS policy.
+	Nameserver string `json:"nameserver"`
 }
 
 // resolvedNetworkIdentity is the validated, parsed form the installer works
@@ -48,6 +49,7 @@ type resolvedNetworkIdentity struct {
 	prefixBits int
 	broadcast  netip.Addr
 	gateway    netip.Addr
+	nameserver netip.Addr
 }
 
 const maxGuestInterfaceNameLength = 15
@@ -123,6 +125,21 @@ func (identity AssignmentNetworkIdentity) resolve() (resolvedNetworkIdentity, er
 		)
 	}
 	resolved.gateway = gateway
+	nameserver, err := netip.ParseAddr(strings.TrimSpace(identity.Nameserver))
+	if err != nil || !nameserver.Is4() {
+		return resolvedNetworkIdentity{}, fmt.Errorf(
+			"assignment network nameserver %q must be IPv4",
+			identity.Nameserver,
+		)
+	}
+	if nameserver != gateway {
+		return resolvedNetworkIdentity{}, fmt.Errorf(
+			"assignment network nameserver %s must equal the runner gateway %s",
+			nameserver,
+			gateway,
+		)
+	}
+	resolved.nameserver = nameserver
 	return resolved, nil
 }
 

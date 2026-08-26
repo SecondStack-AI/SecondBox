@@ -18,7 +18,7 @@ func validPlan(t *testing.T) InstallPlan {
 	if err != nil {
 		t.Fatal(err)
 	}
-	quotas := map[string]int64{"maxSandboxes": 20, "maxActiveInstances": 8, "maxCpuMillis": 32000, "maxMemoryBytes": 24 << 30, "maxSnapshots": 100, "maxPortSessions": 50, "maxConcurrentOperations": 8}
+	quotas := map[string]int64{"maxSandboxes": 20, "maxActiveInstances": 8, "maxVcpuCount": 32, "maxMemoryBytes": 24 << 30, "maxSnapshots": 100, "maxPortSessions": 50, "maxConcurrentOperations": 8}
 	images := map[string]string{}
 	for _, name := range []string{"control-plane", "runner", "microvm-artifacts", "installer-tools", "postgres"} {
 		images[name] = "ghcr.io/secondstack-ai/secondbox/" + name + "@sha256:" + strings.Repeat("b", 64)
@@ -26,9 +26,90 @@ func validPlan(t *testing.T) InstallPlan {
 	runnerRoot := "/srv/secondbox/secondbox-install_0123456789abcdef"
 	runnerStorage := runnerRoot + "/storage"
 	workspace := runnerStorage + "/workspaces"
-	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: "install_0123456789abcdef", CreatedAt: now, HostFacts: facts, HostFactsDigest: factsDigest, Release: ReleasePlan{Version: "0.4.0", ArtifactManifestURL: "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.0/secondbox-0.4.0-artifact-manifest.json", ArtifactManifestDigest: "sha256:" + strings.Repeat("a", 64), SigningKeyFingerprint: "SHA256:" + strings.Repeat("A", 64), Images: images, BinaryDigests: map[string]string{"secondbox": strings.Repeat("c", 64), "secondbox-deploy": strings.Repeat("d", 64)}, ExpectedDownloadBytes: 12 << 30}, Storage: StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: "8:2"}, Capacity: CapacityPlan{MaxSandboxes: 8, MaxCPUMillis: 32000, MaxMemoryBytes: 24 << 30, MaxWorkspaceBytes: 200 << 30, ConcurrentStarts: 2, ConcurrentOperations: 8, StoragePressurePercent: 85, SubjectQuotas: quotas}, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: NetworkPlan{APIAddress: "127.0.0.1:8080", RunnerAddress: "127.0.0.1:9443", DataPlaneAddress: "127.0.0.1:9444", DatabaseAddress: "127.0.0.1:5432", GuestBridgeCIDR: "172.30.0.0/24", ComposeBackendCIDR: "172.31.0.0/24", TAPPrefix: "sbx", CgroupParent: "secondbox", JailerUIDRange: UIDRange{Start: 200000, Count: 64}, DNSUpstream: "1.1.1.1", Gateways: map[string]string{"agent-compartment": "gateway-agent", "durable-coding": "gateway-coding"}}, CLI: CLIPlan{ConfigPath: "/home/operator/.config/secondbox/config.json"}, Paths: []PlannedPath{plannedPath("deployment", "/srv/secondbox/deployment", PathUserDeployment, ResourceDirectory, 0o700, 1000, 1000, false, true), plannedPath("platform-token", "/srv/secondbox/deployment/secrets/platform-token", PathUserDeployment, ResourceFile, 0o600, 1000, 1000, false, true), plannedPath("binary-directory-root", "/home/operator/.local", PathUserDeployment, ResourceDirectory, 0o755, 1000, 1000, false, true), plannedPath("binary-directory", "/home/operator/.local/bin", PathUserDeployment, ResourceDirectory, 0o755, 1000, 1000, false, true), plannedPath("cli-config", "/home/operator/.config/secondbox/config.json", PathUserDeployment, ResourceFile, 0o600, 1000, 1000, false, true), plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true), plannedPath("runner-storage", runnerStorage, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true), plannedPath("artifacts-parent", runnerStorage+"/release", PathInstallerHost, ResourceDirectory, 0o700, 1000, 1000, true, true), plannedPath("artifacts", runnerStorage+"/release/artifacts", PathInstallerHost, ResourceDirectory, 0o700, 1000, 1000, false, true), plannedPath("state", runnerStorage+"/state", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("jail", runnerStorage+"/jail", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("run", runnerStorage+"/state/run", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("logs", runnerStorage+"/state/logs", PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true), plannedPath("firecracker-logs", runnerStorage+"/state/firecracker-logs", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true)}, SecretTargets: []SecretTarget{{Category: "platform-authority", Path: "/srv/secondbox/deployment/secrets/platform-token"}}, GeneratedAuthorityCategories: []string{"platform-authority"}, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400, PrivilegedActions: []string{"create Runner directories"}}
+	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: "install_0123456789abcdef", CreatedAt: now, HostFacts: facts, HostFactsDigest: factsDigest, Release: ReleasePlan{Version: "0.4.0", ArtifactManifestURL: "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.0/secondbox-0.4.0-artifact-manifest.json", ArtifactManifestDigest: "sha256:" + strings.Repeat("a", 64), SigningKeyFingerprint: "SHA256:" + strings.Repeat("A", 64), Images: images, BinaryDigests: map[string]string{"secondbox": strings.Repeat("c", 64), "secondbox-deploy": strings.Repeat("d", 64)}, ExpectedDownloadBytes: 12 << 30}, Storage: StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: "8:2"}, Capacity: CapacityPlan{MaxSandboxes: 8, MaxVCPUCount: 32, MaxMemoryBytes: 24 << 30, MaxWorkspaceBytes: 200 << 30, ConcurrentStarts: 2, ConcurrentOperations: 8, StoragePressurePercent: 85, SubjectQuotas: quotas}, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: NetworkPlan{APIAddress: "127.0.0.1:8080", RunnerAddress: "127.0.0.1:9443", DataPlaneAddress: "127.0.0.1:9444", DatabaseAddress: "127.0.0.1:5432", GuestBridgeCIDR: "172.30.0.0/24", ComposeBackendCIDR: "172.31.0.0/24", TAPPrefix: "sbx", CgroupParent: "secondbox", JailerUIDRange: UIDRange{Start: 200000, Count: 64}, DNSUpstream: "1.1.1.1", Gateways: map[string]string{"agent-compartment": "gateway-agent", "durable-coding": "gateway-coding"}}, CLI: CLIPlan{ConfigPath: "/home/operator/.config/secondbox/config.json"}, Paths: []PlannedPath{plannedPath("deployment", "/srv/secondbox/deployment", PathUserDeployment, ResourceDirectory, 0o700, 1000, 1000, false, true), plannedPath("platform-token", "/srv/secondbox/deployment/secrets/platform-token", PathUserDeployment, ResourceFile, 0o600, 1000, 1000, false, true), plannedPath("binary-directory-root", "/home/operator/.local", PathUserDeployment, ResourceDirectory, 0o755, 1000, 1000, false, true), plannedPath("binary-directory", "/home/operator/.local/bin", PathUserDeployment, ResourceDirectory, 0o755, 1000, 1000, false, true), plannedPath("cli-config", "/home/operator/.config/secondbox/config.json", PathUserDeployment, ResourceFile, 0o600, 1000, 1000, false, true), plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true), plannedPath("runner-storage", runnerStorage, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true), plannedPath("artifacts-parent", runnerStorage+"/release", PathInstallerHost, ResourceDirectory, 0o700, 1000, 1000, true, true), plannedPath("artifacts", runnerStorage+"/release/artifacts", PathInstallerHost, ResourceDirectory, 0o700, 1000, 1000, false, true), plannedPath("state", runnerStorage+"/state", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("jail", runnerStorage+"/jail", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("run", runnerStorage+"/state/run", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("logs", runnerStorage+"/state/logs", PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true), plannedPath("firecracker-logs", runnerStorage+"/state/firecracker-logs", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true)}, SecretTargets: []SecretTarget{{Category: "platform-authority", Path: "/srv/secondbox/deployment/secrets/platform-token"}}, GeneratedAuthorityCategories: []string{"platform-authority"}, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400, PrivilegedActions: []string{"create Runner directories"}}
 	plan.ReleaseHistory = []ReleaseActivation{{Release: plan.Release, ActivatedAt: now}}
 	return plan
+}
+
+// TestLegacyCapacitySpellingRoundTripsWithStableIdentity proves a plan whose
+// accepting release stated CPU in milli-units still decodes, keeps its exact
+// recorded spelling through re-encoding (so its digest and receipt identity
+// never move), and reads back as whole vCPUs through the accessors.
+func TestLegacyCapacitySpellingRoundTripsWithStableIdentity(t *testing.T) {
+	plan := validPlan(t)
+	plan.Capacity.MaxVCPUCount = 0
+	plan.Capacity.LegacyMaxCPUMillis = 32500
+	delete(plan.Capacity.SubjectQuotas, "maxVcpuCount")
+	plan.Capacity.SubjectQuotas["maxCpuMillis"] = 4500
+	encoded, err := Canonical(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodePlan(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reencoded, err := Canonical(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reencoded) != string(encoded) {
+		t.Fatal("legacy capacity spelling did not round-trip byte-for-byte")
+	}
+	if got := decoded.Capacity.VCPUCount(); got != 33 {
+		t.Fatalf("legacy capacity VCPUCount = %d, want 33 (32500 milli-units rounded up)", got)
+	}
+	if got := decoded.Capacity.SubjectQuotaVCPUCount(); got != 5 {
+		t.Fatalf("legacy subject quota vCPUs = %d, want 5 (4500 milli-units rounded up)", got)
+	}
+	conflicted := validPlan(t)
+	conflicted.Capacity.LegacyMaxCPUMillis = 1000
+	if err := conflicted.Validate(); err == nil {
+		t.Fatal("a plan stating both CPU spellings was accepted")
+	}
+}
+
+// TestFrozenV060PlanDecodesWithStableIdentity decodes the exact plan bytes a
+// v0.6.0 release recorded (frozen in testdata, independent of current struct
+// tags), proving strict decoding accepts them, the accessors normalize the
+// milli-unit spelling, and re-encoding reproduces the recorded bytes so the
+// plan digest a v0.6.0 receipt pinned never moves.
+func TestFrozenV060PlanDecodesWithStableIdentity(t *testing.T) {
+	frozen, err := os.ReadFile(filepath.Join("testdata", "v060-plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := DecodePlan(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Capacity.VCPUCount(); got != 32 {
+		t.Fatalf("frozen plan VCPUCount = %d, want 32", got)
+	}
+	if got := plan.Capacity.SubjectQuotaVCPUCount(); got != 32 {
+		t.Fatalf("frozen plan subject quota vCPUs = %d, want 32", got)
+	}
+	reencoded, err := Canonical(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reencoded) != string(frozen) {
+		t.Fatal("frozen v0.6.0 plan bytes did not survive a decode round-trip")
+	}
+	if plan.Release.Version != "0.6.0" {
+		t.Fatalf("frozen plan release version = %q, want 0.6.0", plan.Release.Version)
+	}
+	frozenReceipt, err := os.ReadFile(filepath.Join("testdata", "v060-receipt.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := DecodeReceipt(frozenReceipt, plan)
+	if err != nil {
+		t.Fatalf("frozen v0.6.0 receipt was rejected against the frozen plan: %v", err)
+	}
+	if receipt.PlanDigest != Digest(frozen) {
+		t.Fatalf("frozen receipt pins digest %s, want the frozen plan bytes' %s", receipt.PlanDigest, Digest(frozen))
+	}
 }
 
 func TestStrictCanonicalPlanAndReceiptIdentity(t *testing.T) {

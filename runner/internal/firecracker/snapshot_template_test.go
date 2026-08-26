@@ -34,13 +34,13 @@ func testSnapshotTemplateKey() SnapshotTemplateKey {
 		VCPUCount:               1,
 		MemorySizeMiB:           512,
 		WorkspaceSizeMiB:        64,
-		ProcessLimit:            256,
-		RuntimeClass:            "tool_executor",
-		NetworkInterfaceID:      "eth0",
-		TemplateGuestMAC:        "02:00:00:5b:7e:00",
-		GuestControlVsockPort:   1024,
-		GuestProtocolVsockPort:  1025,
-		GuestCID:                3,
+
+		RuntimeClass:           "tool_executor",
+		NetworkInterfaceID:     "eth0",
+		TemplateGuestMAC:       "02:00:00:5b:7e:00",
+		GuestControlVsockPort:  1024,
+		GuestProtocolVsockPort: 1025,
+		GuestCID:               3,
 	}
 }
 
@@ -130,7 +130,6 @@ func TestSnapshotTemplateKeyChangeProducesNewIdentity(t *testing.T) {
 		"signing key":     func(k *SnapshotTemplateKey) { k.SigningKeyFingerprint = strings.Repeat("3", 64) },
 		"signed manifest": func(k *SnapshotTemplateKey) { k.SignedManifestDigest = "sha256:" + strings.Repeat("4", 64) },
 		"workspace shape": func(k *SnapshotTemplateKey) { k.WorkspaceSizeMiB = 128 },
-		"process limit":   func(k *SnapshotTemplateKey) { k.ProcessLimit = 512 },
 		"runtime class":   func(k *SnapshotTemplateKey) { k.RuntimeClass = "other" },
 		"network shape":   func(k *SnapshotTemplateKey) { k.NetworkInterfaceID = "eth1" },
 		"template mac":    func(k *SnapshotTemplateKey) { k.TemplateGuestMAC = "02:00:00:5b:7e:01" },

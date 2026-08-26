@@ -1,4 +1,5 @@
 {
+"SECONDBOX_COMPUTE_BACKEND": "firecracker",
 "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY": "/opt/secondbox/manifest-public.pem",
 "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 "SECONDBOX_RUNNER_CLIENT_CERTIFICATE": "/etc/secondbox/identity/runner.crt",

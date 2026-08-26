@@ -60,7 +60,8 @@ type BackendReadiness struct {
 	Capacity          *runnerprotocol.Capacity
 	Reserved          *runnerprotocol.Capacity
 	Capabilities      *runnerprotocol.RunnerCapabilities
-	ArtifactCache     []*runnerprotocol.ArtifactCacheEvidence
+	BackendKind       runnerprotocol.ComputeBackendKind
+	Materializations  []*runnerprotocol.BackendMaterializationEvidence
 	ReadinessFailures []runnerprotocol.RunnerReadinessFailure
 }
 
@@ -153,6 +154,14 @@ type startupTimingBackend interface {
 
 type evidenceAwareBackend interface {
 	SetRunnerEvidenceSink(runnerevidence.Sink, string)
+}
+
+type assignmentDecisionError interface {
+	AssignmentDecision() runnerprotocol.AssignmentDecision
+}
+
+type assignmentTerminalError interface {
+	AssignmentTerminal() runnerprotocol.AssignmentTerminalKind
 }
 
 type instanceTerminalBackend interface {
@@ -571,7 +580,8 @@ func (s *RunnerProtocolService) sendRegistration(
 						Capabilities:      readiness.Capabilities,
 						Allocatable:       readiness.Capacity,
 						Reserved:          readiness.Reserved,
-						ArtifactCache:     readiness.ArtifactCache,
+						BackendKind:       readiness.BackendKind,
+						Materializations:  readiness.Materializations,
 						ReadinessFailures: readiness.ReadinessFailures,
 						StartupTiming:     s.startupTiming(),
 
@@ -1087,10 +1097,15 @@ func (s *RunnerProtocolService) handleAssignment(
 		)
 	}
 	if err := s.backend.ValidateAssignment(ctx, assignment); err != nil {
+		decision := runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE
+		var typed assignmentDecisionError
+		if errors.As(err, &typed) {
+			decision = typed.AssignmentDecision()
+		}
 		return s.sendAssignmentAck(
 			stream,
 			assignment,
-			runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE,
+			decision,
 			err.Error(),
 		)
 	}
@@ -1124,6 +1139,10 @@ func (s *RunnerProtocolService) handleAssignment(
 			"error", err,
 		)
 		terminal = runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_RUNNER_FAILED
+		var typed assignmentTerminalError
+		if errors.As(err, &typed) {
+			terminal = typed.AssignmentTerminal()
+		}
 		safeDetail = "runner failed to start assignment"
 	} else {
 		s.recordActiveAssignment(assignment.Fence, instance.BackendReference)
@@ -1662,8 +1681,6 @@ func validateResolvedAssignment(assignment *runnerprotocol.AssignmentCommand) er
 	}
 	requirements := assignment.Requirements
 	if requirements.VcpuCount == 0 ||
-		requirements.VcpuMillis == 0 ||
-		requirements.ProcessLimit == 0 ||
 		requirements.MemoryBytes == 0 ||
 		requirements.DiskBytes == 0 ||
 		strings.TrimSpace(requirements.Architecture) == "" ||
@@ -1671,20 +1688,16 @@ func validateResolvedAssignment(assignment *runnerprotocol.AssignmentCommand) er
 		requirements.MaximumOutputBytes == 0 {
 		return fmt.Errorf("SecondBox runner assignment has incomplete immutable profile requirements")
 	}
-	if (requirements.VcpuMillis+999)/1000 != requirements.VcpuCount {
-		return fmt.Errorf("SecondBox runner assignment CPU millis and vCPU count are inconsistent")
-	}
 	if len(assignment.Assets) == 0 {
-		return fmt.Errorf("SecondBox runner assignment has no signed immutable assets")
+		return fmt.Errorf("SecondBox runner assignment has no immutable assets")
 	}
 	for _, asset := range assignment.Assets {
 		if asset == nil ||
 			strings.TrimSpace(asset.ArtifactId) == "" ||
 			!immutableManifestDigest.MatchString(asset.ManifestDigest) ||
-			strings.TrimSpace(asset.SignatureKeyId) == "" ||
 			strings.TrimSpace(asset.Architecture) == "" ||
 			asset.GuestProtocolGeneration == 0 {
-			return fmt.Errorf("SecondBox runner assignment contains a mutable or unsigned asset")
+			return fmt.Errorf("SecondBox runner assignment contains a mutable or incomplete asset")
 		}
 	}
 	if err := validateResolvedNetworkPolicy(assignment.NetworkPolicy); err != nil {

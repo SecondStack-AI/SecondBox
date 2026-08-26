@@ -1,0 +1,36 @@
+[package]
+name = "secondbox-microsandbox-helper"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+build = "build.rs"
+
+# Keep the helper independently locked when the local builder stages it beneath the pinned
+# Microsandbox source workspace.
+[workspace]
+
+[dependencies]
+libc = "=0.2.183"
+microsandbox-agent-client = { version = "=0.6.8", default-features = false, features = ["stream"] }
+microsandbox-network = { path = "../../crates/network" }
+microsandbox-protocol = "=0.6.8"
+microsandbox-types = { path = "../../packages/microsandbox-types/rust" }
+msb_krun = { version = "=0.1.30", features = ["blk", "net"] }
+msb_krun_utils = "=0.1.30"
+prost = "=0.14.3"
+thiserror = "=2.0.17"
+tokio = { version = "=1.52.0", features = ["io-util", "net", "rt-multi-thread", "sync", "time"] }
+tempfile = "=3.26.0"
+
+[build-dependencies]
+prost-build = "=0.14.3"
+
+[dev-dependencies]
+proptest = "=1.9.0"
+
+[features]
+default = []
+# The production local builder stages this crate into the exact patched
+# Microsandbox 5b335537 workspace and enables its libkrun composition there.
+patched-microsandbox = []

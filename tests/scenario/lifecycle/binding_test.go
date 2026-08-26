@@ -15,7 +15,7 @@ func bindingConfig() lifecycleConfig {
 			MaxConcurrentOperationsGlobal: 4000,
 		},
 		Profile: profileLimits{
-			CPUMillis:            1000,
+			VCPUCount:            1,
 			MemoryBytes:          512 << 20,
 			WorkspaceBytes:       1 << 30,
 			ConcurrentOperations: 4,
@@ -25,7 +25,7 @@ func bindingConfig() lifecycleConfig {
 		SubjectMaxSandboxes:            1000,
 		SubjectMaxConcurrentOperations: 1000,
 		SubjectMaxSnapshots:            1000,
-		SubjectMaxCPUMillis:            1000 * 1000,
+		SubjectMaxVCPUCount:            1000,
 		SubjectMaxMemoryBytes:          1000 * (512 << 20),
 	}
 	return config
@@ -84,7 +84,7 @@ func TestConfiguredBindingNamesTheSmallestLimit(t *testing.T) {
 		},
 		{
 			name:     "subject CPU quota",
-			mutate:   func(c *lifecycleConfig) { c.SubjectMaxCPUMillis = 24000 },
+			mutate:   func(c *lifecycleConfig) { c.SubjectMaxVCPUCount = 24 },
 			capacity: 24,
 			binding:  "subject quota: CPU",
 		},

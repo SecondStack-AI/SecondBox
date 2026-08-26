@@ -213,6 +213,7 @@ func TestSmokeJailedSnapshotResume(t *testing.T) {
 	store, err := workspacestore.New(t.Context(), workspacestore.Config{
 		Root:                  filepath.Join(workDir, "resume-workspaces"),
 		TemplateCapacityBytes: int64(workspaceMiB) << 20,
+		FormatterKind:         workspacestore.FormatterMke2fs,
 	})
 	if err != nil {
 		t.Fatalf("new resume WorkspaceStore: %v", err)
@@ -545,19 +546,18 @@ func (inst *jailedResumeInstance) resume(
 	}
 	inst.sample.TemplateIdentityMicros = time.Since(identityStartedAt).Microseconds()
 
-	workspaceImage := inst.attachment.Image()
+	workspaceImage := inst.attachment.Descriptor()
 	if workspaceImage == nil || inst.attachment.Generation() != 1 {
 		return fmt.Errorf("resolved Workspace attachment generation is stale")
 	}
 	policy := &runtimemanager.SandboxRuntimePolicy{
-		VCPUs:             cfg.MicroVMVCPUs,
-		CPUMillis:         cfg.MicroVMVCPUs * 1000,
-		MemoryMiB:         memoryMiB,
-		WorkspaceSizeMiB:  workspaceMiB,
-		ProcessLimit:      opts.SandboxPolicy.ProcessLimit,
+		VCPUs:            cfg.MicroVMVCPUs,
+		MemoryMiB:        memoryMiB,
+		WorkspaceSizeMiB: workspaceMiB,
+
 		WorkspaceWritable: true,
 	}
-	launch, err := inst.startResumeProcess(ctx, manager, cfg, template, workspaceImage.Name(), policy)
+	launch, err := inst.startResumeProcess(ctx, manager, cfg, template, policy)
 	if err != nil {
 		return err
 	}
@@ -607,6 +607,7 @@ func (inst *jailedResumeInstance) resume(
 			MACAddress:  guestMACForInstance(inst.tapName),
 			AddressCIDR: guestAddressCIDR(inst.guestIP, cfg.MicroVMBridgeCIDR),
 			Gateway:     bridgeAddress(cfg.MicroVMBridgeCIDR).String(),
+			Nameserver:  bridgeAddress(cfg.MicroVMBridgeCIDR).String(),
 		},
 	}); err != nil {
 		return fmt.Errorf("bind resumed guest assignment: %w", err)
@@ -659,7 +660,6 @@ func (inst *jailedResumeInstance) startResumeProcess(
 	manager *Manager,
 	cfg *config.Config,
 	template *AdmittedSnapshotTemplate,
-	workspacePath string,
 	policy *runtimemanager.SandboxRuntimePolicy,
 ) (snapshotResumeLaunch, error) {
 	networkStartedAt := time.Now()
@@ -705,7 +705,7 @@ func (inst *jailedResumeInstance) startResumeProcess(
 		inst.id,
 		inst.runDir,
 		template,
-		workspacePath,
+		inst.attachment,
 		"",
 		inst.jailerUID,
 		policy,
@@ -876,16 +876,11 @@ func measureSnapshotResumeNetworkFindings(
 		t.Fatalf("new network-finding manager: %v", err)
 	}
 	defer releaseManagerNetworkPolicy(t, manager)
-	opts := smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
-		Timezone:      "UTC",
-		CompartmentID: "cmp_resume_netfind",
-	})
 	policy := &runtimemanager.SandboxRuntimePolicy{
-		VCPUs:             cfg.MicroVMVCPUs,
-		CPUMillis:         cfg.MicroVMVCPUs * 1000,
-		MemoryMiB:         memoryMiB,
-		WorkspaceSizeMiB:  workspaceMiB,
-		ProcessLimit:      opts.SandboxPolicy.ProcessLimit,
+		VCPUs:            cfg.MicroVMVCPUs,
+		MemoryMiB:        memoryMiB,
+		WorkspaceSizeMiB: workspaceMiB,
+
 		WorkspaceWritable: true,
 	}
 
@@ -897,7 +892,7 @@ func measureSnapshotResumeNetworkFindings(
 			t.Errorf("release absent-interface finding instance: %v", err)
 		}
 	}()
-	absentLaunch, err := absent.startResumeProcess(t.Context(), manager, cfg, template, absent.attachment.Image().Name(), policy)
+	absentLaunch, err := absent.startResumeProcess(t.Context(), manager, cfg, template, policy)
 	if err != nil {
 		t.Fatalf("start absent-interface finding instance: %v", err)
 	}
@@ -926,7 +921,7 @@ func measureSnapshotResumeNetworkFindings(
 			t.Errorf("release rebinding finding instance: %v", err)
 		}
 	}()
-	reboundLaunch, err := rebound.startResumeProcess(t.Context(), manager, cfg, template, rebound.attachment.Image().Name(), policy)
+	reboundLaunch, err := rebound.startResumeProcess(t.Context(), manager, cfg, template, policy)
 	if err != nil {
 		t.Fatalf("start rebinding finding instance: %v", err)
 	}

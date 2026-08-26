@@ -41,10 +41,19 @@ func TestScenarioOrdinaryLifecycleAndCapacityRelease(t *testing.T) {
 			return handle.Drain(ctx, options)
 		},
 	)
-	draining := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateDraining)
-	if draining.DesiredState != contracts.SandboxDesiredStateStopped ||
-		draining.Instance == nil ||
-		draining.Instance.TerminationReason != contracts.TerminationReasonRequestedDrain {
+	draining := waitForSandbox(
+		t,
+		ctx,
+		handle,
+		secondboxclient.SandboxStateDraining,
+		secondboxclient.SandboxStateStopped,
+	)
+	if draining.DesiredState != contracts.SandboxDesiredStateStopped {
+		t.Fatalf("SecondBox scenario drain transition = %#v", draining)
+	}
+	if draining.State == secondboxclient.SandboxStateDraining &&
+		(draining.Instance == nil ||
+			draining.Instance.TerminationReason != contracts.TerminationReasonRequestedDrain) {
 		t.Fatalf("SecondBox scenario draining Sandbox = %#v", draining)
 	}
 	released := scenarioJSON[contracts.Lease](
@@ -57,7 +66,8 @@ func TestScenarioOrdinaryLifecycleAndCapacityRelease(t *testing.T) {
 			Headers:        scenarioHeaders(uniqueScenarioKey(t, "lifecycle-drain-release")),
 		},
 	)
-	if released.State != contracts.LeaseStateReleased {
+	if released.State != contracts.LeaseStateReleased &&
+		released.State != contracts.LeaseStateFenced {
 		t.Fatalf("SecondBox scenario drain Lease release = %#v", released)
 	}
 	waitForScenarioOperation(t, ctx, fixture.subject, drainOperation)

@@ -15,8 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtimeconfig"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
@@ -35,7 +33,7 @@ func main() {
 		}
 		return
 	}
-	if handled, err := jailersupervisor.RunInvocation(os.Args[1:]); handled {
+	if handled, err := runPlatformSupervisorInvocation(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "SecondBox jailer supervisor failed: %v\n", err)
 			os.Exit(1)
@@ -82,30 +80,27 @@ func run(arguments []string) (runErr error) {
 	defer func() {
 		runErr = errors.Join(runErr, closeLog())
 	}()
-	firecrackerConfig := composition.Firecracker
+	formatterKind := workspacestore.FormatterMke2fs
+	if composition.BackendKind == "microsandbox" {
+		formatterKind = workspacestore.FormatterMicrosandboxHelper
+	}
 	workspaceStore, err := workspacestore.New(
 		context.Background(),
 		workspacestore.Config{
-			Root:                  firecrackerConfig.RunnerWorkspaceRoot,
-			TemplateCapacityBytes: int64(firecrackerConfig.MicroVMWorkspaceSizeMiB) << 20,
+			Root:                         composition.WorkspaceRoot,
+			TemplateCapacityBytes:        composition.WorkspaceTemplateCapacityBytes,
+			FormatterKind:                formatterKind,
+			MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 		},
 	)
 	if err != nil {
 		return fmt.Errorf("initialize SecondBox runner WorkspaceStore: %w", err)
 	}
-	manager, err := firecracker.New(firecrackerConfig)
+	backend, shutdownBackend, err := newPlatformAssignmentBackend(
+		context.Background(), composition, workspaceStore,
+	)
 	if err != nil {
-		return fmt.Errorf("create SecondBox Firecracker backend: %w", err)
-	}
-	if err := manager.SetWorkspaceStore(workspaceStore); err != nil {
-		return fmt.Errorf("bind SecondBox runner WorkspaceStore: %w", err)
-	}
-	if err := manager.Start(context.Background()); err != nil {
-		return fmt.Errorf("start SecondBox Firecracker backend: %w", err)
-	}
-	backend, err := firecracker.NewAssignmentBackend(manager)
-	if err != nil {
-		return fmt.Errorf("create SecondBox assignment backend: %w", err)
+		return err
 	}
 	service, err := runnercontrol.NewRunnerProtocolService(protocolConfig, backend, connector)
 	if err != nil {
@@ -117,7 +112,7 @@ func run(arguments []string) (runErr error) {
 	runErr = service.Run(ctx)
 	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelShutdown()
-	shutdownErr := manager.Shutdown(shutdownContext)
+	shutdownErr := shutdownBackend(shutdownContext)
 	if runErr != nil && ctx.Err() == nil {
 		runErr = fmt.Errorf("SecondBox runner protocol stopped: %w", runErr)
 	} else {
@@ -140,11 +135,4 @@ func configureRunnerLogging(path string) (func() error, error) {
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(io.MultiWriter(os.Stdout, file), nil)))
 	return file.Close, nil
-}
-
-func validateRunnerExecutionIdentity(healthcheck bool, effectiveUID int) error {
-	if !healthcheck && effectiveUID != 0 {
-		return fmt.Errorf("SecondBox runner must run as root to own Firecracker host resources")
-	}
-	return nil
 }

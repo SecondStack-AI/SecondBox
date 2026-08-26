@@ -50,7 +50,7 @@ type stressConfig struct {
 	SubjectMaxConcurrentOps    int                 `json:"subjectMaxConcurrentOperations"`
 	SubjectMaxSnapshots        int                 `json:"subjectMaxSnapshots"`
 	SubjectMaxPortSessions     int                 `json:"subjectMaxPortSessions"`
-	SubjectMaxCPUMillis        int64               `json:"subjectMaxCpuMillis"`
+	SubjectMaxVCPUCount        int64               `json:"subjectMaxVcpuCount"`
 	SubjectMaxMemoryBytes      int64               `json:"subjectMaxMemoryBytes"`
 }
 
@@ -71,10 +71,9 @@ type stressRunnerConfig struct {
 }
 
 type stressProfileConfig struct {
-	CPUMillis                   int64  `json:"cpuMillis"`
+	VCPUCount                   int64  `json:"vcpuCount"`
 	MemoryBytes                 int64  `json:"memoryBytes"`
 	WorkspaceBytes              int64  `json:"workspaceBytes"`
-	ProcessLimit                int64  `json:"processLimit"`
 	ConcurrentOperations        int64  `json:"concurrentOperations"`
 	DrainGraceSeconds           int64  `json:"drainGraceSeconds"`
 	IdleSeconds                 int64  `json:"idleSeconds"`
@@ -198,8 +197,8 @@ func (config stressConfig) validate() error {
 		return errors.New("SecondBox stress config latencyDegradationRatio must be greater than 1")
 	}
 	for name, value := range map[string]int64{
-		"subjectMaxCpuMillis":     config.SubjectMaxCPUMillis,
-		"subjectMaxMemoryBytes":   config.SubjectMaxMemoryBytes,
+		"subjectMaxVcpuCount":   config.SubjectMaxVCPUCount,
+		"subjectMaxMemoryBytes": config.SubjectMaxMemoryBytes,
 	} {
 		if value < 1 {
 			return fmt.Errorf("SecondBox stress config %s must be positive", name)
@@ -224,13 +223,13 @@ func (config stressConfig) validate() error {
 	if config.Profile.WorkspaceBytes > int64(config.Runner.SandboxDiskMiB)<<20 {
 		return errors.New("SecondBox stress Profile workspace exceeds runner sandbox disk")
 	}
-	if config.Profile.CPUMillis > int64(config.Runner.SandboxMaxVCPUs)*1000 {
+	if config.Profile.VCPUCount > int64(config.Runner.SandboxMaxVCPUs) {
 		return errors.New("SecondBox stress Profile CPU exceeds runner sandbox vCPU capacity")
 	}
 	if config.Runner.MemoryBudgetMiB < config.Runner.SandboxMemoryMiB {
 		return errors.New("SecondBox stress runner memory budget cannot admit one Sandbox")
 	}
-	if config.SubjectMaxCPUMillis < config.Profile.CPUMillis ||
+	if config.SubjectMaxVCPUCount < config.Profile.VCPUCount ||
 		config.SubjectMaxMemoryBytes < config.Profile.MemoryBytes {
 		return errors.New("SecondBox stress subject quota cannot admit one configured Profile")
 	}
@@ -270,10 +269,9 @@ func (config stressRunnerConfig) validate() error {
 
 func (config stressProfileConfig) validate() error {
 	for name, value := range map[string]int64{
-		"cpuMillis":                   config.CPUMillis,
+		"vcpuCount":                   config.VCPUCount,
 		"memoryBytes":                 config.MemoryBytes,
 		"workspaceBytes":              config.WorkspaceBytes,
-		"processLimit":                config.ProcessLimit,
 		"concurrentOperations":        config.ConcurrentOperations,
 		"drainGraceSeconds":           config.DrainGraceSeconds,
 		"idleSeconds":                 config.IdleSeconds,
@@ -319,7 +317,7 @@ func (config stressConfig) configuredBinding(guestCIDR string) configuredLimit {
 		{Name: "Sandboxes", Capacity: config.SubjectMaxSandboxes},
 		{
 			Name:     "CPU",
-			Capacity: int(config.SubjectMaxCPUMillis / config.Profile.CPUMillis),
+			Capacity: int(config.SubjectMaxVCPUCount / config.Profile.VCPUCount),
 		},
 		{
 			Name:     "memory",
@@ -335,7 +333,7 @@ func (config stressConfig) configuredBinding(guestCIDR string) configuredLimit {
 			Name: "runner CPU capacity",
 			Capacity: int(
 				int64(config.Runner.SandboxMaxVCPUs*config.Runner.MaxConcurrentGlobal*1000) /
-					config.Profile.CPUMillis,
+					config.Profile.VCPUCount,
 			),
 		},
 		{

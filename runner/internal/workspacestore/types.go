@@ -8,6 +8,7 @@ package workspacestore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -60,7 +61,7 @@ const (
 	ReceiptRelocationExport      = "relocation_export"
 	ReceiptRelocationImport      = "relocation_import"
 	ReceiptRelocationAbort       = "relocation_abort"
-	workspaceFilesystemLabel     = "secondbox-workspace"
+	workspaceFilesystemLabel     = "secondbox"
 	currentManifestFormatVersion = 1
 	receiptFormatVersion         = 1
 )
@@ -88,9 +89,12 @@ func (handle WorkspaceHandle) Generation() uint64 {
 // descriptor. Callers must close it only after compute and every host-side user
 // have stopped.
 type Attachment struct {
-	handle WorkspaceHandle
-	file   *os.File
-	lock   *os.File
+	handle         WorkspaceHandle
+	file           *os.File
+	lock           *os.File
+	driver         platformDriver
+	capacityBytes  int64
+	filesystemUUID string
 }
 
 // ComputeAttachment is the only runner-private value a compute backend may
@@ -100,7 +104,13 @@ type ComputeAttachment interface {
 	Handle() WorkspaceHandle
 	WorkspaceID() string
 	Generation() uint64
-	Image() *os.File
+	Descriptor() *os.File
+	LockDescriptor() *os.File
+	StableBlockID() string
+	CapacityBytes() int64
+	FilesystemUUID() string
+	ChildDescriptorPath(int) string
+	LinkInto(string) error
 	Close() error
 }
 
@@ -122,13 +132,57 @@ func (attachment *Attachment) Generation() uint64 {
 	return attachment.Handle().Generation()
 }
 
-// Image returns an already-open descriptor for a privileged compute adapter.
-// Lifecycle and protocol code should retain only Handle.
-func (attachment *Attachment) Image() *os.File {
+// Descriptor returns the already-open inherited Workspace descriptor. Its
+// display name is provider-neutral and cannot be reused as a host path.
+func (attachment *Attachment) Descriptor() *os.File {
 	if attachment == nil {
 		return nil
 	}
 	return attachment.file
+}
+
+// LockDescriptor returns the open descriptor holding the exclusive writer
+// lock. A compute process that inherits a duplicate shares the same open file
+// description, so the flock stays held until the last holder exits: a crashed
+// runner cannot release the Workspace to a replacement while its compute is
+// still flushing.
+func (attachment *Attachment) LockDescriptor() *os.File {
+	if attachment == nil {
+		return nil
+	}
+	return attachment.lock
+}
+
+func (*Attachment) StableBlockID() string { return "workspace" }
+
+func (attachment *Attachment) CapacityBytes() int64 {
+	if attachment == nil {
+		return 0
+	}
+	return attachment.capacityBytes
+}
+
+func (attachment *Attachment) FilesystemUUID() string {
+	if attachment == nil {
+		return ""
+	}
+	return attachment.filesystemUUID
+}
+
+func (attachment *Attachment) ChildDescriptorPath(descriptor int) string {
+	if attachment == nil || attachment.driver == nil {
+		return ""
+	}
+	return attachment.driver.ChildDescriptorPath(descriptor)
+}
+
+// LinkInto publishes a same-filesystem hard link for a compute backend's
+// private jail without revealing the authoritative WorkspaceStore path.
+func (attachment *Attachment) LinkInto(destination string) error {
+	if attachment == nil || attachment.driver == nil || attachment.file == nil {
+		return fmt.Errorf("SecondBox WorkspaceStore attachment is closed")
+	}
+	return attachment.driver.LinkDescriptor(attachment.file, destination)
 }
 
 // Close releases the image descriptor and exclusive Workspace writer lock.
@@ -149,9 +203,12 @@ func (attachment *Attachment) Close() error {
 		attachment.file = nil
 	}
 	if attachment.lock != nil {
-		if err := unlockFile(attachment.lock); err != nil && first == nil {
-			first = err
-		}
+		// Never explicitly release the writer flock: a compute backend's
+		// helper inherits a duplicate of this descriptor sharing the same
+		// open-file description, so an explicit unlock would surrender the
+		// fence while that helper may still be flushing the image. Closing
+		// this descriptor lets the kernel release the lock only when the
+		// last holder - the helper included - has closed it.
 		if err := attachment.lock.Close(); err != nil && first == nil {
 			first = err
 		}

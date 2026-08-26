@@ -88,6 +88,28 @@ func TestRunnerDataPlaneExecCreditFenceOrderingAndCancellation(t *testing.T) {
 	if err := service.handleExecFrame(t.Context(), stream, relayExecCredit(fence, "exec-1", "exec-stream-1", 5, 1), enabled, asyncErrors); err == nil {
 		t.Fatal("reordered Exec credit was accepted")
 	}
+	postTerminalCredits := make(chan error, 1)
+	go func() {
+		for sequence := uint64(4); sequence < 304; sequence++ {
+			if err := service.handleExecFrame(
+				t.Context(), stream,
+				relayExecCredit(fence, "exec-1", "exec-stream-1", sequence, 1),
+				enabled, asyncErrors,
+			); err != nil {
+				postTerminalCredits <- err
+				return
+			}
+		}
+		postTerminalCredits <- nil
+	}()
+	select {
+	case err := <-postTerminalCredits:
+		if err != nil {
+			t.Fatalf("post-terminal Exec credit: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("post-terminal Exec credit blocked the control receive path")
+	}
 
 	stale := cloneRunnerFence(fence)
 	stale.SandboxGeneration++
@@ -963,5 +985,45 @@ func relayExecCredit(
 	return &runnerprotocol.ExecFrame{
 		Fence: cloneRunnerFence(fence), OperationId: operationID, StreamId: streamID, Sequence: sequence,
 		Payload: &runnerprotocol.ExecFrame_Credit{Credit: &runnerprotocol.StreamCredit{ByteCount: credit}},
+	}
+}
+
+// TestSendExecControlBlocksForBackpressureInsteadOfFailing proves a full
+// control queue stalls the caller until a slot frees, and that cancellation
+// and operation completion release a blocked sender without an error.
+func TestSendExecControlBlocksForBackpressureInsteadOfFailing(t *testing.T) {
+	controls := make(chan ExecControl, 1)
+	done := make(chan struct{})
+	controls <- ExecControl{Credit: 1}
+
+	delivered := make(chan error, 1)
+	go func() {
+		delivered <- sendExecControl(context.Background(), done, controls, ExecControl{Credit: 2})
+	}()
+	select {
+	case err := <-delivered:
+		t.Fatalf("full queue did not apply backpressure: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if first := <-controls; first.Credit != 1 {
+		t.Fatalf("drained control credit = %d, want 1", first.Credit)
+	}
+	if err := <-delivered; err != nil {
+		t.Fatalf("released sender returned %v", err)
+	}
+	if second := <-controls; second.Credit != 2 {
+		t.Fatalf("delivered control credit = %d, want 2", second.Credit)
+	}
+
+	controls <- ExecControl{Credit: 3}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sendExecControl(cancelled, done, controls, ExecControl{Credit: 4}); err == nil {
+		t.Fatal("cancelled sender on a full queue must surface the cancellation")
+	}
+
+	close(done)
+	if err := sendExecControl(context.Background(), done, controls, ExecControl{Credit: 5}); err != nil {
+		t.Fatalf("completed operation must drop the control silently, got %v", err)
 	}
 }

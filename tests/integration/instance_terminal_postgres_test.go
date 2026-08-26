@@ -222,7 +222,9 @@ func helloFrameForIntegration(runnerID string) *runnerv1.RunnerToControlPlane {
 	return &runnerv1.RunnerToControlPlane{
 		Message: &runnerv1.RunnerToControlPlane_Hello{Hello: &runnerv1.RunnerHello{
 			RunnerId: runnerID, ConnectionNonce: []byte("01234567890123456789012345678901"),
-			SupportedVersions: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			SupportedVersions: &runnerv1.ProtocolVersionRange{
+				Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum,
+			},
 			MandatoryFeatures: []runnerv1.RunnerFeature{
 				runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 			},

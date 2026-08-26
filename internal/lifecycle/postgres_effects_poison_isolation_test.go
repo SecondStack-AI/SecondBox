@@ -13,10 +13,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// A Profile revision that cannot be resolved into a valid assignment is
-// durable data: erroring would end the reconciler on every start attempt, so
-// the Sandbox defers with backoff instead and the control plane stays alive.
-func TestInvalidProfileStartDefersInsteadOfFailing(t *testing.T) {
+// A Profile revision that cannot be resolved into a valid assignment is a
+// terminal compatibility failure. It must fail before assignment and release
+// its Workspace mutation so an operator can delete the durable Sandbox.
+func TestInvalidProfileStartFailsBeforeAssignmentAndReleasesWorkspace(t *testing.T) {
 	databaseURL := openLifecycleEffectTestDatabase(t)
 	pool, err := pgxpool.New(t.Context(), databaseURL)
 	if err != nil {
@@ -42,7 +42,8 @@ func TestInvalidProfileStartDefersInsteadOfFailing(t *testing.T) {
 			local_receipt_json,created_at,updated_at
 		) VALUES (
 			'workspace-profile','tenant','subject','sandbox-profile','runner-home','ready',
-			8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
+			8589934592,3,'start','operation-profile','operation-profile','operation-profile',
+			3,3,'queued','{}',$1,$1
 		);
 		INSERT INTO secondbox.sandboxes (
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
@@ -51,6 +52,13 @@ func TestInvalidProfileStartDefersInsteadOfFailing(t *testing.T) {
 		) VALUES (
 			'sandbox-profile','tenant','subject','profile','revision-bogus','stopped','running',
 			3,'workspace-profile','','{}','{}','worker-profile',2,$1,$1
+		);
+		INSERT INTO secondbox.operations (
+			id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,
+			request_metadata_json,error_code,error_message,retryable,created_at,updated_at
+		) VALUES (
+			'operation-profile','tenant','subject','sandbox-profile','','create','pending',
+			'request-profile','{}','','',false,$1,$1
 		)`,
 		pgx.QueryExecModeSimpleProtocol, now, string(specJSON),
 	); err != nil {
@@ -74,7 +82,6 @@ func TestInvalidProfileStartDefersInsteadOfFailing(t *testing.T) {
 			Now: func() time.Time { return now },
 		},
 	}
-	nextReconcileAt := now.Add(time.Second)
 	if err := broker.scheduleAndStart(
 		t.Context(),
 		ports.LifecycleReconcileClaim{
@@ -83,24 +90,37 @@ func TestInvalidProfileStartDefersInsteadOfFailing(t *testing.T) {
 			Revision:  2,
 		},
 		now,
-		nextReconcileAt,
+		now.Add(time.Second),
 	); err != nil {
-		t.Fatalf("invalid Profile start = %v, want a logged deferral", err)
+		t.Fatalf("invalid Profile start = %v, want terminal compatibility failure", err)
 	}
-	var reconcileOwner string
+	var sandboxState, failureClass, reconcileOwner string
 	var nextAt *time.Time
+	var mutationState, operationState, operationError string
 	var assignments int64
 	if err := pool.QueryRow(t.Context(), `
-		SELECT sandbox.reconcile_owner,sandbox.next_reconcile_at,
+		SELECT sandbox.state,sandbox.lifecycle_failure_class,sandbox.reconcile_owner,
+		       sandbox.next_reconcile_at,workspace.mutation_state,
+		       operation.state,operation.error_code,
 		       (SELECT count(*) FROM secondbox.assignments)
-		FROM secondbox.sandboxes AS sandbox WHERE sandbox.id='sandbox-profile'`,
-	).Scan(&reconcileOwner, &nextAt, &assignments); err != nil {
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.operations AS operation ON operation.id='operation-profile'
+		WHERE sandbox.id='sandbox-profile'`,
+	).Scan(
+		&sandboxState, &failureClass, &reconcileOwner, &nextAt, &mutationState,
+		&operationState, &operationError, &assignments,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if reconcileOwner != "" || nextAt == nil || !nextAt.Equal(nextReconcileAt) || assignments != 0 {
+	if sandboxState != "failed" || failureClass != "compatibility" ||
+		reconcileOwner != "" || nextAt != nil || mutationState != "" ||
+		operationState != "failed" || operationError != "profile_unavailable" ||
+		assignments != 0 {
 		t.Fatalf(
-			"owner=%q nextReconcileAt=%v assignments=%d, want a released deferral",
-			reconcileOwner, nextAt, assignments,
+			"state=%q failure=%q owner=%q next=%v mutation=%q operation=%q/%q assignments=%d",
+			sandboxState, failureClass, reconcileOwner, nextAt, mutationState,
+			operationState, operationError, assignments,
 		)
 	}
 }

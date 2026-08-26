@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -28,7 +27,14 @@ const (
 	snapshotImageMode    = 0o400
 	ext4MagicOffset      = 1024 + 0x38
 	ext4UUIDOffset       = 1024 + 0x68
-	minimumExt4Bytes     = 16 << 20
+	// minimumExt4Bytes bounds NEW capacity requests: the qualified Linux
+	// mke2fs composition needs 64 MiB for its reserved metadata. Manifests
+	// recorded by earlier releases remain valid down to the previous 16 MiB
+	// floor and are validated against legacyMinimumExt4Bytes instead - the
+	// public Profile contract still admits those Workspaces, and a raised
+	// creation floor must never reclassify them as corrupt.
+	minimumExt4Bytes       = 64 << 20
+	legacyMinimumExt4Bytes = 16 << 20
 )
 
 var logicalIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -36,9 +42,21 @@ var logicalIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // Config contains the explicit production settings for runner-local Workspace
 // durability and template prewarming.
 type Config struct {
-	Root                  string
-	TemplateCapacityBytes int64
+	Root                         string
+	TemplateCapacityBytes        int64
+	FormatterKind                FormatterKind
+	MicrosandboxHelperExecutable string
 }
+
+// FormatterKind selects the explicitly composed Linux ext4 formatter. The
+// Firecracker runner retains its descriptor-based mke2fs path, while the
+// Microsandbox runner delegates formatting to its separately built helper.
+type FormatterKind string
+
+const (
+	FormatterMke2fs             FormatterKind = "mke2fs"
+	FormatterMicrosandboxHelper FormatterKind = "microsandbox_helper"
+)
 
 type imageCloner interface {
 	Clone(destination *os.File, source *os.File) error
@@ -49,59 +67,11 @@ type imageFormatter interface {
 	SetUUID(context.Context, string, string) error
 }
 
-type linuxFICLONER struct{}
-
-func (linuxFICLONER) Clone(destination *os.File, source *os.File) error {
-	return unix.IoctlFileClone(int(destination.Fd()), int(source.Fd()))
-}
-
-type ext4Formatter struct {
-	formatExecutable  string
-	setUUIDExecutable string
-}
-
-func (formatter ext4Formatter) Format(ctx context.Context, path string, uuid string) error {
-	command := exec.CommandContext(
-		ctx,
-		formatter.formatExecutable,
-		"-t", "ext4",
-		"-F",
-		"-q",
-		"-L", workspaceFilesystemLabel,
-		"-U", uuid,
-		"-E", "lazy_itable_init=0,lazy_journal_init=0,nodiscard",
-		path,
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf(
-			"SecondBox WorkspaceStore ext4 format failed: %w: %s",
-			err,
-			strings.TrimSpace(string(output)),
-		)
-	}
-	return nil
-}
-
-func (formatter ext4Formatter) SetUUID(ctx context.Context, path string, uuid string) error {
-	command := exec.CommandContext(ctx, formatter.setUUIDExecutable, "-U", uuid, path)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf(
-			"SecondBox WorkspaceStore ext4 UUID rewrite failed: %w: %s",
-			err,
-			strings.TrimSpace(string(output)),
-		)
-	}
-	return nil
-}
-
 // Store is the reflink-only production WorkspaceStore implementation.
 type Store struct {
-	root      string
-	cloner    imageCloner
-	formatter imageFormatter
-	now       func() time.Time
+	root   string
+	driver platformDriver
+	now    func() time.Time
 
 	templateCapacityBytes int64
 	templateMu            sync.Mutex
@@ -116,18 +86,11 @@ func New(ctx context.Context, config Config) (*Store, error) {
 			minimumExt4Bytes,
 		)
 	}
-	formatterPath, err := exec.LookPath("mke2fs")
+	driver, err := newPlatformDriver(config.FormatterKind, config.MicrosandboxHelperExecutable)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox WorkspaceStore mke2fs is required: %w", err)
+		return nil, err
 	}
-	setUUIDPath, err := exec.LookPath("tune2fs")
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox WorkspaceStore tune2fs is required: %w", err)
-	}
-	store, err := newStore(config, linuxFICLONER{}, ext4Formatter{
-		formatExecutable:  formatterPath,
-		setUUIDExecutable: setUUIDPath,
-	})
+	store, err := newStoreWithDriver(config, driver)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +101,13 @@ func New(ctx context.Context, config Config) (*Store, error) {
 }
 
 func newStore(config Config, cloner imageCloner, formatter imageFormatter) (*Store, error) {
+	if cloner == nil || formatter == nil {
+		return nil, fmt.Errorf("SecondBox WorkspaceStore filesystem dependencies are required")
+	}
+	return newStoreWithDriver(config, injectedDriver{cloner: cloner, formatter: formatter})
+}
+
+func newStoreWithDriver(config Config, driver platformDriver) (*Store, error) {
 	if !filepath.IsAbs(config.Root) || filepath.Clean(config.Root) != config.Root {
 		return nil, fmt.Errorf(
 			"SecondBox WorkspaceStore SECONDBOX_RUNNER_WORKSPACE_ROOT must be a clean absolute path",
@@ -148,7 +118,7 @@ func newStore(config Config, cloner imageCloner, formatter imageFormatter) (*Sto
 			"SecondBox WorkspaceStore SECONDBOX_RUNNER_WORKSPACE_ROOT cannot be the filesystem root",
 		)
 	}
-	if cloner == nil || formatter == nil {
+	if driver == nil {
 		return nil, fmt.Errorf("SecondBox WorkspaceStore filesystem dependencies are required")
 	}
 	if config.TemplateCapacityBytes < 0 ||
@@ -160,8 +130,7 @@ func newStore(config Config, cloner imageCloner, formatter imageFormatter) (*Sto
 	}
 	return &Store{
 		root:                  config.Root,
-		cloner:                cloner,
-		formatter:             formatter,
+		driver:                driver,
 		now:                   time.Now,
 		templateCapacityBytes: config.TemplateCapacityBytes,
 	}, nil
@@ -193,7 +162,7 @@ func (store *Store) initialize(ctx context.Context) error {
 			return err
 		}
 	}
-	return syncDir(store.root)
+	return store.driver.SyncDirectory(store.root)
 }
 
 func (store *Store) probeReflink(ctx context.Context) error {
@@ -241,7 +210,7 @@ func (store *Store) probeReflink(ctx context.Context) error {
 			ErrStorageIncompatible,
 		)
 	}
-	if err := store.cloner.Clone(destination, source); err != nil {
+	if err := store.driver.Clone(destination, source); err != nil {
 		return fmt.Errorf("%w: FICLONE probe failed: %v", ErrStorageIncompatible, err)
 	}
 	if _, err := destination.WriteAt([]byte("D"), 0); err != nil {
@@ -581,7 +550,7 @@ func (store *Store) Open(
 		closeLockedFile(lock)
 		return nil, err
 	}
-	image, err := os.OpenFile(imagePath, os.O_RDWR, 0)
+	image, err := store.driver.OpenAttachment(imagePath)
 	if err != nil {
 		closeLockedFile(lock)
 		return nil, fmt.Errorf("SecondBox WorkspaceStore open current image: %w", err)
@@ -592,8 +561,11 @@ func (store *Store) Open(
 			image:       manifest.Image, generation: manifest.Generation,
 			nonce: requestNonce(workspaceID, manifest.Image, strconv.FormatUint(manifest.Generation, 10)),
 		},
-		file: image,
-		lock: lock,
+		file:           image,
+		lock:           lock,
+		driver:         store.driver,
+		capacityBytes:  manifest.CapacityBytes,
+		filesystemUUID: deterministicUUID(workspaceID),
 	}, nil
 }
 
@@ -1314,9 +1286,18 @@ func (store *Store) ensureTemplate(ctx context.Context, capacityBytes int64) (st
 	closeFile = false
 
 	formatStartedAt := time.Now()
-	if err := store.formatter.Format(ctx, tempPath, expectedUUID); err != nil {
+	file, err = os.OpenFile(tempPath, os.O_RDWR, 0)
+	if err != nil {
+		return "", fmt.Errorf("SecondBox WorkspaceStore reopen ext4 template for format: %w", err)
+	}
+	closeFile = true
+	if err := store.driver.Format(ctx, file, capacityBytes, expectedUUID); err != nil {
 		return "", err
 	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("SecondBox WorkspaceStore close formatted ext4 template: %w", err)
+	}
+	closeFile = false
 	formatElapsed := time.Since(formatStartedAt)
 	file, err = os.OpenFile(tempPath, os.O_RDWR, 0)
 	if err != nil {
@@ -1340,7 +1321,7 @@ func (store *Store) ensureTemplate(ctx context.Context, capacityBytes int64) (st
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		return "", fmt.Errorf("SecondBox WorkspaceStore publish ext4 template: %w", err)
 	}
-	if err := syncDir(store.ext4TemplatesRoot()); err != nil {
+	if err := store.driver.SyncDirectory(store.ext4TemplatesRoot()); err != nil {
 		return "", err
 	}
 	if err := validateExt4Template(finalPath, capacityBytes, expectedUUID); err != nil {
@@ -1400,8 +1381,8 @@ func (store *Store) cloneImage(
 		}
 	}()
 	cloneStartedAt := time.Now()
-	if err := store.cloner.Clone(destination, source); err != nil {
-		return fmt.Errorf("SecondBox WorkspaceStore FICLONE failed: %w", err)
+	if err := store.driver.Clone(destination, source); err != nil {
+		return fmt.Errorf("%w: SecondBox WorkspaceStore FICLONE failed: %w", ErrStorageIncompatible, err)
 	}
 	cloneElapsed := time.Since(cloneStartedAt)
 	if err := destination.Chmod(mode); err != nil {
@@ -1421,8 +1402,15 @@ func (store *Store) cloneImage(
 			return fmt.Errorf("SecondBox WorkspaceStore close reflink before UUID rewrite: %w", err)
 		}
 		uuidStartedAt := time.Now()
-		if err := store.formatter.SetUUID(ctx, tempPath, filesystemUUID); err != nil {
+		destination, err = os.OpenFile(tempPath, os.O_RDWR, 0)
+		if err != nil {
+			return fmt.Errorf("SecondBox WorkspaceStore reopen reflink for UUID rewrite: %w", err)
+		}
+		if err := store.driver.SetUUID(ctx, destination, filesystemUUID); err != nil {
 			return err
+		}
+		if err := destination.Close(); err != nil {
+			return fmt.Errorf("SecondBox WorkspaceStore close UUID-rewritten reflink: %w", err)
 		}
 		uuidElapsed = time.Since(uuidStartedAt)
 		fsyncStartedAt = time.Now()
@@ -1443,7 +1431,7 @@ func (store *Store) cloneImage(
 		return fmt.Errorf("SecondBox WorkspaceStore publish reflink: %w", err)
 	}
 	removeTemp = false
-	if err := syncDir(filepath.Dir(finalPath)); err != nil {
+	if err := store.driver.SyncDirectory(filepath.Dir(finalPath)); err != nil {
 		return err
 	}
 	if filesystemUUID != "" {
@@ -1479,14 +1467,14 @@ func (store *Store) ensureWorkspaceLayout(workspaceID string) error {
 			return err
 		}
 	}
-	return syncDir(store.workspaceDir(workspaceID))
+	return store.driver.SyncDirectory(store.workspaceDir(workspaceID))
 }
 
 func (store *Store) publishCurrentManifest(workspaceID string, manifest currentManifest) error {
 	if manifest.FormatVersion != currentManifestFormatVersion ||
 		manifest.WorkspaceID != workspaceID ||
 		manifest.Generation < 1 ||
-		manifest.CapacityBytes < minimumExt4Bytes {
+		manifest.CapacityBytes < legacyMinimumExt4Bytes {
 		return fmt.Errorf("%w: invalid current manifest", ErrCorruptState)
 	}
 	if _, err := store.validatedVersionPath(workspaceID, manifest.Image); err != nil {
@@ -1511,7 +1499,7 @@ func (store *Store) readCurrentManifest(workspaceID string) (currentManifest, er
 	if manifest.FormatVersion != currentManifestFormatVersion ||
 		manifest.WorkspaceID != workspaceID ||
 		manifest.Generation < 1 ||
-		manifest.CapacityBytes < minimumExt4Bytes {
+		manifest.CapacityBytes < legacyMinimumExt4Bytes {
 		return currentManifest{}, fmt.Errorf("%w: invalid current manifest", ErrCorruptState)
 	}
 	if _, err := store.validatedVersionPath(workspaceID, manifest.Image); err != nil {
@@ -1533,7 +1521,7 @@ func (store *Store) readSnapshotManifest(snapshotID string) (snapshotManifest, e
 		manifest.SnapshotID != snapshotID ||
 		validateID(manifest.WorkspaceID) != nil ||
 		manifest.Generation < 1 ||
-		manifest.CapacityBytes < minimumExt4Bytes {
+		manifest.CapacityBytes < legacyMinimumExt4Bytes {
 		return snapshotManifest{}, fmt.Errorf("%w: invalid Snapshot manifest", ErrCorruptState)
 	}
 	return manifest, nil
@@ -1549,7 +1537,7 @@ func (store *Store) readStagedRestore(workspaceID string, operationID string) (s
 		staged.OperationID != operationID ||
 		validateID(staged.SnapshotID) != nil ||
 		staged.NextGeneration != staged.ExpectedGeneration+1 ||
-		staged.CapacityBytes < minimumExt4Bytes {
+		staged.CapacityBytes < legacyMinimumExt4Bytes {
 		return stagedRestore{}, fmt.Errorf("%w: invalid staged restore", ErrCorruptState)
 	}
 	if _, err := store.validatedVersionPath(workspaceID, staged.Image); err != nil {
@@ -1567,7 +1555,7 @@ func (store *Store) readRollback(workspaceID string, operationID string) (rollba
 		rollback.WorkspaceID != workspaceID ||
 		rollback.OperationID != operationID ||
 		rollback.NextGeneration != rollback.PreviousGeneration+1 ||
-		rollback.CapacityBytes < minimumExt4Bytes {
+		rollback.CapacityBytes < legacyMinimumExt4Bytes {
 		return rollbackManifest{}, fmt.Errorf("%w: invalid rollback manifest", ErrCorruptState)
 	}
 	if _, err := store.validatedVersionPath(workspaceID, rollback.PreviousImage); err != nil {
@@ -1908,7 +1896,7 @@ func (store *Store) lockWorkspace(workspaceID string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox WorkspaceStore open Workspace lock: %w", err)
 	}
-	if err := tryLockFile(lock); err != nil {
+	if err := store.driver.TryLock(lock); err != nil {
 		closeErr := lock.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
 			return nil, errors.Join(ErrActiveWriter, closeErr)
@@ -1924,14 +1912,10 @@ func closeLockedFile(lock *os.File) error {
 	if lock == nil {
 		return nil
 	}
-	var first error
-	if err := unlockFile(lock); err != nil {
-		first = err
-	}
-	if err := lock.Close(); err != nil && first == nil {
-		first = err
-	}
-	return first
+	// Closing the descriptor releases its flock once the last holder of the
+	// open-file description is gone; an explicit unlock would instead drop
+	// the fence early for any child that inherited a duplicate.
+	return lock.Close()
 }
 
 func atomicJSON(path string, value any) error {
@@ -2181,15 +2165,7 @@ func removeExactFile(path string) error {
 }
 
 func syncDir(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("SecondBox WorkspaceStore open directory for fsync: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("SecondBox WorkspaceStore fsync directory: %w", err)
-	}
-	return nil
+	return platformSyncDirectory(path)
 }
 
 func (store *Store) validateImage(workspaceID string, image string, capacityBytes int64) error {

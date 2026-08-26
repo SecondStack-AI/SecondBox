@@ -28,6 +28,7 @@ type managerTestComputeAttachment struct {
 	workspaceID string
 	generation  uint64
 	image       *os.File
+	linkErr     error
 }
 
 func (*managerTestComputeAttachment) Handle() workspacestore.WorkspaceHandle {
@@ -42,8 +43,46 @@ func (attachment *managerTestComputeAttachment) Generation() uint64 {
 	return attachment.generation
 }
 
-func (attachment *managerTestComputeAttachment) Image() *os.File {
+func (attachment *managerTestComputeAttachment) LockDescriptor() *os.File { return nil }
+
+func (attachment *managerTestComputeAttachment) Descriptor() *os.File {
 	return attachment.image
+}
+
+func (*managerTestComputeAttachment) StableBlockID() string { return "workspace" }
+func (attachment *managerTestComputeAttachment) CapacityBytes() int64 {
+	if attachment.image == nil {
+		return 0
+	}
+	info, _ := attachment.image.Stat()
+	if info == nil {
+		return 0
+	}
+	return info.Size()
+}
+func (*managerTestComputeAttachment) FilesystemUUID() string { return "test-workspace-uuid" }
+func (*managerTestComputeAttachment) ChildDescriptorPath(descriptor int) string {
+	return fmt.Sprintf("/proc/self/fd/%d", descriptor)
+}
+func (attachment *managerTestComputeAttachment) LinkInto(destination string) error {
+	if attachment.linkErr != nil {
+		return attachment.linkErr
+	}
+	_ = os.Remove(destination)
+	return os.Link(attachment.image.Name(), destination)
+}
+
+func managerTestAttachment(t *testing.T, path string) *managerTestComputeAttachment {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	return &managerTestComputeAttachment{workspaceID: "test-workspace", generation: 1, image: file}
 }
 
 func (attachment *managerTestComputeAttachment) Close() error {
@@ -1531,7 +1570,7 @@ func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 	cfg := &config.Config{MicroVMKernelPath: "/vmlinux", MicroVMVCPUs: 2, MicroVMMemoryMiB: 512}
 	policy := &runtimemanager.SandboxRuntimePolicy{
-		VCPUs: 1, CPUMillis: 750, MemoryMiB: 128, WorkspaceSizeMiB: 64, ProcessLimit: 16,
+		VCPUs: 1, MemoryMiB: 128, WorkspaceSizeMiB: 64,
 		WorkspaceWritable: false, SharedReadOnly: true,
 	}
 	got := buildFirecrackerConfigWithPolicy(cfg, "/vmlinux", "/rootfs", "/workspace", "/shared", "/vsock", "", "", false, policy)
@@ -1540,9 +1579,6 @@ func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 	}
 	if len(got.Drives) != 3 || !got.Drives[1].IsReadOnly || !got.Drives[2].IsReadOnly {
 		t.Fatalf("drive policy = %+v", got.Drives)
-	}
-	if !strings.Contains(got.BootSource.BootArgs, "secondbox.process_limit=16") {
-		t.Fatalf("boot args = %q", got.BootSource.BootArgs)
 	}
 }
 
@@ -1728,7 +1764,8 @@ func TestPrepareLaunchUnjailedIncludesInstanceID(t *testing.T) {
 		MicroVMMemoryMiB:     512,
 		MicroVMKernelPath:    "/kernel",
 	}}
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", "/workspace.ext4", "", "", "", os.Getuid(), false, nil)
+	workspace := managerTestAttachment(t, filepath.Join(t.TempDir(), "workspace.ext4"))
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", workspace, "", "", "", os.Getuid(), false, nil)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1813,8 +1850,9 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMWorkspaceSizeMiB:    8,
 		MicroVMAllowUnjailed:       false,
 	}}
-	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, CPUMillis: 750, MemoryMiB: 512, ProcessLimit: 64}
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, workspace, shared, "agfc123", "", os.Getuid(), false, policy)
+	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512}
+	attachment := managerTestAttachment(t, workspace)
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, attachment, shared, "agfc123", "", os.Getuid(), false, policy)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1831,8 +1869,8 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		`"--chroot-base-dir","` + m.cfg.MicroVMJailerChrootBaseDir + `"`,
 		`"--new-pid-ns"`,
 		`"--cgroup","memory.max=805306368"`,
-		`"--cgroup","cpu.max=85000 100000"`,
-		`"--cgroup","pids.max=98"`,
+		`"--cgroup","cpu.max=110000 100000"`,
+		`"--cgroup","pids.max=34"`,
 		`"--","--api-sock","firecracker.sock","--config-file","firecracker.json"`,
 	} {
 		if !strings.Contains(args, want) {
@@ -1886,7 +1924,7 @@ func TestPrepareJailedLaunchRejectsUnixSocketPathOverflowBeforeStaging(t *testin
 		t.TempDir(),
 		"missing-kernel",
 		"missing-rootfs",
-		"missing-workspace",
+		managerTestAttachment(t, filepath.Join(t.TempDir(), "workspace.ext4")),
 		"",
 		"",
 		"",
@@ -1915,12 +1953,12 @@ func TestJailerMemoryCgroupAddsHostOverhead(t *testing.T) {
 }
 
 func TestJailerResourceCgroupsBoundCPUAndPIDsWithVMMHeadroom(t *testing.T) {
-	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 2, CPUMillis: 1250, MemoryMiB: 2048, ProcessLimit: 64}
-	wantV2 := []string{"memory.max=2415919104", "cpu.max=137500 100000", "pids.max=100"}
+	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 2, MemoryMiB: 2048}
+	wantV2 := []string{"memory.max=2415919104", "cpu.max=220000 100000", "pids.max=36"}
 	if got := jailerResourceCgroups(2, policy); !reflect.DeepEqual(got, wantV2) {
 		t.Fatalf("cgroup v2 = %q, want %q", got, wantV2)
 	}
-	wantV1 := []string{"memory.limit_in_bytes=2415919104", "cpu.cfs_period_us=100000", "cpu.cfs_quota_us=137500", "pids.max=100"}
+	wantV1 := []string{"memory.limit_in_bytes=2415919104", "cpu.cfs_period_us=100000", "cpu.cfs_quota_us=220000", "pids.max=36"}
 	if got := jailerResourceCgroups(1, policy); !reflect.DeepEqual(got, wantV1) {
 		t.Fatalf("cgroup v1 = %q, want %q", got, wantV1)
 	}
@@ -1986,13 +2024,9 @@ func TestStageWorkspaceJailFileRejectsCrossDeviceCopyFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(dir, "jail-workspace.ext4")
-	orig := hardLinkFile
-	hardLinkFile = func(_, _ string) error {
-		return syscall.EXDEV
-	}
-	t.Cleanup(func() { hardLinkFile = orig })
-
-	err := stageWorkspaceJailFile(dst, src, os.Getuid(), os.Getgid())
+	attachment := managerTestAttachment(t, src)
+	attachment.linkErr = syscall.EXDEV
+	err := stageWorkspaceJailFile(dst, attachment, os.Getuid(), os.Getgid())
 	if err == nil {
 		t.Fatal("expected EXDEV error")
 	}

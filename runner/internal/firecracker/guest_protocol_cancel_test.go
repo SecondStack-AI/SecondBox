@@ -42,6 +42,7 @@ func TestGuestProtocolCancellationSendFailureIsReturned(t *testing.T) {
 			stream := &cancelFailingGuestStream{
 				ctx:               ctx,
 				initialSend:       make(chan struct{}),
+				cancelAttempted:   make(chan struct{}),
 				cancelSendFailure: cancelSendFailure,
 			}
 			session := &GuestProtocolSession{
@@ -73,6 +74,7 @@ type cancelFailingGuestStream struct {
 	grpc.ClientStream
 	ctx               context.Context
 	initialSend       chan struct{}
+	cancelAttempted   chan struct{}
 	cancelSendFailure error
 	sendCount         int
 }
@@ -83,10 +85,16 @@ func (stream *cancelFailingGuestStream) Send(*guestv1.RunnerToGuest) error {
 		close(stream.initialSend)
 		return nil
 	}
+	close(stream.cancelAttempted)
 	return stream.cancelSendFailure
 }
 
 func (stream *cancelFailingGuestStream) Recv() (*guestv1.GuestToRunner, error) {
 	<-stream.ctx.Done()
+	// Cancellation unblocks this receive and schedules the cancellation
+	// send concurrently; returning first would let the caller stop the
+	// scheduled send and the test would observe plain context cancellation.
+	// Hold the receive until the cancellation send has actually happened.
+	<-stream.cancelAttempted
 	return nil, stream.ctx.Err()
 }

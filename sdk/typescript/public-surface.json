@@ -592,11 +592,11 @@
     "required": [
       "activeInstances",
       "concurrentOperations",
-      "cpuMillis",
       "memoryBytes",
       "portSessions",
       "sandboxes",
-      "snapshots"
+      "snapshots",
+      "vcpuCount"
     ],
     "optional": []
   },
@@ -624,9 +624,8 @@
   "ResourcePolicy": {
     "required": [
       "concurrentOperations",
-      "cpuMillis",
       "memoryBytes",
-      "processLimit",
+      "vcpuCount",
       "workspaceBytes"
     ],
     "optional": []
@@ -872,11 +871,11 @@
     "required": [
       "maxActiveInstances",
       "maxConcurrentOperations",
-      "maxCpuMillis",
       "maxMemoryBytes",
       "maxPortSessions",
       "maxSandboxes",
-      "maxSnapshots"
+      "maxSnapshots",
+      "maxVcpuCount"
     ],
     "optional": []
   },
@@ -966,11 +965,11 @@
       "maxActiveSubjects",
       "maxApplicationAuthorities",
       "maxConcurrentOperations",
-      "maxCpuMillis",
       "maxMemoryBytes",
       "maxPortSessions",
       "maxSandboxes",
-      "maxSnapshots"
+      "maxSnapshots",
+      "maxVcpuCount"
     ],
     "optional": []
   },
@@ -980,11 +979,11 @@
       "activeSubjects",
       "applicationAuthorities",
       "concurrentOperations",
-      "cpuMillis",
       "memoryBytes",
       "portSessions",
       "sandboxes",
-      "snapshots"
+      "snapshots",
+      "vcpuCount"
     ],
     "optional": []
   },

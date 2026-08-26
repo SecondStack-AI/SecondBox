@@ -17,6 +17,7 @@ import (
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	guestconformance "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol/conformance"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
+	runnerconformance "github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -836,6 +837,9 @@ func assertAssignmentBackendBridgeOverTransport(
 	if err := <-echoErrors; err != nil {
 		t.Fatal(err)
 	}
+	runnerconformance.RunDataPlane(t, runnerconformance.DataPlaneFixture{
+		Backend: backend, PTY: backend, Port: backend, Fence: fence,
+	})
 }
 
 func cloneRunnerProtocolFence(fence *runnerprotocol.AssignmentFence) *runnerprotocol.AssignmentFence {

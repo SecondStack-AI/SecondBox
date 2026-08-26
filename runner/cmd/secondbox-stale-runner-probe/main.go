@@ -153,15 +153,15 @@ func staleProbeRegistration(
 				SoftwareVersion: config.SoftwareVersion + "-qualification-stale-probe",
 				ProtocolVersion: config.ProtocolMaximum,
 				Capabilities: &runnerprotocol.RunnerCapabilities{
-					Architecture: "amd64", KvmReady: true, JailerReady: true,
-					CgroupReady: true, NetworkPolicyReady: true, StorageReady: true,
-					CleanupReady: true, FirecrackerVersion: "qualification-stale-probe",
+					Architecture: "amd64", HypervisorReady: true, IsolationReady: true,
+					ResourceLimitsReady: true, NetworkPolicyReady: true, StorageReady: true,
+					CleanupReady: true, ComputeBackendVersion: "qualification-stale-probe",
 					GuestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{
 						Minimum: 1, Maximum: 1,
 					},
 				},
 				Allocatable: &runnerprotocol.Capacity{
-					VcpuMillis: 1, MemoryBytes: 1, DiskBytes: 1, Instances: 1, Operations: 1,
+					VcpuCount: 1, MemoryBytes: 1, DiskBytes: 1, Instances: 1, Operations: 1,
 				},
 				Reserved:      &runnerprotocol.Capacity{},
 				StartupTiming: &runnerprotocol.StartupTiming{},

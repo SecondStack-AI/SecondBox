@@ -364,6 +364,76 @@ func TestNFTablesNetworkPolicyPinsAreSandboxScopedAndExpire(t *testing.T) {
 	}
 }
 
+func TestNFTablesNetworkPolicySerializesConcurrentDNSFamilies(t *testing.T) {
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode: networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{{
+			Protocol: networkpolicy.ProtocolHTTPS,
+			Domain:   "api.example.com",
+			Port:     443,
+		}},
+	}, networkpolicy.CompileOptions{MaximumPins: 4, MaximumTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var scripts []string
+	active := 0
+	maximumActive := 0
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		nftPath: "/usr/sbin/nft",
+		run: func(_ context.Context, _ string, _ []string, stdin string) ([]byte, error) {
+			mu.Lock()
+			active++
+			if active > maximumActive {
+				maximumActive = active
+			}
+			mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
+			mu.Lock()
+			scripts = append(scripts, stdin)
+			active--
+			mu.Unlock()
+			return nil, nil
+		},
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "fc-dual-family", TapName: "tap-dual", GuestIP: "10.0.0.8", Policy: compiled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = enforcer.Remove(context.Background(), "fc-dual-family") })
+
+	answers := [][]netip.Addr{
+		{netip.MustParseAddr("93.184.216.34")},
+		{netip.MustParseAddr("2606:2800:220:1:248:1893:25c8:1946")},
+	}
+	errors := make(chan error, len(answers))
+	for _, addresses := range answers {
+		go func() {
+			errors <- enforcer.ObserveDNSAnswer(
+				context.Background(), "10.0.0.8", "api.example.com", addresses, time.Minute,
+			)
+		}()
+	}
+	for range answers {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maximumActive != 1 {
+		t.Fatalf("concurrent nft policy mutations = %d, want 1", maximumActive)
+	}
+	final := scripts[len(scripts)-1]
+	for _, address := range []string{"93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"} {
+		if !strings.Contains(final, address) {
+			t.Fatalf("final dual-family policy omitted %s:\n%s", address, final)
+		}
+	}
+}
+
 func TestNFTTableNamesUseCollisionResistantInstanceIdentity(t *testing.T) {
 	left := nftTableName(strings.Repeat("a", 80) + "-one")
 	right := nftTableName(strings.Repeat("a", 80) + "_one")
@@ -421,5 +491,119 @@ func TestNFTablesNetworkPolicyUpdateFailureIsObservable(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("nft update failure was not reported")
+	}
+}
+
+func TestNFTablesNetworkPolicyUpdateFailureCallbackCanRemovePolicy(t *testing.T) {
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode: networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{{
+			Protocol: networkpolicy.ProtocolHTTPS,
+			Domain:   "api.example.com",
+			Port:     443,
+		}},
+	}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	callbackDone := make(chan error, 1)
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		nftPath: "/usr/sbin/nft",
+		run: func(context.Context, string, []string, string) ([]byte, error) {
+			calls++
+			if calls == 2 {
+				return []byte("atomic update rejected"), errors.New("nft update failed")
+			}
+			return nil, nil
+		},
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "fc-reentrant-failure",
+		TapName:    "tap-reentrant",
+		GuestIP:    "10.0.0.10",
+		Policy:     compiled,
+		OnFailure: func(error) {
+			callbackDone <- enforcer.Remove(context.Background(), "fc-reentrant-failure")
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	observeDone := make(chan error, 1)
+	go func() {
+		observeDone <- enforcer.ObserveDNSAnswer(
+			context.Background(), "10.0.0.10", "api.example.com",
+			[]netip.Addr{netip.MustParseAddr("93.184.216.34")}, time.Minute,
+		)
+	}()
+	select {
+	case err := <-callbackDone:
+		if err != nil {
+			t.Fatalf("failure callback remove policy: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("failure callback deadlocked while removing policy")
+	}
+	select {
+	case err := <-observeDone:
+		if err == nil || !strings.Contains(err.Error(), "atomic update rejected") {
+			t.Fatalf("observe failure = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DNS observation did not return after failure callback")
+	}
+}
+
+func TestNFTablesNetworkPolicyExpiryFailureCallbackCanRemovePolicy(t *testing.T) {
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode: networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{{
+			Protocol: networkpolicy.ProtocolHTTPS,
+			Domain:   "api.example.com",
+			Port:     443,
+		}},
+	}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var callsMu sync.Mutex
+	calls := 0
+	callbackDone := make(chan error, 1)
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		nftPath: "/usr/sbin/nft",
+		run: func(context.Context, string, []string, string) ([]byte, error) {
+			callsMu.Lock()
+			defer callsMu.Unlock()
+			calls++
+			if calls == 3 {
+				return []byte("expiry rejected"), errors.New("nft expiry failed")
+			}
+			return nil, nil
+		},
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "fc-reentrant-expiry",
+		TapName:    "tap-expiry",
+		GuestIP:    "10.0.0.11",
+		Policy:     compiled,
+		OnFailure: func(error) {
+			callbackDone <- enforcer.Remove(context.Background(), "fc-reentrant-expiry")
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := enforcer.ObserveDNSAnswer(
+		context.Background(), "10.0.0.11", "api.example.com",
+		[]netip.Addr{netip.MustParseAddr("93.184.216.34")}, 10*time.Millisecond,
+	); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-callbackDone:
+		if err != nil {
+			t.Fatalf("expiry failure callback remove policy: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expiry failure callback deadlocked while removing policy")
 	}
 }

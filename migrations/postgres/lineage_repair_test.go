@@ -37,6 +37,7 @@ var postFenceMigrationFiles = []string{
 	"0016_persisted_authorities.sql",
 	"0017_tenant_aggregate_quotas.sql",
 	"0018_subject_cleanup.sql",
+	"0019_vcpu_quotas_and_backend_kind.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

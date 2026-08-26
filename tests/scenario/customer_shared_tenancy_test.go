@@ -187,7 +187,7 @@ func createScenarioTenantAuthority(
 ) (*secondboxclient.Client, secondboxclient.ApplicationCredentialResponse) {
 	t.Helper()
 	quota := secondboxclient.TenantQuota{
-		MaxSandboxes: 4, MaxActiveInstances: 4, MaxCpuMillis: 4000,
+		MaxSandboxes: 4, MaxActiveInstances: 4, MaxVcpuCount: 4,
 		MaxMemoryBytes: 4 << 30, MaxSnapshots: 4, MaxPortSessions: 4,
 		MaxConcurrentOperations: 8, MaxActiveSubjects: 4, MaxApplicationAuthorities: 6,
 	}
@@ -228,7 +228,7 @@ func createScenarioSubjectAuthority(
 	subject, err := controller.CreateSubject(ctx, secondboxclient.CreateSubjectRequest{
 		Ref: secondboxclient.OwnershipRef(subjectRef), ExpiresAt: subjectExpiry,
 		Quota: secondboxclient.SubjectQuota{
-			MaxSandboxes: 2, MaxActiveInstances: 2, MaxCpuMillis: 2000,
+			MaxSandboxes: 2, MaxActiveInstances: 2, MaxVcpuCount: 2,
 			MaxMemoryBytes: 2 << 30, MaxSnapshots: 2, MaxPortSessions: 2,
 			MaxConcurrentOperations: 4,
 		}, Metadata: map[string]string{"name": subjectRef},
@@ -465,7 +465,7 @@ func assertCustomerSharedQuota(t *testing.T, ctx context.Context, controller *se
 		usage.Usage.ActiveInstances != 0 ||
 		usage.Usage.ActiveSubjects != 0 ||
 		usage.Usage.ApplicationAuthorities != 0 ||
-		usage.Usage.CPUMillis != 0 ||
+		usage.Usage.VcpuCount != 0 ||
 		usage.Usage.MemoryBytes != 0 ||
 		usage.Usage.Snapshots != 0 ||
 		usage.Usage.PortSessions != 0 ||
@@ -478,7 +478,7 @@ func assertCustomerSharedQuota(t *testing.T, ctx context.Context, controller *se
 			found = true
 			if subject.Usage.Sandboxes != wantSandboxes ||
 				subject.Usage.ActiveInstances != 0 ||
-				subject.Usage.CPUMillis != 0 ||
+				subject.Usage.VcpuCount != 0 ||
 				subject.Usage.MemoryBytes != 0 ||
 				subject.Usage.Snapshots != 0 ||
 				subject.Usage.PortSessions != 0 ||

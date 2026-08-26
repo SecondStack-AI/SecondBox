@@ -1,5 +1,7 @@
 # Observability and diagnostics
 
+Runner readiness and assignment logs use provider-neutral hypervisor, isolation, materialization, compute-launch, and guest-negotiation stages. Private diagnostics may include backend kind/version and materialization digest; public operations and data-plane responses do not.
+
 SecondBox exposes unauthenticated liveness, readiness, and fixed-cardinality Prometheus metrics. Operational logs are newline-delimited JSON on stdout and at the explicit absolute `SECONDBOX_LOG_PATH`. Security-sensitive domain mutations write transactional rows to `secondbox.audit_events`.
 
 The standalone CLI can read or follow that local file with an explicit initial byte bound:

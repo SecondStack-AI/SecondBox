@@ -27,14 +27,16 @@ Registration reports:
 - stable Runner and RunnerPool identity established by the certificate;
 - software and runner-protocol versions;
 - architecture and kernel evidence;
-- verified KVM, Firecracker, jailer, cgroup, networking, storage, cleanup, and caller-facing data-plane capabilities;
+- private compute-backend kind and version plus provider-neutral hypervisor, isolation, cgroup, networking, storage, cleanup, and caller-facing data-plane evidence;
 - whether the Runner can start a Sandbox by resuming a prepared guest;
 - supported guest-protocol generations;
-- verified immutable image and toolchain cache entries;
+- locally present, revalidated backend materializations keyed by backend kind, architecture, runtime digest, and toolchain digest;
 - allocatable and currently reserved vCPU, memory, disk, Instance, and operation capacity;
 - the advertised caller-facing Port data-plane address.
 
-The runner performs prerequisite and trust validation before advertising schedulable capacity. Instance capacity and concurrent data-plane operation capacity are independent bounds; Profile operation limits reserve the latter while a Sandbox Instance is active. Missing KVM, required network controls, trust anchors, storage health, cleanup capability, or a bound caller-facing data-plane listener make it unready.
+The runner performs prerequisite and trust validation before advertising schedulable capacity. Instance capacity and concurrent data-plane operation capacity are independent bounds; Profile operation limits reserve the latter while a Sandbox Instance is active. Missing backend prerequisites, required network controls, backend-specific trust anchors, storage health, cleanup capability, or a bound caller-facing data-plane listener make it unready. Registration transactionally seals an unsealed RunnerPool to the first healthy Runner's backend kind; every later mismatch is rejected and there is no reset operation.
+
+Assignments carry provider-neutral `AssetReference` records: artifact identity, immutable digest, architecture, guest protocol generation, and required features. Signature evidence is not universal protocol data. Firecracker continues to verify its local signed bundle and trust anchor before advertising a materialization. Microsandbox materializations additionally bind a digest-pinned source OCI manifest and an already materialized content-addressed flat root; assignment start never resolves a tag or pulls an image.
 
 Resume capacity is optional evidence rather than a prerequisite. A Runner reports it only when it is configured with a resume template cache root, requires the jailer, and already holds a template built from the exact signed execution bundle it verified; the control plane then records the provider-neutral `snapshot-resume` capability, which is the only way a `snapshot_resume` ProfileRevision is admitted. A Runner without it registers and schedules normally for `cold_boot` Profiles. Each Assignment carries the ProfileRevision's startup mode, and a Runner that cannot honour the stated mode fails the Assignment before creating any Workspace, TAP, or jail rather than substituting the other mode. The control plane treats claims as evidence for scheduling, not as authority to change a ProfileRevision.
 

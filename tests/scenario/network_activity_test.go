@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"os"
 	"testing"
 	"time"
 
@@ -90,18 +91,22 @@ func TestScenarioPortSessionsLeasesAndGenerationFencing(t *testing.T) {
 		"port-response.txt",
 		[]byte("SecondBox real guest port response\n"),
 	)
-	server := executeScenarioCommand(
-		t,
-		ctx,
-		handle,
-		`nohup python3 -m http.server 8080 --directory /workspace >/workspace/port-server.log 2>&1 </dev/null & python3 -c 'import socket, time
+	serverCommand := `nohup python3 -m http.server 8080 --directory /workspace >/workspace/port-server.log 2>&1 </dev/null & python3 -c 'import socket, time
 for _ in range(50):
     try:
         socket.create_connection(("127.0.0.1", 8080), 1).close()
         raise SystemExit(0)
     except OSError:
         time.sleep(0.1)
-raise SystemExit(1)'`,
+raise SystemExit(1)'`
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+		serverCommand = `nohup sh -c 'while :; do { printf "HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\n"; cat /workspace/port-response.txt; } | nc -l -p 8080; done' >/workspace/port-server.log 2>&1 </dev/null & sleep 1`
+	}
+	server := executeScenarioCommand(
+		t,
+		ctx,
+		handle,
+		serverCommand,
 		4096,
 		"port-http-server",
 	)
@@ -432,11 +437,15 @@ func TestScenarioNetworkPolicyDenyAndAllowList(t *testing.T) {
 	)
 	denied, _ := createScenarioSandbox(t, fixture, denyProfile, "network-deny")
 	waitForSandbox(t, ctx, denied, secondboxclient.SandboxStateReady)
+	networkProbe := "curl --silent --show-error --connect-timeout 3 --max-time 5 http://example.com/ >/dev/null"
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+		networkProbe = "wget -q -T 5 -O /dev/null http://example.com/"
+	}
 	deniedOutcome := executeScenarioCommand(
 		t,
 		ctx,
 		denied,
-		"curl --silent --show-error --connect-timeout 3 --max-time 5 http://1.1.1.1/cdn-cgi/trace >/dev/null",
+		networkProbe,
 		4096,
 		"network-denied",
 	)
@@ -450,7 +459,7 @@ func TestScenarioNetworkPolicyDenyAndAllowList(t *testing.T) {
 		Mode: "allow_list",
 		Destinations: []contracts.NetworkDestination{{
 			Protocol: "http",
-			CIDR:     "1.1.1.1/32",
+			Domain:   "example.com",
 			Port:     80,
 		}},
 	}
@@ -461,7 +470,7 @@ func TestScenarioNetworkPolicyDenyAndAllowList(t *testing.T) {
 		t,
 		ctx,
 		allowed,
-		"curl --silent --show-error --connect-timeout 3 --max-time 5 http://1.1.1.1/cdn-cgi/trace >/dev/null",
+		networkProbe,
 		16<<10,
 		"network-allowed",
 	)
@@ -475,6 +484,13 @@ func TestScenarioNetworkPolicyDenyAndAllowList(t *testing.T) {
 }
 
 func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *testing.T) {
+	if backend := os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND"); backend != "" && backend != "firecracker" {
+		// The network-enabled egress gateway listens on the Runner's host
+		// guest bridge, which only the Firecracker backend creates; the
+		// Microsandbox and gVisor backends have no host bridge to bind
+		// the gateway on.
+		t.Skip("SecondBox scenario network-enabled gateway requires the Firecracker host guest bridge")
+	}
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)
 	waitForScenarioRunner(t, fixture, 90*time.Second)

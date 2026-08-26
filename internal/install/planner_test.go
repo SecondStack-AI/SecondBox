@@ -181,7 +181,7 @@ func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T)
 	if !strings.Contains(RenderPlanReview(plan), "Compute: Firecracker CPU template None") || !strings.Contains(RenderPlanReview(plan), "Existing SecondBox CLIs and CLI configuration") || !strings.Contains(RenderPlanReview(plan), "Ordinary uninstall preserves") || !strings.Contains(RenderPlanReview(plan), "Paths requiring sudo") {
 		t.Fatalf("review omitted durable or privilege boundary:\n%s", RenderPlanReview(plan))
 	}
-	if plan.Capacity.MaxCPUMillis < DurableCodingCPUMillis || plan.Capacity.MaxMemoryBytes < DurableCodingMemoryBytes || plan.Capacity.MaxWorkspaceBytes < MinimumWorkspaceBytes || plan.Capacity.ConcurrentOperations < plan.Capacity.MaxSandboxes*DurableCodingConcurrentOperations || plan.Capacity.SubjectQuotas["maxConcurrentOperations"] < plan.Capacity.SubjectQuotas["maxActiveInstances"]*DurableCodingConcurrentOperations {
+	if plan.Capacity.MaxVCPUCount < DurableCodingVCPUCount || plan.Capacity.MaxMemoryBytes < DurableCodingMemoryBytes || plan.Capacity.MaxWorkspaceBytes < MinimumWorkspaceBytes || plan.Capacity.ConcurrentOperations < plan.Capacity.MaxSandboxes*DurableCodingConcurrentOperations || plan.Capacity.SubjectQuotas["maxConcurrentOperations"] < plan.Capacity.SubjectQuotas["maxActiveInstances"]*DurableCodingConcurrentOperations {
 		t.Fatalf("proposal cannot run durable-coding: %#v", plan.Capacity)
 	}
 }
