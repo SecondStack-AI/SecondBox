@@ -294,11 +294,11 @@ func TestRecordedInstallerComposeDiagnosticsDoNotRegenerateSourceProfiles(t *tes
 	if _, err := ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath, "ps"); err == nil {
 		t.Fatal("ordinary accepted-manifest resolution unexpectedly accepted changed release input")
 	}
-	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, subject, "ps")
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, "0.7.0", subject, "ps")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,13 +316,13 @@ func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, action := range []string{"stop-control-plane", "start-control-plane", "down"} {
 		executor := &recordingComposeExecutor{}
-		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, action, subject, executor); err != nil {
+		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, "0.7.0", action, subject, executor); err != nil {
 			t.Fatal(err)
 		}
 		if len(executor.calls) != 1 {
@@ -347,7 +347,7 @@ func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
 	if err := os.WriteFile(resolved.ComposeFiles[0], []byte("drifted\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, "down", subject, &recordingComposeExecutor{}); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
+	if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, "0.7.0", "down", subject, &recordingComposeExecutor{}); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
 		t.Fatalf("drifted recorded Compose asset result = %v", err)
 	}
 }
@@ -358,7 +358,7 @@ func TestRecordedInstallerComposeSubjectAuthenticatesProjectIdentity(t *testing.
 	if _, err := Render(manifestPath, environmentPath); err != nil {
 		t.Fatal(err)
 	}
-	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,15 +378,60 @@ func TestRecordedInstallerComposeSubjectAuthenticatesProjectIdentity(t *testing.
 	if err := os.WriteFile(manifestPath, drifted, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	driftedSubject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	driftedSubject, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if driftedSubject == subject {
 		t.Fatal("Compose project-only drift preserved the authenticated subject")
 	}
-	if _, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, subject, "ps"); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
+	if _, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, "0.7.0", subject, "ps"); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
 		t.Fatalf("Compose project-only drift result = %v", err)
+	}
+}
+
+func TestRecordedInstallerComposeIdentityAcceptsOnlyExactV060Fixture(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	if _, err := Render(manifestPath, environmentPath); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"compose.explicit-network.yml": "v0.6.0 recorded explicit network\n",
+		"compose.same-host-runner.yml": "v0.6.0 recorded same-host Runner\n",
+	} {
+		if err := os.WriteFile(filepath.Join(environmentPath+".compose", name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The fixture was encoded by singleHostManifest at the exact public v0.6.0
+	// source commit from its verified public artifact manifest. It does not
+	// inherit any target-era manifest type or generator behavior.
+	legacy, err := os.ReadFile(filepath.Join("testdata", "v060-recorded-installer-manifest.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0"); err == nil || !strings.Contains(err.Error(), "strict decode") {
+		t.Fatalf("current release accepted v0.6.0 CPU fields: %v", err)
+	}
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "", recordedManifestV060Version)
+	if err != nil {
+		t.Fatalf("exact v0.6.0 recorded manifest was rejected: %v", err)
+	}
+	if _, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, recordedManifestV060Version, subject, "ps"); err != nil {
+		t.Fatalf("exact v0.6.0 recorded Compose identity was rejected: %v", err)
+	}
+	if _, err := RecordedInstallerComposeSubject(manifestPath, "", "0.6.1"); err == nil || !strings.Contains(err.Error(), "strict decode") {
+		t.Fatalf("non-v0.6.0 release accepted legacy CPU fields: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, append(legacy, []byte("\nunknown_recorded_field = true\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecordedInstallerComposeSubject(manifestPath, "", recordedManifestV060Version); err == nil || !strings.Contains(err.Error(), "strict decode recorded v0.6.0 manifest") {
+		t.Fatalf("v0.6.0 recorded decoder accepted an unknown field: %v", err)
 	}
 }
 

@@ -34,7 +34,7 @@ func RunComposeForAcceptedInstaller(ctx context.Context, manifestPath, action st
 // RunExistingComposeForAcceptedInstaller fences, shuts down, or restores the
 // source deployment through its already-materialized environment and Compose
 // assets. It deliberately does not render target-binary embedded assets.
-func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, action, expectedSubject string, executor ComposeExecutor) error {
+func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, sourceVersion, action, expectedSubject string, executor ComposeExecutor) error {
 	if action != "stop-control-plane" && action != "start-control-plane" && action != "down" {
 		return manifestError("existing Compose action must stop, start, or shut down the recorded deployment", nil)
 	}
@@ -47,7 +47,7 @@ func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, a
 	} else if action == "down" {
 		command = []string{"down", "--remove-orphans"}
 	}
-	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, expectedSubject, command...)
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, sourceVersion, expectedSubject, command...)
 	if err != nil {
 		return err
 	}
@@ -166,12 +166,12 @@ func ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath string, command
 // operation and its public source release. In particular, this path does not
 // regenerate historical standard Profile lineage with the running target
 // binary's policy.
-func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, expectedSubject string, command ...string) ([]string, error) {
-	absolute, project, composeFiles, err := recordedInstallerComposeIdentity(manifestPath)
+func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, sourceVersion, expectedSubject string, command ...string) ([]string, error) {
+	absolute, project, composeFiles, err := recordedInstallerComposeIdentity(manifestPath, sourceVersion)
 	if err != nil {
 		return nil, err
 	}
-	actualSubject, err := RecordedInstallerComposeSubject(absolute, "")
+	actualSubject, err := RecordedInstallerComposeSubject(absolute, "", sourceVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -184,8 +184,8 @@ func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, expectedSubjec
 // RecordedInstallerComposeSubject binds the generated environment and selected
 // Compose files without regenerating them with the running binary. A non-empty
 // environmentPath is used to authenticate a canonical source-binary render.
-func RecordedInstallerComposeSubject(manifestPath, environmentPath string) (string, error) {
-	absolute, project, selected, err := recordedInstallerComposeIdentity(manifestPath)
+func RecordedInstallerComposeSubject(manifestPath, environmentPath, sourceVersion string) (string, error) {
+	absolute, project, selected, err := recordedInstallerComposeIdentity(manifestPath, sourceVersion)
 	if err != nil {
 		return "", err
 	}
@@ -220,43 +220,66 @@ func RecordedInstallerComposeSubject(manifestPath, environmentPath string) (stri
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func recordedInstallerComposeIdentity(manifestPath string) (string, string, []string, error) {
+func recordedInstallerComposeIdentity(manifestPath, sourceVersion string) (string, string, []string, error) {
 	absolute, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return "", "", nil, err
 	}
-	manifest, err := ReadManifest(absolute)
-	if err != nil {
-		return "", "", nil, err
+	var deploymentMode, composeProject, composeBackendCIDR, databaseMode string
+	var runnerPlacements []string
+	if sourceVersion == recordedManifestV060Version {
+		manifest, err := readRecordedManifestV060(absolute)
+		if err != nil {
+			return "", "", nil, err
+		}
+		deploymentMode = manifest.Deployment.Mode
+		composeProject = manifest.Deployment.ComposeProjectName
+		composeBackendCIDR = manifest.Deployment.ComposeBackendCIDR
+		databaseMode = manifest.Database.Mode
+		for _, runner := range manifest.Runners {
+			runnerPlacements = append(runnerPlacements, runner.Placement)
+		}
+	} else {
+		manifest, err := ReadManifest(absolute)
+		if err != nil {
+			return "", "", nil, err
+		}
+		deploymentMode = manifest.Deployment.Mode
+		composeProject = manifest.Deployment.ComposeProjectName
+		composeBackendCIDR = manifest.Deployment.ComposeBackendCIDR
+		databaseMode = manifest.Database.Mode
+		for _, runner := range manifest.Runners {
+			runnerPlacements = append(runnerPlacements, runner.Placement)
+		}
 	}
-	if manifest.Deployment.Mode != "development" && manifest.Deployment.Mode != "production" {
+	if deploymentMode != "development" && deploymentMode != "production" {
 		return "", "", nil, manifestError("recorded Compose deployment mode is unsupported", nil)
 	}
-	if manifest.Database.Mode != "bundled" && manifest.Database.Mode != "external" {
+	if databaseMode != "bundled" && databaseMode != "external" {
 		return "", "", nil, manifestError("recorded Compose database mode is unsupported", nil)
 	}
 	composeFiles := []string{"deploy/compose.yml"}
-	if manifest.Deployment.ComposeBackendCIDR != "" {
+	if composeBackendCIDR != "" {
 		composeFiles = append(composeFiles, "deploy/compose.explicit-network.yml")
 	}
-	if manifest.Deployment.Mode == "development" {
+	if deploymentMode == "development" {
 		composeFiles = append(composeFiles, "deploy/compose.development.yml")
-	} else if manifest.Database.Mode == "bundled" {
+	} else if databaseMode == "bundled" {
 		composeFiles = append(composeFiles, "deploy/compose.bundled-database.yml")
 	}
 	sameHost := false
-	for _, runner := range manifest.Runners {
-		if runner.Placement == "same-host" {
+	for _, placement := range runnerPlacements {
+		if placement == "same-host" {
 			if sameHost {
 				return "", "", nil, manifestError("recorded Compose topology has multiple same-host Runners", nil)
 			}
 			sameHost = true
 			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
-		} else if runner.Placement != "remote" {
+		} else if placement != "remote" {
 			return "", "", nil, manifestError("recorded Compose Runner placement is unsupported", nil)
 		}
 	}
-	project := manifest.Deployment.ComposeProjectName
+	project := composeProject
 	if project == "" {
 		project = DefaultComposeProjectName
 	} else if !composeProjectPattern.MatchString(project) {
