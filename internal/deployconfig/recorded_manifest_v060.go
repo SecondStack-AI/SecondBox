@@ -10,23 +10,24 @@ import (
 
 const recordedManifestV060Version = "0.6.0"
 
-// recordedManifestV060 is the exact deployment-manifest shape emitted by the
-// v0.6.0 guided installer. It is accepted only after the update workflow has
-// authenticated the recorded source release and only to recover the immutable
+// These types freeze the exact deployment-manifest shape emitted by the
+// v0.6.0 guided installer. They are accepted only after the update workflow
+// authenticates the recorded source release and only to recover immutable
 // Compose transport identity. Ordinary manifest decoding remains current and
 // strict.
 type recordedManifestV060 struct {
 	SchemaVersion     int                           `toml:"schema_version"`
-	Deployment        Deployment                    `toml:"deployment"`
-	Database          Database                      `toml:"database"`
-	RunnerTrust       RunnerTrust                   `toml:"runner_trust"`
-	Runners           []Runner                      `toml:"runners"`
-	Applications      Applications                  `toml:"applications"`
+	Deployment        recordedDeploymentV060        `toml:"deployment"`
+	Database          recordedDatabaseV060          `toml:"database"`
+	RunnerTrust       recordedRunnerTrustV060       `toml:"runner_trust"`
+	Runners           []recordedRunnerV060          `toml:"runners"`
+	Applications      recordedApplicationsV060      `toml:"applications"`
 	Policy            recordedPolicyV060            `toml:"policy"`
 	StandardResources recordedStandardResourcesV060 `toml:"standard_resources"`
-	Overrides         TuningOverrides               `toml:"overrides"`
+	Overrides         recordedTuningOverridesV060   `toml:"overrides"`
 }
 
+// recordedStandardResourcesV060 is an explicit release-bundle selection. It contains no authority.
 type recordedStandardResourcesV060 struct {
 	ArtifactManifest string                   `toml:"artifact_manifest"`
 	Bundles          []string                 `toml:"bundles"`
@@ -34,6 +35,7 @@ type recordedStandardResourcesV060 struct {
 	ApplyWaitSeconds *int64                   `toml:"apply_wait_seconds"`
 }
 
+// recordedRunnerPoolV060 binds one standard bundle's fixed selector to deployment inventory.
 type recordedRunnerPoolV060 struct {
 	Bundle         string   `toml:"bundle"`
 	Name           string   `toml:"name"`
@@ -43,6 +45,51 @@ type recordedRunnerPoolV060 struct {
 	MaxSandboxes   *int64   `toml:"max_sandboxes"`
 	MaxCPUMillis   *int64   `toml:"max_cpu_millis"`
 	MaxMemoryBytes *int64   `toml:"max_memory_bytes"`
+}
+
+type recordedDeploymentV060 struct {
+	Mode                   string `toml:"mode"`
+	ComposeProjectName     string `toml:"compose_project_name"`
+	ComposeBackendCIDR     string `toml:"compose_backend_cidr,omitempty"`
+	PublicBaseURL          string `toml:"public_base_url"`
+	TLSTermination         string `toml:"tls_termination"`
+	ControlPlaneImage      string `toml:"control_plane_image"`
+	RunnerImage            string `toml:"runner_image"`
+	PostgresImage          string `toml:"postgres_image"`
+	APIBindIP              string `toml:"api_bind_ip"`
+	APIPublishedPort       *int64 `toml:"api_published_port"`
+	ListenAddress          string `toml:"listen_address"`
+	RunnerBindIP           string `toml:"runner_bind_ip"`
+	RunnerPublishedPort    *int64 `toml:"runner_published_port"`
+	RunnerListenAddress    string `toml:"runner_listen_address"`
+	LogPath                string `toml:"log_path"`
+	SignedAssetCatalog     string `toml:"signed_asset_catalog"`
+	SignedAssetCatalogPath string `toml:"signed_asset_catalog_path"`
+	DevelopmentWaitSeconds *int64 `toml:"development_prepare_wait_timeout_seconds"`
+}
+
+type recordedDatabaseV060 struct {
+	Mode          string `toml:"mode"`
+	URLFile       string `toml:"url_file"`
+	BindIP        string `toml:"bind_ip"`
+	PublishedPort *int64 `toml:"published_port"`
+	Name          string `toml:"name"`
+	User          string `toml:"user"`
+	PasswordFile  string `toml:"password_file"`
+}
+
+type recordedRunnerTrustV060 struct {
+	EnrollmentCredentialFile string `toml:"enrollment_credential_file"`
+	CACertificateFile        string `toml:"ca_certificate_file"`
+	CAPrivateKeyFile         string `toml:"ca_private_key_file"`
+	ServerCertificateFile    string `toml:"server_certificate_file"`
+	ServerPrivateKeyFile     string `toml:"server_private_key_file"`
+	ServerName               string `toml:"server_name"`
+	CertificateLifetimeDays  *int64 `toml:"certificate_lifetime_days"`
+}
+
+type recordedApplicationsV060 struct {
+	PlatformTokenFile string `toml:"platform_token_file"`
 }
 
 type recordedPolicyV060 struct {
@@ -57,6 +104,96 @@ type recordedPolicyV060 struct {
 	DefaultSubjectMaxSnapshots            *int64 `toml:"default_subject_max_snapshots"`
 	DefaultSubjectMaxPortSessions         *int64 `toml:"default_subject_max_port_sessions"`
 	DefaultSubjectMaxConcurrentOperations *int64 `toml:"default_subject_max_concurrent_operations"`
+}
+
+// recordedTuningOverridesV060 owns the public TOML names for all Category C overrides.
+type recordedTuningOverridesV060 struct {
+	HTTPTimeoutSeconds                          *int64 `toml:"http_timeout_seconds"`
+	RunnerHeartbeatIntervalMilliseconds         *int64 `toml:"runner_heartbeat_interval_milliseconds"`
+	RunnerHeartbeatTimeoutMilliseconds          *int64 `toml:"runner_heartbeat_timeout_milliseconds"`
+	RunnerCommandDeliveryBatchSize              *int64 `toml:"runner_command_delivery_batch_size"`
+	RunnerEventPersistenceBatchSize             *int64 `toml:"runner_event_persistence_batch_size"`
+	RunnerEventPersistenceBatchWaitMilliseconds *int64 `toml:"runner_event_persistence_batch_wait_milliseconds"`
+	DataPlaneMaximumSessionBytes                *int64 `toml:"data_plane_maximum_session_bytes"`
+	IdempotencyRetentionSeconds                 *int64 `toml:"idempotency_retention_seconds"`
+	LifecycleReconcileBatchSize                 *int64 `toml:"lifecycle_reconcile_batch_size"`
+	LifecycleReconcilePollIntervalMilliseconds  *int64 `toml:"lifecycle_reconcile_poll_interval_milliseconds"`
+	LifecycleReconcileClaimDurationMilliseconds *int64 `toml:"lifecycle_reconcile_claim_duration_milliseconds"`
+	AssignmentClaimDurationMilliseconds         *int64 `toml:"assignment_claim_duration_milliseconds"`
+	AssignmentDeadlineMilliseconds              *int64 `toml:"assignment_deadline_milliseconds"`
+	AssignmentRetryLimit                        *int64 `toml:"assignment_retry_limit"`
+	SchedulerSerializationRetryLimit            *int64 `toml:"scheduler_serialization_retry_limit"`
+}
+
+// recordedRunnerV060 is one immutable runner_id and its typed, placement-local runtime
+// contract. Host paths remain opaque strings for remote placement.
+type recordedRunnerV060 struct {
+	RunnerID                      string `toml:"runner_id"`
+	Placement                     string `toml:"placement"`
+	PoolID                        string `toml:"pool_id"`
+	SoftwareVersion               string `toml:"software_version"`
+	ControlPlaneAddress           string `toml:"control_plane_address"`
+	ControlPlaneServerName        string `toml:"control_plane_server_name"`
+	IdentityDirectory             string `toml:"identity_directory"`
+	IdentityHostDirectory         string `toml:"identity_host_directory"`
+	ArtifactHostDirectory         string `toml:"artifact_host_directory"`
+	StateHostDirectory            string `toml:"state_host_directory"`
+	WorkspaceHostDirectory        string `toml:"workspace_host_directory"`
+	LogPath                       string `toml:"log_path"`
+	LogDirectory                  string `toml:"log_directory"`
+	FirecrackerPath               string `toml:"firecracker_path"`
+	FirecrackerJailerPath         string `toml:"firecracker_jailer_path"`
+	FirecrackerJailRoot           string `toml:"firecracker_jail_root"`
+	FirecrackerJailerUIDStart     *int64 `toml:"firecracker_jailer_uid_start"`
+	FirecrackerJailerUIDCount     *int64 `toml:"firecracker_jailer_uid_count"`
+	FirecrackerJailerUIDAllowLow  *bool  `toml:"firecracker_jailer_uid_allow_below_1000"`
+	FirecrackerJailerGID          *int64 `toml:"firecracker_jailer_gid"`
+	FirecrackerCgroupVersion      *int64 `toml:"firecracker_cgroup_version"`
+	FirecrackerCgroupParent       string `toml:"firecracker_cgroup_parent"`
+	FirecrackerKernelPath         string `toml:"firecracker_kernel_path"`
+	FirecrackerRootFSPath         string `toml:"firecracker_rootfs_path"`
+	FirecrackerSharedImagePath    string `toml:"firecracker_shared_image_path"`
+	FirecrackerKernelArgs         string `toml:"firecracker_kernel_args"`
+	FirecrackerCPUTemplate        string `toml:"firecracker_cpu_template"`
+	FirecrackerRunDirectory       string `toml:"firecracker_run_directory"`
+	FirecrackerLogDirectory       string `toml:"firecracker_log_directory"`
+	FirecrackerAllowUnjailed      *bool  `toml:"firecracker_allow_unjailed"`
+	SnapshotTemplateCacheRoot     string `toml:"snapshot_template_cache_root"`
+	ArtifactPublicKey             string `toml:"artifact_public_key"`
+	ArtifactPublicKeySHA256       string `toml:"artifact_public_key_sha256"`
+	WorkspaceRoot                 string `toml:"workspace_root"`
+	StorageRecoveryPercent        *int64 `toml:"storage_pressure_recovery_percent"`
+	StorageWarningPercent         *int64 `toml:"storage_pressure_warning_percent"`
+	StorageAdmissionDenyPercent   *int64 `toml:"storage_pressure_admission_deny_percent"`
+	SandboxMaxVCPUs               *int64 `toml:"sandbox_max_vcpus"`
+	SandboxMaxMemoryMiB           *int64 `toml:"sandbox_max_memory_mib"`
+	SandboxMaxDiskMiB             *int64 `toml:"sandbox_max_disk_mib"`
+	SandboxMemoryBudgetMiB        *int64 `toml:"sandbox_memory_budget_mib"`
+	SandboxGuestIP                string `toml:"sandbox_guest_ip"`
+	SandboxBridgeName             string `toml:"sandbox_bridge_name"`
+	SandboxBridgeCIDR             string `toml:"sandbox_bridge_cidr"`
+	SandboxGuestCIDR              string `toml:"sandbox_guest_cidr"`
+	SandboxTapPrefix              string `toml:"sandbox_tap_prefix"`
+	SandboxNetworkStateDir        string `toml:"sandbox_network_state_directory"`
+	SandboxDeleteBridge           *bool  `toml:"sandbox_delete_bridge"`
+	NetworkPolicyNFTPath          string `toml:"network_policy_nft_path"`
+	NetworkPolicyMaxDNSPins       *int64 `toml:"network_policy_max_dns_pins"`
+	NetworkPolicyMaxDNSTTL        string `toml:"network_policy_max_dns_ttl"`
+	NetworkPolicyRunnerAddresses  string `toml:"network_policy_runner_addresses"`
+	NetworkPolicyManagementCIDRs  string `toml:"network_policy_management_cidrs"`
+	NetworkPolicyRunnerGateways   string `toml:"network_policy_runner_gateways"`
+	NetworkPolicyDNSUpstream      string `toml:"network_policy_dns_upstream"`
+	MaxConcurrentPerSandbox       *int64 `toml:"max_concurrent_per_sandbox"`
+	MaxConcurrentGlobal           *int64 `toml:"max_concurrent_global"`
+	MaxConcurrentStarts           *int64 `toml:"max_concurrent_starts"`
+	MaxConcurrentWorkspaceCreates *int64 `toml:"max_concurrent_workspace_creates"`
+	MaxConcurrentOperationsGlobal *int64 `toml:"max_concurrent_operations_global"`
+	FileTransferMaxBytes          *int64 `toml:"file_transfer_max_bytes"`
+	GuestControlVSockPort         *int64 `toml:"guest_control_vsock_port"`
+	GuestProtocolVSockPort        *int64 `toml:"guest_protocol_vsock_port"`
+	GuestHeartbeatInterval        string `toml:"guest_heartbeat_interval"`
+	DataPlaneListenAddress        string `toml:"data_plane_listen_address"`
+	DataPlaneAdvertisedAddress    string `toml:"data_plane_advertised_address"`
 }
 
 func readRecordedManifestV060(path string) (recordedManifestV060, error) {

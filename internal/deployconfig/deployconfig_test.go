@@ -390,20 +390,27 @@ func TestRecordedInstallerComposeSubjectAuthenticatesProjectIdentity(t *testing.
 	}
 }
 
-func TestRecordedInstallerComposeIdentityAcceptsOnlyExactV060CPUFields(t *testing.T) {
+func TestRecordedInstallerComposeIdentityAcceptsOnlyExactV060Fixture(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
 	if _, err := Render(manifestPath, environmentPath); err != nil {
 		t.Fatal(err)
 	}
-	current, err := os.ReadFile(manifestPath)
+	for name, content := range map[string]string{
+		"compose.explicit-network.yml": "v0.6.0 recorded explicit network\n",
+		"compose.same-host-runner.yml": "v0.6.0 recorded same-host Runner\n",
+	} {
+		if err := os.WriteFile(filepath.Join(environmentPath+".compose", name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The fixture was encoded by singleHostManifest at the exact public v0.6.0
+	// source commit from its verified public artifact manifest. It does not
+	// inherit any target-era manifest type or generator behavior.
+	legacy, err := os.ReadFile(filepath.Join("testdata", "v060-recorded-installer-manifest.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count := bytes.Count(current, []byte("max_vcpu_count")); count != 4 {
-		t.Fatalf("current manifest CPU field count = %d, want 4", count)
-	}
-	legacy := bytes.ReplaceAll(current, []byte("max_vcpu_count"), []byte("max_cpu_millis"))
 	if err := os.WriteFile(manifestPath, legacy, 0o600); err != nil {
 		t.Fatal(err)
 	}

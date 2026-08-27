@@ -225,50 +225,61 @@ func recordedInstallerComposeIdentity(manifestPath, sourceVersion string) (strin
 	if err != nil {
 		return "", "", nil, err
 	}
-	var deployment Deployment
-	var database Database
-	var runners []Runner
+	var deploymentMode, composeProject, composeBackendCIDR, databaseMode string
+	var runnerPlacements []string
 	if sourceVersion == recordedManifestV060Version {
 		manifest, err := readRecordedManifestV060(absolute)
 		if err != nil {
 			return "", "", nil, err
 		}
-		deployment, database, runners = manifest.Deployment, manifest.Database, manifest.Runners
+		deploymentMode = manifest.Deployment.Mode
+		composeProject = manifest.Deployment.ComposeProjectName
+		composeBackendCIDR = manifest.Deployment.ComposeBackendCIDR
+		databaseMode = manifest.Database.Mode
+		for _, runner := range manifest.Runners {
+			runnerPlacements = append(runnerPlacements, runner.Placement)
+		}
 	} else {
 		manifest, err := ReadManifest(absolute)
 		if err != nil {
 			return "", "", nil, err
 		}
-		deployment, database, runners = manifest.Deployment, manifest.Database, manifest.Runners
+		deploymentMode = manifest.Deployment.Mode
+		composeProject = manifest.Deployment.ComposeProjectName
+		composeBackendCIDR = manifest.Deployment.ComposeBackendCIDR
+		databaseMode = manifest.Database.Mode
+		for _, runner := range manifest.Runners {
+			runnerPlacements = append(runnerPlacements, runner.Placement)
+		}
 	}
-	if deployment.Mode != "development" && deployment.Mode != "production" {
+	if deploymentMode != "development" && deploymentMode != "production" {
 		return "", "", nil, manifestError("recorded Compose deployment mode is unsupported", nil)
 	}
-	if database.Mode != "bundled" && database.Mode != "external" {
+	if databaseMode != "bundled" && databaseMode != "external" {
 		return "", "", nil, manifestError("recorded Compose database mode is unsupported", nil)
 	}
 	composeFiles := []string{"deploy/compose.yml"}
-	if deployment.ComposeBackendCIDR != "" {
+	if composeBackendCIDR != "" {
 		composeFiles = append(composeFiles, "deploy/compose.explicit-network.yml")
 	}
-	if deployment.Mode == "development" {
+	if deploymentMode == "development" {
 		composeFiles = append(composeFiles, "deploy/compose.development.yml")
-	} else if database.Mode == "bundled" {
+	} else if databaseMode == "bundled" {
 		composeFiles = append(composeFiles, "deploy/compose.bundled-database.yml")
 	}
 	sameHost := false
-	for _, runner := range runners {
-		if runner.Placement == "same-host" {
+	for _, placement := range runnerPlacements {
+		if placement == "same-host" {
 			if sameHost {
 				return "", "", nil, manifestError("recorded Compose topology has multiple same-host Runners", nil)
 			}
 			sameHost = true
 			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
-		} else if runner.Placement != "remote" {
+		} else if placement != "remote" {
 			return "", "", nil, manifestError("recorded Compose Runner placement is unsupported", nil)
 		}
 	}
-	project := deployment.ComposeProjectName
+	project := composeProject
 	if project == "" {
 		project = DefaultComposeProjectName
 	} else if !composeProjectPattern.MatchString(project) {

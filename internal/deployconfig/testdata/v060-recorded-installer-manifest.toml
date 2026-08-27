@@ -1,0 +1,179 @@
+schema_version = 1
+
+[deployment]
+mode = 'development'
+compose_project_name = 'secondbox-0123456789abcdef'
+compose_backend_cidr = '172.31.0.0/24'
+public_base_url = 'http://127.0.0.1:8080'
+tls_termination = 'development-loopback'
+control_plane_image = 'ghcr.io/secondstack-ai/secondbox/control-plane@sha256:22ec5eaed76990ac2cff31b1aa3ca433c14777f4a5b46d470bc82a348c6a80cc'
+runner_image = 'ghcr.io/secondstack-ai/secondbox/runner@sha256:ecd1ebee2f380178943ff96b13dbe31da739a0d73fe3e37b696ad944571d41f1'
+postgres_image = 'docker.io/library/postgres@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382'
+api_bind_ip = '127.0.0.1'
+api_published_port = 8080
+listen_address = '0.0.0.0:8080'
+runner_bind_ip = '127.0.0.1'
+runner_published_port = 9443
+runner_listen_address = '0.0.0.0:9443'
+log_path = '/var/log/secondbox/control-plane.jsonl'
+signed_asset_catalog = 'signed-assets.json'
+signed_asset_catalog_path = '/etc/secondbox/signed-assets.json'
+development_prepare_wait_timeout_seconds = 300
+
+[database]
+mode = 'bundled'
+url_file = ''
+bind_ip = '127.0.0.1'
+published_port = 5432
+name = 'secondbox'
+user = 'secondbox'
+password_file = 'secrets/postgres-password'
+
+[runner_trust]
+enrollment_credential_file = 'secrets/runner-credential'
+ca_certificate_file = 'secrets/runner-pki/runner-ca.crt'
+ca_private_key_file = 'secrets/runner-pki/runner-ca.key'
+server_certificate_file = 'secrets/runner-pki/server.crt'
+server_private_key_file = 'secrets/runner-pki/server.key'
+server_name = 'control-plane'
+certificate_lifetime_days = 825
+
+[[runners]]
+runner_id = 'runner-0123456789abcdef'
+placement = 'same-host'
+pool_id = 'standard-amd64'
+software_version = '0.6.0'
+control_plane_address = '127.0.0.1:9443'
+control_plane_server_name = 'control-plane'
+identity_directory = '/run/secondbox-runner-identity'
+identity_host_directory = '/srv/secondbox/secondbox-install_0123456789abcdef/storage/identity'
+artifact_host_directory = '/srv/secondbox/secondbox-install_0123456789abcdef/storage/release/artifacts'
+state_host_directory = '/srv/secondbox/secondbox-install_0123456789abcdef/storage'
+workspace_host_directory = '/srv/secondbox/secondbox-install_0123456789abcdef/storage/workspaces'
+log_path = '/var/lib/secondbox-runner/state/logs/runner.jsonl'
+log_directory = '/var/lib/secondbox-runner/state/logs'
+firecracker_path = '/usr/local/bin/firecracker'
+firecracker_jailer_path = '/usr/local/bin/jailer'
+firecracker_jail_root = '/var/lib/secondbox-runner/jail'
+firecracker_jailer_uid_start = 200000
+firecracker_jailer_uid_count = 64
+firecracker_jailer_uid_allow_below_1000 = false
+firecracker_jailer_gid = 200000
+firecracker_cgroup_version = 2
+firecracker_cgroup_parent = 'secondbox'
+firecracker_kernel_path = '/opt/secondbox-artifacts/kernel'
+firecracker_rootfs_path = '/opt/secondbox-artifacts/rootfs.ext4'
+firecracker_shared_image_path = '/opt/secondbox-artifacts/shared.img'
+firecracker_kernel_args = 'console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init'
+firecracker_cpu_template = 'None'
+firecracker_run_directory = '/var/lib/secondbox-runner/state/run'
+firecracker_log_directory = '/var/lib/secondbox-runner/state/firecracker-logs'
+firecracker_allow_unjailed = false
+snapshot_template_cache_root = '/var/lib/secondbox-runner/state/snapshot-template-cache'
+artifact_public_key = '/opt/secondbox-artifacts/signing.pub'
+artifact_public_key_sha256 = '40a61101ea2574faf4f6715eb7201cfece7c48b51495cc319896b4e87c63931b'
+workspace_root = '/var/lib/secondbox-runner/workspaces'
+storage_pressure_recovery_percent = 75
+storage_pressure_warning_percent = 80
+storage_pressure_admission_deny_percent = 85
+sandbox_max_vcpus = 1
+sandbox_max_memory_mib = 3072
+sandbox_max_disk_mib = 25600
+sandbox_memory_budget_mib = 24576
+sandbox_guest_ip = '172.30.0.2'
+sandbox_bridge_name = 'sbx0'
+sandbox_bridge_cidr = '172.30.0.1/24'
+sandbox_guest_cidr = '172.30.0.0/24'
+sandbox_tap_prefix = 'sbx'
+sandbox_network_state_directory = '/var/lib/secondbox-runner/state/network'
+sandbox_delete_bridge = true
+network_policy_nft_path = '/usr/sbin/nft'
+network_policy_max_dns_pins = 256
+network_policy_max_dns_ttl = '5m'
+network_policy_runner_addresses = '172.30.0.1'
+network_policy_management_cidrs = '172.30.0.0/24'
+network_policy_runner_gateways = 'agent-gateway.secondbox.internal=172.30.0.1,coding-gateway.secondbox.internal=172.30.0.1,isolated-gateway.secondbox.internal=172.30.0.1'
+network_policy_dns_upstream = '1.1.1.1:53'
+max_concurrent_per_sandbox = 4
+max_concurrent_global = 8
+max_concurrent_starts = 2
+max_concurrent_workspace_creates = 2
+max_concurrent_operations_global = 16
+file_transfer_max_bytes = 1073741824
+guest_control_vsock_port = 1024
+guest_protocol_vsock_port = 1025
+guest_heartbeat_interval = '5s'
+data_plane_listen_address = '127.0.0.1:9444'
+data_plane_advertised_address = '127.0.0.1:9444'
+
+[applications]
+platform_token_file = 'secrets/platform-token'
+
+[policy]
+# Data-plane session, result, and idempotency retention deadline.
+data_plane_retention_seconds = 86400
+data_plane_poll_interval_milliseconds = 250
+runner_command_poll_interval_milliseconds = 250
+runner_enabled_features = 'evidence,exec-streaming,file-streaming,local-workspace,port-proxy,pty'
+default_subject_max_sandboxes = 20
+default_subject_max_active_instances = 8
+default_subject_max_cpu_millis = 32000
+default_subject_max_memory_bytes = 25769803776
+default_subject_max_snapshots = 100
+default_subject_max_port_sessions = 50
+default_subject_max_concurrent_operations = 16
+
+[standard_resources]
+artifact_manifest = 'release-artifact-manifest.json'
+bundles = ['agent-compartment', 'durable-coding', 'agent-compartment-isolated']
+apply_wait_seconds = 300
+
+[[standard_resources.runner_pools]]
+bundle = 'agent-compartment'
+name = 'standard-amd64'
+architectures = ['amd64']
+capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
+state = 'ready'
+max_sandboxes = 8
+max_cpu_millis = 32000
+max_memory_bytes = 25769803776
+
+[[standard_resources.runner_pools]]
+bundle = 'durable-coding'
+name = 'standard-amd64'
+architectures = ['amd64']
+capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
+state = 'ready'
+max_sandboxes = 8
+max_cpu_millis = 32000
+max_memory_bytes = 25769803776
+
+[[standard_resources.runner_pools]]
+bundle = 'agent-compartment-isolated'
+name = 'standard-amd64'
+architectures = ['amd64']
+capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
+state = 'ready'
+max_sandboxes = 8
+max_cpu_millis = 32000
+max_memory_bytes = 25769803776
+
+[overrides]
+
+# Optional tuning overrides. Uncomment only an intentional override.
+# [overrides]
+# http_timeout_seconds = 30 # default; HTTP request-read, response-write, keep-alive, and shutdown timeout.
+# runner_heartbeat_interval_milliseconds = 5000 # default; Runner heartbeat cadence.
+# runner_heartbeat_timeout_milliseconds = 30000 # default; Runner liveness timeout.
+# runner_command_delivery_batch_size = 16 # default; Commands delivered per claim.
+# runner_event_persistence_batch_size = 16 # default; Runner events persisted per batch.
+# runner_event_persistence_batch_wait_milliseconds = 2 # default; Maximum runner-event batch wait.
+# data_plane_maximum_session_bytes = 67108864 # default; Maximum data-plane session payload.
+# idempotency_retention_seconds = 86400 # default; Retention for expired idempotency and activity-touch records.
+# lifecycle_reconcile_batch_size = 8 # default; Lifecycle rows reconciled per batch.
+# lifecycle_reconcile_poll_interval_milliseconds = 250 # default; Lifecycle fallback polling cadence.
+# lifecycle_reconcile_claim_duration_milliseconds = 30000 # default; Lifecycle work claim duration.
+# assignment_claim_duration_milliseconds = 30000 # default; Assignment dispatch claim duration.
+# assignment_deadline_milliseconds = 120000 # default; Assignment readiness deadline.
+# assignment_retry_limit = 2 # default; Assignment retry count.
+# scheduler_serialization_retry_limit = 3 # default; Serializable scheduling retry count.
