@@ -95,10 +95,25 @@ EOF
 }
 
 create_qualification_workload() {
-  local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5"
+  local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5" quota_cpu_contract="$6"
   local platform_config="$root/platform.json" controller_config="$root/controller.json" application_config="$root/application.json"
-  local platform_token_path platform_token api_address subject_ref expiry controller_response controller_token application_response application_token
+  local platform_token_path platform_token api_address subject_ref expiry controller_response controller_token application_response application_token cpu_quota_field cpu_quota_value
   local sandbox_operation sandbox_id sandbox_state=''
+
+  case "$quota_cpu_contract" in
+    v0.6-cpu-millis)
+      cpu_quota_field='maxCpuMillis'
+      cpu_quota_value=4000
+      ;;
+    current-vcpu-count)
+      cpu_quota_field='maxVcpuCount'
+      cpu_quota_value=4
+      ;;
+    *)
+      echo "qualification workload CPU quota contract is invalid: $quota_cpu_contract" >&2
+      return 2
+      ;;
+  esac
 
   install -d -m 0700 "$root"
   platform_token_path="$(jq -er '.secretTargets[] | select(.category == "platform-authority") | .path' "$plan_path")"
@@ -109,8 +124,8 @@ create_qualification_workload() {
 
   SECONDBOX_CONFIG="$platform_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$platform_token" \
     "$binary" --output json platform login >/dev/null
-  jq -n --arg ref "$tenant_ref" \
-    '{ref:$ref,allowedProfileGrants:["durable-coding"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:4,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16,maxActiveSubjects:1,maxApplicationAuthorities:1},expiryPolicy:{maximumSubjectLifetimeSeconds:21600,maximumAuthorityLifetimeSeconds:21600},metadata:{qualification:"installer-qualified-workload"}}' >"$root/tenant.json"
+  jq -n --arg ref "$tenant_ref" --arg cpuQuotaField "$cpu_quota_field" --argjson cpuQuotaValue "$cpu_quota_value" \
+    '{ref:$ref,allowedProfileGrants:["durable-coding"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:({maxSandboxes:1,maxActiveInstances:1,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16,maxActiveSubjects:1,maxApplicationAuthorities:1} + {($cpuQuotaField):$cpuQuotaValue}),expiryPolicy:{maximumSubjectLifetimeSeconds:21600,maximumAuthorityLifetimeSeconds:21600},metadata:{qualification:"installer-qualified-workload"}}' >"$root/tenant.json"
   SECONDBOX_CONFIG="$platform_config" "$binary" --output json tenant create \
     --file "$root/tenant.json" --idempotency-key "qualified-tenant-$key_suffix" >/dev/null
   jq -n --arg expiresAt "$expiry" '{expiresAt:$expiresAt,metadata:{qualification:"installer-qualified-workload"}}' >"$root/controller-request.json"
@@ -119,8 +134,8 @@ create_qualification_workload() {
   controller_token="$(jq -er .bearerToken <<<"$controller_response")"
   SECONDBOX_CONFIG="$controller_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$controller_token" \
     "$binary" --output json controller login >/dev/null
-  jq -n --arg ref "$subject_ref" \
-    '{ref:$ref,quota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:4,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16},metadata:{qualification:"installer-qualified-workload"}}' >"$root/subject.json"
+  jq -n --arg ref "$subject_ref" --arg cpuQuotaField "$cpu_quota_field" --argjson cpuQuotaValue "$cpu_quota_value" \
+    '{ref:$ref,quota:({maxSandboxes:1,maxActiveInstances:1,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16} + {($cpuQuotaField):$cpuQuotaValue}),metadata:{qualification:"installer-qualified-workload"}}' >"$root/subject.json"
   SECONDBOX_CONFIG="$controller_config" "$binary" --output json subject create \
     --file "$root/subject.json" --idempotency-key "qualified-subject-$key_suffix" >/dev/null
   jq -n --arg subjectRef "$subject_ref" --arg expiresAt "$expiry" \
@@ -208,7 +223,7 @@ if [[ "$phase" == install ]]; then
     cli_config="$(jq -er .cli.configPath "$plan")"
     source_qualification="$(jq -r '.completedStages[] | select(.stage == "smoke_execution") | .evidence.qualification // ""' "$receipt")"
     if [[ "$source_qualification" == authenticated-runner-readiness ]]; then
-      source_workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/source-workload-$mode" "qualified-$mode" "source-$mode")"
+      source_workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/source-workload-$mode" "qualified-$mode" "source-$mode" v0.6-cpu-millis)"
       qualification_sandbox_id="$(jq -er .sandboxId <<<"$source_workload")"
       qualification_workload_config="$(jq -er .configPath <<<"$source_workload")"
     else
@@ -361,7 +376,7 @@ if [[ "$mode" == existing_reflink_update ]]; then
   sandbox_id="$(jq -er '.sandboxId | select(length > 0)' "$state")"
   workload_config="$(jq -er '.workloadConfig | select(length > 0)' "$state")"
 else
-  workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode")"
+  workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" current-vcpu-count)"
   sandbox_id="$(jq -er .sandboxId <<<"$workload")"
   workload_config="$(jq -er .configPath <<<"$workload")"
 fi

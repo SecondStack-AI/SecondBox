@@ -232,6 +232,10 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		`sudo cat -- "$isolation/source"`,
 		`workspaceId:.workspace.id`,
 		`workspace_generation_after == generation_after`,
+		`"source-$mode" v0.6-cpu-millis`,
+		`"$mode" current-vcpu-count`,
+		`cpu_quota_field='maxCpuMillis'`,
+		`cpu_quota_field='maxVcpuCount'`,
 		"report_qualified_guest_failure",
 	} {
 		if !strings.Contains(guest, required) {
