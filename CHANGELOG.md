@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Retracted the Go module version `v0.7.0`, which the public Go proxy cached from an intermediate release-preparation commit before final qualification fixes merged. Use `v0.7.1`; its runtime, API, protocol, migration, and signed microVM bundle contracts are unchanged from the final v0.7.0 release artifacts.
 - Release qualification now preserves and validates the qualified Linux amd64 host platform in both scenario and installer evidence.
 - Recorded-release verification now recognizes the exact published v0.6.0 installer-qualification waiver only when authenticating that immutable release as a guided-update source. New scenario and installer evidence use v2 and require an explicit Linux amd64 host platform; valid v1 evidence remains readable without weakening current release staging.
 - Guided updates from the exact v0.6.0 release now recover its recorded Compose transport through the strict v0.6.0 deployment-manifest schema, including the source-era `max_cpu_millis` fields. This bridge is version-gated to authenticated v0.6.0 installer state; ordinary and newer deployment manifests remain on the current strict schema and reject legacy CPU fields.
