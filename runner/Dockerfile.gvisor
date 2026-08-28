@@ -20,7 +20,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
       -ldflags="-X main.releaseVersion=${RELEASE_VERSION} -X main.sourceCommit=${SOURCE_COMMIT}" \
       -o /out/secondbox-runner ./cmd/secondbox-runner \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
-      -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent
+      -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+      -o /out/secondbox-prepare-gvisor-flat-root ./cmd/secondbox-prepare-gvisor-flat-root
 
 FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c AS runsc-release
 
@@ -60,6 +62,7 @@ LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondB
 
 COPY --from=runner-builder /out/secondbox-runner /usr/local/bin/secondbox-runner
 COPY --from=runner-builder /out/secondbox-guest-agent /usr/local/bin/secondbox-guest-agent
+COPY --from=runner-builder /out/secondbox-prepare-gvisor-flat-root /usr/local/bin/secondbox-prepare-gvisor-flat-root
 COPY --from=runsc-release /out/runsc /usr/local/bin/runsc
 COPY LICENSE /usr/share/licenses/secondbox-runner/LICENSE
 

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	runnerconformance "github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
@@ -78,6 +80,9 @@ func newQualificationFixture(t *testing.T, suffix string) qualificationFixture {
 func newQualificationFixtureWithDNS(t *testing.T, suffix, dnsUpstream string) qualificationFixture {
 	t.Helper()
 	runsc, agent, rootfs := qualificationBuild(t)
+	if dnsUpstream == "" {
+		dnsUpstream = "127.0.0.1:53"
+	}
 
 	qualificationRoot := t.TempDir()
 	if parent := os.Getenv("SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM"); parent != "" {
@@ -143,7 +148,11 @@ func newQualificationFixtureWithDNS(t *testing.T, suffix, dnsUpstream string) qu
 		RunscPath: runsc, AgentPath: agent, FlatRootPath: rootfs,
 		MaterializationPath: manifestPath, MaterializationDigest: manifestDigest,
 		RuntimeDir: runtimeDir, WorkspaceRoot: filepath.Join(qualificationRoot, "store"),
-		SelfExecutable: selfExecutable, DNSUpstream: dnsUpstream,
+		SelfExecutable: selfExecutable,
+		NetworkPolicy: networkpolicy.RunnerConfig{
+			CompileOptions: networkpolicy.CompileOptions{MaximumPins: 64, MaximumTTL: 5 * time.Minute},
+			DNSUpstream:    netip.MustParseAddrPort(dnsUpstream),
+		},
 		MaximumVCPUs: 2, MaximumMemoryBytes: 1 << 30,
 		MaximumDiskBytes: uint64(backendQualificationWorkspaceBytes),
 		MaximumInstances: 1, MaximumOperations: 8, WorkspaceStore: store,

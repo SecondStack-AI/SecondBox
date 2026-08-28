@@ -142,6 +142,7 @@ test-gvisor build_dir:
       echo "SecondBox gVisor qualification requires bin/runsc, bin/secondbox-guest-agent, and rootfs in $build_dir" >&2
       exit 1
     }
+    go run ./cmd/secondbox-prepare-gvisor-flat-root "$build_dir/rootfs"
     SECONDBOX_GVISOR_QUALIFICATION=1 SECONDBOX_GVISOR_BUILD="$build_dir" \
       go test ./internal/gvisor/ -count=1 -v -run 'TestAttachment|TestQualifiedGVisor'
 

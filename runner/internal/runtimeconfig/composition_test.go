@@ -103,6 +103,12 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_GVISOR_MAXIMUM_OPERATIONS":                "64",
 		"SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES": "8589934592",
 		"SECONDBOX_GVISOR_NETWORK_PROFILE":                   "0",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS":       "17",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL":        "47s",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES":   "10.210.2.1,10.210.2.3",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS":   "10.211.0.0/16,192.168.50.0/24",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS":    "agent-gateway.secondbox.internal=10.210.2.2",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM":       "10.201.0.10:53",
 	}
 	for name, value := range complete {
 		t.Setenv(name, value)
@@ -120,17 +126,15 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		composition.MaximumVCPUs != 8 || composition.MaximumMemoryBytes != 17179869184 ||
 		composition.MaximumDiskBytes != 107374182400 || composition.MaximumInstances != 8 ||
 		composition.MaximumOperations != 64 || templateBytes != 8589934592 ||
-		composition.NetworkProfile != 0 {
+		composition.NetworkProfile != 0 ||
+		composition.NetworkPolicy.CompileOptions.MaximumPins != 17 ||
+		composition.NetworkPolicy.CompileOptions.MaximumTTL != 47*time.Second ||
+		len(composition.NetworkPolicy.CompileOptions.RunnerAddresses) != 2 ||
+		len(composition.NetworkPolicy.CompileOptions.ManagementPrefixes) != 2 ||
+		composition.NetworkPolicy.CompileOptions.RunnerGateways["agent-gateway.secondbox.internal"].String() != "10.210.2.2" ||
+		composition.NetworkPolicy.DNSUpstream.String() != "10.201.0.10:53" {
 		t.Fatalf("gVisor composition = %#v templateBytes=%d", composition, templateBytes)
 	}
-
-	t.Run("dns upstream", func(t *testing.T) {
-		t.Setenv("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM", "10.201.0.10:53")
-		composition, _, err := loadGVisorComposition()
-		if err != nil || composition.DNSUpstream != "10.201.0.10:53" {
-			t.Fatalf("dns upstream composition = %#v, %v", composition, err)
-		}
-	})
 
 	t.Run("network profile", func(t *testing.T) {
 		t.Setenv("SECONDBOX_GVISOR_NETWORK_PROFILE", "1")
@@ -152,6 +156,9 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_GVISOR_RUNSC_PATH",
 		"SECONDBOX_GVISOR_MATERIALIZATION_DIGEST",
 		"SECONDBOX_GVISOR_MAXIMUM_VCPUS",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM",
 	} {
 		t.Run(required, func(t *testing.T) {
 			t.Setenv(required, "")
@@ -164,6 +171,12 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		t.Setenv("SECONDBOX_GVISOR_RUNSC_PATH", "bin/runsc")
 		if _, _, err := loadGVisorComposition(); err == nil {
 			t.Fatal("relative runsc path was accepted")
+		}
+	})
+	t.Run("malformed network policy", func(t *testing.T) {
+		t.Setenv("SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL", "forever")
+		if _, _, err := loadGVisorComposition(); err == nil {
+			t.Fatal("malformed network-policy TTL was accepted")
 		}
 	})
 }

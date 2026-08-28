@@ -40,7 +40,7 @@ func newGVisorAssignmentBackend(
 		MaximumInstances:      settings.MaximumInstances,
 		MaximumOperations:     settings.MaximumOperations,
 		NetworkProfile:        settings.NetworkProfile,
-		DNSUpstream:           settings.DNSUpstream,
+		NetworkPolicy:         settings.NetworkPolicy,
 		WorkspaceStore:        workspaceStore,
 	})
 	if err != nil {

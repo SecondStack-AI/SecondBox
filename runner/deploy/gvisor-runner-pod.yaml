@@ -91,6 +91,18 @@ spec:
           value: /var/lib/secondbox-runner/log/runner.jsonl
         - name: SECONDBOX_RUNNER_WORKSPACE_ROOT
           value: /w
+        - name: SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS
+          value: "OPERATOR_MAXIMUM_DNS_PINS"
+        - name: SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL
+          value: "OPERATOR_MAXIMUM_DNS_TTL"
+        - name: SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES
+          value: "OPERATOR_RUNNER_ADDRESSES"
+        - name: SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS
+          value: "OPERATOR_MANAGEMENT_CIDRS"
+        - name: SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS
+          value: "OPERATOR_LOGICAL_GATEWAY_DOMAIN=OPERATOR_LOGICAL_GATEWAY_IP"
+        - name: SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM
+          value: "OPERATOR_DNS_UPSTREAM_IP:53"
         - name: SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
           value: "0.0.0.0:9500"
         # Proxied-only default: the listener stays pod-local and the

@@ -3,15 +3,8 @@
 package gvisor
 
 import (
-	"time"
-
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
-)
-
-const (
-	gvisorPolicyMaximumPins = 64
-	gvisorPolicyMaximumTTL  = 5 * time.Minute
 )
 
 // translateNetworkPolicy passes the assignment policy through the shared
@@ -20,13 +13,10 @@ const (
 // validation identical to the Firecracker path. The compiled policy is
 // enforced exactly by the inet-family veth rendering; a rule the compiler
 // rejects never reaches enforcement, and nothing is omitted or broadened.
-func translateNetworkPolicy(policy *runnerprotocol.NetworkPolicy) (*networkpolicy.CompiledPolicy, error) {
+func translateNetworkPolicy(policy *runnerprotocol.NetworkPolicy, options networkpolicy.CompileOptions) (*networkpolicy.CompiledPolicy, error) {
 	portable, err := networkpolicy.FromRunnerProtocol(policy)
 	if err != nil {
 		return nil, err
 	}
-	return networkpolicy.Compile(portable, networkpolicy.CompileOptions{
-		MaximumPins: gvisorPolicyMaximumPins,
-		MaximumTTL:  gvisorPolicyMaximumTTL,
-	})
+	return networkpolicy.Compile(portable, options)
 }

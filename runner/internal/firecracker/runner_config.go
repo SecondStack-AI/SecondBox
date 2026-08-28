@@ -2,13 +2,13 @@ package firecracker
 
 import (
 	"fmt"
-	"net/netip"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 )
 
 // LoadRunnerFirecrackerConfigFromEnv loads explicit standalone runner settings.
@@ -43,77 +43,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		}
 		return value, nil
 	}
-	requiredAddresses := func(name string) ([]netip.Addr, error) {
-		raw, err := required(name)
-		if err != nil {
-			return nil, err
-		}
-		parts := strings.Split(raw, ",")
-		addresses := make([]netip.Addr, 0, len(parts))
-		for _, part := range parts {
-			address, parseErr := netip.ParseAddr(strings.TrimSpace(part))
-			if parseErr != nil {
-				return nil, fmt.Errorf("SecondBox Firecracker config %s contains invalid address %q", name, part)
-			}
-			addresses = append(addresses, address)
-		}
-		return addresses, nil
-	}
-	requiredPrefixes := func(name string) ([]netip.Prefix, error) {
-		raw, err := required(name)
-		if err != nil {
-			return nil, err
-		}
-		parts := strings.Split(raw, ",")
-		prefixes := make([]netip.Prefix, 0, len(parts))
-		for _, part := range parts {
-			prefix, parseErr := netip.ParsePrefix(strings.TrimSpace(part))
-			if parseErr != nil {
-				return nil, fmt.Errorf("SecondBox Firecracker config %s contains invalid CIDR %q", name, part)
-			}
-			prefixes = append(prefixes, prefix.Masked())
-		}
-		return prefixes, nil
-	}
-	requiredRunnerGateways := func(name string) (map[string]netip.Addr, error) {
-		raw, err := required(name)
-		if err != nil {
-			return nil, err
-		}
-		gateways := make(map[string]netip.Addr)
-		if raw == "none" {
-			return gateways, nil
-		}
-		for _, part := range strings.Split(raw, ",") {
-			domain, addressRaw, found := strings.Cut(strings.TrimSpace(part), "=")
-			domain = strings.TrimSpace(domain)
-			if !found || domain == "" || strings.TrimSpace(addressRaw) == "" {
-				return nil, fmt.Errorf(
-					"SecondBox Firecracker config %s entry %q must be domain=IP",
-					name,
-					part,
-				)
-			}
-			address, parseErr := netip.ParseAddr(strings.TrimSpace(addressRaw))
-			if parseErr != nil {
-				return nil, fmt.Errorf(
-					"SecondBox Firecracker config %s entry %q has an invalid IP",
-					name,
-					part,
-				)
-			}
-			if _, duplicate := gateways[domain]; duplicate {
-				return nil, fmt.Errorf(
-					"SecondBox Firecracker config %s repeats domain %q",
-					name,
-					domain,
-				)
-			}
-			gateways[domain] = address
-		}
-		return gateways, nil
-	}
-
 	firecrackerPath, err := required("SECONDBOX_RUNNER_FIRECRACKER_PATH")
 	if err != nil {
 		return nil, err
@@ -306,37 +235,9 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	networkPolicyMaximumDNSPins, err := requiredInt("SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS")
+	networkPolicyConfig, err := networkpolicy.LoadRunnerConfigFromEnvironment()
 	if err != nil {
-		return nil, err
-	}
-	networkPolicyMaximumDNSTTLRaw, err := required("SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL")
-	if err != nil {
-		return nil, err
-	}
-	networkPolicyMaximumDNSTTL, err := time.ParseDuration(networkPolicyMaximumDNSTTLRaw)
-	if err != nil || networkPolicyMaximumDNSTTL <= 0 {
-		return nil, fmt.Errorf("SecondBox Firecracker config requires positive duration SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL")
-	}
-	networkPolicyRunnerAddresses, err := requiredAddresses("SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES")
-	if err != nil {
-		return nil, err
-	}
-	networkPolicyManagementCIDRs, err := requiredPrefixes("SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS")
-	if err != nil {
-		return nil, err
-	}
-	networkPolicyRunnerGateways, err := requiredRunnerGateways("SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS")
-	if err != nil {
-		return nil, err
-	}
-	networkPolicyDNSUpstreamRaw, err := required("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM")
-	if err != nil {
-		return nil, err
-	}
-	networkPolicyDNSUpstream, err := netip.ParseAddrPort(networkPolicyDNSUpstreamRaw)
-	if err != nil || networkPolicyDNSUpstream.Port() == 0 {
-		return nil, fmt.Errorf("SecondBox Firecracker config SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM must be an IP:port")
+		return nil, fmt.Errorf("SecondBox Firecracker config: %w", err)
 	}
 
 	return &config.Config{
@@ -384,11 +285,11 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMToolVMIdleTTL:                       time.Duration(0),
 		FileTransferMaxBytes:                       int64(fileTransferMaxBytes),
 		NetworkPolicyNFTPath:                       networkPolicyNFTPath,
-		NetworkPolicyMaximumDNSPins:                networkPolicyMaximumDNSPins,
-		NetworkPolicyMaximumDNSTTL:                 networkPolicyMaximumDNSTTL,
-		NetworkPolicyRunnerAddresses:               networkPolicyRunnerAddresses,
-		NetworkPolicyManagementCIDRs:               networkPolicyManagementCIDRs,
-		NetworkPolicyRunnerGateways:                networkPolicyRunnerGateways,
-		NetworkPolicyDNSUpstream:                   networkPolicyDNSUpstream,
+		NetworkPolicyMaximumDNSPins:                networkPolicyConfig.CompileOptions.MaximumPins,
+		NetworkPolicyMaximumDNSTTL:                 networkPolicyConfig.CompileOptions.MaximumTTL,
+		NetworkPolicyRunnerAddresses:               networkPolicyConfig.CompileOptions.RunnerAddresses,
+		NetworkPolicyManagementCIDRs:               networkPolicyConfig.CompileOptions.ManagementPrefixes,
+		NetworkPolicyRunnerGateways:                networkPolicyConfig.CompileOptions.RunnerGateways,
+		NetworkPolicyDNSUpstream:                   networkPolicyConfig.DNSUpstream,
 	}, nil
 }

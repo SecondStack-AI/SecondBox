@@ -299,24 +299,6 @@ func ensureDockerForwardAdmission(ctx context.Context) error {
 	return nil
 }
 
-// systemDNSUpstream discovers the host resolver for the runner DNS proxy.
-func systemDNSUpstream() (netip.AddrPort, error) {
-	content, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return netip.AddrPort{}, fmt.Errorf("read host resolver configuration: %w", err)
-	}
-	for _, line := range strings.Split(string(content), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "nameserver" {
-			address, err := netip.ParseAddr(fields[1])
-			if err == nil && address.Is4() {
-				return netip.AddrPortFrom(address, 53), nil
-			}
-		}
-	}
-	return netip.AddrPort{}, fmt.Errorf("host resolver configuration names no IPv4 nameserver")
-}
-
 // renderInetPolicy is the routed-veth rendering of the shared compiled
 // policy: forward-hook enforcement for guest egress, input-hook admission of
 // only the runner DNS proxy, protected-prefix drops before any accept, and a

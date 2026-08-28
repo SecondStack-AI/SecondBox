@@ -63,10 +63,23 @@ rootfs/
   docker rm "$container"
   ```
 
-  Its digest must equal the materialization's `flatRootDigest`, computed by
-  `runner/cmd/secondbox-flat-root-digest`. The qualification drivers below consume this same
-  build directory: the CI `buildx` image publishes nothing an operator can qualify from, so
-  assemble the directory locally for both enrollment and qualification.
+  A normal exported image is not required to contain gVisor's bind destinations. Prepare the
+  flat root once, before computing or recording any digest:
+
+  ```sh
+  cd runner
+  go run ./cmd/secondbox-prepare-gvisor-flat-root /absolute/path/to/rootfs
+  go run ./cmd/secondbox-flat-root-digest /absolute/path/to/rootfs
+  ```
+
+  Preparation creates only absent `/secondbox-guest-agent`, `/workspace`,
+  `/secondbox-sockets`, `/runtime-private`, `/etc/resolv.conf`, `/proc`, and `/tmp` targets.
+  It rejects symlinks and incompatible existing node types and is idempotent. The runner only
+  validates this contract; it never repairs or mutates a flat root after the resulting digest is
+  pinned. The digest must equal the materialization's `flatRootDigest`. The qualification drivers
+  below consume and prepare this same build directory before calculating identity: the CI
+  `buildx` image publishes nothing an operator can qualify from, so assemble the directory locally
+  for both enrollment and qualification.
 
 ## Operator-owned resources
 
@@ -93,6 +106,12 @@ path, identity, capacity, and credential for the actual installation.
 ```sh
 export SECONDBOX_COMPUTE_BACKEND=gvisor
 export SECONDBOX_RUNNER_WORKSPACE_ROOT=/var/lib/secondbox/workspaces
+export SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS=256
+export SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL=5m
+export SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES=10.210.2.1
+export SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS=10.211.0.0/16
+export SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS=agent-gateway.secondbox.internal=10.210.2.2
+export SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM=10.0.0.53:53
 export SECONDBOX_GVISOR_RUNSC_PATH=/opt/secondbox-gvisor/bin/runsc
 export SECONDBOX_GVISOR_AGENT_PATH=/opt/secondbox-gvisor/bin/secondbox-guest-agent
 export SECONDBOX_GVISOR_FLAT_ROOT_PATH=/opt/secondbox-gvisor/rootfs
@@ -112,11 +131,13 @@ export SECONDBOX_GVISOR_MAXIMUM_OPERATIONS=32
 export SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 ```
 
-DNS resolution is IPv4-only end to end: automatic resolver discovery reads only IPv4
-nameservers from the host (an IPv6-only resolver leaves the runner unready), the
-`SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM` override accepts a literal IPv4 address and
-port (`10.0.0.53:53`) - never a hostname - and Sandbox egress carries no IPv6 route, so
-IPv6-only destinations are unreachable regardless of policy.
+DNS resolution is IPv4-only end to end. The required
+`SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM` accepts a literal IPv4 address and port
+(`10.0.0.53:53`) - never a hostname - and Sandbox egress carries no IPv6 route, so IPv6-only
+destinations are unreachable regardless of policy. All six `SECONDBOX_RUNNER_NETWORK_POLICY_*`
+values above are the same explicit generic contract used by Firecracker. Pin and TTL bounds,
+Runner addresses, management CIDRs, and logical Runner gateways all reach the shared compiler;
+missing or malformed values keep the runner from starting.
 
 `SECONDBOX_GVISOR_NETWORK_PROFILE` separates runners sharing one host network namespace: each
 profile selects its own DNS proxy address, link-local slot space, and veth and namespace names.
@@ -139,7 +160,9 @@ never copied from a document.
 1. Compute and pin the identities from the build directory:
 
    ```sh
-   cd runner && go run ./cmd/secondbox-flat-root-digest /opt/secondbox-gvisor/rootfs
+   cd runner
+   go run ./cmd/secondbox-prepare-gvisor-flat-root /opt/secondbox-gvisor/rootfs
+   go run ./cmd/secondbox-flat-root-digest /opt/secondbox-gvisor/rootfs
    sha256sum /opt/secondbox-gvisor/bin/runsc /opt/secondbox-gvisor/bin/secondbox-guest-agent
    go run ./cmd/secondbox-materialization-digest \
      /etc/secondbox/gvisor-linux-amd64.materialization.json
@@ -182,7 +205,8 @@ never copied from a document.
    | `SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS` / `..._WORKSPACE_CREATES` | Admission concurrency bounds. |
    | `SECONDBOX_RUNNER_LOG_DIR` / `SECONDBOX_RUNNER_LOG_PATH` | Operator-owned log directory and JSONL file. |
    | `SECONDBOX_RUNNER_WORKSPACE_ROOT` | The reflink-capable WorkspaceStore root. |
-   | `SECONDBOX_GVISOR_*` (all values from the environment block above) | The backend block, including capacity maxima, the materialization pin, the runtime directory, the network profile, and the optional `SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM` resolver override. |
+   | `SECONDBOX_RUNNER_NETWORK_POLICY_*` (all six values from the environment block above) | Explicit generic enforcement bounds, protected Runner and management destinations, logical Runner gateways, and the IPv4 DNS upstream. |
+   | `SECONDBOX_GVISOR_*` (all values from the environment block above) | The backend block, including capacity maxima, the materialization pin, the runtime directory, and the network profile. |
 
    Instance capacity and per-Instance ceilings come only from the `SECONDBOX_GVISOR_MAXIMUM_*`
    values; the `SECONDBOX_RUNNER_SANDBOX_*`, storage-pressure, file-transfer, and remaining
@@ -323,7 +347,8 @@ just test-gvisor-pod
 just test-scenario-gvisor-pod
 ```
 
-The scenario wrapper refuses hosts that expose `/dev/kvm`, verifies the `runsc` binary against
-the reviewed pin, derives the materialization from the build directory, and runs the complete
-control-plane scenario suite against the gVisor runner container. Passing this document's checks
-does not remove the experimental label.
+The qualification wrappers refuse hosts that expose `/dev/kvm`, prepare and validate the flat-root
+contract before deriving its digest, verify the `runsc` binary against the reviewed pin, derive
+the materialization from the build directory, and run the complete control-plane scenario suite
+against the gVisor runner container. Passing this document's checks does not remove the
+experimental label.
