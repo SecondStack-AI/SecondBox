@@ -129,3 +129,27 @@ func TestPrepareFlatRootPreflightsBeforeMutation(t *testing.T) {
 		t.Fatalf("preflight failure partially mutated the root: %v", err)
 	}
 }
+
+func TestPrepareFlatRootRejectsFilesystemRootAndSymlinkedAncestors(t *testing.T) {
+	if err := PrepareFlatRoot(string(filepath.Separator)); err == nil || !strings.Contains(err.Error(), "filesystem root") {
+		t.Fatalf("filesystem root error = %v", err)
+	}
+
+	parent := t.TempDir()
+	resolvedParent := filepath.Join(parent, "resolved")
+	resolvedRoot := filepath.Join(resolvedParent, "rootfs")
+	if err := os.MkdirAll(resolvedRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lexicalParent := filepath.Join(parent, "lexical")
+	if err := os.Symlink(resolvedParent, lexicalParent); err != nil {
+		t.Fatal(err)
+	}
+	lexicalRoot := filepath.Join(lexicalParent, "rootfs")
+	if err := PrepareFlatRoot(lexicalRoot); err == nil || !strings.Contains(err.Error(), "symlink ancestors") {
+		t.Fatalf("symlink ancestor error = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(resolvedRoot, "secondbox-guest-agent")); !os.IsNotExist(err) {
+		t.Fatalf("symlinked root was mutated: %v", err)
+	}
+}

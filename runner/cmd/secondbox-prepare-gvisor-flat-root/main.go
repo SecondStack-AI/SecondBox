@@ -1,3 +1,5 @@
+//go:build linux
+
 // secondbox-prepare-gvisor-flat-root creates and validates the mount targets
 // required by SecondBox before a gVisor flat root receives its digest identity.
 package main

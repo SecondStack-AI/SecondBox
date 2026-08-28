@@ -63,6 +63,9 @@ func inspectFlatRoot(root string) error {
 	if strings.TrimSpace(root) == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return fmt.Errorf("SecondBox gVisor flat root path must be clean and absolute")
 	}
+	if root == string(filepath.Separator) {
+		return fmt.Errorf("SecondBox gVisor flat root path must not be the filesystem root")
+	}
 	info, err := os.Lstat(root)
 	if err != nil {
 		return fmt.Errorf("SecondBox gVisor flat root inspect: %w", err)
@@ -72,6 +75,13 @@ func inspectFlatRoot(root string) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("SecondBox gVisor flat root must be a directory")
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("SecondBox gVisor flat root resolve: %w", err)
+	}
+	if resolved != root {
+		return fmt.Errorf("SecondBox gVisor flat root path must not contain symlink ancestors")
 	}
 	return nil
 }

@@ -77,14 +77,21 @@ func TestRenderInetPolicyAllowsOnlyConfiguredProtectedGatewayTuple(t *testing.T)
 	}
 	script := renderInetPolicy("sbx_gateway", "gvh0", "169.254.104.2", netip.MustParseAddr("169.254.99.53"), true,
 		compiled.ProtectedPrefixes(), compiled.Destinations(), compiled.RunnerGatewayDestinations(), nil)
-	want := `ip daddr 10.210.2.2 tcp dport 443 ct mark set 0x53425801 accept`
-	if !strings.Contains(script, want) {
-		t.Fatalf("rendered policy lacks exact gateway allow:\n%s", script)
+	inputAllow := `add rule inet sbx_gateway input iifname "gvh0" ip daddr 10.210.2.2 tcp dport 443 ct mark set 0x53425801 accept`
+	forwardAllow := `add rule inet sbx_gateway forward iifname "gvh0" ip daddr 10.210.2.2 tcp dport 443 ct mark set 0x53425801 accept`
+	for _, want := range []string{inputAllow, forwardAllow} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("rendered policy lacks exact gateway allow %q:\n%s", want, script)
+		}
 	}
 	if strings.Contains(script, "10.210.2.2 tcp dport 80") || strings.Contains(script, "10.210.2.3 tcp dport 443") {
 		t.Fatalf("rendered policy broadened gateway allow:\n%s", script)
 	}
-	if strings.Index(script, want) > strings.Index(script, "ip daddr 10.0.0.0/8 drop") {
+	inputDrop := `add rule inet sbx_gateway input iifname "gvh0" drop`
+	if strings.Index(script, inputAllow) > strings.Index(script, inputDrop) {
+		t.Fatalf("input drop shadows runner-local gateway exception:\n%s", script)
+	}
+	if strings.Index(script, forwardAllow) > strings.Index(script, "ip daddr 10.0.0.0/8 drop") {
 		t.Fatalf("protected-prefix drop shadows gateway exception:\n%s", script)
 	}
 }

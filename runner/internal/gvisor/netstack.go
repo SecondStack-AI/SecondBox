@@ -300,10 +300,11 @@ func ensureDockerForwardAdmission(ctx context.Context) error {
 }
 
 // renderInetPolicy is the routed-veth rendering of the shared compiled
-// policy: forward-hook enforcement for guest egress, input-hook admission of
-// only the runner DNS proxy, protected-prefix drops before any accept, and a
-// NAT table masquerading guest egress. It fails closed: everything from the
-// guest interface not explicitly accepted is dropped.
+// policy: forward-hook enforcement for routed guest egress, input-hook
+// admission of the runner DNS proxy and exact runner-local gateway tuples,
+// protected-prefix drops before any forward accept, and a NAT table
+// masquerading guest egress. It fails closed: everything from the guest
+// interface not explicitly accepted is dropped.
 func renderInetPolicy(
 	table string,
 	interfaceName string,
@@ -336,9 +337,12 @@ func renderInetPolicy(
 				table, interfaceName, family, dnsAddress, protocol, allowedInetMark)
 		}
 	}
+	for _, gateway := range runnerGateways {
+		renderInetAllow(&script, table, "input", interfaceName, gateway.Address.String(), gateway.Address.Is6(), gateway.Destination)
+	}
 	fmt.Fprintf(&script, "add rule inet %s input iifname %q drop\n", table, interfaceName)
 	for _, gateway := range runnerGateways {
-		renderInetAllow(&script, table, interfaceName, gateway.Address.String(), gateway.Address.Is6(), gateway.Destination)
+		renderInetAllow(&script, table, "forward", interfaceName, gateway.Address.String(), gateway.Address.Is6(), gateway.Destination)
 	}
 	for _, prefix := range protected {
 		family := "ip"
@@ -350,7 +354,7 @@ func renderInetPolicy(
 	}
 	for index, destination := range destinations {
 		if destination.Prefix.IsValid() {
-			renderInetAllow(&script, table, interfaceName, destination.Prefix.String(), destination.Prefix.Addr().Is6(), destination)
+			renderInetAllow(&script, table, "forward", interfaceName, destination.Prefix.String(), destination.Prefix.Addr().Is6(), destination)
 			continue
 		}
 		addresses := append([]netip.Addr(nil), pins[index]...)
@@ -358,7 +362,7 @@ func renderInetPolicy(
 			return addresses[left].Compare(addresses[right]) < 0
 		})
 		for _, address := range addresses {
-			renderInetAllow(&script, table, interfaceName, address.String(), address.Is6(), destination)
+			renderInetAllow(&script, table, "forward", interfaceName, address.String(), address.Is6(), destination)
 		}
 	}
 	fmt.Fprintf(&script, "add rule inet %s forward iifname %q drop\n", table, interfaceName)
@@ -374,6 +378,7 @@ func renderInetPolicy(
 func renderInetAllow(
 	script *bytes.Buffer,
 	table string,
+	chain string,
 	interfaceName string,
 	target string,
 	ipv6 bool,
@@ -384,8 +389,8 @@ func renderInetAllow(
 		family = "ip6"
 	}
 	fmt.Fprintf(script,
-		"add rule inet %s forward iifname %q %s daddr %s tcp dport %d ct mark set %s accept\n",
-		table, interfaceName, family, target, destination.Port, allowedInetMark)
+		"add rule inet %s %s iifname %q %s daddr %s tcp dport %d ct mark set %s accept\n",
+		table, chain, interfaceName, family, target, destination.Port, allowedInetMark)
 }
 
 // deleteInetPolicyTables removes both per-Instance tables atomically with
