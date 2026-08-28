@@ -13,6 +13,8 @@ fail() {
   exit 1
 }
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]] || fail "requires Linux x86_64"
 [[ ! -e /dev/kvm ]] || fail "qualifies nodes without /dev/kvm"
 [[ "$(id -u)" == "0" ]] || fail "requires root for kubectl and host-table checks"
@@ -28,6 +30,8 @@ for path in "$SECONDBOX_GVISOR_POD_BUILD/bin/runsc" "$SECONDBOX_GVISOR_POD_BUILD
 done
 [[ -d "$SECONDBOX_GVISOR_POD_BUILD/rootfs" ]] || fail "missing flat root: $SECONDBOX_GVISOR_POD_BUILD/rootfs"
 [[ -d "$SECONDBOX_GVISOR_POD_REFLINK" ]] || fail "missing reflink directory: $SECONDBOX_GVISOR_POD_REFLINK"
+(cd "$repo_root/runner" && go run ./cmd/secondbox-prepare-gvisor-flat-root "$SECONDBOX_GVISOR_POD_BUILD/rootfs") ||
+  fail "flat-root preparation failed"
 
 kubectl() {
   # shellcheck disable=SC2086

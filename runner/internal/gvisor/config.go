@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
@@ -30,13 +31,10 @@ type Config struct {
 	// NetworkProfile separates runners sharing one host network namespace:
 	// it selects the DNS proxy address, the link-local /30 slot space, and
 	// the veth and namespace name spaces. Single-runner hosts keep 0.
-	NetworkProfile uint32
-	WorkspaceRoot  string
-	SelfExecutable string
-	// DNSUpstream optionally overrides host-resolver discovery for the
-	// runner DNS proxy, as host:port. Qualification environments use it to
-	// pin a test-owned resolver.
-	DNSUpstream        string
+	NetworkProfile     uint32
+	WorkspaceRoot      string
+	SelfExecutable     string
+	NetworkPolicy      networkpolicy.RunnerConfig
 	MaximumVCPUs       uint32
 	MaximumMemoryBytes uint64
 	MaximumDiskBytes   uint64
@@ -171,6 +169,13 @@ func validateConfig(config Config) (validatedConfig, error) {
 	if config.NetworkProfile >= maximumNetworkProfiles {
 		return validatedConfig{}, fmt.Errorf("SecondBox gVisor network profile must be below %d", maximumNetworkProfiles)
 	}
+	if !config.NetworkPolicy.DNSUpstream.IsValid() || config.NetworkPolicy.DNSUpstream.Port() == 0 ||
+		!config.NetworkPolicy.DNSUpstream.Addr().Is4() {
+		return validatedConfig{}, fmt.Errorf("SecondBox gVisor network policy DNS upstream must be an IPv4 address and port")
+	}
+	if _, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll}, config.NetworkPolicy.CompileOptions); err != nil {
+		return validatedConfig{}, fmt.Errorf("SecondBox gVisor network policy config: %w", err)
+	}
 	if config.MaximumInstances > maximumNetworkslots {
 		return validatedConfig{}, fmt.Errorf("SecondBox gVisor supports at most %d concurrent Instances per runner", maximumNetworkslots)
 	}
@@ -189,6 +194,9 @@ func validateConfig(config Config) (validatedConfig, error) {
 		return validatedConfig{}, err
 	}
 	if err := verifyLaunchArtifact(manifest, agentArtifactID, config.AgentPath, true); err != nil {
+		return validatedConfig{}, err
+	}
+	if err := ValidateFlatRoot(config.FlatRootPath); err != nil {
 		return validatedConfig{}, err
 	}
 	flatRootDigest, err := materialization.DigestFlatRoot(config.FlatRootPath)

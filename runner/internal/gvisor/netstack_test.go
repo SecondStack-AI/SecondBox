@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 )
@@ -60,16 +61,6 @@ func TestNetworkSlotAllocatorReleasesAndBounds(t *testing.T) {
 	}
 }
 
-func TestResolveDNSUpstreamOverride(t *testing.T) {
-	upstream, err := resolveDNSUpstream("10.201.0.10:53")
-	if err != nil || upstream.String() != "10.201.0.10:53" {
-		t.Fatalf("override upstream = %v, %v", upstream, err)
-	}
-	if _, err := resolveDNSUpstream("not-an-address"); err == nil {
-		t.Fatal("invalid override was accepted")
-	}
-}
-
 func TestRenderInetPolicyFailsClosed(t *testing.T) {
 	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
 		Mode: networkpolicy.ModeAllowList,
@@ -77,7 +68,7 @@ func TestRenderInetPolicyFailsClosed(t *testing.T) {
 			{Protocol: networkpolicy.ProtocolTCP, Domain: "allowed.test", Port: 8080},
 			{Protocol: networkpolicy.ProtocolHTTPS, Prefix: netip.MustParsePrefix("93.184.216.0/24"), Port: 443},
 		},
-	}, networkpolicy.CompileOptions{MaximumPins: 8, MaximumTTL: gvisorPolicyMaximumTTL})
+	}, networkpolicy.CompileOptions{MaximumPins: 8, MaximumTTL: 37 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +122,7 @@ func TestRenderInetPolicyFailsClosed(t *testing.T) {
 
 func TestRenderInetPolicyDenyAll(t *testing.T) {
 	compiled, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll},
-		networkpolicy.CompileOptions{MaximumPins: 8, MaximumTTL: gvisorPolicyMaximumTTL})
+		networkpolicy.CompileOptions{MaximumPins: 8, MaximumTTL: 37 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

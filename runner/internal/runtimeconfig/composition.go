@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	runnerconfig "github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 )
 
@@ -42,7 +43,7 @@ type GVisorComposition struct {
 	MaximumInstances      uint32
 	MaximumOperations     uint32
 	NetworkProfile        uint32
-	DNSUpstream           string
+	NetworkPolicy         networkpolicy.RunnerConfig
 }
 
 type MicrosandboxComposition struct {
@@ -173,9 +174,10 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 	if err != nil {
 		return GVisorComposition{}, 0, err
 	}
-	// The generic runner DNS upstream override applies to this backend's
-	// DNS proxy; without it the proxy discovers the host resolver.
-	dnsUpstream := strings.TrimSpace(os.Getenv("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM"))
+	networkPolicyConfig, err := networkpolicy.LoadRunnerConfigFromEnvironment()
+	if err != nil {
+		return GVisorComposition{}, 0, err
+	}
 	// The network profile keeps runners sharing one host network namespace
 	// apart. It must be stated explicitly - runner configuration has no
 	// defaults, and a silently shared profile 0 would let reconciliation on
@@ -197,7 +199,7 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		MaterializationDigest: digest,
 		MaximumVCPUs:          uint32(vcpus), MaximumMemoryBytes: memory, MaximumDiskBytes: disk,
 		MaximumInstances: uint32(instances), MaximumOperations: uint32(operations),
-		NetworkProfile: uint32(networkProfile), DNSUpstream: dnsUpstream,
+		NetworkProfile: uint32(networkProfile), NetworkPolicy: networkPolicyConfig,
 	}, int64(template), nil
 }
 

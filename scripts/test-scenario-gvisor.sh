@@ -72,6 +72,7 @@ runsc_release="$(sed -n 's/^readonly RUNSC_RELEASE="\([0-9.]*\)"$/\1/p' "$repo_r
 runtime_digest="$(digest_text "secondbox-gvisor-runtime-release-$runsc_release-linux-amd64")"
 toolchain_digest="$(digest_text "secondbox-gvisor-toolchain-release-$runsc_release-linux-amd64")"
 source_oci_digest="$(digest_text 'alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce')"
+(cd "$repo_root/runner" && go run ./cmd/secondbox-prepare-gvisor-flat-root "$flat_root")
 flat_root_digest="$(cd "$repo_root/runner" && go run ./cmd/secondbox-flat-root-digest "$flat_root")"
 materialization="$temporary/materialization.json"
 jq -cn \

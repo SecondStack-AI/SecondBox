@@ -39,15 +39,15 @@ type capacityReservation struct {
 }
 
 type activeAssignment struct {
-	fence          *runnerprotocol.AssignmentFence
-	correlation    *runnerprotocol.Correlation
-	handles        *SupervisorHandles
-	session        *firecracker.GuestProtocolSession
-	workspace      workspacestore.ComputeAttachment
-	network        instanceNetwork
-	instanceDir    string
-	reservation    capacityReservation
-	backendRef     string
+	fence       *runnerprotocol.AssignmentFence
+	correlation *runnerprotocol.Correlation
+	handles     *SupervisorHandles
+	session     *firecracker.GuestProtocolSession
+	workspace   workspacestore.ComputeAttachment
+	network     instanceNetwork
+	instanceDir string
+	reservation capacityReservation
+	backendRef  string
 	// launched closes when the claimed start finishes (successfully
 	// registered or removed after failure); nil on a completed assignment.
 	launched       chan struct{}
@@ -191,35 +191,15 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox gVisor network enforcement requires nft: %w", err)
 	}
-	upstream, err := resolveDNSUpstream(config.DNSUpstream)
-	if err != nil {
-		return nil, err
-	}
 	dnsListen := netip.MustParseAddr(dnsAddressForProfile(config.NetworkProfile))
 	return &AssignmentBackend{
 		config:            validated,
 		assignments:       make(map[string]*activeAssignment),
 		instanceTerminals: make(chan runnercontrol.BackendInstanceTerminal, config.MaximumInstances),
 		enforcer: firecracker.NewNetworkPolicyEnforcer(
-			nftPath, dnsListen, upstream, renderInetPolicy, deleteInetPolicyTables,
+			nftPath, dnsListen, config.NetworkPolicy.DNSUpstream, renderInetPolicy, deleteInetPolicyTables,
 		),
 	}, nil
-}
-
-func resolveDNSUpstream(override string) (netip.AddrPort, error) {
-	if strings.TrimSpace(override) != "" {
-		upstream, err := netip.ParseAddrPort(override)
-		if err != nil {
-			return netip.AddrPort{}, fmt.Errorf("SecondBox gVisor DNS upstream override is invalid: %w", err)
-		}
-		if !upstream.Addr().Is4() {
-			// Guest DNS admission and egress are IPv4-only; a non-IPv4
-			// override would pass startup and fail every resolution.
-			return netip.AddrPort{}, fmt.Errorf("SecondBox gVisor DNS upstream override must be an IPv4 address and port")
-		}
-		return upstream, nil
-	}
-	return systemDNSUpstream()
 }
 
 func (backend *AssignmentBackend) InstanceTerminals() <-chan runnercontrol.BackendInstanceTerminal {
@@ -418,7 +398,7 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return artifactAssignment(fmt.Errorf("SecondBox gVisor revalidate local materialization: %w", err))
 	}
-	if _, err := translateNetworkPolicy(assignment.NetworkPolicy); err != nil {
+	if _, err := translateNetworkPolicy(assignment.NetworkPolicy, backend.config.NetworkPolicy.CompileOptions); err != nil {
 		return incompatibleAssignment(err)
 	}
 	backend.mu.Lock()
@@ -559,7 +539,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
 		return result, err
 	}
-	compiled, err := translateNetworkPolicy(assignment.NetworkPolicy)
+	compiled, err := translateNetworkPolicy(assignment.NetworkPolicy, backend.config.NetworkPolicy.CompileOptions)
 	if err != nil {
 		return result, incompatibleAssignment(err)
 	}
