@@ -190,6 +190,7 @@ function sandboxFixture(): Sandbox {
     id: "sandbox-1",
     profile: "default",
     profileRevisionId: "profile-revision-1",
+    egressContext: null,
     state: "ready",
     desiredState: "running",
     generation: 7,

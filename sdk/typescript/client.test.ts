@@ -693,6 +693,7 @@ function sandbox(state: Sandbox["state"]): Sandbox {
     id: "sandbox-1",
     profile: "default",
     profileRevisionId: "profile-revision-1",
+    egressContext: null,
     state,
     desiredState: "running",
     generation: 7,
