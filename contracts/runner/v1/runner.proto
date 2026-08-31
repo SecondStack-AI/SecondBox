@@ -25,6 +25,10 @@ enum RunnerFeature {
   RUNNER_FEATURE_EVIDENCE = 5;
   reserved 6;
   RUNNER_FEATURE_LOCAL_WORKSPACE = 7;
+  // Generation 4 defines context-aware assignment support. Context values and
+  // assignment payloads land with the generation-4 placement contract; older
+  // generations are never negotiated as a fallback.
+  RUNNER_FEATURE_TENANT_EGRESS_CONTEXT = 8;
 }
 
 message RunnerHello {

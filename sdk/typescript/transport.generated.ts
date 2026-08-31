@@ -220,6 +220,9 @@ export interface DurationPercentiles {
   readonly p99Milliseconds?: number;
 }
 
+/** Opaque operator-selected routing context identifier. It carries no hostname, address, CIDR, Tenant reference, gateway identity, or mapping digest. */
+export type EgressContextName = string;
+
 export interface ExecCancelled {
   readonly kind: "cancelled";
   readonly output: ExecOutput;
@@ -381,6 +384,7 @@ export interface NetworkDestination {
 export interface NetworkPolicy {
   readonly destinations: readonly NetworkDestination[];
   readonly mode: "deny_all" | "allow_list";
+  readonly requiresTenantEgressContext: boolean;
 }
 
 export type OpaqueID = string;

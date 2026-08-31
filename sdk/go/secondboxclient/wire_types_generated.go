@@ -218,6 +218,9 @@ type DirectoryListing struct {
 
 type DurationPercentiles = contracts.DurationPercentiles
 
+// EgressContextName Opaque operator-selected routing context identifier. It carries no hostname, address, CIDR, Tenant reference, gateway identity, or mapping digest.
+type EgressContextName = string
+
 type ExecCancelled struct {
 	Kind   string     `json:"kind"`
 	Output ExecOutput `json:"output"`

@@ -1281,6 +1281,9 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	if spec.Network.Mode != "deny_all" && spec.Network.Mode != "allow_list" {
 		return invalidRequest(errors.New("SecondBox Profile network mode must be deny_all or allow_list"))
 	}
+	if spec.Network.RequiresTenantEgressContext == nil {
+		return invalidRequest(errors.New("SecondBox Profile network policy must explicitly state requiresTenantEgressContext"))
+	}
 	if spec.Network.Mode == "deny_all" && len(spec.Network.Destinations) != 0 {
 		return invalidRequest(errors.New("SecondBox Profile deny_all network policy cannot contain destinations"))
 	}

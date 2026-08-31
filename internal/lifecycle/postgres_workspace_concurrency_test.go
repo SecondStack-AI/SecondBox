@@ -51,8 +51,9 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			DataPlaneTransport:          contracts.DataPlaneTransportProxied,
 		},
 		Network: contracts.NetworkPolicy{
-			Mode:         "deny_all",
-			Destinations: []contracts.NetworkDestination{},
+			Mode:                        "deny_all",
+			Destinations:                []contracts.NetworkDestination{},
+			RequiresTenantEgressContext: new(bool),
 		},
 		Ports: []contracts.PortPolicy{},
 	}

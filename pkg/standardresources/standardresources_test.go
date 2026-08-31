@@ -150,14 +150,14 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 		t.Fatalf("agent-compartment revision 2 changed more than its deadline: %#v", agent.Revisions)
 	}
 	currentAgent := agent.Revisions[len(agent.Revisions)-1].Spec
-	if currentAgent.Network.Mode != "allow_list" || len(currentAgent.Network.Destinations) != 1 || currentAgent.Network.Destinations[0].Domain != AgentGateway || len(currentAgent.Ports) != 0 || currentAgent.Retention.SnapshotLimit != 0 {
+	if currentAgent.Network.RequiresTenantEgressContext == nil || !*currentAgent.Network.RequiresTenantEgressContext || currentAgent.Network.Mode != "allow_list" || len(currentAgent.Network.Destinations) != 1 || currentAgent.Network.Destinations[0].Domain != AgentGateway || len(currentAgent.Ports) != 0 || currentAgent.Retention.SnapshotLimit != 0 {
 		t.Fatalf("agent-compartment is over-capable: %#v", currentAgent)
 	}
-	if coding.Revisions[0].Spec.Network.Mode != "allow_list" || len(coding.Revisions[0].Spec.Network.Destinations) != 1 || coding.Revisions[0].Spec.Network.Destinations[0].Domain != PlatformGateway || len(coding.Revisions[0].Spec.Ports) == 0 || coding.Revisions[0].Spec.Retention.SnapshotLimit == 0 {
+	if coding.Revisions[0].Spec.Network.RequiresTenantEgressContext == nil || !*coding.Revisions[0].Spec.Network.RequiresTenantEgressContext || coding.Revisions[0].Spec.Network.Mode != "allow_list" || len(coding.Revisions[0].Spec.Network.Destinations) != 1 || coding.Revisions[0].Spec.Network.Destinations[0].Domain != PlatformGateway || len(coding.Revisions[0].Spec.Ports) == 0 || coding.Revisions[0].Spec.Retention.SnapshotLimit == 0 {
 		t.Fatalf("durable-coding lacks durable capabilities: %#v", coding.Revisions[0].Spec)
 	}
 	isolatedSpec := isolated.Revisions[0].Spec
-	if isolatedSpec.Network.Mode != "deny_all" || len(isolatedSpec.Network.Destinations) != 0 || len(isolatedSpec.Ports) != 0 || isolatedSpec.Retention.SnapshotLimit != 0 || isolatedSpec.Execution.MaximumDeadlineMilliseconds != 900000 || isolatedSpec.Resources.WorkspaceBytes == 0 || isolatedSpec.Lifecycle.MaximumDurationSeconds == 0 {
+	if isolatedSpec.Network.RequiresTenantEgressContext == nil || *isolatedSpec.Network.RequiresTenantEgressContext || isolatedSpec.Network.Mode != "deny_all" || len(isolatedSpec.Network.Destinations) != 0 || len(isolatedSpec.Ports) != 0 || isolatedSpec.Retention.SnapshotLimit != 0 || isolatedSpec.Execution.MaximumDeadlineMilliseconds != 900000 || isolatedSpec.Resources.WorkspaceBytes == 0 || isolatedSpec.Lifecycle.MaximumDurationSeconds == 0 {
 		t.Fatalf("agent-compartment-isolated capability bounds = %#v", isolatedSpec)
 	}
 	networkAgent := currentAgent
@@ -178,7 +178,7 @@ func TestAgentCompartmentPinsPortableResourceRevisionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := profile.Revisions[0].SpecDigest, "sha256:0724aee520173710db793ad365db28cdb6905f2a5fecb2cb785c475443f98ed4"; got != want {
+	if got, want := profile.Revisions[0].SpecDigest, "sha256:054dc1ce0afc837bf729c32ddbb64b532ba6a8a75793dd492d9d8698765c1e88"; got != want {
 		t.Fatalf("portable revision 1 digest = %q, want %q", got, want)
 	}
 }
@@ -188,7 +188,7 @@ func TestAgentCompartmentIsolatedCanonicalRevisionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := profile.Revisions[0].SpecDigest, "sha256:e5e27b42fdf23c91929529d9a19afe599823ba1c3b5553159affa1f35286ae75"; got != want {
+	if got, want := profile.Revisions[0].SpecDigest, "sha256:e1c26c6688bc9eb9bc80fd994904b4e020131a8e61ca5341e37fc2e4ba3632db"; got != want {
 		t.Fatalf("agent-compartment-isolated revision 1 digest = %q, want %q", got, want)
 	}
 }
@@ -211,10 +211,10 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 	if len(agent.Revisions) != 3 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 2 {
 		t.Fatalf("changed-bundle lineage = agent %#v coding %#v isolated %#v", agent.Revisions, coding.Revisions, isolated.Revisions)
 	}
-	if agent.Revisions[0].SpecDigest != "sha256:0724aee520173710db793ad365db28cdb6905f2a5fecb2cb785c475443f98ed4" {
+	if agent.Revisions[0].SpecDigest != "sha256:054dc1ce0afc837bf729c32ddbb64b532ba6a8a75793dd492d9d8698765c1e88" {
 		t.Fatalf("changed bundle rewrote agent revision 1: %#v", agent.Revisions)
 	}
-	if isolated.Revisions[0].SpecDigest != "sha256:e5e27b42fdf23c91929529d9a19afe599823ba1c3b5553159affa1f35286ae75" {
+	if isolated.Revisions[0].SpecDigest != "sha256:e1c26c6688bc9eb9bc80fd994904b4e020131a8e61ca5341e37fc2e4ba3632db" {
 		t.Fatalf("changed bundle rewrote isolated revision 1: %#v", isolated.Revisions)
 	}
 	for _, profile := range []resourceapply.Profile{agent, coding, isolated} {

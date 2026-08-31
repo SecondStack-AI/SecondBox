@@ -1125,7 +1125,7 @@ func task4Registration(
 	return &runnerv1.RunnerRegistration{
 		MessageId: "registration-1", Sequence: 1, RunnerId: runnerID,
 		ConnectionId: connectionID, RunnerPoolId: poolName,
-		SoftwareVersion: "1.0.0", ProtocolVersion: 3,
+		SoftwareVersion: "1.0.0", ProtocolVersion: runnerv1.SupportedProtocolMaximum,
 		BackendKind: runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 		Capabilities: &runnerv1.RunnerCapabilities{
 			Architecture: "amd64", ComputeBackendVersion: "1.16.1",

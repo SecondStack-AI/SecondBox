@@ -9,9 +9,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
-	"os"
 	"testing"
 	"time"
 
@@ -456,7 +456,8 @@ func TestScenarioNetworkPolicyDenyAndAllowList(t *testing.T) {
 
 	allowSpec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
 	allowSpec.Network = contracts.NetworkPolicy{
-		Mode: "allow_list",
+		Mode:                        "allow_list",
+		RequiresTenantEgressContext: new(bool),
 		Destinations: []contracts.NetworkDestination{{
 			Protocol: "http",
 			Domain:   "example.com",
@@ -515,7 +516,7 @@ func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *te
 		t.Fatal(err)
 	}
 	networkSpec := networkLineage.Revisions[len(networkLineage.Revisions)-1].Spec
-	networkSpec.Network = contracts.NetworkPolicy{Mode: "allow_list", Destinations: []contracts.NetworkDestination{{Protocol: "http", CIDR: "1.1.1.1/32", Port: 80}}}
+	networkSpec.Network = contracts.NetworkPolicy{Mode: "allow_list", Destinations: []contracts.NetworkDestination{{Protocol: "http", CIDR: "1.1.1.1/32", Port: 80}}, RequiresTenantEgressContext: new(bool)}
 	networkProfile := createScenarioProfile(t, fixture, "scenario-agent-compartment-network-enabled", networkSpec)
 
 	isolated, _ := createScenarioSandbox(t, fixture, isolatedProfile, "isolated-network-policy")

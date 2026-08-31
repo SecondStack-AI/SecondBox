@@ -427,7 +427,8 @@
   "NetworkPolicy": {
     "required": [
       "destinations",
-      "mode"
+      "mode",
+      "requiresTenantEgressContext"
     ],
     "optional": []
   },

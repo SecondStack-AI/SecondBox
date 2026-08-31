@@ -439,8 +439,9 @@ func testProfileSpec(vcpuCount int64) contracts.ProfileRevisionSpec {
 			TerminalDetachSeconds: 30, DataPlaneTransport: contracts.DataPlaneTransportProxied,
 		},
 		Network: contracts.NetworkPolicy{
-			Mode:         "deny_all",
-			Destinations: []contracts.NetworkDestination{},
+			Mode:                        "deny_all",
+			Destinations:                []contracts.NetworkDestination{},
+			RequiresTenantEgressContext: new(bool),
 		},
 		Ports: []contracts.PortPolicy{{
 			Name: "web", Port: 8080, Protocol: "tcp",

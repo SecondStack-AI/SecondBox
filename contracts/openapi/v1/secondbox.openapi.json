@@ -2317,11 +2317,22 @@
       "NetworkPolicy": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["mode", "destinations"],
+        "required": ["mode", "destinations", "requiresTenantEgressContext"],
         "properties": {
           "mode": {"type": "string", "enum": ["deny_all", "allow_list"]},
-          "destinations": {"type": "array", "maxItems": 128, "items": {"$ref": "#/components/schemas/NetworkDestination"}}
+          "destinations": {"type": "array", "maxItems": 128, "items": {"$ref": "#/components/schemas/NetworkDestination"}},
+          "requiresTenantEgressContext": {
+            "type": "boolean",
+            "description": "Whether this immutable Profile revision requires the creating Tenant's pinned egress context. Every Profile states this explicitly; omission is invalid and there is no default."
+          }
         }
+      },
+      "EgressContextName": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+        "description": "Opaque operator-selected routing context identifier. It carries no hostname, address, CIDR, Tenant reference, gateway identity, or mapping digest."
       },
       "NetworkDestination": {
         "type": "object",

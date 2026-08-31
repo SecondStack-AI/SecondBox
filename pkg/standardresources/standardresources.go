@@ -192,6 +192,7 @@ func appendOrValidatePool(pools []resourceapply.RunnerPool, binding PoolBinding)
 }
 
 func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilliseconds int64) secondboxclient.ProfileRevisionSpec {
+	requiresTenantEgressContext := true
 	return secondboxclient.ProfileRevisionSpec{
 		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
 		Resources: secondboxclient.ResourcePolicy{VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 2 << 30, ConcurrentOperations: 4},
@@ -199,18 +200,20 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilli
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 10, IdleSeconds: 60, MaximumDurationSeconds: 900, LeaseSeconds: 60},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 0, SnapshotRetentionSeconds: 3600},
 		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: maximumDeadlineMilliseconds, MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 64 << 10, MaximumTransferBytes: 256 << 20, TerminalDetachSeconds: 0, DataPlaneTransport: "proxied"},
-		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: AgentGateway, Port: 443}}},
+		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: AgentGateway, Port: 443}}, RequiresTenantEgressContext: &requiresTenantEgressContext},
 		Ports:     []secondboxclient.PortPolicy{},
 	}
 }
 
 func isolatedAgentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
 	spec := agentSpec(pool, runtimeDigest, toolchainDigest, 900000)
-	spec.Network = secondboxclient.NetworkPolicy{Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{}}
+	requiresTenantEgressContext := false
+	spec.Network = secondboxclient.NetworkPolicy{Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{}, RequiresTenantEgressContext: &requiresTenantEgressContext}
 	return spec
 }
 
 func codingSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
+	requiresTenantEgressContext := true
 	return secondboxclient.ProfileRevisionSpec{
 		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
 		Resources: secondboxclient.ResourcePolicy{VCPUCount: DurableCodingVCPUCount, MemoryBytes: DurableCodingMemoryBytes, WorkspaceBytes: DurableCodingWorkspaceBytes, ConcurrentOperations: DurableCodingConcurrentOperations},
@@ -218,7 +221,7 @@ func codingSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.Pro
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 120, IdleSeconds: 28800, MaximumDurationSeconds: 604800, LeaseSeconds: 300},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 64, SnapshotRetentionSeconds: 2592000},
 		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: 86400000, MaximumBufferedOutputBytes: 16 << 20, StreamWindowBytes: 1 << 20, MaximumTransferBytes: 10 << 30, TerminalDetachSeconds: 86400, DataPlaneTransport: "proxied"},
-		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: PlatformGateway, Port: 443}}},
+		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: PlatformGateway, Port: 443}}, RequiresTenantEgressContext: &requiresTenantEgressContext},
 		Ports:     []secondboxclient.PortPolicy{{Name: "development-http", Port: 3000, Protocol: "http", MaximumSessions: 8, MaximumSessionSeconds: 86400}},
 	}
 }

@@ -1,32 +1,47 @@
 {
-  "schema_generation": 2,
+  "schema_generation": 4,
   "server_window": {
-    "minimum": 1,
-    "maximum": 2
+    "minimum": 4,
+    "maximum": 4
   },
   "negotiation_cases": [
     {
       "name": "current_generation",
-      "client_minimum": 1,
-      "client_maximum": 2,
+      "client_minimum": 4,
+      "client_maximum": 4,
       "mandatory_features": [
         "exec_streaming",
         "evidence",
-        "local_workspace"
+        "local_workspace",
+        "tenant_egress_context"
       ],
       "server_features": [
         "exec_streaming",
         "evidence",
         "file_streaming",
-        "local_workspace"
+        "local_workspace",
+        "tenant_egress_context"
       ],
-      "selected_generation": 2,
+      "selected_generation": 4,
       "rejection": ""
     },
     {
-      "name": "future_only",
+      "name": "previous_generation",
       "client_minimum": 3,
-      "client_maximum": 4,
+      "client_maximum": 3,
+      "mandatory_features": [
+        "tenant_egress_context"
+      ],
+      "server_features": [
+        "tenant_egress_context"
+      ],
+      "selected_generation": 0,
+      "rejection": "version_unsupported"
+    },
+    {
+      "name": "future_only",
+      "client_minimum": 5,
+      "client_maximum": 6,
       "mandatory_features": [],
       "server_features": [
         "exec_streaming"
@@ -36,8 +51,8 @@
     },
     {
       "name": "invalid_range",
-      "client_minimum": 2,
-      "client_maximum": 1,
+      "client_minimum": 4,
+      "client_maximum": 3,
       "mandatory_features": [],
       "server_features": [
         "exec_streaming"
@@ -47,10 +62,10 @@
     },
     {
       "name": "mandatory_feature_missing",
-      "client_minimum": 1,
-      "client_maximum": 1,
+      "client_minimum": 4,
+      "client_maximum": 4,
       "mandatory_features": [
-        "port_proxy"
+        "tenant_egress_context"
       ],
       "server_features": [
         "exec_streaming"
@@ -60,8 +75,8 @@
     },
     {
       "name": "portable_checkpoint_runner_is_not_compatible",
-      "client_minimum": 1,
-      "client_maximum": 1,
+      "client_minimum": 4,
+      "client_maximum": 4,
       "mandatory_features": [
         "evidence",
         "portable_checkpoint"

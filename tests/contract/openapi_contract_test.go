@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 type openAPIDocument map[string]any
@@ -417,6 +419,33 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			if strings.Contains(lower, forbidden) {
 				t.Errorf("public startup policy exposes %q: %s", forbidden, encoded)
 			}
+		}
+	})
+
+	t.Run("tenant egress context policy is explicit and bounded", func(t *testing.T) {
+		policy := componentSchema(t, document, "NetworkPolicy")
+		properties := object(t, policy["properties"], "NetworkPolicy.properties")
+		requirement := object(
+			t,
+			properties["requiresTenantEgressContext"],
+			"NetworkPolicy.properties.requiresTenantEgressContext",
+		)
+		if requirement["type"] != "boolean" {
+			t.Fatalf("requiresTenantEgressContext type = %v, want boolean", requirement["type"])
+		}
+		required := map[string]bool{}
+		for _, value := range array(t, policy["required"], "NetworkPolicy.required") {
+			required[value.(string)] = true
+		}
+		if !required["requiresTenantEgressContext"] {
+			t.Error("requiresTenantEgressContext must be required, not defaulted")
+		}
+
+		contextName := componentSchema(t, document, "EgressContextName")
+		if contextName["type"] != "string" ||
+			contextName["pattern"] != contracts.EgressContextNamePattern ||
+			contextName["maxLength"] != float64(contracts.EgressContextNameMaximumLength) {
+			t.Fatalf("EgressContextName schema = %#v, want canonical pattern %q and maximum %d", contextName, contracts.EgressContextNamePattern, contracts.EgressContextNameMaximumLength)
 		}
 	})
 

@@ -31,6 +31,10 @@ const (
 	RunnerFeature_RUNNER_FEATURE_PORT_PROXY      RunnerFeature = 4
 	RunnerFeature_RUNNER_FEATURE_EVIDENCE        RunnerFeature = 5
 	RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE RunnerFeature = 7
+	// Generation 4 defines context-aware assignment support. Context values and
+	// assignment payloads land with the generation-4 placement contract; older
+	// generations are never negotiated as a fallback.
+	RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT RunnerFeature = 8
 )
 
 // Enum value maps for RunnerFeature.
@@ -43,15 +47,17 @@ var (
 		4: "RUNNER_FEATURE_PORT_PROXY",
 		5: "RUNNER_FEATURE_EVIDENCE",
 		7: "RUNNER_FEATURE_LOCAL_WORKSPACE",
+		8: "RUNNER_FEATURE_TENANT_EGRESS_CONTEXT",
 	}
 	RunnerFeature_value = map[string]int32{
-		"RUNNER_FEATURE_UNSPECIFIED":     0,
-		"RUNNER_FEATURE_EXEC_STREAMING":  1,
-		"RUNNER_FEATURE_FILE_STREAMING":  2,
-		"RUNNER_FEATURE_PTY":             3,
-		"RUNNER_FEATURE_PORT_PROXY":      4,
-		"RUNNER_FEATURE_EVIDENCE":        5,
-		"RUNNER_FEATURE_LOCAL_WORKSPACE": 7,
+		"RUNNER_FEATURE_UNSPECIFIED":           0,
+		"RUNNER_FEATURE_EXEC_STREAMING":        1,
+		"RUNNER_FEATURE_FILE_STREAMING":        2,
+		"RUNNER_FEATURE_PTY":                   3,
+		"RUNNER_FEATURE_PORT_PROXY":            4,
+		"RUNNER_FEATURE_EVIDENCE":              5,
+		"RUNNER_FEATURE_LOCAL_WORKSPACE":       7,
+		"RUNNER_FEATURE_TENANT_EGRESS_CONTEXT": 8,
 	}
 )
 
@@ -9351,7 +9357,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x11data_plane_cancel\x18\x11 \x01(\v2+.secondbox.runner.v1.DataPlaneCancelCommandH\x00R\x0fdataPlaneCancel\x12\\\n" +
 	"\x12workspace_transfer\x18\x12 \x01(\v2+.secondbox.runner.v1.WorkspaceTransferFrameH\x00R\x11workspaceTransferB\t\n" +
 	"\amessageJ\x04\b\n" +
-	"\x10\vJ\x04\b\v\x10\fJ\x04\b\f\x10\r*\xf3\x01\n" +
+	"\x10\vJ\x04\b\v\x10\fJ\x04\b\f\x10\r*\x9d\x02\n" +
 	"\rRunnerFeature\x12\x1e\n" +
 	"\x1aRUNNER_FEATURE_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dRUNNER_FEATURE_EXEC_STREAMING\x10\x01\x12!\n" +
@@ -9359,7 +9365,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x12RUNNER_FEATURE_PTY\x10\x03\x12\x1d\n" +
 	"\x19RUNNER_FEATURE_PORT_PROXY\x10\x04\x12\x1b\n" +
 	"\x17RUNNER_FEATURE_EVIDENCE\x10\x05\x12\"\n" +
-	"\x1eRUNNER_FEATURE_LOCAL_WORKSPACE\x10\a\"\x04\b\x06\x10\x06*\xfc\x01\n" +
+	"\x1eRUNNER_FEATURE_LOCAL_WORKSPACE\x10\a\x12(\n" +
+	"$RUNNER_FEATURE_TENANT_EGRESS_CONTEXT\x10\b\"\x04\b\x06\x10\x06*\xfc\x01\n" +
 	"\x15ProtocolRejectionKind\x12'\n" +
 	"#PROTOCOL_REJECTION_KIND_UNSPECIFIED\x10\x00\x12/\n" +
 	"+PROTOCOL_REJECTION_KIND_VERSION_UNSUPPORTED\x10\x01\x12/\n" +

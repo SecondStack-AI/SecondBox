@@ -196,10 +196,14 @@ type ExecutionPolicy struct {
 	DataPlaneTransport          string `json:"dataPlaneTransport"`
 }
 
-// NetworkPolicy is an explicit deny-all or destination allow-list.
+// NetworkPolicy is an explicit deny-all or destination allow-list and states
+// whether its immutable Profile revision requires the creating Tenant's pinned
+// egress context. The pointer distinguishes explicit false from an omitted
+// field; Profile validation rejects nil rather than supplying a default.
 type NetworkPolicy struct {
-	Mode         string               `json:"mode"`
-	Destinations []NetworkDestination `json:"destinations"`
+	Mode                        string               `json:"mode"`
+	Destinations                []NetworkDestination `json:"destinations"`
+	RequiresTenantEgressContext *bool                `json:"requiresTenantEgressContext"`
 }
 
 // NetworkDestination is one bounded protocol and host or CIDR allowance.
