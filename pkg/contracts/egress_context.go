@@ -12,6 +12,8 @@ const (
 	// EgressContextNamePattern is the canonical ASCII syntax shared by HTTP,
 	// persistence, Runner configuration and protocol, audit, and diagnostics.
 	EgressContextNamePattern = `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`
+	// RunnerEgressContextSetMaximumSize bounds one registration snapshot.
+	RunnerEgressContextSetMaximumSize = 64
 )
 
 var egressContextNamePattern = regexp.MustCompile(EgressContextNamePattern)

@@ -155,6 +155,10 @@ message RunnerRegistration {
   string data_plane_certificate_spki_sha256 = 15;
   ComputeBackendKind backend_kind = 16;
   repeated BackendMaterializationEvidence materializations = 17;
+  // supported_egress_contexts is the bounded, unordered set loaded before the
+  // connection starts. It remains fixed for this connection and names no
+  // addresses, credentials, gateway identities, or mapping digests.
+  repeated string supported_egress_contexts = 18;
 }
 
 enum DrainPhase {
@@ -171,6 +175,9 @@ message ActiveAssignmentSummary {
   uint64 sandbox_generation = 4;
   bytes fencing_token = 5;
   repeated string active_operation_ids = 6;
+  // egress_context repeats the immutable assignment prerequisite. It is empty
+  // only when the pinned Profile explicitly does not require a Tenant context.
+  string egress_context = 7;
 }
 
 message RunnerHeartbeat {
@@ -227,6 +234,9 @@ message ProfileRequirements {
   // runner that cannot honour the stated mode fails the assignment; it never
   // substitutes the other one.
   string startup_mode = 10;
+  // requires_tenant_egress_context is the ProfileRevision's explicit policy.
+  // It is never inferred from NetworkPolicy mode or destinations.
+  bool requires_tenant_egress_context = 11;
 }
 
 message AssetReference {
@@ -277,6 +287,9 @@ message AssignmentCommand {
   Correlation correlation = 9;
   NetworkPolicy network_policy = 10;
   string workspace_id = 11;
+  // egress_context is the Sandbox's immutable creation-time pin. It is empty
+  // exactly when requirements.requires_tenant_egress_context is false.
+  string egress_context = 12;
 }
 
 enum AssignmentDecision {

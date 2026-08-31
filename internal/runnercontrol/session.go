@@ -10,6 +10,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -577,12 +578,19 @@ func (session *Session) acceptHello(hello *runnerv1.RunnerHello) (Event, error) 
 	}
 	enabled := featureSet(session.config.EnabledFeatures)
 	mandatory := featureSet(hello.MandatoryFeatures)
-	if enabled[runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] &&
-		!mandatory[runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] {
-		return session.rejection(
-			runnerv1.ProtocolRejectionKind_PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED,
-			"runner does not implement the mandatory local-workspace protocol",
-		), nil
+	for _, requirement := range []struct {
+		feature runnerv1.RunnerFeature
+		detail  string
+	}{
+		{runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE, "runner does not implement the mandatory local-workspace protocol"},
+		{runnerv1.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT, "runner does not implement context-aware assignments"},
+	} {
+		if enabled[requirement.feature] && !mandatory[requirement.feature] {
+			return session.rejection(
+				runnerv1.ProtocolRejectionKind_PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED,
+				requirement.detail,
+			), nil
+		}
 	}
 	for _, feature := range hello.MandatoryFeatures {
 		if !enabled[feature] {
@@ -635,6 +643,26 @@ func (session *Session) validateRegistration(registration *runnerv1.RunnerRegist
 		registration.Capabilities.GuestProtocolGenerations.Minimum >
 			registration.Capabilities.GuestProtocolGenerations.Maximum {
 		return ErrRunnerPrerequisites
+	}
+	if err := validateSupportedEgressContexts(registration.SupportedEgressContexts); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSupportedEgressContexts(contextNames []string) error {
+	if len(contextNames) > contracts.RunnerEgressContextSetMaximumSize {
+		return fmt.Errorf("%w: Registration advertises too many egress contexts", ErrRunnerPrerequisites)
+	}
+	seen := make(map[string]struct{}, len(contextNames))
+	for _, contextName := range contextNames {
+		if err := contracts.ValidateEgressContextName(contextName); err != nil {
+			return fmt.Errorf("%w: Registration advertises an invalid egress context: %v", ErrRunnerPrerequisites, err)
+		}
+		if _, duplicate := seen[contextName]; duplicate {
+			return fmt.Errorf("%w: Registration repeats an egress context", ErrRunnerPrerequisites)
+		}
+		seen[contextName] = struct{}{}
 	}
 	return nil
 }

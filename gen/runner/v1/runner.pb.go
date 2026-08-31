@@ -2433,8 +2433,12 @@ type RunnerRegistration struct {
 	DataPlaneCertificateSpkiSha256 string                            `protobuf:"bytes,15,opt,name=data_plane_certificate_spki_sha256,json=dataPlaneCertificateSpkiSha256,proto3" json:"data_plane_certificate_spki_sha256,omitempty"`
 	BackendKind                    ComputeBackendKind                `protobuf:"varint,16,opt,name=backend_kind,json=backendKind,proto3,enum=secondbox.runner.v1.ComputeBackendKind" json:"backend_kind,omitempty"`
 	Materializations               []*BackendMaterializationEvidence `protobuf:"bytes,17,rep,name=materializations,proto3" json:"materializations,omitempty"`
-	unknownFields                  protoimpl.UnknownFields
-	sizeCache                      protoimpl.SizeCache
+	// supported_egress_contexts is the bounded, unordered set loaded before the
+	// connection starts. It remains fixed for this connection and names no
+	// addresses, credentials, gateway identities, or mapping digests.
+	SupportedEgressContexts []string `protobuf:"bytes,18,rep,name=supported_egress_contexts,json=supportedEgressContexts,proto3" json:"supported_egress_contexts,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *RunnerRegistration) Reset() {
@@ -2579,6 +2583,13 @@ func (x *RunnerRegistration) GetMaterializations() []*BackendMaterializationEvid
 	return nil
 }
 
+func (x *RunnerRegistration) GetSupportedEgressContexts() []string {
+	if x != nil {
+		return x.SupportedEgressContexts
+	}
+	return nil
+}
+
 type ActiveAssignmentSummary struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	AssignmentId       string                 `protobuf:"bytes,1,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
@@ -2587,8 +2598,11 @@ type ActiveAssignmentSummary struct {
 	SandboxGeneration  uint64                 `protobuf:"varint,4,opt,name=sandbox_generation,json=sandboxGeneration,proto3" json:"sandbox_generation,omitempty"`
 	FencingToken       []byte                 `protobuf:"bytes,5,opt,name=fencing_token,json=fencingToken,proto3" json:"fencing_token,omitempty"`
 	ActiveOperationIds []string               `protobuf:"bytes,6,rep,name=active_operation_ids,json=activeOperationIds,proto3" json:"active_operation_ids,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// egress_context repeats the immutable assignment prerequisite. It is empty
+	// only when the pinned Profile explicitly does not require a Tenant context.
+	EgressContext string `protobuf:"bytes,7,opt,name=egress_context,json=egressContext,proto3" json:"egress_context,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ActiveAssignmentSummary) Reset() {
@@ -2661,6 +2675,13 @@ func (x *ActiveAssignmentSummary) GetActiveOperationIds() []string {
 		return x.ActiveOperationIds
 	}
 	return nil
+}
+
+func (x *ActiveAssignmentSummary) GetEgressContext() string {
+	if x != nil {
+		return x.EgressContext
+	}
+	return ""
 }
 
 type RunnerHeartbeat struct {
@@ -3030,9 +3051,12 @@ type ProfileRequirements struct {
 	// neutral and stated by the operator: "cold_boot" or "snapshot_resume". A
 	// runner that cannot honour the stated mode fails the assignment; it never
 	// substitutes the other one.
-	StartupMode   string `protobuf:"bytes,10,opt,name=startup_mode,json=startupMode,proto3" json:"startup_mode,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	StartupMode string `protobuf:"bytes,10,opt,name=startup_mode,json=startupMode,proto3" json:"startup_mode,omitempty"`
+	// requires_tenant_egress_context is the ProfileRevision's explicit policy.
+	// It is never inferred from NetworkPolicy mode or destinations.
+	RequiresTenantEgressContext bool `protobuf:"varint,11,opt,name=requires_tenant_egress_context,json=requiresTenantEgressContext,proto3" json:"requires_tenant_egress_context,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *ProfileRequirements) Reset() {
@@ -3119,6 +3143,13 @@ func (x *ProfileRequirements) GetStartupMode() string {
 		return x.StartupMode
 	}
 	return ""
+}
+
+func (x *ProfileRequirements) GetRequiresTenantEgressContext() bool {
+	if x != nil {
+		return x.RequiresTenantEgressContext
+	}
+	return false
 }
 
 type AssetReference struct {
@@ -3359,8 +3390,11 @@ type AssignmentCommand struct {
 	Correlation       *Correlation           `protobuf:"bytes,9,opt,name=correlation,proto3" json:"correlation,omitempty"`
 	NetworkPolicy     *NetworkPolicy         `protobuf:"bytes,10,opt,name=network_policy,json=networkPolicy,proto3" json:"network_policy,omitempty"`
 	WorkspaceId       string                 `protobuf:"bytes,11,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// egress_context is the Sandbox's immutable creation-time pin. It is empty
+	// exactly when requirements.requires_tenant_egress_context is false.
+	EgressContext string `protobuf:"bytes,12,opt,name=egress_context,json=egressContext,proto3" json:"egress_context,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AssignmentCommand) Reset() {
@@ -3459,6 +3493,13 @@ func (x *AssignmentCommand) GetNetworkPolicy() *NetworkPolicy {
 func (x *AssignmentCommand) GetWorkspaceId() string {
 	if x != nil {
 		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *AssignmentCommand) GetEgressContext() string {
+	if x != nil {
+		return x.EgressContext
 	}
 	return ""
 }
@@ -8786,7 +8827,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x13verified_at_unix_ms\x18\r \x01(\x04R\x10verifiedAtUnixMs\"]\n" +
 	"\rStartupTiming\x12!\n" +
 	"\fsample_count\x18\x01 \x01(\x04R\vsampleCount\x12)\n" +
-	"\x10p95_milliseconds\x18\x02 \x01(\x04R\x0fp95Milliseconds\"\xbf\a\n" +
+	"\x10p95_milliseconds\x18\x02 \x01(\x04R\x0fp95Milliseconds\"\xfb\a\n" +
 	"\x12RunnerRegistration\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -8805,7 +8846,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x1ddata_plane_advertised_address\x18\x0e \x01(\tR\x1adataPlaneAdvertisedAddress\x12J\n" +
 	"\"data_plane_certificate_spki_sha256\x18\x0f \x01(\tR\x1edataPlaneCertificateSpkiSha256\x12J\n" +
 	"\fbackend_kind\x18\x10 \x01(\x0e2'.secondbox.runner.v1.ComputeBackendKindR\vbackendKind\x12_\n" +
-	"\x10materializations\x18\x11 \x03(\v23.secondbox.runner.v1.BackendMaterializationEvidenceR\x10materializationsJ\x04\b\v\x10\f\"\x84\x02\n" +
+	"\x10materializations\x18\x11 \x03(\v23.secondbox.runner.v1.BackendMaterializationEvidenceR\x10materializations\x12:\n" +
+	"\x19supported_egress_contexts\x18\x12 \x03(\tR\x17supportedEgressContextsJ\x04\b\v\x10\f\"\xab\x02\n" +
 	"\x17ActiveAssignmentSummary\x12#\n" +
 	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x1d\n" +
 	"\n" +
@@ -8814,7 +8856,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"instanceId\x12-\n" +
 	"\x12sandbox_generation\x18\x04 \x01(\x04R\x11sandboxGeneration\x12#\n" +
 	"\rfencing_token\x18\x05 \x01(\fR\ffencingToken\x120\n" +
-	"\x14active_operation_ids\x18\x06 \x03(\tR\x12activeOperationIds\"\xe6\x04\n" +
+	"\x14active_operation_ids\x18\x06 \x03(\tR\x12activeOperationIds\x12%\n" +
+	"\x0eegress_context\x18\a \x01(\tR\regressContext\"\xe6\x04\n" +
 	"\x0fRunnerHeartbeat\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -8852,7 +8895,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\rfencing_token\x18\x05 \x01(\fR\ffencingToken\"w\n" +
 	"\x13CapacityReservation\x129\n" +
 	"\bcapacity\x18\x01 \x01(\v2\x1d.secondbox.runner.v1.CapacityR\bcapacity\x12%\n" +
-	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\"\xe2\x02\n" +
+	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\"\xa7\x03\n" +
 	"\x13ProfileRequirements\x12\x1d\n" +
 	"\n" +
 	"vcpu_count\x18\x01 \x01(\rR\tvcpuCount\x12!\n" +
@@ -8864,7 +8907,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x14maximum_operation_ms\x18\x06 \x01(\x04R\x12maximumOperationMs\x120\n" +
 	"\x14maximum_output_bytes\x18\a \x01(\x04R\x12maximumOutputBytes\x12!\n" +
 	"\fstartup_mode\x18\n" +
-	" \x01(\tR\vstartupModeJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	" \x01(\tR\vstartupMode\x12C\n" +
+	"\x1erequires_tenant_egress_context\x18\v \x01(\bR\x1brequiresTenantEgressContextJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
 	"\"\xfa\x01\n" +
 	"\x0eAssetReference\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
@@ -8881,7 +8925,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x06target\"\x98\x01\n" +
 	"\rNetworkPolicy\x12:\n" +
 	"\x04mode\x18\x01 \x01(\x0e2&.secondbox.runner.v1.NetworkPolicyModeR\x04mode\x12K\n" +
-	"\fdestinations\x18\x02 \x03(\v2'.secondbox.runner.v1.NetworkDestinationR\fdestinations\"\xa7\x04\n" +
+	"\fdestinations\x18\x02 \x03(\v2'.secondbox.runner.v1.NetworkDestinationR\fdestinations\"\xce\x04\n" +
 	"\x11AssignmentCommand\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -8894,7 +8938,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\vcorrelation\x18\t \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\x12I\n" +
 	"\x0enetwork_policy\x18\n" +
 	" \x01(\v2\".secondbox.runner.v1.NetworkPolicyR\rnetworkPolicy\x12!\n" +
-	"\fworkspace_id\x18\v \x01(\tR\vworkspaceIdJ\x04\b\a\x10\b\"\xb8\x02\n" +
+	"\fworkspace_id\x18\v \x01(\tR\vworkspaceId\x12%\n" +
+	"\x0eegress_context\x18\f \x01(\tR\regressContextJ\x04\b\a\x10\b\"\xb8\x02\n" +
 	"\rAssignmentAck\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +

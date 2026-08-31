@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,6 +108,10 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 	if err != nil {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
 	}
+	supportedEgressContexts, err := supportedEgressContextsFromEnvironment()
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
 
 	return RunnerProtocolConfig{
 			RunnerID:                          runnerID,
@@ -118,6 +123,7 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 			MaximumConcurrentWorkspaceCreates: maximumConcurrentWorkspaceCreates,
 			DataPlaneListenAddress:            dataPlaneListenAddress,
 			DataPlaneAdvertisedAddress:        dataPlaneAdvertisedAddress,
+			SupportedEgressContexts:           supportedEgressContexts,
 			MandatoryFeatures: []runnerprotocol.RunnerFeature{
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
@@ -125,6 +131,7 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
+				runnerprotocol.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT,
 			},
 		}, GRPCConnectorConfig{
 			Address:           address,
@@ -134,6 +141,31 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 			CertificatePool:   certificatePool,
 			Credential:        credential,
 		}, nil
+}
+
+// supportedEgressContextsFromEnvironment is the intentionally narrow Task 3
+// seam. Task 4 replaces this name-only startup input with the strict mapping
+// file while preserving RunnerProtocolConfig as the immutable protocol input.
+func supportedEgressContextsFromEnvironment() ([]string, error) {
+	raw := os.Getenv("SECONDBOX_RUNNER_EGRESS_CONTEXTS")
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > maximumSupportedEgressContexts {
+		return nil, fmt.Errorf("SecondBox runner protocol config exceeds the supported egress-context bound")
+	}
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		if part == "" || part != strings.TrimSpace(part) {
+			return nil, fmt.Errorf("SECONDBOX_RUNNER_EGRESS_CONTEXTS contains an empty or padded context name")
+		}
+		if _, duplicate := seen[part]; duplicate {
+			return nil, fmt.Errorf("SECONDBOX_RUNNER_EGRESS_CONTEXTS repeats context %q", part)
+		}
+		seen[part] = struct{}{}
+	}
+	return slices.Sorted(slices.Values(parts)), nil
 }
 
 // GRPCConnector creates one outbound runner stream over mutually authenticated TLS.

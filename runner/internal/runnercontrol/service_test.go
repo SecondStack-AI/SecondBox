@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/big"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,8 @@ import (
 
 func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *testing.T) {
 	assignment := resolvedAssignmentCommand()
+	assignment.Requirements.RequiresTenantEgressContext = true
+	assignment.EgressContext = "tenant-blue"
 	firstStream := &recordingProtocolStream{
 		inbound: []*runnerprotocol.ControlPlaneToRunner{
 			runnerWelcomeFrame("connection-1"),
@@ -58,7 +61,9 @@ func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *test
 		startupCount: 4,
 		startupP95:   75 * time.Millisecond,
 	}
-	service, err := NewRunnerProtocolService(testRunnerConfig(), backend, connector)
+	config := testRunnerConfig()
+	config.SupportedEgressContexts = []string{assignment.EgressContext}
+	service, err := NewRunnerProtocolService(config, backend, connector)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +88,7 @@ func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *test
 					InstanceId:        assignment.Fence.InstanceId,
 					SandboxGeneration: assignment.Fence.SandboxGeneration,
 					FencingToken:      assignment.Fence.FencingToken,
+					EgressContext:     assignment.EgressContext,
 				},
 			) {
 			t.Fatalf(
@@ -184,6 +190,35 @@ func TestRunnerProtocolServiceHeartbeatsWhileAssignmentStartIsBlocked(t *testing
 	cancelRun()
 	if runErr := <-runResult; !errors.Is(runErr, context.Canceled) {
 		t.Fatalf("consumeCommands cancellation error = %v", runErr)
+	}
+}
+
+func TestRunnerRegistrationAdvertisesStaticSupportedEgressContexts(t *testing.T) {
+	config := testRunnerConfig()
+	config.SupportedEgressContexts = []string{"tenant-z", "tenant-a"}
+	service, err := NewRunnerProtocolService(
+		config,
+		&recordingAssignmentBackend{},
+		staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &recordingProtocolStream{}
+	if err := service.sendRegistration(
+		stream,
+		"connection-1",
+		runnerprotocol.SupportedProtocolMaximum,
+		BackendReadiness{
+			Capacity: &runnerprotocol.Capacity{}, Reserved: &runnerprotocol.Capacity{},
+			Capabilities: &runnerprotocol.RunnerCapabilities{},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	registration := stream.outbound[0].GetRegistration()
+	if !slices.Equal(registration.SupportedEgressContexts, []string{"tenant-a", "tenant-z"}) {
+		t.Fatalf("registration egress contexts = %v", registration.SupportedEgressContexts)
 	}
 }
 
@@ -1164,6 +1199,8 @@ func TestResolvedAssignmentRequiresStructurallyCompleteNetworkPolicy(t *testing.
 
 func TestRunnerProtocolServiceDrainReportsRemainingReadyAssignment(t *testing.T) {
 	assignment := resolvedAssignmentCommand()
+	assignment.Requirements.RequiresTenantEgressContext = true
+	assignment.EgressContext = "tenant-blue"
 	stream := &recordingProtocolStream{
 		inbound: []*runnerprotocol.ControlPlaneToRunner{
 			{Message: &runnerprotocol.ControlPlaneToRunner_Welcome{Welcome: &runnerprotocol.RunnerWelcome{
@@ -1188,7 +1225,9 @@ func TestRunnerProtocolServiceDrainReportsRemainingReadyAssignment(t *testing.T)
 		},
 		instance: BackendInstance{BackendKind: "firecracker", BackendReference: "fc-instance-1"},
 	}
-	service, err := NewRunnerProtocolService(testRunnerConfig(), backend, staticProtocolConnector{stream: stream})
+	config := testRunnerConfig()
+	config.SupportedEgressContexts = []string{assignment.EgressContext}
+	service, err := NewRunnerProtocolService(config, backend, staticProtocolConnector{stream: stream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1206,7 +1245,8 @@ func TestRunnerProtocolServiceDrainReportsRemainingReadyAssignment(t *testing.T)
 	if state == nil ||
 		state.Phase != runnerprotocol.DrainPhase_DRAIN_PHASE_DRAINING ||
 		len(state.RemainingAssignments) != 1 ||
-		state.RemainingAssignments[0].AssignmentId != assignment.Fence.AssignmentId {
+		state.RemainingAssignments[0].AssignmentId != assignment.Fence.AssignmentId ||
+		state.RemainingAssignments[0].EgressContext != assignment.EgressContext {
 		t.Fatalf("drain state = %#v, want draining with the active assignment", state)
 	}
 }
@@ -1298,6 +1338,62 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 		NetworkPolicy: &runnerprotocol.NetworkPolicy{
 			Mode: runnerprotocol.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL,
 		},
+	}
+}
+
+func TestRunnerRejectsAssignmentEgressContextPrerequisiteFailures(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		contexts   []string
+		mutate     func(*runnerprotocol.AssignmentCommand)
+		wantDetail string
+	}{
+		{
+			name: "missing", contexts: []string{"tenant-blue"},
+			mutate: func(assignment *runnerprotocol.AssignmentCommand) {
+				assignment.Requirements.RequiresTenantEgressContext = true
+			},
+			wantDetail: "required egress context is missing",
+		},
+		{
+			name: "unexpected", contexts: []string{"tenant-blue"},
+			mutate: func(assignment *runnerprotocol.AssignmentCommand) {
+				assignment.EgressContext = "tenant-blue"
+			},
+			wantDetail: "unexpected egress context",
+		},
+		{
+			name: "unsupported", contexts: []string{"tenant-green"},
+			mutate: func(assignment *runnerprotocol.AssignmentCommand) {
+				assignment.Requirements.RequiresTenantEgressContext = true
+				assignment.EgressContext = "tenant-blue"
+			},
+			wantDetail: "egress context is unsupported",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := testRunnerConfig()
+			config.SupportedEgressContexts = test.contexts
+			stream := &recordingProtocolStream{}
+			service, err := NewRunnerProtocolService(
+				config,
+				&recordingAssignmentBackend{},
+				staticProtocolConnector{stream: stream},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assignment := resolvedAssignmentCommand()
+			test.mutate(assignment)
+			if err := service.handleAssignment(t.Context(), stream, assignment); err != nil {
+				t.Fatal(err)
+			}
+			ack := stream.outbound[len(stream.outbound)-1].GetAssignmentAck()
+			if ack.GetDecision() != runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE ||
+				!strings.Contains(ack.GetSafeDetail(), test.wantDetail) {
+				t.Fatalf("assignment Ack = %#v", ack)
+			}
+		})
 	}
 }
 

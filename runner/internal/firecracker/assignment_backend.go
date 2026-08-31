@@ -27,9 +27,11 @@ import (
 )
 
 type activeRunnerAssignment struct {
-	fence            *runnerprotocol.AssignmentFence
-	correlation      *runnerprotocol.Correlation
-	backendReference string
+	fence                 *runnerprotocol.AssignmentFence
+	correlation           *runnerprotocol.Correlation
+	backendReference      string
+	egressContext         string
+	requiresEgressContext bool
 }
 
 type signedArtifactManifest struct {
@@ -442,7 +444,7 @@ func (b *AssignmentBackend) ValidateAssignment(
 	active, alreadyActive := b.assignments[assignment.Fence.AssignmentId]
 	b.mu.Unlock()
 	if alreadyActive {
-		if sameAssignmentFence(active.fence, assignment.Fence) {
+		if sameActiveAssignment(active, assignment) {
 			return nil
 		}
 		return fmt.Errorf("SecondBox Firecracker assignment ID was reused with different fencing")
@@ -561,7 +563,7 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	b.mu.Lock()
 	if active, ok := b.assignments[assignment.Fence.AssignmentId]; ok {
-		if sameAssignmentFence(active.fence, assignment.Fence) {
+		if sameActiveAssignment(active, assignment) {
 			b.mu.Unlock()
 			return runnercontrol.BackendInstance{
 				BackendKind:      "firecracker",
@@ -705,6 +707,8 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	b.mu.Lock()
 	b.assignments[assignment.Fence.AssignmentId] = activeRunnerAssignment{
+		egressContext:         assignment.EgressContext,
+		requiresEgressContext: assignment.Requirements.RequiresTenantEgressContext,
 		fence: &runnerprotocol.AssignmentFence{
 			AssignmentId:      assignment.Fence.AssignmentId,
 			SandboxId:         assignment.Fence.SandboxId,
@@ -736,6 +740,16 @@ func (b *AssignmentBackend) StartAssignment(
 		BackendKind:      "firecracker",
 		BackendReference: backendReference,
 	}, nil
+}
+
+func sameActiveAssignment(
+	active activeRunnerAssignment,
+	assignment *runnerprotocol.AssignmentCommand,
+) bool {
+	return assignment != nil &&
+		sameAssignmentFence(active.fence, assignment.Fence) &&
+		active.egressContext == assignment.EgressContext &&
+		active.requiresEgressContext == (assignment.Requirements != nil && assignment.Requirements.RequiresTenantEgressContext)
 }
 
 func cloneAssignmentFence(

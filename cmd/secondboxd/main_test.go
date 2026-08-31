@@ -20,8 +20,9 @@ func TestConfiguredRunnerFeaturesRequireLocalWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(features) != 2 ||
-		features[1] != runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE {
+	if len(features) != 3 ||
+		features[1] != runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE ||
+		features[2] != runnerv1.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT {
 		t.Fatalf("configured features = %v", features)
 	}
 }
