@@ -186,6 +186,7 @@ type CreateTenantRequest struct {
 	AggregateQuota           TenantQuota          `json:"aggregateQuota"`
 	AllowedApplicationScopes ApplicationScopeList `json:"allowedApplicationScopes"`
 	AllowedProfileGrants     ProfileGrantList     `json:"allowedProfileGrants"`
+	EgressContext            *EgressContextName   `json:"egressContext,omitempty"`
 	ExpiresAt                *Timestamp           `json:"expiresAt,omitempty"`
 	ExpiryPolicy             TenantExpiryPolicy   `json:"expiryPolicy"`
 	Metadata                 Metadata             `json:"metadata"`
@@ -503,6 +504,7 @@ const (
 	ProblemCodeInvalidLifecycleTransition           ProblemCode = "invalid_lifecycle_transition"
 	ProblemCodeResourceExpired                      ProblemCode = "resource_expired"
 	ProblemCodeTenantSuspended                      ProblemCode = "tenant_suspended"
+	ProblemCodeTenantEgressContextRequired          ProblemCode = "tenant_egress_context_required"
 	ProblemCodeGrantEscalationDenied                ProblemCode = "grant_escalation_denied"
 	ProblemCodeCleanupStateConflict                 ProblemCode = "cleanup_state_conflict"
 	ProblemCodeWorkspaceMutationConflict            ProblemCode = "workspace_mutation_conflict"
@@ -793,6 +795,7 @@ type Tenant struct {
 	AllowedApplicationScopes ApplicationScopeList `json:"allowedApplicationScopes"`
 	AllowedProfileGrants     ProfileGrantList     `json:"allowedProfileGrants"`
 	CreatedAt                Timestamp            `json:"createdAt"`
+	EgressContext            *EgressContextName   `json:"egressContext"`
 	ExpiresAt                *Timestamp           `json:"expiresAt,omitempty"`
 	ExpiryPolicy             TenantExpiryPolicy   `json:"expiryPolicy"`
 	Metadata                 Metadata             `json:"metadata"`
@@ -968,6 +971,11 @@ type UpdateSandboxMetadataRequest struct {
 
 type UpdateSubjectQuotaRequest struct {
 	Quota SubjectQuota `json:"quota"`
+}
+
+// UpdateTenantEgressContextRequest Replaces the operator-owned Tenant egress context. JSON null explicitly clears it; no default or fallback is selected.
+type UpdateTenantEgressContextRequest struct {
+	EgressContext *EgressContextName `json:"egressContext"`
 }
 
 type WaitSandboxRequest struct {

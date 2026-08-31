@@ -172,6 +172,7 @@ export interface CreateTenantRequest {
   readonly aggregateQuota: TenantQuota;
   readonly allowedApplicationScopes: ApplicationScopeList;
   readonly allowedProfileGrants: ProfileGrantList;
+  readonly egressContext?: EgressContextName | null;
   readonly expiresAt?: Timestamp;
   readonly expiryPolicy: TenantExpiryPolicy;
   readonly metadata: Metadata;
@@ -480,7 +481,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -628,6 +629,7 @@ export interface Sandbox {
   readonly createdAt: Timestamp;
   readonly deletedAt?: Timestamp;
   readonly desiredState: SandboxDesiredState;
+  readonly egressContext: EgressContextName | null;
   readonly generation: number;
   readonly id: OpaqueID;
   readonly instance?: Instance;
@@ -789,6 +791,7 @@ export interface Tenant {
   readonly allowedApplicationScopes: ApplicationScopeList;
   readonly allowedProfileGrants: ProfileGrantList;
   readonly createdAt: Timestamp;
+  readonly egressContext: EgressContextName | null;
   readonly expiresAt?: Timestamp;
   readonly expiryPolicy: TenantExpiryPolicy;
   readonly metadata: Metadata;
@@ -944,6 +947,11 @@ export interface UpdateSubjectQuotaRequest {
   readonly quota: SubjectQuota;
 }
 
+/** Replaces the operator-owned Tenant egress context. JSON null explicitly clears it; no default or fallback is selected. */
+export interface UpdateTenantEgressContextRequest {
+  readonly egressContext: EgressContextName | null;
+}
+
 export interface WaitSandboxRequest {
   readonly deadlineMilliseconds: number;
   readonly states: readonly SandboxState[];
@@ -1035,6 +1043,7 @@ export type OperationID =
   | "updateRunnerPool"
   | "updateSandboxMetadata"
   | "updateSubjectQuota"
+  | "updateTenantEgressContext"
   | "waitForSandbox"
   | "writeSandboxFile";
 
@@ -1119,6 +1128,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   updateRunnerPool: { method: "PATCH", path: "/v1/runner-pools/{runnerPoolName}", contentType: "application/json" },
   updateSandboxMetadata: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/metadata", contentType: "application/json" },
   updateSubjectQuota: { method: "PUT", path: "/v1/subjects/{subjectRef}/quota", contentType: "application/json" },
+  updateTenantEgressContext: { method: "PUT", path: "/v1/tenants/{tenantRef}/egress-context", contentType: "application/json" },
   waitForSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:wait", contentType: "application/json" },
   writeSandboxFile: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/files", contentType: "application/octet-stream" },
 };

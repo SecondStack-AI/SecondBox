@@ -200,16 +200,16 @@ func (store *PostgresControlPlaneStore) RelocateSandbox(
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.workspace_relocations (
 			id,tenant_ref,subject_ref,sandbox_id,workspace_id,operation_id,
-			source_runner_id,target_runner_id,generation,logical_capacity_bytes,state,
+			source_runner_id,target_runner_id,generation,logical_capacity_bytes,egress_context,state,
 			export_command_id,cleanup_command_id,fencing_token,checksum,
 			failure_code,failure_message,retry_count,created_at,updated_at,completed_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'queued',$11,'',$12,'','','',0,$13,$13,NULL
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued',$12,'',$13,'','','',0,$14,$14,NULL
 		)`,
 		input.RelocationID, input.Principal.TenantRef, input.Principal.SubjectRef,
 		locked.SandboxID, workspace.ID, input.Operation.ID,
 		workspace.HomeRunnerID, targetRunnerID, workspace.Generation,
-		workspace.LogicalCapacityBytes, input.ExportCommandID,
+		workspace.LogicalCapacityBytes, locked.EgressContext, input.ExportCommandID,
 		input.FencingToken, now,
 	); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox Workspace relocation insert failed: %w", err)

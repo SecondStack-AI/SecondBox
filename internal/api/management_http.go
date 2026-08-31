@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -105,6 +108,46 @@ func (apiHandler *handler) listTenants(writer http.ResponseWriter, request *http
 		return
 	}
 	apiHandler.writeJSON(writer, request, http.StatusOK, page)
+}
+
+func (apiHandler *handler) updateTenantEgressContext(writer http.ResponseWriter, request *http.Request) {
+	var wire struct {
+		EgressContext json.RawMessage `json:"egressContext"`
+	}
+	if err := decodeStrictJSON(request, &wire); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	if len(wire.EgressContext) == 0 {
+		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Tenant egressContext is required")))
+		return
+	}
+	var egressContext *string
+	if !bytes.Equal(bytes.TrimSpace(wire.EgressContext), []byte("null")) {
+		var value string
+		if err := json.Unmarshal(wire.EgressContext, &value); err != nil {
+			apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Tenant egressContext must be a string or null")))
+			return
+		}
+		egressContext = &value
+	}
+	body := contracts.UpdateTenantEgressContextRequest{EgressContext: egressContext}
+	expectedRevision, err := parseIfMatch(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	tenant, replayed, err := apiHandler.service.UpdateTenantEgressContext(
+		request.Context(), requestPrincipal(request), request.PathValue("tenantRef"),
+		request.Header.Get("Idempotency-Key"), expectedRevision, body,
+	)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	setRevisionETag(writer, tenant.Revision)
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+	apiHandler.writeJSON(writer, request, http.StatusOK, tenant)
 }
 
 func (apiHandler *handler) tenantManagementAction(writer http.ResponseWriter, request *http.Request) {

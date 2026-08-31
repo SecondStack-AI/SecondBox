@@ -90,6 +90,7 @@ type DeploymentUsage struct {
 type Tenant struct {
 	Ref                      string             `json:"ref"`
 	State                    string             `json:"state"`
+	EgressContext            *string            `json:"egressContext"`
 	AllowedProfileGrants     []string           `json:"allowedProfileGrants"`
 	AllowedApplicationScopes []string           `json:"allowedApplicationScopes"`
 	AggregateQuota           TenantQuota        `json:"aggregateQuota"`
@@ -162,12 +163,18 @@ type ApplicationCredentialResponse struct {
 // CreateTenantRequest supplies the complete operator-owned Tenant boundary.
 type CreateTenantRequest struct {
 	Ref                      string             `json:"ref"`
+	EgressContext            *string            `json:"egressContext,omitempty"`
 	AllowedProfileGrants     []string           `json:"allowedProfileGrants"`
 	AllowedApplicationScopes []string           `json:"allowedApplicationScopes"`
 	AggregateQuota           TenantQuota        `json:"aggregateQuota"`
 	ExpiryPolicy             TenantExpiryPolicy `json:"expiryPolicy"`
 	Metadata                 map[string]string  `json:"metadata"`
 	ExpiresAt                *time.Time         `json:"expiresAt,omitempty"`
+}
+
+// UpdateTenantEgressContextRequest replaces or clears the operator-owned routing context.
+type UpdateTenantEgressContextRequest struct {
+	EgressContext *string `json:"egressContext"`
 }
 
 // CreateSubjectRequest supplies one tenant-scoped subject and its quota.

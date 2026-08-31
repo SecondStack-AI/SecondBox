@@ -313,6 +313,13 @@ var operations = map[string]OperationMetadata{
 		},
 		RequestBodyRequired: true,
 	},
+	"updateTenantEgressContext": {
+		OperationID: "updateTenantEgressContext", Method: "PUT", PathTemplate: "/v1/tenants/{tenantRef}/egress-context",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "UpdateTenantEgressContextRequest"},
+		},
+		RequestBodyRequired: true,
+	},
 	"waitForSandbox": {
 		OperationID: "waitForSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:wait",
 		RequestBody: []OperationMediaType{

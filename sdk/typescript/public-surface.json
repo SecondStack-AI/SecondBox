@@ -184,6 +184,7 @@
       "ref"
     ],
     "optional": [
+      "egressContext",
       "expiresAt"
     ]
   },
@@ -705,6 +706,7 @@
     "required": [
       "createdAt",
       "desiredState",
+      "egressContext",
       "generation",
       "id",
       "metadata",
@@ -894,6 +896,7 @@
       "allowedApplicationScopes",
       "allowedProfileGrants",
       "createdAt",
+      "egressContext",
       "expiryPolicy",
       "metadata",
       "ref",
@@ -1084,6 +1087,12 @@
   "UpdateSubjectQuotaRequest": {
     "required": [
       "quota"
+    ],
+    "optional": []
+  },
+  "UpdateTenantEgressContextRequest": {
+    "required": [
+      "egressContext"
     ],
     "optional": []
   },

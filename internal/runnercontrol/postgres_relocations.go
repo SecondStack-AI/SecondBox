@@ -10,6 +10,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )
@@ -21,6 +22,7 @@ type workspaceRelocationAuthority struct {
 	failureCode, failureMessage                  string
 	generation, capacity, retryCount             int64
 	fencingToken                                 []byte
+	egressContext                                *string
 }
 
 func recordLocalWorkspaceRelocationResult(
@@ -40,7 +42,8 @@ func recordLocalWorkspaceRelocationResult(
 		authority.sourceRunnerID != runnerID ||
 		locked.Workspace.Mutation.Kind != "relocate" ||
 		locked.Workspace.Mutation.ID != authority.id ||
-		locked.Workspace.Mutation.OperationID != authority.operationID {
+		locked.Workspace.Mutation.OperationID != authority.operationID ||
+		!equalRelocationContext(locked.EgressContext, authority.egressContext) {
 		return errors.New("SecondBox Workspace relocation result conflicts with durable authority")
 	}
 	succeeded := result.Terminal ==
@@ -228,7 +231,7 @@ func queueWorkspaceRelocationRestarts(
 		       relocation.export_command_id,relocation.cleanup_command_id,
 		       operation.request_id,relocation.failure_code,relocation.failure_message,
 		       relocation.generation,relocation.logical_capacity_bytes,
-		       relocation.retry_count,relocation.fencing_token
+		       relocation.retry_count,relocation.fencing_token,relocation.egress_context
 		FROM secondbox.workspace_relocations AS relocation
 		JOIN secondbox.operations AS operation ON operation.id=relocation.operation_id
 		WHERE (relocation.source_runner_id=$1 OR relocation.target_runner_id=$1)
@@ -248,7 +251,7 @@ func queueWorkspaceRelocationRestarts(
 			&authority.state, &authority.exportCommandID, &authority.cleanupCommandID,
 			&authority.requestID, &authority.failureCode, &authority.failureMessage,
 			&authority.generation, &authority.capacity, &authority.retryCount,
-			&authority.fencingToken,
+			&authority.fencingToken, &authority.egressContext,
 		); err != nil {
 			return fmt.Errorf("SecondBox Workspace relocation restart scan: %w", err)
 		}
@@ -334,7 +337,8 @@ func (store *PostgresStateStore) RouteWorkspaceTransfer(
 		locked.CurrentInstanceID != "" ||
 		locked.Workspace.Mutation.Kind != "relocate" ||
 		locked.Workspace.Mutation.ID != authority.id ||
-		locked.Workspace.Mutation.OperationID != authority.operationID {
+		locked.Workspace.Mutation.OperationID != authority.operationID ||
+		!equalRelocationContext(locked.EgressContext, authority.egressContext) {
 		return "", errors.New("SecondBox Workspace transfer conflicts with durable authority")
 	}
 	peerRunnerID := ""
@@ -455,7 +459,7 @@ func lockWorkspaceRelocation(
 		       relocation.export_command_id,relocation.cleanup_command_id,
 		       operation.request_id,relocation.failure_code,relocation.failure_message,
 		       relocation.generation,relocation.logical_capacity_bytes,
-		       relocation.retry_count,relocation.fencing_token
+		       relocation.retry_count,relocation.fencing_token,relocation.egress_context
 		FROM secondbox.workspace_relocations AS relocation
 		JOIN secondbox.operations AS operation ON operation.id=relocation.operation_id
 		WHERE relocation.operation_id=$1
@@ -466,7 +470,7 @@ func lockWorkspaceRelocation(
 		&authority.state, &authority.exportCommandID, &authority.cleanupCommandID,
 		&authority.requestID, &authority.failureCode, &authority.failureMessage,
 		&authority.generation, &authority.capacity, &authority.retryCount,
-		&authority.fencingToken,
+		&authority.fencingToken, &authority.egressContext,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspaceRelocationAuthority{}, errors.New("SecondBox Workspace transfer has no durable relocation authority")
@@ -474,7 +478,16 @@ func lockWorkspaceRelocation(
 	if err != nil {
 		return workspaceRelocationAuthority{}, fmt.Errorf("SecondBox Workspace transfer authority lookup: %w", err)
 	}
+	if authority.egressContext != nil {
+		if err := contracts.ValidateEgressContextName(*authority.egressContext); err != nil {
+			return workspaceRelocationAuthority{}, fmt.Errorf("SecondBox persisted Workspace relocation egress context is invalid: %w", err)
+		}
+	}
 	return authority, nil
+}
+
+func equalRelocationContext(left, right *string) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func commitWorkspaceRelocation(

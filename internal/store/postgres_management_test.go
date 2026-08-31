@@ -187,8 +187,14 @@ func TestManagedTenantEgressContextUpdateIsRevisionFencedIdempotentAndRecoverabl
 	controlPlaneStore := openStoreTest(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	tenant := managementTestTenant("tenant-egress-context-update", now)
+	initialContext := "secondstack-initial"
+	tenant.EgressContext = &initialContext
 	if _, err := controlPlaneStore.CreateTenant(t.Context(), tenant); err != nil {
 		t.Fatal(err)
+	}
+	created, err := controlPlaneStore.GetTenant(t.Context(), tenant.Ref)
+	if err != nil || created.EgressContext == nil || *created.EgressContext != initialContext {
+		t.Fatalf("created Tenant egress context = %#v error=%v", created.EgressContext, err)
 	}
 
 	contextName := "secondstack-staging"

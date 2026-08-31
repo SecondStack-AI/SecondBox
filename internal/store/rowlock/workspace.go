@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -19,6 +20,7 @@ type SandboxWorkspace struct {
 	SubjectRef        string
 	WorkspaceID       string
 	ProfileRevisionID string
+	EgressContext     *string
 	SandboxState      string
 	DesiredState      string
 	Generation        int64
@@ -51,7 +53,7 @@ func SandboxWorkspaceForSubject(
 	var locked SandboxWorkspace
 	locked.SandboxID = sandboxID
 	if err := tx.QueryRow(ctx, `
-		SELECT tenant_ref,subject_ref,workspace_id,profile_revision_id,state,desired_state,generation,revision,
+		SELECT tenant_ref,subject_ref,workspace_id,profile_revision_id,egress_context,state,desired_state,generation,revision,
 		       current_instance_id,COALESCE(reconcile_owner,'')
 		FROM secondbox.sandboxes
 		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3 AND state<>'deleted'
@@ -59,11 +61,16 @@ func SandboxWorkspaceForSubject(
 		sandboxID, tenantRef, subjectRef,
 	).Scan(
 		&locked.TenantRef, &locked.SubjectRef,
-		&locked.WorkspaceID, &locked.ProfileRevisionID, &locked.SandboxState,
+		&locked.WorkspaceID, &locked.ProfileRevisionID, &locked.EgressContext, &locked.SandboxState,
 		&locked.DesiredState, &locked.Generation, &locked.Revision,
 		&locked.CurrentInstanceID, &locked.ReconcileOwner,
 	); err != nil {
 		return SandboxWorkspace{}, err
+	}
+	if locked.EgressContext != nil {
+		if err := contracts.ValidateEgressContextName(*locked.EgressContext); err != nil {
+			return SandboxWorkspace{}, fmt.Errorf("SecondBox persisted Sandbox egress context is invalid: %w", err)
+		}
 	}
 	workspace, err := lockWorkspace(ctx, tx, locked.WorkspaceID, sandboxID)
 	if err != nil {
@@ -91,7 +98,7 @@ func SandboxWorkspaceByID(
 	var locked SandboxWorkspace
 	locked.SandboxID = sandboxID
 	if err := tx.QueryRow(ctx, `
-		SELECT tenant_ref,subject_ref,workspace_id,profile_revision_id,state,desired_state,generation,revision,
+		SELECT tenant_ref,subject_ref,workspace_id,profile_revision_id,egress_context,state,desired_state,generation,revision,
 		       current_instance_id,COALESCE(reconcile_owner,'')
 		FROM secondbox.sandboxes
 		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3
@@ -99,11 +106,16 @@ func SandboxWorkspaceByID(
 		sandboxID, tenantRef, subjectRef,
 	).Scan(
 		&locked.TenantRef, &locked.SubjectRef,
-		&locked.WorkspaceID, &locked.ProfileRevisionID, &locked.SandboxState,
+		&locked.WorkspaceID, &locked.ProfileRevisionID, &locked.EgressContext, &locked.SandboxState,
 		&locked.DesiredState, &locked.Generation, &locked.Revision,
 		&locked.CurrentInstanceID, &locked.ReconcileOwner,
 	); err != nil {
 		return SandboxWorkspace{}, err
+	}
+	if locked.EgressContext != nil {
+		if err := contracts.ValidateEgressContextName(*locked.EgressContext); err != nil {
+			return SandboxWorkspace{}, fmt.Errorf("SecondBox persisted Sandbox egress context is invalid: %w", err)
+		}
 	}
 	workspace, err := lockWorkspace(ctx, tx, locked.WorkspaceID, sandboxID)
 	if err != nil {

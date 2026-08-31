@@ -30,6 +30,12 @@ func (client *Client) ListTenants(ctx context.Context, options PageOptions) (Ten
 	return page, err
 }
 
+func (client *Client) UpdateTenantEgressContext(ctx context.Context, tenantRef OwnershipRef, request UpdateTenantEgressContextRequest, expectedRevision int64, idempotencyKey string) (Tenant, error) {
+	var tenant Tenant
+	err := client.mutateManagementJSON(ctx, "updateTenantEgressContext", map[string]string{"tenantRef": tenantRef}, expectedRevision, idempotencyKey, request, &tenant)
+	return tenant, err
+}
+
 func (client *Client) SuspendTenant(ctx context.Context, tenantRef OwnershipRef, expectedRevision int64, idempotencyKey string) (Tenant, error) {
 	return client.mutateTenantLifecycle(ctx, "suspendTenant", tenantRef, expectedRevision, idempotencyKey)
 }

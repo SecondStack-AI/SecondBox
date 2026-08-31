@@ -85,6 +85,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("GET /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.listTenants)))
 	mux.Handle("POST /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.createTenant)))
 	mux.Handle("GET /v1/tenants/{tenantRef}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.getTenant)))
+	mux.Handle("PUT /v1/tenants/{tenantRef}/egress-context", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.updateTenantEgressContext)))
 	mux.Handle("POST /v1/tenants/{tenantAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.tenantManagementAction)))
 	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.listTenantControllerAuthorities)))
 	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.createTenantControllerAuthority)))
@@ -1020,6 +1021,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "resource_expired", "Management resource is expired", false
 	case errors.Is(err, ports.ErrTenantSuspended):
 		return http.StatusConflict, "tenant_suspended", "Tenant is suspended", false
+	case errors.Is(err, ports.ErrTenantEgressContextRequired):
+		return http.StatusConflict, "tenant_egress_context_required", "Profile requires a Tenant egress context", false
 	case errors.Is(err, ports.ErrGrantEscalationDenied):
 		return http.StatusForbidden, "grant_escalation_denied", "Requested grant exceeds the Tenant ceiling", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):

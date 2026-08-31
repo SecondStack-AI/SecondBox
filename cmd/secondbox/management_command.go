@@ -62,7 +62,7 @@ func runTenantCommand(ctx context.Context, session cliSession, args []string, ou
 		return err
 	}
 	if len(args) == 0 {
-		return errors.New("SecondBox tenant requires create, get, list, suspend, or reactivate")
+		return errors.New("SecondBox tenant requires create, get, list, egress-context, suspend, or reactivate")
 	}
 	var result any
 	switch args[0] {
@@ -85,6 +85,12 @@ func runTenantCommand(ctx context.Context, session cliSession, args []string, ou
 			return parseErr
 		}
 		result, err = client.ListTenants(ctx, options.page)
+	case "egress-context":
+		ref, request, revision, idempotencyKey, parseErr := parseTenantEgressContextOptions(args[1:])
+		if parseErr != nil {
+			return parseErr
+		}
+		result, err = client.UpdateTenantEgressContext(ctx, ref, request, revision, idempotencyKey)
 	case "suspend", "reactivate":
 		ref, revision, idempotencyKey, parseErr := parseRevisionMutationOptions("tenant "+args[0], args[1:])
 		if parseErr != nil {
@@ -102,6 +108,29 @@ func runTenantCommand(ctx context.Context, session cliSession, args []string, ou
 		return err
 	}
 	return writeManagementResult(ctx, output, result)
+}
+
+func parseTenantEgressContextOptions(args []string) (string, secondboxclient.UpdateTenantEgressContextRequest, int64, string, error) {
+	ref, remaining, err := shiftManagementReference("tenant egress-context", args)
+	if err != nil {
+		return "", secondboxclient.UpdateTenantEgressContextRequest{}, 0, "", err
+	}
+	flags := flag.NewFlagSet("tenant egress-context", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	file := flags.String("file", "", "JSON request document, or - for stdin")
+	revision := flags.Int64("revision", 0, "expected positive Tenant revision")
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key")
+	if err := flags.Parse(remaining); err != nil {
+		return "", secondboxclient.UpdateTenantEgressContextRequest{}, 0, "", fmt.Errorf("SecondBox tenant egress-context options: %w", err)
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*file) == "" || *revision < 1 || strings.TrimSpace(*idempotencyKey) == "" {
+		return "", secondboxclient.UpdateTenantEgressContextRequest{}, 0, "", errors.New("SecondBox tenant egress-context requires --file, --revision, and --idempotency-key")
+	}
+	var request secondboxclient.UpdateTenantEgressContextRequest
+	if err := decodeManagementRequest(*file, &request); err != nil {
+		return "", secondboxclient.UpdateTenantEgressContextRequest{}, 0, "", fmt.Errorf("SecondBox tenant egress-context request: %w", err)
+	}
+	return ref, request, *revision, strings.TrimSpace(*idempotencyKey), nil
 }
 
 func runTenantControllerAuthorityCommand(ctx context.Context, session cliSession, args []string, output io.Writer, httpClient *http.Client) error {
@@ -471,7 +500,11 @@ func writeManagementResult(ctx context.Context, output io.Writer, result any) er
 }
 
 func writeTenantSummary(renderer cliui.Renderer, tenant secondboxclient.Tenant) error {
-	return renderer.WriteSummary(cliui.Summary{Title: "Tenant", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Reference", Value: tenant.Ref}, {Key: "State", Value: tenant.State}, {Key: "Revision", Value: strconv.FormatInt(tenant.Revision, 10)}, {Key: "Profile grants", Value: strings.Join(tenant.AllowedProfileGrants, ", ")}, {Key: "Application scopes", Value: strings.Join(tenant.AllowedApplicationScopes, ", ")}}})
+	egressContext := "none"
+	if tenant.EgressContext != nil {
+		egressContext = *tenant.EgressContext
+	}
+	return renderer.WriteSummary(cliui.Summary{Title: "Tenant", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Reference", Value: tenant.Ref}, {Key: "State", Value: tenant.State}, {Key: "Egress context", Value: egressContext}, {Key: "Revision", Value: strconv.FormatInt(tenant.Revision, 10)}, {Key: "Profile grants", Value: strings.Join(tenant.AllowedProfileGrants, ", ")}, {Key: "Application scopes", Value: strings.Join(tenant.AllowedApplicationScopes, ", ")}}})
 }
 
 func writeAuthoritySummary(renderer cliui.Renderer, title, id, state string, revision int64) error {

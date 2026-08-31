@@ -57,6 +57,14 @@
         "responses": {"200": {"$ref": "#/components/responses/TenantOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
       }
     },
+    "/v1/tenants/{tenantRef}/egress-context": {
+      "put": {
+        "tags": ["Tenants"], "operationId": "updateTenantEgressContext", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateTenantEgressContextRequest"}}}},
+        "responses": {"200": {"$ref": "#/components/responses/TenantMutationOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
     "/v1/tenants/{tenantRef}:suspend": {
       "post": {
         "tags": ["Tenants"], "operationId": "suspendTenant", "security": [{"platformBearer": []}],
@@ -2024,10 +2032,11 @@
       },
       "Tenant": {
         "type": "object", "additionalProperties": false,
-        "required": ["ref", "state", "allowedProfileGrants", "allowedApplicationScopes", "aggregateQuota", "expiryPolicy", "metadata", "revision", "createdAt", "updatedAt"],
+        "required": ["ref", "state", "egressContext", "allowedProfileGrants", "allowedApplicationScopes", "aggregateQuota", "expiryPolicy", "metadata", "revision", "createdAt", "updatedAt"],
         "properties": {
           "ref": {"$ref": "#/components/schemas/OwnershipRef"},
           "state": {"$ref": "#/components/schemas/TenantState"},
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
           "allowedProfileGrants": {"$ref": "#/components/schemas/ProfileGrantList"},
           "allowedApplicationScopes": {"$ref": "#/components/schemas/ApplicationScopeList"},
           "aggregateQuota": {"$ref": "#/components/schemas/TenantQuota"},
@@ -2048,12 +2057,20 @@
         "required": ["ref", "allowedProfileGrants", "allowedApplicationScopes", "aggregateQuota", "expiryPolicy", "metadata"],
         "properties": {
           "ref": {"$ref": "#/components/schemas/OwnershipRef"},
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
           "allowedProfileGrants": {"$ref": "#/components/schemas/ProfileGrantList"},
           "allowedApplicationScopes": {"$ref": "#/components/schemas/ApplicationScopeList"},
           "aggregateQuota": {"$ref": "#/components/schemas/TenantQuota"},
           "expiryPolicy": {"$ref": "#/components/schemas/TenantExpiryPolicy"},
           "metadata": {"$ref": "#/components/schemas/Metadata"},
           "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "UpdateTenantEgressContextRequest": {
+        "type": "object", "additionalProperties": false, "required": ["egressContext"],
+        "description": "Replaces the operator-owned Tenant egress context. JSON null explicitly clears it; no default or fallback is selected.",
+        "properties": {
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]}
         }
       },
       "Subject": {
@@ -2497,11 +2514,12 @@
       "Sandbox": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "profile", "profileRevisionId", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "profile", "profileRevisionId", "egressContext", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "profile": {"$ref": "#/components/schemas/ProfileName"},
           "profileRevisionId": {"$ref": "#/components/schemas/OpaqueID"},
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
           "state": {"$ref": "#/components/schemas/SandboxState"},
           "desiredState": {"$ref": "#/components/schemas/SandboxDesiredState"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
@@ -3366,6 +3384,7 @@
           "invalid_lifecycle_transition",
           "resource_expired",
           "tenant_suspended",
+          "tenant_egress_context_required",
           "grant_escalation_denied",
           "cleanup_state_conflict",
           "workspace_mutation_conflict",

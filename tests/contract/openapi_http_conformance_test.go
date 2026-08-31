@@ -33,6 +33,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"listTenants":                     {"listTenants", "200", "TenantPage", nil, nil},
 	"createTenant":                    {"createTenant", "201", "Tenant", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getTenant":                       {"getTenant", "200", "Tenant", nil, []string{"ETag"}},
+	"updateTenantEgressContext":       {"updateTenantEgressContext", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"suspendTenant":                   {"tenantManagementAction", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"reactivateTenant":                {"tenantManagementAction", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"listTenantControllerAuthorities": {"listTenantControllerAuthorities", "200", "TenantControllerAuthorityPage", nil, nil},

@@ -91,6 +91,21 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 	if isolated.EgressContext != nil {
 		t.Fatalf("isolated Sandbox pinned Tenant context %#v", isolated.EgressContext)
 	}
+	auditEvents, err := databaseStore.ListAuditEvents(t.Context(), project.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAudit := findAuditEvent(auditEvents, "sandbox.created", first.ID)
+	if firstAudit == nil || firstAudit.Details["egressContext"] != firstContext {
+		t.Fatalf("first Sandbox creation audit = %#v", firstAudit)
+	}
+	isolatedAudit := findAuditEvent(auditEvents, "sandbox.created", isolated.ID)
+	if isolatedAudit == nil {
+		t.Fatalf("isolated Sandbox creation audit is absent: %#v", auditEvents)
+	}
+	if _, exists := isolatedAudit.Details["egressContext"]; exists {
+		t.Fatalf("isolated Sandbox creation audit exposed a context: %#v", isolatedAudit)
+	}
 
 	databaseStore.Close()
 	restarted, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL)

@@ -380,6 +380,23 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if profile.State != contracts.ProfileStateEnabled {
 		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrProfileDisabled
 	}
+	var tenantEgressContext *string
+	if err := tx.QueryRow(ctx, `SELECT egress_context FROM secondbox.tenants WHERE ref=$1`, input.Principal.TenantRef).Scan(&tenantEgressContext); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Tenant egress-context lookup failed: %w", err)
+	}
+	if profile.CurrentRevision.Spec.Network.RequiresTenantEgressContext == nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, errors.New("SecondBox Profile egress-context requirement is absent")
+	}
+	if *profile.CurrentRevision.Spec.Network.RequiresTenantEgressContext {
+		if tenantEgressContext == nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrTenantEgressContextRequired
+		}
+		if err := contracts.ValidateEgressContextName(*tenantEgressContext); err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox persisted Tenant egress context is invalid: %w", err)
+		}
+	} else {
+		tenantEgressContext = nil
+	}
 	if err := ensureCompatibleRunnerPool(ctx, tx, profile.CurrentRevision.Spec); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
@@ -428,6 +445,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.SubjectRef = input.Principal.SubjectRef
+	sandbox.EgressContext = cloneStoreOptionalString(tenantEgressContext)
 	sandbox.ProfileRevisionID = profile.CurrentRevision.ID
 	sandbox.Workspace = input.Workspace
 	sandbox.Workspace.TenantRef = input.Principal.TenantRef
@@ -484,14 +502,14 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.sandboxes (
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,generation,workspace_id,
-			current_instance_id,metadata_json,compatibility_summary_json,last_activity_at,revision,
+			current_instance_id,egress_context,metadata_json,compatibility_summary_json,last_activity_at,revision,
 			lifecycle_termination_reason,lifecycle_failure_class,lifecycle_failure_message,lifecycle_intent_kind,
 			reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,reconcile_retry_count,
 			reconcile_retry_limit,created_at,updated_at,deleted_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
 		sandbox.ID, sandbox.TenantRef, sandbox.SubjectRef,
 		sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
-		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", metadataJSON,
+		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", sandbox.EgressContext, metadataJSON,
 		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
 		"", nil, nil, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
 	); err != nil {
@@ -1008,7 +1026,7 @@ func scanProfile(row rowScanner) (contracts.Profile, error) {
 
 const sandboxSelect = `
 	SELECT sandbox.id,sandbox.tenant_ref,sandbox.subject_ref,
-	       sandbox.profile_name,sandbox.profile_revision_id,
+	       sandbox.profile_name,sandbox.profile_revision_id,sandbox.egress_context,
 	       sandbox.state,sandbox.desired_state,sandbox.generation,sandbox.metadata_json,
 	       sandbox.last_activity_at,sandbox.revision,sandbox.created_at,sandbox.updated_at,sandbox.deleted_at,
 	       workspace.id,workspace.tenant_ref,workspace.subject_ref,
@@ -1028,7 +1046,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	var readyAt, guestHeartbeatAt, stoppedAt sql.NullTime
 	if err := row.Scan(
 		&sandbox.ID, &sandbox.TenantRef, &sandbox.SubjectRef,
-		&sandbox.Profile, &sandbox.ProfileRevisionID,
+		&sandbox.Profile, &sandbox.ProfileRevisionID, &sandbox.EgressContext,
 		&sandbox.State, &sandbox.DesiredState, &sandbox.Generation, &metadataJSON,
 		&sandbox.LastActivityAt, &sandbox.Revision, &sandbox.CreatedAt, &sandbox.UpdatedAt,
 		&sandbox.DeletedAt, &sandbox.Workspace.ID,
@@ -1039,6 +1057,11 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt,
 	); err != nil {
 		return contracts.Sandbox{}, err
+	}
+	if sandbox.EgressContext != nil {
+		if err := contracts.ValidateEgressContextName(*sandbox.EgressContext); err != nil {
+			return contracts.Sandbox{}, fmt.Errorf("SecondBox persisted Sandbox egress context is invalid: %w", err)
+		}
 	}
 	if err := json.Unmarshal(metadataJSON, &sandbox.Metadata); err != nil {
 		return contracts.Sandbox{}, fmt.Errorf("SecondBox Sandbox metadata decoding failed: %w", err)
@@ -1061,6 +1084,14 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		}
 	}
 	return sandbox, nil
+}
+
+func cloneStoreOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func getSandboxWithQuerier(

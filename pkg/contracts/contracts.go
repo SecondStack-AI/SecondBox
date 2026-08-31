@@ -460,6 +460,7 @@ type Sandbox struct {
 	ID                string            `json:"id"`
 	TenantRef         string            `json:"-"`
 	SubjectRef        string            `json:"-"`
+	EgressContext     *string           `json:"egressContext"`
 	Profile           string            `json:"profile"`
 	ProfileRevisionID string            `json:"profileRevisionId"`
 	State             string            `json:"state"`

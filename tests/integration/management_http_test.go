@@ -38,7 +38,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 	expiresAt := now.Add(time.Hour)
 	tenantRequest := secondboxclient.CreateTenantRequest{
 		Ref: "missing-key-tenant", AllowedProfileGrants: []string{"coding"},
-		AllowedApplicationScopes: []string{"sandbox:read"},
+		AllowedApplicationScopes: []string{"sandbox:read", "sandbox:lifecycle"},
 		AggregateQuota:           secondboxclient.TenantQuota{MaxSandboxes: 10, MaxActiveInstances: 10, MaxVcpuCount: 10, MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10, MaxActiveSubjects: 10, MaxApplicationAuthorities: 10},
 		ExpiryPolicy:             secondboxclient.TenantExpiryPolicy{MaximumSubjectLifetimeSeconds: 3600, MaximumAuthorityLifetimeSeconds: 3600},
 		Metadata:                 map[string]string{}, ExpiresAt: &expiresAt,
@@ -60,7 +60,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	applicationRequest := secondboxclient.CreateApplicationAuthorityRequest{SubjectRef: subject.Ref, Scopes: []string{"sandbox:read"}, ProfileGrants: []string{"coding"}, Metadata: map[string]string{}, ExpiresAt: expiresAt}
+	applicationRequest := secondboxclient.CreateApplicationAuthorityRequest{SubjectRef: subject.Ref, Scopes: []string{"sandbox:read", "sandbox:lifecycle"}, ProfileGrants: []string{"coding"}, Metadata: map[string]string{}, ExpiresAt: expiresAt}
 	application, err := controllerClient.CreateApplicationAuthority(t.Context(), applicationRequest, "missing-key-setup-application")
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +107,10 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 		request.Header.Set("Authorization", "Bearer "+delegated.token)
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "delegated-schema-context-override")
+		if delegated.token == application.BearerToken {
+			request.Header.Set("X-SecondBox-Tenant-Ref", string(tenant.Ref))
+			request.Header.Set("X-SecondBox-Subject-Ref", string(subject.Ref))
+		}
 		response, err := server.Client().Do(request)
 		if err != nil {
 			t.Fatal(err)
@@ -193,8 +197,10 @@ func TestManagementOwnershipReferencesRoundTripThroughEncodedActionRoutes(t *tes
 		t.Fatal(err)
 	}
 	expiresAt := now.Add(time.Hour)
+	initialContext := secondboxclient.EgressContextName("secondstack-http-initial")
 	request := secondboxclient.CreateTenantRequest{
 		Ref: "customer/west:production", AllowedProfileGrants: []string{"coding"},
+		EgressContext:            &initialContext,
 		AllowedApplicationScopes: []string{"sandbox:read"}, Metadata: map[string]string{}, ExpiresAt: &expiresAt,
 		AggregateQuota: secondboxclient.TenantQuota{MaxSandboxes: 1, MaxActiveInstances: 1, MaxVcpuCount: 1, MaxMemoryBytes: 1 << 30, MaxSnapshots: 1, MaxPortSessions: 1, MaxConcurrentOperations: 1, MaxActiveSubjects: 1, MaxApplicationAuthorities: 1},
 		ExpiryPolicy:   secondboxclient.TenantExpiryPolicy{MaximumSubjectLifetimeSeconds: 3600, MaximumAuthorityLifetimeSeconds: 3600},
@@ -204,10 +210,19 @@ func TestManagementOwnershipReferencesRoundTripThroughEncodedActionRoutes(t *tes
 		t.Fatal(err)
 	}
 	read, err := operator.GetTenant(t.Context(), tenant.Ref)
-	if err != nil || read.Ref != tenant.Ref {
+	if err != nil || read.Ref != tenant.Ref || read.EgressContext == nil || *read.EgressContext != initialContext {
 		t.Fatalf("encoded Tenant read = %#v error=%v", read, err)
 	}
-	suspended, err := operator.SuspendTenant(t.Context(), tenant.Ref, tenant.Revision, "encoded-reference-suspend")
+	updatedContext := secondboxclient.EgressContextName("secondstack-http-updated")
+	updated, err := operator.UpdateTenantEgressContext(
+		t.Context(), tenant.Ref,
+		secondboxclient.UpdateTenantEgressContextRequest{EgressContext: &updatedContext},
+		tenant.Revision, "encoded-reference-egress-context",
+	)
+	if err != nil || updated.EgressContext == nil || *updated.EgressContext != updatedContext || updated.Revision != tenant.Revision+1 {
+		t.Fatalf("encoded Tenant egress-context update = %#v error=%v", updated, err)
+	}
+	suspended, err := operator.SuspendTenant(t.Context(), tenant.Ref, updated.Revision, "encoded-reference-suspend")
 	if err != nil || suspended.State != secondboxclient.TenantStateSuspended {
 		t.Fatalf("encoded Tenant action = %#v error=%v", suspended, err)
 	}

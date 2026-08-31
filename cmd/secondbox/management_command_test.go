@@ -102,6 +102,7 @@ func TestManagementCredentialStructuredOutputCarriesBearerTokenOnce(t *testing.T
 func TestManagementCommandActionsUseGeneratedRoutes(t *testing.T) {
 	platform := sessionAuthorityPlatform
 	controller := sessionAuthorityTenantController
+	egressContextRequest := writeManagementRequestFixture(t, `{"egressContext":"secondstack-staging"}`)
 	tests := []struct {
 		name      string
 		authority sessionAuthorityKind
@@ -113,6 +114,7 @@ func TestManagementCommandActionsUseGeneratedRoutes(t *testing.T) {
 	}{
 		{name: "tenant get", authority: platform, args: []string{"tenant", "get", "tenant-a"}, method: http.MethodGet, path: "/v1/tenants/tenant-a"},
 		{name: "tenant list", authority: platform, args: []string{"tenant", "list", "--limit", "2", "--cursor", "next"}, method: http.MethodGet, path: "/v1/tenants", query: "cursor=next&limit=2"},
+		{name: "tenant egress context", authority: platform, args: []string{"tenant", "egress-context", "tenant-a", "--file", egressContextRequest, "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPut, path: "/v1/tenants/tenant-a/egress-context", mutation: true},
 		{name: "tenant suspend", authority: platform, args: []string{"tenant", "suspend", "tenant-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/tenants/tenant-a:suspend", mutation: true},
 		{name: "tenant reactivate", authority: platform, args: []string{"tenant", "reactivate", "tenant-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/tenants/tenant-a:reactivate", mutation: true},
 		{name: "controller get", authority: platform, args: []string{"controller-authority", "get", "tenant-a", "controller-a"}, method: http.MethodGet, path: "/v1/tenants/tenant-a/controller-authorities/controller-a"},
