@@ -29,18 +29,20 @@ Every ProfileRevision contains:
 - exec deadline, buffered output, streaming window, transfer, PTY, and port-session bounds;
 - drain grace, idle timeout, maximum Instance duration, lease duration, and desired create state;
 - Snapshot count and retention;
-- outbound network and DNS policy;
+- outbound network and DNS policy, including the required `network.requiresTenantEgressContext` Boolean;
 - approved exposed ports, protocols, and session limits.
 
 SecondBox releases three explicitly selected standard Profile bundles:
 
-- `agent-compartment` is bounded ephemeral compute for Flue-style agent turns. It starts immediately, has short idle and maximum-duration bounds, and exposes no ports.
-- `durable-coding` is a long-running coding workspace with larger inline CPU, memory, disk, process, operation, transfer, PTY-detach, Snapshot, and development-port bounds.
-- `agent-compartment-isolated` retains the bounded command, file, workspace, cancellation, and lifecycle capabilities of `agent-compartment` while denying all outbound network and DNS access and exposing no ports.
+- `agent-compartment` is bounded ephemeral compute for Flue-style agent turns. It starts immediately, has short idle and maximum-duration bounds, exposes no ports, and states `requiresTenantEgressContext: true`.
+- `durable-coding` is a long-running coding workspace with larger inline CPU, memory, disk, process, operation, transfer, PTY-detach, Snapshot, and development-port bounds; it states `requiresTenantEgressContext: true`.
+- `agent-compartment-isolated` retains the bounded command, file, workspace, cancellation, and lifecycle capabilities of `agent-compartment` while denying all outbound network and DNS access, exposing no ports, and stating `requiresTenantEgressContext: false`.
 
 The declarative resource engine materializes standard bundles as ordinary immutable ProfileRevisions. Selection is explicit in `[standard_resources]`; the control plane has no built-in defaults, reserved-name behavior, or request-time reconciler. Each release declares the complete ordered lineage and canonical spec digest, validates an installed prefix, and appends only missing revisions. Existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules.
 
-Tenant ceilings and application grants select these release-owned Profile names directly; they do not create tenant-specific Profile copies. A network-enabled RunnerPool maps to one operator-trusted egress context. Tenant-aware shared egress identity is outside this release.
+Tenant ceilings and application grants select these release-owned Profile names directly; they do not create tenant-specific Profile copies. The requirement is explicit policy, not an inference from `agent-gateway.secondbox.internal`, `platform-gateway.secondbox.internal`, or any other domain. Operator-defined Profiles must also state the Boolean on every revision. Omission is invalid; the control plane supplies no default and does not decode an old missing field into either value.
+
+A Tenant has at most one nullable operator-controlled egress-context name. The name is an opaque 1-to-63-character lowercase ASCII label matching `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`; it is not a hostname, network, gateway identity, or mapping digest. A Sandbox created from a requiring Profile pins the Tenant's current name. Later Tenant changes apply only to new Sandboxes. A non-requiring Profile pins and sends no context even when its Tenant has one.
 
 Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or transferring Workspace bytes off the Runner. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
 
@@ -48,7 +50,7 @@ Ordinary stop always flushes and detaches compute, advances the local Workspace 
 
 `POST /v1/sandboxes` contains only `profile` and bounded string metadata. The client supplies `Idempotency-Key` as a header. Resource, backend, image, lifecycle, storage, network, timeout, port, and placement fields are rejected as unknown properties.
 
-Creation fails before allocating durable intent when the profile is absent, disabled, or has no RunnerPool capable of its immutable requirements. Successful creation persists the exact ProfileRevision ID and a resolved compatibility summary. Later runner availability changes do not rewrite that selection.
+Creation fails before allocating durable intent when the profile is absent, disabled, requires an egress context that the authenticated Tenant lacks, or has no RunnerPool capable of its immutable requirements. Successful creation persists the exact ProfileRevision ID, the immutable Tenant-context pin when required, and a resolved compatibility summary. Later Tenant or Runner availability changes do not rewrite that selection.
 
 Profiles may be disabled to stop future creation. Disablement does not mutate pinned Sandboxes. A profile revision and its referenced assets cannot be deleted while reachable from a Sandbox or retention record.
 
@@ -59,6 +61,10 @@ Profiles may be disabled to stop future creation. Disablement does not mutate pi
 The mode is a placement requirement, not a hint. A `snapshot_resume` ProfileRevision admits only onto Runners advertising the provider-neutral `snapshot-resume` capability, at initial home placement and at every later Instance assignment onto that same home Runner. A Runner advertises the capability only when it is configured with a resume template cache root, requires the jailer, and already holds a template built from the exact signed execution bundle it verified. A pool whose operator-declared capabilities omit `snapshot-resume` refuses a `snapshot_resume` Profile non-retryably with `startup_mode_unsupported`, because no Runner in it will ever be admissible; a declared pool with no currently advertising Runner refuses retryably, because a Runner may materialize the template.
 
 Revisions recorded before the field existed are stamped `cold_boot` by migration `0015_profile_startup_mode`. That is a statement of the behavior they already had, not a default invented for them, and it keeps an upgraded database converging on exactly the spec a fresh one writes.
+
+## Tenant-egress release boundary
+
+The tenant-egress release is not an in-place Profile or Sandbox upgrade from v0.7.2. Applications quiesce, every v0.7.2 Sandbox is retired, and the deployment is replaced before new Profiles and Sandboxes are created. The new release adds no historical decoder for a missing `requiresTenantEgressContext`, legacy assignment form, or Sandbox migration operation. A coordinated v0.7.2 backup is retained only for complete rollback.
 
 ## Quotas
 
