@@ -130,6 +130,33 @@ func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *test
 	}
 }
 
+func TestRunnerProtocolServiceStartupRecoveryRequiresConfiguredContext(t *testing.T) {
+	recovered := &runnerprotocol.ActiveAssignmentSummary{
+		AssignmentId: "assignment-recovered", SandboxId: "sandbox-recovered",
+		InstanceId: "instance-recovered", SandboxGeneration: 7,
+		FencingToken: []byte("recovered-assignment-fence"), EgressContext: "tenant-blue",
+	}
+	backend := &recoveredRecordingAssignmentBackend{
+		recordingAssignmentBackend: recordingAssignmentBackend{},
+		recovered:                  []*runnerprotocol.ActiveAssignmentSummary{recovered},
+	}
+	config := testRunnerConfig()
+	if _, err := NewRunnerProtocolService(config, backend, staticProtocolConnector{}); err == nil ||
+		!strings.Contains(err.Error(), "startup recovery refuses") ||
+		!strings.Contains(err.Error(), "never substitute") {
+		t.Fatalf("missing recovered-context error = %v", err)
+	}
+
+	config.SupportedEgressContexts = []string{"tenant-blue"}
+	service, err := NewRunnerProtocolService(config, backend, staticProtocolConnector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active := service.activeAssignments(); len(active) != 1 || !proto.Equal(active[0], recovered) {
+		t.Fatalf("recovered active assignments = %#v", active)
+	}
+}
+
 func TestRunnerProtocolServiceHeartbeatsWhileAssignmentStartIsBlocked(t *testing.T) {
 	backend := &blockingAssignmentBackend{
 		recordingAssignmentBackend: recordingAssignmentBackend{
@@ -1547,6 +1574,15 @@ type recordingAssignmentBackend struct {
 	startupP95   time.Duration
 	startCalls   atomic.Uint32
 	fenceCalls   atomic.Uint32
+}
+
+type recoveredRecordingAssignmentBackend struct {
+	recordingAssignmentBackend
+	recovered []*runnerprotocol.ActiveAssignmentSummary
+}
+
+func (backend *recoveredRecordingAssignmentBackend) RecoveredAssignments() []*runnerprotocol.ActiveAssignmentSummary {
+	return backend.recovered
 }
 
 type classifiedAssignmentError struct {

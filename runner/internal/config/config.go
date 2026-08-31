@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 )
 
 type Config struct {
@@ -71,7 +73,7 @@ type Config struct {
 	NetworkPolicyMaximumDNSTTL           time.Duration
 	NetworkPolicyRunnerAddresses         []netip.Addr
 	NetworkPolicyManagementCIDRs         []netip.Prefix
-	NetworkPolicyRunnerGateways          map[string]netip.Addr
+	NetworkPolicyEgressContexts          networkpolicy.EgressContextConfig
 	NetworkPolicyDNSUpstream             netip.AddrPort
 }
 

@@ -45,7 +45,11 @@ pub struct RunningVm {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TranslatedNetworkPolicy {
     DenyAll,
-    AllowList(Vec<TranslatedNetworkDestination>),
+    AllowList {
+        runner_gateways: Vec<TranslatedNetworkDestination>,
+        protected_cidrs: Vec<String>,
+        destinations: Vec<TranslatedNetworkDestination>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -533,35 +537,61 @@ fn set_xattr(path: &CStr, name: &CStr, value: &[u8]) -> io::Result<()> {
 }
 
 fn microsandbox_policy(translated: &TranslatedNetworkPolicy) -> Result<NetworkPolicy, BuildError> {
-    let TranslatedNetworkPolicy::AllowList(destinations) = translated else {
+    let TranslatedNetworkPolicy::AllowList {
+        runner_gateways,
+        protected_cidrs,
+        destinations,
+    } = translated
+    else {
         return Ok(NetworkPolicy::none());
     };
-    let mut rules = Vec::with_capacity(destinations.len() + 1);
+    let mut rules =
+        Vec::with_capacity(runner_gateways.len() + protected_cidrs.len() + destinations.len() + 1);
+    for gateway in runner_gateways {
+        rules.push(allow_network_destination(gateway)?);
+    }
     if destinations.iter().any(|destination| destination.is_domain) {
         rules.push(Rule::allow_dns());
     }
-    for destination in destinations {
-        let target = if destination.is_domain {
-            Destination::Domain(destination.target.parse().map_err(|error| {
-                BuildError::NetworkPolicy(format!("invalid domain {}: {error}", destination.target))
-            })?)
-        } else {
-            Destination::Cidr(destination.target.parse().map_err(|error| {
-                BuildError::NetworkPolicy(format!("invalid CIDR {}: {error}", destination.target))
-            })?)
-        };
+    for cidr in protected_cidrs {
         rules.push(Rule {
             direction: Direction::Egress,
-            destination: target,
-            protocols: vec![Protocol::Tcp],
-            ports: vec![PortRange::single(destination.port)],
-            action: Action::Allow,
+            destination: Destination::Cidr(cidr.parse().map_err(|error| {
+                BuildError::NetworkPolicy(format!("invalid protected CIDR {cidr}: {error}"))
+            })?),
+            protocols: Vec::new(),
+            ports: Vec::new(),
+            action: Action::Deny,
         });
+    }
+    for destination in destinations {
+        rules.push(allow_network_destination(destination)?);
     }
     Ok(NetworkPolicy {
         default_egress: Action::Deny,
         default_ingress: Action::Deny,
         rules,
+    })
+}
+
+fn allow_network_destination(
+    destination: &TranslatedNetworkDestination,
+) -> Result<Rule, BuildError> {
+    let target = if destination.is_domain {
+        Destination::Domain(destination.target.parse().map_err(|error| {
+            BuildError::NetworkPolicy(format!("invalid domain {}: {error}", destination.target))
+        })?)
+    } else {
+        Destination::Cidr(destination.target.parse().map_err(|error| {
+            BuildError::NetworkPolicy(format!("invalid CIDR {}: {error}", destination.target))
+        })?)
+    };
+    Ok(Rule {
+        direction: Direction::Egress,
+        destination: target,
+        protocols: vec![Protocol::Tcp],
+        ports: vec![PortRange::single(destination.port)],
+        action: Action::Allow,
     })
 }
 
@@ -596,15 +626,26 @@ fn translate_environment(values: &[String]) -> Result<Vec<(String, String)>, Lau
 fn translate_network(start: &StartRequest) -> Result<TranslatedNetworkPolicy, LaunchError> {
     let policy = start.network_policy.as_ref().ok_or(LaunchError::Network)?;
     match HelperNetworkPolicyMode::try_from(policy.mode).map_err(|_| LaunchError::Network)? {
-        HelperNetworkPolicyMode::DenyAll if policy.destinations.is_empty() => {
+        HelperNetworkPolicyMode::DenyAll
+            if policy.destinations.is_empty()
+                && policy.runner_gateways.is_empty()
+                && policy.protected_cidrs.is_empty() =>
+        {
             Ok(TranslatedNetworkPolicy::DenyAll)
         }
-        HelperNetworkPolicyMode::AllowList => policy
-            .destinations
-            .iter()
-            .map(translate_destination)
-            .collect::<Result<Vec<_>, _>>()
-            .map(TranslatedNetworkPolicy::AllowList),
+        HelperNetworkPolicyMode::AllowList => Ok(TranslatedNetworkPolicy::AllowList {
+            runner_gateways: policy
+                .runner_gateways
+                .iter()
+                .map(translate_destination)
+                .collect::<Result<Vec<_>, _>>()?,
+            protected_cidrs: policy.protected_cidrs.clone(),
+            destinations: policy
+                .destinations
+                .iter()
+                .map(translate_destination)
+                .collect::<Result<Vec<_>, _>>()?,
+        }),
         _ => Err(LaunchError::Network),
     }
 }
@@ -675,6 +716,8 @@ mod tests {
             network_policy: Some(HelperNetworkPolicy {
                 mode: HelperNetworkPolicyMode::DenyAll as i32,
                 destinations: Vec::new(),
+                runner_gateways: Vec::new(),
+                protected_cidrs: Vec::new(),
             }),
             stable_workspace_block_id: "workspace".into(),
             workspace_capacity_bytes: 64 * MIB,
@@ -769,38 +812,51 @@ mod tests {
 
     #[test]
     fn translates_exact_network_rules_into_fail_closed_smoltcp_policy() {
-        let translated = TranslatedNetworkPolicy::AllowList(vec![
-            TranslatedNetworkDestination {
-                target: "api.example.com".into(),
-                is_domain: true,
+        let translated = TranslatedNetworkPolicy::AllowList {
+            runner_gateways: vec![TranslatedNetworkDestination {
+                target: "8.8.8.8/32".into(),
+                is_domain: false,
                 protocol: HelperNetworkProtocol::Https,
                 port: 443,
-            },
-            TranslatedNetworkDestination {
-                target: "93.184.216.0/24".into(),
-                is_domain: false,
-                protocol: HelperNetworkProtocol::Http,
-                port: 8080,
-            },
-            TranslatedNetworkDestination {
-                target: "2001:4860:4860::/48".into(),
-                is_domain: false,
-                protocol: HelperNetworkProtocol::Tcp,
-                port: 8443,
-            },
-        ]);
+            }],
+            protected_cidrs: vec!["9.9.9.9/32".into()],
+            destinations: vec![
+                TranslatedNetworkDestination {
+                    target: "api.example.com".into(),
+                    is_domain: true,
+                    protocol: HelperNetworkProtocol::Https,
+                    port: 443,
+                },
+                TranslatedNetworkDestination {
+                    target: "93.184.216.0/24".into(),
+                    is_domain: false,
+                    protocol: HelperNetworkProtocol::Http,
+                    port: 8080,
+                },
+                TranslatedNetworkDestination {
+                    target: "2001:4860:4860::/48".into(),
+                    is_domain: false,
+                    protocol: HelperNetworkProtocol::Tcp,
+                    port: 8443,
+                },
+            ],
+        };
         let policy = microsandbox_policy(&translated).unwrap();
         assert!(matches!(policy.default_egress, Action::Deny));
         assert!(matches!(policy.default_ingress, Action::Deny));
-        assert_eq!(policy.rules.len(), 4);
-        assert!(matches!(policy.rules[0].destination, Destination::Group(_)));
+        assert_eq!(policy.rules.len(), 6);
+        assert!(matches!(policy.rules[0].destination, Destination::Cidr(_)));
+        assert!(matches!(policy.rules[0].action, Action::Allow));
+        assert!(matches!(policy.rules[1].destination, Destination::Group(_)));
+        assert!(matches!(policy.rules[2].destination, Destination::Cidr(_)));
+        assert!(matches!(policy.rules[2].action, Action::Deny));
         assert!(matches!(
-            policy.rules[1].destination,
+            policy.rules[3].destination,
             Destination::Domain(_)
         ));
-        assert!(matches!(policy.rules[2].destination, Destination::Cidr(_)));
-        assert!(matches!(policy.rules[3].destination, Destination::Cidr(_)));
-        for (rule, port) in policy.rules[1..].iter().zip([443, 8080, 8443]) {
+        assert!(matches!(policy.rules[4].destination, Destination::Cidr(_)));
+        assert!(matches!(policy.rules[5].destination, Destination::Cidr(_)));
+        for (rule, port) in policy.rules[3..].iter().zip([443, 8080, 8443]) {
             assert_eq!(rule.protocols, vec![Protocol::Tcp]);
             assert_eq!(rule.ports[0].start, port);
             assert_eq!(rule.ports[0].end, port);
@@ -813,10 +869,14 @@ mod tests {
                 .is_empty()
         );
         assert!(
-            microsandbox_policy(&TranslatedNetworkPolicy::AllowList(Vec::new()))
-                .unwrap()
-                .rules
-                .is_empty()
+            microsandbox_policy(&TranslatedNetworkPolicy::AllowList {
+                runner_gateways: Vec::new(),
+                protected_cidrs: Vec::new(),
+                destinations: Vec::new(),
+            })
+            .unwrap()
+            .rules
+            .is_empty()
         );
     }
 

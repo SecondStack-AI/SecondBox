@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ func TestRenderedRunnerFixturePassesProductionComposition(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	environment["SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG"] = writeRuntimeContextConfig(t)
 	environment["SECONDBOX_RUNNER_CREDENTIAL"] = strings.Repeat("c", 48)
 	environment["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"] = certificatePath
 	environment["SECONDBOX_RUNNER_CLIENT_KEY"] = keyPath
@@ -46,7 +48,8 @@ func TestRenderedRunnerFixturePassesProductionComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if composition.Protocol.RunnerID != "runner-conformance" || composition.Firecracker == nil || composition.Connector == nil {
+	if composition.Protocol.RunnerID != "runner-conformance" || composition.Firecracker == nil || composition.Connector == nil ||
+		!slices.Equal(composition.Protocol.SupportedEgressContexts, []string{"tenant-a", "tenant-b"}) {
 		t.Fatalf("composition = %#v", composition)
 	}
 	if err := composition.Connector.Close(); err != nil {
@@ -107,7 +110,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL":        "47s",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES":   "10.210.2.1,10.210.2.3",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS":   "10.211.0.0/16,192.168.50.0/24",
-		"SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS":    "agent-gateway.secondbox.internal=10.210.2.2",
+		"SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG":             writeRuntimeContextConfig(t),
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM":       "10.201.0.10:53",
 	}
 	for name, value := range complete {
@@ -131,11 +134,10 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		composition.NetworkPolicy.CompileOptions.MaximumTTL != 47*time.Second ||
 		len(composition.NetworkPolicy.CompileOptions.RunnerAddresses) != 2 ||
 		len(composition.NetworkPolicy.CompileOptions.ManagementPrefixes) != 2 ||
-		composition.NetworkPolicy.CompileOptions.RunnerGateways["agent-gateway.secondbox.internal"].String() != "10.210.2.2" ||
+		strings.Join(composition.NetworkPolicy.ContextNames(), ",") != "tenant-a,tenant-b" ||
 		composition.NetworkPolicy.DNSUpstream.String() != "10.201.0.10:53" {
 		t.Fatalf("gVisor composition = %#v templateBytes=%d", composition, templateBytes)
 	}
-
 	t.Run("network profile", func(t *testing.T) {
 		t.Setenv("SECONDBOX_GVISOR_NETWORK_PROFILE", "1")
 		composition, _, err := loadGVisorComposition()
@@ -157,7 +159,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_GVISOR_MATERIALIZATION_DIGEST",
 		"SECONDBOX_GVISOR_MAXIMUM_VCPUS",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS",
-		"SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS",
+		"SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM",
 	} {
 		t.Run(required, func(t *testing.T) {
@@ -179,4 +181,14 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 			t.Fatal("malformed network-policy TTL was accepted")
 		}
 	})
+}
+
+func writeRuntimeContextConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "egress-contexts.json")
+	content := `{"schemaVersion":"secondbox.runner-egress-contexts/v1","contexts":[{"name":"tenant-a","gateways":[{"logicalName":"agent-gateway.secondbox.internal","address":"10.210.2.2"}]},{"name":"tenant-b","gateways":[{"logicalName":"agent-gateway.secondbox.internal","address":"10.210.2.3"}]}]}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

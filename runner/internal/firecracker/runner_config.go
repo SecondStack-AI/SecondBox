@@ -289,7 +289,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		NetworkPolicyMaximumDNSTTL:                 networkPolicyConfig.CompileOptions.MaximumTTL,
 		NetworkPolicyRunnerAddresses:               networkPolicyConfig.CompileOptions.RunnerAddresses,
 		NetworkPolicyManagementCIDRs:               networkPolicyConfig.CompileOptions.ManagementPrefixes,
-		NetworkPolicyRunnerGateways:                networkPolicyConfig.CompileOptions.RunnerGateways,
+		NetworkPolicyEgressContexts:                networkPolicyConfig.EgressContexts,
 		NetworkPolicyDNSUpstream:                   networkPolicyConfig.DNSUpstream,
 	}, nil
 }

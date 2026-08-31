@@ -155,5 +155,8 @@ func writeEgressContextConfig(t *testing.T, content string, mode os.FileMode) st
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
 	return path
 }

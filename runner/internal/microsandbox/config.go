@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
@@ -27,6 +28,7 @@ type Config struct {
 	MaximumDiskBytes      uint64
 	MaximumInstances      uint32
 	MaximumOperations     uint32
+	NetworkPolicy         networkpolicy.RunnerConfig
 	WorkspaceStore        *workspacestore.Store
 }
 

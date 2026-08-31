@@ -330,9 +330,13 @@ func New(cfg *config.Config) (*Manager, error) {
 			dnsListen:   bridgeAddress(cfg.MicroVMBridgeCIDR),
 			dnsUpstream: cfg.NetworkPolicyDNSUpstream,
 		}
+		compileOptions, compileOptionsErr := m.networkPolicyCompileOptions("", false)
+		if compileOptionsErr != nil {
+			return nil, fmt.Errorf("compile default-deny host network policy options: %w", compileOptionsErr)
+		}
 		m.defaultNetworkPolicy, err = networkpolicy.Compile(
 			networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll},
-			m.networkPolicyCompileOptions(),
+			compileOptions,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("compile default-deny host network policy: %w", err)

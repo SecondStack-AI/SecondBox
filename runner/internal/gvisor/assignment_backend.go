@@ -208,6 +208,23 @@ func (backend *AssignmentBackend) InstanceTerminals() <-chan runnercontrol.Backe
 	return backend.instanceTerminals
 }
 
+func (backend *AssignmentBackend) RecoveredAssignments() []*runnerprotocol.ActiveAssignmentSummary {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	result := make([]*runnerprotocol.ActiveAssignmentSummary, 0, len(backend.assignments))
+	for _, active := range backend.assignments {
+		if active == nil || active.fence == nil {
+			continue
+		}
+		result = append(result, &runnerprotocol.ActiveAssignmentSummary{
+			AssignmentId: active.fence.AssignmentId, SandboxId: active.fence.SandboxId,
+			InstanceId: active.fence.InstanceId, SandboxGeneration: active.fence.SandboxGeneration,
+			FencingToken: append([]byte(nil), active.fence.FencingToken...), EgressContext: active.egressContext,
+		})
+	}
+	return result
+}
+
 func (backend *AssignmentBackend) SetRunnerEvidenceSink(sink runnerevidence.Sink, runnerID string) {
 	if sink == nil || strings.TrimSpace(runnerID) == "" {
 		return
@@ -400,7 +417,14 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return artifactAssignment(fmt.Errorf("SecondBox gVisor revalidate local materialization: %w", err))
 	}
-	if _, err := translateNetworkPolicy(assignment.NetworkPolicy, backend.config.NetworkPolicy.CompileOptions); err != nil {
+	compileOptions, err := backend.config.NetworkPolicy.CompileOptionsForAssignment(
+		assignment.EgressContext,
+		assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment egress context: %w", err))
+	}
+	if _, err := translateNetworkPolicy(assignment.NetworkPolicy, compileOptions); err != nil {
 		return incompatibleAssignment(err)
 	}
 	backend.mu.Lock()
@@ -545,7 +569,14 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
 		return result, err
 	}
-	compiled, err := translateNetworkPolicy(assignment.NetworkPolicy, backend.config.NetworkPolicy.CompileOptions)
+	compileOptions, err := backend.config.NetworkPolicy.CompileOptionsForAssignment(
+		assignment.EgressContext,
+		assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment egress context: %w", err))
+	}
+	compiled, err := translateNetworkPolicy(assignment.NetworkPolicy, compileOptions)
 	if err != nil {
 		return result, incompatibleAssignment(err)
 	}

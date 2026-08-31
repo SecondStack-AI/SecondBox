@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"google.golang.org/grpc/codes"
@@ -174,6 +175,13 @@ type instanceTerminalBackend interface {
 	MarkAssignmentReady(*runnerprotocol.AssignmentFence) error
 }
 
+// recoveredAssignmentBackend exposes assignments whose compute survived the
+// protocol service composition boundary. Startup must validate their pinned
+// contexts before any registration can advertise them.
+type recoveredAssignmentBackend interface {
+	RecoveredAssignments() []*runnerprotocol.ActiveAssignmentSummary
+}
+
 // RunnerProtocolStream is the generated bidirectional gRPC stream surface.
 type RunnerProtocolStream interface {
 	Send(*runnerprotocol.RunnerToControlPlane) error
@@ -255,8 +263,8 @@ func NewRunnerProtocolService(
 	}
 	supportedEgressContexts := make(map[string]struct{}, len(config.SupportedEgressContexts))
 	for _, contextName := range config.SupportedEgressContexts {
-		if contextName == "" || contextName != strings.TrimSpace(contextName) {
-			return nil, fmt.Errorf("SecondBox runner protocol config contains an empty or padded egress context")
+		if err := networkpolicy.ValidateEgressContextName(contextName); err != nil {
+			return nil, fmt.Errorf("SecondBox runner protocol config contains an invalid egress context: %w", err)
 		}
 		if _, duplicate := supportedEgressContexts[contextName]; duplicate {
 			return nil, fmt.Errorf("SecondBox runner protocol config repeats egress context %q", contextName)
@@ -344,6 +352,13 @@ func NewRunnerProtocolService(
 		workspaceRelocationTargets: make(map[string]*workspaceRelocationTarget),
 		supportedEgressContexts:    supportedEgressContexts,
 	}
+	if recoveredBackend, ok := backend.(recoveredAssignmentBackend); ok {
+		for _, recovered := range recoveredBackend.RecoveredAssignments() {
+			if err := service.recoverActiveAssignment(recovered); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if implementsTerminal {
 		service.instanceTerminals = terminalBackend.InstanceTerminals()
 		if service.instanceTerminals == nil {
@@ -354,6 +369,27 @@ func NewRunnerProtocolService(
 		evidenceBackend.SetRunnerEvidenceSink(service.evidence, config.RunnerID)
 	}
 	return service, nil
+}
+
+func (s *RunnerProtocolService) recoverActiveAssignment(recovered *runnerprotocol.ActiveAssignmentSummary) error {
+	if recovered == nil || strings.TrimSpace(recovered.AssignmentId) == "" ||
+		strings.TrimSpace(recovered.SandboxId) == "" || strings.TrimSpace(recovered.InstanceId) == "" ||
+		recovered.SandboxGeneration == 0 || len(recovered.FencingToken) == 0 {
+		return fmt.Errorf("SecondBox Runner startup recovery contains an incomplete active assignment")
+	}
+	if recovered.EgressContext != "" {
+		if err := networkpolicy.ValidateEgressContextName(recovered.EgressContext); err != nil {
+			return fmt.Errorf("SecondBox Runner startup recovery contains an invalid egress context: %w", err)
+		}
+		if _, configured := s.supportedEgressContexts[recovered.EgressContext]; !configured {
+			return fmt.Errorf("SecondBox Runner startup recovery refuses active assignment %q because egress context %q is absent from configuration; never substitute another context", recovered.AssignmentId, recovered.EgressContext)
+		}
+	}
+	if _, duplicate := s.active[recovered.AssignmentId]; duplicate {
+		return fmt.Errorf("SecondBox Runner startup recovery repeats active assignment %q", recovered.AssignmentId)
+	}
+	s.active[recovered.AssignmentId] = proto.Clone(recovered).(*runnerprotocol.ActiveAssignmentSummary)
+	return nil
 }
 
 func validateDataPlaneCertificate(

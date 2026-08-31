@@ -173,7 +173,11 @@ func validateConfig(config Config) (validatedConfig, error) {
 		!config.NetworkPolicy.DNSUpstream.Addr().Is4() {
 		return validatedConfig{}, fmt.Errorf("SecondBox gVisor network policy DNS upstream must be an IPv4 address and port")
 	}
-	if _, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll}, config.NetworkPolicy.CompileOptions); err != nil {
+	compileOptions, err := config.NetworkPolicy.CompileOptionsForAssignment("", false)
+	if err != nil {
+		return validatedConfig{}, fmt.Errorf("SecondBox gVisor network policy config: %w", err)
+	}
+	if _, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll}, compileOptions); err != nil {
 		return validatedConfig{}, fmt.Errorf("SecondBox gVisor network policy config: %w", err)
 	}
 	if config.MaximumInstances > maximumNetworkslots {

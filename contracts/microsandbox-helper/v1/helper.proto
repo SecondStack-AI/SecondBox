@@ -86,6 +86,8 @@ message HelperNetworkDestination {
 message HelperNetworkPolicy {
   HelperNetworkPolicyMode mode = 1;
   repeated HelperNetworkDestination destinations = 2;
+  repeated HelperNetworkDestination runner_gateways = 3;
+  repeated string protected_cidrs = 4;
 }
 
 message ReadyEvent {

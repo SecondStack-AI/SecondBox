@@ -72,6 +72,7 @@ type CompileOptions struct {
 	MaximumTTL         time.Duration
 	RunnerAddresses    []netip.Addr
 	ManagementPrefixes []netip.Prefix
+	ProtectedAddresses []netip.Addr
 	RunnerGateways     map[string]netip.Addr
 }
 
@@ -110,6 +111,7 @@ type CompiledPolicy struct {
 	maximumTTL         time.Duration
 	runnerAddresses    map[netip.Addr]struct{}
 	managementPrefixes []netip.Prefix
+	protectedAddresses map[netip.Addr]struct{}
 	runnerGateways     map[string]netip.Addr
 
 	mu   sync.Mutex
@@ -181,6 +183,13 @@ func (policy *CompiledPolicy) ProtectedPrefixes() []netip.Prefix {
 		}
 		prefixes = append(prefixes, netip.PrefixFrom(address, bits))
 	}
+	for address := range policy.protectedAddresses {
+		bits := 128
+		if address.Is4() {
+			bits = 32
+		}
+		prefixes = append(prefixes, netip.PrefixFrom(address, bits))
+	}
 	return prefixes
 }
 
@@ -230,14 +239,6 @@ func Compile(policy Policy, options CompileOptions) (*CompiledPolicy, error) {
 		return nil, fmt.Errorf("SecondBox network policy mode %q is unsupported", policy.Mode)
 	}
 
-	destinations := make([]Destination, 0, len(policy.Destinations))
-	for index, destination := range policy.Destinations {
-		validated, err := validateDestination(destination)
-		if err != nil {
-			return nil, fmt.Errorf("SecondBox network policy destination %d: %w", index, err)
-		}
-		destinations = append(destinations, validated)
-	}
 	runnerAddresses := make(map[netip.Addr]struct{}, len(options.RunnerAddresses))
 	for _, address := range options.RunnerAddresses {
 		address = normalizeAddress(address)
@@ -254,6 +255,22 @@ func Compile(policy Policy, options CompileOptions) (*CompiledPolicy, error) {
 		}
 		managementPrefixes = append(managementPrefixes, normalized)
 	}
+	protectedAddresses := make(map[netip.Addr]struct{}, len(options.ProtectedAddresses))
+	for _, address := range options.ProtectedAddresses {
+		address = normalizeAddress(address)
+		if !address.IsValid() {
+			return nil, fmt.Errorf("SecondBox network policy protected address is invalid")
+		}
+		protectedAddresses[address] = struct{}{}
+	}
+	destinations := make([]Destination, 0, len(policy.Destinations))
+	for index, destination := range policy.Destinations {
+		validated, err := validateDestination(destination, protectedAddresses)
+		if err != nil {
+			return nil, fmt.Errorf("SecondBox network policy destination %d: %w", index, err)
+		}
+		destinations = append(destinations, validated)
+	}
 	runnerGateways := make(map[string]netip.Addr, len(options.RunnerGateways))
 	for rawDomain, rawAddress := range options.RunnerGateways {
 		domain, err := normalizeDomain(rawDomain)
@@ -264,7 +281,7 @@ func Compile(policy Policy, options CompileOptions) (*CompiledPolicy, error) {
 		if !address.IsValid() {
 			return nil, fmt.Errorf("SecondBox network policy Runner gateway %q address is invalid", domain)
 		}
-		if !isProtectedAddress(address, runnerAddresses, managementPrefixes) {
+		if !isProtectedAddress(address, runnerAddresses, managementPrefixes, protectedAddresses) {
 			return nil, fmt.Errorf(
 				"SecondBox network policy Runner gateway %q address %s is not a protected Runner destination",
 				domain,
@@ -283,12 +300,13 @@ func Compile(policy Policy, options CompileOptions) (*CompiledPolicy, error) {
 		maximumTTL:         options.MaximumTTL,
 		runnerAddresses:    runnerAddresses,
 		managementPrefixes: managementPrefixes,
+		protectedAddresses: protectedAddresses,
 		runnerGateways:     runnerGateways,
 		pins:               make(map[pinKey]DNSPin),
 	}, nil
 }
 
-func validateDestination(destination Destination) (Destination, error) {
+func validateDestination(destination Destination, dynamicProtected map[netip.Addr]struct{}) (Destination, error) {
 	if !validProtocol(destination.Protocol) {
 		return Destination{}, fmt.Errorf("protocol %q is unsupported", destination.Protocol)
 	}
@@ -319,6 +337,11 @@ func validateDestination(destination Destination) (Destination, error) {
 	for _, protected := range protectedPrefixes {
 		if prefixesOverlap(prefix, protected) {
 			return Destination{}, fmt.Errorf("CIDR %s intersects protected destination class %s", prefix, protected)
+		}
+	}
+	for address := range dynamicProtected {
+		if prefix.Contains(address) {
+			return Destination{}, fmt.Errorf("CIDR %s contains protected destination %s", prefix, address)
 		}
 	}
 	destination.Prefix = prefix
@@ -579,18 +602,22 @@ func (policy *CompiledPolicy) hasDomainRule(protocol Protocol, domain string, po
 }
 
 func (policy *CompiledPolicy) isProtected(address netip.Addr) bool {
-	return isProtectedAddress(address, policy.runnerAddresses, policy.managementPrefixes)
+	return isProtectedAddress(address, policy.runnerAddresses, policy.managementPrefixes, policy.protectedAddresses)
 }
 
 func isProtectedAddress(
 	address netip.Addr,
 	runnerAddresses map[netip.Addr]struct{},
 	managementPrefixes []netip.Prefix,
+	protectedAddresses map[netip.Addr]struct{},
 ) bool {
 	if !address.IsValid() {
 		return true
 	}
 	if _, found := runnerAddresses[address]; found {
+		return true
+	}
+	if _, found := protectedAddresses[address]; found {
 		return true
 	}
 	for _, prefix := range managementPrefixes {

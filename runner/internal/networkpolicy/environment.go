@@ -14,6 +14,27 @@ import (
 type RunnerConfig struct {
 	CompileOptions CompileOptions
 	DNSUpstream    netip.AddrPort
+	EgressContexts EgressContextConfig
+}
+
+// ContextNames returns the exact static set advertised by this Runner.
+func (config RunnerConfig) ContextNames() []string {
+	return config.EgressContexts.ContextNames()
+}
+
+// CompileOptionsForAssignment binds one required context or produces an
+// isolated mapping-free policy while protecting every configured gateway.
+func (config RunnerConfig) CompileOptionsForAssignment(contextName string, required bool) (CompileOptions, error) {
+	if required {
+		if err := ValidateEgressContextName(contextName); err != nil {
+			return CompileOptions{}, err
+		}
+		return config.EgressContexts.CompileOptionsForContext(contextName, config.CompileOptions)
+	}
+	if contextName != "" {
+		return CompileOptions{}, fmt.Errorf("SecondBox Runner network policy received an unexpected egress context")
+	}
+	return config.EgressContexts.compileOptionsWithoutContext(config.CompileOptions), nil
 }
 
 // LoadRunnerConfigFromEnvironment requires and parses every generic runner
@@ -72,27 +93,13 @@ func LoadRunnerConfigFromEnvironment() (RunnerConfig, error) {
 		managementPrefixes = append(managementPrefixes, prefix.Masked())
 	}
 
-	runnerGatewaysRaw, err := required("SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS")
+	egressContextConfigPath, err := required(EgressContextConfigEnvironment)
 	if err != nil {
 		return RunnerConfig{}, err
 	}
-	runnerGateways := make(map[string]netip.Addr)
-	if runnerGatewaysRaw != "none" {
-		for _, part := range strings.Split(runnerGatewaysRaw, ",") {
-			domain, addressRaw, found := strings.Cut(strings.TrimSpace(part), "=")
-			domain = strings.TrimSpace(domain)
-			if !found || domain == "" || strings.TrimSpace(addressRaw) == "" {
-				return RunnerConfig{}, fmt.Errorf("SecondBox runner network policy config SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS entry %q must be domain=IP", part)
-			}
-			address, parseErr := netip.ParseAddr(strings.TrimSpace(addressRaw))
-			if parseErr != nil {
-				return RunnerConfig{}, fmt.Errorf("SecondBox runner network policy config SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS entry %q has an invalid IP", part)
-			}
-			if _, duplicate := runnerGateways[domain]; duplicate {
-				return RunnerConfig{}, fmt.Errorf("SecondBox runner network policy config SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS repeats domain %q", domain)
-			}
-			runnerGateways[domain] = address
-		}
+	egressContexts, err := LoadEgressContextConfig(egressContextConfigPath)
+	if err != nil {
+		return RunnerConfig{}, err
 	}
 
 	dnsUpstreamRaw, err := required("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM")
@@ -110,8 +117,8 @@ func LoadRunnerConfigFromEnvironment() (RunnerConfig, error) {
 			MaximumTTL:         maximumTTL,
 			RunnerAddresses:    runnerAddresses,
 			ManagementPrefixes: managementPrefixes,
-			RunnerGateways:     runnerGateways,
 		},
-		DNSUpstream: dnsUpstream,
+		DNSUpstream:    dnsUpstream,
+		EgressContexts: egressContexts,
 	}, nil
 }

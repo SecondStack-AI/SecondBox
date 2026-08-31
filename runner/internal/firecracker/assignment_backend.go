@@ -115,6 +115,23 @@ func (b *AssignmentBackend) InstanceTerminals() <-chan runnercontrol.BackendInst
 	return b.instanceTerminals
 }
 
+func (b *AssignmentBackend) RecoveredAssignments() []*runnerprotocol.ActiveAssignmentSummary {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	result := make([]*runnerprotocol.ActiveAssignmentSummary, 0, len(b.assignments))
+	for _, active := range b.assignments {
+		if active.fence == nil {
+			continue
+		}
+		result = append(result, &runnerprotocol.ActiveAssignmentSummary{
+			AssignmentId: active.fence.AssignmentId, SandboxId: active.fence.SandboxId,
+			InstanceId: active.fence.InstanceId, SandboxGeneration: active.fence.SandboxGeneration,
+			FencingToken: append([]byte(nil), active.fence.FencingToken...), EgressContext: active.egressContext,
+		})
+	}
+	return result
+}
+
 // MarkAssignmentReady starts natural-exit observation only after the ready
 // AssignmentResult has been emitted on the Runner stream.
 func (b *AssignmentBackend) MarkAssignmentReady(fence *runnerprotocol.AssignmentFence) error {
@@ -772,7 +789,14 @@ func (b *AssignmentBackend) compileAssignmentNetworkPolicy(
 	if err != nil {
 		return nil, err
 	}
-	compiled, err := networkpolicy.Compile(policy, b.manager.networkPolicyCompileOptions())
+	compileOptions, err := b.manager.networkPolicyCompileOptions(
+		assignment.EgressContext,
+		assignment.Requirements != nil && assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox Firecracker assignment egress context: %w", err)
+	}
+	compiled, err := networkpolicy.Compile(policy, compileOptions)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox Firecracker assignment network policy: %w", err)
 	}

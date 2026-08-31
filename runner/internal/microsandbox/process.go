@@ -213,7 +213,14 @@ func helperStartRequest(
 	if err != nil {
 		return nil, err
 	}
-	networkPolicy, err := translateNetworkPolicy(assignment.NetworkPolicy)
+	compileOptions, err := config.NetworkPolicy.CompileOptionsForAssignment(
+		assignment.EgressContext,
+		assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return nil, err
+	}
+	networkPolicy, err := translateNetworkPolicy(assignment.NetworkPolicy, compileOptions)
 	if err != nil {
 		return nil, err
 	}

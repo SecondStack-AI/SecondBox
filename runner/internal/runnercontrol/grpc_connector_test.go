@@ -2,7 +2,6 @@ package runnercontrol
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
@@ -23,7 +22,6 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 		"SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES": "4",
 		"SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS":        "0.0.0.0:7443",
 		"SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS":    "10.0.0.5:7443",
-		"SECONDBOX_RUNNER_EGRESS_CONTEXTS":                  "tenant-z,tenant-a",
 	} {
 		t.Setenv(name, value)
 	}
@@ -53,13 +51,7 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 			config.MaximumConcurrentWorkspaceCreates,
 		)
 	}
-	if !slices.Equal(config.SupportedEgressContexts, []string{"tenant-a", "tenant-z"}) {
-		t.Fatalf("supported egress contexts = %v", config.SupportedEgressContexts)
-	}
-
-	t.Setenv("SECONDBOX_RUNNER_EGRESS_CONTEXTS", "tenant-a,tenant-a")
-	if _, _, err := LoadRunnerProtocolConfigFromEnv(); err == nil ||
-		!strings.Contains(err.Error(), "repeats context") {
-		t.Fatalf("duplicate egress-context config error = %v", err)
+	if len(config.SupportedEgressContexts) != 0 {
+		t.Fatalf("protocol environment synthesized egress contexts = %v", config.SupportedEgressContexts)
 	}
 }

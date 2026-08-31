@@ -58,6 +58,7 @@ type MicrosandboxComposition struct {
 	MaximumDiskBytes      uint64
 	MaximumInstances      uint32
 	MaximumOperations     uint32
+	NetworkPolicy         networkpolicy.RunnerConfig
 }
 
 // LoadFromEnvironment is shared by PID 1 and deployment conformance tests. A
@@ -109,6 +110,7 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 			return Composition{}, errors.Join(err, connector.Close())
 		}
 		composition.Microsandbox = &microsandbox
+		composition.Protocol.SupportedEgressContexts = microsandbox.NetworkPolicy.ContextNames()
 		composition.WorkspaceTemplateCapacityBytes = templateBytes
 		return composition, nil
 	}
@@ -118,6 +120,7 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 			return Composition{}, errors.Join(err, connector.Close())
 		}
 		composition.GVisor = &gvisor
+		composition.Protocol.SupportedEgressContexts = gvisor.NetworkPolicy.ContextNames()
 		composition.WorkspaceTemplateCapacityBytes = templateBytes
 		return composition, nil
 	}
@@ -253,6 +256,10 @@ func loadMicrosandboxComposition() (MicrosandboxComposition, int64, error) {
 	if err != nil {
 		return MicrosandboxComposition{}, 0, err
 	}
+	networkPolicyConfig, err := networkpolicy.LoadRunnerConfigFromEnvironment()
+	if err != nil {
+		return MicrosandboxComposition{}, 0, err
+	}
 	return MicrosandboxComposition{
 		HelperExecutable:      values["SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE"],
 		LibkrunfwPath:         values["SECONDBOX_MICROSANDBOX_LIBKRUNFW_PATH"],
@@ -262,5 +269,6 @@ func loadMicrosandboxComposition() (MicrosandboxComposition, int64, error) {
 		MaterializationDigest: digest,
 		MaximumVCPUs:          uint32(vcpus), MaximumMemoryBytes: memory, MaximumDiskBytes: disk,
 		MaximumInstances: uint32(instances), MaximumOperations: uint32(operations),
+		NetworkPolicy: networkPolicyConfig,
 	}, int64(template), nil
 }

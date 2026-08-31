@@ -30,6 +30,7 @@ func newMicrosandboxAssignmentBackend(
 		MaximumDiskBytes:      settings.MaximumDiskBytes,
 		MaximumInstances:      settings.MaximumInstances,
 		MaximumOperations:     settings.MaximumOperations,
+		NetworkPolicy:         settings.NetworkPolicy,
 		WorkspaceStore:        workspaceStore,
 	})
 	if err != nil {
