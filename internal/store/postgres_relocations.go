@@ -155,6 +155,7 @@ func (store *PostgresControlPlaneStore) RelocateSandbox(
 		spec,
 		workspace.HomeRunnerID,
 		input.TargetRunnerID,
+		locked.EgressContext,
 	)
 	if err != nil {
 		return contracts.Operation{}, err
@@ -258,12 +259,18 @@ func selectWorkspaceRelocationTarget(
 	spec contracts.ProfileRevisionSpec,
 	sourceRunnerID string,
 	exactRunnerID string,
+	egressContexts ...*string,
 ) (string, error) {
+	var egressContext *string
+	if len(egressContexts) != 0 {
+		egressContext = egressContexts[0]
+	}
 	return selectRunnerForPlacement(ctx, tx, spec, runnerPlacementOptions{
 		exactRunnerID:            exactRunnerID,
 		excludedRunnerID:         sourceRunnerID,
 		requireWorkspaceTransfer: true,
 		unavailable:              ports.ErrRelocationTargetUnavailable,
 		errorPrefix:              "SecondBox Workspace relocation target",
+		requiredEgressContext:    egressContext,
 	})
 }

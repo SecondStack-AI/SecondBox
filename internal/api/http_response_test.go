@@ -103,6 +103,17 @@ func TestTenantEgressContextRequiredIsTypedAndNotRetryable(t *testing.T) {
 	}
 }
 
+func TestEgressContextUnavailableIsTypedAndRetryable(t *testing.T) {
+	status, code, title, retryable := classifyError(ports.ErrEgressContextUnavailable)
+	if status != http.StatusServiceUnavailable || code != "egress_context_unavailable" ||
+		title != "Sandbox egress context is unavailable" || !retryable {
+		t.Fatalf(
+			"egress-context availability classification = %d %q %q retryable=%t",
+			status, code, title, retryable,
+		)
+	}
+}
+
 func TestPrefixedInternalErrorIsGenericRetryableAndCorrelated(t *testing.T) {
 	var logs bytes.Buffer
 	apiHandler := &handler{

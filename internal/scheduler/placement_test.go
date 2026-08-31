@@ -96,6 +96,93 @@ func TestSelectRunnerRejectsUnavailablePool(t *testing.T) {
 	}
 }
 
+func TestSelectRunnerRequiresExactPinnedEgressContext(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	required := "tenant-blue"
+	requirements := Requirements{
+		PoolName: "general", Architecture: "amd64", EgressContext: &required,
+		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
+		GuestProtocolGeneration:  1,
+		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
+		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+	}
+	base := RunnerSnapshot{
+		PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
+	}
+	unsupported := base
+	unsupported.ID = "runner-unsupported"
+	unsupported.SupportedEgressContexts = []string{"tenant-green"}
+	if _, err := SelectRunner(
+		requirements, []RunnerSnapshot{unsupported}, now, 30*time.Second,
+	); !errors.Is(err, ErrEgressContextUnavailable) {
+		t.Fatalf("context-incompatible selection error = %v, want ErrEgressContextUnavailable", err)
+	}
+	supported := base
+	supported.ID = "runner-supported"
+	supported.SupportedEgressContexts = []string{"tenant-green", required}
+	selected, err := SelectRunner(
+		requirements, []RunnerSnapshot{unsupported, supported}, now, 30*time.Second,
+	)
+	if err != nil || selected.ID != supported.ID {
+		t.Fatalf("context-compatible selection = %q, %v; want %q", selected.ID, err, supported.ID)
+	}
+}
+
+func TestSelectRunnerDoesNotPlaceOnDrainingContextCompatibleRunner(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	required := "tenant-blue"
+	requirements := Requirements{
+		PoolName: "general", Architecture: "amd64", EgressContext: &required,
+		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
+		GuestProtocolGeneration:  1,
+		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
+		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+	}
+	base := RunnerSnapshot{
+		PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
+	}
+	draining := base
+	draining.ID = "runner-draining"
+	draining.DrainPhase = DrainPhaseDraining
+	draining.SupportedEgressContexts = []string{required}
+	unsupported := base
+	unsupported.ID = "runner-active-unsupported"
+	unsupported.SupportedEgressContexts = []string{"tenant-green"}
+	if _, err := SelectRunner(
+		requirements, []RunnerSnapshot{draining, unsupported}, now, 30*time.Second,
+	); !errors.Is(err, ErrEgressContextUnavailable) {
+		t.Fatalf("selection error = %v, want active context availability failure", err)
+	}
+}
+
+func TestSelectRunnerWithNoPinnedContextDoesNotRequireAdvertisement(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 30, 0, 0, time.UTC)
+	requirements := Requirements{
+		PoolName: "general", Architecture: "amd64",
+		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
+		GuestProtocolGeneration:  1,
+		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
+		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+	}
+	runner := RunnerSnapshot{
+		ID: "runner-isolated", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
+	}
+	if selected, err := SelectRunner(
+		requirements, []RunnerSnapshot{runner}, now, 30*time.Second,
+	); err != nil || selected.ID != runner.ID {
+		t.Fatalf("context-free selection = %q, %v; want %q", selected.ID, err, runner.ID)
+	}
+}
+
 func TestSelectRunnerRejectsMissingExactMaterialization(t *testing.T) {
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{

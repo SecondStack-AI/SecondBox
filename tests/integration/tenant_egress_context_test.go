@@ -31,6 +31,9 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstContext := "secondstack-staging"
+	secondContext := "secondstack-development"
+	setFixtureRunnerEgressContexts(t, firstContext, secondContext)
 
 	if _, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "missing-egress-context",
@@ -40,7 +43,6 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 	}
 	assertNoSandboxIntent(t, project.ID, account.ID)
 
-	firstContext := "secondstack-staging"
 	tenant, replayed, err := controlPlane.UpdateTenantEgressContext(
 		t.Context(), admin, project.ID, "set-staging-context", 1,
 		contracts.UpdateTenantEgressContextRequest{EgressContext: &firstContext},
@@ -59,7 +61,6 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 		t.Fatalf("first Sandbox egress context = %#v", first.EgressContext)
 	}
 
-	secondContext := "secondstack-development"
 	tenant, _, err = controlPlane.UpdateTenantEgressContext(
 		t.Context(), admin, project.ID, "set-development-context", tenant.Revision,
 		contracts.UpdateTenantEgressContextRequest{EgressContext: &secondContext},
@@ -124,6 +125,20 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 		if !equalOptionalString(recovered.EgressContext, expected.context) {
 			t.Fatalf("recovered Sandbox %s context = %#v, want %#v", expected.id, recovered.EgressContext, expected.context)
 		}
+	}
+}
+
+func setFixtureRunnerEgressContexts(t *testing.T, contextNames ...string) {
+	t.Helper()
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.runners
+		SET supported_egress_contexts_json=to_jsonb($1::text[])`, contextNames); err != nil {
+		t.Fatal(err)
 	}
 }
 

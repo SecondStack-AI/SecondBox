@@ -23,6 +23,12 @@ func TestRelocateSandboxAdmitsOnlyStoppedSnapshotFreeWorkspaceToCompatibleRunner
 		t.Fatal(err)
 	}
 	seedWorkspaceRelocationTarget(t, store, "runner-relocation-target", "ready", now)
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.runners
+		SET supported_egress_contexts_json='["secondstack-staging"]'
+		WHERE id='runner-relocation-target'`); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("happy path", func(t *testing.T) {
 		workspaceID, sandboxID := seedLocalWorkspace(t, store, "relocation-happy", now)
@@ -115,6 +121,21 @@ func TestRelocateSandboxAdmitsOnlyStoppedSnapshotFreeWorkspaceToCompatibleRunner
 			sandboxID, "incompatible", "runner-relocation-incompatible", now,
 		)); !errors.Is(err, ports.ErrRelocationTargetUnavailable) {
 			t.Fatalf("incompatible target relocation error = %v", err)
+		}
+	})
+
+	t.Run("target missing pinned egress context", func(t *testing.T) {
+		_, sandboxID := seedLocalWorkspace(t, store, "relocation-context", now)
+		if _, err := store.pool.Exec(t.Context(), `
+			UPDATE secondbox.sandboxes SET egress_context='secondstack-staging' WHERE id=$1`, sandboxID,
+		); err != nil {
+			t.Fatal(err)
+		}
+		seedWorkspaceRelocationTarget(t, store, "runner-relocation-wrong-context", "ready", now)
+		if _, err := store.RelocateSandbox(t.Context(), workspaceRelocationInput(
+			sandboxID, "context", "runner-relocation-wrong-context", now,
+		)); !errors.Is(err, ports.ErrEgressContextUnavailable) {
+			t.Fatalf("context-incompatible target relocation error = %v", err)
 		}
 	})
 }

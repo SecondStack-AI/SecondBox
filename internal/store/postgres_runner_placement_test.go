@@ -527,6 +527,7 @@ func (fixture placementScanFixture) Scan(destinations ...any) error {
 	*(destinations[9].(*[]byte)) = []byte(`{}`)
 	*(destinations[10].(*[]byte)) = []byte(`{}`)
 	*(destinations[11].(*[]byte)) = []byte(fixture.cacheJSON)
+	*(destinations[12].(*[]byte)) = []byte(`[]`)
 	return nil
 }
 

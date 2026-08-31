@@ -1023,6 +1023,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "tenant_suspended", "Tenant is suspended", false
 	case errors.Is(err, ports.ErrTenantEgressContextRequired):
 		return http.StatusConflict, "tenant_egress_context_required", "Profile requires a Tenant egress context", false
+	case errors.Is(err, ports.ErrEgressContextUnavailable):
+		return http.StatusServiceUnavailable, "egress_context_unavailable", "Sandbox egress context is unavailable", true
 	case errors.Is(err, ports.ErrGrantEscalationDenied):
 		return http.StatusForbidden, "grant_escalation_denied", "Requested grant exceeds the Tenant ceiling", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):

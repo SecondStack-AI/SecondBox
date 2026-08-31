@@ -414,6 +414,7 @@ type startPlan struct {
 	profileRevisionID string
 	operationID       string
 	requestID         string
+	egressContext     *string
 	spec              contracts.ProfileRevisionSpec
 }
 
@@ -481,14 +482,15 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		},
 		ProfileRevisionId: plan.profileRevisionID,
 		Requirements: &runnerv1.ProfileRequirements{
-			VcpuCount:            uint32(plan.spec.Resources.VCPUCount),
-			MemoryBytes:          uint64(plan.spec.Resources.MemoryBytes),
-			DiskBytes:            uint64(plan.spec.Resources.WorkspaceBytes),
-			Architecture:         plan.spec.Architecture,
-			RequiredCapabilities: requiredCapabilities,
-			StartupMode:          plan.spec.Startup.Mode,
-			MaximumOperationMs:   uint64(plan.spec.Execution.MaximumDeadlineMilliseconds),
-			MaximumOutputBytes:   uint64(plan.spec.Execution.MaximumBufferedOutputBytes),
+			VcpuCount:                   uint32(plan.spec.Resources.VCPUCount),
+			MemoryBytes:                 uint64(plan.spec.Resources.MemoryBytes),
+			DiskBytes:                   uint64(plan.spec.Resources.WorkspaceBytes),
+			Architecture:                plan.spec.Architecture,
+			RequiredCapabilities:        requiredCapabilities,
+			StartupMode:                 plan.spec.Startup.Mode,
+			MaximumOperationMs:          uint64(plan.spec.Execution.MaximumDeadlineMilliseconds),
+			MaximumOutputBytes:          uint64(plan.spec.Execution.MaximumBufferedOutputBytes),
+			RequiresTenantEgressContext: *plan.spec.Network.RequiresTenantEgressContext,
 		},
 		Assets:         assets,
 		WorkspaceId:    plan.workspaceID,
@@ -498,6 +500,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			SandboxGeneration: uint64(plan.generation),
 		},
 		NetworkPolicy: networkPolicy,
+	}
+	if plan.egressContext != nil {
+		assignmentCommand.EgressContext = *plan.egressContext
 	}
 	planReadyAt, err := broker.observeAtOrAfter(effectStartedAt)
 	if err != nil {
@@ -511,6 +516,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		Requirements: scheduler.Requirements{
 			PoolName:     plan.spec.Pool,
 			Architecture: plan.spec.Architecture, RequiredCapabilities: placementCapabilities,
+			EgressContext: plan.egressContext,
 			Capacity: scheduler.Capacity{
 				VCPUCount:   plan.spec.Resources.VCPUCount,
 				MemoryBytes: plan.spec.Resources.MemoryBytes,
@@ -536,7 +542,8 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		if errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
 			return ports.ErrRevisionConflict
 		}
-		if errors.Is(err, scheduler.ErrHomeRunnerUnavailable) {
+		if errors.Is(err, scheduler.ErrHomeRunnerUnavailable) ||
+			errors.Is(err, scheduler.ErrEgressContextUnavailable) {
 			return broker.deferUnavailableHomeRunnerStart(
 				ctx, claim, plan.generation, nextReconcileAt.UTC(),
 			)
@@ -761,6 +768,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	var specJSON []byte
 	err := broker.pool.QueryRow(ctx, `
 		SELECT sandbox.workspace_id,sandbox.generation,sandbox.profile_revision_id,
+		       sandbox.egress_context,
 		       revision.spec_json,workspace.mutation_id,
 		       COALESCE(operation.id,''),COALESCE(operation.request_id,'')
 		FROM secondbox.sandboxes AS sandbox
@@ -771,7 +779,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		WHERE sandbox.id=$1 AND sandbox.reconcile_owner=$2`,
 		claim.SandboxID, claim.WorkerID,
 	).Scan(
-		&plan.workspaceID, &plan.generation, &plan.profileRevisionID,
+		&plan.workspaceID, &plan.generation, &plan.profileRevisionID, &plan.egressContext,
 		&specJSON, &plan.mutationID, &plan.operationID, &plan.requestID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -782,6 +790,19 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	}
 	if err := json.Unmarshal(specJSON, &plan.spec); err != nil {
 		return startPlan{}, fmt.Errorf("SecondBox lifecycle start Profile decoding failed: %w", err)
+	}
+	if plan.spec.Network.RequiresTenantEgressContext == nil {
+		return startPlan{}, errors.New("SecondBox lifecycle start Profile egress-context requirement is absent")
+	}
+	if *plan.spec.Network.RequiresTenantEgressContext {
+		if plan.egressContext == nil {
+			return startPlan{}, errors.New("SecondBox lifecycle start required Sandbox egress-context pin is absent")
+		}
+		if err := contracts.ValidateEgressContextName(*plan.egressContext); err != nil {
+			return startPlan{}, fmt.Errorf("SecondBox lifecycle start Sandbox egress context is invalid: %w", err)
+		}
+	} else if plan.egressContext != nil {
+		return startPlan{}, errors.New("SecondBox lifecycle start isolated Sandbox has an unexpected egress-context pin")
 	}
 	if plan.operationID == "" {
 		plan.operationID = stableEffectID(

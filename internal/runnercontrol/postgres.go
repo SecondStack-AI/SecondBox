@@ -375,6 +375,13 @@ func (store *PostgresStateStore) RecordRegistration(
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner capabilities encoding: %w", err)
 	}
+	if err := validateSupportedEgressContexts(registration.SupportedEgressContexts); err != nil {
+		return false, err
+	}
+	egressContextsJSON, err := json.Marshal(registration.SupportedEgressContexts)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox runner egress-context encoding: %w", err)
+	}
 	allocatableJSON, err := encodeProtocolCapacity(registration.Allocatable)
 	if err != nil {
 		return false, err
@@ -472,6 +479,7 @@ func (store *PostgresStateStore) RecordRegistration(
 			artifact_cache_json=$12,sandbox_start_sample_count=$13,
 			sandbox_start_p95_milliseconds=$14,last_seen_at=$15,
 			data_plane_address=$17,backend_kind=$18,
+			supported_egress_contexts_json=$19,
 			revision=revision+1,updated_at=$15
 		WHERE id=$1 AND pool_name=$2 AND active_connection_id=$16`,
 		registration.RunnerId, registration.RunnerPoolId, architecturesJSON, capabilitiesJSON,
@@ -480,7 +488,7 @@ func (store *PostgresStateStore) RecordRegistration(
 		registration.Capabilities.GuestProtocolGenerations.Maximum,
 		registration.SoftwareVersion, registration.Sequence,
 		reservedJSON, cacheJSON, startCount, startP95Milliseconds,
-		now.UTC(), registration.ConnectionId, dataPlaneEndpoint, backendKind,
+		now.UTC(), registration.ConnectionId, dataPlaneEndpoint, backendKind, egressContextsJSON,
 	)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner Registration update: %w", err)
@@ -651,7 +659,7 @@ func reconcileRunnerActiveAssignments(
 		reportedByID[summary.AssignmentId] = summary
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT id,sandbox_id,instance_id,generation,fencing_token
+		SELECT id,sandbox_id,instance_id,generation,fencing_token,egress_context
 		FROM secondbox.assignments
 		WHERE runner_id=$1 AND state='ready'
 		ORDER BY id
@@ -662,11 +670,12 @@ func reconcileRunnerActiveAssignments(
 		return fmt.Errorf("SecondBox runner Heartbeat active Assignment lookup: %w", err)
 	}
 	type activeAssignment struct {
-		id           string
-		sandboxID    string
-		instanceID   string
-		generation   int64
-		fencingToken []byte
+		id            string
+		sandboxID     string
+		instanceID    string
+		generation    int64
+		fencingToken  []byte
+		egressContext *string
 	}
 	missing := make([]activeAssignment, 0)
 	for rows.Next() {
@@ -677,16 +686,22 @@ func reconcileRunnerActiveAssignments(
 			&assignment.instanceID,
 			&assignment.generation,
 			&assignment.fencingToken,
+			&assignment.egressContext,
 		); err != nil {
 			rows.Close()
 			return fmt.Errorf("SecondBox runner Heartbeat active Assignment scan: %w", err)
 		}
 		summary, found := reportedByID[assignment.id]
 		if found {
+			reportedEgressContextMatches := assignment.egressContext == nil && summary.EgressContext == ""
+			if assignment.egressContext != nil {
+				reportedEgressContextMatches = summary.EgressContext == *assignment.egressContext
+			}
 			if summary.SandboxId != assignment.sandboxID ||
 				summary.InstanceId != assignment.instanceID ||
 				summary.SandboxGeneration != uint64(assignment.generation) ||
-				!bytes.Equal(summary.FencingToken, assignment.fencingToken) {
+				!bytes.Equal(summary.FencingToken, assignment.fencingToken) ||
+				!reportedEgressContextMatches {
 				rows.Close()
 				return errors.New("SecondBox runner Heartbeat active Assignment evidence conflicts with durable authority")
 			}

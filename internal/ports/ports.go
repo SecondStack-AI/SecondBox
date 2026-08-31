@@ -23,6 +23,7 @@ var (
 	ErrResourceExpired             = errors.New("SecondBox management resource is expired")
 	ErrTenantSuspended             = errors.New("SecondBox Tenant is suspended")
 	ErrTenantEgressContextRequired = errors.New("SecondBox Profile requires a Tenant egress context")
+	ErrEgressContextUnavailable    = errors.New("SecondBox Sandbox egress context is unavailable")
 	ErrGrantEscalationDenied       = errors.New("SecondBox management grant exceeds its Tenant ceiling")
 	ErrInvalidRequest              = errors.New("SecondBox request is invalid")
 	ErrProfileNotFound             = errors.New("SecondBox Profile not found")

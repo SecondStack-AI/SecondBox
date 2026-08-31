@@ -402,7 +402,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 	homeRunnerID := ""
 	if input.SourceSnapshotID == "" {
-		homeRunnerID, err = selectInitialHomeRunner(ctx, tx, profile.CurrentRevision.Spec)
+		homeRunnerID, err = selectInitialHomeRunner(ctx, tx, profile.CurrentRevision.Spec, tenantEgressContext)
 	} else {
 		homeRunnerID, err = selectSnapshotCloneHomeRunner(
 			ctx,
@@ -410,6 +410,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			input.Principal,
 			input.SourceSnapshotID,
 			profile.CurrentRevision.Spec,
+			tenantEgressContext,
 			input.Sandbox.CreatedAt,
 		)
 	}
@@ -1249,10 +1250,16 @@ func selectInitialHomeRunner(
 	ctx context.Context,
 	tx pgx.Tx,
 	spec contracts.ProfileRevisionSpec,
+	egressContexts ...*string,
 ) (string, error) {
+	var egressContext *string
+	if len(egressContexts) != 0 {
+		egressContext = egressContexts[0]
+	}
 	return selectRunnerForPlacement(ctx, tx, spec, runnerPlacementOptions{
-		unavailable: ports.ErrHomeRunnerUnavailable,
-		errorPrefix: "SecondBox initial home Runner",
+		unavailable:           ports.ErrHomeRunnerUnavailable,
+		errorPrefix:           "SecondBox initial home Runner",
+		requiredEgressContext: egressContext,
 	})
 }
 
@@ -1270,6 +1277,7 @@ func selectSnapshotCloneHomeRunner(
 	principal contracts.Principal,
 	snapshotID string,
 	spec contracts.ProfileRevisionSpec,
+	egressContext *string,
 	now time.Time,
 ) (string, error) {
 	var (
@@ -1294,9 +1302,10 @@ func selectSnapshotCloneHomeRunner(
 		return "", ports.ErrSnapshotUnavailable
 	}
 	return selectRunnerForPlacement(ctx, tx, spec, runnerPlacementOptions{
-		exactRunnerID: homeRunnerID,
-		unavailable:   ports.ErrHomeRunnerUnavailable,
-		errorPrefix:   "SecondBox Snapshot home Runner",
+		exactRunnerID:         homeRunnerID,
+		unavailable:           ports.ErrHomeRunnerUnavailable,
+		errorPrefix:           "SecondBox Snapshot home Runner",
+		requiredEgressContext: egressContext,
 	})
 }
 
