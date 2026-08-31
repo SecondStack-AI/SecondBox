@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -65,6 +66,62 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 		t.Fatal(err)
 	}
 
+	for _, credential := range []string{controller.BearerToken, application.BearerToken} {
+		request, err := http.NewRequestWithContext(
+			t.Context(), http.MethodPut,
+			server.URL+"/v1/tenants/"+string(tenant.Ref)+"/egress-context",
+			strings.NewReader(`{"egressContext":"delegated-override"}`),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+credential)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "delegated-egress-context-override")
+		request.Header.Set("If-Match", fmt.Sprintf(`"revision-%d"`, tenant.Revision))
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var problem secondboxclient.Problem
+		if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+			response.Body.Close()
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized || problem.Code != secondboxclient.ProblemCodeAuthenticationFailed {
+			t.Fatalf("delegated Tenant egress-context update = %d %#v", response.StatusCode, problem)
+		}
+	}
+
+	for _, delegated := range []struct {
+		path, token, body string
+	}{
+		{"/v1/subjects", controller.BearerToken, `{"ref":"delegated-context-subject","quota":{"maxSandboxes":1,"maxActiveInstances":1,"maxVcpuCount":1,"maxMemoryBytes":1073741824,"maxSnapshots":1,"maxPortSessions":1,"maxConcurrentOperations":1},"metadata":{},"egressContext":"forbidden"}`},
+		{"/v1/sandboxes", application.BearerToken, `{"profile":"coding","metadata":{},"egressContext":"forbidden"}`},
+	} {
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+delegated.path, strings.NewReader(delegated.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+delegated.token)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "delegated-schema-context-override")
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var problem secondboxclient.Problem
+		if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+			response.Body.Close()
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest || problem.Code != secondboxclient.ProblemCodeInvalidRequest {
+			t.Fatalf("delegated request accepted egressContext on %s: %d %#v", delegated.path, response.StatusCode, problem)
+		}
+	}
+
 	type mutation struct {
 		name, method, path, token string
 		body                      any
@@ -72,6 +129,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 	}
 	mutations := []mutation{
 		{"tenant create", http.MethodPost, "/v1/tenants", testPlatformToken, tenantRequest, 0},
+		{"tenant egress context", http.MethodPut, "/v1/tenants/" + string(tenant.Ref) + "/egress-context", testPlatformToken, secondboxclient.UpdateTenantEgressContextRequest{}, tenant.Revision},
 		{"tenant action", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + ":suspend", testPlatformToken, nil, tenant.Revision},
 		{"controller create", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities", testPlatformToken, secondboxclient.CreateTenantControllerAuthorityRequest{ExpiresAt: expiresAt, Metadata: map[string]string{}}, 0},
 		{"controller rotate", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities/" + controller.Authority.ID + ":rotate", testPlatformToken, nil, controller.Authority.Revision},

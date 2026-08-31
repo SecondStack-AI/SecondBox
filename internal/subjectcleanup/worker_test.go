@@ -174,11 +174,11 @@ func TestCleanupCancelsActiveWorkAndContinuesPartialSandboxDeletion(t *testing.T
 			($7,$1,$2,$8,'runner-deleted','deleted',1024,1,'','','','',1,1,'','{}',$4,$4);
 		INSERT INTO secondbox.sandboxes (
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
-			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			generation,workspace_id,current_instance_id,egress_context,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
 		) VALUES
-			($6,$1,$2,'profile','revision','ready','running',3,$5,'','{}','{}',1,$4,$4),
-			($8,$1,$2,'profile','revision','deleted','deleted',1,$7,'','{}','{}',1,$4,$4);
+			($6,$1,$2,'profile','revision','ready','running',3,$5,'','secondstack-staging','{}','{}',1,$4,$4),
+			($8,$1,$2,'profile','revision','deleted','deleted',1,$7,'',NULL,'{}','{}',1,$4,$4);
 		INSERT INTO secondbox.operations (
 			id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,
 			request_metadata_json,error_code,error_message,retryable,created_at,started_at,updated_at
@@ -223,11 +223,12 @@ func TestCleanupCancelsActiveWorkAndContinuesPartialSandboxDeletion(t *testing.T
 		t.Fatalf("concurrent Operation states active=%q delete=%q", activeState, deleteState)
 	}
 	var desiredState string
-	if err := pool.QueryRow(t.Context(), `SELECT desired_state FROM secondbox.sandboxes WHERE id=$1`, activeSandbox).Scan(&desiredState); err != nil {
+	var egressContext *string
+	if err := pool.QueryRow(t.Context(), `SELECT desired_state,egress_context FROM secondbox.sandboxes WHERE id=$1`, activeSandbox).Scan(&desiredState, &egressContext); err != nil {
 		t.Fatal(err)
 	}
-	if desiredState != "deleted" {
-		t.Fatalf("remaining Sandbox desired state = %q", desiredState)
+	if desiredState != "deleted" || egressContext == nil || *egressContext != "secondstack-staging" {
+		t.Fatalf("remaining Sandbox desired state = %q egress context = %v", desiredState, egressContext)
 	}
 	var cleanupDeletes int64
 	if err := pool.QueryRow(t.Context(), `

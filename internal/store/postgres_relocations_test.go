@@ -26,6 +26,11 @@ func TestRelocateSandboxAdmitsOnlyStoppedSnapshotFreeWorkspaceToCompatibleRunner
 
 	t.Run("happy path", func(t *testing.T) {
 		workspaceID, sandboxID := seedLocalWorkspace(t, store, "relocation-happy", now)
+		if _, err := store.pool.Exec(t.Context(), `
+			UPDATE secondbox.sandboxes SET egress_context='secondstack-staging' WHERE id=$1`, sandboxID,
+		); err != nil {
+			t.Fatal(err)
+		}
 		operation, err := store.RelocateSandbox(t.Context(), workspaceRelocationInput(
 			sandboxID, "happy", "runner-relocation-target", now,
 		))
@@ -36,21 +41,26 @@ func TestRelocateSandboxAdmitsOnlyStoppedSnapshotFreeWorkspaceToCompatibleRunner
 			t.Fatalf("relocation Operation = %#v", operation)
 		}
 		var homeRunnerID, mutationState, relocationState, targetRunnerID string
+		var sandboxContext, relocationContext *string
 		if err := store.pool.QueryRow(t.Context(), `
 			SELECT workspace.home_runner_id,workspace.mutation_state,
-			       relocation.state,relocation.target_runner_id
+			       relocation.state,relocation.target_runner_id,
+			       sandbox.egress_context,relocation.egress_context
 			FROM secondbox.workspaces AS workspace
 			JOIN secondbox.workspace_relocations AS relocation
 			  ON relocation.workspace_id=workspace.id
+			JOIN secondbox.sandboxes AS sandbox ON sandbox.id=relocation.sandbox_id
 			WHERE workspace.id=$1`, workspaceID,
-		).Scan(&homeRunnerID, &mutationState, &relocationState, &targetRunnerID); err != nil {
+		).Scan(&homeRunnerID, &mutationState, &relocationState, &targetRunnerID, &sandboxContext, &relocationContext); err != nil {
 			t.Fatal(err)
 		}
 		if homeRunnerID != "runner-home" || mutationState != "queued" ||
-			relocationState != "queued" || targetRunnerID != "runner-relocation-target" {
+			relocationState != "queued" || targetRunnerID != "runner-relocation-target" ||
+			sandboxContext == nil || relocationContext == nil ||
+			*sandboxContext != "secondstack-staging" || *relocationContext != "secondstack-staging" {
 			t.Fatalf(
-				"relocation authority home=%q mutation=%q state=%q target=%q",
-				homeRunnerID, mutationState, relocationState, targetRunnerID,
+				"relocation authority home=%q mutation=%q state=%q target=%q sandboxContext=%v relocationContext=%v",
+				homeRunnerID, mutationState, relocationState, targetRunnerID, sandboxContext, relocationContext,
 			)
 		}
 	})
@@ -147,7 +157,7 @@ func seedWorkspaceRelocationTarget(
 			$1,'pool-local',$1,$2,'["amd64"]',
 			'["compute","local-workspace","storage","workspace-relocation"]',
 			'{"VCPUCount":8000,"MemoryBytes":17179869184,"DiskBytes":17179869184,"Instances":8,"Operations":32}',
-			'["2"]',1,1,'test','connection-' || $1,0,'active','{}','` + placementTestCacheJSON + `','firecracker',0,0,$3,1,$3,$3
+			'["2"]',1,1,'test','connection-' || $1,0,'active','{}','`+placementTestCacheJSON+`','firecracker',0,0,$3,1,$3,$3
 		) ON CONFLICT (id) DO UPDATE SET state=EXCLUDED.state,
 			active_connection_id=EXCLUDED.active_connection_id,
 			capabilities_json=EXCLUDED.capabilities_json,
