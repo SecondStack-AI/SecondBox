@@ -227,7 +227,7 @@ if [[ "$phase" == install ]]; then
       exit 1
     fi
     grep -Fq 'in-place updates from v0.7.2 are unsupported' "$qualification_root/update-check-${mode}.log"
-    grep -Fq 'retire every v0.7.2 Sandbox' "$qualification_root/update-check-${mode}.log"
+    grep -Fq 'retire every pre-v0.8.0 Sandbox' "$qualification_root/update-check-${mode}.log"
     grep -Fq 'uninstall --purge' "$qualification_root/update-check-${mode}.log"
     [[ "$(sha256sum "$plan" | awk '{print $1}')" == "$source_plan_digest" && "$(sha256sum "$receipt" | awk '{print $1}')" == "$source_receipt_digest" ]] || { echo 'v0.7.2 update refusal mutated the source operation' >&2; exit 1; }
 
