@@ -1,12 +1,16 @@
 package firecracker
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -15,6 +19,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
@@ -101,6 +106,293 @@ func TestSmokeBootFirecracker(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("microVM did not stay running")
+}
+
+func TestSmokeTenantEgressContextIsolation(t *testing.T) {
+	if os.Getenv("SECONDBOX_RUNNER_QUALIFY_TENANT_EGRESS") != "1" {
+		t.Skip("set SECONDBOX_RUNNER_QUALIFY_TENANT_EGRESS=1 to qualify tenant egress contexts")
+	}
+	if os.Geteuid() != 0 {
+		t.Fatal("tenant egress context qualification must run in the isolated root-mapped network namespace")
+	}
+	workDir := shortSmokeDir(t)
+	contextPath := filepath.Join(workDir, "egress-contexts.json")
+	contextDocument := `{"schemaVersion":"secondbox.runner-egress-contexts/v1","contexts":[{"name":"installation-a","gateways":[{"logicalName":"agent-gateway.secondbox.internal","address":"172.30.0.10"}]},{"name":"installation-b","gateways":[{"logicalName":"agent-gateway.secondbox.internal","address":"172.30.0.11"}]}]}`
+	if err := os.WriteFile(contextPath, []byte(contextDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	egressContexts, err := networkpolicy.LoadEgressContextConfig(contextPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nftPath, err := exec.LookPath("nft")
+	if err != nil {
+		t.Fatalf("tenant egress context qualification requires nft: %v", err)
+	}
+	cfg := &config.Config{
+		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
+		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
+		RunnerWorkspaceRoot:              filepath.Join(workDir, "durable-workspaces"),
+		MicroVMRunDir:                    filepath.Join(workDir, "run"),
+		MicroVMLogDir:                    filepath.Join(workDir, "logs"),
+		MicroVMSnapshotTemplateCacheRoot: filepath.Join(workDir, "snapshot-templates"),
+		MicroVMKernelArgs:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
+		MicroVMMemoryMiB:                 256,
+		MicroVMVCPUs:                     1,
+		MicroVMWorkspaceSizeMiB:          64,
+		MicroVMAllowUnjailed:             true,
+		MicroVMBridgeName:                "sbctx0",
+		MicroVMBridgeCIDR:                "172.30.0.1/24",
+		MicroVMGuestIP:                   "172.30.0.2",
+		MicroVMTapPrefix:                 "sbcx",
+		NetworkPolicyNFTPath:             nftPath,
+		NetworkPolicyMaximumDNSPins:      16,
+		NetworkPolicyMaximumDNSTTL:       time.Minute,
+		NetworkPolicyRunnerAddresses:     []netip.Addr{netip.MustParseAddr("172.30.0.1")},
+		NetworkPolicyManagementCIDRs:     []netip.Prefix{netip.MustParsePrefix("172.30.0.0/24")},
+		NetworkPolicyEgressContexts:      egressContexts,
+		NetworkPolicyDNSUpstream:         netip.MustParseAddrPort("1.1.1.1:53"),
+	}
+
+	ctx := context.Background()
+	if output, err := exec.Command("sysctl", "-q", "-w", "net.ipv4.ip_forward=1").CombinedOutput(); err != nil {
+		t.Fatalf("enable forwarding in isolated qualification namespace: %v: %s", err, output)
+	}
+	networkConfigurer := IPTapConfigurer{}
+	if err := networkConfigurer.ensureBridge(ctx, cfg.MicroVMBridgeName, cfg.MicroVMBridgeCIDR); err != nil {
+		t.Fatalf("create isolated qualification bridge: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = exec.Command("ip", "link", "delete", cfg.MicroVMBridgeName).CombinedOutput()
+	})
+	stopA := startContextProxyFixture(t, cfg.MicroVMBridgeName, "sbcxha", "sbcxpa", "172.30.0.10/24", "installation-a")
+	defer stopA()
+	stopB := startContextProxyFixture(t, cfg.MicroVMBridgeName, "sbcxhb", "sbcxpb", "172.30.0.11/24", "installation-b")
+	defer stopB()
+
+	manager, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new tenant egress qualification manager: %v", err)
+	}
+	workspaceStore, err := workspacestore.New(ctx, workspacestore.Config{
+		Root: cfg.RunnerWorkspaceRoot, TemplateCapacityBytes: 64 << 20,
+		FormatterKind: workspacestore.FormatterMke2fs,
+	})
+	if err != nil {
+		t.Fatalf("new tenant egress qualification WorkspaceStore: %v", err)
+	}
+	if err := manager.SetWorkspaceStore(workspaceStore); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(context.Background())
+
+	profilePolicy := networkpolicy.Policy{Mode: networkpolicy.ModeAllowList, Destinations: []networkpolicy.Destination{{
+		Protocol: networkpolicy.ProtocolHTTP, Domain: "agent-gateway.secondbox.internal", Port: 443,
+	}}}
+	type runningContext struct {
+		name       string
+		selectedIP string
+		otherIP    string
+		instanceID string
+		logPath    string
+	}
+	running := []runningContext{
+		{name: "installation-a", selectedIP: "172.30.0.10", otherIP: "172.30.0.11"},
+		{name: "installation-b", selectedIP: "172.30.0.11", otherIP: "172.30.0.10"},
+	}
+	for index := range running {
+		item := &running[index]
+		workspaceID := "workspace-" + item.name
+		if _, err := workspaceStore.Create(ctx, workspacestore.CreateWorkspaceRequest{
+			Mutation:      workspacestore.Mutation{OperationID: "create-" + item.name, WorkspaceID: workspaceID, FencingToken: []byte("tenant-egress-workspace-fence-000")},
+			CapacityBytes: 64 << 20,
+		}); err != nil {
+			t.Fatalf("create %s Workspace: %v", item.name, err)
+		}
+		attachment, err := workspaceStore.Open(ctx, workspaceID, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compileOptions, err := manager.networkPolicyCompileOptions(item.name, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compiled, err := networkpolicy.Compile(profilePolicy, compileOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
+			Timezone: "UTC", CompartmentID: "cmp-" + item.name,
+			WorkspaceAttachment: attachment, NetworkPolicy: compiled,
+		})
+		item.instanceID, err = manager.createAndStart(ctx, "sandbox-"+item.name, opts)
+		if err != nil {
+			_ = attachment.Close()
+			t.Fatalf("start %s microVM: %v\n%s", item.name, err, latestSmokeLog(t, workDir))
+		}
+		if instance := manager.lookup(item.instanceID); instance != nil {
+			item.logPath = instance.logPath
+		}
+		defer manager.Remove(context.Background(), item.instanceID)
+	}
+
+	for _, item := range running {
+		response, err := executeThroughInjectedProxy(ctx, manager, item.instanceID, item.selectedIP)
+		if err != nil || response.Error != "" || response.ExitCode != 0 || strings.TrimSpace(response.Stdout) != item.name {
+			t.Fatalf("%s selected proxy response=%+v error=%v\n%s", item.name, response, err, smokeLogPath(t, item.logPath))
+		}
+		blocked, blockedErr := executeThroughInjectedProxy(ctx, manager, item.instanceID, item.otherIP)
+		if blockedErr == nil && blocked.Error == "" && blocked.ExitCode == 0 {
+			t.Fatalf("%s reached other context gateway %s: %+v\n%s", item.name, item.otherIP, blocked, smokeLogPath(t, item.logPath))
+		}
+	}
+}
+
+func startContextProxyFixture(t *testing.T, bridge, hostInterface, peerInterface, cidr, responseBody string) func() {
+	t.Helper()
+	runIP := func(arguments ...string) error {
+		output, err := exec.Command("ip", arguments...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("ip %s: %w: %s", strings.Join(arguments, " "), err, output)
+		}
+		return nil
+	}
+	if err := runIP("link", "add", hostInterface, "type", "veth", "peer", "name", peerInterface); err != nil {
+		t.Fatal(err)
+	}
+	removeHostInterface := func() { _, _ = exec.Command("ip", "link", "delete", hostInterface).CombinedOutput() }
+	if err := runIP("link", "set", hostInterface, "master", bridge); err != nil {
+		removeHostInterface()
+		t.Fatal(err)
+	}
+	if err := runIP("link", "set", hostInterface, "up"); err != nil {
+		removeHostInterface()
+		t.Fatal(err)
+	}
+
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	unsharePath, err := exec.LookPath("unshare")
+	if err != nil {
+		removeHostInterface()
+		t.Fatalf("tenant egress proxy fixture requires unshare: %v", err)
+	}
+	command := exec.Command(unsharePath, "--net", "--", os.Args[0], "-test.run=^TestTenantEgressProxyFixtureProcess$")
+	command.Env = append(os.Environ(),
+		"SECONDBOX_TENANT_EGRESS_PROXY_FIXTURE=1",
+		"SECONDBOX_TENANT_EGRESS_PROXY_INTERFACE="+peerInterface,
+		"SECONDBOX_TENANT_EGRESS_PROXY_CIDR="+cidr,
+		"SECONDBOX_TENANT_EGRESS_PROXY_RESPONSE="+responseBody,
+		"SECONDBOX_TENANT_EGRESS_PROXY_READY="+readyPath,
+	)
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Start(); err != nil {
+		removeHostInterface()
+		t.Fatalf("start isolated tenant egress proxy fixture: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	failFixture := func(detail string) {
+		_ = command.Process.Kill()
+		<-done
+		removeHostInterface()
+		t.Fatalf("%s: %s", detail, output.String())
+	}
+	parentNetworkNamespace, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		failFixture("inspect qualification network namespace: " + err.Error())
+	}
+	namespaceDeadline := time.Now().Add(5 * time.Second)
+	for {
+		childNetworkNamespace, readErr := os.Readlink(fmt.Sprintf("/proc/%d/ns/net", command.Process.Pid))
+		if readErr == nil && childNetworkNamespace != parentNetworkNamespace {
+			break
+		}
+		if time.Now().After(namespaceDeadline) {
+			failFixture("isolated tenant egress proxy fixture did not enter its network namespace")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := runIP("link", "set", peerInterface, "netns", strconv.Itoa(command.Process.Pid)); err != nil {
+		failFixture(err.Error())
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			removeHostInterface()
+			t.Fatalf("isolated tenant egress proxy fixture exited before ready: %v: %s", err, output.String())
+		case <-deadline.C:
+			failFixture("timed out waiting for isolated tenant egress proxy fixture")
+		case <-ticker.C:
+		}
+	}
+	return func() {
+		_ = command.Process.Kill()
+		<-done
+		removeHostInterface()
+	}
+}
+
+func TestTenantEgressProxyFixtureProcess(t *testing.T) {
+	if os.Getenv("SECONDBOX_TENANT_EGRESS_PROXY_FIXTURE") != "1" {
+		t.Skip("tenant egress proxy fixture helper")
+	}
+	interfaceName := requiredEnv(t, "SECONDBOX_TENANT_EGRESS_PROXY_INTERFACE")
+	cidr := requiredEnv(t, "SECONDBOX_TENANT_EGRESS_PROXY_CIDR")
+	address, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interfaceDeadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := exec.Command("ip", "link", "show", interfaceName).Run(); err == nil {
+			break
+		}
+		if time.Now().After(interfaceDeadline) {
+			t.Fatalf("isolated proxy interface %q was not attached", interfaceName)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for _, arguments := range [][]string{
+		{"link", "set", "lo", "up"},
+		{"link", "set", interfaceName, "up"},
+		{"addr", "add", cidr, "dev", interfaceName},
+	} {
+		if output, err := exec.Command("ip", arguments...).CombinedOutput(); err != nil {
+			t.Fatalf("configure isolated proxy interface: %v: %s", err, output)
+		}
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort(address.Addr().String(), "443"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(os.Getenv("SECONDBOX_TENANT_EGRESS_PROXY_RESPONSE") + "\n"))
+	})}
+	if err := os.WriteFile(requiredEnv(t, "SECONDBOX_TENANT_EGRESS_PROXY_READY"), []byte("ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		t.Fatal(err)
+	}
+}
+
+func executeThroughInjectedProxy(ctx context.Context, manager *Manager, instanceID, proxyIP string) (ToolExecResponse, error) {
+	return manager.ExecuteTool(ctx, instanceID, ToolExecRequest{
+		Operation: ToolOpExec, Command: "sh",
+		Args:          []string{"-c", `if command -v curl >/dev/null 2>&1; then curl --fail --silent --show-error --connect-timeout 2 --max-time 4 http://proxy-target.invalid/; else wget -q -T 4 -O - http://proxy-target.invalid/; fi`},
+		Env:           map[string]string{"http_proxy": "http://" + proxyIP + ":443", "HTTP_PROXY": "http://" + proxyIP + ":443"},
+		TimeoutMillis: 6000,
+	})
 }
 
 func TestSmokeGeneratedImageBootsControlAndRuntime(t *testing.T) {
