@@ -383,7 +383,7 @@ Selected RunnerPools and standard Profile lineages are checked and applied after
 
 ## Recovery and replacement
 
-Replacing v0.7.2 with the tenant-aware release in place is unsupported. Quiesce every consuming application, retire every v0.7.2 Sandbox, stop the old deployment, and remove its database, Runner state, and Workspaces through the documented recreation procedure before initializing the new release. Recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes from the new contract. There is no historical Profile decoder for the required context policy, legacy assignment support, Workspace import path, or Sandbox migration operation.
+Replacing v0.7.2 with the tenant-aware release in place is unsupported. Quiesce every consuming application, retire every pre-v0.8.0 Sandbox, stop the old deployment, and remove its database, Runner state, and Workspaces through the documented recreation procedure before initializing the new release. Recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes from the new contract. There is no historical Profile decoder for the required context policy, legacy assignment support, Workspace import path, or Sandbox migration operation.
 
 The target release's `secondbox-deploy update --check` refuses every source through exactly v0.7.2 before downloading or staging target release inputs. Its error prints this recreation sequence, including the guided single-host `uninstall` and reviewed `uninstall --purge` steps. This refusal is not a migration assistant and never retires a Sandbox or deletes state on the operator's behalf.
 
