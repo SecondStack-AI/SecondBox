@@ -3,7 +3,7 @@ package deployconfig
 import (
 	"encoding/json"
 
-	"github.com/SecondStack-AI/SecondBox/runner/networkpolicycontract"
+	"github.com/SecondStack-AI/SecondBox/pkg/networkpolicycontract"
 )
 
 const runnerEgressContextConfigSchema = "secondbox.runner-egress-contexts/v1"

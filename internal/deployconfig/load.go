@@ -27,10 +27,10 @@ import (
 	controlconfig "github.com/SecondStack-AI/SecondBox/internal/config"
 	"github.com/SecondStack-AI/SecondBox/internal/runnerfeatures"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/SecondStack-AI/SecondBox/pkg/networkpolicycontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
 	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
-	"github.com/SecondStack-AI/SecondBox/runner/networkpolicycontract"
 	"github.com/pelletier/go-toml/v2"
 )
 

@@ -7,6 +7,7 @@ scripts/verify-runner-protocol-generated.sh
 scripts/verify-guest-protocol-generated.sh
 scripts/verify-microsandbox-helper-generated.sh
 scripts/verify-portdirect-mirrored.sh
+scripts/verify-network-policy-contract-mirrored.sh
 scripts/verify-sdk-generated.sh
 go test ./internal/deployconfig -run TestExampleManifestIsGeneratedFromTheRegistry -count=1
 go test ./sdk/go/secondboxclient
