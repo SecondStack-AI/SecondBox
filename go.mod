@@ -2,11 +2,9 @@ module github.com/SecondStack-AI/SecondBox
 
 go 1.25.12
 
-require github.com/SecondStack-AI/SecondBox/runner v0.0.0
-
-replace github.com/SecondStack-AI/SecondBox/runner => ./runner
-
 retract v0.7.0 // The public Go proxy cached an intermediate release-preparation commit; use v0.7.1.
+
+retract v0.8.0 // Tag created from a commit whose module graph is unresolvable downstream; use v0.8.1.
 
 require (
 	charm.land/bubbles/v2 v2.1.1
