@@ -281,12 +281,48 @@ type Runner struct {
 	Capabilities                []string         `json:"capabilities"`
 	Capacity                    map[string]int64 `json:"capacity"`
 	ProtocolVersions            []string         `json:"protocolVersions"`
+	SupportedEgressContexts     []string         `json:"supportedEgressContexts"`
 	SandboxStartSampleCount     int64            `json:"sandboxStartSampleCount"`
 	SandboxStartP95Milliseconds int64            `json:"sandboxStartP95Milliseconds"`
 	LastSeenAt                  *time.Time       `json:"lastSeenAt,omitempty"`
 	Revision                    int64            `json:"revision"`
 	CreatedAt                   time.Time        `json:"createdAt"`
 	UpdatedAt                   time.Time        `json:"updatedAt"`
+}
+
+// EgressContextPreflight is a read-only operator view of required context
+// placement and active assignment impact.
+type EgressContextPreflight struct {
+	Ready             bool                           `json:"ready"`
+	Truncated         bool                           `json:"truncated"`
+	Requirements      []EgressContextRequirement     `json:"requirements"`
+	Runners           []EgressContextRunner          `json:"runners"`
+	ActiveAssignments []EgressContextAssignmentGroup `json:"activeAssignments"`
+}
+
+type EgressContextRequirement struct {
+	TenantRef           string   `json:"tenantRef"`
+	ProfileName         string   `json:"profileName"`
+	ProfileRevisionID   string   `json:"profileRevisionId"`
+	PoolName            string   `json:"poolName"`
+	EgressContext       *string  `json:"egressContext"`
+	CompatibleRunnerIDs []string `json:"compatibleRunnerIds"`
+	Status              string   `json:"status"`
+}
+
+type EgressContextRunner struct {
+	RunnerID           string   `json:"runnerId"`
+	PoolName           string   `json:"poolName"`
+	State              string   `json:"state"`
+	Connected          bool     `json:"connected"`
+	AdvertisedContexts []string `json:"advertisedContexts"`
+}
+
+type EgressContextAssignmentGroup struct {
+	EgressContext *string `json:"egressContext"`
+	RunnerID      string  `json:"runnerId"`
+	State         string  `json:"state"`
+	Count         int64   `json:"count"`
 }
 
 // RunnerPage is one bounded stable administrative Runner traversal page.

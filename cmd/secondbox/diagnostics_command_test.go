@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-func TestDiagnosticsBundleBoundsContentAndUsesCredentialOnlyForTiming(t *testing.T) {
+func TestDiagnosticsBundleBoundsContentAndUsesCredentialOnlyForAuthorizedProbes(t *testing.T) {
 	const platformToken = "diagnostic-platform-token-at-least-24-bytes"
 	var mu sync.Mutex
 	authorizationByPath := make(map[string]string)
@@ -35,6 +35,10 @@ func TestDiagnosticsBundleBoundsContentAndUsesCredentialOnlyForTiming(t *testing
 				t.Errorf("timing ownership headers = %#v", request.Header)
 			}
 			_, _ = io.WriteString(writer, `{"windowSeconds":300,"observedAt":"2026-07-29T12:00:00Z","boot":{"count":0},"bootStages":[],"exec":{"count":0},"execSeries":[],"api":{"count":0},"apiSeries":[],"operations":[]}`)
+			return
+		}
+		if request.URL.Path == "/v1/diagnostics/egress-contexts" {
+			_, _ = io.WriteString(writer, `{"ready":true,"truncated":false,"requirements":[],"runners":[],"activeAssignments":[]}`)
 			return
 		}
 		_, _ = io.WriteString(writer, strings.Repeat("p", 64))
@@ -110,6 +114,36 @@ func TestDiagnosticsBundleBoundsContentAndUsesCredentialOnlyForTiming(t *testing
 	}
 	if authorizationByPath["/v1/timings"] != "Bearer "+platformToken {
 		t.Errorf("timing authorization = %q", authorizationByPath["/v1/timings"])
+	}
+	if authorizationByPath["/v1/diagnostics/egress-contexts"] != "Bearer "+platformToken {
+		t.Errorf("egress preflight authorization = %q", authorizationByPath["/v1/diagnostics/egress-contexts"])
+	}
+	if got := string(files["egress-context-preflight.status"]); got != "truncated\n" {
+		t.Errorf("egress preflight status = %q", got)
+	}
+}
+
+func TestEgressContextDiagnosticsIsReadOnlyPlatformProbe(t *testing.T) {
+	const body = `{"ready":false,"truncated":false,"requirements":[{"tenantRef":"tenant-a","egressContext":"customer-a","profileName":"coding","profileRevisionId":"prv_coding_4","poolName":"default","compatibleRunnerIds":[],"status":"runner_context_unavailable"}],"runners":[],"activeAssignments":[]}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/diagnostics/egress-contexts" {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer platform-token" {
+			t.Errorf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		_, _ = io.WriteString(writer, body)
+	}))
+	defer server.Close()
+
+	var output bytes.Buffer
+	if err := runEgressContextDiagnosticsCommand(
+		t.Context(), server.URL, "platform-token", nil, &output, server.Client(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != body+"\n" {
+		t.Fatalf("output = %q", got)
 	}
 }
 

@@ -218,6 +218,9 @@ var operations = map[string]OperationMetadata{
 	"reactivateTenant": {
 		OperationID: "reactivateTenant", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}:reactivate",
 	},
+	"readEgressContextPreflight": {
+		OperationID: "readEgressContextPreflight", Method: "GET", PathTemplate: "/v1/diagnostics/egress-contexts",
+	},
 	"readSandboxFile": {
 		OperationID: "readSandboxFile", Method: "GET", PathTemplate: "/v1/sandboxes/{sandboxId}/files",
 	},

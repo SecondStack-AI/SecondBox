@@ -20,7 +20,7 @@ func secondboxHelp() cliui.Help {
 			{Key: "profiles | runner-pools | runners", Value: "inspect and manage compute configuration"},
 			{Key: "files", Value: "transfer Sandbox files"},
 			{Key: "leases | ports", Value: "manage generation Leases and port sessions"},
-			{Key: "logs | timings | diagnostics", Value: "inspect bounded operational evidence"},
+			{Key: "logs | timings | diagnostics", Value: "inspect bounded operational evidence and egress-context readiness"},
 			{Key: "resources", Value: "check or apply explicit standard resources"},
 			{Key: "operation", Value: "invoke an OpenAPI operationId directly"},
 		},

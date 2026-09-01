@@ -221,8 +221,41 @@ export interface DurationPercentiles {
   readonly p99Milliseconds?: number;
 }
 
+export interface EgressContextAssignmentGroup {
+  readonly count: number;
+  readonly egressContext: EgressContextName | null;
+  readonly runnerId: RunnerID;
+  readonly state: string;
+}
+
 /** Opaque operator-selected routing context identifier. It carries no hostname, address, CIDR, Tenant reference, gateway identity, or mapping digest. */
 export type EgressContextName = string;
+
+export interface EgressContextPreflight {
+  readonly activeAssignments: readonly EgressContextAssignmentGroup[];
+  readonly ready: boolean;
+  readonly requirements: readonly EgressContextRequirement[];
+  readonly runners: readonly EgressContextRunner[];
+  readonly truncated: boolean;
+}
+
+export interface EgressContextRequirement {
+  readonly compatibleRunnerIds: readonly RunnerID[];
+  readonly egressContext: EgressContextName | null;
+  readonly poolName: ProfileName;
+  readonly profileName: ProfileName;
+  readonly profileRevisionId: OpaqueID;
+  readonly status: "ready" | "tenant_context_missing" | "runner_context_unavailable";
+  readonly tenantRef: OwnershipRef;
+}
+
+export interface EgressContextRunner {
+  readonly advertisedContexts: readonly EgressContextName[];
+  readonly connected: boolean;
+  readonly poolName: ProfileName;
+  readonly runnerId: RunnerID;
+  readonly state: string;
+}
 
 export interface ExecCancelled {
   readonly kind: "cancelled";
@@ -590,6 +623,7 @@ export interface Runner {
   readonly sandboxStartP95Milliseconds: number;
   readonly sandboxStartSampleCount: number;
   readonly state: "enrolling" | "enrolled" | "connected" | "ready" | "draining" | "drained" | "offline";
+  readonly supportedEgressContexts: readonly EgressContextName[];
   readonly updatedAt: Timestamp;
 }
 
@@ -1022,6 +1056,7 @@ export type OperationID =
   | "listTenants"
   | "pingSandbox"
   | "reactivateTenant"
+  | "readEgressContextPreflight"
   | "readSandboxFile"
   | "reconnectSandboxTerminal"
   | "releaseSandboxLease"
@@ -1107,6 +1142,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   listTenants: { method: "GET", path: "/v1/tenants" },
   pingSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:ping" },
   reactivateTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:reactivate" },
+  readEgressContextPreflight: { method: "GET", path: "/v1/diagnostics/egress-contexts" },
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },
   reconnectSandboxTerminal: { method: "GET", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
   releaseSandboxLease: { method: "DELETE", path: "/v1/leases/{leaseId}" },

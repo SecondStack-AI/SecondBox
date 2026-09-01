@@ -219,8 +219,41 @@ type DirectoryListing struct {
 
 type DurationPercentiles = contracts.DurationPercentiles
 
+type EgressContextAssignmentGroup struct {
+	Count         int64              `json:"count"`
+	EgressContext *EgressContextName `json:"egressContext"`
+	RunnerID      RunnerID           `json:"runnerId"`
+	State         string             `json:"state"`
+}
+
 // EgressContextName Opaque operator-selected routing context identifier. It carries no hostname, address, CIDR, Tenant reference, gateway identity, or mapping digest.
 type EgressContextName = string
+
+type EgressContextPreflight struct {
+	ActiveAssignments []EgressContextAssignmentGroup `json:"activeAssignments"`
+	Ready             bool                           `json:"ready"`
+	Requirements      []EgressContextRequirement     `json:"requirements"`
+	Runners           []EgressContextRunner          `json:"runners"`
+	Truncated         bool                           `json:"truncated"`
+}
+
+type EgressContextRequirement struct {
+	CompatibleRunnerIds []RunnerID         `json:"compatibleRunnerIds"`
+	EgressContext       *EgressContextName `json:"egressContext"`
+	PoolName            ProfileName        `json:"poolName"`
+	ProfileName         ProfileName        `json:"profileName"`
+	ProfileRevisionID   OpaqueID           `json:"profileRevisionId"`
+	Status              string             `json:"status"`
+	TenantRef           OwnershipRef       `json:"tenantRef"`
+}
+
+type EgressContextRunner struct {
+	AdvertisedContexts []EgressContextName `json:"advertisedContexts"`
+	Connected          bool                `json:"connected"`
+	PoolName           ProfileName         `json:"poolName"`
+	RunnerID           RunnerID            `json:"runnerId"`
+	State              string              `json:"state"`
+}
 
 type ExecCancelled struct {
 	Kind   string     `json:"kind"`

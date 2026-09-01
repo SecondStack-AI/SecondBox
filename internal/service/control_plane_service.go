@@ -50,6 +50,7 @@ type RunnerAdminStore interface {
 	ListRunnerPools(ctx context.Context, limit int, cursor string) (contracts.RunnerPoolPage, error)
 	GetRunner(ctx context.Context, runnerID string) (contracts.Runner, error)
 	ListRunners(ctx context.Context, poolName string, limit int, cursor string) (contracts.RunnerPage, error)
+	ReadEgressContextPreflight(ctx context.Context) (contracts.EgressContextPreflight, error)
 }
 
 // SandboxStore owns public Sandbox and Operation records.

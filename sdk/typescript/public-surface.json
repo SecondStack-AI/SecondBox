@@ -244,6 +244,47 @@
       "p99Milliseconds"
     ]
   },
+  "EgressContextAssignmentGroup": {
+    "required": [
+      "count",
+      "egressContext",
+      "runnerId",
+      "state"
+    ],
+    "optional": []
+  },
+  "EgressContextPreflight": {
+    "required": [
+      "activeAssignments",
+      "ready",
+      "requirements",
+      "runners",
+      "truncated"
+    ],
+    "optional": []
+  },
+  "EgressContextRequirement": {
+    "required": [
+      "compatibleRunnerIds",
+      "egressContext",
+      "poolName",
+      "profileName",
+      "profileRevisionId",
+      "status",
+      "tenantRef"
+    ],
+    "optional": []
+  },
+  "EgressContextRunner": {
+    "required": [
+      "advertisedContexts",
+      "connected",
+      "poolName",
+      "runnerId",
+      "state"
+    ],
+    "optional": []
+  },
   "ExecCancelled": {
     "required": [
       "kind",
@@ -666,6 +707,7 @@
       "sandboxStartP95Milliseconds",
       "sandboxStartSampleCount",
       "state",
+      "supportedEgressContexts",
       "updatedAt"
     ],
     "optional": [

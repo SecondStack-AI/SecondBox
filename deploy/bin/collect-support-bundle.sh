@@ -84,6 +84,11 @@ probe_endpoint \
   "$working_directory/timing-summary.json" \
   "$working_directory/timing-summary.status" \
   "$SECONDBOX_SUPPORT_PLATFORM_TOKEN"
+probe_endpoint \
+  "v1/diagnostics/egress-contexts" \
+  "$working_directory/egress-context-preflight.json" \
+  "$working_directory/egress-context-preflight.status" \
+  "$SECONDBOX_SUPPORT_PLATFORM_TOKEN"
 
 if [[ -f "$SECONDBOX_SUPPORT_CONTROL_PLANE_LOG" ]]; then
   tail -c "$SECONDBOX_SUPPORT_MAX_LOG_BYTES" \

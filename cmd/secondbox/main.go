@@ -364,6 +364,11 @@ func runOperationalCommand(
 		return true, runDiagnosticsBundleCommand(
 			ctx, session.url, session.token, args[2:], output, http.DefaultClient,
 		)
+	case args[0] == "diagnostics" && args[1] == "egress-contexts":
+		if session.authority != sessionAuthorityPlatform {
+			return true, errors.New("SecondBox diagnostics egress-contexts requires platform authority")
+		}
+		return true, runEgressContextDiagnosticsCommand(ctx, session.url, session.token, args[2:], output, http.DefaultClient)
 	case args[0] == "logs" && (args[1] == "tail" || args[1] == "follow"):
 		return true, runLogsCommand(ctx, args[1], args[2:], output)
 	default:

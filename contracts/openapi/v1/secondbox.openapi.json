@@ -497,6 +497,23 @@
         }
       }
     },
+    "/v1/diagnostics/egress-contexts": {
+      "get": {
+        "tags": ["Diagnostics"],
+        "operationId": "readEgressContextPreflight",
+        "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/RequestID"}],
+        "responses": {
+          "200": {
+            "description": "Read-only Tenant/Profile and Runner egress-context compatibility with active assignment impact.",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EgressContextPreflight"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
     "/v1/timings": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
@@ -2478,7 +2495,7 @@
       "Runner": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "poolName", "name", "state", "credentialState", "architectures", "capabilities", "capacity", "protocolVersions", "sandboxStartSampleCount", "sandboxStartP95Milliseconds", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "poolName", "name", "state", "credentialState", "architectures", "capabilities", "capacity", "protocolVersions", "supportedEgressContexts", "sandboxStartSampleCount", "sandboxStartP95Milliseconds", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/RunnerID"},
           "poolName": {"$ref": "#/components/schemas/ProfileName"},
@@ -2489,6 +2506,7 @@
           "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "snapshot-resume", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]}},
           "capacity": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": "integer", "format": "int64", "minimum": 0}},
           "protocolVersions": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 32}},
+          "supportedEgressContexts": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/components/schemas/EgressContextName"}},
           "sandboxStartSampleCount": {"type": "integer", "format": "int64", "minimum": 0},
           "sandboxStartP95Milliseconds": {"type": "integer", "format": "int64", "minimum": 0},
           "lastSeenAt": {"$ref": "#/components/schemas/Timestamp"},
@@ -2504,6 +2522,55 @@
         "properties": {
           "items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/Runner"}},
           "nextCursor": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      },
+      "EgressContextPreflight": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ready", "truncated", "requirements", "runners", "activeAssignments"],
+        "properties": {
+          "ready": {"type": "boolean"},
+          "truncated": {"type": "boolean"},
+          "requirements": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/components/schemas/EgressContextRequirement"}},
+          "runners": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/components/schemas/EgressContextRunner"}},
+          "activeAssignments": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/components/schemas/EgressContextAssignmentGroup"}}
+        }
+      },
+      "EgressContextRequirement": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantRef", "profileName", "profileRevisionId", "poolName", "egressContext", "compatibleRunnerIds", "status"],
+        "properties": {
+          "tenantRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "profileName": {"$ref": "#/components/schemas/ProfileName"},
+          "profileRevisionId": {"$ref": "#/components/schemas/OpaqueID"},
+          "poolName": {"$ref": "#/components/schemas/ProfileName"},
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
+          "compatibleRunnerIds": {"type": "array", "maxItems": 1000, "uniqueItems": true, "items": {"$ref": "#/components/schemas/RunnerID"}},
+          "status": {"type": "string", "enum": ["ready", "tenant_context_missing", "runner_context_unavailable"]}
+        }
+      },
+      "EgressContextRunner": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["runnerId", "poolName", "state", "connected", "advertisedContexts"],
+        "properties": {
+          "runnerId": {"$ref": "#/components/schemas/RunnerID"},
+          "poolName": {"$ref": "#/components/schemas/ProfileName"},
+          "state": {"type": "string", "minLength": 1, "maxLength": 32},
+          "connected": {"type": "boolean"},
+          "advertisedContexts": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/components/schemas/EgressContextName"}}
+        }
+      },
+      "EgressContextAssignmentGroup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["egressContext", "runnerId", "state", "count"],
+        "properties": {
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
+          "runnerId": {"$ref": "#/components/schemas/RunnerID"},
+          "state": {"type": "string", "minLength": 1, "maxLength": 32},
+          "count": {"type": "integer", "format": "int64", "minimum": 1}
         }
       },
       "SandboxState": {
