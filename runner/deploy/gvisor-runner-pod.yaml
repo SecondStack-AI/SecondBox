@@ -99,8 +99,8 @@ spec:
           value: "OPERATOR_RUNNER_ADDRESSES"
         - name: SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS
           value: "OPERATOR_MANAGEMENT_CIDRS"
-        - name: SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS
-          value: "OPERATOR_LOGICAL_GATEWAY_DOMAIN=OPERATOR_LOGICAL_GATEWAY_IP"
+        - name: SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG
+          value: /etc/secondbox-runner/egress-contexts.json
         - name: SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM
           value: "OPERATOR_DNS_UPSTREAM_IP:53"
         - name: SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
@@ -151,6 +151,10 @@ spec:
           mountPath: /var/lib/secondbox-runner
         - name: workspace
           mountPath: /w
+        - name: egress-contexts
+          mountPath: /etc/secondbox-runner/egress-contexts.json
+          subPath: egress-contexts.json
+          readOnly: true
   volumes:
     # Per-runner identity: the mTLS keypair and CA. The runner credential
     # rides the same Secret as its own key.
@@ -173,3 +177,9 @@ spec:
       hostPath:
         path: /var/lib/secondbox-workspaces
         type: Directory
+    # Strict context-indexed Runner-local logical gateway mappings. This
+    # ConfigMap contains no gateway certificates or upstream proxy addresses.
+    - name: egress-contexts
+      configMap:
+        name: secondbox-gvisor-runner-egress-contexts
+        defaultMode: 0o400

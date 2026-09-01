@@ -228,7 +228,7 @@ func TestPurgePreflightRefusesNestedMountBeforeMutation(t *testing.T) {
 
 func TestRunnerIdentityPurgeAcceptsGeneratedModesExactly(t *testing.T) {
 	directory := t.TempDir()
-	for name, mode := range map[string]os.FileMode{"runner-ca.crt": 0o644, "runner.crt": 0o600, "runner.env": 0o600, "runner.key": 0o600} {
+	for name, mode := range map[string]os.FileMode{"egress-contexts.json": 0o600, "runner-ca.crt": 0o644, "runner.crt": 0o600, "runner.env": 0o600, "runner.key": 0o600} {
 		path := filepath.Join(directory, name)
 		if err := os.WriteFile(path, []byte(name), mode); err != nil {
 			t.Fatal(err)

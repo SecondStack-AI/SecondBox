@@ -10,6 +10,9 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # defaults, including SECONDBOX_RUNNER_WORKSPACE_ROOT on a dedicated
 # reflink-capable filesystem and the explicit guest vsock settings.
 EnvironmentFile=/run/secondbox-runner/runner.env
+# The supported systemd handoff installs the generated strict configuration in
+# this protected directory and makes it read-only to the Runner service.
+ReadOnlyPaths=/run/secondbox-runner/egress-contexts.json
 Restart=on-failure
 RestartSec=2s
 KillMode=mixed
