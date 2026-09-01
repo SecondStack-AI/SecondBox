@@ -24,8 +24,12 @@ func TestInvalidProfileStartFailsBeforeAssignmentAndReleasesWorkspace(t *testing
 	}
 	t.Cleanup(pool.Close)
 	now := time.Date(2026, 8, 6, 13, 0, 0, 0, time.UTC)
+	requiresTenantEgressContext := false
 	spec := contracts.ProfileRevisionSpec{
-		Network: contracts.NetworkPolicy{Mode: "bogus"},
+		Network: contracts.NetworkPolicy{
+			Mode:                        "bogus",
+			RequiresTenantEgressContext: &requiresTenantEgressContext,
+		},
 	}
 	specJSON, err := json.Marshal(spec)
 	if err != nil {

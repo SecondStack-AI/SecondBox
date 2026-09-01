@@ -51,8 +51,9 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			DataPlaneTransport:          contracts.DataPlaneTransportProxied,
 		},
 		Network: contracts.NetworkPolicy{
-			Mode:         "deny_all",
-			Destinations: []contracts.NetworkDestination{},
+			Mode:                        "deny_all",
+			Destinations:                []contracts.NetworkDestination{},
+			RequiresTenantEgressContext: new(bool),
 		},
 		Ports: []contracts.PortPolicy{},
 	}
@@ -61,6 +62,11 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.tenants (
+			ref,state,allowed_profile_grants_json,allowed_application_scopes_json,
+			aggregate_quota_json,expiry_policy_json,metadata_json,egress_context,
+			revision,created_at,updated_at
+		) VALUES ('tenant','active','[]','[]','{}','{}','{}','tenant-blue',1,$2,$2);
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
 		) VALUES ('revision-automatic-start','profile-automatic-start',1,$1,$2);
@@ -145,6 +151,9 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 	command := recordingScheduler.request.AssignmentCommand
 	if command == nil ||
 		command.Correlation == nil ||
+		command.EgressContext != "" ||
+		command.Requirements.RequiresTenantEgressContext ||
+		recordingScheduler.request.Requirements.EgressContext != nil ||
 		!strings.HasPrefix(command.Correlation.OperationId, "automatic-start-") ||
 		command.Correlation.RequestId != "request-"+command.Correlation.OperationId ||
 		recordingScheduler.request.StartMutationID == "" ||

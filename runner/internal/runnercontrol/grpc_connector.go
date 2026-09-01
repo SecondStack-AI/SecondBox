@@ -107,7 +107,6 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 	if err != nil {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
 	}
-
 	return RunnerProtocolConfig{
 			RunnerID:                          runnerID,
 			RunnerPoolID:                      poolID,
@@ -125,6 +124,7 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
+				runnerprotocol.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT,
 			},
 		}, GRPCConnectorConfig{
 			Address:           address,

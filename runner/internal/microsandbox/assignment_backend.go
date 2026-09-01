@@ -32,15 +32,16 @@ type capacityReservation struct {
 }
 
 type activeAssignment struct {
-	fence          *runnerprotocol.AssignmentFence
-	correlation    *runnerprotocol.Correlation
-	process        *helperProcess
-	reservation    capacityReservation
-	backendRef     string
+	fence         *runnerprotocol.AssignmentFence
+	correlation   *runnerprotocol.Correlation
+	egressContext string
+	process       *helperProcess
+	reservation   capacityReservation
+	backendRef    string
 	// launched closes when the claimed start finishes (successfully
 	// registered or removed after failure); nil on a completed assignment.
-	launched   chan struct{}
-	launchDone func()
+	launched       chan struct{}
+	launchDone     func()
 	readyPublished bool
 	fenced         bool
 	terminalSent   bool
@@ -169,6 +170,21 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 
 func (backend *AssignmentBackend) InstanceTerminals() <-chan runnercontrol.BackendInstanceTerminal {
 	return backend.instanceTerminals
+}
+
+func (backend *AssignmentBackend) RecoveredAssignments() []*runnerprotocol.ActiveAssignmentSummary {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	result := make([]*runnerprotocol.ActiveAssignmentSummary, 0, len(backend.assignments))
+	for _, active := range backend.assignments {
+		if active == nil {
+			continue
+		}
+		if summary := runnerprotocol.RecoveredAssignmentSummary(active.fence, active.egressContext); summary != nil {
+			result = append(result, summary)
+		}
+	}
+	return result
 }
 
 func (backend *AssignmentBackend) SetRunnerEvidenceSink(sink runnerevidence.Sink, runnerID string) {
@@ -312,7 +328,7 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	backend.mu.Lock()
 	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
 		defer backend.mu.Unlock()
-		if sameFence(active.fence, assignment.Fence) {
+		if active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, assignment) {
 			if active.fenced {
 				return infrastructureAssignment(fmt.Errorf("SecondBox Microsandbox replayed assignment is being fenced"))
 			}
@@ -353,7 +369,14 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return artifactAssignment(fmt.Errorf("SecondBox Microsandbox revalidate local materialization: %w", err))
 	}
-	if _, err := translateNetworkPolicy(assignment.NetworkPolicy); err != nil {
+	compileOptions, err := backend.config.NetworkPolicy.CompileOptionsForAssignment(
+		assignment.EgressContext,
+		assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment egress context: %w", err))
+	}
+	if _, err := translateNetworkPolicy(assignment.NetworkPolicy, compileOptions); err != nil {
 		return incompatibleAssignment(err)
 	}
 	backend.mu.Lock()
@@ -389,7 +412,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignmentID := assignment.Fence.AssignmentId
 	backend.mu.Lock()
 	if existing, exists := backend.assignments[assignmentID]; exists {
-		if !sameFence(existing.fence, assignment.Fence) {
+		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, assignment) {
 			backend.mu.Unlock()
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment ID was reused with different fencing"))
 		}
@@ -408,8 +431,8 @@ func (backend *AssignmentBackend) StartAssignment(
 			}
 			backend.mu.Lock()
 			reference = ""
-			if current, still := backend.assignments[assignmentID]; still &&
-				sameFence(current.fence, assignment.Fence) && !current.fenced {
+			if current, still := backend.assignments[assignmentID]; still && current != nil &&
+				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, assignment) && !current.fenced {
 				reference = current.backendRef
 			}
 			backend.mu.Unlock()
@@ -426,7 +449,10 @@ func (backend *AssignmentBackend) StartAssignment(
 		}
 	}
 	launched := make(chan struct{})
-	claim := &activeAssignment{fence: cloneFence(assignment.Fence), launched: launched}
+	claim := &activeAssignment{
+		fence: cloneFence(assignment.Fence), launched: launched,
+		egressContext: assignment.EgressContext,
+	}
 	claim.launchDone = sync.OnceFunc(func() { close(launched) })
 	backend.assignments[assignmentID] = claim
 	backend.mu.Unlock()
@@ -475,7 +501,14 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
 		return result, err
 	}
-	if _, err := translateNetworkPolicy(assignment.NetworkPolicy); err != nil {
+	compileOptions, err := backend.config.NetworkPolicy.CompileOptionsForAssignment(
+		assignment.EgressContext,
+		assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment egress context: %w", err))
+	}
+	if _, err := translateNetworkPolicy(assignment.NetworkPolicy, compileOptions); err != nil {
 		return result, err
 	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP); err != nil {
@@ -499,6 +532,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	active := &activeAssignment{
 		fence:         cloneFence(assignment.Fence),
 		correlation:   proto.Clone(assignment.Correlation).(*runnerprotocol.Correlation),
+		egressContext: assignment.EgressContext,
 		process:       process,
 		reservation:   reservation,
 		backendRef:    fmt.Sprintf("microsandbox:%d", process.command.Process.Pid),

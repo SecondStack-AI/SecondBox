@@ -6,6 +6,8 @@ services:
     depends_on:
       control-plane:
         condition: service_healthy
+      runner-config-init:
+        condition: service_completed_successfully
     privileged: true
     network_mode: host
     cgroup: host
@@ -64,7 +66,7 @@ services:
       SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL: ${SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL:?set SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL}
       SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES: ${SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES:?set SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES}
       SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS: ${SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS:?set SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS}
-      SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS: ${SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS:?set SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS}
+      SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG: /run/secondbox-runner-config/egress-contexts.json
       SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM: ${SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM:?set SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM}
       SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX: ${SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX:?set SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX}
       SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL: ${SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL:?set SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL}
@@ -85,6 +87,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      - runner-config-runtime:/run/secondbox-runner-config:ro
       - type: bind
         source: ${SECONDBOX_RUNNER_ARTIFACT_HOST_DIR:?set SECONDBOX_RUNNER_ARTIFACT_HOST_DIR}
         target: /opt/secondbox-artifacts
@@ -112,3 +115,25 @@ services:
       timeout: 6s
       retries: 4
       start_period: 15s
+
+  runner-config-init:
+    image: ${SECONDBOX_RUNNER_IMAGE:?set SECONDBOX_RUNNER_IMAGE}
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - install -m 444 -o 0 -g 0 /source/egress-contexts.json /target/egress-contexts.json
+    volumes:
+      - type: bind
+        source: ${SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG_HOST_PATH:?set SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG_HOST_PATH}
+        target: /source/egress-contexts.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - runner-config-runtime:/target
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  runner-config-runtime:

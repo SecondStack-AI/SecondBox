@@ -145,7 +145,7 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 	files := map[string]struct {
 		data []byte
 		mode os.FileMode
-	}{"runner.crt": {pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}), 0o600}, "runner.key": {pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientKey)}), 0o600}, "runner-ca.crt": {caPEM, 0o644}}
+	}{"runner.crt": {pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}), 0o600}, "runner.key": {pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientKey)}), 0o600}, "runner-ca.crt": {caPEM, 0o644}, "egress-contexts.json": {resolved.RunnerEgressContextConfigs[runnerID], 0o600}}
 	for name, file := range files {
 		if err := writeAtomic(filepath.Join(staging, name), file.data, file.mode, false); err != nil {
 			return err
@@ -218,7 +218,7 @@ func validateExistingRunnerIdentity(manifestPath, runnerID, target string) error
 		names = append(names, entry.Name())
 	}
 	slices.Sort(names)
-	if !slices.Equal(names, []string{"runner-ca.crt", "runner.crt", "runner.env", "runner.key"}) {
+	if !slices.Equal(names, []string{"egress-contexts.json", "runner-ca.crt", "runner.crt", "runner.env", "runner.key"}) {
 		return manifestError("existing runner-init target has unexpected entries", nil)
 	}
 	readRegular := func(name string, mode os.FileMode) ([]byte, error) {
@@ -293,6 +293,10 @@ func validateExistingRunnerIdentity(manifestPath, runnerID, target string) error
 	actualEnvironment, err := readRegular("runner.env", 0o600)
 	if err != nil || !bytes.Equal(actualEnvironment, expectedEnvironment) {
 		return manifestError("existing runner-init environment differs from the declared Runner", err)
+	}
+	actualContextConfig, err := readRegular("egress-contexts.json", 0o600)
+	if err != nil || !bytes.Equal(actualContextConfig, resolved.RunnerEgressContextConfigs[runnerID]) {
+		return manifestError("existing runner-init egress context configuration differs from the declared Runner", err)
 	}
 	return nil
 }

@@ -92,6 +92,28 @@ func TestHomeRunnerUnavailableCarriesTypedRetryBackoff(t *testing.T) {
 	}
 }
 
+func TestTenantEgressContextRequiredIsTypedAndNotRetryable(t *testing.T) {
+	status, code, title, retryable := classifyError(ports.ErrTenantEgressContextRequired)
+	if status != http.StatusConflict || code != "tenant_egress_context_required" ||
+		title != "Profile requires a Tenant egress context" || retryable {
+		t.Fatalf(
+			"Tenant egress-context classification = %d %q %q retryable=%t",
+			status, code, title, retryable,
+		)
+	}
+}
+
+func TestEgressContextUnavailableIsTypedAndRetryable(t *testing.T) {
+	status, code, title, retryable := classifyError(ports.ErrEgressContextUnavailable)
+	if status != http.StatusServiceUnavailable || code != "egress_context_unavailable" ||
+		title != "Sandbox egress context is unavailable" || !retryable {
+		t.Fatalf(
+			"egress-context availability classification = %d %q %q retryable=%t",
+			status, code, title, retryable,
+		)
+	}
+}
+
 func TestPrefixedInternalErrorIsGenericRetryableAndCorrelated(t *testing.T) {
 	var logs bytes.Buffer
 	apiHandler := &handler{

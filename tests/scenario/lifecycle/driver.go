@@ -108,7 +108,7 @@ func (driver *lifecycleDriver) prepare(ctx context.Context) error {
 						DataPlaneTransport:          driver.config.Profile.DataPlaneTransport,
 					},
 					Network: secondboxclient.NetworkPolicy{
-						Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{},
+						Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{}, RequiresTenantEgressContext: new(bool),
 					},
 					Ports: []secondboxclient.PortPolicy{},
 				},

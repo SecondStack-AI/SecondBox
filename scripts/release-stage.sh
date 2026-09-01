@@ -339,8 +339,17 @@ go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$output_dir"
 node_project="$temporary/node-smoke"
 mkdir "$node_project"
 (cd "$node_project" && npm init --yes >/dev/null && npm install --ignore-scripts "$output_dir/$typescript_name" >/dev/null && node -e 'import("@secondstack-ai/secondbox").then(m => { if (typeof m.SecondBox !== "function") process.exit(1) })')
-deployment_dir="$temporary/deployment"
-"$output_dir/secondbox-deploy_${version}_linux_amd64" init --mode development "$deployment_dir" >/dev/null
-"$output_dir/secondbox-deploy_${version}_linux_amd64" inspect "$deployment_dir/secondbox.toml" >/dev/null
+source_less_consumer="$temporary/source-less-consumer"
+deployment_dir="$source_less_consumer/deployment"
+mkdir "$source_less_consumer"
+(
+  cd "$source_less_consumer"
+  "$output_dir/secondbox-deploy_${version}_linux_amd64" runner-template >runner.toml
+  grep -q '^egress_context_config_path = ' runner.toml
+  grep -q '^egress_contexts = \[\]$' runner.toml
+  ! grep -q 'network_policy_runner_gateways' runner.toml
+  "$output_dir/secondbox-deploy_${version}_linux_amd64" init --mode development "$deployment_dir" >/dev/null
+  "$output_dir/secondbox-deploy_${version}_linux_amd64" inspect "$deployment_dir/secondbox.toml" >/dev/null
+)
 
 echo "$output_dir"

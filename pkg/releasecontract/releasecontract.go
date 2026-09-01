@@ -314,17 +314,6 @@ func DecodeInstallerQualificationEvidence(data []byte) (InstallerQualificationEv
 	return evidence, nil
 }
 
-// DecodeRecordedInstallerQualificationEvidence strictly decodes evidence for
-// a previously published release. Callers must still validate it against the
-// exact recorded release identity with ValidateRecordedForRelease.
-func DecodeRecordedInstallerQualificationEvidence(data []byte) (InstallerQualificationEvidence, error) {
-	var evidence InstallerQualificationEvidence
-	if err := decodeStrict(data, &evidence); err != nil {
-		return InstallerQualificationEvidence{}, contractError("decode installer qualification evidence: %v", err)
-	}
-	return evidence, nil
-}
-
 func (evidence QualificationEvidence) Validate() error {
 	if evidence.SchemaVersion != QualificationEvidenceSchema && evidence.SchemaVersion != LegacyQualificationEvidenceSchema {
 		return contractError("qualification evidence schemaVersion must be %q or legacy %q", QualificationEvidenceSchema, LegacyQualificationEvidenceSchema)
@@ -407,31 +396,6 @@ func (evidence InstallerQualificationEvidence) ValidateForRelease(sourceCommit, 
 	}
 	if !digestPattern.MatchString(qualificationSubjectDigest) || evidence.ReleaseManifestDigest != qualificationSubjectDigest {
 		return contractError("installer qualification evidence release identity does not match release")
-	}
-	return nil
-}
-
-// ValidateRecordedForRelease recognizes the one immutable v0.6.0 installer
-// evidence waiver only while authenticating that exact release as an update
-// source. New releases and ordinary installation remain subject to Validate.
-func (evidence InstallerQualificationEvidence) ValidateRecordedForRelease(sourceCommit, qualificationSubjectDigest string) error {
-	strictErr := evidence.ValidateForRelease(sourceCommit, qualificationSubjectDigest)
-	if strictErr == nil {
-		return nil
-	}
-	if sourceCommit != "92e409ddade89737afa75ec2b781dac5c8afbeab" || qualificationSubjectDigest != "sha256:8cb794536dd6b1b45bb1471c21c2fefd062af276446bdd954a4ce1b53aa95197" {
-		return strictErr
-	}
-	if evidence.SchemaVersion != LegacyInstallerQualificationEvidenceSchema ||
-		evidence.SourceCommit != sourceCommit || evidence.RepositoryDirty ||
-		evidence.Suite != "test-installer-qualified" || evidence.PassCount != 2 || evidence.WallClockSeconds != 1451 ||
-		evidence.ReleaseManifestDigest != qualificationSubjectDigest ||
-		evidence.FilesystemIdentity != "waived-after-two-complete-modes" || evidence.RebootPassed ||
-		evidence.QualifiedAt != "2026-08-26T14:53:50Z" {
-		return contractError("recorded installer qualification evidence does not match the exact v0.6.0 waiver")
-	}
-	if err := validateQualificationHost("recorded installer qualification", evidence.Host, false); err != nil {
-		return err
 	}
 	return nil
 }

@@ -86,6 +86,48 @@ Production ingress is a separate deadline boundary. Configure reverse proxies an
 
 Runner protocol minimum and maximum are not configuration. Both binaries compile the one supported protocol window, and generated-protocol verification rejects drift between the two modules.
 
+## Tenant-aware egress topology
+
+The tenant-aware release uses Runner protocol generation 4 exactly. A v0.7.2 control plane or Runner supports generation 3 and cannot join a generation-4 deployment. Upgrade the control plane and every Runner as one coordinated replacement; a mixed fleet, legacy assignment, or global-gateway fallback is unsupported.
+
+One SecondBox Tenant represents one SecondStack installation and has at most one nullable operator-selected egress-context name. Names are opaque and match `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`, so they contain 1 through 63 lowercase ASCII letters, digits, or hyphens and begin and end with an alphanumeric character. They are not DNS names or network coordinates. Do not put SecondStack hostnames, proxy endpoints, certificates, network ranges, Tenant references, or secrets in a context name or in control-plane configuration.
+
+A Runner can support several names. Each maps to its own Runner-local logical-gateway-to-address table. One separately deployed `agent-runner-gateway` process serves one context and authenticates to exactly one installation's Agent Egress Proxy. The SecondBox deployment owns only the context-indexed Runner-local mappings; gateway certificates, proxy addresses, interception CAs, policy databases, and credentials remain in that installation's gateway/proxy deployment. Gateway and proxy protocols do not change.
+
+Logical mappings authorize network policy and never create guest DNS. Agent Platform continues to inject its installation's configured Runner-local gateway IP through the existing proxy variables. The same IP may appear more than once within or across contexts; operators select distinct addresses where isolation requires them. A context pins the mapping indirection rather than an address list or digest.
+
+Runner context configuration is static for one connection. To replace or remove a mapping, drain the Runner, stop every active Sandbox using that context, update the reviewed configuration, and restart. A stopped Sandbox pinned to a removed context remains durable but cannot start until the mapping returns or the Sandbox is retired. There is no dynamic gateway health discovery, live remapping, default context, cross-context retry, or automatic reassignment.
+
+State the mapping in the Runner declaration; never edit the generated JSON or environment transport:
+
+```toml
+egress_context_config_path = "/etc/secondbox/egress-contexts.json"
+
+[[runners.egress_contexts]]
+name = "secondstack-staging"
+
+[[runners.egress_contexts.gateways]]
+logical_name = "agent-gateway.secondbox.internal"
+address = "10.210.2.2"
+
+[[runners.egress_contexts]]
+name = "secondstack-development"
+
+[[runners.egress_contexts.gateways]]
+logical_name = "agent-gateway.secondbox.internal"
+address = "10.210.3.2"
+```
+
+The renderer writes one strict `secondbox.runner-egress-contexts/v1` document per Runner beneath the generated environment's `.runners` directory. For same-host Compose, a one-shot root init service copies that file into a named volume and the Runner mounts it read-only at `/run/secondbox-runner-config/egress-contexts.json`. A remote `runner-init` handoff contains `runner.env` plus `egress-contexts.json`; install both together, mount the JSON read-only at the declared absolute path, and use the supplied systemd unit's `ReadOnlyPaths` fence. The qualified gVisor pod uses a read-only ConfigMap projection. Every path is explicit, and startup rejects a missing, unsafe, malformed, empty, or stale file.
+
+After the control plane and Runners are connected, run the platform-authorized, read-only placement preflight:
+
+```sh
+secondbox diagnostics egress-contexts
+```
+
+The JSON lists each active Tenant grant whose current Profile head requires a context, the connected compatible Runner IDs, all Runner advertisements, and grouped nonterminal assignments by context, Runner, and state. `ready` is false when a required Tenant context is absent or no connected ready Runner in the Profile's pool advertises it. The check does not change Tenants, Runner configuration, assignments, or lifecycle. Before replacing or removing a mapping, use `activeAssignments` to find what must be stopped, then drain and restart the affected Runner.
+
 ## Production initialization
 
 Create the protected skeleton:
@@ -273,8 +315,13 @@ network_policy_max_dns_ttl = ''
 network_policy_runner_addresses = ''
 # Management networks; a comma-separated list of CIDRs.
 network_policy_management_cidrs = ''
-# Logical gateways; unique domain=IP pairs or none, including every gateway required by selected standard bundles.
-network_policy_runner_gateways = ''
+# Absolute path from which this Runner loads the generated strict context configuration. Same-host Compose requires /run/secondbox-runner-config/egress-contexts.json.
+egress_context_config_path = ''
+# Context-indexed Runner-local mappings. Replace the empty list with one or more
+# [[runners.egress_contexts]] tables, each containing a unique valid name, and
+# [[runners.egress_contexts.gateways]] tables containing logical_name and
+# address. The generator emits the strict JSON file; do not hand-edit it.
+egress_contexts = []
 # Upstream DNS resolver; must be an IP:port with a nonzero port.
 network_policy_dns_upstream = ''
 
@@ -319,7 +366,7 @@ Review these relationships before enrollment:
 - Put `state_host_directory` on a dedicated non-root XFS or Btrfs filesystem with reflink support. For same-host placement, `workspace_host_directory` must be its `workspaces` child and `workspace_root` must be `/var/lib/secondbox-runner/workspaces`. Compose binds the common storage root once so Workspace images, jail state, run state, and snapshot templates retain one mount identity.
 - Leave the filesystem target named by `identity_host_directory` absent before `runner-init`. The command validates the declaration without the same-host identity preflight, then creates that exact target; create the artifact and Runner storage host directories first, and run full manifest validation after enrollment.
 - Set `pool_id` to the `name` of the selected `[[standard_resources.runner_pools]]` inventory that admits the Runner architecture and capabilities.
-- Map every logical gateway required by the selected standard bundles in `network_policy_runner_gateways`. The mapping is Runner-local `domain=IP` authorization, not guest-side name resolution. The Runner DNS proxy only forwards to its configured upstream, rejects answers resolving to protected addresses, and does not synthesize the logical gateway domain. Production qualification must prove the deployment's own guest resolution and gateway reachability.
+- For v0.7.2 only, `network_policy_runner_gateways` is the legacy single global logical-gateway map. It is not accepted as a generation-4 default or fallback. The tenant-aware deployment replaces it with explicit context-indexed Runner-local mappings; the mapping remains `logical-name=IP` authorization rather than guest-side name resolution. The Runner DNS proxy only forwards to its configured upstream, rejects answers resolving to protected addresses, and does not synthesize logical gateway names. Production qualification must prove each installation's injected gateway address and reachability.
 
 Issue one declared identity and protected environment handoff:
 
@@ -332,9 +379,15 @@ secondbox-deploy runner-init \
 
 The command signs a client certificate carrying `spiffe://secondbox/runner/<runner-id>`, writes the matching key, CA certificate, and canonical systemd environment, then atomically installs the directory. It refuses an undeclared ID, an existing target, a same-host target that differs from the declared identity directory, or mismatched CA evidence. Copying and activating a remote handoff on its Runner host is an explicit operator action.
 
-Selected RunnerPools and standard Profile lineages are checked and applied after the control plane becomes ready. A repeated deployment is a no-op; an interrupted application resumes from the verified installed prefix. Each Runner in a selected pool maps the standard Profile's logical gateway in `network_policy_runner_gateways`; that mapping does not add a DNS record. See [declarative resources](declarative-resources.md).
+Selected RunnerPools and standard Profile lineages are checked and applied after the control plane becomes ready. A repeated deployment is a no-op; an interrupted application resumes from the verified installed prefix. In the tenant-aware release, every Runner in a selected pool maps each required standard Profile logical gateway inside every advertised context that should accept that Profile. No mapping adds a DNS record. See [declarative resources](declarative-resources.md).
 
 ## Recovery and replacement
+
+Replacing v0.7.2 with the tenant-aware release in place is unsupported. Quiesce every consuming application, retire every v0.7.2 Sandbox, stop the old deployment, and remove its database, Runner state, and Workspaces through the documented recreation procedure before initializing the new release. Recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes from the new contract. There is no historical Profile decoder for the required context policy, legacy assignment support, Workspace import path, or Sandbox migration operation.
+
+The target release's `secondbox-deploy update --check` refuses every source through exactly v0.7.2 before downloading or staging target release inputs. Its error prints this recreation sequence, including the guided single-host `uninstall` and reviewed `uninstall --purge` steps. This refusal is not a migration assistant and never retires a Sandbox or deletes state on the operator's behalf.
+
+Take one coordinated v0.7.2 backup of PostgreSQL, deployment state, every Runner identity, and every complete Workspace filesystem before retirement. That backup is for complete rollback only. Rollback stops the new deployment and restores the complete matching v0.7.2 database and Runner filesystems; never combine v0.7.2 global-gateway state with a generation-4 database or Runner.
 
 Replacing v0.5.2 with v0.6.0 in place is unsupported. v0.6.0 is a clean-install
 boundary: stop workloads, back up PostgreSQL and each Runner identity plus its

@@ -198,22 +198,12 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 		if err != nil {
 			return err
 		}
-		if recorded {
-			installerEvidence, err := releasecontract.DecodeRecordedInstallerQualificationEvidence(installerEvidenceData)
-			if err != nil {
-				return err
-			}
-			if err := installerEvidence.ValidateRecordedForRelease(manifest.SourceCommit, qualificationSubject); err != nil {
-				return err
-			}
-		} else {
-			installerEvidence, err := releasecontract.DecodeInstallerQualificationEvidence(installerEvidenceData)
-			if err != nil {
-				return err
-			}
-			if err := installerEvidence.ValidateForRelease(manifest.SourceCommit, qualificationSubject); err != nil {
-				return err
-			}
+		installerEvidence, err := releasecontract.DecodeInstallerQualificationEvidence(installerEvidenceData)
+		if err != nil {
+			return err
+		}
+		if err := installerEvidence.ValidateForRelease(manifest.SourceCommit, qualificationSubject); err != nil {
+			return err
 		}
 	}
 	for _, binary := range manifest.Binaries {

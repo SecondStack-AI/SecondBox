@@ -25,9 +25,11 @@ Customers that require physical separation use separate RunnerPools or Runner ho
 
 ## Management resources
 
-`secondbox.tenants` stores one stable, uninterpreted tenant reference, lifecycle state, allowed Profile grants, allowed application scopes, aggregate quota, expiry policy, bounded metadata, revision, and timestamps.
+`secondbox.tenants` stores one stable, uninterpreted tenant reference, at most one nullable operator-controlled egress-context name, lifecycle state, allowed Profile grants, allowed application scopes, aggregate quota, expiry policy, bounded metadata, revision, and timestamps.
 A tenant represents one independent SecondStack installation in the qualified deployment flow.
 An installation group such as a preview service can use one tenant and create one subject for each managed environment.
+
+An egress-context name is an opaque routing identifier, not a hostname, address, CIDR, Tenant reference, gateway identity, or gateway-address digest. The one canonical syntax is 1 through 63 lowercase ASCII letters, digits, or hyphens, beginning and ending with a letter or digit: `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`. HTTP schemas, persisted values, Runner configuration and protocol, audit, and diagnostics use that same bound. SecondStack hostnames, proxy addresses, certificates, and network ranges remain outside the control plane.
 
 `secondbox.subjects` stores a tenant-scoped subject reference, lifecycle state, subject quota, optional expiry, bounded metadata, revision, and timestamps.
 The unique identity is `(tenant_ref, subject_ref)`.
@@ -46,12 +48,12 @@ Required uniqueness constraints protect tenant references, subject identity, aut
 ## Authority hierarchy
 
 The deployment-wide platform token remains the operator authority.
-It creates and suspends tenants, manages tenant-controller authorities, manages Profiles and RunnerPools, enrolls Runners, and inspects deployment-wide operations.
+It creates and suspends tenants, selects or clears a Tenant's egress context, manages tenant-controller authorities, manages Profiles and RunnerPools, enrolls Runners, and inspects deployment-wide operations.
 It never enters a SecondStack application container.
 
 A tenant-controller authority is fixed to one tenant and has one code-owned permission set.
 It can create, inspect, list, rotate, and revoke application authorities, create and close subjects, set subject quota within its tenant ceiling, and request cleanup for its own subjects.
-It cannot select another tenant, change its tenant ceiling, grant an unapproved Profile or scope, administer Runners, or call ordinary Sandbox routes as another subject.
+It cannot select another tenant, change its tenant ceiling or egress context, grant an unapproved Profile or scope, administer Runners, or call ordinary Sandbox routes as another subject.
 Management routes derive the tenant from the authenticated controller authority and do not accept a tenant assertion from request headers.
 
 An application authority retains the existing fixed-reference request contract.
@@ -121,17 +123,19 @@ The release-owned `agent-compartment-isolated` Profile permits command, file, an
 Ephemeral previews use this Profile.
 They may share a Runner with a network-enabled tenant because the Runner compiles network policy for each Sandbox and the isolated Profile cannot reach a gateway present on the host.
 
-A network-enabled Profile can use only the Runner gateway configured for its RunnerPool trust context.
-The current Runner gateway carries one SecondStack deployment's workload identity and cannot safely route another installation through that deployment's credential broker.
-SecondBox v0.6.0 supports one network-enabled SecondStack egress context per RunnerPool and any number of network-disabled tenants.
-It does not implement a tenant-aware shared gateway.
+A ProfileRevision's required `network.requiresTenantEgressContext` Boolean states whether Sandbox creation needs the Tenant's egress context. It is required and has no default. The release-owned `agent-compartment` and `durable-coding` network-enabled Profiles state `true`; `agent-compartment-isolated` states `false`. The behavior is never inferred from a destination domain suffix.
 
-The Runner gateway mapping authorizes one logical domain and port at a protected
-Runner-local address; it does not create guest-side name resolution. The DNS
-proxy forwards questions to its configured upstream only and rejects answers
-that resolve to protected addresses. A production deployment supplies and
-qualifies its own logical gateway DNS answer, destination authentication, and
-reachability.
+Sandbox creation copies the Tenant value into an immutable Sandbox pin. A later operator change to the Tenant affects only new Sandboxes. A Profile that requires a context fails closed when the Tenant has none; a Profile that does not require one sends no context to the Runner even if its Tenant has one. Subjects, end users, application requests, guest headers, and guest source addresses neither select nor override the pin. Application and tenant-controller authorities have no context-capacity or context-selection API.
+
+A Runner may advertise several context names. Each advertised name selects one Runner-local mapping from logical gateway names to addresses, and one existing `agent-runner-gateway` instance serves one context and authenticates to exactly one SecondStack installation's egress proxy. Logical gateway mappings remain network-policy authorization rather than guest DNS: the DNS proxy does not synthesize or rewrite them, and Agent Platform continues to inject its installation's Runner-local gateway address through its existing proxy variables. Gateway and egress-proxy protocols do not change.
+
+The context pin selects the routing indirection, not a digest of the mapping. Addresses may repeat within or across contexts. Operators create distinct addresses where isolation requires them; SecondBox does not impose address uniqueness. Replacing or removing a mapping requires draining the Runner, stopping its active Sandboxes for that context, and restarting it. This release has no dynamic gateway health discovery or live context remapping.
+
+Missing Tenant context, Runner advertisement, Runner-local mapping, or assignment context fails closed. There is no default context, cross-context retry, automatic reassignment, or fallback to the v0.7.2 global gateway mapping.
+
+## v0.7.2 recreation boundary
+
+Tenant-aware egress is a clean-recreation boundary from v0.7.2. Operators quiesce every consuming application, retire every old Sandbox, stop and replace the old deployment, initialize the new release, and recreate its resources and Sandboxes. The new release does not decode an omitted context requirement into historical Profile behavior, preserve legacy assignments, or provide a Sandbox migration operation. A coordinated v0.7.2 database, Runner identity, and complete Workspace backup is a rollback input only; it is never combined with new-release state.
 
 ## Availability and recovery
 

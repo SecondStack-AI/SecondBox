@@ -25,22 +25,18 @@ func (m *Manager) SetHostNetworkPolicyEnforcer(enforcer HostNetworkPolicyEnforce
 	m.networkPolicy = enforcer
 }
 
-func (m *Manager) networkPolicyCompileOptions() networkpolicy.CompileOptions {
-	return networkpolicy.CompileOptions{
+func (m *Manager) networkPolicyCompileOptions(contextName string, required bool) (networkpolicy.CompileOptions, error) {
+	base := networkpolicy.CompileOptions{
 		MaximumPins:        m.cfg.NetworkPolicyMaximumDNSPins,
 		MaximumTTL:         m.cfg.NetworkPolicyMaximumDNSTTL,
 		RunnerAddresses:    append([]netip.Addr(nil), m.cfg.NetworkPolicyRunnerAddresses...),
 		ManagementPrefixes: append([]netip.Prefix(nil), m.cfg.NetworkPolicyManagementCIDRs...),
-		RunnerGateways:     cloneRunnerGateways(m.cfg.NetworkPolicyRunnerGateways),
 	}
-}
-
-func cloneRunnerGateways(source map[string]netip.Addr) map[string]netip.Addr {
-	result := make(map[string]netip.Addr, len(source))
-	for domain, address := range source {
-		result[domain] = address
+	runnerConfig := networkpolicy.RunnerConfig{
+		CompileOptions: base,
+		EgressContexts: m.cfg.NetworkPolicyEgressContexts,
 	}
-	return result
+	return runnerConfig.CompileOptionsForAssignment(contextName, required)
 }
 
 func (m *Manager) networkRequired(opts runtimemanager.StartOpts) bool {

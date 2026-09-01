@@ -118,83 +118,98 @@ type TuningOverrides struct {
 // Runner is one immutable runner_id and its typed, placement-local runtime
 // contract. Host paths remain opaque strings for remote placement.
 type Runner struct {
-	RunnerID                      string `toml:"runner_id"`
-	Placement                     string `toml:"placement"`
-	PoolID                        string `toml:"pool_id"`
-	SoftwareVersion               string `toml:"software_version"`
-	ControlPlaneAddress           string `toml:"control_plane_address"`
-	ControlPlaneServerName        string `toml:"control_plane_server_name"`
-	IdentityDirectory             string `toml:"identity_directory"`
-	IdentityHostDirectory         string `toml:"identity_host_directory"`
-	ArtifactHostDirectory         string `toml:"artifact_host_directory"`
-	StateHostDirectory            string `toml:"state_host_directory"`
-	WorkspaceHostDirectory        string `toml:"workspace_host_directory"`
-	LogPath                       string `toml:"log_path"`
-	LogDirectory                  string `toml:"log_directory"`
-	FirecrackerPath               string `toml:"firecracker_path"`
-	FirecrackerJailerPath         string `toml:"firecracker_jailer_path"`
-	FirecrackerJailRoot           string `toml:"firecracker_jail_root"`
-	FirecrackerJailerUIDStart     *int64 `toml:"firecracker_jailer_uid_start"`
-	FirecrackerJailerUIDCount     *int64 `toml:"firecracker_jailer_uid_count"`
-	FirecrackerJailerUIDAllowLow  *bool  `toml:"firecracker_jailer_uid_allow_below_1000"`
-	FirecrackerJailerGID          *int64 `toml:"firecracker_jailer_gid"`
-	FirecrackerCgroupVersion      *int64 `toml:"firecracker_cgroup_version"`
-	FirecrackerCgroupParent       string `toml:"firecracker_cgroup_parent"`
-	FirecrackerKernelPath         string `toml:"firecracker_kernel_path"`
-	FirecrackerRootFSPath         string `toml:"firecracker_rootfs_path"`
-	FirecrackerSharedImagePath    string `toml:"firecracker_shared_image_path"`
-	FirecrackerKernelArgs         string `toml:"firecracker_kernel_args"`
-	FirecrackerCPUTemplate        string `toml:"firecracker_cpu_template"`
-	FirecrackerRunDirectory       string `toml:"firecracker_run_directory"`
-	FirecrackerLogDirectory       string `toml:"firecracker_log_directory"`
-	FirecrackerAllowUnjailed      *bool  `toml:"firecracker_allow_unjailed"`
-	SnapshotTemplateCacheRoot     string `toml:"snapshot_template_cache_root"`
-	ArtifactPublicKey             string `toml:"artifact_public_key"`
-	ArtifactPublicKeySHA256       string `toml:"artifact_public_key_sha256"`
-	WorkspaceRoot                 string `toml:"workspace_root"`
-	StorageRecoveryPercent        *int64 `toml:"storage_pressure_recovery_percent"`
-	StorageWarningPercent         *int64 `toml:"storage_pressure_warning_percent"`
-	StorageAdmissionDenyPercent   *int64 `toml:"storage_pressure_admission_deny_percent"`
-	SandboxMaxVCPUs               *int64 `toml:"sandbox_max_vcpus"`
-	SandboxMaxMemoryMiB           *int64 `toml:"sandbox_max_memory_mib"`
-	SandboxMaxDiskMiB             *int64 `toml:"sandbox_max_disk_mib"`
-	SandboxMemoryBudgetMiB        *int64 `toml:"sandbox_memory_budget_mib"`
-	SandboxGuestIP                string `toml:"sandbox_guest_ip"`
-	SandboxBridgeName             string `toml:"sandbox_bridge_name"`
-	SandboxBridgeCIDR             string `toml:"sandbox_bridge_cidr"`
-	SandboxGuestCIDR              string `toml:"sandbox_guest_cidr"`
-	SandboxTapPrefix              string `toml:"sandbox_tap_prefix"`
-	SandboxNetworkStateDir        string `toml:"sandbox_network_state_directory"`
-	SandboxDeleteBridge           *bool  `toml:"sandbox_delete_bridge"`
-	NetworkPolicyNFTPath          string `toml:"network_policy_nft_path"`
-	NetworkPolicyMaxDNSPins       *int64 `toml:"network_policy_max_dns_pins"`
-	NetworkPolicyMaxDNSTTL        string `toml:"network_policy_max_dns_ttl"`
-	NetworkPolicyRunnerAddresses  string `toml:"network_policy_runner_addresses"`
-	NetworkPolicyManagementCIDRs  string `toml:"network_policy_management_cidrs"`
-	NetworkPolicyRunnerGateways   string `toml:"network_policy_runner_gateways"`
-	NetworkPolicyDNSUpstream      string `toml:"network_policy_dns_upstream"`
-	MaxConcurrentPerSandbox       *int64 `toml:"max_concurrent_per_sandbox"`
-	MaxConcurrentGlobal           *int64 `toml:"max_concurrent_global"`
-	MaxConcurrentStarts           *int64 `toml:"max_concurrent_starts"`
-	MaxConcurrentWorkspaceCreates *int64 `toml:"max_concurrent_workspace_creates"`
-	MaxConcurrentOperationsGlobal *int64 `toml:"max_concurrent_operations_global"`
-	FileTransferMaxBytes          *int64 `toml:"file_transfer_max_bytes"`
-	GuestControlVSockPort         *int64 `toml:"guest_control_vsock_port"`
-	GuestProtocolVSockPort        *int64 `toml:"guest_protocol_vsock_port"`
-	GuestHeartbeatInterval        string `toml:"guest_heartbeat_interval"`
-	DataPlaneListenAddress        string `toml:"data_plane_listen_address"`
-	DataPlaneAdvertisedAddress    string `toml:"data_plane_advertised_address"`
+	RunnerID                      string                `toml:"runner_id"`
+	Placement                     string                `toml:"placement"`
+	PoolID                        string                `toml:"pool_id"`
+	SoftwareVersion               string                `toml:"software_version"`
+	ControlPlaneAddress           string                `toml:"control_plane_address"`
+	ControlPlaneServerName        string                `toml:"control_plane_server_name"`
+	IdentityDirectory             string                `toml:"identity_directory"`
+	IdentityHostDirectory         string                `toml:"identity_host_directory"`
+	ArtifactHostDirectory         string                `toml:"artifact_host_directory"`
+	StateHostDirectory            string                `toml:"state_host_directory"`
+	WorkspaceHostDirectory        string                `toml:"workspace_host_directory"`
+	LogPath                       string                `toml:"log_path"`
+	LogDirectory                  string                `toml:"log_directory"`
+	FirecrackerPath               string                `toml:"firecracker_path"`
+	FirecrackerJailerPath         string                `toml:"firecracker_jailer_path"`
+	FirecrackerJailRoot           string                `toml:"firecracker_jail_root"`
+	FirecrackerJailerUIDStart     *int64                `toml:"firecracker_jailer_uid_start"`
+	FirecrackerJailerUIDCount     *int64                `toml:"firecracker_jailer_uid_count"`
+	FirecrackerJailerUIDAllowLow  *bool                 `toml:"firecracker_jailer_uid_allow_below_1000"`
+	FirecrackerJailerGID          *int64                `toml:"firecracker_jailer_gid"`
+	FirecrackerCgroupVersion      *int64                `toml:"firecracker_cgroup_version"`
+	FirecrackerCgroupParent       string                `toml:"firecracker_cgroup_parent"`
+	FirecrackerKernelPath         string                `toml:"firecracker_kernel_path"`
+	FirecrackerRootFSPath         string                `toml:"firecracker_rootfs_path"`
+	FirecrackerSharedImagePath    string                `toml:"firecracker_shared_image_path"`
+	FirecrackerKernelArgs         string                `toml:"firecracker_kernel_args"`
+	FirecrackerCPUTemplate        string                `toml:"firecracker_cpu_template"`
+	FirecrackerRunDirectory       string                `toml:"firecracker_run_directory"`
+	FirecrackerLogDirectory       string                `toml:"firecracker_log_directory"`
+	FirecrackerAllowUnjailed      *bool                 `toml:"firecracker_allow_unjailed"`
+	SnapshotTemplateCacheRoot     string                `toml:"snapshot_template_cache_root"`
+	ArtifactPublicKey             string                `toml:"artifact_public_key"`
+	ArtifactPublicKeySHA256       string                `toml:"artifact_public_key_sha256"`
+	WorkspaceRoot                 string                `toml:"workspace_root"`
+	StorageRecoveryPercent        *int64                `toml:"storage_pressure_recovery_percent"`
+	StorageWarningPercent         *int64                `toml:"storage_pressure_warning_percent"`
+	StorageAdmissionDenyPercent   *int64                `toml:"storage_pressure_admission_deny_percent"`
+	SandboxMaxVCPUs               *int64                `toml:"sandbox_max_vcpus"`
+	SandboxMaxMemoryMiB           *int64                `toml:"sandbox_max_memory_mib"`
+	SandboxMaxDiskMiB             *int64                `toml:"sandbox_max_disk_mib"`
+	SandboxMemoryBudgetMiB        *int64                `toml:"sandbox_memory_budget_mib"`
+	SandboxGuestIP                string                `toml:"sandbox_guest_ip"`
+	SandboxBridgeName             string                `toml:"sandbox_bridge_name"`
+	SandboxBridgeCIDR             string                `toml:"sandbox_bridge_cidr"`
+	SandboxGuestCIDR              string                `toml:"sandbox_guest_cidr"`
+	SandboxTapPrefix              string                `toml:"sandbox_tap_prefix"`
+	SandboxNetworkStateDir        string                `toml:"sandbox_network_state_directory"`
+	SandboxDeleteBridge           *bool                 `toml:"sandbox_delete_bridge"`
+	NetworkPolicyNFTPath          string                `toml:"network_policy_nft_path"`
+	NetworkPolicyMaxDNSPins       *int64                `toml:"network_policy_max_dns_pins"`
+	NetworkPolicyMaxDNSTTL        string                `toml:"network_policy_max_dns_ttl"`
+	NetworkPolicyRunnerAddresses  string                `toml:"network_policy_runner_addresses"`
+	NetworkPolicyManagementCIDRs  string                `toml:"network_policy_management_cidrs"`
+	EgressContextConfigPath       string                `toml:"egress_context_config_path"`
+	EgressContexts                []RunnerEgressContext `toml:"egress_contexts"`
+	NetworkPolicyDNSUpstream      string                `toml:"network_policy_dns_upstream"`
+	MaxConcurrentPerSandbox       *int64                `toml:"max_concurrent_per_sandbox"`
+	MaxConcurrentGlobal           *int64                `toml:"max_concurrent_global"`
+	MaxConcurrentStarts           *int64                `toml:"max_concurrent_starts"`
+	MaxConcurrentWorkspaceCreates *int64                `toml:"max_concurrent_workspace_creates"`
+	MaxConcurrentOperationsGlobal *int64                `toml:"max_concurrent_operations_global"`
+	FileTransferMaxBytes          *int64                `toml:"file_transfer_max_bytes"`
+	GuestControlVSockPort         *int64                `toml:"guest_control_vsock_port"`
+	GuestProtocolVSockPort        *int64                `toml:"guest_protocol_vsock_port"`
+	GuestHeartbeatInterval        string                `toml:"guest_heartbeat_interval"`
+	DataPlaneListenAddress        string                `toml:"data_plane_listen_address"`
+	DataPlaneAdvertisedAddress    string                `toml:"data_plane_advertised_address"`
+}
+
+// RunnerEgressContext is one Runner-local routing authority. It deliberately
+// contains only logical gateway names and Runner-local addresses.
+type RunnerEgressContext struct {
+	Name     string                 `toml:"name" json:"name"`
+	Gateways []RunnerLogicalGateway `toml:"gateways" json:"gateways"`
+}
+
+// RunnerLogicalGateway binds one Profile logical destination to a Runner-local IP.
+type RunnerLogicalGateway struct {
+	LogicalName string `toml:"logical_name" json:"logicalName"`
+	Address     string `toml:"address" json:"address"`
 }
 
 // ResolvedDeployment is the typed, validated result. Environment is the
 // Compose transport; RemoteRunnerEnvironment contains isolated systemd maps.
 type ResolvedDeployment struct {
-	Manifest                ManifestV1
-	Environment             map[string]string
-	RemoteRunnerEnvironment map[string]map[string]string
-	ComposeFiles            []string
-	SecretPaths             map[string]string
-	ResourceDocument        resourceapply.Document
+	Manifest                   ManifestV1
+	Environment                map[string]string
+	RemoteRunnerEnvironment    map[string]map[string]string
+	RunnerEgressContextConfigs map[string][]byte
+	ComposeFiles               []string
+	SecretPaths                map[string]string
+	ResourceDocument           resourceapply.Document
 }
 
 // ComposeProject is the Compose project this deployment owns. Compose derives

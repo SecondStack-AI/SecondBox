@@ -30,8 +30,11 @@ func (service *ControlPlaneService) CreateTenant(ctx context.Context, principal 
 		return contracts.Tenant{}, false, err
 	}
 	idempotency.AuditEvent = auditEventPointer(service.newAudit(ctx, principal, "tenant.created", "tenant", request.Ref, request.Ref, now))
+	if request.EgressContext != nil {
+		idempotency.AuditEvent.Details["egressContext"] = *request.EgressContext
+	}
 	tenant := contracts.Tenant{
-		Ref: request.Ref, State: contracts.TenantStateActive,
+		Ref: request.Ref, State: contracts.TenantStateActive, EgressContext: cloneOptionalString(request.EgressContext),
 		AllowedProfileGrants:     sortedUnique(request.AllowedProfileGrants),
 		AllowedApplicationScopes: sortedUnique(request.AllowedApplicationScopes),
 		AggregateQuota:           request.AggregateQuota, ExpiryPolicy: request.ExpiryPolicy,
@@ -41,6 +44,54 @@ func (service *ControlPlaneService) CreateTenant(ctx context.Context, principal 
 	tenant, result, err := service.store.CreateManagedTenant(ctx, tenant, idempotency)
 	if err != nil {
 		return contracts.Tenant{}, false, service.managementDenied(ctx, principal, "tenant.created", "tenant", request.Ref, request.Ref, err)
+	}
+	return tenant, result.Replayed, nil
+}
+
+// UpdateTenantEgressContext replaces or clears one Tenant's context under revision and idempotency fences.
+func (service *ControlPlaneService) UpdateTenantEgressContext(
+	ctx context.Context,
+	principal contracts.Principal,
+	tenantRef string,
+	idempotencyKey string,
+	expectedRevision int64,
+	request contracts.UpdateTenantEgressContextRequest,
+) (contracts.Tenant, bool, error) {
+	if err := validateOwnershipRef("Tenant", tenantRef); err != nil {
+		return contracts.Tenant{}, false, err
+	}
+	if expectedRevision < 1 {
+		return contracts.Tenant{}, false, invalidRequest(errors.New("SecondBox Tenant revision must be positive"))
+	}
+	if request.EgressContext != nil {
+		if err := contracts.ValidateEgressContextName(*request.EgressContext); err != nil {
+			return contracts.Tenant{}, false, service.managementDenied(
+				ctx, principal, "tenant.egress_context_updated", "tenant", tenantRef, tenantRef,
+				invalidRequest(err),
+			)
+		}
+	}
+	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(principal, "tenant.egress_context.update", tenantRef, idempotencyKey, struct {
+		ExpectedRevision int64   `json:"expectedRevision"`
+		EgressContext    *string `json:"egressContext"`
+	}{ExpectedRevision: expectedRevision, EgressContext: request.EgressContext}, now)
+	if err != nil {
+		return contracts.Tenant{}, false, err
+	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(
+		ctx, principal, "tenant.egress_context_updated", "tenant", tenantRef, tenantRef, now,
+	))
+	if request.EgressContext != nil {
+		idempotency.AuditEvent.Details["egressContext"] = *request.EgressContext
+	}
+	tenant, result, err := service.store.UpdateManagedTenantEgressContext(
+		ctx, tenantRef, cloneOptionalString(request.EgressContext), expectedRevision, now, idempotency,
+	)
+	if err != nil {
+		return contracts.Tenant{}, false, service.managementDenied(
+			ctx, principal, "tenant.egress_context_updated", "tenant", tenantRef, tenantRef, err,
+		)
 	}
 	return tenant, result.Replayed, nil
 }
@@ -428,6 +479,11 @@ func validateCreateTenantRequest(request contracts.CreateTenantRequest, now time
 	if err := validateManagementMetadata(request.Metadata); err != nil {
 		return err
 	}
+	if request.EgressContext != nil {
+		if err := contracts.ValidateEgressContextName(*request.EgressContext); err != nil {
+			return invalidRequest(err)
+		}
+	}
 	if err := validateProfileGrants(request.AllowedProfileGrants); err != nil {
 		return err
 	}
@@ -445,6 +501,14 @@ func validateCreateTenantRequest(request contracts.CreateTenantRequest, now time
 		return invalidRequest(errors.New("SecondBox Tenant expiry must be in the future"))
 	}
 	return nil
+}
+
+func cloneOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func validateCreateSubjectRequest(request contracts.CreateSubjectRequest, now time.Time) error {

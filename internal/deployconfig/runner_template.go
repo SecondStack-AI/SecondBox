@@ -114,8 +114,13 @@ network_policy_max_dns_ttl = ''
 network_policy_runner_addresses = ''
 # Management networks; a comma-separated list of CIDRs.
 network_policy_management_cidrs = ''
-# Logical gateways; unique domain=IP pairs or none, including every gateway required by selected standard bundles.
-network_policy_runner_gateways = ''
+# Absolute path from which this Runner loads the generated strict context configuration. Same-host Compose requires /run/secondbox-runner-config/egress-contexts.json.
+egress_context_config_path = ''
+# Context-indexed Runner-local mappings. Replace the empty list with one or more
+# [[runners.egress_contexts]] tables, each containing a unique valid name, and
+# [[runners.egress_contexts.gateways]] tables containing logical_name and
+# address. The generator emits the strict JSON file; do not hand-edit it.
+egress_contexts = []
 # Upstream DNS resolver; must be an IP:port with a nonzero port.
 network_policy_dns_upstream = ''
 

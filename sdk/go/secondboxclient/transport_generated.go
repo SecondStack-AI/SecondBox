@@ -218,6 +218,9 @@ var operations = map[string]OperationMetadata{
 	"reactivateTenant": {
 		OperationID: "reactivateTenant", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}:reactivate",
 	},
+	"readEgressContextPreflight": {
+		OperationID: "readEgressContextPreflight", Method: "GET", PathTemplate: "/v1/diagnostics/egress-contexts",
+	},
 	"readSandboxFile": {
 		OperationID: "readSandboxFile", Method: "GET", PathTemplate: "/v1/sandboxes/{sandboxId}/files",
 	},
@@ -310,6 +313,13 @@ var operations = map[string]OperationMetadata{
 		OperationID: "updateSubjectQuota", Method: "PUT", PathTemplate: "/v1/subjects/{subjectRef}/quota",
 		RequestBody: []OperationMediaType{
 			{ContentType: "application/json", Schema: "UpdateSubjectQuotaRequest"},
+		},
+		RequestBodyRequired: true,
+	},
+	"updateTenantEgressContext": {
+		OperationID: "updateTenantEgressContext", Method: "PUT", PathTemplate: "/v1/tenants/{tenantRef}/egress-context",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "UpdateTenantEgressContextRequest"},
 		},
 		RequestBodyRequired: true,
 	},

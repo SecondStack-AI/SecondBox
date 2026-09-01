@@ -148,7 +148,7 @@ func TestIsolatedStandardBundleCanBeSelectedWithoutGatewayMapping(t *testing.T) 
 	})
 	runner := validTestRunner("runner-isolated", "remote")
 	runner.PoolID = standardresources.PoolAMD64
-	runner.NetworkPolicyRunnerGateways = "none"
+	runner.EgressContexts = nil
 	if err := validateStandardResources(manifest.StandardResources, []Runner{runner}); err != nil {
 		t.Fatalf("explicit isolated bundle selection: %v", err)
 	}
@@ -294,11 +294,11 @@ func TestRecordedInstallerComposeDiagnosticsDoNotRegenerateSourceProfiles(t *tes
 	if _, err := ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath, "ps"); err == nil {
 		t.Fatal("ordinary accepted-manifest resolution unexpectedly accepted changed release input")
 	}
-	subject, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0")
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, "0.7.0", subject, "ps")
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, subject, "ps")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,13 +316,13 @@ func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0")
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, action := range []string{"stop-control-plane", "start-control-plane", "down"} {
 		executor := &recordingComposeExecutor{}
-		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, "0.7.0", action, subject, executor); err != nil {
+		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, action, subject, executor); err != nil {
 			t.Fatal(err)
 		}
 		if len(executor.calls) != 1 {
@@ -347,7 +347,7 @@ func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
 	if err := os.WriteFile(resolved.ComposeFiles[0], []byte("drifted\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, "0.7.0", "down", subject, &recordingComposeExecutor{}); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
+	if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, "down", subject, &recordingComposeExecutor{}); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
 		t.Fatalf("drifted recorded Compose asset result = %v", err)
 	}
 }
@@ -358,7 +358,7 @@ func TestRecordedInstallerComposeSubjectAuthenticatesProjectIdentity(t *testing.
 	if _, err := Render(manifestPath, environmentPath); err != nil {
 		t.Fatal(err)
 	}
-	subject, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0")
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,60 +378,15 @@ func TestRecordedInstallerComposeSubjectAuthenticatesProjectIdentity(t *testing.
 	if err := os.WriteFile(manifestPath, drifted, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	driftedSubject, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0")
+	driftedSubject, err := RecordedInstallerComposeSubject(manifestPath, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if driftedSubject == subject {
 		t.Fatal("Compose project-only drift preserved the authenticated subject")
 	}
-	if _, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, "0.7.0", subject, "ps"); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
+	if _, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, subject, "ps"); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
 		t.Fatalf("Compose project-only drift result = %v", err)
-	}
-}
-
-func TestRecordedInstallerComposeIdentityAcceptsOnlyExactV060Fixture(t *testing.T) {
-	manifestPath := initializedDevelopment(t)
-	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
-	if _, err := Render(manifestPath, environmentPath); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string]string{
-		"compose.explicit-network.yml": "v0.6.0 recorded explicit network\n",
-		"compose.same-host-runner.yml": "v0.6.0 recorded same-host Runner\n",
-	} {
-		if err := os.WriteFile(filepath.Join(environmentPath+".compose", name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The fixture was encoded by singleHostManifest at the exact public v0.6.0
-	// source commit from its verified public artifact manifest. It does not
-	// inherit any target-era manifest type or generator behavior.
-	legacy, err := os.ReadFile(filepath.Join("testdata", "v060-recorded-installer-manifest.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(manifestPath, legacy, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := RecordedInstallerComposeSubject(manifestPath, "", "0.7.0"); err == nil || !strings.Contains(err.Error(), "strict decode") {
-		t.Fatalf("current release accepted v0.6.0 CPU fields: %v", err)
-	}
-	subject, err := RecordedInstallerComposeSubject(manifestPath, "", recordedManifestV060Version)
-	if err != nil {
-		t.Fatalf("exact v0.6.0 recorded manifest was rejected: %v", err)
-	}
-	if _, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, recordedManifestV060Version, subject, "ps"); err != nil {
-		t.Fatalf("exact v0.6.0 recorded Compose identity was rejected: %v", err)
-	}
-	if _, err := RecordedInstallerComposeSubject(manifestPath, "", "0.6.1"); err == nil || !strings.Contains(err.Error(), "strict decode") {
-		t.Fatalf("non-v0.6.0 release accepted legacy CPU fields: %v", err)
-	}
-	if err := os.WriteFile(manifestPath, append(legacy, []byte("\nunknown_recorded_field = true\n")...), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := RecordedInstallerComposeSubject(manifestPath, "", recordedManifestV060Version); err == nil || !strings.Contains(err.Error(), "strict decode recorded v0.6.0 manifest") {
-		t.Fatalf("v0.6.0 recorded decoder accepted an unknown field: %v", err)
 	}
 }
 
@@ -535,7 +490,7 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "standard gateway unresolved", want: "must resolve agent-gateway.secondbox.internal", mutate: func(manifest *ManifestV1) {
 			runner := validTestRunner("runner-a", "remote")
 			runner.PoolID = "standard-amd64"
-			runner.NetworkPolicyRunnerGateways = "platform-gateway.secondbox.internal=172.30.0.1"
+			runner.EgressContexts = []RunnerEgressContext{{Name: "secondstack-staging", Gateways: []RunnerLogicalGateway{{LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.1"}}}}
 			manifest.Runners = []Runner{runner}
 		}},
 		{name: "Compose environment contains newline", want: "forbidden byte", mutate: func(manifest *ManifestV1) { manifest.Deployment.ControlPlaneImage = "image\npoison" }},
@@ -1076,9 +1031,73 @@ func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testi
 	if got := resolved.RemoteRunnerEnvironment["runner-a"]["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"]; got != "/remote-a/identity/runner.crt" {
 		t.Fatalf("remote Runner identity path was not preserved: %q", got)
 	}
+	if got := resolved.RemoteRunnerEnvironment["runner-a"]["SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG"]; got != "/etc/secondbox/egress-contexts.json" {
+		t.Fatalf("remote Runner context config path was not preserved: %q", got)
+	}
 	renderedPath := filepath.Join(filepath.Dir(manifestPath), "generated.env")
 	if _, err := Render(manifestPath, renderedPath); err != nil {
 		t.Fatal(err)
+	}
+	contextConfigPath := filepath.Join(renderedPath+".runners", "runner-a.egress-contexts.json")
+	contextConfig, err := os.ReadFile(contextConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(contextConfig, []byte(`"schemaVersion": "secondbox.runner-egress-contexts/v1"`)) ||
+		!bytes.Contains(contextConfig, []byte(`"name": "secondstack-staging"`)) ||
+		bytes.Contains(contextConfig, []byte("certificate")) || bytes.Contains(contextConfig, []byte("proxy")) {
+		t.Fatalf("rendered context configuration = %s", contextConfig)
+	}
+	manifest.Runners[0].EgressContexts = append(manifest.Runners[0].EgressContexts, RunnerEgressContext{
+		Name: "customer-b",
+		Gateways: []RunnerLogicalGateway{
+			{LogicalName: "agent-gateway.secondbox.internal", Address: "172.30.0.2"},
+			{LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.2"},
+		},
+	})
+	encoded, err = encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Render(manifestPath, renderedPath); err != nil {
+		t.Fatal(err)
+	}
+	contextConfig, err = os.ReadFile(contextConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var multiple runnerEgressContextConfigDocument
+	if err := json.Unmarshal(contextConfig, &multiple); err != nil {
+		t.Fatal(err)
+	}
+	if len(multiple.Contexts) != 2 || multiple.Contexts[1].Name != "customer-b" {
+		t.Fatalf("multiple context render = %#v", multiple.Contexts)
+	}
+	manifest.Runners[0].EgressContexts[0].Gateways[0].Address = "172.30.0.9"
+	manifest.Runners[0].EgressContexts = manifest.Runners[0].EgressContexts[:1]
+	encoded, err = encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Render(manifestPath, renderedPath); err != nil {
+		t.Fatal(err)
+	}
+	contextConfig, err = os.ReadFile(contextConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replaced runnerEgressContextConfigDocument
+	if err := json.Unmarshal(contextConfig, &replaced); err != nil {
+		t.Fatal(err)
+	}
+	if len(replaced.Contexts) != 1 || replaced.Contexts[0].Gateways[0].Address != "172.30.0.9" {
+		t.Fatalf("context replacement/removal render = %#v", replaced.Contexts)
 	}
 	manifest.Runners = manifest.Runners[:1]
 	encoded, err = encodeManifest(manifest)
@@ -1094,11 +1113,14 @@ func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testi
 	if _, err := os.Stat(filepath.Join(renderedPath+".runners", "runner-b.env")); !os.IsNotExist(err) {
 		t.Fatalf("removed Runner retained a stale handoff: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(renderedPath+".runners", "runner-b.egress-contexts.json")); !os.IsNotExist(err) {
+		t.Fatalf("removed Runner retained a stale context config: %v", err)
+	}
 	handoff := filepath.Join(t.TempDir(), "runner-a")
 	if err := RunnerInit(manifestPath, "runner-a", handoff); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"runner.crt", "runner.key", "runner-ca.crt", "runner.env"} {
+	for _, name := range []string{"egress-contexts.json", "runner.crt", "runner.key", "runner-ca.crt", "runner.env"} {
 		if info, err := os.Stat(filepath.Join(handoff, name)); err != nil || !info.Mode().IsRegular() {
 			t.Fatalf("runner handoff %s = %v, %v", name, info, err)
 		}
@@ -1267,12 +1289,13 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 }
 
 func validTestRunner(id, placement string) Runner {
-	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", WorkspaceHostDirectory: "/var/lib/secondbox/workspace", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUIDStart: integer(10001), FirecrackerJailerUIDCount: integer(16), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", FirecrackerAllowUnjailed: boolean(false), SnapshotTemplateCacheRoot: "/var/lib/secondbox/snapshot-templates", ArtifactPublicKey: "/opt/secondbox/manifest-public.pem", ArtifactPublicKeySHA256: strings.Repeat("a", 64), WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", NetworkPolicyRunnerGateways: "agent-gateway.secondbox.internal=172.30.0.1,platform-gateway.secondbox.internal=172.30.0.1", NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
+	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", WorkspaceHostDirectory: "/var/lib/secondbox/workspace", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUIDStart: integer(10001), FirecrackerJailerUIDCount: integer(16), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", FirecrackerAllowUnjailed: boolean(false), SnapshotTemplateCacheRoot: "/var/lib/secondbox/snapshot-templates", ArtifactPublicKey: "/opt/secondbox/manifest-public.pem", ArtifactPublicKeySHA256: strings.Repeat("a", 64), WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", EgressContextConfigPath: "/etc/secondbox/egress-contexts.json", EgressContexts: []RunnerEgressContext{{Name: "secondstack-staging", Gateways: []RunnerLogicalGateway{{LogicalName: "agent-gateway.secondbox.internal", Address: "172.30.0.1"}, {LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.1"}}}}, NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
 }
 
 func validSameHostTestRunner(id string) Runner {
 	runner := validTestRunner(id, "same-host")
 	runner.IdentityDirectory = "/run/secondbox-runner-identity"
+	runner.EgressContextConfigPath = "/run/secondbox-runner-config/egress-contexts.json"
 	runner.StateHostDirectory = "/var/lib/secondbox-runner-storage"
 	runner.WorkspaceHostDirectory = "/var/lib/secondbox-runner-storage/workspaces"
 	runner.LogPath = "/var/lib/secondbox-runner/state/logs/runner.jsonl"
@@ -1360,7 +1383,11 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 		{name: "invalid DNS TTL", want: "supported duration range", mutate: func(r *Runner) { r.NetworkPolicyMaxDNSTTL = "invalid" }},
 		{name: "invalid Runner address", want: "invalid network value", mutate: func(r *Runner) { r.NetworkPolicyRunnerAddresses = "not-an-ip" }},
 		{name: "invalid management CIDR", want: "invalid network value", mutate: func(r *Runner) { r.NetworkPolicyManagementCIDRs = "127.0.0.1" }},
-		{name: "invalid gateway", want: "domain=IP", mutate: func(r *Runner) { r.NetworkPolicyRunnerGateways = "invalid" }},
+		{name: "invalid gateway", want: "invalid gateway IP", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].Address = "invalid" }},
+		{name: "trailing-dot gateway name", want: "canonical logical gateway name", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].LogicalName = "gateway.example." }},
+		{name: "underscore gateway name", want: "canonical logical gateway name", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].LogicalName = "gateway_name.example" }},
+		{name: "IP-literal gateway name", want: "canonical logical gateway name", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].LogicalName = "192.0.2.10" }},
+		{name: "malformed gateway name", want: "canonical logical gateway name", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].LogicalName = "gateway..example" }},
 		{name: "invalid DNS upstream", want: "must be an IP:port", mutate: func(r *Runner) { r.NetworkPolicyDNSUpstream = "localhost:53" }},
 		{name: "invalid advertised address", want: "explicit reachable host", mutate: func(r *Runner) { r.DataPlaneAdvertisedAddress = "0.0.0.0:7443" }},
 	}
@@ -1372,6 +1399,34 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestEncodeRunnerEgressContextConfigNormalizesEmptyContexts(t *testing.T) {
+	content, err := encodeRunnerEgressContextConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), `"contexts": null`) || !strings.Contains(string(content), `"contexts": []`) {
+		t.Fatalf("empty Runner egress context config = %s", content)
+	}
+}
+
+func TestRemoveStaleRunnerArtifactsRefusesUnmarkedContextConfig(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "runner-a.egress-contexts.json")
+	content := []byte(`{"schemaVersion":"secondbox.runner-egress-contexts/v1","contexts":[]}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeStaleRunnerArtifacts(directory, map[string]map[string]string{}, map[string][]byte{}); err == nil || !strings.Contains(err.Error(), "refusing non-generated stale artifact") {
+		t.Fatalf("unmarked stale context config removal = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("unmarked stale context config was removed: %v", err)
 	}
 }
 

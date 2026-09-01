@@ -597,7 +597,11 @@ func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contra
 		if runner.Capacity["VCPUCount"] < install.DurableCodingVCPUCount || runner.Capacity["MemoryBytes"] < install.DurableCodingMemoryBytes || runner.Capacity["DiskBytes"] < install.MinimumWorkspaceBytes || runner.Capacity["Instances"] < 1 || runner.Capacity["Operations"] < install.DurableCodingConcurrentOperations {
 			continue
 		}
-		return map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}, true
+		expectedContext := expectedInstallerComposeProject(plan)
+		if !slices.Contains(runner.SupportedEgressContexts, expectedContext) {
+			continue
+		}
+		return map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "egressContext": expectedContext, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}, true
 	}
 	return nil, false
 }
@@ -628,7 +632,25 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 	if err := json.Unmarshal(stdout.Bytes(), &runner); err != nil {
 		return nil, fmt.Errorf("SecondBox installer qualification Runner decode: %w", err)
 	}
-	return installedSmokeEvidence(plan, pool, runner)
+	evidence, err := installedSmokeEvidence(plan, pool, runner)
+	if err != nil {
+		return nil, err
+	}
+	command, stdout, stderr = installedCLICommand(
+		ctx, plan, "--output", "json", "diagnostics", "egress-contexts",
+	)
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight: %w: %s", err, cliui.Sanitize(stderr.String()))
+	}
+	var preflight contracts.EgressContextPreflight
+	if err := json.Unmarshal(stdout.Bytes(), &preflight); err != nil {
+		return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight decode: %w", err)
+	}
+	if !preflight.Ready || preflight.Truncated {
+		return nil, errors.New("SecondBox installer qualification egress-context preflight is not ready and complete")
+	}
+	evidence["egressContextPreflight"] = "ready"
+	return evidence, nil
 }
 
 func installedSmokeEvidence(

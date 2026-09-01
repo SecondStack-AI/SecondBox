@@ -109,6 +109,25 @@ func TestSessionRejectsRegistrationWithFailedPrerequisitesAndVersionSkew(t *test
 	}
 }
 
+func TestSessionRejectsInvalidOrDuplicateAdvertisedEgressContexts(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		contexts []string
+	}{
+		{name: "invalid", contexts: []string{"Tenant-Blue"}},
+		{name: "duplicate", contexts: []string{"tenant-blue", "tenant-blue"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := negotiatedSession(t)
+			registration := registrationFrame("runner-1", "connection-1", 1)
+			registration.GetRegistration().SupportedEgressContexts = test.contexts
+			if _, err := session.Accept(registration); !errors.Is(err, ErrRunnerPrerequisites) {
+				t.Fatalf("registration error = %v, want ErrRunnerPrerequisites", err)
+			}
+		})
+	}
+}
+
 func TestSessionRejectsPortableCheckpointOnlyRunner(t *testing.T) {
 	session := NewSession(SessionConfig{
 		AuthenticatedRunnerID: "runner-old",

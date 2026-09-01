@@ -5,10 +5,13 @@ import (
 	"errors"
 	"sort"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 )
 
 var ErrNoCompatibleRunner = errors.New("SecondBox scheduler found no compatible runner")
 var ErrHomeRunnerUnavailable = errors.New("SecondBox Sandbox home runner is unavailable")
+var ErrEgressContextUnavailable = ports.ErrEgressContextUnavailable
 
 const (
 	DrainPhaseActive   = "active"
@@ -32,6 +35,7 @@ type Requirements struct {
 	Capacity                 Capacity
 	GuestProtocolGeneration  uint32
 	PreferredArtifactDigests []string
+	EgressContext            *string
 }
 
 // MaterializationSnapshot is one revalidated local backend composition.
@@ -45,19 +49,20 @@ type MaterializationSnapshot struct {
 
 // RunnerSnapshot is one durable registration and latest heartbeat view.
 type RunnerSnapshot struct {
-	ID                   string
-	PoolName             string
-	BackendKind          string
-	Architecture         string
-	Capabilities         map[string]bool
-	Allocatable          Capacity
-	Reserved             Capacity
-	DrainPhase           string
-	LastHeartbeatAt      time.Time
-	ArtifactDigests      []string
-	Materializations     []MaterializationSnapshot
-	GuestProtocolMinimum uint32
-	GuestProtocolMaximum uint32
+	ID                      string
+	PoolName                string
+	BackendKind             string
+	Architecture            string
+	Capabilities            map[string]bool
+	Allocatable             Capacity
+	Reserved                Capacity
+	DrainPhase              string
+	LastHeartbeatAt         time.Time
+	ArtifactDigests         []string
+	Materializations        []MaterializationSnapshot
+	SupportedEgressContexts []string
+	GuestProtocolMinimum    uint32
+	GuestProtocolMaximum    uint32
 }
 
 // SelectRunner applies hard compatibility before locality and stable identity ordering.
@@ -72,8 +77,14 @@ func SelectRunner(
 		artifactLocality int
 	}
 	ranked := make([]rankedRunner, 0, len(runners))
+	contextMismatch := false
 	for _, runner := range runners {
 		if !compatible(requirements, runner, now, heartbeatTimeout) {
+			continue
+		}
+		if requirements.EgressContext != nil &&
+			!contains(runner.SupportedEgressContexts, *requirements.EgressContext) {
+			contextMismatch = true
 			continue
 		}
 		ranked = append(ranked, rankedRunner{
@@ -82,6 +93,9 @@ func SelectRunner(
 		})
 	}
 	if len(ranked) == 0 {
+		if contextMismatch {
+			return RunnerSnapshot{}, ErrEgressContextUnavailable
+		}
 		return RunnerSnapshot{}, ErrNoCompatibleRunner
 	}
 	sort.Slice(ranked, func(left, right int) bool {
@@ -124,6 +138,9 @@ func SelectHomeRunner(
 		}
 	}
 	selected, err := SelectRunner(requirements, homeCandidates, now, heartbeatTimeout)
+	if errors.Is(err, ErrEgressContextUnavailable) {
+		return RunnerSnapshot{}, err
+	}
 	if errors.Is(err, ErrNoCompatibleRunner) {
 		return RunnerSnapshot{}, ErrHomeRunnerUnavailable
 	}

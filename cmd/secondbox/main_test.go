@@ -89,7 +89,7 @@ func TestEveryCommandHasOutputContract(t *testing.T) {
 	for _, command := range []string{
 		"version", "login", "logout", "whoami", "run", "exec", "shell",
 		"sandbox shell", "exec stream", "logs tail", "logs follow",
-		"diagnostics bundle", "timings sandbox", "timings operation",
+		"diagnostics bundle", "diagnostics egress-contexts", "timings sandbox", "timings operation",
 		"timings summary", "resources check", "resources apply", "operation",
 		"platform login", "controller login", "application login", "tenant",
 		"controller-authority", "subject", "application-authority", "usage",

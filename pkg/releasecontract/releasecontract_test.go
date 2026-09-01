@@ -217,29 +217,6 @@ func TestInstallerQualificationEvidenceRequiresRebootAndPinnedRelease(t *testing
 	}
 }
 
-func TestRecordedInstallerQualificationAcceptsOnlyExactV060Waiver(t *testing.T) {
-	evidence := InstallerQualificationEvidence{
-		SchemaVersion: LegacyInstallerQualificationEvidenceSchema,
-		SourceCommit:  "92e409ddade89737afa75ec2b781dac5c8afbeab",
-		Suite:         "test-installer-qualified", PassCount: 2, WallClockSeconds: 1451,
-		Host: QualificationHostEvidence{
-			KVM:                 QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
-			TUN:                 QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
-			WorkspaceFilesystem: QualificationFilesystemEvidence{Mount: "/recorded/v0.6.0 btrfs", Type: "btrfs"},
-		},
-		ReleaseManifestDigest: "sha256:8cb794536dd6b1b45bb1471c21c2fefd062af276446bdd954a4ce1b53aa95197",
-		FilesystemIdentity:    "waived-after-two-complete-modes",
-		QualifiedAt:           "2026-08-26T14:53:50Z",
-	}
-	if err := evidence.ValidateRecordedForRelease(evidence.SourceCommit, evidence.ReleaseManifestDigest); err != nil {
-		t.Fatal(err)
-	}
-	evidence.PassCount++
-	if err := evidence.ValidateRecordedForRelease(evidence.SourceCommit, evidence.ReleaseManifestDigest); err == nil || !strings.Contains(err.Error(), "exact v0.6.0 waiver") {
-		t.Fatalf("mutated recorded waiver error = %v", err)
-	}
-}
-
 func validManifest() ArtifactManifest {
 	identity := Identity{Version: "1.2.3", Tag: "v1.2.3", SourceCommit: testCommit}
 	ref := func(name string) Reference {

@@ -39,15 +39,16 @@ type capacityReservation struct {
 }
 
 type activeAssignment struct {
-	fence       *runnerprotocol.AssignmentFence
-	correlation *runnerprotocol.Correlation
-	handles     *SupervisorHandles
-	session     *firecracker.GuestProtocolSession
-	workspace   workspacestore.ComputeAttachment
-	network     instanceNetwork
-	instanceDir string
-	reservation capacityReservation
-	backendRef  string
+	fence         *runnerprotocol.AssignmentFence
+	correlation   *runnerprotocol.Correlation
+	egressContext string
+	handles       *SupervisorHandles
+	session       *firecracker.GuestProtocolSession
+	workspace     workspacestore.ComputeAttachment
+	network       instanceNetwork
+	instanceDir   string
+	reservation   capacityReservation
+	backendRef    string
 	// launched closes when the claimed start finishes (successfully
 	// registered or removed after failure); nil on a completed assignment.
 	launched       chan struct{}
@@ -206,6 +207,21 @@ func (backend *AssignmentBackend) InstanceTerminals() <-chan runnercontrol.Backe
 	return backend.instanceTerminals
 }
 
+func (backend *AssignmentBackend) RecoveredAssignments() []*runnerprotocol.ActiveAssignmentSummary {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	result := make([]*runnerprotocol.ActiveAssignmentSummary, 0, len(backend.assignments))
+	for _, active := range backend.assignments {
+		if active == nil {
+			continue
+		}
+		if summary := runnerprotocol.RecoveredAssignmentSummary(active.fence, active.egressContext); summary != nil {
+			result = append(result, summary)
+		}
+	}
+	return result
+}
+
 func (backend *AssignmentBackend) SetRunnerEvidenceSink(sink runnerevidence.Sink, runnerID string) {
 	if sink == nil || strings.TrimSpace(runnerID) == "" {
 		return
@@ -355,7 +371,8 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	// begun; the claiming start passes its own claim through.
 	backend.mu.Lock()
 	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
-		same, fenced := sameFence(active.fence, assignment.Fence), active.fenced
+		same := active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, assignment)
+		fenced := active != nil && active.fenced
 		backend.mu.Unlock()
 		if same {
 			if fenced {
@@ -398,7 +415,14 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return artifactAssignment(fmt.Errorf("SecondBox gVisor revalidate local materialization: %w", err))
 	}
-	if _, err := translateNetworkPolicy(assignment.NetworkPolicy, backend.config.NetworkPolicy.CompileOptions); err != nil {
+	compileOptions, err := backend.config.NetworkPolicy.CompileOptionsForAssignment(
+		assignment.EgressContext,
+		assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment egress context: %w", err))
+	}
+	if _, err := translateNetworkPolicy(assignment.NetworkPolicy, compileOptions); err != nil {
 		return incompatibleAssignment(err)
 	}
 	backend.mu.Lock()
@@ -435,7 +459,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignmentID := assignment.Fence.AssignmentId
 	backend.mu.Lock()
 	if existing, exists := backend.assignments[assignmentID]; exists {
-		if !sameFence(existing.fence, assignment.Fence) {
+		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, assignment) {
 			backend.mu.Unlock()
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment ID was reused with different fencing"))
 		}
@@ -454,8 +478,8 @@ func (backend *AssignmentBackend) StartAssignment(
 			}
 			backend.mu.Lock()
 			reference = ""
-			if current, still := backend.assignments[assignmentID]; still &&
-				sameFence(current.fence, assignment.Fence) && !current.fenced {
+			if current, still := backend.assignments[assignmentID]; still && current != nil &&
+				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, assignment) && !current.fenced {
 				reference = current.backendRef
 			}
 			backend.mu.Unlock()
@@ -472,7 +496,10 @@ func (backend *AssignmentBackend) StartAssignment(
 		}
 	}
 	launched := make(chan struct{})
-	claim := &activeAssignment{fence: cloneFence(assignment.Fence), launched: launched, done: make(chan struct{})}
+	claim := &activeAssignment{
+		fence: cloneFence(assignment.Fence), launched: launched, done: make(chan struct{}),
+		egressContext: assignment.EgressContext,
+	}
 	claim.launchDone = sync.OnceFunc(func() { close(launched) })
 	backend.assignments[assignmentID] = claim
 	backend.mu.Unlock()
@@ -539,7 +566,14 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
 		return result, err
 	}
-	compiled, err := translateNetworkPolicy(assignment.NetworkPolicy, backend.config.NetworkPolicy.CompileOptions)
+	compileOptions, err := backend.config.NetworkPolicy.CompileOptionsForAssignment(
+		assignment.EgressContext,
+		assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment egress context: %w", err))
+	}
+	compiled, err := translateNetworkPolicy(assignment.NetworkPolicy, compileOptions)
 	if err != nil {
 		return result, incompatibleAssignment(err)
 	}
@@ -700,6 +734,7 @@ func (backend *AssignmentBackend) launchInstance(
 	active := &activeAssignment{
 		fence:         cloneFence(assignment.Fence),
 		correlation:   proto.Clone(assignment.Correlation).(*runnerprotocol.Correlation),
+		egressContext: assignment.EgressContext,
 		handles:       handles,
 		workspace:     workspace,
 		network:       network,

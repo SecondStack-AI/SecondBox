@@ -12,6 +12,7 @@ import (
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -104,6 +105,7 @@ type DurableAssignment struct {
 	Revision                int64
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
+	EgressContext           *string
 }
 
 // NewPostgresStore connects the scheduler to PostgreSQL authority.
@@ -237,6 +239,9 @@ func (store *PostgresStore) scheduleOnce(
 		(workspace.State != "creating" && workspace.State != "ready") {
 		return DurableAssignment{}, false, ErrProfileRevisionMismatch
 	}
+	if !equalEgressContext(locked.EgressContext, request.Requirements.EgressContext) {
+		return DurableAssignment{}, false, ErrProfileRevisionMismatch
+	}
 	if pinnedProfileRevisionID != request.ProfileRevisionID {
 		return DurableAssignment{}, false, ErrProfileRevisionMismatch
 	}
@@ -326,6 +331,7 @@ func (store *PostgresStore) scheduleOnce(
 		ReleaseProof: map[string]string{}, RetryLimit: request.RetryLimit,
 		OperationDeadline: request.OperationDeadline.UTC(), ClaimExpiresAt: request.ClaimExpiresAt.UTC(),
 		NextReconcileAt: request.OperationDeadline.UTC(),
+		EgressContext:   cloneEgressContext(request.Requirements.EgressContext),
 		Revision:        1, CreatedAt: placementAt, UpdatedAt: placementAt,
 	}
 	orderedWrites := &pgx.Batch{}
@@ -362,14 +368,15 @@ func (store *PostgresStore) scheduleOnce(
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
 			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
-			next_reconcile_at,revision,created_at,updated_at
+			next_reconcile_at,revision,created_at,updated_at,egress_context
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,'{}','',0,$12,$13,$14,'',$15,$13,1,$15,$15
+			$1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,'{}','',0,$12,$13,$14,'',$15,$13,1,$15,$15,$16
 		)`,
 		assignment.ID, assignment.SandboxID, assignment.InstanceID, assignment.RunnerID,
 		assignment.ProfileRevisionID, assignment.BackendKind, assignment.Generation,
 		assignment.FencingToken, assignment.State, capabilitiesJSON, artifactsJSON,
 		assignment.RetryLimit, assignment.OperationDeadline, assignment.ClaimExpiresAt, placementAt,
+		request.Requirements.EgressContext,
 	)
 	// The command is always queued pending. Assigning its stream sequence here
 	// meant locking the runner's single runner_connections row inside every
@@ -500,7 +507,35 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		command.DeadlineUnixMs == 0 {
 		return errors.New("SecondBox scheduler Assignment command does not match durable assignment authority")
 	}
+	if request.Requirements.EgressContext == nil {
+		if command.Requirements.RequiresTenantEgressContext || command.EgressContext != "" {
+			return errors.New("SecondBox scheduler context-free placement carries an Assignment egress context")
+		}
+	} else if !command.Requirements.RequiresTenantEgressContext ||
+		command.EgressContext != *request.Requirements.EgressContext {
+		return errors.New("SecondBox scheduler Assignment egress context does not match placement requirements")
+	}
+	if request.Requirements.EgressContext != nil {
+		if err := contracts.ValidateEgressContextName(*request.Requirements.EgressContext); err != nil {
+			return fmt.Errorf("SecondBox scheduler placement egress context is invalid: %w", err)
+		}
+	}
 	return nil
+}
+
+func equalEgressContext(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func cloneEgressContext(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (store *PostgresStore) observeAtOrAfter(previous time.Time) (time.Time, error) {
@@ -528,7 +563,8 @@ func lockRunnerCandidates(
 	rows, err := tx.Query(ctx, `
 		SELECT id,pool_name,architectures_json,capabilities_json,capacity_json,
 			reserved_capacity_json,drain_phase,last_seen_at,artifact_cache_json,
-			guest_protocol_minimum,guest_protocol_maximum,backend_kind
+			guest_protocol_minimum,guest_protocol_maximum,backend_kind,
+			supported_egress_contexts_json
 		FROM secondbox.runners
 		WHERE pool_name=$1 AND state='ready'
 		ORDER BY id FOR UPDATE`, poolName)
@@ -539,11 +575,12 @@ func lockRunnerCandidates(
 	runners := make([]RunnerSnapshot, 0)
 	for rows.Next() {
 		var runner RunnerSnapshot
-		var architecturesJSON, capabilitiesJSON, allocatableJSON, reservedJSON, cacheJSON []byte
+		var architecturesJSON, capabilitiesJSON, allocatableJSON, reservedJSON, cacheJSON, egressContextsJSON []byte
 		if err := rows.Scan(
 			&runner.ID, &runner.PoolName, &architecturesJSON, &capabilitiesJSON,
 			&allocatableJSON, &reservedJSON, &runner.DrainPhase, &runner.LastHeartbeatAt,
 			&cacheJSON, &runner.GuestProtocolMinimum, &runner.GuestProtocolMaximum, &runner.BackendKind,
+			&egressContextsJSON,
 		); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner candidate scan: %w", err)
 		}
@@ -575,6 +612,9 @@ func lockRunnerCandidates(
 		}
 		runner.ArtifactDigests = cacheEvidence.ArtifactDigests
 		runner.Materializations = cacheEvidence.Materializations
+		if err := json.Unmarshal(egressContextsJSON, &runner.SupportedEgressContexts); err != nil {
+			return nil, fmt.Errorf("SecondBox scheduler Runner egress-context decoding: %w", err)
+		}
 		runners = append(runners, runner)
 	}
 	if err := rows.Err(); err != nil {
@@ -596,7 +636,7 @@ func readAssignment(
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
 			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
-			next_reconcile_at,revision,created_at,updated_at
+			next_reconcile_at,revision,created_at,updated_at,egress_context
 		FROM secondbox.assignments WHERE sandbox_id=$1 AND generation=$2`,
 		sandboxID, generation,
 	).Scan(
@@ -607,7 +647,7 @@ func readAssignment(
 		&assignment.RetryLimit, &assignment.OperationDeadline, &assignment.ClaimExpiresAt,
 		&assignment.ReconcileOwner, &assignment.ReconcileClaimExpiresAt,
 		&assignment.NextReconcileAt,
-		&assignment.Revision, &assignment.CreatedAt, &assignment.UpdatedAt,
+		&assignment.Revision, &assignment.CreatedAt, &assignment.UpdatedAt, &assignment.EgressContext,
 	)
 	if err != nil {
 		return DurableAssignment{}, err

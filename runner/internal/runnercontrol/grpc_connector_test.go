@@ -37,6 +37,7 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT,
 	}
 	if !slices.Equal(config.MandatoryFeatures, want) {
 		t.Fatalf("Runner requested features = %v, want %v", config.MandatoryFeatures, want)
@@ -49,5 +50,8 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 			"maximum concurrent Workspace creates = %d, want 4",
 			config.MaximumConcurrentWorkspaceCreates,
 		)
+	}
+	if len(config.SupportedEgressContexts) != 0 {
+		t.Fatalf("protocol environment synthesized egress contexts = %v", config.SupportedEgressContexts)
 	}
 }

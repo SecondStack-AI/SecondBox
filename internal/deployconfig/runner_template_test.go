@@ -2,6 +2,7 @@ package deployconfig
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -159,11 +160,23 @@ func populateRunnerTemplateForTest(t *testing.T, template string, runner Runner)
 	runnerValue := reflect.ValueOf(runner)
 	for index := 0; index < runnerType.NumField(); index++ {
 		name := runnerType.Field(index).Tag.Get("toml")
-		encoded, err := toml.Marshal(map[string]any{name: runnerValue.Field(index).Interface()})
+		value := runnerValue.Field(index).Interface()
+		encoded, err := toml.Marshal(map[string]any{name: value})
 		if err != nil {
 			t.Fatalf("encode replacement for %s: %v", name, err)
 		}
 		replacement := strings.TrimSpace(string(encoded))
+		if name == "egress_contexts" {
+			contexts := value.([]RunnerEgressContext)
+			if len(contexts) != 1 || len(contexts[0].Gateways) == 0 {
+				t.Fatalf("test Runner egress contexts = %#v", contexts)
+			}
+			var gateways []string
+			for _, gateway := range contexts[0].Gateways {
+				gateways = append(gateways, fmt.Sprintf("{ logical_name = %q, address = %q }", gateway.LogicalName, gateway.Address))
+			}
+			replacement = fmt.Sprintf("egress_contexts = [{ name = %q, gateways = [%s] }]", contexts[0].Name, strings.Join(gateways, ", "))
+		}
 		found := 0
 		for lineIndex, line := range lines {
 			if strings.HasPrefix(line, name+" = ") {

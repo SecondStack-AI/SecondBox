@@ -606,6 +606,21 @@ export SECONDBOX_SCENARIO_COMPOSE_CIDR="$scenario_compose_cidr"
 export SECONDBOX_SCENARIO_BRIDGE_ADDRESS="198.${scenario_network_second_octet}.${scenario_network_third_octet}.1"
 export SECONDBOX_SCENARIO_BRIDGE_CIDR="$SECONDBOX_SCENARIO_BRIDGE_ADDRESS/24"
 export SECONDBOX_SCENARIO_GUEST_IP="198.${scenario_network_second_octet}.${scenario_network_third_octet}.2"
+export SECONDBOX_SCENARIO_EGRESS_CONTEXT_CONFIG="$run_dir/egress-contexts.json"
+jq -n --arg address "$SECONDBOX_SCENARIO_BRIDGE_ADDRESS" '{
+  schemaVersion: "secondbox.runner-egress-contexts/v1",
+  contexts: [
+    {name: "scenario-primary", gateways: [
+      {logicalName: "agent-gateway.secondbox.internal", address: $address},
+      {logicalName: "platform-gateway.secondbox.internal", address: $address}
+    ]},
+    {name: "scenario-replacement", gateways: [
+      {logicalName: "agent-gateway.secondbox.internal", address: $address},
+      {logicalName: "platform-gateway.secondbox.internal", address: $address}
+    ]}
+  ]
+}' >"$SECONDBOX_SCENARIO_EGRESS_CONTEXT_CONFIG"
+chmod 0600 "$SECONDBOX_SCENARIO_EGRESS_CONTEXT_CONFIG"
 export SECONDBOX_SCENARIO_RUNNER_CLIENT_CERTIFICATE=/opt/secondbox-runner-identity/runner.crt
 export SECONDBOX_SCENARIO_RUNNER_CREDENTIAL=scenario-runner-credential-000000000000000000000000
 export SECONDBOX_SCENARIO_RUNNER_GUEST_HEARTBEAT_INTERVAL=1s
@@ -890,8 +905,8 @@ echo "SecondBox scenario Compose network: $SECONDBOX_SCENARIO_COMPOSE_CIDR"
 sweep_host_orphans
 
 compose config --quiet
-compose up --detach --wait --wait-timeout 240 \
-  postgres control-plane
+compose run --rm --no-deps egress-context-config-init
+compose up --detach --wait --wait-timeout 240 postgres control-plane
 
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
@@ -920,6 +935,7 @@ scenario_management_post() {
 
 scenario_management_post "$SECONDBOX_PLATFORM_TOKEN" /v1/tenants scenario-bootstrap-tenant "$(jq -cn \
   --arg ref "$bootstrap_tenant" \
+  --arg egressContext "scenario-primary" \
   --argjson profileGrants "$bootstrap_profile_grants" \
   --argjson maxSandboxes "$SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES" \
   --argjson maxActiveInstances "$SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES" \
@@ -928,7 +944,7 @@ scenario_management_post "$SECONDBOX_PLATFORM_TOKEN" /v1/tenants scenario-bootst
   --argjson maxSnapshots "$SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS" \
   --argjson maxPortSessions "$SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS" \
   --argjson maxConcurrentOperations "$SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS" \
-  '{ref:$ref,allowedProfileGrants:$profileGrants,allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports","sandbox:ports:direct"],aggregateQuota:{maxSandboxes:$maxSandboxes,maxActiveInstances:$maxActiveInstances,maxVcpuCount:$maxVcpuCount,maxMemoryBytes:$maxMemoryBytes,maxSnapshots:$maxSnapshots,maxPortSessions:$maxPortSessions,maxConcurrentOperations:$maxConcurrentOperations,maxActiveSubjects:2,maxApplicationAuthorities:2},expiryPolicy:{maximumSubjectLifetimeSeconds:86400,maximumAuthorityLifetimeSeconds:86400},metadata:{harness:"scenario"}}')" >/dev/null
+  '{ref:$ref,egressContext:$egressContext,allowedProfileGrants:$profileGrants,allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports","sandbox:ports:direct"],aggregateQuota:{maxSandboxes:$maxSandboxes,maxActiveInstances:$maxActiveInstances,maxVcpuCount:$maxVcpuCount,maxMemoryBytes:$maxMemoryBytes,maxSnapshots:$maxSnapshots,maxPortSessions:$maxPortSessions,maxConcurrentOperations:$maxConcurrentOperations,maxActiveSubjects:2,maxApplicationAuthorities:2},expiryPolicy:{maximumSubjectLifetimeSeconds:86400,maximumAuthorityLifetimeSeconds:86400},metadata:{harness:"scenario"}}')" >/dev/null
 
 controller_response="$(scenario_management_post "$SECONDBOX_PLATFORM_TOKEN" "/v1/tenants/$bootstrap_tenant/controller-authorities" scenario-bootstrap-controller "$(jq -cn --arg expiresAt "$bootstrap_expiry" '{expiresAt:$expiresAt,metadata:{harness:"scenario"}}')")"
 controller_token="$(jq -er '.bearerToken' <<<"$controller_response")"

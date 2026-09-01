@@ -184,6 +184,7 @@
       "ref"
     ],
     "optional": [
+      "egressContext",
       "expiresAt"
     ]
   },
@@ -242,6 +243,47 @@
       "p95Milliseconds",
       "p99Milliseconds"
     ]
+  },
+  "EgressContextAssignmentGroup": {
+    "required": [
+      "count",
+      "egressContext",
+      "runnerId",
+      "state"
+    ],
+    "optional": []
+  },
+  "EgressContextPreflight": {
+    "required": [
+      "activeAssignments",
+      "ready",
+      "requirements",
+      "runners",
+      "truncated"
+    ],
+    "optional": []
+  },
+  "EgressContextRequirement": {
+    "required": [
+      "compatibleRunnerIds",
+      "egressContext",
+      "poolName",
+      "profileName",
+      "profileRevisionId",
+      "status",
+      "tenantRef"
+    ],
+    "optional": []
+  },
+  "EgressContextRunner": {
+    "required": [
+      "advertisedContexts",
+      "connected",
+      "poolName",
+      "runnerId",
+      "state"
+    ],
+    "optional": []
   },
   "ExecCancelled": {
     "required": [
@@ -427,7 +469,8 @@
   "NetworkPolicy": {
     "required": [
       "destinations",
-      "mode"
+      "mode",
+      "requiresTenantEgressContext"
     ],
     "optional": []
   },
@@ -664,6 +707,7 @@
       "sandboxStartP95Milliseconds",
       "sandboxStartSampleCount",
       "state",
+      "supportedEgressContexts",
       "updatedAt"
     ],
     "optional": [
@@ -704,6 +748,7 @@
     "required": [
       "createdAt",
       "desiredState",
+      "egressContext",
       "generation",
       "id",
       "metadata",
@@ -893,6 +938,7 @@
       "allowedApplicationScopes",
       "allowedProfileGrants",
       "createdAt",
+      "egressContext",
       "expiryPolicy",
       "metadata",
       "ref",
@@ -1083,6 +1129,12 @@
   "UpdateSubjectQuotaRequest": {
     "required": [
       "quota"
+    ],
+    "optional": []
+  },
+  "UpdateTenantEgressContextRequest": {
+    "required": [
+      "egressContext"
     ],
     "optional": []
   },

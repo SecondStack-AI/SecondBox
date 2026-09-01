@@ -38,6 +38,8 @@ var postFenceMigrationFiles = []string{
 	"0017_tenant_aggregate_quotas.sql",
 	"0018_subject_cleanup.sql",
 	"0019_vcpu_quotas_and_backend_kind.sql",
+	"0020_tenant_egress_context.sql",
+	"0021_runner_egress_contexts.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

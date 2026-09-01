@@ -183,6 +183,63 @@ func TestPostgresPersistedAuthorityRevocationExpiryRotationAndKindIsolation(t *t
 	}
 }
 
+func TestManagedTenantEgressContextUpdateIsRevisionFencedIdempotentAndRecoverable(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	tenant := managementTestTenant("tenant-egress-context-update", now)
+	initialContext := "secondstack-initial"
+	tenant.EgressContext = &initialContext
+	if _, err := controlPlaneStore.CreateTenant(t.Context(), tenant); err != nil {
+		t.Fatal(err)
+	}
+	created, err := controlPlaneStore.GetTenant(t.Context(), tenant.Ref)
+	if err != nil || created.EgressContext == nil || *created.EgressContext != initialContext {
+		t.Fatalf("created Tenant egress context = %#v error=%v", created.EgressContext, err)
+	}
+
+	contextName := "secondstack-staging"
+	input := adminTestInput(tenant.Ref, "platform", "tenant.egress_context.update", "set-egress-context", now)
+	updated, result, err := controlPlaneStore.UpdateManagedTenantEgressContext(
+		t.Context(), tenant.Ref, &contextName, tenant.Revision, now.Add(time.Second), input,
+	)
+	if err != nil || result.Replayed || updated.EgressContext == nil ||
+		*updated.EgressContext != contextName || updated.Revision != tenant.Revision+1 {
+		t.Fatalf("Tenant egress-context update = %#v result=%#v error=%v", updated, result, err)
+	}
+	replayed, result, err := controlPlaneStore.UpdateManagedTenantEgressContext(
+		t.Context(), tenant.Ref, &contextName, tenant.Revision, now.Add(time.Second), input,
+	)
+	if err != nil || !result.Replayed || replayed.Revision != updated.Revision ||
+		replayed.EgressContext == nil || *replayed.EgressContext != contextName {
+		t.Fatalf("Tenant egress-context replay = %#v result=%#v error=%v", replayed, result, err)
+	}
+	conflictInput := adminTestInput(tenant.Ref, "platform", "tenant.egress_context.update", "stale-egress-context", now)
+	if _, _, err := controlPlaneStore.UpdateManagedTenantEgressContext(
+		t.Context(), tenant.Ref, nil, tenant.Revision, now.Add(2*time.Second), conflictInput,
+	); !errors.Is(err, ports.ErrRevisionConflict) {
+		t.Fatalf("stale Tenant egress-context update error = %v", err)
+	}
+
+	clearInput := adminTestInput(tenant.Ref, "platform", "tenant.egress_context.update", "clear-egress-context", now)
+	cleared, _, err := controlPlaneStore.UpdateManagedTenantEgressContext(
+		t.Context(), tenant.Ref, nil, updated.Revision, now.Add(3*time.Second), clearInput,
+	)
+	if err != nil || cleared.EgressContext != nil || cleared.Revision != updated.Revision+1 {
+		t.Fatalf("Tenant egress-context clear = %#v error=%v", cleared, err)
+	}
+
+	controlPlaneStore.Close()
+	restarted, err := NewPostgresControlPlaneStore(t.Context(), storeTestDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restarted.Close)
+	recovered, err := restarted.GetTenant(t.Context(), tenant.Ref)
+	if err != nil || recovered.EgressContext != nil || recovered.Revision != cleared.Revision {
+		t.Fatalf("recovered Tenant = %#v error=%v", recovered, err)
+	}
+}
+
 func TestPostgresPersistedAuthoritiesFailClosedForInvalidVerifierAndCrossTenantReads(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	now := time.Now().UTC().Truncate(time.Second)

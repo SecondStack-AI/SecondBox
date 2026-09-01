@@ -2,11 +2,13 @@ package runnercontrol
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/jackc/pgx/v5"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestHeartbeatPreservesAndReleasesDurableAssignmentReservations(t *testing.T) {
@@ -139,22 +141,22 @@ func TestHeartbeatMakesMissingActiveAssignmentUncertain(t *testing.T) {
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
 			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
-			next_reconcile_at,revision,created_at,updated_at
+			next_reconcile_at,revision,created_at,updated_at,egress_context
 		) VALUES
 		(
 			'assignment-retained','sandbox-retained','instance-retained','runner-home',
 			'profile-active-inventory','firecracker','fc-retained',2,$2,'ready',
-			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1
+			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1,'tenant-blue'
 		),
 		(
 			'assignment-missing','sandbox-missing','instance-missing','runner-home',
 			'profile-active-inventory','firecracker','fc-missing',4,$4,'ready',
-			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1
+			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1,NULL
 		),
 		(
 			'assignment-starting','sandbox-starting','instance-starting','runner-home',
 			'profile-active-inventory','firecracker','',5,$5,'starting',
-			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1
+			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1,NULL
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		now,
@@ -166,7 +168,7 @@ func TestHeartbeatMakesMissingActiveAssignmentUncertain(t *testing.T) {
 		t.Fatal(err)
 	}
 	heartbeatAt := now.Add(time.Second)
-	if _, err := store.RecordHeartbeat(t.Context(), &runnerv1.RunnerHeartbeat{
+	heartbeat := &runnerv1.RunnerHeartbeat{
 		MessageId:        "heartbeat-active-inventory",
 		Sequence:         1,
 		RunnerId:         "runner-home",
@@ -183,10 +185,18 @@ func TestHeartbeatMakesMissingActiveAssignmentUncertain(t *testing.T) {
 			InstanceId:        "instance-retained",
 			SandboxGeneration: 2,
 			FencingToken:      []byte("retained-fencing-token-000000000"),
+			EgressContext:     "tenant-blue",
 		}},
 		DrainPhase:    runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
 		StartupTiming: &runnerv1.StartupTiming{},
-	}, heartbeatAt); err != nil {
+	}
+	conflicting := proto.Clone(heartbeat).(*runnerv1.RunnerHeartbeat)
+	conflicting.ActiveAssignments[0].EgressContext = "tenant-green"
+	if _, err := store.RecordHeartbeat(t.Context(), conflicting, heartbeatAt); err == nil ||
+		!strings.Contains(err.Error(), "conflicts with durable authority") {
+		t.Fatalf("cross-context active Assignment recovery error = %v", err)
+	}
+	if _, err := store.RecordHeartbeat(t.Context(), heartbeat, heartbeatAt); err != nil {
 		t.Fatal(err)
 	}
 

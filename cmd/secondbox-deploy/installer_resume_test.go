@@ -165,7 +165,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 
 func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *testing.T) {
 	plan := install.InstallPlan{OperationID: "install_0123456789abcdef"}
-	ready := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, Capacity: map[string]int64{"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
+	ready := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, SupportedEgressContexts: []string{"secondbox-0123456789abcdef"}, Capacity: map[string]int64{"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
 	if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); !ok || evidence["runnerId"] != ready.ID || evidence["runnerPool"] != standardresources.PoolAMD64 || evidence["coldBootCapacity"] != "advertised" || evidence["concurrentOperationCapacity"] != "16" {
 		t.Fatalf("exact readiness evidence = %#v, %t", evidence, ok)
 	}
@@ -174,6 +174,7 @@ func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *t
 		func(runner *contracts.Runner) { runner.PoolName = "other-pool" },
 		func(runner *contracts.Runner) { runner.CredentialState = "active" },
 		func(runner *contracts.Runner) { runner.Capabilities = []string{"local-workspace"} },
+		func(runner *contracts.Runner) { runner.SupportedEgressContexts = []string{"other-context"} },
 		func(runner *contracts.Runner) { runner.Capacity["MemoryBytes"]-- },
 		func(runner *contracts.Runner) { runner.Capacity["Operations"]-- },
 	} {
@@ -193,8 +194,9 @@ func TestInstalledSmokeRequiresAuthenticatedRunnerPoolAndRunnerReadiness(t *test
 	pool := contracts.RunnerPool{Name: standardresources.PoolAMD64, State: contracts.RunnerPoolStateReady, ReadyRunnerCount: 1}
 	runner := contracts.Runner{
 		ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared",
-		Architectures: []string{standardresources.ArchitectureAMD64},
-		Capabilities:  []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"},
+		Architectures:           []string{standardresources.ArchitectureAMD64},
+		Capabilities:            []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"},
+		SupportedEgressContexts: []string{"secondbox-0123456789abcdef"},
 		Capacity: map[string]int64{
 			"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes,
 			"DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1,
@@ -230,15 +232,16 @@ func TestInstalledSmokeUsesRealCLIInspectionGrammar(t *testing.T) {
 	runner := contracts.Runner{
 		ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64,
 		State: "ready", CredentialState: "pre_shared",
-		Architectures: []string{standardresources.ArchitectureAMD64},
-		Capabilities:  []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"},
+		Architectures:           []string{standardresources.ArchitectureAMD64},
+		Capabilities:            []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"},
+		SupportedEgressContexts: []string{"secondbox-0123456789abcdef"},
 		Capacity: map[string]int64{
 			"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes,
 			"DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1,
 			"Operations": install.DurableCodingConcurrentOperations,
 		},
 	}
-	requests := make(chan string, 4)
+	requests := make(chan string, 6)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer "+platformToken {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
@@ -251,6 +254,12 @@ func TestInstalledSmokeUsesRealCLIInspectionGrammar(t *testing.T) {
 			_ = json.NewEncoder(writer).Encode(pool)
 		case "/v1/runners/" + runner.ID:
 			_ = json.NewEncoder(writer).Encode(runner)
+		case "/v1/diagnostics/egress-contexts":
+			_ = json.NewEncoder(writer).Encode(contracts.EgressContextPreflight{
+				Ready: true, Requirements: []contracts.EgressContextRequirement{},
+				Runners:           []contracts.EgressContextRunner{{RunnerID: runner.ID, PoolName: runner.PoolName, State: runner.State, Connected: true, AdvertisedContexts: runner.SupportedEgressContexts}},
+				ActiveAssignments: []contracts.EgressContextAssignmentGroup{},
+			})
 		default:
 			http.NotFound(writer, request)
 		}
@@ -280,7 +289,8 @@ func TestInstalledSmokeUsesRealCLIInspectionGrammar(t *testing.T) {
 		t.Fatal(err)
 	}
 	if evidence["qualification"] != "authenticated-runner-readiness" ||
-		evidence["runnerId"] != runner.ID || evidence["runnerPool"] != pool.Name {
+		evidence["runnerId"] != runner.ID || evidence["runnerPool"] != pool.Name ||
+		evidence["egressContextPreflight"] != "ready" {
 		t.Fatalf("real CLI qualification evidence = %#v", evidence)
 	}
 	updateEvidence, err := runInstalledUpdateSmoke(t.Context(), plan)
@@ -292,8 +302,8 @@ func TestInstalledSmokeUsesRealCLIInspectionGrammar(t *testing.T) {
 		t.Fatalf("real CLI update qualification evidence = %#v", updateEvidence)
 	}
 	wantRequests := []string{
-		"/v1/runner-pools/" + standardresources.PoolAMD64, "/v1/runners/" + runner.ID,
-		"/v1/runner-pools/" + standardresources.PoolAMD64, "/v1/runners/" + runner.ID,
+		"/v1/runner-pools/" + standardresources.PoolAMD64, "/v1/runners/" + runner.ID, "/v1/diagnostics/egress-contexts",
+		"/v1/runner-pools/" + standardresources.PoolAMD64, "/v1/runners/" + runner.ID, "/v1/diagnostics/egress-contexts",
 	}
 	for index, want := range wantRequests {
 		if got := <-requests; got != want {
@@ -313,8 +323,9 @@ func TestQualifiedGuestUsesRunnerReadinessAndExplicitWorkloadEvidence(t *testing
 		`.evidence.runnerId`, `.evidence.runnerPool`, `.evidence.runnerState`,
 		`.evidence.runnerCredentialState`, `.evidence.runnerPoolState`,
 		`.evidence.runnerPoolReadyRunners`, `.evidence.coldBootCapacity`,
-		`.evidence.concurrentOperationCapacity`,
-		`create_qualification_workload`, `postUpdateState == "runner-ready"`,
+		`.evidence.concurrentOperationCapacity`, `.evidence.egressContext`,
+		`.evidence.egressContextPreflight`, `create_qualification_workload`,
+		`in-place v0.7.2 update`, `refused_then_recreated`,
 	} {
 		if !bytes.Contains(content, []byte(required)) {
 			t.Errorf("qualified guest lacks %q", required)

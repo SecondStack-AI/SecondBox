@@ -91,7 +91,15 @@ artifact bundle and never substitutes mock compute.
 
 ## Bounded support bundles
 
-The support collector includes the three unauthenticated probes, their HTTP status, an authenticated aggregate timing summary, and a bounded tail of the configured control-plane JSON log. It never collects process environments, environment files, credentials, authority verifier rows, database contents, workspaces, runner credentials, or guest files. The platform token is sent only to the aggregate timing route and is never written to the archive. Tenant and Subject references can appear in the reviewed log tail and audit export, but never as metric labels or qualification-evidence fields.
+The platform-only context preflight is available directly:
+
+```sh
+secondbox diagnostics egress-contexts
+```
+
+It performs only reads and returns bounded Tenant/Profile requirements, connected Runner advertisements, compatible Runner IDs, and grouped nonterminal assignments by context. Use it before replacing or removing a Runner mapping; it never drains a Runner, changes a Tenant, or rewrites configuration. Application and tenant-controller sessions are rejected.
+
+The support collector includes the three unauthenticated probes, their HTTP status, an authenticated aggregate timing summary, the authenticated egress-context preflight, and a bounded tail of the configured control-plane JSON log. It never collects process environments, environment files, credentials, authority verifier rows, database contents, workspaces, runner credentials, gateway certificates, proxy endpoints, or guest files. The platform token is sent only to the two platform-authorized routes and is never written to the archive. Tenant and Subject references can appear in the preflight, reviewed log tail, and audit export, but never as metric labels or qualification-evidence fields.
 
 ```sh
 export SECONDBOX_SUPPORT_BASE_URL=http://127.0.0.1:8080
@@ -120,7 +128,7 @@ secondbox \
   --timing-window 15m
 ```
 
-The CLI requires absolute output and non-symbolic-link control-plane log paths, explicit bounds, and an explicit timing window. It records transport failures or truncation in the matching status file and creates the archive with mode `0600`. It does not send the bearer credential to the unauthenticated probes; it sends it only to the aggregate timing route.
+The CLI requires absolute output and non-symbolic-link control-plane log paths, explicit bounds, and an explicit timing window. It records transport failures or truncation in the matching status file and creates the archive with mode `0600`. It does not send the bearer credential to the unauthenticated probes; it sends it only to the aggregate timing and egress-context preflight routes.
 
 ## Audit inspection
 

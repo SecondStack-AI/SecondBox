@@ -20,7 +20,7 @@
       "revisions": [
         {
           "number": 1,
-          "specDigest": "sha256:10af5253a99a56146b4f6556e0847dab5dd853ba6c969436e91ef346f7d45580",
+          "specDigest": "sha256:cbc04881b2e05fca62d317a80e3a75674ed3fdc42889fd2028c99b392cee2247",
           "spec": {
             "pool": "experimental-microsandbox-arm64",
             "architecture": "arm64",
@@ -52,7 +52,7 @@
               "terminalDetachSeconds": 3600,
               "dataPlaneTransport": "proxied"
             },
-            "network": {"mode": "deny_all", "destinations": []},
+            "network": {"mode": "deny_all", "destinations": [], "requiresTenantEgressContext": false},
             "ports": []
           }
         }

@@ -823,11 +823,13 @@ func (*HelperNetworkDestination_Domain) isHelperNetworkDestination_Target() {}
 func (*HelperNetworkDestination_Cidr) isHelperNetworkDestination_Target() {}
 
 type HelperNetworkPolicy struct {
-	state         protoimpl.MessageState      `protogen:"open.v1"`
-	Mode          HelperNetworkPolicyMode     `protobuf:"varint,1,opt,name=mode,proto3,enum=secondbox.microsandbox.helper.v1.HelperNetworkPolicyMode" json:"mode,omitempty"`
-	Destinations  []*HelperNetworkDestination `protobuf:"bytes,2,rep,name=destinations,proto3" json:"destinations,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState      `protogen:"open.v1"`
+	Mode           HelperNetworkPolicyMode     `protobuf:"varint,1,opt,name=mode,proto3,enum=secondbox.microsandbox.helper.v1.HelperNetworkPolicyMode" json:"mode,omitempty"`
+	Destinations   []*HelperNetworkDestination `protobuf:"bytes,2,rep,name=destinations,proto3" json:"destinations,omitempty"`
+	RunnerGateways []*HelperNetworkDestination `protobuf:"bytes,3,rep,name=runner_gateways,json=runnerGateways,proto3" json:"runner_gateways,omitempty"`
+	ProtectedCidrs []string                    `protobuf:"bytes,4,rep,name=protected_cidrs,json=protectedCidrs,proto3" json:"protected_cidrs,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *HelperNetworkPolicy) Reset() {
@@ -870,6 +872,20 @@ func (x *HelperNetworkPolicy) GetMode() HelperNetworkPolicyMode {
 func (x *HelperNetworkPolicy) GetDestinations() []*HelperNetworkDestination {
 	if x != nil {
 		return x.Destinations
+	}
+	return nil
+}
+
+func (x *HelperNetworkPolicy) GetRunnerGateways() []*HelperNetworkDestination {
+	if x != nil {
+		return x.RunnerGateways
+	}
+	return nil
+}
+
+func (x *HelperNetworkPolicy) GetProtectedCidrs() []string {
+	if x != nil {
+		return x.ProtectedCidrs
 	}
 	return nil
 }
@@ -1980,10 +1996,12 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\x04cidr\x18\x02 \x01(\tH\x00R\x04cidr\x12S\n" +
 	"\bprotocol\x18\x03 \x01(\x0e27.secondbox.microsandbox.helper.v1.HelperNetworkProtocolR\bprotocol\x12\x12\n" +
 	"\x04port\x18\x04 \x01(\rR\x04portB\b\n" +
-	"\x06target\"\xc4\x01\n" +
+	"\x06target\"\xd2\x02\n" +
 	"\x13HelperNetworkPolicy\x12M\n" +
 	"\x04mode\x18\x01 \x01(\x0e29.secondbox.microsandbox.helper.v1.HelperNetworkPolicyModeR\x04mode\x12^\n" +
-	"\fdestinations\x18\x02 \x03(\v2:.secondbox.microsandbox.helper.v1.HelperNetworkDestinationR\fdestinations\"\xee\x02\n" +
+	"\fdestinations\x18\x02 \x03(\v2:.secondbox.microsandbox.helper.v1.HelperNetworkDestinationR\fdestinations\x12c\n" +
+	"\x0frunner_gateways\x18\x03 \x03(\v2:.secondbox.microsandbox.helper.v1.HelperNetworkDestinationR\x0erunnerGateways\x12'\n" +
+	"\x0fprotected_cidrs\x18\x04 \x03(\tR\x0eprotectedCidrs\"\xee\x02\n" +
 	"\n" +
 	"ReadyEvent\x12%\n" +
 	"\x0ehelper_version\x18\x01 \x01(\tR\rhelperVersion\x12-\n" +
@@ -2164,15 +2182,16 @@ var file_microsandbox_helper_v1_helper_proto_depIdxs = []int32{
 	2,  // 16: secondbox.microsandbox.helper.v1.HelperNetworkDestination.protocol:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkProtocol
 	1,  // 17: secondbox.microsandbox.helper.v1.HelperNetworkPolicy.mode:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkPolicyMode
 	6,  // 18: secondbox.microsandbox.helper.v1.HelperNetworkPolicy.destinations:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkDestination
-	0,  // 19: secondbox.microsandbox.helper.v1.ReadyEvent.operations:type_name -> secondbox.microsandbox.helper.v1.Operation
-	0,  // 20: secondbox.microsandbox.helper.v1.FileRequest.operation:type_name -> secondbox.microsandbox.helper.v1.Operation
-	3,  // 21: secondbox.microsandbox.helper.v1.StreamData.channel:type_name -> secondbox.microsandbox.helper.v1.StreamChannel
-	20, // 22: secondbox.microsandbox.helper.v1.FileMetadataEvent.direct_child_entries:type_name -> secondbox.microsandbox.helper.v1.FileMetadataEntry
-	23, // [23:23] is the sub-list for method output_type
-	23, // [23:23] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	6,  // 19: secondbox.microsandbox.helper.v1.HelperNetworkPolicy.runner_gateways:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkDestination
+	0,  // 20: secondbox.microsandbox.helper.v1.ReadyEvent.operations:type_name -> secondbox.microsandbox.helper.v1.Operation
+	0,  // 21: secondbox.microsandbox.helper.v1.FileRequest.operation:type_name -> secondbox.microsandbox.helper.v1.Operation
+	3,  // 22: secondbox.microsandbox.helper.v1.StreamData.channel:type_name -> secondbox.microsandbox.helper.v1.StreamChannel
+	20, // 23: secondbox.microsandbox.helper.v1.FileMetadataEvent.direct_child_entries:type_name -> secondbox.microsandbox.helper.v1.FileMetadataEntry
+	24, // [24:24] is the sub-list for method output_type
+	24, // [24:24] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_microsandbox_helper_v1_helper_proto_init() }

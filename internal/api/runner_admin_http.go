@@ -118,3 +118,12 @@ func (apiHandler *handler) getRunner(writer http.ResponseWriter, request *http.R
 	setRevisionETag(writer, runner.Revision)
 	apiHandler.writeJSON(writer, request, http.StatusOK, runner)
 }
+
+func (apiHandler *handler) readEgressContextPreflight(writer http.ResponseWriter, request *http.Request) {
+	preflight, err := apiHandler.service.ReadEgressContextPreflight(request.Context(), requestPrincipal(request))
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	apiHandler.writeJSON(writer, request, http.StatusOK, preflight)
+}

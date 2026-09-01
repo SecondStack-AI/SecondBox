@@ -50,6 +50,7 @@ type RunnerAdminStore interface {
 	ListRunnerPools(ctx context.Context, limit int, cursor string) (contracts.RunnerPoolPage, error)
 	GetRunner(ctx context.Context, runnerID string) (contracts.Runner, error)
 	ListRunners(ctx context.Context, poolName string, limit int, cursor string) (contracts.RunnerPage, error)
+	ReadEgressContextPreflight(ctx context.Context) (contracts.EgressContextPreflight, error)
 }
 
 // SandboxStore owns public Sandbox and Operation records.
@@ -103,6 +104,7 @@ type ManagementStore interface {
 	GetTenant(context.Context, string) (contracts.Tenant, error)
 	ListTenants(context.Context, int, string) (contracts.TenantPage, error)
 	SetTenantState(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
+	UpdateManagedTenantEgressContext(context.Context, string, *string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
 	CreateManagedSubject(context.Context, contracts.Subject, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
 	GetSubject(context.Context, string, string) (contracts.Subject, error)
 	ListSubjects(context.Context, string, int, string) (contracts.SubjectPage, error)
@@ -519,6 +521,9 @@ func (service *ControlPlaneService) createSandboxOperation(
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	if created {
+		if storedSandbox.EgressContext != nil {
+			audit.Details["egressContext"] = *storedSandbox.EgressContext
+		}
 		if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 			return contracts.Sandbox{}, contracts.Operation{}, false, err
 		}
@@ -1280,6 +1285,9 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	}
 	if spec.Network.Mode != "deny_all" && spec.Network.Mode != "allow_list" {
 		return invalidRequest(errors.New("SecondBox Profile network mode must be deny_all or allow_list"))
+	}
+	if spec.Network.RequiresTenantEgressContext == nil {
+		return invalidRequest(errors.New("SecondBox Profile network policy must explicitly state requiresTenantEgressContext"))
 	}
 	if spec.Network.Mode == "deny_all" && len(spec.Network.Destinations) != 0 {
 		return invalidRequest(errors.New("SecondBox Profile deny_all network policy cannot contain destinations"))

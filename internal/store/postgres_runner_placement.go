@@ -1,13 +1,14 @@
 package store
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 )
@@ -18,21 +19,23 @@ type runnerPlacementOptions struct {
 	requireWorkspaceTransfer bool
 	unavailable              error
 	errorPrefix              string
+	requiredEgressContext    *string
 }
 
 type runnerPlacementCandidate struct {
-	id                 string
-	poolName           string
-	state              string
-	drainPhase         string
-	activeConnectionID string
-	backendKind        string
-	architectures      []string
-	capabilities       []string
-	protocolVersions   []string
-	materializations   []placementMaterialization
-	allocatable        runnerCapacity
-	reportedReserved   runnerCapacity
+	id                      string
+	poolName                string
+	state                   string
+	drainPhase              string
+	activeConnectionID      string
+	backendKind             string
+	architectures           []string
+	capabilities            []string
+	protocolVersions        []string
+	materializations        []placementMaterialization
+	supportedEgressContexts []string
+	allocatable             runnerCapacity
+	reportedReserved        runnerCapacity
 }
 
 // placementMaterialization mirrors the scheduler's materialization snapshot
@@ -57,7 +60,8 @@ func selectRunnerForPlacement(
 	rows, err := tx.Query(ctx, `
 		SELECT id,pool_name,state,drain_phase,active_connection_id,backend_kind,
 		       architectures_json,capabilities_json,protocol_versions_json,
-		       capacity_json,reserved_capacity_json,artifact_cache_json
+		       capacity_json,reserved_capacity_json,artifact_cache_json,
+		       supported_egress_contexts_json
 		FROM secondbox.runners
 		WHERE pool_name=$1
 		  AND ($2='' OR id=$2)
@@ -69,6 +73,8 @@ func selectRunnerForPlacement(
 		return "", fmt.Errorf("%s candidates failed: %w", options.errorPrefix, err)
 	}
 	candidates := make([]runnerPlacementCandidate, 0)
+	contextCompatibleSnapshot := false
+	contextMismatchSnapshot := false
 	for rows.Next() {
 		candidate, scanErr := scanRunnerPlacementCandidate(
 			rows, options.errorPrefix, options.requireWorkspaceTransfer,
@@ -77,8 +83,16 @@ func selectRunnerForPlacement(
 			rows.Close()
 			return "", fmt.Errorf("%s candidate scan failed: %w", options.errorPrefix, scanErr)
 		}
-		if options.exactRunnerID != "" ||
-			runnerPlacementCompatible(candidate, spec, options, candidate.reportedReserved) {
+		compatible := runnerPlacementCompatible(candidate, spec, options, candidate.reportedReserved)
+		if compatible {
+			contextCompatibleSnapshot = true
+		}
+		withoutContext := options
+		withoutContext.requiredEgressContext = nil
+		contextMismatch := options.requiredEgressContext != nil &&
+			runnerPlacementCompatible(candidate, spec, withoutContext, candidate.reportedReserved)
+		contextMismatchSnapshot = contextMismatchSnapshot || contextMismatch
+		if options.exactRunnerID != "" || compatible {
 			candidates = append(candidates, candidate)
 		}
 	}
@@ -92,7 +106,7 @@ func selectRunnerForPlacement(
 		if len(candidates) == 0 {
 			return "", options.unavailable
 		}
-		selected, locked, err := lockRunnerPlacementCandidate(
+		selected, locked, contextMismatch, err := lockRunnerPlacementCandidate(
 			ctx, tx, candidates[0], spec, options, false,
 		)
 		if err != nil {
@@ -101,12 +115,16 @@ func selectRunnerForPlacement(
 		if locked && selected != "" {
 			return selected, nil
 		}
+		if locked && contextMismatch {
+			return "", ports.ErrEgressContextUnavailable
+		}
 		return "", options.unavailable
 	}
 
 	lockedCandidates := 0
+	lockedContextMismatch := false
 	for _, snapshot := range candidates {
-		selected, locked, err := lockRunnerPlacementCandidate(
+		selected, locked, contextMismatch, err := lockRunnerPlacementCandidate(
 			ctx, tx, snapshot, spec, options, true,
 		)
 		if err != nil {
@@ -116,6 +134,7 @@ func selectRunnerForPlacement(
 			continue
 		}
 		lockedCandidates++
+		lockedContextMismatch = lockedContextMismatch || contextMismatch
 		if selected != "" {
 			return selected, nil
 		}
@@ -124,7 +143,7 @@ func selectRunnerForPlacement(
 		// A compatible fleet must not become unavailable merely because every
 		// candidate was momentarily locked. Wait for the first ranked candidate
 		// and revalidate so the worst case preserves the old bounded contention.
-		selected, locked, err := lockRunnerPlacementCandidate(
+		selected, locked, contextMismatch, err := lockRunnerPlacementCandidate(
 			ctx, tx, candidates[0], spec, options, false,
 		)
 		if err != nil {
@@ -133,6 +152,10 @@ func selectRunnerForPlacement(
 		if locked && selected != "" {
 			return selected, nil
 		}
+		lockedContextMismatch = lockedContextMismatch || contextMismatch
+	}
+	if !contextCompatibleSnapshot && (contextMismatchSnapshot || lockedContextMismatch) {
+		return "", ports.ErrEgressContextUnavailable
 	}
 	return "", options.unavailable
 }
@@ -144,7 +167,7 @@ func lockRunnerPlacementCandidate(
 	spec contracts.ProfileRevisionSpec,
 	options runnerPlacementOptions,
 	skipLocked bool,
-) (string, bool, error) {
+) (string, bool, bool, error) {
 	lockClause := "FOR UPDATE"
 	if skipLocked {
 		lockClause += " SKIP LOCKED"
@@ -152,7 +175,8 @@ func lockRunnerPlacementCandidate(
 	candidate, err := scanRunnerPlacementCandidate(tx.QueryRow(ctx, `
 			SELECT id,pool_name,state,drain_phase,active_connection_id,backend_kind,
 			       architectures_json,capabilities_json,protocol_versions_json,
-			       capacity_json,reserved_capacity_json,artifact_cache_json
+			       capacity_json,reserved_capacity_json,artifact_cache_json,
+			       supported_egress_contexts_json
 			FROM secondbox.runners
 			WHERE id=$1
 			`+lockClause, snapshot.id),
@@ -160,23 +184,27 @@ func lockRunnerPlacementCandidate(
 		options.requireWorkspaceTransfer,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
+		return "", false, false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("%s candidate lock failed: %w", options.errorPrefix, err)
+		return "", false, false, fmt.Errorf("%s candidate lock failed: %w", options.errorPrefix, err)
 	}
 	durableReserved, err := durableHomeReservation(ctx, tx, candidate.id)
 	if err != nil {
-		return "", true, fmt.Errorf("%s durable reservation failed: %w", options.errorPrefix, err)
+		return "", true, false, fmt.Errorf("%s durable reservation failed: %w", options.errorPrefix, err)
 	}
 	effectiveReserved := maxRunnerPlacementCapacity(
 		candidate.reportedReserved,
 		durableReserved,
 	)
 	if runnerPlacementCompatible(candidate, spec, options, effectiveReserved) {
-		return candidate.id, true, nil
+		return candidate.id, true, false, nil
 	}
-	return "", true, nil
+	withoutContext := options
+	withoutContext.requiredEgressContext = nil
+	contextMismatch := options.requiredEgressContext != nil &&
+		runnerPlacementCompatible(candidate, spec, withoutContext, effectiveReserved)
+	return "", true, contextMismatch, nil
 }
 
 func scanRunnerPlacementCandidate(
@@ -185,12 +213,12 @@ func scanRunnerPlacementCandidate(
 	decodeProtocolVersions bool,
 ) (runnerPlacementCandidate, error) {
 	var candidate runnerPlacementCandidate
-	var architecturesJSON, capabilitiesJSON, versionsJSON, capacityJSON, reservedJSON, cacheJSON []byte
+	var architecturesJSON, capabilitiesJSON, versionsJSON, capacityJSON, reservedJSON, cacheJSON, egressContextsJSON []byte
 	if err := scanner.Scan(
 		&candidate.id, &candidate.poolName, &candidate.state,
 		&candidate.drainPhase, &candidate.activeConnectionID, &candidate.backendKind,
 		&architecturesJSON, &capabilitiesJSON, &versionsJSON,
-		&capacityJSON, &reservedJSON, &cacheJSON,
+		&capacityJSON, &reservedJSON, &cacheJSON, &egressContextsJSON,
 	); err != nil {
 		return runnerPlacementCandidate{}, err
 	}
@@ -208,6 +236,7 @@ func scanRunnerPlacementCandidate(
 		{name: "capabilities", value: capabilitiesJSON, dest: &candidate.capabilities},
 		{name: "capacity", value: capacityJSON, dest: &candidate.allocatable},
 		{name: "reservation", value: reservedJSON, dest: &candidate.reportedReserved},
+		{name: "egress contexts", value: egressContextsJSON, dest: &candidate.supportedEgressContexts},
 	} {
 		if err := json.Unmarshal(item.value, item.dest); err != nil {
 			return runnerPlacementCandidate{}, fmt.Errorf("%s %s decoding failed: %w", errorPrefix, item.name, err)
@@ -242,6 +271,10 @@ func runnerPlacementCompatible(
 		(!contains(candidate.capabilities, "storage") ||
 			!contains(candidate.capabilities, "workspace-relocation") ||
 			!supportsProtocolGeneration(candidate.protocolVersions, 2)) {
+		return false
+	}
+	if options.requiredEgressContext != nil &&
+		!contains(candidate.supportedEgressContexts, *options.requiredEgressContext) {
 		return false
 	}
 	// A Sandbox never leaves its home Runner, so the startup mode a Profile pins

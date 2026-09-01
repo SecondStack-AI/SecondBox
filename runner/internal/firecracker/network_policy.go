@@ -583,6 +583,22 @@ func renderNFTPolicy(
 		}
 	}
 	for _, gateway := range runnerGateways {
+		if gateway.Address.Is4() {
+			fmt.Fprintf(
+				&script,
+				"add rule bridge %s ingress iifname %q arp daddr ip %s accept\n",
+				table,
+				tapName,
+				gateway.Address,
+			)
+			fmt.Fprintf(
+				&script,
+				"add rule bridge %s egress oifname %q arp saddr ip %s accept\n",
+				table,
+				tapName,
+				gateway.Address,
+			)
+		}
 		renderNFTAllow(
 			&script,
 			table,

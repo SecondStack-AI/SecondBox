@@ -20,7 +20,7 @@
       "revisions": [
         {
           "number": 1,
-          "specDigest": "sha256:d0117db5cfd13047a80cee4b7adf05e5558a61a8f761eb4257bb9a079f4552d5",
+          "specDigest": "sha256:ceae1348e11724ca9ca17628c568b2d8a883d31b9b27eacd0f98d75bf7bcc28e",
           "spec": {
             "pool": "experimental-gvisor-amd64",
             "architecture": "amd64",
@@ -52,7 +52,7 @@
               "terminalDetachSeconds": 3600,
               "dataPlaneTransport": "proxied"
             },
-            "network": {"mode": "deny_all", "destinations": []},
+            "network": {"mode": "deny_all", "destinations": [], "requiresTenantEgressContext": false},
             "ports": []
           }
         }

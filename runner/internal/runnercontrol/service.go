@@ -13,10 +13,12 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"google.golang.org/grpc/codes"
@@ -27,8 +29,9 @@ import (
 var immutableManifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 const (
-	runnerReconnectInitialDelay = 250 * time.Millisecond
-	runnerReconnectMaximumDelay = 30 * time.Second
+	runnerReconnectInitialDelay    = 250 * time.Millisecond
+	runnerReconnectMaximumDelay    = 30 * time.Second
+	maximumSupportedEgressContexts = 64
 )
 
 // ErrRunnerProtocolNegotiation identifies a connection rejected before registration.
@@ -44,6 +47,9 @@ type RunnerProtocolConfig struct {
 	MaximumConcurrentStarts           int
 	MaximumConcurrentWorkspaceCreates int
 	MandatoryFeatures                 []runnerprotocol.RunnerFeature
+	// SupportedEgressContexts is loaded once before the service starts and is
+	// immutable for every connection made by this service instance.
+	SupportedEgressContexts []string
 	// DataPlaneListenAddress binds the caller-facing direct data-plane transport.
 	DataPlaneListenAddress string
 	// DataPlaneAdvertisedAddress is administrative capacity evidence returned
@@ -169,6 +175,13 @@ type instanceTerminalBackend interface {
 	MarkAssignmentReady(*runnerprotocol.AssignmentFence) error
 }
 
+// recoveredAssignmentBackend exposes assignments whose compute survived the
+// protocol service composition boundary. Startup must validate their pinned
+// contexts before any registration can advertise them.
+type recoveredAssignmentBackend interface {
+	RecoveredAssignments() []*runnerprotocol.ActiveAssignmentSummary
+}
+
 // RunnerProtocolStream is the generated bidirectional gRPC stream surface.
 type RunnerProtocolStream interface {
 	Send(*runnerprotocol.RunnerToControlPlane) error
@@ -219,6 +232,7 @@ type RunnerProtocolService struct {
 	workspaceRelocationMu      sync.Mutex
 	workspaceRelocationSources map[string]*workspaceRelocationSource
 	workspaceRelocationTargets map[string]*workspaceRelocationTarget
+	supportedEgressContexts    map[string]struct{}
 }
 
 // NewRunnerProtocolService validates immutable identity before creating the composition root.
@@ -244,6 +258,20 @@ func NewRunnerProtocolService(
 	if config.MaximumConcurrentWorkspaceCreates < 1 {
 		return nil, fmt.Errorf("SecondBox runner protocol config requires a positive maximum concurrent Workspace create count")
 	}
+	if len(config.SupportedEgressContexts) > maximumSupportedEgressContexts {
+		return nil, fmt.Errorf("SecondBox runner protocol config exceeds the supported egress-context bound")
+	}
+	supportedEgressContexts := make(map[string]struct{}, len(config.SupportedEgressContexts))
+	for _, contextName := range config.SupportedEgressContexts {
+		if err := networkpolicy.ValidateEgressContextName(contextName); err != nil {
+			return nil, fmt.Errorf("SecondBox runner protocol config contains an invalid egress context: %w", err)
+		}
+		if _, duplicate := supportedEgressContexts[contextName]; duplicate {
+			return nil, fmt.Errorf("SecondBox runner protocol config repeats egress context %q", contextName)
+		}
+		supportedEgressContexts[contextName] = struct{}{}
+	}
+	config.SupportedEgressContexts = slices.Sorted(slices.Values(config.SupportedEgressContexts))
 	config.DataPlaneListenAddress = strings.TrimSpace(config.DataPlaneListenAddress)
 	config.DataPlaneAdvertisedAddress = strings.TrimSpace(config.DataPlaneAdvertisedAddress)
 	if err := validateDataPlaneAddress(
@@ -322,6 +350,14 @@ func NewRunnerProtocolService(
 		directDataPlane:            newDirectDataPlaneRegistry(),
 		workspaceRelocationSources: make(map[string]*workspaceRelocationSource),
 		workspaceRelocationTargets: make(map[string]*workspaceRelocationTarget),
+		supportedEgressContexts:    supportedEgressContexts,
+	}
+	if recoveredBackend, ok := backend.(recoveredAssignmentBackend); ok {
+		for _, recovered := range recoveredBackend.RecoveredAssignments() {
+			if err := service.recoverActiveAssignment(recovered); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if implementsTerminal {
 		service.instanceTerminals = terminalBackend.InstanceTerminals()
@@ -333,6 +369,27 @@ func NewRunnerProtocolService(
 		evidenceBackend.SetRunnerEvidenceSink(service.evidence, config.RunnerID)
 	}
 	return service, nil
+}
+
+func (s *RunnerProtocolService) recoverActiveAssignment(recovered *runnerprotocol.ActiveAssignmentSummary) error {
+	if recovered == nil || strings.TrimSpace(recovered.AssignmentId) == "" ||
+		strings.TrimSpace(recovered.SandboxId) == "" || strings.TrimSpace(recovered.InstanceId) == "" ||
+		recovered.SandboxGeneration == 0 || len(recovered.FencingToken) == 0 {
+		return fmt.Errorf("SecondBox Runner startup recovery contains an incomplete active assignment")
+	}
+	if recovered.EgressContext != "" {
+		if err := networkpolicy.ValidateEgressContextName(recovered.EgressContext); err != nil {
+			return fmt.Errorf("SecondBox Runner startup recovery contains an invalid egress context: %w", err)
+		}
+		if _, configured := s.supportedEgressContexts[recovered.EgressContext]; !configured {
+			return fmt.Errorf("SecondBox Runner startup recovery refuses active assignment %q because egress context %q is absent from configuration; never substitute another context", recovered.AssignmentId, recovered.EgressContext)
+		}
+	}
+	if _, duplicate := s.active[recovered.AssignmentId]; duplicate {
+		return fmt.Errorf("SecondBox Runner startup recovery repeats active assignment %q", recovered.AssignmentId)
+	}
+	s.active[recovered.AssignmentId] = proto.Clone(recovered).(*runnerprotocol.ActiveAssignmentSummary)
+	return nil
 }
 
 func validateDataPlaneCertificate(
@@ -570,18 +627,21 @@ func (s *RunnerProtocolService) sendRegistration(
 			return &runnerprotocol.RunnerToControlPlane{
 				Message: &runnerprotocol.RunnerToControlPlane_Registration{
 					Registration: &runnerprotocol.RunnerRegistration{
-						MessageId:         s.messageID(sequence),
-						Sequence:          sequence,
-						RunnerId:          s.config.RunnerID,
-						ConnectionId:      connectionID,
-						RunnerPoolId:      s.config.RunnerPoolID,
-						SoftwareVersion:   s.config.SoftwareVersion,
-						ProtocolVersion:   selectedProtocolVersion,
-						Capabilities:      readiness.Capabilities,
-						Allocatable:       readiness.Capacity,
-						Reserved:          readiness.Reserved,
-						BackendKind:       readiness.BackendKind,
-						Materializations:  readiness.Materializations,
+						MessageId:        s.messageID(sequence),
+						Sequence:         sequence,
+						RunnerId:         s.config.RunnerID,
+						ConnectionId:     connectionID,
+						RunnerPoolId:     s.config.RunnerPoolID,
+						SoftwareVersion:  s.config.SoftwareVersion,
+						ProtocolVersion:  selectedProtocolVersion,
+						Capabilities:     readiness.Capabilities,
+						Allocatable:      readiness.Capacity,
+						Reserved:         readiness.Reserved,
+						BackendKind:      readiness.BackendKind,
+						Materializations: readiness.Materializations,
+						SupportedEgressContexts: append(
+							[]string(nil), s.config.SupportedEgressContexts...,
+						),
 						ReadinessFailures: readiness.ReadinessFailures,
 						StartupTiming:     s.startupTiming(),
 
@@ -1096,6 +1156,14 @@ func (s *RunnerProtocolService) handleAssignment(
 			err.Error(),
 		)
 	}
+	if err := s.validateAssignmentEgressContext(assignment); err != nil {
+		return s.sendAssignmentAck(
+			stream,
+			assignment,
+			runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE,
+			err.Error(),
+		)
+	}
 	if err := s.backend.ValidateAssignment(ctx, assignment); err != nil {
 		decision := runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE
 		var typed assignmentDecisionError
@@ -1145,7 +1213,7 @@ func (s *RunnerProtocolService) handleAssignment(
 		}
 		safeDetail = "runner failed to start assignment"
 	} else {
-		s.recordActiveAssignment(assignment.Fence, instance.BackendReference)
+		s.recordActiveAssignment(assignment.Fence, instance.BackendReference, assignment.EgressContext)
 		s.recordAssignmentCorrelation(assignment)
 	}
 	if evidenceErr := s.emitEvidence(
@@ -1458,17 +1526,23 @@ func (s *RunnerProtocolService) startupTiming() *runnerprotocol.StartupTiming {
 func (s *RunnerProtocolService) recordActiveAssignment(
 	fence *runnerprotocol.AssignmentFence,
 	backendReference string,
+	egressContext ...string,
 ) {
 	if fence == nil {
 		return
 	}
 	s.stateMu.Lock()
+	contextName := ""
+	if len(egressContext) != 0 {
+		contextName = egressContext[0]
+	}
 	s.active[fence.AssignmentId] = &runnerprotocol.ActiveAssignmentSummary{
 		AssignmentId:      fence.AssignmentId,
 		SandboxId:         fence.SandboxId,
 		InstanceId:        fence.InstanceId,
 		SandboxGeneration: fence.SandboxGeneration,
 		FencingToken:      append([]byte(nil), fence.FencingToken...),
+		EgressContext:     contextName,
 	}
 	s.stateMu.Unlock()
 }
@@ -1495,6 +1569,7 @@ func (s *RunnerProtocolService) activeAssignments() []*runnerprotocol.ActiveAssi
 			SandboxGeneration:  active.SandboxGeneration,
 			FencingToken:       append([]byte(nil), active.FencingToken...),
 			ActiveOperationIds: append([]string(nil), active.ActiveOperationIds...),
+			EgressContext:      active.EgressContext,
 		})
 	}
 	return assignments
@@ -1702,6 +1777,26 @@ func validateResolvedAssignment(assignment *runnerprotocol.AssignmentCommand) er
 	}
 	if err := validateResolvedNetworkPolicy(assignment.NetworkPolicy); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *RunnerProtocolService) validateAssignmentEgressContext(
+	assignment *runnerprotocol.AssignmentCommand,
+) error {
+	required := assignment.Requirements.RequiresTenantEgressContext
+	contextName := assignment.EgressContext
+	if required && contextName == "" {
+		return fmt.Errorf("SecondBox runner assignment required egress context is missing")
+	}
+	if !required && contextName != "" {
+		return fmt.Errorf("SecondBox runner assignment has an unexpected egress context")
+	}
+	if contextName == "" {
+		return nil
+	}
+	if _, supported := s.supportedEgressContexts[contextName]; !supported {
+		return fmt.Errorf("SecondBox runner assignment egress context is unsupported")
 	}
 	return nil
 }

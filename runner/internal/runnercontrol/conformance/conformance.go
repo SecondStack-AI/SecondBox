@@ -68,6 +68,20 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 		if err != nil || second != first {
 			t.Fatalf("idempotent start = %+v, %v; want %+v", second, err, first)
 		}
+		mismatchedContext := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+		mismatchedContext.Requirements.RequiresTenantEgressContext = true
+		mismatchedContext.EgressContext = "tenant-other"
+		if err := fixture.Backend.ValidateAssignment(
+			context.Background(), mismatchedContext,
+		); err == nil {
+			t.Fatal("backend accepted an active assignment replay under another egress context")
+		}
+		if _, err := fixture.Backend.StartAssignment(
+			context.Background(), mismatchedContext,
+			func(runnerprotocol.AssignmentProgressStage) error { return nil },
+		); err == nil {
+			t.Fatal("backend restarted an active assignment under another egress context")
+		}
 		expiredReplay := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
 		expiredReplay.DeadlineUnixMs = 1
 		if err := fixture.Backend.ValidateAssignment(

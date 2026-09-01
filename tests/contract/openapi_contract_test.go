@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 type openAPIDocument map[string]any
@@ -186,7 +188,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			}
 		}
 		for _, required := range []string{
-			"listTenants", "createTenant", "getTenant", "suspendTenant", "reactivateTenant",
+			"listTenants", "createTenant", "getTenant", "updateTenantEgressContext", "suspendTenant", "reactivateTenant",
 			"listTenantControllerAuthorities", "createTenantControllerAuthority",
 			"getTenantControllerAuthority", "rotateTenantControllerAuthority", "revokeTenantControllerAuthority",
 			"listSubjects", "createSubject", "getSubject", "updateSubjectQuota", "closeSubject", "cleanupSubject",
@@ -233,7 +235,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 	t.Run("administrative mutation replays are observable", func(t *testing.T) {
 		required := map[string]bool{
 			"createProfile": true, "reviseProfile": true, "disableProfile": true,
-			"createTenant": true, "suspendTenant": true, "reactivateTenant": true,
+			"createTenant": true, "updateTenantEgressContext": true, "suspendTenant": true, "reactivateTenant": true,
 			"createTenantControllerAuthority": true, "rotateTenantControllerAuthority": true,
 			"revokeTenantControllerAuthority": true, "createSubject": true, "updateSubjectQuota": true,
 			"closeSubject": true, "cleanupSubject": true,
@@ -285,7 +287,8 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			if strings.HasPrefix(path, "/v1/tenants") ||
 				strings.HasPrefix(path, "/v1/subjects") ||
 				strings.HasPrefix(path, "/v1/application-authorities") ||
-				path == "/v1/usage" || path == "/v1/deployment-usage" {
+				path == "/v1/usage" || path == "/v1/deployment-usage" ||
+				path == "/v1/diagnostics/egress-contexts" {
 				continue
 			}
 			pathItem := object(t, pathValue, path)
@@ -417,6 +420,61 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			if strings.Contains(lower, forbidden) {
 				t.Errorf("public startup policy exposes %q: %s", forbidden, encoded)
 			}
+		}
+	})
+
+	t.Run("tenant egress context policy is explicit and bounded", func(t *testing.T) {
+		policy := componentSchema(t, document, "NetworkPolicy")
+		properties := object(t, policy["properties"], "NetworkPolicy.properties")
+		requirement := object(
+			t,
+			properties["requiresTenantEgressContext"],
+			"NetworkPolicy.properties.requiresTenantEgressContext",
+		)
+		if requirement["type"] != "boolean" {
+			t.Fatalf("requiresTenantEgressContext type = %v, want boolean", requirement["type"])
+		}
+		required := map[string]bool{}
+		for _, value := range array(t, policy["required"], "NetworkPolicy.required") {
+			required[value.(string)] = true
+		}
+		if !required["requiresTenantEgressContext"] {
+			t.Error("requiresTenantEgressContext must be required, not defaulted")
+		}
+
+		contextName := componentSchema(t, document, "EgressContextName")
+		if contextName["type"] != "string" ||
+			contextName["pattern"] != contracts.EgressContextNamePattern ||
+			contextName["maxLength"] != float64(contracts.EgressContextNameMaximumLength) {
+			t.Fatalf("EgressContextName schema = %#v, want canonical pattern %q and maximum %d", contextName, contracts.EgressContextNamePattern, contracts.EgressContextNameMaximumLength)
+		}
+
+		for _, schemaName := range []string{"Tenant", "CreateTenantRequest", "UpdateTenantEgressContextRequest", "Sandbox"} {
+			properties := object(t, componentSchema(t, document, schemaName)["properties"], schemaName+".properties")
+			if _, exists := properties["egressContext"]; !exists {
+				t.Errorf("%s does not expose the nullable egressContext", schemaName)
+			}
+		}
+		for _, schemaName := range []string{"CreateSubjectRequest", "CreateApplicationAuthorityRequest", "CreateSandboxRequest"} {
+			properties := object(t, componentSchema(t, document, schemaName)["properties"], schemaName+".properties")
+			if _, exists := properties["egressContext"]; exists {
+				t.Errorf("%s permits delegated egress-context selection", schemaName)
+			}
+		}
+
+		paths := object(t, document["paths"], "paths")
+		updatePath := object(t, paths["/v1/tenants/{tenantRef}/egress-context"], "Tenant egress-context path")
+		update := object(t, updatePath["put"], "updateTenantEgressContext")
+		if update["operationId"] != "updateTenantEgressContext" {
+			t.Fatalf("Tenant egress-context operationId = %v", update["operationId"])
+		}
+		security := array(t, update["security"], "updateTenantEgressContext.security")
+		if len(security) != 1 {
+			t.Fatalf("Tenant egress-context security = %#v", security)
+		}
+		platform := object(t, security[0], "updateTenantEgressContext platform security")
+		if _, ok := platform["platformBearer"]; !ok {
+			t.Fatalf("Tenant egress-context operation is not platform-authority only: %#v", security)
 		}
 	})
 
@@ -582,6 +640,7 @@ func TestManagementContractRejectsUnsafeShapes(t *testing.T) {
 			"authority_kind_mismatch", "invalid_lifecycle_transition", "resource_expired", "tenant_suspended",
 			"grant_escalation_denied", "quota_exceeded", "precondition_failed",
 			"cleanup_state_conflict", "management_unavailable", "credential_response_unavailable",
+			"tenant_egress_context_required",
 		} {
 			if !codes[code] {
 				t.Errorf("ProblemCode is missing management error %q", code)
@@ -646,7 +705,7 @@ func TestSandboxCreateRejectsInfrastructureAuthorityOverrides(t *testing.T) {
 		"hostPath", "image", "imageRef", "idempotencyKey", "lifecycle",
 		"lifecyclePolicyId", "memoryBytes", "network", "placement",
 		"resourceClassId", "resources", "runnerCredential", "runnerId",
-		"runnerPool", "secondStackProjectId", "storageRef", "subjectRef", "tenantRef",
+		"runnerPool", "secondStackProjectId", "storageRef", "subjectRef", "tenantRef", "egressContext",
 	} {
 		t.Run(forbidden, func(t *testing.T) {
 			payload := map[string]any{"profile": "standard", "metadata": map[string]string{}, forbidden: "caller-controlled"}

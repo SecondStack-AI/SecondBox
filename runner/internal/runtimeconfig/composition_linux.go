@@ -39,6 +39,7 @@ func loadPlatformBackendComposition(
 		)
 	}
 	composition.Firecracker = firecrackerConfig
+	composition.Protocol.SupportedEgressContexts = firecrackerConfig.NetworkPolicyEgressContexts.ContextNames()
 	composition.WorkspaceTemplateCapacityBytes = int64(firecrackerConfig.MicroVMWorkspaceSizeMiB) << 20
 	return composition, nil
 }

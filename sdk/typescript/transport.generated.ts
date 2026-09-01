@@ -172,6 +172,7 @@ export interface CreateTenantRequest {
   readonly aggregateQuota: TenantQuota;
   readonly allowedApplicationScopes: ApplicationScopeList;
   readonly allowedProfileGrants: ProfileGrantList;
+  readonly egressContext?: EgressContextName | null;
   readonly expiresAt?: Timestamp;
   readonly expiryPolicy: TenantExpiryPolicy;
   readonly metadata: Metadata;
@@ -218,6 +219,42 @@ export interface DurationPercentiles {
   readonly p50Milliseconds?: number;
   readonly p95Milliseconds?: number;
   readonly p99Milliseconds?: number;
+}
+
+export interface EgressContextAssignmentGroup {
+  readonly count: number;
+  readonly egressContext: EgressContextName | null;
+  readonly runnerId: RunnerID;
+  readonly state: string;
+}
+
+/** Opaque operator-selected routing context identifier. It carries no hostname, address, CIDR, Tenant reference, gateway identity, or mapping digest. */
+export type EgressContextName = string;
+
+export interface EgressContextPreflight {
+  readonly activeAssignments: readonly EgressContextAssignmentGroup[];
+  readonly ready: boolean;
+  readonly requirements: readonly EgressContextRequirement[];
+  readonly runners: readonly EgressContextRunner[];
+  readonly truncated: boolean;
+}
+
+export interface EgressContextRequirement {
+  readonly compatibleRunnerIds: readonly RunnerID[];
+  readonly egressContext: EgressContextName | null;
+  readonly poolName: ProfileName;
+  readonly profileName: ProfileName;
+  readonly profileRevisionId: OpaqueID;
+  readonly status: "ready" | "tenant_context_missing" | "runner_context_unavailable";
+  readonly tenantRef: OwnershipRef;
+}
+
+export interface EgressContextRunner {
+  readonly advertisedContexts: readonly EgressContextName[];
+  readonly connected: boolean;
+  readonly poolName: ProfileName;
+  readonly runnerId: RunnerID;
+  readonly state: string;
 }
 
 export interface ExecCancelled {
@@ -381,6 +418,7 @@ export interface NetworkDestination {
 export interface NetworkPolicy {
   readonly destinations: readonly NetworkDestination[];
   readonly mode: "deny_all" | "allow_list";
+  readonly requiresTenantEgressContext: boolean;
 }
 
 export type OpaqueID = string;
@@ -476,7 +514,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -585,6 +623,7 @@ export interface Runner {
   readonly sandboxStartP95Milliseconds: number;
   readonly sandboxStartSampleCount: number;
   readonly state: "enrolling" | "enrolled" | "connected" | "ready" | "draining" | "drained" | "offline";
+  readonly supportedEgressContexts: readonly EgressContextName[];
   readonly updatedAt: Timestamp;
 }
 
@@ -624,6 +663,7 @@ export interface Sandbox {
   readonly createdAt: Timestamp;
   readonly deletedAt?: Timestamp;
   readonly desiredState: SandboxDesiredState;
+  readonly egressContext: EgressContextName | null;
   readonly generation: number;
   readonly id: OpaqueID;
   readonly instance?: Instance;
@@ -785,6 +825,7 @@ export interface Tenant {
   readonly allowedApplicationScopes: ApplicationScopeList;
   readonly allowedProfileGrants: ProfileGrantList;
   readonly createdAt: Timestamp;
+  readonly egressContext: EgressContextName | null;
   readonly expiresAt?: Timestamp;
   readonly expiryPolicy: TenantExpiryPolicy;
   readonly metadata: Metadata;
@@ -940,6 +981,11 @@ export interface UpdateSubjectQuotaRequest {
   readonly quota: SubjectQuota;
 }
 
+/** Replaces the operator-owned Tenant egress context. JSON null explicitly clears it; no default or fallback is selected. */
+export interface UpdateTenantEgressContextRequest {
+  readonly egressContext: EgressContextName | null;
+}
+
 export interface WaitSandboxRequest {
   readonly deadlineMilliseconds: number;
   readonly states: readonly SandboxState[];
@@ -1010,6 +1056,7 @@ export type OperationID =
   | "listTenants"
   | "pingSandbox"
   | "reactivateTenant"
+  | "readEgressContextPreflight"
   | "readSandboxFile"
   | "reconnectSandboxTerminal"
   | "releaseSandboxLease"
@@ -1031,6 +1078,7 @@ export type OperationID =
   | "updateRunnerPool"
   | "updateSandboxMetadata"
   | "updateSubjectQuota"
+  | "updateTenantEgressContext"
   | "waitForSandbox"
   | "writeSandboxFile";
 
@@ -1094,6 +1142,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   listTenants: { method: "GET", path: "/v1/tenants" },
   pingSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:ping" },
   reactivateTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:reactivate" },
+  readEgressContextPreflight: { method: "GET", path: "/v1/diagnostics/egress-contexts" },
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },
   reconnectSandboxTerminal: { method: "GET", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
   releaseSandboxLease: { method: "DELETE", path: "/v1/leases/{leaseId}" },
@@ -1115,6 +1164,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   updateRunnerPool: { method: "PATCH", path: "/v1/runner-pools/{runnerPoolName}", contentType: "application/json" },
   updateSandboxMetadata: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/metadata", contentType: "application/json" },
   updateSubjectQuota: { method: "PUT", path: "/v1/subjects/{subjectRef}/quota", contentType: "application/json" },
+  updateTenantEgressContext: { method: "PUT", path: "/v1/tenants/{tenantRef}/egress-context", contentType: "application/json" },
   waitForSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:wait", contentType: "application/json" },
   writeSandboxFile: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/files", contentType: "application/octet-stream" },
 };

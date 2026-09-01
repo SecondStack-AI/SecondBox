@@ -85,6 +85,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("GET /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.listTenants)))
 	mux.Handle("POST /v1/tenants", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.createTenant)))
 	mux.Handle("GET /v1/tenants/{tenantRef}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.getTenant)))
+	mux.Handle("PUT /v1/tenants/{tenantRef}/egress-context", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.updateTenantEgressContext)))
 	mux.Handle("POST /v1/tenants/{tenantAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.tenantManagementAction)))
 	mux.Handle("GET /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.listTenantControllerAuthorities)))
 	mux.Handle("POST /v1/tenants/{tenantRef}/controller-authorities", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.createTenantControllerAuthority)))
@@ -111,6 +112,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("PATCH /v1/runner-pools/{runnerPoolName}", apiHandler.authenticate(http.HandlerFunc(apiHandler.updateRunnerPool)))
 	mux.Handle("GET /v1/runners", apiHandler.authenticate(http.HandlerFunc(apiHandler.listRunners)))
 	mux.Handle("GET /v1/runners/{runnerID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getRunner)))
+	mux.Handle("GET /v1/diagnostics/egress-contexts", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.readEgressContextPreflight)))
 	mux.Handle("GET /v1/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getDeploymentTiming)))
 	mux.Handle("GET /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.listSandboxes)))
 	mux.Handle("POST /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.createSandbox)))
@@ -1020,6 +1022,10 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "resource_expired", "Management resource is expired", false
 	case errors.Is(err, ports.ErrTenantSuspended):
 		return http.StatusConflict, "tenant_suspended", "Tenant is suspended", false
+	case errors.Is(err, ports.ErrTenantEgressContextRequired):
+		return http.StatusConflict, "tenant_egress_context_required", "Profile requires a Tenant egress context", false
+	case errors.Is(err, ports.ErrEgressContextUnavailable):
+		return http.StatusServiceUnavailable, "egress_context_unavailable", "Sandbox egress context is unavailable", true
 	case errors.Is(err, ports.ErrGrantEscalationDenied):
 		return http.StatusForbidden, "grant_escalation_denied", "Requested grant exceeds the Tenant ceiling", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):

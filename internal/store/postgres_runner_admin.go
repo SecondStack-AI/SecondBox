@@ -21,7 +21,7 @@ const runnerAdminSelect = `
 	SELECT runner.id,runner.pool_name,runner.name,runner.state,
 	       'pre_shared' AS credential_state,
 	       runner.architectures_json,runner.capabilities_json,runner.capacity_json,
-	       runner.protocol_versions_json,runner.sandbox_start_sample_count,
+	       runner.protocol_versions_json,runner.supported_egress_contexts_json,runner.sandbox_start_sample_count,
 	       runner.sandbox_start_p95_milliseconds,runner.last_seen_at,runner.revision,
 	       runner.created_at,runner.updated_at
 	FROM secondbox.runners AS runner`
@@ -297,11 +297,11 @@ func scanRunnerPool(row runnerPoolRow) (contracts.RunnerPool, error) {
 
 func scanRunnerAdmin(row runnerPoolRow) (contracts.Runner, error) {
 	var runner contracts.Runner
-	var architecturesJSON, capabilitiesJSON, capacityJSON, protocolVersionsJSON []byte
+	var architecturesJSON, capabilitiesJSON, capacityJSON, protocolVersionsJSON, egressContextsJSON []byte
 	if err := row.Scan(
 		&runner.ID, &runner.PoolName, &runner.Name, &runner.State,
 		&runner.CredentialState, &architecturesJSON, &capabilitiesJSON,
-		&capacityJSON, &protocolVersionsJSON, &runner.SandboxStartSampleCount,
+		&capacityJSON, &protocolVersionsJSON, &egressContextsJSON, &runner.SandboxStartSampleCount,
 		&runner.SandboxStartP95Milliseconds, &runner.LastSeenAt,
 		&runner.Revision, &runner.CreatedAt, &runner.UpdatedAt,
 	); err != nil {
@@ -321,6 +321,9 @@ func scanRunnerAdmin(row runnerPoolRow) (contracts.Runner, error) {
 	}
 	if err := json.Unmarshal(protocolVersionsJSON, &runner.ProtocolVersions); err != nil {
 		return contracts.Runner{}, fmt.Errorf("SecondBox Runner protocol versions decoding failed: %w", err)
+	}
+	if err := json.Unmarshal(egressContextsJSON, &runner.SupportedEgressContexts); err != nil {
+		return contracts.Runner{}, fmt.Errorf("SecondBox Runner egress contexts decoding failed: %w", err)
 	}
 	return runner, nil
 }

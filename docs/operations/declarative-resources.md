@@ -25,14 +25,25 @@ The bundle resolver takes runtime/toolchain identity from the verified release a
 
 `secondbox.toml` requires an explicit `[standard_resources]` section with the verified artifact-manifest path, selected bundle names, apply readiness bound, and one typed RunnerPool inventory binding per selected bundle. Production uses the same shape and accepts no generated development authority.
 
-Logical gateway addresses remain Runner-local deployment configuration. Every declared Runner in a selected pool must map the required logical name in `network_policy_runner_gateways`, for example:
+Logical gateway addresses remain Runner-local deployment configuration. Every declared Runner in a selected pool that should admit a network-enabled standard Profile must advertise one or more contexts and map that Profile's logical name inside each applicable context, for example:
 
 ```toml
-network_policy_runner_gateways = "agent-gateway.secondbox.internal=10.0.0.10,platform-gateway.secondbox.internal=10.0.0.11"
+egress_context_config_path = "/etc/secondbox/egress-contexts.json"
+
+[[runners.egress_contexts]]
+name = "secondstack-staging"
+
+[[runners.egress_contexts.gateways]]
+logical_name = "agent-gateway.secondbox.internal"
+address = "10.0.0.10"
+
+[[runners.egress_contexts.gateways]]
+logical_name = "platform-gateway.secondbox.internal"
+address = "10.0.0.11"
 ```
 
 A logical gateway mapping binds the Profile's exact destination name and port to one protected Runner-local address for network-policy authorization. It does not provide guest name resolution or authenticate the destination. The Runner DNS proxy forwards guest questions to its configured upstream only; it does not synthesize an answer for the logical gateway name, and it rejects upstream answers that resolve to protected addresses. SecondBox does not assume that the destination is an HTTP proxy, inject proxy variables into Exec requests, or distribute an external proxy's interception CA. An application that supplies a forward proxy must make its logical name resolvable in the deployment's upstream DNS, pass its proxy environment explicitly, and make the proxy CA available in the guest trust path. The application also owns hostname verification and CA rotation. Gateway reachability is qualified in the production deployment, not supplied by the standard bundle. This keeps external gateway authority out of immutable SecondBox runtime and toolchain bundles.
 
-`agent-compartment-isolated` does not add a gateway mapping. Each current network-enabled RunnerPool maps to one trusted egress context; sharing a tenant-aware egress identity across tenants requires a separate authenticated routing capability and is outside this release.
+`agent-compartment-isolated` does not add a gateway mapping and explicitly declines a Tenant context. `agent-compartment` and `durable-coding` explicitly require one. The release documents and artifact manifest bind the new immutable standard Profile heads and exact revision numbers; operators consume those documents rather than reconstructing revision identities. The Runner configuration contains only context names, logical names, and Runner-local IP addresses; gateway certificates, interception authority, proxy endpoints, policy databases, and credentials stay outside SecondBox.
 
-`secondbox-deploy inspect` shows selected bundles plus each standard Profile's release identity: name, revision number, and spec digest. `secondbox-deploy compose ... up` waits for `/readyz` and applies the selected document using the same library as `secondbox resources apply`.
+`secondbox-deploy inspect` shows selected bundles, each standard Profile's release identity, and each Runner's advertised context names without exposing mapping addresses or host paths. `secondbox-deploy compose ... up` waits for `/readyz` and applies the selected document using the same library as `secondbox resources apply`.

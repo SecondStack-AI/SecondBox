@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 	expiresAt := now.Add(time.Hour)
 	tenantRequest := secondboxclient.CreateTenantRequest{
 		Ref: "missing-key-tenant", AllowedProfileGrants: []string{"coding"},
-		AllowedApplicationScopes: []string{"sandbox:read"},
+		AllowedApplicationScopes: []string{"sandbox:read", "sandbox:lifecycle"},
 		AggregateQuota:           secondboxclient.TenantQuota{MaxSandboxes: 10, MaxActiveInstances: 10, MaxVcpuCount: 10, MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10, MaxActiveSubjects: 10, MaxApplicationAuthorities: 10},
 		ExpiryPolicy:             secondboxclient.TenantExpiryPolicy{MaximumSubjectLifetimeSeconds: 3600, MaximumAuthorityLifetimeSeconds: 3600},
 		Metadata:                 map[string]string{}, ExpiresAt: &expiresAt,
@@ -59,10 +60,70 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	applicationRequest := secondboxclient.CreateApplicationAuthorityRequest{SubjectRef: subject.Ref, Scopes: []string{"sandbox:read"}, ProfileGrants: []string{"coding"}, Metadata: map[string]string{}, ExpiresAt: expiresAt}
+	applicationRequest := secondboxclient.CreateApplicationAuthorityRequest{SubjectRef: subject.Ref, Scopes: []string{"sandbox:read", "sandbox:lifecycle"}, ProfileGrants: []string{"coding"}, Metadata: map[string]string{}, ExpiresAt: expiresAt}
 	application, err := controllerClient.CreateApplicationAuthority(t.Context(), applicationRequest, "missing-key-setup-application")
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	for _, credential := range []string{controller.BearerToken, application.BearerToken} {
+		request, err := http.NewRequestWithContext(
+			t.Context(), http.MethodPut,
+			server.URL+"/v1/tenants/"+string(tenant.Ref)+"/egress-context",
+			strings.NewReader(`{"egressContext":"delegated-override"}`),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+credential)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "delegated-egress-context-override")
+		request.Header.Set("If-Match", fmt.Sprintf(`"revision-%d"`, tenant.Revision))
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var problem secondboxclient.Problem
+		if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+			response.Body.Close()
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized || problem.Code != secondboxclient.ProblemCodeAuthenticationFailed {
+			t.Fatalf("delegated Tenant egress-context update = %d %#v", response.StatusCode, problem)
+		}
+	}
+
+	for _, delegated := range []struct {
+		path, token, body string
+	}{
+		{"/v1/subjects", controller.BearerToken, `{"ref":"delegated-context-subject","quota":{"maxSandboxes":1,"maxActiveInstances":1,"maxVcpuCount":1,"maxMemoryBytes":1073741824,"maxSnapshots":1,"maxPortSessions":1,"maxConcurrentOperations":1},"metadata":{},"egressContext":"forbidden"}`},
+		{"/v1/sandboxes", application.BearerToken, `{"profile":"coding","metadata":{},"egressContext":"forbidden"}`},
+	} {
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+delegated.path, strings.NewReader(delegated.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+delegated.token)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "delegated-schema-context-override")
+		if delegated.token == application.BearerToken {
+			request.Header.Set("X-SecondBox-Tenant-Ref", string(tenant.Ref))
+			request.Header.Set("X-SecondBox-Subject-Ref", string(subject.Ref))
+		}
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var problem secondboxclient.Problem
+		if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+			response.Body.Close()
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest || problem.Code != secondboxclient.ProblemCodeInvalidRequest {
+			t.Fatalf("delegated request accepted egressContext on %s: %d %#v", delegated.path, response.StatusCode, problem)
+		}
 	}
 
 	type mutation struct {
@@ -72,6 +133,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 	}
 	mutations := []mutation{
 		{"tenant create", http.MethodPost, "/v1/tenants", testPlatformToken, tenantRequest, 0},
+		{"tenant egress context", http.MethodPut, "/v1/tenants/" + string(tenant.Ref) + "/egress-context", testPlatformToken, secondboxclient.UpdateTenantEgressContextRequest{}, tenant.Revision},
 		{"tenant action", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + ":suspend", testPlatformToken, nil, tenant.Revision},
 		{"controller create", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities", testPlatformToken, secondboxclient.CreateTenantControllerAuthorityRequest{ExpiresAt: expiresAt, Metadata: map[string]string{}}, 0},
 		{"controller rotate", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities/" + controller.Authority.ID + ":rotate", testPlatformToken, nil, controller.Authority.Revision},
@@ -135,8 +197,10 @@ func TestManagementOwnershipReferencesRoundTripThroughEncodedActionRoutes(t *tes
 		t.Fatal(err)
 	}
 	expiresAt := now.Add(time.Hour)
+	initialContext := secondboxclient.EgressContextName("secondstack-http-initial")
 	request := secondboxclient.CreateTenantRequest{
 		Ref: "customer/west:production", AllowedProfileGrants: []string{"coding"},
+		EgressContext:            &initialContext,
 		AllowedApplicationScopes: []string{"sandbox:read"}, Metadata: map[string]string{}, ExpiresAt: &expiresAt,
 		AggregateQuota: secondboxclient.TenantQuota{MaxSandboxes: 1, MaxActiveInstances: 1, MaxVcpuCount: 1, MaxMemoryBytes: 1 << 30, MaxSnapshots: 1, MaxPortSessions: 1, MaxConcurrentOperations: 1, MaxActiveSubjects: 1, MaxApplicationAuthorities: 1},
 		ExpiryPolicy:   secondboxclient.TenantExpiryPolicy{MaximumSubjectLifetimeSeconds: 3600, MaximumAuthorityLifetimeSeconds: 3600},
@@ -146,10 +210,19 @@ func TestManagementOwnershipReferencesRoundTripThroughEncodedActionRoutes(t *tes
 		t.Fatal(err)
 	}
 	read, err := operator.GetTenant(t.Context(), tenant.Ref)
-	if err != nil || read.Ref != tenant.Ref {
+	if err != nil || read.Ref != tenant.Ref || read.EgressContext == nil || *read.EgressContext != initialContext {
 		t.Fatalf("encoded Tenant read = %#v error=%v", read, err)
 	}
-	suspended, err := operator.SuspendTenant(t.Context(), tenant.Ref, tenant.Revision, "encoded-reference-suspend")
+	updatedContext := secondboxclient.EgressContextName("secondstack-http-updated")
+	updated, err := operator.UpdateTenantEgressContext(
+		t.Context(), tenant.Ref,
+		secondboxclient.UpdateTenantEgressContextRequest{EgressContext: &updatedContext},
+		tenant.Revision, "encoded-reference-egress-context",
+	)
+	if err != nil || updated.EgressContext == nil || *updated.EgressContext != updatedContext || updated.Revision != tenant.Revision+1 {
+		t.Fatalf("encoded Tenant egress-context update = %#v error=%v", updated, err)
+	}
+	suspended, err := operator.SuspendTenant(t.Context(), tenant.Ref, updated.Revision, "encoded-reference-suspend")
 	if err != nil || suspended.State != secondboxclient.TenantStateSuspended {
 		t.Fatalf("encoded Tenant action = %#v error=%v", suspended, err)
 	}

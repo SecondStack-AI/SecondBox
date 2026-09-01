@@ -91,11 +91,11 @@ type guestCases struct {
 func TestRunnerProtocolCompatibilityWindow(t *testing.T) {
 	cases := readFixture[runnerCases](t, "contracts/runner/v1/fixtures/protocol_cases.json")
 
-	if cases.SchemaGeneration != 2 {
-		t.Fatalf("runner fixture must remain frozen at generation 2, got %d", cases.SchemaGeneration)
+	if cases.SchemaGeneration != 4 {
+		t.Fatalf("runner fixture must record generation 4, got %d", cases.SchemaGeneration)
 	}
-	if width := cases.ServerWindow.Maximum - cases.ServerWindow.Minimum + 1; width > 2 {
-		t.Fatalf("runner compatibility window retains at most current and previous generation, got width %d", width)
+	if cases.ServerWindow.Minimum != 4 || cases.ServerWindow.Maximum != 4 {
+		t.Fatalf("runner compatibility window = %#v, want generation 4 exactly", cases.ServerWindow)
 	}
 
 	for _, tc := range cases.NegotiationCases {
@@ -197,9 +197,12 @@ func TestCanonicalSchemasExposeRequiredProtocolSurfaces(t *testing.T) {
 		"service RunnerControl",
 		"rpc Connect(stream RunnerToControlPlane) returns (stream ControlPlaneToRunner)",
 		"message RunnerRegistration",
+		"repeated string supported_egress_contexts",
 		"message RunnerHeartbeat",
 		"message Capacity",
 		"message AssignmentCommand",
+		"bool requires_tenant_egress_context",
+		"string egress_context",
 		"message AssignmentAck",
 		"message AssignmentProgress",
 		"message AssignmentResult",
@@ -214,6 +217,7 @@ func TestCanonicalSchemasExposeRequiredProtocolSurfaces(t *testing.T) {
 		"message PtyFrame",
 		"message PortFrame",
 		"RUNNER_FEATURE_LOCAL_WORKSPACE",
+		"RUNNER_FEATURE_TENANT_EGRESS_CONTEXT",
 		"message LocalWorkspaceCommand",
 		"message LocalWorkspaceResult",
 		"message WorkspaceTransferFrame",

@@ -160,6 +160,11 @@ func (service *ControlPlaneService) ListRunners(
 	return service.store.ListRunners(ctx, poolName, boundedLimit(limit), cursor)
 }
 
+// ReadEgressContextPreflight returns read-only operator placement diagnostics.
+func (service *ControlPlaneService) ReadEgressContextPreflight(ctx context.Context, _ contracts.Principal) (contracts.EgressContextPreflight, error) {
+	return service.store.ReadEgressContextPreflight(ctx)
+}
+
 func validateRunnerPoolPolicy(
 	name string,
 	state string,

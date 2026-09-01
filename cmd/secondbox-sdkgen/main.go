@@ -350,6 +350,16 @@ func generateGoSchemas(schemas map[string]schema) ([]byte, error) {
 }
 
 func goSchemaType(definition schema, schemas map[string]schema, optional bool) (string, error) {
+	if nullable, ok := nullableSchemaVariant(definition); ok {
+		result, err := goSchemaType(nullable, schemas, false)
+		if err != nil {
+			return "", err
+		}
+		if !strings.HasPrefix(result, "*") {
+			result = "*" + result
+		}
+		return result, nil
+	}
 	var result string
 	if definition.Ref != "" {
 		name, err := referencedName(definition.Ref)
@@ -611,6 +621,8 @@ func typeScriptSchemaType(definition schema, schemas map[string]schema) (string,
 		return strings.Join(values, " | "), nil
 	}
 	switch definition.Type {
+	case "null":
+		return "null", nil
 	case "string":
 		return "string", nil
 	case "integer", "number":
@@ -644,6 +656,19 @@ func typeScriptSchemaType(definition schema, schemas map[string]schema) (string,
 	default:
 		return "", fmt.Errorf("unsupported schema type %q", definition.Type)
 	}
+}
+
+func nullableSchemaVariant(definition schema) (schema, bool) {
+	if len(definition.OneOf) != 2 {
+		return schema{}, false
+	}
+	if definition.OneOf[0].Type == "null" {
+		return definition.OneOf[1], true
+	}
+	if definition.OneOf[1].Type == "null" {
+		return definition.OneOf[0], true
+	}
+	return schema{}, false
 }
 
 func decodeAdditionalProperties(raw json.RawMessage) (schema, bool, error) {

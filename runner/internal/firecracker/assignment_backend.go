@@ -30,6 +30,7 @@ type activeRunnerAssignment struct {
 	fence            *runnerprotocol.AssignmentFence
 	correlation      *runnerprotocol.Correlation
 	backendReference string
+	egressContext    string
 }
 
 type signedArtifactManifest struct {
@@ -111,6 +112,18 @@ func (b *AssignmentBackend) SetRunnerEvidenceSink(sink runnerevidence.Sink, runn
 // active assignment.
 func (b *AssignmentBackend) InstanceTerminals() <-chan runnercontrol.BackendInstanceTerminal {
 	return b.instanceTerminals
+}
+
+func (b *AssignmentBackend) RecoveredAssignments() []*runnerprotocol.ActiveAssignmentSummary {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	result := make([]*runnerprotocol.ActiveAssignmentSummary, 0, len(b.assignments))
+	for _, active := range b.assignments {
+		if summary := runnerprotocol.RecoveredAssignmentSummary(active.fence, active.egressContext); summary != nil {
+			result = append(result, summary)
+		}
+	}
+	return result
 }
 
 // MarkAssignmentReady starts natural-exit observation only after the ready
@@ -442,7 +455,7 @@ func (b *AssignmentBackend) ValidateAssignment(
 	active, alreadyActive := b.assignments[assignment.Fence.AssignmentId]
 	b.mu.Unlock()
 	if alreadyActive {
-		if sameAssignmentFence(active.fence, assignment.Fence) {
+		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, assignment) {
 			return nil
 		}
 		return fmt.Errorf("SecondBox Firecracker assignment ID was reused with different fencing")
@@ -561,7 +574,7 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	b.mu.Lock()
 	if active, ok := b.assignments[assignment.Fence.AssignmentId]; ok {
-		if sameAssignmentFence(active.fence, assignment.Fence) {
+		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, assignment) {
 			b.mu.Unlock()
 			return runnercontrol.BackendInstance{
 				BackendKind:      "firecracker",
@@ -705,6 +718,7 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	b.mu.Lock()
 	b.assignments[assignment.Fence.AssignmentId] = activeRunnerAssignment{
+		egressContext: assignment.EgressContext,
 		fence: &runnerprotocol.AssignmentFence{
 			AssignmentId:      assignment.Fence.AssignmentId,
 			SandboxId:         assignment.Fence.SandboxId,
@@ -758,7 +772,14 @@ func (b *AssignmentBackend) compileAssignmentNetworkPolicy(
 	if err != nil {
 		return nil, err
 	}
-	compiled, err := networkpolicy.Compile(policy, b.manager.networkPolicyCompileOptions())
+	compileOptions, err := b.manager.networkPolicyCompileOptions(
+		assignment.EgressContext,
+		assignment.Requirements != nil && assignment.Requirements.RequiresTenantEgressContext,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox Firecracker assignment egress context: %w", err)
+	}
+	compiled, err := networkpolicy.Compile(policy, compileOptions)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox Firecracker assignment network policy: %w", err)
 	}

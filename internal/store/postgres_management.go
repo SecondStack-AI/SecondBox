@@ -25,7 +25,7 @@ const (
 	applicationLookupPrefix      = "apa_"
 )
 
-const tenantSelect = `SELECT ref,state,allowed_profile_grants_json,allowed_application_scopes_json,
+const tenantSelect = `SELECT ref,state,egress_context,allowed_profile_grants_json,allowed_application_scopes_json,
 	aggregate_quota_json,expiry_policy_json,metadata_json,expires_at,revision,created_at,updated_at
 	FROM secondbox.tenants`
 
@@ -49,6 +49,65 @@ func (store *PostgresControlPlaneStore) CreateTenant(
 		return contracts.Tenant{}, fmt.Errorf("SecondBox Tenant create commit failed: %w", err)
 	}
 	return tenant, nil
+}
+
+// UpdateManagedTenantEgressContext replaces or clears one operator-owned context.
+func (store *PostgresControlPlaneStore) UpdateManagedTenantEgressContext(
+	ctx context.Context,
+	tenantRef string,
+	egressContext *string,
+	expectedRevision int64,
+	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
+) (contracts.Tenant, ports.AdminIdempotencyResult, error) {
+	if egressContext != nil {
+		if err := contracts.ValidateEgressContextName(*egressContext); err != nil {
+			return contracts.Tenant{}, ports.AdminIdempotencyResult{}, errors.Join(ports.ErrInvalidRequest, err)
+		}
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant egress-context transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var replayed contracts.Tenant
+	result, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant egress-context replay commit failed: %w", err)
+		}
+		return replayed, result, nil
+	}
+	tenant, err := scanTenant(tx.QueryRow(ctx, tenantSelect+` WHERE ref=$1 FOR UPDATE`, tenantRef))
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrManagementNotFound)
+	}
+	if tenant.Revision != expectedRevision {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
+	}
+	if tenant.State == contracts.TenantStateExpired {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, ports.ErrResourceExpired
+	}
+	tenant.EgressContext = clonePostgresOptionalString(egressContext)
+	tenant.Revision++
+	tenant.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.tenants SET egress_context=$2,revision=$3,updated_at=$4 WHERE ref=$1`,
+		tenant.Ref, tenant.EgressContext, tenant.Revision, tenant.UpdatedAt,
+	); err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant egress-context update failed: %w", err)
+	}
+	result, err = insertAdminIdempotency(ctx, tx, idempotency, tenant)
+	if err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Tenant{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Tenant egress-context commit failed: %w", err)
+	}
+	return tenant, result, nil
 }
 
 // CreateManagedTenant creates or replays one exact operator-owned Tenant response.
@@ -1543,6 +1602,11 @@ func insertAuthorityIdentity(
 }
 
 func insertTenant(ctx context.Context, tx pgx.Tx, tenant contracts.Tenant) error {
+	if tenant.EgressContext != nil {
+		if err := contracts.ValidateEgressContextName(*tenant.EgressContext); err != nil {
+			return errors.Join(ports.ErrInvalidRequest, err)
+		}
+	}
 	profileGrantsJSON, err := encodeManagementJSON("Tenant Profile grants", tenant.AllowedProfileGrants)
 	if err != nil {
 		return err
@@ -1564,9 +1628,9 @@ func insertTenant(ctx context.Context, tx pgx.Tx, tenant contracts.Tenant) error
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.tenants (
-		ref,state,allowed_profile_grants_json,allowed_application_scopes_json,
+		ref,state,egress_context,allowed_profile_grants_json,allowed_application_scopes_json,
 		aggregate_quota_json,expiry_policy_json,metadata_json,expires_at,revision,created_at,updated_at
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, tenant.Ref, tenant.State,
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, tenant.Ref, tenant.State, tenant.EgressContext,
 		profileGrantsJSON, scopesJSON, quotaJSON, expiryPolicyJSON, metadataJSON,
 		tenant.ExpiresAt, tenant.Revision, tenant.CreatedAt.UTC(), tenant.UpdatedAt.UTC()); err != nil {
 		return mapManagementConflict(fmt.Errorf("SecondBox Tenant insert failed: %w", err))
@@ -1802,10 +1866,15 @@ type managementRow interface {
 func scanTenant(row managementRow) (contracts.Tenant, error) {
 	var tenant contracts.Tenant
 	var profileGrantsJSON, scopesJSON, quotaJSON, expiryPolicyJSON, metadataJSON []byte
-	if err := row.Scan(&tenant.Ref, &tenant.State, &profileGrantsJSON, &scopesJSON, &quotaJSON,
+	if err := row.Scan(&tenant.Ref, &tenant.State, &tenant.EgressContext, &profileGrantsJSON, &scopesJSON, &quotaJSON,
 		&expiryPolicyJSON, &metadataJSON, &tenant.ExpiresAt, &tenant.Revision,
 		&tenant.CreatedAt, &tenant.UpdatedAt); err != nil {
 		return contracts.Tenant{}, err
+	}
+	if tenant.EgressContext != nil {
+		if err := contracts.ValidateEgressContextName(*tenant.EgressContext); err != nil {
+			return contracts.Tenant{}, fmt.Errorf("SecondBox persisted Tenant egress context is invalid: %w", err)
+		}
 	}
 	for _, decoded := range []struct {
 		name string
@@ -1823,6 +1892,14 @@ func scanTenant(row managementRow) (contracts.Tenant, error) {
 		}
 	}
 	return tenant, nil
+}
+
+func clonePostgresOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func scanSubject(row managementRow) (contracts.Subject, error) {

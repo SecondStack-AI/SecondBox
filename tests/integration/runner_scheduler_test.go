@@ -213,21 +213,30 @@ func TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt(t 
 				t.Fatal(err)
 			}
 			registration := task4Registration(runnerID, connectionID, poolName)
+			registration.SupportedEgressContexts = []string{"tenant-blue", "tenant-green"}
 			registration.Capabilities.SnapshotResumeReady = testCase.snapshotResumeReady
 			if duplicate, err := stateStore.RecordRegistration(
 				t.Context(), registration, now,
 			); err != nil || duplicate {
 				t.Fatalf("RecordRegistration duplicate, error = %t, %v", duplicate, err)
 			}
-			var capabilitiesJSON []byte
+			var capabilitiesJSON, egressContextsJSON []byte
 			if err := databasePool.QueryRow(t.Context(), `
-				SELECT capabilities_json FROM secondbox.runners WHERE id=$1`, runnerID,
-			).Scan(&capabilitiesJSON); err != nil {
+				SELECT capabilities_json,supported_egress_contexts_json
+				FROM secondbox.runners WHERE id=$1`, runnerID,
+			).Scan(&capabilitiesJSON, &egressContextsJSON); err != nil {
 				t.Fatal(err)
 			}
 			var capabilities []string
 			if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
 				t.Fatal(err)
+			}
+			var egressContexts []string
+			if err := json.Unmarshal(egressContextsJSON, &egressContexts); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(egressContexts, registration.SupportedEgressContexts) {
+				t.Fatalf("persisted egress contexts = %v, want %v", egressContexts, registration.SupportedEgressContexts)
 			}
 			advertised := slices.Contains(capabilities, contracts.RunnerCapabilitySnapshotResume)
 			if advertised != testCase.snapshotResumeReady {
@@ -270,6 +279,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatal(err)
 	}
 	registration := task4Registration(runnerID, connectionID, poolName)
+	registration.SupportedEgressContexts = []string{"tenant-blue"}
 	if duplicate, err := stateStore.RecordRegistration(t.Context(), registration, now); err != nil || duplicate {
 		t.Fatalf("RecordRegistration duplicate, error = %t, %v", duplicate, err)
 	}
@@ -297,6 +307,17 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	sandboxID := task4ID("sandbox")
 	profileRevisionID := task4ID("profile-revision")
 	workspaceID := task4InsertSchedulableSandbox(t, sandboxID, profileRevisionID, runnerID, now)
+	contextPool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(contextPool.Close)
+	if _, err := contextPool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes SET egress_context='tenant-blue' WHERE id=$1`, sandboxID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	requiredEgressContext := "tenant-blue"
 	firstScheduler, err := scheduler.NewPostgresStore(
 		t.Context(), scheduler.PostgresStoreConfig{
 			DatabaseURL: integrationDatabaseURL,
@@ -341,7 +362,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 				InstanceID: instanceID, SandboxID: sandboxID, ProfileRevisionID: profileRevisionID,
 				WorkspaceID: workspaceID, StartMutationID: task4IDForIndex("workspace-start", index),
 				Requirements: scheduler.Requirements{
-					PoolName: poolName, Architecture: "amd64",
+					PoolName: poolName, Architecture: "amd64", EgressContext: &requiredEgressContext,
 					RequiredCapabilities:    []string{"local-workspace", "network-policy"},
 					GuestProtocolGeneration: 1,
 					Capacity: scheduler.Capacity{
@@ -361,7 +382,9 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 						VcpuCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
 						Architecture: "amd64", RequiredCapabilities: []string{"local-workspace", "network-policy"},
 						MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
+						RequiresTenantEgressContext: true,
 					},
+					EgressContext: requiredEgressContext,
 					Assets: []*runnerv1.AssetReference{
 						{
 							ArtifactId: "runtime", ManifestDigest: runtimeDigest,
@@ -406,6 +429,8 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			result.assignment.ProfileRevisionID != profileRevisionID ||
 			result.assignment.BackendKind != "firecracker" ||
 			result.assignment.Generation != 1 ||
+			result.assignment.EgressContext == nil ||
+			*result.assignment.EgressContext != requiredEgressContext ||
 			!result.assignment.NextReconcileAt.Equal(now.Add(2*time.Minute)) ||
 			len(result.assignment.FencingToken) != 32 {
 			t.Fatalf("replica returned divergent durable Assignment: %#v", result.assignment)
@@ -491,6 +516,8 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	if delivery.Message.GetAssignment() == nil ||
 		delivery.Message.GetAssignment().Fence.AssignmentId != durableAssignment.ID ||
+		delivery.Message.GetAssignment().EgressContext != requiredEgressContext ||
+		!delivery.Message.GetAssignment().Requirements.RequiresTenantEgressContext ||
 		delivery.Message.GetAssignment().Sequence != 2 ||
 		delivery.Message.GetAssignment().MessageId != delivery.ID {
 		t.Fatalf("claimed Assignment command lacks durable authority: %#v", delivery.Message.GetAssignment())
@@ -1125,7 +1152,7 @@ func task4Registration(
 	return &runnerv1.RunnerRegistration{
 		MessageId: "registration-1", Sequence: 1, RunnerId: runnerID,
 		ConnectionId: connectionID, RunnerPoolId: poolName,
-		SoftwareVersion: "1.0.0", ProtocolVersion: 3,
+		SoftwareVersion: "1.0.0", ProtocolVersion: runnerv1.SupportedProtocolMaximum,
 		BackendKind: runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 		Capabilities: &runnerv1.RunnerCapabilities{
 			Architecture: "amd64", ComputeBackendVersion: "1.16.1",

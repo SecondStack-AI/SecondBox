@@ -169,9 +169,12 @@ func TestNFTablesNetworkPolicyPlacesExactRunnerGatewayBeforeProtectedDrops(t *te
 	}
 	allow := `ip daddr 198.18.43.1 tcp dport 18080 ct mark set 0x53425801 accept`
 	protectedDrop := `ip daddr 198.18.43.0/24 drop`
+	gatewayARPRequest := `arp daddr ip 198.18.43.1 accept`
+	gatewayARPReply := `arp saddr ip 198.18.43.1 accept`
 	allowIndex := strings.Index(script, allow)
 	dropIndex := strings.Index(script, protectedDrop)
-	if allowIndex < 0 || dropIndex < 0 || allowIndex >= dropIndex {
+	if allowIndex < 0 || dropIndex < 0 || allowIndex >= dropIndex ||
+		!strings.Contains(script, gatewayARPRequest) || !strings.Contains(script, gatewayARPReply) {
 		t.Fatalf("Runner gateway allow must precede protected drop:\n%s", script)
 	}
 	if strings.Count(script, allow) != 1 {

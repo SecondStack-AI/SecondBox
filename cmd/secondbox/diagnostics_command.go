@@ -102,6 +102,11 @@ func runDiagnosticsBundleCommand(
 	)
 	files["timing-summary.json"] = timingBody
 	files["timing-summary.status"] = []byte(timingStatus + "\n")
+	egressBody, egressStatus := diagnosticProbe(
+		ctx, &client, baseURL, "v1/diagnostics/egress-contexts", token, 0, *maximumProbeBytes,
+	)
+	files["egress-context-preflight.json"] = egressBody
+	files["egress-context-preflight.status"] = []byte(egressStatus + "\n")
 	logTail, err := readBoundedRegularFileTail(*controlPlaneLog, *maximumLogBytes)
 	if err != nil {
 		return err
@@ -117,6 +122,27 @@ func runDiagnosticsBundleCommand(
 	}
 	if _, err := fmt.Fprintf(output, "Created bounded support bundle: %s\n", *outputPath); err != nil {
 		return fmt.Errorf("SecondBox diagnostics bundle result write failed: %w", err)
+	}
+	return nil
+}
+
+func runEgressContextDiagnosticsCommand(ctx context.Context, rawURL, token string, args []string, output io.Writer, httpClient *http.Client) error {
+	if len(args) != 0 {
+		return errors.New("SecondBox diagnostics egress-contexts accepts no arguments")
+	}
+	if rawURL == "" || token == "" {
+		return errors.New("SecondBox diagnostics egress-contexts requires a platform session")
+	}
+	baseURL, err := diagnosticBaseURL(rawURL)
+	if err != nil {
+		return err
+	}
+	body, status := diagnosticProbe(ctx, httpClient, baseURL, "v1/diagnostics/egress-contexts", token, 0, maximumDiagnosticProbeBytes)
+	if status != "200" {
+		return fmt.Errorf("SecondBox diagnostics egress-contexts failed with status %s: %s", status, strings.TrimSpace(string(body)))
+	}
+	if _, err := output.Write(append(body, '\n')); err != nil {
+		return fmt.Errorf("SecondBox diagnostics egress-contexts output failed: %w", err)
 	}
 	return nil
 }

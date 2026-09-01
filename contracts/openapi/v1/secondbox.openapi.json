@@ -57,6 +57,14 @@
         "responses": {"200": {"$ref": "#/components/responses/TenantOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
       }
     },
+    "/v1/tenants/{tenantRef}/egress-context": {
+      "put": {
+        "tags": ["Tenants"], "operationId": "updateTenantEgressContext", "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/TenantRefPath"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateTenantEgressContextRequest"}}}},
+        "responses": {"200": {"$ref": "#/components/responses/TenantMutationOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
     "/v1/tenants/{tenantRef}:suspend": {
       "post": {
         "tags": ["Tenants"], "operationId": "suspendTenant", "security": [{"platformBearer": []}],
@@ -486,6 +494,23 @@
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/v1/diagnostics/egress-contexts": {
+      "get": {
+        "tags": ["Diagnostics"],
+        "operationId": "readEgressContextPreflight",
+        "security": [{"platformBearer": []}],
+        "parameters": [{"$ref": "#/components/parameters/RequestID"}],
+        "responses": {
+          "200": {
+            "description": "Read-only Tenant/Profile and Runner egress-context compatibility with active assignment impact.",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EgressContextPreflight"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
         }
       }
     },
@@ -2024,10 +2049,11 @@
       },
       "Tenant": {
         "type": "object", "additionalProperties": false,
-        "required": ["ref", "state", "allowedProfileGrants", "allowedApplicationScopes", "aggregateQuota", "expiryPolicy", "metadata", "revision", "createdAt", "updatedAt"],
+        "required": ["ref", "state", "egressContext", "allowedProfileGrants", "allowedApplicationScopes", "aggregateQuota", "expiryPolicy", "metadata", "revision", "createdAt", "updatedAt"],
         "properties": {
           "ref": {"$ref": "#/components/schemas/OwnershipRef"},
           "state": {"$ref": "#/components/schemas/TenantState"},
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
           "allowedProfileGrants": {"$ref": "#/components/schemas/ProfileGrantList"},
           "allowedApplicationScopes": {"$ref": "#/components/schemas/ApplicationScopeList"},
           "aggregateQuota": {"$ref": "#/components/schemas/TenantQuota"},
@@ -2048,12 +2074,20 @@
         "required": ["ref", "allowedProfileGrants", "allowedApplicationScopes", "aggregateQuota", "expiryPolicy", "metadata"],
         "properties": {
           "ref": {"$ref": "#/components/schemas/OwnershipRef"},
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
           "allowedProfileGrants": {"$ref": "#/components/schemas/ProfileGrantList"},
           "allowedApplicationScopes": {"$ref": "#/components/schemas/ApplicationScopeList"},
           "aggregateQuota": {"$ref": "#/components/schemas/TenantQuota"},
           "expiryPolicy": {"$ref": "#/components/schemas/TenantExpiryPolicy"},
           "metadata": {"$ref": "#/components/schemas/Metadata"},
           "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "UpdateTenantEgressContextRequest": {
+        "type": "object", "additionalProperties": false, "required": ["egressContext"],
+        "description": "Replaces the operator-owned Tenant egress context. JSON null explicitly clears it; no default or fallback is selected.",
+        "properties": {
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]}
         }
       },
       "Subject": {
@@ -2317,11 +2351,22 @@
       "NetworkPolicy": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["mode", "destinations"],
+        "required": ["mode", "destinations", "requiresTenantEgressContext"],
         "properties": {
           "mode": {"type": "string", "enum": ["deny_all", "allow_list"]},
-          "destinations": {"type": "array", "maxItems": 128, "items": {"$ref": "#/components/schemas/NetworkDestination"}}
+          "destinations": {"type": "array", "maxItems": 128, "items": {"$ref": "#/components/schemas/NetworkDestination"}},
+          "requiresTenantEgressContext": {
+            "type": "boolean",
+            "description": "Whether this immutable Profile revision requires the creating Tenant's pinned egress context. Every Profile states this explicitly; omission is invalid and there is no default."
+          }
         }
+      },
+      "EgressContextName": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+        "description": "Opaque operator-selected routing context identifier. It carries no hostname, address, CIDR, Tenant reference, gateway identity, or mapping digest."
       },
       "NetworkDestination": {
         "type": "object",
@@ -2450,7 +2495,7 @@
       "Runner": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "poolName", "name", "state", "credentialState", "architectures", "capabilities", "capacity", "protocolVersions", "sandboxStartSampleCount", "sandboxStartP95Milliseconds", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "poolName", "name", "state", "credentialState", "architectures", "capabilities", "capacity", "protocolVersions", "supportedEgressContexts", "sandboxStartSampleCount", "sandboxStartP95Milliseconds", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/RunnerID"},
           "poolName": {"$ref": "#/components/schemas/ProfileName"},
@@ -2461,6 +2506,7 @@
           "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "snapshot-resume", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]}},
           "capacity": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": "integer", "format": "int64", "minimum": 0}},
           "protocolVersions": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 32}},
+          "supportedEgressContexts": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/components/schemas/EgressContextName"}},
           "sandboxStartSampleCount": {"type": "integer", "format": "int64", "minimum": 0},
           "sandboxStartP95Milliseconds": {"type": "integer", "format": "int64", "minimum": 0},
           "lastSeenAt": {"$ref": "#/components/schemas/Timestamp"},
@@ -2478,6 +2524,55 @@
           "nextCursor": {"type": "string", "minLength": 1, "maxLength": 512}
         }
       },
+      "EgressContextPreflight": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ready", "truncated", "requirements", "runners", "activeAssignments"],
+        "properties": {
+          "ready": {"type": "boolean"},
+          "truncated": {"type": "boolean"},
+          "requirements": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/components/schemas/EgressContextRequirement"}},
+          "runners": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/components/schemas/EgressContextRunner"}},
+          "activeAssignments": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/components/schemas/EgressContextAssignmentGroup"}}
+        }
+      },
+      "EgressContextRequirement": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantRef", "profileName", "profileRevisionId", "poolName", "egressContext", "compatibleRunnerIds", "status"],
+        "properties": {
+          "tenantRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "profileName": {"$ref": "#/components/schemas/ProfileName"},
+          "profileRevisionId": {"$ref": "#/components/schemas/OpaqueID"},
+          "poolName": {"$ref": "#/components/schemas/ProfileName"},
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
+          "compatibleRunnerIds": {"type": "array", "maxItems": 1000, "uniqueItems": true, "items": {"$ref": "#/components/schemas/RunnerID"}},
+          "status": {"type": "string", "enum": ["ready", "tenant_context_missing", "runner_context_unavailable"]}
+        }
+      },
+      "EgressContextRunner": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["runnerId", "poolName", "state", "connected", "advertisedContexts"],
+        "properties": {
+          "runnerId": {"$ref": "#/components/schemas/RunnerID"},
+          "poolName": {"$ref": "#/components/schemas/ProfileName"},
+          "state": {"type": "string", "minLength": 1, "maxLength": 32},
+          "connected": {"type": "boolean"},
+          "advertisedContexts": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/components/schemas/EgressContextName"}}
+        }
+      },
+      "EgressContextAssignmentGroup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["egressContext", "runnerId", "state", "count"],
+        "properties": {
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
+          "runnerId": {"$ref": "#/components/schemas/RunnerID"},
+          "state": {"type": "string", "minLength": 1, "maxLength": 32},
+          "count": {"type": "integer", "format": "int64", "minimum": 1}
+        }
+      },
       "SandboxState": {
         "type": "string",
         "enum": ["creating", "stopped", "starting", "ready", "draining", "stopping", "failed", "deleting", "deleted"]
@@ -2486,11 +2581,12 @@
       "Sandbox": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "profile", "profileRevisionId", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "profile", "profileRevisionId", "egressContext", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "profile": {"$ref": "#/components/schemas/ProfileName"},
           "profileRevisionId": {"$ref": "#/components/schemas/OpaqueID"},
+          "egressContext": {"oneOf": [{"$ref": "#/components/schemas/EgressContextName"}, {"type": "null"}]},
           "state": {"$ref": "#/components/schemas/SandboxState"},
           "desiredState": {"$ref": "#/components/schemas/SandboxDesiredState"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
@@ -3355,6 +3451,8 @@
           "invalid_lifecycle_transition",
           "resource_expired",
           "tenant_suspended",
+          "tenant_egress_context_required",
+          "egress_context_unavailable",
           "grant_escalation_denied",
           "cleanup_state_conflict",
           "workspace_mutation_conflict",

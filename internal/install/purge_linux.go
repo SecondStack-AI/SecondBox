@@ -651,7 +651,7 @@ func validateRunnerIdentityDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	want := map[string]os.FileMode{"runner-ca.crt": 0o644, "runner.crt": 0o600, "runner.env": 0o600, "runner.key": 0o600}
+	want := map[string]os.FileMode{"egress-contexts.json": 0o600, "runner-ca.crt": 0o644, "runner.crt": 0o600, "runner.env": 0o600, "runner.key": 0o600}
 	actual := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		info, err := os.Lstat(filepath.Join(path, entry.Name()))
@@ -662,7 +662,7 @@ func validateRunnerIdentityDirectory(path string) error {
 		actual = append(actual, entry.Name())
 	}
 	slices.Sort(actual)
-	return boolError(slices.Equal(actual, []string{"runner-ca.crt", "runner.crt", "runner.env", "runner.key"}), "Runner identity purge allowlist differs")
+	return boolError(slices.Equal(actual, []string{"egress-contexts.json", "runner-ca.crt", "runner.crt", "runner.env", "runner.key"}), "Runner identity purge allowlist differs")
 }
 
 func validateComposeAssetDirectory(path string) error {
