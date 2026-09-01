@@ -93,7 +93,7 @@ create_qualification_workload() {
   local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5" egress_context="${6:-}"
   local platform_config="$root/platform.json" controller_config="$root/controller.json" application_config="$root/application.json"
   local platform_token_path platform_token api_address subject_ref expiry controller_response controller_token application_response application_token
-  local sandbox_operation sandbox_id sandbox_state=''
+  local operation_id expected_runner_id placement_preflight='' sandbox_operation sandbox_id sandbox_state=''
 
   install -d -m 0700 "$root"
   platform_token_path="$(jq -er '.secretTargets[] | select(.category == "platform-authority") | .path' "$plan_path")"
@@ -126,9 +126,42 @@ create_qualification_workload() {
   SECONDBOX_CONFIG="$application_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$application_token" \
     SECONDBOX_TENANT_REF="$tenant_ref" SECONDBOX_SUBJECT_REF="$subject_ref" \
     "$binary" --output json application login >/dev/null
+
+  if [[ -n "$egress_context" ]]; then
+    operation_id="$(jq -er .operationId "$plan_path")"
+    expected_runner_id="runner-${operation_id#install_}"
+    for _ in $(seq 1 300); do
+      if placement_preflight="$(SECONDBOX_CONFIG="$platform_config" "$binary" --output json diagnostics egress-contexts 2>/dev/null)" &&
+        jq -e --arg tenantRef "$tenant_ref" --arg egressContext "$egress_context" --arg runnerId "$expected_runner_id" '
+          .ready == true and
+          any(.requirements[];
+            .tenantRef == $tenantRef and
+            .profileName == "durable-coding" and
+            .egressContext == $egressContext and
+            .status == "ready" and
+            (.compatibleRunnerIds | index($runnerId)) != null
+          ) and
+          any(.runners[];
+            .runnerId == $runnerId and
+            .state == "ready" and
+            .connected == true and
+            (.advertisedContexts | index($egressContext)) != null
+          )
+        ' <<<"$placement_preflight" >/dev/null; then
+        placement_preflight='ready'
+        break
+      fi
+      sleep 1
+    done
+    [[ "$placement_preflight" == ready ]] || { echo 'qualification placement did not become ready' >&2; return 1; }
+  fi
+
   jq -n '{profile:"durable-coding",metadata:{qualification:"installer-qualified-workload"}}' >"$root/sandbox.json"
-  sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create \
-    --body "$root/sandbox.json" --header "Idempotency-Key=qualified-sandbox-$key_suffix")"
+  if ! sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create \
+    --body "$root/sandbox.json" --header "Idempotency-Key=qualified-sandbox-$key_suffix")"; then
+    echo 'explicit qualification Sandbox creation failed' >&2
+    return 1
+  fi
   sandbox_id="$(jq -er .sandboxId <<<"$sandbox_operation")"
   for _ in $(seq 1 300); do
     sandbox_state="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes get --path "sandboxId=$sandbox_id" | jq -er .state)"

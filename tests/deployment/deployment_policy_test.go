@@ -240,6 +240,9 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		`[[ "$delete_operation_state" == succeeded ]]`,
 		`[[ "$source_sandbox_state" == deleted ]]`,
 		`grep -Fq 'retire every pre-v0.8.0 Sandbox'`,
+		`"$binary" --output json diagnostics egress-contexts`,
+		"qualification placement did not become ready",
+		`if ! sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create`,
 		"report_qualified_guest_failure",
 	} {
 		if !strings.Contains(guest, required) {
@@ -254,6 +257,11 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 	}
 	if strings.Contains(guest, `grep -Fq 'retire every v0.7.2 Sandbox'`) {
 		t.Error("qualified guest expects stale recreation-refusal wording")
+	}
+	placementReady := strings.Index(guest, `"$binary" --output json diagnostics egress-contexts`)
+	sandboxCreate := strings.Index(guest, `--output json sandboxes create`)
+	if placementReady < 0 || sandboxCreate < 0 || placementReady > sandboxCreate {
+		t.Error("qualified guest must establish live Tenant-specific placement compatibility before Sandbox creation")
 	}
 }
 
