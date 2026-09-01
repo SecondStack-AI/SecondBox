@@ -2,7 +2,6 @@ package standardresources
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
-const BundleSchemaVersion = "secondbox.standard-bundle/v2"
+const BundleSchemaVersion = "secondbox.standard-bundle/v3"
 
 var recordedBundleDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
@@ -164,44 +163,13 @@ type recordedSpecIdentity struct {
 	ToolchainBundleDigest string
 }
 
-type legacyRecordedProfileRevisionSpec struct {
-	Pool                  string                          `json:"pool"`
-	Architecture          string                          `json:"architecture"`
-	RuntimeBundleDigest   string                          `json:"runtimeBundleDigest"`
-	ToolchainBundleDigest string                          `json:"toolchainBundleDigest"`
-	Resources             legacyRecordedResourcePolicy    `json:"resources"`
-	Startup               secondboxclient.StartupPolicy   `json:"startup"`
-	Lifecycle             secondboxclient.LifecyclePolicy `json:"lifecycle"`
-	Retention             secondboxclient.RetentionPolicy `json:"retention"`
-	Execution             secondboxclient.ExecutionPolicy `json:"execution"`
-	Network               secondboxclient.NetworkPolicy   `json:"network"`
-	Ports                 []secondboxclient.PortPolicy    `json:"ports"`
-}
-
-type legacyRecordedResourcePolicy struct {
-	CPUMillis            int64 `json:"cpuMillis"`
-	MemoryBytes          int64 `json:"memoryBytes"`
-	WorkspaceBytes       int64 `json:"workspaceBytes"`
-	ProcessLimit         int64 `json:"processLimit"`
-	ConcurrentOperations int64 `json:"concurrentOperations"`
-}
-
 func recordedProfileSpecIdentity(raw json.RawMessage) (recordedSpecIdentity, string, error) {
 	var current secondboxclient.ProfileRevisionSpec
-	if err := decodeStrictDocument(raw, &current); err == nil {
-		digest, digestErr := resourceapply.SpecDigest(current)
-		return recordedSpecIdentity{Pool: current.Pool, Architecture: current.Architecture, RuntimeBundleDigest: current.RuntimeBundleDigest, ToolchainBundleDigest: current.ToolchainBundleDigest}, digest, digestErr
-	}
-	var legacy legacyRecordedProfileRevisionSpec
-	if err := decodeStrictDocument(raw, &legacy); err != nil {
+	if err := decodeStrictDocument(raw, &current); err != nil {
 		return recordedSpecIdentity{}, "", err
 	}
-	canonical, err := json.Marshal(legacy)
-	if err != nil {
-		return recordedSpecIdentity{}, "", err
-	}
-	digest := sha256.Sum256(canonical)
-	return recordedSpecIdentity{Pool: legacy.Pool, Architecture: legacy.Architecture, RuntimeBundleDigest: legacy.RuntimeBundleDigest, ToolchainBundleDigest: legacy.ToolchainBundleDigest}, fmt.Sprintf("sha256:%x", digest), nil
+	digest, err := resourceapply.SpecDigest(current)
+	return recordedSpecIdentity{Pool: current.Pool, Architecture: current.Architecture, RuntimeBundleDigest: current.RuntimeBundleDigest, ToolchainBundleDigest: current.ToolchainBundleDigest}, digest, err
 }
 
 func (document BundleDocument) Validate() error {

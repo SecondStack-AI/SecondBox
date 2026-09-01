@@ -186,20 +186,25 @@ func TestGuidedUpdateRoutesLegacyOperationToCleanInstallBoundaryBeforeStrictDeco
 	}
 }
 
-func TestGuidedUpdateRefusesV072WithCompleteRecreationProcedure(t *testing.T) {
-	err := validateGuidedUpdateSourceVersion("0.7.2")
-	for _, required := range []string{
-		"v0.7.2 tenant-egress clean-recreation boundary",
-		"quiesce consuming applications",
-		"retire every v0.7.2 Sandbox",
-		"coordinated PostgreSQL, deployment-state, Runner-identity, and complete Workspace backup",
-		"uninstall --purge",
-		"recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes",
-		"rollback only",
-	} {
-		if err == nil || !strings.Contains(err.Error(), required) {
-			t.Fatalf("v0.7.2 update refusal = %v, want %q", err, required)
-		}
+func TestGuidedUpdateRefusesRecreationBoundarySourcesWithExactVersion(t *testing.T) {
+	for _, version := range []string{"0.6.0", "0.7.1", "0.7.2"} {
+		t.Run(version, func(t *testing.T) {
+			err := validateGuidedUpdateSourceVersion(version)
+			for _, required := range []string{
+				"v0.7.2 tenant-egress clean-recreation boundary",
+				"in-place updates from v" + version + " are unsupported",
+				"quiesce consuming applications",
+				"retire every pre-v0.8.0 Sandbox",
+				"coordinated PostgreSQL, deployment-state, Runner-identity, and complete Workspace backup",
+				"uninstall --purge",
+				"recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes",
+				"rollback only",
+			} {
+				if err == nil || !strings.Contains(err.Error(), required) {
+					t.Fatalf("%s update refusal = %v, want %q", version, err, required)
+				}
+			}
+		})
 	}
 }
 

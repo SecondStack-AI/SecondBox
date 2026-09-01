@@ -33,7 +33,7 @@ type updateDependencies struct {
 	CheckCapacity func(install.InstallPlan, install.ReleasePlan) error
 	Materializer  install.ReleaseMaterializeExecutor
 	Compose       func(context.Context, string, string) error
-	SourceCompose func(context.Context, string, string, string, string) error
+	SourceCompose func(context.Context, string, string, string) error
 	SourceSubject func(context.Context, install.InstallPlan) (string, error)
 	Readiness     func(context.Context, install.InstallPlan) (map[string]string, error)
 	Smoke         func(context.Context, install.InstallPlan) (map[string]string, error)
@@ -65,8 +65,8 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 		Compose: func(ctx context.Context, manifestPath, action string) error {
 			return deployconfig.RunComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, httpClient)
 		},
-		SourceCompose: func(ctx context.Context, manifestPath, sourceVersion, action, subject string) error {
-			return deployconfig.RunExistingComposeForAcceptedInstaller(ctx, manifestPath, sourceVersion, action, subject, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
+		SourceCompose: func(ctx context.Context, manifestPath, action, subject string) error {
+			return deployconfig.RunExistingComposeForAcceptedInstaller(ctx, manifestPath, action, subject, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
 		},
 		SourceSubject: authenticatedSourceComposeSubject,
 		Readiness:     waitForInstalledRunner,
@@ -105,11 +105,11 @@ func authenticatedSourceComposeSubject(ctx context.Context, plan install.Install
 	if stdout.tooLong || stderr.tooLong {
 		return "", errors.New("SecondBox installer update source Compose render exceeded the bounded output limit")
 	}
-	expected, err := deployconfig.RecordedInstallerComposeSubject(manifestPath, environmentPath, plan.Release.Version)
+	expected, err := deployconfig.RecordedInstallerComposeSubject(manifestPath, environmentPath)
 	if err != nil {
 		return "", err
 	}
-	actual, err := deployconfig.RecordedInstallerComposeSubject(manifestPath, "", plan.Release.Version)
+	actual, err := deployconfig.RecordedInstallerComposeSubject(manifestPath, "")
 	if err != nil {
 		return "", err
 	}
@@ -382,7 +382,7 @@ func validateGuidedUpdateSourceVersion(version string) error {
 		return err
 	}
 	if comparison <= 0 {
-		return fmt.Errorf("SecondBox installer update: v0.7.2 tenant-egress clean-recreation boundary: in-place updates from v0.7.2 are unsupported; active release is %s. Recreation procedure: (1) quiesce consuming applications; (2) retire every v0.7.2 Sandbox; (3) take and verify a coordinated PostgreSQL, deployment-state, Runner-identity, and complete Workspace backup for rollback only; (4) stop the old deployment and remove its database and every Runner state and Workspace through the recorded uninstall procedure, including `secondbox-deploy uninstall --purge <operation-directory>` for a guided single-host deployment; (5) initialize the target release and recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes. Never combine v0.7.2 state with the generation-4 deployment", version)
+		return fmt.Errorf("SecondBox installer update: v0.7.2 tenant-egress clean-recreation boundary: in-place updates from v%s are unsupported. Recreation procedure: (1) quiesce consuming applications; (2) retire every pre-v0.8.0 Sandbox; (3) take and verify a coordinated PostgreSQL, deployment-state, Runner-identity, and complete Workspace backup for rollback only; (4) stop the old deployment and remove its database and every Runner state and Workspace through the recorded uninstall procedure, including `secondbox-deploy uninstall --purge <operation-directory>` for a guided single-host deployment; (5) initialize the target release and recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes. Never combine pre-v0.8.0 state with the generation-4 deployment", version)
 	}
 	return nil
 }
@@ -475,11 +475,11 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, fmt.Errorf("SecondBox installer update: Sandboxes became active before activation: %s", strings.Join(active, ", ")))
 		}
 		manifestPath := installerPlannedPath(plan, "manifest")
-		if err := dependencies.SourceCompose(ctx, manifestPath, current.SourceRelease.Version, "stop-control-plane", sourceComposeSubject); err != nil {
+		if err := dependencies.SourceCompose(ctx, manifestPath, "stop-control-plane", sourceComposeSubject); err != nil {
 			return fail(install.UpdateStageActivationStarted, install.FailureRetryable, fmt.Errorf("SecondBox installer update fence control-plane admission: %w", err))
 		}
 		restoreSource := func(problem error) error {
-			return errors.Join(problem, dependencies.SourceCompose(ctx, manifestPath, current.SourceRelease.Version, "start-control-plane", sourceComposeSubject))
+			return errors.Join(problem, dependencies.SourceCompose(ctx, manifestPath, "start-control-plane", sourceComposeSubject))
 		}
 		active, err = dependencies.Quiescent(ctx, plan, sourceComposeSubject)
 		if err != nil {
@@ -511,7 +511,7 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 		if sourceComposeSubject == "" {
 			return fail(install.UpdateStageDeploymentPublished, install.FailureNeedsAction, errors.New("SecondBox installer update: authenticated source Compose identity is absent from the activation boundary"))
 		}
-		if err := dependencies.SourceCompose(ctx, manifestPath, current.SourceRelease.Version, "down", sourceComposeSubject); err != nil {
+		if err := dependencies.SourceCompose(ctx, manifestPath, "down", sourceComposeSubject); err != nil {
 			return fail(install.UpdateStageDeploymentPublished, install.FailureRetryable, err)
 		}
 		artifact, err = install.ActivateUpdateArtifactsAndBinaries(plan, current, source.Manifest, target)
@@ -704,7 +704,7 @@ func installedDeploymentSandboxesRequiringStop(ctx context.Context, plan install
 	query := installedDeploymentQuiescenceQuery
 	command := `exec psql --no-psqlrc --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "$1"`
 	arguments, err := deployconfig.ComposeDiagnosticArgumentsForRecordedInstaller(
-		manifestPath, plan.Release.Version, sourceComposeSubject, "exec", "--no-TTY", "postgres", "sh", "-eu", "-c", command, "secondbox-update-quiescence", query,
+		manifestPath, sourceComposeSubject, "exec", "--no-TTY", "postgres", "sh", "-eu", "-c", command, "secondbox-update-quiescence", query,
 	)
 	if err != nil {
 		return nil, err
