@@ -39,17 +39,16 @@ type capacityReservation struct {
 }
 
 type activeAssignment struct {
-	fence                 *runnerprotocol.AssignmentFence
-	correlation           *runnerprotocol.Correlation
-	egressContext         string
-	requiresEgressContext bool
-	handles               *SupervisorHandles
-	session               *firecracker.GuestProtocolSession
-	workspace             workspacestore.ComputeAttachment
-	network               instanceNetwork
-	instanceDir           string
-	reservation           capacityReservation
-	backendRef            string
+	fence         *runnerprotocol.AssignmentFence
+	correlation   *runnerprotocol.Correlation
+	egressContext string
+	handles       *SupervisorHandles
+	session       *firecracker.GuestProtocolSession
+	workspace     workspacestore.ComputeAttachment
+	network       instanceNetwork
+	instanceDir   string
+	reservation   capacityReservation
+	backendRef    string
 	// launched closes when the claimed start finishes (successfully
 	// registered or removed after failure); nil on a completed assignment.
 	launched       chan struct{}
@@ -213,14 +212,12 @@ func (backend *AssignmentBackend) RecoveredAssignments() []*runnerprotocol.Activ
 	defer backend.mu.Unlock()
 	result := make([]*runnerprotocol.ActiveAssignmentSummary, 0, len(backend.assignments))
 	for _, active := range backend.assignments {
-		if active == nil || active.fence == nil {
+		if active == nil {
 			continue
 		}
-		result = append(result, &runnerprotocol.ActiveAssignmentSummary{
-			AssignmentId: active.fence.AssignmentId, SandboxId: active.fence.SandboxId,
-			InstanceId: active.fence.InstanceId, SandboxGeneration: active.fence.SandboxGeneration,
-			FencingToken: append([]byte(nil), active.fence.FencingToken...), EgressContext: active.egressContext,
-		})
+		if summary := runnerprotocol.RecoveredAssignmentSummary(active.fence, active.egressContext); summary != nil {
+			result = append(result, summary)
+		}
 	}
 	return result
 }
@@ -374,7 +371,8 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	// begun; the claiming start passes its own claim through.
 	backend.mu.Lock()
 	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
-		same, fenced := sameAssignment(active, assignment), active.fenced
+		same := active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, assignment)
+		fenced := active != nil && active.fenced
 		backend.mu.Unlock()
 		if same {
 			if fenced {
@@ -461,7 +459,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignmentID := assignment.Fence.AssignmentId
 	backend.mu.Lock()
 	if existing, exists := backend.assignments[assignmentID]; exists {
-		if !sameAssignment(existing, assignment) {
+		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, assignment) {
 			backend.mu.Unlock()
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment ID was reused with different fencing"))
 		}
@@ -480,8 +478,8 @@ func (backend *AssignmentBackend) StartAssignment(
 			}
 			backend.mu.Lock()
 			reference = ""
-			if current, still := backend.assignments[assignmentID]; still &&
-				sameAssignment(current, assignment) && !current.fenced {
+			if current, still := backend.assignments[assignmentID]; still && current != nil &&
+				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, assignment) && !current.fenced {
 				reference = current.backendRef
 			}
 			backend.mu.Unlock()
@@ -500,8 +498,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	launched := make(chan struct{})
 	claim := &activeAssignment{
 		fence: cloneFence(assignment.Fence), launched: launched, done: make(chan struct{}),
-		egressContext:         assignment.EgressContext,
-		requiresEgressContext: assignment.Requirements != nil && assignment.Requirements.RequiresTenantEgressContext,
+		egressContext: assignment.EgressContext,
 	}
 	claim.launchDone = sync.OnceFunc(func() { close(launched) })
 	backend.assignments[assignmentID] = claim
@@ -735,18 +732,17 @@ func (backend *AssignmentBackend) launchInstance(
 	}
 	supervisorProcess.Store(handles.Command.Process)
 	active := &activeAssignment{
-		fence:                 cloneFence(assignment.Fence),
-		correlation:           proto.Clone(assignment.Correlation).(*runnerprotocol.Correlation),
-		egressContext:         assignment.EgressContext,
-		requiresEgressContext: assignment.Requirements.RequiresTenantEgressContext,
-		handles:               handles,
-		workspace:             workspace,
-		network:               network,
-		instanceDir:           instanceDir,
-		backendRef:            fmt.Sprintf("gvisor:%d", handles.Command.Process.Pid),
-		operations:            make(map[uint64]context.CancelFunc),
-		nextOperation:         1,
-		done:                  make(chan struct{}),
+		fence:         cloneFence(assignment.Fence),
+		correlation:   proto.Clone(assignment.Correlation).(*runnerprotocol.Correlation),
+		egressContext: assignment.EgressContext,
+		handles:       handles,
+		workspace:     workspace,
+		network:       network,
+		instanceDir:   instanceDir,
+		backendRef:    fmt.Sprintf("gvisor:%d", handles.Command.Process.Pid),
+		operations:    make(map[uint64]context.CancelFunc),
+		nextOperation: 1,
+		done:          make(chan struct{}),
 	}
 	go func() {
 		waitErr := handles.Command.Wait()
@@ -1292,13 +1288,6 @@ func sameFence(left, right *runnerprotocol.AssignmentFence) bool {
 	return left != nil && right != nil && left.AssignmentId == right.AssignmentId &&
 		left.SandboxId == right.SandboxId && left.InstanceId == right.InstanceId &&
 		left.SandboxGeneration == right.SandboxGeneration && bytes.Equal(left.FencingToken, right.FencingToken)
-}
-
-func sameAssignment(active *activeAssignment, assignment *runnerprotocol.AssignmentCommand) bool {
-	return active != nil && assignment != nil &&
-		sameFence(active.fence, assignment.Fence) &&
-		active.egressContext == assignment.EgressContext &&
-		active.requiresEgressContext == (assignment.Requirements != nil && assignment.Requirements.RequiresTenantEgressContext)
 }
 
 func cloneFence(fence *runnerprotocol.AssignmentFence) *runnerprotocol.AssignmentFence {
