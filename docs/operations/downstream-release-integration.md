@@ -1,11 +1,11 @@
 # Downstream release integration
 
-Integrate v0.8.1 only after the stable GitHub Release is public. The release is the immutable `v0.8.1` tag plus the locally built files attached to that release; the publishing workflow does not rebuild them. Do not use the retracted v0.7.0 or v0.8.0 Go module coordinates.
+Integrate v0.8.2 only after the stable GitHub Release is public. The release is the immutable `v0.8.2` tag plus the locally built files attached to that release; the publishing workflow does not rebuild them. Do not use the retracted v0.7.0 or v0.8.0 Go module coordinates.
 
-Download the `secondbox-deploy_0.8.1_OS_ARCH` binary and verify it against the public `SHA256SUMS`. Then verify the published artifact manifest and every HTTP release object it references:
+Download the `secondbox-deploy_0.8.2_OS_ARCH` binary and verify it against the public `SHA256SUMS`. Then verify the published artifact manifest and every HTTP release object it references:
 
 ```text
-secondbox-deploy verify artifact-manifest https://github.com/SecondStack-AI/SecondBox/releases/download/v0.8.1/secondbox-0.8.1-artifact-manifest.json
+secondbox-deploy verify artifact-manifest https://github.com/SecondStack-AI/SecondBox/releases/download/v0.8.2/secondbox-0.8.2-artifact-manifest.json
 ```
 
 Keep an operator-reviewed production `secondbox.toml` input containing explicit database, platform and Runner authority, secret-file, ingress, Runner placement, workspace, network, gateway, capacity, retention, and independently held guest trust-anchor choices. It contains no application-authority file. Materialize the deployment with:
@@ -13,7 +13,7 @@ Keep an operator-reviewed production `secondbox.toml` input containing explicit 
 ```text
 secondbox-deploy init --mode production \
   --input /protected/operator.toml \
-  --artifact-manifest https://github.com/SecondStack-AI/SecondBox/releases/download/v0.8.1/secondbox-0.8.1-artifact-manifest.json \
+  --artifact-manifest https://github.com/SecondStack-AI/SecondBox/releases/download/v0.8.2/secondbox-0.8.2-artifact-manifest.json \
   /srv/secondbox/deployment
 secondbox-deploy compose /srv/secondbox/deployment/secondbox.toml up
 ```
@@ -25,8 +25,8 @@ After readiness, log in with the platform token, create each Tenant and its tena
 Import the existing SDKs at the same coordinated version:
 
 ```text
-go get github.com/SecondStack-AI/SecondBox@v0.8.1
-npm install @secondstack-ai/secondbox@0.8.1
+go get github.com/SecondStack-AI/SecondBox@v0.8.2
+npm install @secondstack-ai/secondbox@0.8.2
 ```
 
 Production configuration must retain the digest-pinned control-plane and Runner image references and the installed verified artifact manifest. The independently configured microVM trust and asset identity must remain consistent with that manifest. Never replace release facts with version tags, `latest`, local builds, a source checkout, copied SDK files, copied Compose files, or consumer-owned standard-resource reconciliation.
