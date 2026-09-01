@@ -66,6 +66,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"listRunners":                     {"listRunners", "200", "RunnerPage", nil, nil},
 	"getRunner":                       {"getRunner", "200", "Runner", nil, []string{"ETag"}},
 	"getDeploymentTiming":             {"getDeploymentTiming", "200", "DeploymentTimingSummary", nil, nil},
+	"readEgressContextPreflight":      {"readEgressContextPreflight", "200", "EgressContextPreflight", nil, nil},
 	"listSandboxes":                   {"listSandboxes", "200", "SandboxPage", nil, nil},
 	"createSandbox":                   {"createSandbox", "202", "Operation", []string{"Idempotency-Key"}, []string{"Idempotency-Replayed"}},
 	"getSandbox":                      {"getSandbox", "200", "Sandbox", nil, []string{"ETag"}},

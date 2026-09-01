@@ -287,7 +287,8 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			if strings.HasPrefix(path, "/v1/tenants") ||
 				strings.HasPrefix(path, "/v1/subjects") ||
 				strings.HasPrefix(path, "/v1/application-authorities") ||
-				path == "/v1/usage" || path == "/v1/deployment-usage" {
+				path == "/v1/usage" || path == "/v1/deployment-usage" ||
+				path == "/v1/diagnostics/egress-contexts" {
 				continue
 			}
 			pathItem := object(t, pathValue, path)
