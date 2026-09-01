@@ -1093,6 +1093,57 @@ func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testi
 		bytes.Contains(contextConfig, []byte("certificate")) || bytes.Contains(contextConfig, []byte("proxy")) {
 		t.Fatalf("rendered context configuration = %s", contextConfig)
 	}
+	manifest.Runners[0].EgressContexts = append(manifest.Runners[0].EgressContexts, RunnerEgressContext{
+		Name: "customer-b",
+		Gateways: []RunnerLogicalGateway{
+			{LogicalName: "agent-gateway.secondbox.internal", Address: "172.30.0.2"},
+			{LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.2"},
+		},
+	})
+	encoded, err = encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Render(manifestPath, renderedPath); err != nil {
+		t.Fatal(err)
+	}
+	contextConfig, err = os.ReadFile(contextConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var multiple runnerEgressContextConfigDocument
+	if err := json.Unmarshal(contextConfig, &multiple); err != nil {
+		t.Fatal(err)
+	}
+	if len(multiple.Contexts) != 2 || multiple.Contexts[1].Name != "customer-b" {
+		t.Fatalf("multiple context render = %#v", multiple.Contexts)
+	}
+	manifest.Runners[0].EgressContexts[0].Gateways[0].Address = "172.30.0.9"
+	manifest.Runners[0].EgressContexts = manifest.Runners[0].EgressContexts[:1]
+	encoded, err = encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Render(manifestPath, renderedPath); err != nil {
+		t.Fatal(err)
+	}
+	contextConfig, err = os.ReadFile(contextConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replaced runnerEgressContextConfigDocument
+	if err := json.Unmarshal(contextConfig, &replaced); err != nil {
+		t.Fatal(err)
+	}
+	if len(replaced.Contexts) != 1 || replaced.Contexts[0].Gateways[0].Address != "172.30.0.9" {
+		t.Fatalf("context replacement/removal render = %#v", replaced.Contexts)
+	}
 	manifest.Runners = manifest.Runners[:1]
 	encoded, err = encodeManifest(manifest)
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 
 // Guided updates begin at the customer-shared-tenancy clean-install boundary.
 const minimumGuidedUpdateSourceVersion = "0.6.0"
+const tenantEgressRecreationBoundaryVersion = "0.7.2"
 
 type updateDependencies struct {
 	OwnerUID      int
@@ -375,6 +376,13 @@ func validateGuidedUpdateSourceVersion(version string) error {
 	}
 	if comparison < 0 {
 		return fmt.Errorf("SecondBox installer update: v0.6.0 clean-install boundary: active release %s predates v%s; perform a clean reinstall; import and compatibility modes are not available", version, minimumGuidedUpdateSourceVersion)
+	}
+	comparison, err = releasecontract.CompareVersions(version, tenantEgressRecreationBoundaryVersion)
+	if err != nil {
+		return err
+	}
+	if comparison <= 0 {
+		return fmt.Errorf("SecondBox installer update: v0.7.2 tenant-egress clean-recreation boundary: in-place updates from v0.7.2 are unsupported; active release is %s. Recreation procedure: (1) quiesce consuming applications; (2) retire every v0.7.2 Sandbox; (3) take and verify a coordinated PostgreSQL, deployment-state, Runner-identity, and complete Workspace backup for rollback only; (4) stop the old deployment and remove its database and every Runner state and Workspace through the recorded uninstall procedure, including `secondbox-deploy uninstall --purge <operation-directory>` for a guided single-host deployment; (5) initialize the target release and recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes. Never combine v0.7.2 state with the generation-4 deployment", version)
 	}
 	return nil
 }

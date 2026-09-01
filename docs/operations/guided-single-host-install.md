@@ -82,7 +82,7 @@ Updates are explicit and operator-initiated; there is no automatic background up
 
 First stop every live Sandbox. The updater refuses to change desired state, leases, or workload lifecycle on the operator's behalf.
 
-Take and verify a PostgreSQL backup before activating a target release: migrations are forward-only, and a target that carries a representation change (such as the vCPU conversion in migration `0019`) leaves the database unreadable by the source release's binaries. Rolling back after activation means restoring that backup and redeploying the source release; there is no in-place downgrade. On the single host the updater stops the Runner with the rest of the Compose project and restarts the upgraded Runner after the control plane, which is exactly the required generation-3 rollout order; a multi-runner deployment must stop every Runner before activating and start the upgraded Runners only after the upgraded control plane is ready, because a mixed-generation fleet is refused.
+Take and verify a PostgreSQL backup before activating a compatible target release: migrations are forward-only, and a target that carries a representation change (such as the vCPU conversion in migration `0019`) leaves the database unreadable by the source release's binaries. Rolling back after activation means restoring that backup and redeploying the source release; there is no in-place downgrade. The tenant-egress release uses Runner protocol generation 4 and is a clean recreation from v0.7.2, not an update. For later compatible releases, the single-host updater stops the Runner with the rest of the Compose project and restarts it after the control plane; a multi-runner deployment must coordinate the same order because a mixed-generation fleet is refused.
 
 Then run the read-only check against the operation directory printed by the original installer:
 
@@ -99,7 +99,7 @@ curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/
   | sh -s -- update "$operation"
 ```
 
-v0.6.0 is a clean-install boundary. `update --check` refuses a v0.5.2-style manifest or deployment and reports that a clean reinstall is required; it provides no authority import, compatibility, fallback, or dual-source option. Preserve or explicitly migrate workloads outside this installer before removing the v0.5.2 deployment. Updates between compatible post-boundary releases retain the existing verified receipt, platform authority, Runner identity, CLI platform session, network settings, capacity, retention, Workspaces, Snapshots, storage paths, and Compose transport, subject to the release and execution-asset checks below.
+v0.6.0 is a historical clean-install boundary. The tenant-egress release adds an exact v0.7.2 clean-recreation boundary: `update --check` refuses v0.7.2 before target release fetch or state mutation and prints the complete procedure. Quiesce consuming applications, retire every v0.7.2 Sandbox, take one coordinated PostgreSQL, operation/deployment-state, Runner-identity, and complete Runner-storage backup for rollback only, run ordinary uninstall, inspect the targets, then run `secondbox-deploy uninstall --purge "$operation"`. Initialize the target release and recreate Tenants, authorities, Profiles, the generated Runner context mappings, and Sandboxes. Never restore v0.7.2 database or Runner state into the generation-4 deployment. Compatible updates after this boundary retain recorded state subject to the ordinary release and execution-asset checks below.
 
 Database migrations begin when the target control plane starts. A failure before activation leaves the source deployment unchanged. A failure after activation remains bound to the verified target; resume it rather than running older binaries against potentially migrated data:
 
@@ -211,7 +211,7 @@ secondbox-deploy install --support /absolute/path/to/operation \
   --output /secure/path/secondbox-installer-support.tar.gz
 ```
 
-The archive is create-only and mode `0600`. It contains no plan document, process environment, token, private key, Workspace content, or database row. Collection rejects output containing any exact installed secret value or a secret-bearing marker. Review bounded Runner log text before sharing it.
+The archive is create-only and mode `0600`. Its non-secret manifest inspection lists the generated Runner context name, and its platform-authorized egress-context preflight lists current requirement and active-assignment impact. It contains no plan document, process environment, token, private key, Workspace content, gateway certificate, proxy endpoint, or database row. Collection rejects output containing any exact installed secret value or a secret-bearing marker. Review bounded Runner log and Tenant/Profile preflight text before sharing it.
 
 ## Uninstall and purge
 

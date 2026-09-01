@@ -93,6 +93,12 @@ func collectInstalledCLIEvidence(ctx context.Context, plan install.InstallPlan, 
 	evidence["runner-health.json"] = boundedEvidence(output.Bytes())
 	evidence["runner-health.stderr"] = boundedEvidence(diagnostic.Bytes())
 	evidence["runner-health.status"] = evidenceStatus(err)
+
+	command, output, diagnostic = installedCLICommand(ctx, plan, "--output", "json", "diagnostics", "egress-contexts")
+	err = command.Run()
+	evidence["egress-context-preflight.json"] = boundedEvidence(output.Bytes())
+	evidence["egress-context-preflight.stderr"] = boundedEvidence(diagnostic.Bytes())
+	evidence["egress-context-preflight.status"] = evidenceStatus(err)
 }
 
 func collectControlPlaneHealth(ctx context.Context, plan install.InstallPlan, evidence map[string][]byte) {

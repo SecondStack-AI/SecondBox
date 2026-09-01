@@ -1,7 +1,7 @@
 {
   "schemaVersion": "secondbox.install.vm-scenario/v1",
   "bootstrapCoordinate": "https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh",
-  "storagePaths": ["btrfs_image", "existing_reflink_filesystem", "existing_reflink_update"],
+  "storagePaths": ["btrfs_image", "existing_reflink_filesystem", "existing_reflink_recreation"],
   "requiredAssertions": [
     "clean_host",
     "read_only_preflight",
@@ -16,7 +16,7 @@
     "existing_reflink_isolation",
     "unsafe_filesystem_refusals",
     "fresh_existing_reflink_install",
-    "update_compatibility_enforced",
+    "v072_update_refused",
     "stage_interrupt_resume",
     "verified_bundle_not_reextracted",
     "uninstall_workspace_preserved",

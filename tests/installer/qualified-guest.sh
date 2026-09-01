@@ -19,14 +19,9 @@ trap 'report_qualified_guest_failure "$LINENO"' ERR
 phase="${1:-}"
 mode="${2:-}"
 release_directory="${3:-}"
-v060_adapter="${4:-}"
 [[ "$phase" == install || "$phase" == verify ]] || { echo 'qualified guest phase must be install or verify' >&2; exit 2; }
-[[ "$mode" == btrfs_image || "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_update ]] || { echo 'qualified guest mode is invalid' >&2; exit 2; }
+[[ "$mode" == btrfs_image || "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_recreation ]] || { echo 'qualified guest mode is invalid' >&2; exit 2; }
 [[ "$release_directory" == /* && -d "$release_directory" && ! -L "$release_directory" ]] || { echo 'qualified guest release directory is unsafe' >&2; exit 1; }
-if [[ "$mode" == existing_reflink_update ]]; then
-  [[ "$v060_adapter" == /* && -f "$v060_adapter" && ! -L "$v060_adapter" && -x "$v060_adapter" ]] || { echo 'qualified guest requires the v0.6.0 recorded-waiver adapter' >&2; exit 1; }
-  jq -e '.version == "0.6.0" and .sourceCommit == "92e409ddade89737afa75ec2b781dac5c8afbeab"' <("$v060_adapter" --output json version) >/dev/null
-fi
 
 qualification_root="$HOME/.secondbox-installer-qualification"
 state="$qualification_root/state-${mode}.json"
@@ -95,25 +90,10 @@ EOF
 }
 
 create_qualification_workload() {
-  local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5" quota_cpu_contract="$6"
+  local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5" egress_context="${6:-}"
   local platform_config="$root/platform.json" controller_config="$root/controller.json" application_config="$root/application.json"
-  local platform_token_path platform_token api_address subject_ref expiry controller_response controller_token application_response application_token cpu_quota_field cpu_quota_value
+  local platform_token_path platform_token api_address subject_ref expiry controller_response controller_token application_response application_token
   local sandbox_operation sandbox_id sandbox_state=''
-
-  case "$quota_cpu_contract" in
-    v0.6-cpu-millis)
-      cpu_quota_field='maxCpuMillis'
-      cpu_quota_value=4000
-      ;;
-    current-vcpu-count)
-      cpu_quota_field='maxVcpuCount'
-      cpu_quota_value=4
-      ;;
-    *)
-      echo "qualification workload CPU quota contract is invalid: $quota_cpu_contract" >&2
-      return 2
-      ;;
-  esac
 
   install -d -m 0700 "$root"
   platform_token_path="$(jq -er '.secretTargets[] | select(.category == "platform-authority") | .path' "$plan_path")"
@@ -124,8 +104,8 @@ create_qualification_workload() {
 
   SECONDBOX_CONFIG="$platform_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$platform_token" \
     "$binary" --output json platform login >/dev/null
-  jq -n --arg ref "$tenant_ref" --arg cpuQuotaField "$cpu_quota_field" --argjson cpuQuotaValue "$cpu_quota_value" \
-    '{ref:$ref,allowedProfileGrants:["durable-coding"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:({maxSandboxes:1,maxActiveInstances:1,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16,maxActiveSubjects:1,maxApplicationAuthorities:1} + {($cpuQuotaField):$cpuQuotaValue}),expiryPolicy:{maximumSubjectLifetimeSeconds:21600,maximumAuthorityLifetimeSeconds:21600},metadata:{qualification:"installer-qualified-workload"}}' >"$root/tenant.json"
+  jq -n --arg ref "$tenant_ref" --arg egressContext "$egress_context" \
+    '{ref:$ref,allowedProfileGrants:["durable-coding"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:4,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16,maxActiveSubjects:1,maxApplicationAuthorities:1},expiryPolicy:{maximumSubjectLifetimeSeconds:21600,maximumAuthorityLifetimeSeconds:21600},metadata:{qualification:"installer-qualified-workload"}} + if $egressContext == "" then {} else {egressContext:$egressContext} end' >"$root/tenant.json"
   SECONDBOX_CONFIG="$platform_config" "$binary" --output json tenant create \
     --file "$root/tenant.json" --idempotency-key "qualified-tenant-$key_suffix" >/dev/null
   jq -n --arg expiresAt "$expiry" '{expiresAt:$expiresAt,metadata:{qualification:"installer-qualified-workload"}}' >"$root/controller-request.json"
@@ -134,8 +114,8 @@ create_qualification_workload() {
   controller_token="$(jq -er .bearerToken <<<"$controller_response")"
   SECONDBOX_CONFIG="$controller_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$controller_token" \
     "$binary" --output json controller login >/dev/null
-  jq -n --arg ref "$subject_ref" --arg cpuQuotaField "$cpu_quota_field" --argjson cpuQuotaValue "$cpu_quota_value" \
-    '{ref:$ref,quota:({maxSandboxes:1,maxActiveInstances:1,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16} + {($cpuQuotaField):$cpuQuotaValue}),metadata:{qualification:"installer-qualified-workload"}}' >"$root/subject.json"
+  jq -n --arg ref "$subject_ref" \
+    '{ref:$ref,quota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:4,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16},metadata:{qualification:"installer-qualified-workload"}}' >"$root/subject.json"
   SECONDBOX_CONFIG="$controller_config" "$binary" --output json subject create \
     --file "$root/subject.json" --idempotency-key "qualified-subject-$key_suffix" >/dev/null
   jq -n --arg subjectRef "$subject_ref" --arg expiresAt "$expiry" \
@@ -165,7 +145,7 @@ if [[ "$phase" == install ]]; then
   [[ -z "$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)" ]] || { echo 'qualified guest has a prior installer operation' >&2; exit 1; }
   [[ -z "$(docker ps -a --filter label=com.docker.compose.project --format '{{.Names}}' | grep secondbox || true)" ]] || { echo 'qualified guest has prior SecondBox containers' >&2; exit 1; }
 
-  if [[ "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_update ]]; then
+  if [[ "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_recreation ]]; then
     sudo mkfs.btrfs -q -f -L secondbox-qualification /dev/vdb
     sudo install -d -m 0755 /srv/secondbox-dedicated
     data_uuid="$(sudo blkid -s UUID -o value /dev/vdb)"
@@ -188,31 +168,26 @@ if [[ "$phase" == install ]]; then
   grep -F -- "$binary_digest" "$release_directory/$bootstrap" >/dev/null
 
   update_attempt='not_run'
-  source_sandbox_lineage=''
   qualification_sandbox_id=''
   qualification_workload_config=''
   source_deploy=''
-  if [[ "$mode" == existing_reflink_update ]]; then
-    source_version='0.6.0'
-    source_bootstrap_sha256='83f64289be964206563bebcc96796f081fa2d1b1d84915a5f6722ef1962f6593'
-    source_binary_digest='947d8f600d2fcd88c0d732f3b0b64839d7409e50ebd01655cb5bb9a9789aceeb'
+  if [[ "$mode" == existing_reflink_recreation ]]; then
+    source_version='0.7.2'
+    source_bootstrap_sha256='7c18876002d1d524bbb9f0faecaea6628512b4479c385d04acfa1e75f7dd4625'
+    source_binary_digest='ec0bb86b6644fcc8b14c1e8c70a317cb29bbdc68294342563f65eee520efd8aa'
     source_bootstrap="$qualification_root/source-install.sh"
     curl --fail --location --proto '=https' --tlsv1.2 --output "$source_bootstrap" "https://github.com/SecondStack-AI/SecondBox/releases/download/v${source_version}/install.sh"
     printf '%s  %s\n' "$source_bootstrap_sha256" "$source_bootstrap" | sha256sum --check --status
     bootstrap_version="$(sed -n "s/^version='\([^']*\)'$/\1/p" "$source_bootstrap")"
     bootstrap_binary_digest="$(sed -n "s/^expected_sha256='\([0-9a-f]\{64\}\)'$/\1/p" "$source_bootstrap")"
     candidate_version="$(jq -er .version "$manifest")"
-    [[ "$bootstrap_version" == "$source_version" && "$bootstrap_binary_digest" == "$source_binary_digest" && "$source_version" != "$candidate_version" ]] || { echo 'qualified update source does not match the pinned v0.6.0 release' >&2; exit 1; }
+    [[ "$bootstrap_version" == "$source_version" && "$bootstrap_binary_digest" == "$source_binary_digest" && "$source_version" != "$candidate_version" ]] || { echo 'qualified recreation source does not match the pinned v0.7.2 release' >&2; exit 1; }
     source_deploy="$qualification_root/secondbox-deploy-source"
     curl --fail --location --proto '=https' --tlsv1.2 --output "$source_deploy" "https://github.com/SecondStack-AI/SecondBox/releases/download/v${source_version}/secondbox-deploy_${source_version}_linux_amd64"
     printf '%s  %s\n' "$source_binary_digest" "$source_deploy" | sha256sum --check --status
     chmod 0755 "$source_deploy"
     install_log="$qualification_root/install-source-${mode}.log"
-    # The exact public binary is downloaded and digest-checked above. The
-    # qualification-only adapter is the same tagged source with only the
-    # published waiver recognition patch, allowing it to install the otherwise
-    # immutable public v0.6.0 release and establish a real update source.
-    printf '1\ny\n1\ny\ny\n' | "$v060_adapter" --accessible install >"$install_log" 2>&1
+    printf '1\ny\n1\ny\ny\n' | "$source_deploy" --accessible install >"$install_log" 2>&1
     operation="$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)"
     [[ -n "$operation" && -f "$operation/install-plan.json" && -f "$operation/install-receipt.json" ]] || { echo 'qualified source installation is absent' >&2; exit 1; }
     plan="$operation/install-plan.json"
@@ -221,57 +196,50 @@ if [[ "$phase" == install ]]; then
     jq -e '.status == "succeeded" and (.schemaVersion == "secondbox.install.receipt/v1" or .schemaVersion == "secondbox.install.receipt/v2")' "$receipt" >/dev/null
     cli_binary="$(jq -er '.paths[] | select(.name == "secondbox-binary") | .path' "$plan")"
     cli_config="$(jq -er .cli.configPath "$plan")"
-    source_qualification="$(jq -r '.completedStages[] | select(.stage == "smoke_execution") | .evidence.qualification // ""' "$receipt")"
-    if [[ "$source_qualification" == authenticated-runner-readiness ]]; then
-      source_workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/source-workload-$mode" "qualified-$mode" "source-$mode" v0.6-cpu-millis)"
-      qualification_sandbox_id="$(jq -er .sandboxId <<<"$source_workload")"
-      qualification_workload_config="$(jq -er .configPath <<<"$source_workload")"
-    else
-      qualification_workload_config="$cli_config"
-      qualification_sandbox_id="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes list --query limit=1 | jq -er '.items[0].id')"
-    fi
-    source_sandbox_lineage="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$qualification_sandbox_id" | jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}')"
-    SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output plain exec "$qualification_sandbox_id" -- python3 -c 'open("/workspace/update-preserved.txt","w").write("preserved through update\n")'
+    source_workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/source-workload-$mode" "qualified-$mode" "source-$mode")"
+    qualification_sandbox_id="$(jq -er .sandboxId <<<"$source_workload")"
+    qualification_workload_config="$(jq -er .configPath <<<"$source_workload")"
     source_sandbox_revision="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$qualification_sandbox_id" | jq -er .revision)"
-    SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes stop \
+    SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes delete \
       --path "sandboxId=$qualification_sandbox_id" \
       --header "If-Match=\"revision-${source_sandbox_revision}\"" \
-      --header "Idempotency-Key=qualification-update-stop-${qualification_sandbox_id}" >/dev/null
+      --header "Idempotency-Key=qualification-recreation-delete-${qualification_sandbox_id}" >/dev/null
     for _ in $(seq 1 300); do
-      source_state="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$qualification_sandbox_id" | jq -er .state)"
-      [[ "$source_state" == stopped ]] && break
-      [[ "$source_state" != failed ]] || { echo 'qualified update source Sandbox failed while stopping' >&2; exit 1; }
+      source_sandbox_count="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes list --query limit=100 | jq --arg id "$qualification_sandbox_id" '[.items[] | select(.id == $id)] | length')"
+      [[ "$source_sandbox_count" == 0 ]] && break
       sleep 1
     done
-    [[ "$source_state" == stopped ]] || { echo 'qualified update source Sandbox did not stop' >&2; exit 1; }
+    [[ "$source_sandbox_count" == 0 ]] || { echo 'qualified v0.7.2 Sandbox was not retired before recreation' >&2; exit 1; }
+
     setup_candidate_registry
-    if ! "$deploy" --output json update --check "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-check-${mode}.json" 2>"$qualification_root/update-check-${mode}.log"; then
-      echo 'qualified v0.6.0 update rejected the candidate release' >&2
-      tail -n 100 "$qualification_root/update-check-${mode}.log" >&2
+    source_plan_digest="$(sha256sum "$plan" | awk '{print $1}')"
+    source_receipt_digest="$(sha256sum "$receipt" | awk '{print $1}')"
+    if "$deploy" --output json update --check "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-check-${mode}.json" 2>"$qualification_root/update-check-${mode}.log"; then
+      echo 'candidate accepted an in-place v0.7.2 update' >&2
       exit 1
     fi
-    printf 'y\n' | "$deploy" --accessible update "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-${mode}.log" 2>&1
-    jq -e --arg source "$source_version" --arg target "$candidate_version" '
-      .schemaVersion == "secondbox.install.receipt/v2" and
-      .updates[-1].status == "succeeded" and
-      .updates[-1].sourceRelease.version == $source and
-      .updates[-1].targetRelease.version == $target and
-      .updates[-1].completedStages[-1].stage == "smoke_execution" and
-      .updates[-1].completedStages[-1].evidence.qualification == "authenticated-runner-readiness" and
-      .updates[-1].completedStages[-1].evidence.runnerPool == "standard-amd64" and
-      .updates[-1].completedStages[-1].evidence.runnerState == "ready" and
-      .updates[-1].completedStages[-1].evidence.runnerCredentialState == "pre_shared" and
-      .updates[-1].completedStages[-1].evidence.runnerPoolState == "ready" and
-      (.updates[-1].completedStages[-1].evidence.runnerPoolReadyRunners | tonumber) >= 1 and
-      .updates[-1].completedStages[-1].evidence.coldBootCapacity == "advertised" and
-      (.updates[-1].completedStages[-1].evidence.concurrentOperationCapacity | tonumber) >= 16 and
-      .updates[-1].completedStages[-1].evidence.postUpdateState == "runner-ready"
-    ' "$receipt" >/dev/null
-    jq -e --arg source "$source_version" --arg target "$candidate_version" '
-      .schemaVersion == "secondbox.install.plan/v2" and .release.version == $target and
-      .releaseHistory[0].release.version == $source and .releaseHistory[-1].release.version == $target
-    ' "$plan" >/dev/null
-    update_attempt='succeeded'
+    grep -Fq 'in-place updates from v0.7.2 are unsupported' "$qualification_root/update-check-${mode}.log"
+    grep -Fq 'retire every v0.7.2 Sandbox' "$qualification_root/update-check-${mode}.log"
+    grep -Fq 'uninstall --purge' "$qualification_root/update-check-${mode}.log"
+    [[ "$(sha256sum "$plan" | awk '{print $1}')" == "$source_plan_digest" && "$(sha256sum "$receipt" | awk '{print $1}')" == "$source_receipt_digest" ]] || { echo 'v0.7.2 update refusal mutated the source operation' >&2; exit 1; }
+
+    source_operation="$operation"
+    source_operation_id="$(jq -er .operationId "$plan")"
+    "$source_deploy" --accessible uninstall "$source_operation" >"$qualification_root/uninstall-source-${mode}.log" 2>&1
+    printf 'PURGE %s\n' "$source_operation_id" | "$source_deploy" --accessible uninstall --purge "$source_operation" >"$qualification_root/purge-source-${mode}.log" 2>&1
+    jq -e '.status == "purged"' "$source_operation/install-receipt.json" >/dev/null
+
+    install_log="$qualification_root/install-candidate-${mode}.log"
+    printf '1\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
+    operation=''
+    while IFS= read -r candidate_operation; do
+      if [[ "$candidate_operation" != "$source_operation" ]] && jq -e --arg target "$candidate_version" '.release.version == $target' "$candidate_operation/install-plan.json" >/dev/null 2>&1; then
+        operation="$candidate_operation"
+        break
+      fi
+    done < <(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print | sort)
+    [[ -n "$operation" ]] || { echo 'clean candidate recreation operation is absent' >&2; exit 1; }
+    update_attempt='refused_then_recreated'
   else
     setup_candidate_registry
     install_log="$qualification_root/install-${mode}.log"
@@ -308,8 +276,8 @@ if [[ "$phase" == install ]]; then
     --arg artifacts "$artifacts" --arg manifest "$manifest_path" --arg cliBinary "$cli_binary" --arg cliConfig "$cli_config" \
     --arg artifactFingerprint "$(artifact_fingerprint "$artifacts")" --arg filesystemIdentity "$filesystem_identity" --arg neighbor "$neighbor" \
     --arg sandboxId "$qualification_sandbox_id" --arg workloadConfig "$qualification_workload_config" \
-    --arg sourceSandboxLineage "$source_sandbox_lineage" --arg updateAttempt "$update_attempt" \
-    '{operation:$operation,operationId:$operationId,workspace:$workspace,artifacts:$artifacts,manifest:$manifest,cliBinary:$cliBinary,cliConfig:$cliConfig,artifactFingerprint:$artifactFingerprint,filesystemIdentity:$filesystemIdentity,neighbor:$neighbor,sandboxId:$sandboxId,workloadConfig:$workloadConfig,updateAttempt:$updateAttempt,sourceSandboxLineage:$sourceSandboxLineage}' >"$state"
+    --arg updateAttempt "$update_attempt" \
+    '{operation:$operation,operationId:$operationId,workspace:$workspace,artifacts:$artifacts,manifest:$manifest,cliBinary:$cliBinary,cliConfig:$cliConfig,artifactFingerprint:$artifactFingerprint,filesystemIdentity:$filesystemIdentity,neighbor:$neighbor,sandboxId:$sandboxId,workloadConfig:$workloadConfig,updateAttempt:$updateAttempt}' >"$state"
   exit 0
 fi
 
@@ -327,7 +295,7 @@ plan="$operation/install-plan.json"
 [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm && -c /dev/net/tun ]] || { echo 'nested virtualization devices did not survive reboot' >&2; exit 1; }
 findmnt --target "$workspace" --types btrfs >/dev/null
 
-if [[ "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_update ]]; then
+if [[ "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_recreation ]]; then
   isolation="$workspace/.qualification-reflink"
   sudo install -d -m 0700 -o root -g root -- "$isolation"
   printf 'source\n' | sudo tee -- "$isolation/source" >/dev/null
@@ -345,7 +313,7 @@ if [[ "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_upda
   fi
 fi
 
-if [[ "$mode" != existing_reflink_update ]]; then
+if [[ "$mode" != existing_reflink_recreation ]]; then
   "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-${mode}.log" 2>&1
 fi
 jq -e '.status == "succeeded" and .completedStages[-1].stage == "smoke_execution"' "$receipt" >/dev/null
@@ -359,6 +327,7 @@ mapfile -t running_services < <(
 jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerState == "ready"' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 expected_runner_id="runner-${operation_id#install_}"
+expected_context="secondbox-${operation_id#install_}"
 update_attempt="$(jq -er .updateAttempt "$state")"
 jq -e --arg runnerId "$expected_runner_id" '
   .completedStages[] | select(.stage == "smoke_execution") |
@@ -370,16 +339,13 @@ jq -e --arg runnerId "$expected_runner_id" '
   .evidence.runnerPoolState == "ready" and
   (.evidence.runnerPoolReadyRunners | tonumber) >= 1 and
   .evidence.coldBootCapacity == "advertised" and
-  (.evidence.concurrentOperationCapacity | tonumber) >= 16
+  (.evidence.concurrentOperationCapacity | tonumber) >= 16 and
+  (.evidence.egressContext | length) > 0 and
+  .evidence.egressContextPreflight == "ready"
 ' "$receipt" >/dev/null
-if [[ "$mode" == existing_reflink_update ]]; then
-  sandbox_id="$(jq -er '.sandboxId | select(length > 0)' "$state")"
-  workload_config="$(jq -er '.workloadConfig | select(length > 0)' "$state")"
-else
-  workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" current-vcpu-count)"
-  sandbox_id="$(jq -er .sandboxId <<<"$workload")"
-  workload_config="$(jq -er .configPath <<<"$workload")"
-fi
+workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" "$expected_context")"
+sandbox_id="$(jq -er .sandboxId <<<"$workload")"
+workload_config="$(jq -er .configPath <<<"$workload")"
 
 live_runner_state=''
 for _ in $(seq 1 300); do
@@ -390,29 +356,9 @@ for _ in $(seq 1 300); do
   sleep 1
 done
 [[ "$live_runner_state" == ready ]] || { echo 'installed Runner did not become ready after reboot' >&2; exit 1; }
-if [[ "$mode" == existing_reflink_update ]]; then
-  sandbox_after_update_document="$(SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
-  [[ "$(jq -er .state <<<"$sandbox_after_update_document")" == stopped ]] || { echo 'retained qualification Sandbox was not stopped after release update and reboot' >&2; exit 1; }
-  sandbox_after_update_revision="$(jq -er .revision <<<"$sandbox_after_update_document")"
-  SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output json sandboxes start \
-    --path "sandboxId=$sandbox_id" \
-    --header "If-Match=\"revision-${sandbox_after_update_revision}\"" \
-    --header "Idempotency-Key=qualification-update-reboot-start-${sandbox_id}" >/dev/null
-  for _ in $(seq 1 300); do
-    sandbox_after_update_state="$(SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id" | jq -er .state)"
-    [[ "$sandbox_after_update_state" == ready ]] && break
-    [[ "$sandbox_after_update_state" != failed ]] || { echo 'retained qualification Sandbox failed while starting after release update and reboot' >&2; exit 1; }
-    sleep 1
-  done
-  [[ "$sandbox_after_update_state" == ready ]] || { echo 'retained qualification Sandbox did not become ready after release update and reboot' >&2; exit 1; }
-fi
 SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
 sandbox_before_document="$(SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
 sandbox_before="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_before_document")"
-if [[ "$mode" == existing_reflink_update ]]; then
-  [[ "$sandbox_before" == "$(jq -er .sourceSandboxLineage "$state")" ]] || { echo 'retained Sandbox lineage changed across release update' >&2; exit 1; }
-  SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print(open("/workspace/update-preserved.txt").read(), end="")' | grep -Fx 'preserved through update' >/dev/null
-fi
 generation_before="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
 workspace_generation_before="$(jq -er '.workspace.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
 (( workspace_generation_before == generation_before )) || { printf 'retained qualification Sandbox and Workspace generations differ before uninstall: sandbox=%s workspace=%s\n' "$generation_before" "$workspace_generation_before" >&2; exit 1; }
@@ -456,8 +402,8 @@ done
 common=(clean_host read_only_preflight bootstrap_checksum guided_install reboot_recovery mount_recovery compose_ready runner_ready cli_login clean_install_delegated_workflow hello_microvm stage_interrupt_resume verified_bundle_not_reextracted uninstall_workspace_preserved resume_same_sandbox_lineage purge_exact_resources purge_neighbor_preserved purge_foreign_mount_refused)
 if [[ "$mode" == existing_reflink_filesystem ]]; then
   common+=(existing_reflink_isolation unsafe_filesystem_refusals fresh_existing_reflink_install)
-elif [[ "$mode" == existing_reflink_update ]]; then
-  common=(update_compatibility_enforced update_receipt_history_preserved update_release_activated update_workspace_preserved)
+elif [[ "$mode" == existing_reflink_recreation ]]; then
+  common=(v072_update_refused v072_sandbox_retired v072_source_purged candidate_clean_recreation)
 fi
 jq -n --arg mode "$mode" --arg filesystemIdentity "$(jq -er .filesystemIdentity "$state")" \
   --arg candidateManifestDigest "sha256:$(sha256sum "$manifest" | awk '{print $1}')" --argjson assertions "$(assertions_json "${common[@]}")" \

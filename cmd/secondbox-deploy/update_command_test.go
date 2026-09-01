@@ -186,6 +186,42 @@ func TestGuidedUpdateRoutesLegacyOperationToCleanInstallBoundaryBeforeStrictDeco
 	}
 }
 
+func TestGuidedUpdateRefusesV072WithCompleteRecreationProcedure(t *testing.T) {
+	err := validateGuidedUpdateSourceVersion("0.7.2")
+	for _, required := range []string{
+		"v0.7.2 tenant-egress clean-recreation boundary",
+		"quiesce consuming applications",
+		"retire every v0.7.2 Sandbox",
+		"coordinated PostgreSQL, deployment-state, Runner-identity, and complete Workspace backup",
+		"uninstall --purge",
+		"recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes",
+		"rollback only",
+	} {
+		if err == nil || !strings.Contains(err.Error(), required) {
+			t.Fatalf("v0.7.2 update refusal = %v, want %q", err, required)
+		}
+	}
+}
+
+func TestGuidedUpdateRoutesV072OperationToRecreationBeforeReleaseFetch(t *testing.T) {
+	directory := t.TempDir()
+	plan := []byte(`{"schemaVersion":"secondbox.install.plan/v2","release":{"version":"0.7.2"}}`)
+	if err := os.WriteFile(filepath.Join(directory, "install-plan.json"), plan, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dependencies := systemUpdateDependencies(cliui.Renderer{})
+	dependencies.TargetVersion = "0.8.0"
+	fetched := false
+	dependencies.VerifyRelease = func(context.Context, string) (releaseverify.VerifiedRelease, error) {
+		fetched = true
+		return releaseverify.VerifiedRelease{}, nil
+	}
+	err := runUpdateWith(context.Background(), directory, true, false, cliui.Renderer{}, dependencies)
+	if err == nil || !strings.Contains(err.Error(), "v0.7.2 tenant-egress clean-recreation boundary") || fetched {
+		t.Fatalf("v0.7.2 operation rejection = %v, target fetched=%t", err, fetched)
+	}
+}
+
 func TestCompletedUpdateMatchesOnlyExactSucceededTarget(t *testing.T) {
 	target := installReleasePlanFixture()
 	receipt := install.InstallReceipt{Updates: []install.UpdateRecord{{TargetRelease: target, Status: install.UpdateSucceeded}}}

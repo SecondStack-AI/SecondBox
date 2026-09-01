@@ -906,7 +906,7 @@ sweep_host_orphans
 
 compose config --quiet
 compose up --detach --wait --wait-timeout 240 \
-  postgres control-plane
+  postgres control-plane egress-context-config-init
 
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"

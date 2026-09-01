@@ -98,6 +98,36 @@ Logical mappings authorize network policy and never create guest DNS. Agent Plat
 
 Runner context configuration is static for one connection. To replace or remove a mapping, drain the Runner, stop every active Sandbox using that context, update the reviewed configuration, and restart. A stopped Sandbox pinned to a removed context remains durable but cannot start until the mapping returns or the Sandbox is retired. There is no dynamic gateway health discovery, live remapping, default context, cross-context retry, or automatic reassignment.
 
+State the mapping in the Runner declaration; never edit the generated JSON or environment transport:
+
+```toml
+egress_context_config_path = "/etc/secondbox/egress-contexts.json"
+
+[[runners.egress_contexts]]
+name = "secondstack-staging"
+
+[[runners.egress_contexts.gateways]]
+logical_name = "agent-gateway.secondbox.internal"
+address = "10.210.2.2"
+
+[[runners.egress_contexts]]
+name = "secondstack-development"
+
+[[runners.egress_contexts.gateways]]
+logical_name = "agent-gateway.secondbox.internal"
+address = "10.210.3.2"
+```
+
+The renderer writes one strict `secondbox.runner-egress-contexts/v1` document per Runner beneath the generated environment's `.runners` directory. For same-host Compose, a one-shot root init service copies that file into a named volume and the Runner mounts it read-only at `/run/secondbox-runner-config/egress-contexts.json`. A remote `runner-init` handoff contains `runner.env` plus `egress-contexts.json`; install both together, mount the JSON read-only at the declared absolute path, and use the supplied systemd unit's `ReadOnlyPaths` fence. The qualified gVisor pod uses a read-only ConfigMap projection. Every path is explicit, and startup rejects a missing, unsafe, malformed, empty, or stale file.
+
+After the control plane and Runners are connected, run the platform-authorized, read-only placement preflight:
+
+```sh
+secondbox diagnostics egress-contexts
+```
+
+The JSON lists each active Tenant grant whose current Profile head requires a context, the connected compatible Runner IDs, all Runner advertisements, and grouped nonterminal assignments by context, Runner, and state. `ready` is false when a required Tenant context is absent or no connected ready Runner in the Profile's pool advertises it. The check does not change Tenants, Runner configuration, assignments, or lifecycle. Before replacing or removing a mapping, use `activeAssignments` to find what must be stopped, then drain and restart the affected Runner.
+
 ## Production initialization
 
 Create the protected skeleton:
@@ -354,6 +384,8 @@ Selected RunnerPools and standard Profile lineages are checked and applied after
 ## Recovery and replacement
 
 Replacing v0.7.2 with the tenant-aware release in place is unsupported. Quiesce every consuming application, retire every v0.7.2 Sandbox, stop the old deployment, and remove its database, Runner state, and Workspaces through the documented recreation procedure before initializing the new release. Recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes from the new contract. There is no historical Profile decoder for the required context policy, legacy assignment support, Workspace import path, or Sandbox migration operation.
+
+The target release's `secondbox-deploy update --check` refuses every source through exactly v0.7.2 before downloading or staging target release inputs. Its error prints this recreation sequence, including the guided single-host `uninstall` and reviewed `uninstall --purge` steps. This refusal is not a migration assistant and never retires a Sandbox or deletes state on the operator's behalf.
 
 Take one coordinated v0.7.2 backup of PostgreSQL, deployment state, every Runner identity, and every complete Workspace filesystem before retirement. That backup is for complete rollback only. Rollback stops the new deployment and restores the complete matching v0.7.2 database and Runner filesystems; never combine v0.7.2 global-gateway state with a generation-4 database or Runner.
 

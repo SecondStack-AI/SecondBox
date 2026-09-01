@@ -97,6 +97,11 @@ runner_start() {
   [[ -n "$service" ]] || fail "a runner service is required"
   service_paths "$service"
   import_runner_image
+  kubectl create configmap "$service-egress-contexts" \
+    --from-file="egress-contexts.json=$SECONDBOX_SCENARIO_EGRESS_CONTEXT_CONFIG" \
+    --dry-run=client --output=yaml |
+    kubectl apply -f - >/dev/null ||
+    fail "publish strict egress-context configuration for $service"
   kubectl apply -f - <<POD
 apiVersion: v1
 kind: Pod
@@ -207,6 +212,7 @@ $(emit_env \
           mountPath: /w
         - name: egress-contexts
           mountPath: /etc/secondbox-runner/egress-contexts.json
+          subPath: egress-contexts.json
           readOnly: true
   volumes:
     - name: entrypoint
@@ -234,9 +240,9 @@ $(emit_env \
         path: $service_workspace
         type: Directory
     - name: egress-contexts
-      hostPath:
-        path: $SECONDBOX_SCENARIO_EGRESS_CONTEXT_CONFIG
-        type: File
+      configMap:
+        name: $service-egress-contexts
+        defaultMode: 0o400
 POD
   local timeout="${wait_timeout:-300}"
   kubectl wait --for=condition=Ready "pod/$service" --timeout="${timeout}s" >/dev/null ||
@@ -247,6 +253,7 @@ runner_stop() {
   local service="$1" grace="${2:-45}"
   kubectl delete pod "$service" --ignore-not-found --wait=true \
     --grace-period="$grace" >/dev/null
+  kubectl delete configmap "$service-egress-contexts" --ignore-not-found >/dev/null
 }
 
 runner_logs() {

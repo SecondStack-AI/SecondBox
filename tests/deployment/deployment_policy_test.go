@@ -184,7 +184,7 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		"--cpu host-passthrough",
 		"run_guest btrfs_image",
 		"run_guest existing_reflink_filesystem",
-		"run_guest existing_reflink_update",
+		"run_guest existing_reflink_recreation",
 		`destroy "$domain"`,
 		`undefine "$domain"`,
 		"cleanup_success",
@@ -232,10 +232,9 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		`sudo cat -- "$isolation/source"`,
 		`workspaceId:.workspace.id`,
 		`workspace_generation_after == generation_after`,
-		`"source-$mode" v0.6-cpu-millis`,
-		`"$mode" current-vcpu-count`,
-		`cpu_quota_field='maxCpuMillis'`,
-		`cpu_quota_field='maxVcpuCount'`,
+		`"source-$mode")`,
+		`"$mode" "$expected_context")`,
+		`maxVcpuCount:4`,
 		"report_qualified_guest_failure",
 	} {
 		if !strings.Contains(guest, required) {
@@ -366,7 +365,7 @@ printf '200'
 		t.Fatalf("read probe log: %v", err)
 	}
 	if got, want := string(probes),
-		"http://127.0.0.1:8080/healthz\nhttp://127.0.0.1:8080/readyz\nhttp://127.0.0.1:8080/metrics\nhttp://127.0.0.1:8080/v1/timings?windowSeconds=300\n"; got != want {
+		"http://127.0.0.1:8080/healthz\nhttp://127.0.0.1:8080/readyz\nhttp://127.0.0.1:8080/metrics\nhttp://127.0.0.1:8080/v1/timings?windowSeconds=300\nhttp://127.0.0.1:8080/v1/diagnostics/egress-contexts\n"; got != want {
 		t.Fatalf("support collector probes = %q, want %q", got, want)
 	}
 	extractDirectory := t.TempDir()
@@ -382,6 +381,9 @@ printf '200'
 	}
 	if _, err := os.Stat(filepath.Join(extractDirectory, "timing-summary.json")); err != nil {
 		t.Fatalf("timing summary missing from support bundle: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(extractDirectory, "egress-context-preflight.json")); err != nil {
+		t.Fatalf("egress context preflight missing from support bundle: %v", err)
 	}
 	checksums := exec.Command("sha256sum", "--check", "SHA256SUMS")
 	checksums.Dir = extractDirectory

@@ -110,7 +110,7 @@ export SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS=256
 export SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL=5m
 export SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES=10.210.2.1
 export SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS=10.211.0.0/16
-export SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS=agent-gateway.secondbox.internal=10.210.2.2
+export SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG=/etc/secondbox-runner/egress-contexts.json
 export SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM=10.0.0.53:53
 export SECONDBOX_GVISOR_RUNSC_PATH=/opt/secondbox-gvisor/bin/runsc
 export SECONDBOX_GVISOR_AGENT_PATH=/opt/secondbox-gvisor/bin/secondbox-guest-agent
@@ -131,13 +131,30 @@ export SECONDBOX_GVISOR_MAXIMUM_OPERATIONS=32
 export SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 ```
 
+Create `/etc/secondbox-runner/egress-contexts.json` as a root-owned, read-only file (or the reference pod's ConfigMap) before starting the Runner:
+
+```json
+{
+  "schemaVersion": "secondbox.runner-egress-contexts/v1",
+  "contexts": [
+    {
+      "name": "secondstack-staging",
+      "gateways": [
+        {
+          "logicalName": "agent-gateway.secondbox.internal",
+          "address": "10.210.2.2"
+        }
+      ]
+    }
+  ]
+}
+```
+
 DNS resolution is IPv4-only end to end. The required
 `SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM` accepts a literal IPv4 address and port
 (`10.0.0.53:53`) - never a hostname - and Sandbox egress carries no IPv6 route, so IPv6-only
-destinations are unreachable regardless of policy. All six `SECONDBOX_RUNNER_NETWORK_POLICY_*`
-values above are the same explicit generic contract used by Firecracker. Pin and TTL bounds,
-Runner addresses, management CIDRs, and logical Runner gateways all reach the shared compiler;
-missing or malformed values keep the runner from starting.
+destinations are unreachable regardless of policy. All five `SECONDBOX_RUNNER_NETWORK_POLICY_*`
+values above, together with `SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG`, are the same explicit generic contract used by Firecracker. The absolute configuration path names a root-owned, non-writable, non-symlink strict `secondbox.runner-egress-contexts/v1` JSON file. Pin and TTL bounds, Runner addresses, management CIDRs, and the selected context's logical Runner gateways all reach the shared compiler; missing or malformed values keep the runner from starting. The reference pod projects the file from `secondbox-gvisor-runner-egress-contexts` as a read-only ConfigMap. Put only context names and logical-name-to-local-IP mappings in it, never certificates or upstream proxy addresses.
 
 `SECONDBOX_GVISOR_NETWORK_PROFILE` separates runners sharing one host network namespace: each
 profile selects its own DNS proxy address, link-local slot space, and veth and namespace names.
@@ -205,7 +222,7 @@ never copied from a document.
    | `SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS` / `..._WORKSPACE_CREATES` | Admission concurrency bounds. |
    | `SECONDBOX_RUNNER_LOG_DIR` / `SECONDBOX_RUNNER_LOG_PATH` | Operator-owned log directory and JSONL file. |
    | `SECONDBOX_RUNNER_WORKSPACE_ROOT` | The reflink-capable WorkspaceStore root. |
-   | `SECONDBOX_RUNNER_NETWORK_POLICY_*` (all six values from the environment block above) | Explicit generic enforcement bounds, protected Runner and management destinations, logical Runner gateways, and the IPv4 DNS upstream. |
+   | `SECONDBOX_RUNNER_NETWORK_POLICY_*` plus `SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG` | Explicit generic enforcement bounds, protected Runner and management destinations, the strict context-indexed logical-gateway file, and the IPv4 DNS upstream. |
    | `SECONDBOX_GVISOR_*` (all values from the environment block above) | The backend block, including capacity maxima, the materialization pin, the runtime directory, and the network profile. |
 
    Instance capacity and per-Instance ceilings come only from the `SECONDBOX_GVISOR_MAXIMUM_*`
