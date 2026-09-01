@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Retracted `v0.8.0` before publication because its root Go module required the unpublished Runner submodule, leaving the tagged module graph unresolvable for downstream consumers. No v0.8.0 GitHub Release or coordinated artifacts were published; use v0.8.1.
 - Retracted the Go module version `v0.7.0`, which the public Go proxy cached from an intermediate release-preparation commit before final qualification fixes merged. Use `v0.7.1`; it includes the exact v0.6.0 quota and recorded-manifest guided-update bridges missing from the cached module while preserving the final v0.7.0 distribution's API, protocol, migration, and signed microVM bundle contracts.
 - Release qualification now preserves and validates the qualified Linux amd64 host platform in both scenario and installer evidence.
 - Recorded-release verification now recognizes the exact published v0.6.0 installer-qualification waiver only when authenticating that immutable release as a guided-update source. New scenario and installer evidence use v2 and require an explicit Linux amd64 host platform; valid v1 evidence remains readable without weakening current release staging.
