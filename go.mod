@@ -2,6 +2,10 @@ module github.com/SecondStack-AI/SecondBox
 
 go 1.25.12
 
+require github.com/SecondStack-AI/SecondBox/runner v0.0.0
+
+replace github.com/SecondStack-AI/SecondBox/runner => ./runner
+
 retract v0.7.0 // The public Go proxy cached an intermediate release-preparation commit; use v0.7.1.
 
 require (

@@ -30,6 +30,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
 	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
+	"github.com/SecondStack-AI/SecondBox/runner/networkpolicycontract"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -841,10 +842,14 @@ func validateRunnerEgressContexts(path string, contexts []RunnerEgressContext) e
 		seenGateways := make(map[string]bool, len(context.Gateways))
 		for gatewayIndex, gateway := range context.Gateways {
 			gatewayPath := fmt.Sprintf("%s.gateways[%d]", contextPath, gatewayIndex)
-			if gateway.LogicalName != strings.ToLower(strings.TrimSpace(gateway.LogicalName)) || seenGateways[gateway.LogicalName] {
+			logicalName, err := networkpolicycontract.NormalizeLogicalGatewayName(gateway.LogicalName)
+			if err != nil || logicalName != gateway.LogicalName {
+				return manifestError(gatewayPath+".logical_name must be a canonical logical gateway name", err)
+			}
+			if seenGateways[logicalName] {
 				return manifestError(gatewayPath+".logical_name must be a unique canonical domain", nil)
 			}
-			seenGateways[gateway.LogicalName] = true
+			seenGateways[logicalName] = true
 			if err := validateRunnerGateways(gatewayPath, gateway.LogicalName+"="+gateway.Address); err != nil {
 				return err
 			}

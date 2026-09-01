@@ -1384,6 +1384,10 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 		{name: "invalid Runner address", want: "invalid network value", mutate: func(r *Runner) { r.NetworkPolicyRunnerAddresses = "not-an-ip" }},
 		{name: "invalid management CIDR", want: "invalid network value", mutate: func(r *Runner) { r.NetworkPolicyManagementCIDRs = "127.0.0.1" }},
 		{name: "invalid gateway", want: "invalid gateway IP", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].Address = "invalid" }},
+		{name: "trailing-dot gateway name", want: "canonical logical gateway name", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].LogicalName = "gateway.example." }},
+		{name: "underscore gateway name", want: "canonical logical gateway name", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].LogicalName = "gateway_name.example" }},
+		{name: "IP-literal gateway name", want: "canonical logical gateway name", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].LogicalName = "192.0.2.10" }},
+		{name: "malformed gateway name", want: "canonical logical gateway name", mutate: func(r *Runner) { r.EgressContexts[0].Gateways[0].LogicalName = "gateway..example" }},
 		{name: "invalid DNS upstream", want: "must be an IP:port", mutate: func(r *Runner) { r.NetworkPolicyDNSUpstream = "localhost:53" }},
 		{name: "invalid advertised address", want: "explicit reachable host", mutate: func(r *Runner) { r.DataPlaneAdvertisedAddress = "0.0.0.0:7443" }},
 	}
@@ -1395,6 +1399,16 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestEncodeRunnerEgressContextConfigNormalizesEmptyContexts(t *testing.T) {
+	content, err := encodeRunnerEgressContextConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), `"contexts": null`) || !strings.Contains(string(content), `"contexts": []`) {
+		t.Fatalf("empty Runner egress context config = %s", content)
 	}
 }
 

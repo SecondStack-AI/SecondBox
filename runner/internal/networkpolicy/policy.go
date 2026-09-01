@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/runner/networkpolicycontract"
 )
 
 // Mode is the closed outbound policy mode.
@@ -359,33 +361,7 @@ func validProtocol(protocol Protocol) bool {
 }
 
 func normalizeDomain(raw string) (string, error) {
-	domain := strings.ToLower(strings.TrimSpace(raw))
-	domain = strings.TrimSuffix(domain, ".")
-	if domain == "" || len(domain) > 253 {
-		return "", fmt.Errorf("domain length is invalid")
-	}
-	if strings.ContainsAny(domain, "*:/") {
-		return "", fmt.Errorf("domain %q must be one exact DNS name", raw)
-	}
-	if _, err := netip.ParseAddr(domain); err == nil {
-		return "", fmt.Errorf("domain %q is an IP address; use a CIDR destination", raw)
-	}
-	labels := strings.Split(domain, ".")
-	for _, label := range labels {
-		if len(label) == 0 || len(label) > 63 ||
-			label[0] == '-' || label[len(label)-1] == '-' {
-			return "", fmt.Errorf("domain %q contains an invalid label", raw)
-		}
-		for _, character := range label {
-			if (character >= 'a' && character <= 'z') ||
-				(character >= '0' && character <= '9') ||
-				character == '-' {
-				continue
-			}
-			return "", fmt.Errorf("domain %q must be an ASCII DNS name", raw)
-		}
-	}
-	return domain, nil
+	return networkpolicycontract.NormalizeLogicalGatewayName(raw)
 }
 
 func normalizeAddress(address netip.Addr) netip.Addr {

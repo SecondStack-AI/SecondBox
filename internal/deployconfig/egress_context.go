@@ -10,6 +10,9 @@ type runnerEgressContextConfigDocument struct {
 }
 
 func encodeRunnerEgressContextConfig(contexts []RunnerEgressContext) ([]byte, error) {
+	if contexts == nil {
+		contexts = []RunnerEgressContext{}
+	}
 	content, err := json.MarshalIndent(runnerEgressContextConfigDocument{
 		SchemaVersion: runnerEgressContextConfigSchema,
 		Contexts:      contexts,
