@@ -905,8 +905,8 @@ echo "SecondBox scenario Compose network: $SECONDBOX_SCENARIO_COMPOSE_CIDR"
 sweep_host_orphans
 
 compose config --quiet
-compose up --detach --wait --wait-timeout 240 \
-  postgres control-plane egress-context-config-init
+compose run --rm --no-deps egress-context-config-init
+compose up --detach --wait --wait-timeout 240 postgres control-plane
 
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
