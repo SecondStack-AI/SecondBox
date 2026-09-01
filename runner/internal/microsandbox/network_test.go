@@ -103,7 +103,13 @@ func TestTranslateNetworkPolicyCarriesSelectedGatewayAndGlobalProtection(t *test
 }
 
 func microsandboxTestCompileOptions() networkpolicy.CompileOptions {
-	return networkpolicy.CompileOptions{MaximumPins: 64, MaximumTTL: 5 * time.Minute}
+	return networkpolicy.CompileOptions{
+		MaximumPins:        64,
+		MaximumTTL:         5 * time.Minute,
+		RunnerAddresses:    []netip.Addr{netip.MustParseAddr("172.30.0.1")},
+		ManagementPrefixes: []netip.Prefix{netip.MustParsePrefix("172.30.0.0/24")},
+		ProtectedAddresses: []netip.Addr{netip.MustParseAddr("172.31.0.10")},
+	}
 }
 
 func allowCIDR(cidr string, port uint32) *runnerprotocol.NetworkPolicy {

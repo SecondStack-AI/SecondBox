@@ -627,9 +627,7 @@ fn translate_network(start: &StartRequest) -> Result<TranslatedNetworkPolicy, La
     let policy = start.network_policy.as_ref().ok_or(LaunchError::Network)?;
     match HelperNetworkPolicyMode::try_from(policy.mode).map_err(|_| LaunchError::Network)? {
         HelperNetworkPolicyMode::DenyAll
-            if policy.destinations.is_empty()
-                && policy.runner_gateways.is_empty()
-                && policy.protected_cidrs.is_empty() =>
+            if policy.destinations.is_empty() && policy.runner_gateways.is_empty() =>
         {
             Ok(TranslatedNetworkPolicy::DenyAll)
         }
@@ -739,6 +737,16 @@ mod tests {
             launch.environment[1],
             ("SECONDBOX_AGENT".into(), "1".into())
         );
+    }
+
+    #[test]
+    fn translates_deny_all_with_production_protected_cidrs() {
+        let root = tempdir().unwrap();
+        let mut start = valid_start(root.path());
+        start.network_policy.as_mut().unwrap().protected_cidrs =
+            vec!["10.0.0.0/8".into(), "172.30.0.1/32".into()];
+        let launch = LaunchConfiguration::from_start(&start).unwrap();
+        assert_eq!(launch.network, TranslatedNetworkPolicy::DenyAll);
     }
 
     #[test]
