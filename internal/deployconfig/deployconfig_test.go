@@ -1412,6 +1412,24 @@ func TestEncodeRunnerEgressContextConfigNormalizesEmptyContexts(t *testing.T) {
 	}
 }
 
+func TestRemoveStaleRunnerArtifactsRefusesUnmarkedContextConfig(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "runner-a.egress-contexts.json")
+	content := []byte(`{"schemaVersion":"secondbox.runner-egress-contexts/v1","contexts":[]}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeStaleRunnerArtifacts(directory, map[string]map[string]string{}, map[string][]byte{}); err == nil || !strings.Contains(err.Error(), "refusing non-generated stale artifact") {
+		t.Fatalf("unmarked stale context config removal = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("unmarked stale context config was removed: %v", err)
+	}
+}
+
 func TestCanonicalRunnerEnvironmentFixtureMatchesResolvedModel(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	manifest, err := ReadManifest(manifestPath)

@@ -57,6 +57,19 @@ func TestLoadEgressContextConfigAcceptsExplicitRepeatedAddresses(t *testing.T) {
 	}
 }
 
+func TestLoadEgressContextConfigAcceptsGeneratedProvenance(t *testing.T) {
+	content := strings.Replace(
+		validEgressContextConfig,
+		`"schemaVersion": "secondbox.runner-egress-contexts/v1",`,
+		`"schemaVersion": "secondbox.runner-egress-contexts/v1", "generatedBy": "secondbox-deploy",`,
+		1,
+	)
+	path := writeEgressContextConfig(t, content, 0o600)
+	if _, err := LoadEgressContextConfig(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadEgressContextConfigRejectsMalformedDocuments(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -67,6 +80,7 @@ func TestLoadEgressContextConfigRejectsMalformedDocuments(t *testing.T) {
 		{name: "unknown context field", content: strings.Replace(validEgressContextConfig, `"name": "installation-a",`, `"name": "installation-a", "extra": true,`, 1), want: "unknown field"},
 		{name: "unknown gateway field", content: strings.Replace(validEgressContextConfig, `"address": "8.8.8.8"`, `"address": "8.8.8.8", "extra": true`, 1), want: "unknown field"},
 		{name: "unsupported schema", content: strings.Replace(validEgressContextConfig, "secondbox.runner-egress-contexts/v1", "secondbox.runner-egress-contexts/v2", 1), want: "schemaVersion"},
+		{name: "unsupported provenance", content: strings.Replace(validEgressContextConfig, `"contexts":`, `"generatedBy":"other", "contexts":`, 1), want: "generatedBy"},
 		{name: "duplicate context", content: strings.Replace(validEgressContextConfig, `"name": "installation-b"`, `"name": "installation-a"`, 1), want: "repeats context"},
 		{name: "invalid context", content: strings.Replace(validEgressContextConfig, `"name": "installation-a"`, `"name": "Installation A"`, 1), want: "egress context name"},
 		{name: "empty mapping", content: strings.Replace(validEgressContextConfig, `"gateways": [`, `"gateways": [], "discarded": [`, 1), want: "unknown field"},

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/SecondStack-AI/SecondBox/runner/networkpolicycontract"
 )
 
 const (
@@ -27,6 +29,7 @@ var egressContextNamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a
 
 type egressContextConfigDocument struct {
 	SchemaVersion string                   `json:"schemaVersion"`
+	GeneratedBy   string                   `json:"generatedBy,omitempty"`
 	Contexts      *[]egressContextDocument `json:"contexts"`
 }
 
@@ -157,6 +160,9 @@ func decodeEgressContextConfig(content []byte) (EgressContextConfig, error) {
 	}
 	if document.SchemaVersion != EgressContextConfigSchemaVersion {
 		return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context config schemaVersion must be %q", EgressContextConfigSchemaVersion)
+	}
+	if document.GeneratedBy != "" && document.GeneratedBy != networkpolicycontract.GeneratedConfigProvenance {
+		return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context config generatedBy is unsupported")
 	}
 	if document.Contexts == nil {
 		return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context config contexts is required")

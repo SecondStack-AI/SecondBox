@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+// GeneratedConfigProvenance marks egress-context documents produced by the
+// supported deployment renderer without making the marker mandatory for
+// operator-authored remote Runner configuration.
+const GeneratedConfigProvenance = "secondbox-deploy"
+
 // NormalizeLogicalGatewayName validates and canonicalizes one exact DNS name.
 func NormalizeLogicalGatewayName(raw string) (string, error) {
 	domain := strings.ToLower(strings.TrimSpace(raw))
