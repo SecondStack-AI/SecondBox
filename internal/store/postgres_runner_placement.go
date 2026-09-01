@@ -74,6 +74,7 @@ func selectRunnerForPlacement(
 	}
 	candidates := make([]runnerPlacementCandidate, 0)
 	contextCompatibleSnapshot := false
+	contextMismatchSnapshot := false
 	for rows.Next() {
 		candidate, scanErr := scanRunnerPlacementCandidate(
 			rows, options.errorPrefix, options.requireWorkspaceTransfer,
@@ -90,7 +91,8 @@ func selectRunnerForPlacement(
 		withoutContext.requiredEgressContext = nil
 		contextMismatch := options.requiredEgressContext != nil &&
 			runnerPlacementCompatible(candidate, spec, withoutContext, candidate.reportedReserved)
-		if options.exactRunnerID != "" || compatible || contextMismatch {
+		contextMismatchSnapshot = contextMismatchSnapshot || contextMismatch
+		if options.exactRunnerID != "" || compatible {
 			candidates = append(candidates, candidate)
 		}
 	}
@@ -152,7 +154,7 @@ func selectRunnerForPlacement(
 		}
 		lockedContextMismatch = lockedContextMismatch || contextMismatch
 	}
-	if !contextCompatibleSnapshot && lockedContextMismatch {
+	if !contextCompatibleSnapshot && (contextMismatchSnapshot || lockedContextMismatch) {
 		return "", ports.ErrEgressContextUnavailable
 	}
 	return "", options.unavailable

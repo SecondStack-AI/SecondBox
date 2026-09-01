@@ -236,6 +236,68 @@ func TestHomePlacementWaitsWhenEveryCompatibleRunnerIsLocked(t *testing.T) {
 	}
 }
 
+func TestContextMismatchDoesNotSuppressLockedCompatibleRunnerWait(t *testing.T) {
+	store := openStoreTest(t)
+	now := time.Date(2026, 8, 4, 13, 20, 0, 0, time.UTC)
+	spec := placementTestSpec("pool-placement-context-lock")
+	incompatibleID := "runner-placement-context-a"
+	compatibleID := "runner-placement-context-b"
+	seedPlacementRunner(t, store, spec.Pool, incompatibleID, now)
+	seedPlacementRunner(t, store, spec.Pool, compatibleID, now)
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.runners
+		SET supported_egress_contexts_json = CASE id
+			WHEN $1 THEN '["other-context"]'::jsonb
+			WHEN $2 THEN '["required-context"]'::jsonb
+		END
+		WHERE id IN ($1,$2)`, incompatibleID, compatibleID); err != nil {
+		t.Fatal(err)
+	}
+
+	blocker, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(t.Context())
+	if _, err := blocker.Exec(t.Context(), `SELECT id FROM secondbox.runners WHERE id=$1 FOR UPDATE`, compatibleID); err != nil {
+		t.Fatal(err)
+	}
+
+	waiter, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer waiter.Rollback(t.Context())
+	waitContext, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	requiredContext := "required-context"
+	selection := make(chan runnerPlacementResult, 1)
+	go func() {
+		selected, err := selectRunnerForPlacement(waitContext, waiter, spec, runnerPlacementOptions{
+			requiredEgressContext: &requiredContext,
+			unavailable:           ports.ErrHomeRunnerUnavailable,
+			errorPrefix:           "SecondBox context lock test",
+		})
+		selection <- runnerPlacementResult{runnerID: selected, err: err}
+	}()
+	select {
+	case result := <-selection:
+		t.Fatalf("context-aware placement did not wait: selected=%q error=%v", result.runnerID, result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := blocker.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-selection:
+		if result.err != nil || result.runnerID != compatibleID {
+			t.Fatalf("context-aware placement selected=%q error=%v", result.runnerID, result.err)
+		}
+	case <-waitContext.Done():
+		t.Fatal(waitContext.Err())
+	}
+}
+
 func TestExactHomePlacementWaitsForRunnerLock(t *testing.T) {
 	store := openStoreTest(t)
 	now := time.Date(2026, 8, 4, 13, 30, 0, 0, time.UTC)
