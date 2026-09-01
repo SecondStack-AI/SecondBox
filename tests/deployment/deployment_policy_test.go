@@ -235,6 +235,10 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		`"source-$mode")`,
 		`"$mode" "$expected_context")`,
 		`maxVcpuCount:4`,
+		`delete_operation="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes delete`,
+		`operations get --path "operationId=$delete_operation_id"`,
+		`[[ "$delete_operation_state" == succeeded ]]`,
+		`[[ "$source_sandbox_state" == deleted ]]`,
 		"report_qualified_guest_failure",
 	} {
 		if !strings.Contains(guest, required) {
@@ -243,6 +247,9 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 	}
 	if strings.Contains(guest, ".microVM.imageReference") {
 		t.Error("qualified guest reads the microVM image from a noncanonical manifest field")
+	}
+	if strings.Contains(guest, `source_sandbox_count=`) {
+		t.Error("qualified guest must not expect deleted v0.7.2 Sandbox tombstones to disappear from listSandboxes")
 	}
 }
 

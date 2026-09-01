@@ -200,16 +200,24 @@ if [[ "$phase" == install ]]; then
     qualification_sandbox_id="$(jq -er .sandboxId <<<"$source_workload")"
     qualification_workload_config="$(jq -er .configPath <<<"$source_workload")"
     source_sandbox_revision="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$qualification_sandbox_id" | jq -er .revision)"
-    SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes delete \
+    delete_operation="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes delete \
       --path "sandboxId=$qualification_sandbox_id" \
       --header "If-Match=\"revision-${source_sandbox_revision}\"" \
-      --header "Idempotency-Key=qualification-recreation-delete-${qualification_sandbox_id}" >/dev/null
+      --header "Idempotency-Key=qualification-recreation-delete-${qualification_sandbox_id}")"
+    delete_operation_id="$(jq -er .id <<<"$delete_operation")"
+    delete_operation_state=''
     for _ in $(seq 1 300); do
-      source_sandbox_count="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes list --query limit=100 | jq --arg id "$qualification_sandbox_id" '[.items[] | select(.id == $id)] | length')"
-      [[ "$source_sandbox_count" == 0 ]] && break
+      delete_operation_state="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json operations get --path "operationId=$delete_operation_id" | jq -er .state)"
+      [[ "$delete_operation_state" == succeeded ]] && break
+      [[ "$delete_operation_state" == pending || "$delete_operation_state" == running ]] || {
+        echo "qualified v0.7.2 Sandbox retirement operation reached $delete_operation_state" >&2
+        exit 1
+      }
       sleep 1
     done
-    [[ "$source_sandbox_count" == 0 ]] || { echo 'qualified v0.7.2 Sandbox was not retired before recreation' >&2; exit 1; }
+    [[ "$delete_operation_state" == succeeded ]] || { echo 'qualified v0.7.2 Sandbox retirement operation did not succeed' >&2; exit 1; }
+    source_sandbox_state="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$qualification_sandbox_id" | jq -er .state)"
+    [[ "$source_sandbox_state" == deleted ]] || { echo 'qualified v0.7.2 Sandbox was not retired before recreation' >&2; exit 1; }
 
     setup_candidate_registry
     source_plan_digest="$(sha256sum "$plan" | awk '{print $1}')"
