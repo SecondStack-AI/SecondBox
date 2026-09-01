@@ -538,6 +538,7 @@ const (
 	ProblemCodeResourceExpired                      ProblemCode = "resource_expired"
 	ProblemCodeTenantSuspended                      ProblemCode = "tenant_suspended"
 	ProblemCodeTenantEgressContextRequired          ProblemCode = "tenant_egress_context_required"
+	ProblemCodeEgressContextUnavailable             ProblemCode = "egress_context_unavailable"
 	ProblemCodeGrantEscalationDenied                ProblemCode = "grant_escalation_denied"
 	ProblemCodeCleanupStateConflict                 ProblemCode = "cleanup_state_conflict"
 	ProblemCodeWorkspaceMutationConflict            ProblemCode = "workspace_mutation_conflict"
