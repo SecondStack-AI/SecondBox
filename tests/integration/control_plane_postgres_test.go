@@ -174,20 +174,23 @@ func TestSubjectCloseSerializedBeforeSandboxAdmissionRejectsAuthenticatedRequest
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	locker, err := pool.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer locker.Rollback(t.Context())
-	if _, err := locker.Exec(t.Context(), `
-		SELECT tenant_ref FROM secondbox.tenant_quotas WHERE tenant_ref=$1 FOR UPDATE`, project.ID); err != nil {
-		t.Fatal(err)
-	}
 	closingStore, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL+"&application_name=subject-close-admission")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closingStore.Close()
+	locker, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Rollback(t.Context())
+	// Block the close after it owns both quota locks, so Sandbox admission is
+	// deterministically serialized behind it rather than racing for the first lock.
+	if _, err := locker.Exec(t.Context(), `
+		SELECT ref FROM secondbox.subjects
+		WHERE tenant_ref=$1 AND ref=$2 FOR UPDATE`, project.ID, account.ID); err != nil {
+		t.Fatal(err)
+	}
 	subject, err := databaseStore.GetSubject(t.Context(), project.ID, account.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +216,9 @@ func TestSubjectCloseSerializedBeforeSandboxAdmissionRejectsAuthenticatedRequest
 		if err := pool.QueryRow(t.Context(), `
 			SELECT EXISTS (
 				SELECT 1 FROM pg_stat_activity
-				WHERE application_name='subject-close-admission' AND wait_event_type='Lock'
+				WHERE application_name='subject-close-admission'
+				  AND wait_event_type='Lock'
+				  AND query LIKE '%FROM secondbox.subjects%'
 			)`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
@@ -221,7 +226,7 @@ func TestSubjectCloseSerializedBeforeSandboxAdmissionRejectsAuthenticatedRequest
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("Subject close did not reach the quota lock")
+			t.Fatal("Subject close did not reach the Subject row lock after its quota locks")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
