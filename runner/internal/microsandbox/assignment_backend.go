@@ -455,7 +455,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	claim := &activeAssignment{
 		fence: cloneFence(assignment.Fence), launched: launched,
 		egressContext:         assignment.EgressContext,
-		requiresEgressContext: assignment.Requirements.RequiresTenantEgressContext,
+		requiresEgressContext: assignment.Requirements != nil && assignment.Requirements.RequiresTenantEgressContext,
 	}
 	claim.launchDone = sync.OnceFunc(func() { close(launched) })
 	backend.assignments[assignmentID] = claim
