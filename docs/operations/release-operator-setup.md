@@ -51,9 +51,15 @@ export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$artifact_public_key_sha256"
 export SECONDBOX_RUNNER_WORKSPACE_ROOT='/srv/secondbox/qualification/workspaces'
 just test-scenario
 
-# On the no-KVM qualification host, at the same tag, then copy both evidence
+# On the no-KVM qualification host (root, Docker with Compose and Buildx, a
+# node-local k3s for the pod placement), at the same tag: assemble the build
+# directory as gvisor-runtime.md describes (bin/runsc, bin/secondbox-guest-agent,
+# rootfs), export the scenario inputs, run both suites, then copy both evidence
 # files to the release host (defaults: .tmp/gvisor-linux-scenario-qualification-evidence.json
 # and .tmp/gvisor-pod-linux-scenario-qualification-evidence.json).
+export SECONDBOX_GVISOR_LINUX_BUILD=/absolute/path/to/build
+export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
+export SECONDBOX_RUNNER_WORKSPACE_ROOT=/absolute/path/on/reflink-fs/gvisor-scenario-workspaces
 just test-scenario-gvisor
 just test-scenario-gvisor-pod
 export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE=/protected/releases/evidence/gvisor-linux-scenario-qualification-evidence.json

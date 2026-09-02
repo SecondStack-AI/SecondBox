@@ -279,6 +279,31 @@ func verifyCandidate(directory string) error {
 	}
 	if manifest.GVisor != nil {
 		refs = append(refs, manifest.GVisor.Materialization, manifest.GVisor.QualificationEvidence, manifest.GVisor.PodQualificationEvidence)
+		// The staged documents must already satisfy public release
+		// verification, not only the staging script's shape checks.
+		staged := func(reference releasecontract.Reference) ([]byte, error) {
+			return os.ReadFile(filepath.Join(directory, filepath.Base(reference.Location)))
+		}
+		materialization, err := staged(manifest.GVisor.Materialization)
+		if err != nil {
+			return err
+		}
+		if err := manifest.GVisor.VerifyGVisorMaterialization(materialization); err != nil {
+			return err
+		}
+		for pod, reference := range map[bool]releasecontract.Reference{false: manifest.GVisor.QualificationEvidence, true: manifest.GVisor.PodQualificationEvidence} {
+			data, err := staged(reference)
+			if err != nil {
+				return err
+			}
+			evidence, err := releasecontract.DecodeGVisorQualificationEvidence(data, pod)
+			if err != nil {
+				return err
+			}
+			if err := evidence.ValidateForRelease(manifest.SourceCommit, pod); err != nil {
+				return err
+			}
+		}
 	}
 	for _, bundle := range manifest.StandardBundles {
 		refs = append(refs, bundle.Document)

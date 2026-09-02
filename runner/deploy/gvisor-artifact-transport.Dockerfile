@@ -35,6 +35,8 @@ RUN apt-get update \
 COPY --from=flat-root-source / /secondbox-runner-gvisor/rootfs
 COPY --from=tools /out/secondbox-guest-agent /secondbox-runner-gvisor/bin/secondbox-guest-agent
 COPY --from=runsc-release /out/runsc /secondbox-runner-gvisor/bin/runsc
+# The verifiers an operator runs after extraction, at the release's version.
+COPY --from=tools /out/secondbox-flat-root-digest /out/secondbox-materialization-digest /secondbox-runner-gvisor/bin/
 COPY --from=tools /out/secondbox-prepare-gvisor-flat-root /out/secondbox-flat-root-digest /out/secondbox-materialization-digest /usr/local/bin/
 COPY runner/scripts/fetch-runsc.sh /tmp/fetch-runsc.sh
 RUN set -eu; \
@@ -62,7 +64,7 @@ RUN set -eu; \
     materialization_digest="$(secondbox-materialization-digest "$root/materialization.json")"; \
     jq -cn --arg materialization "$materialization_digest" --arg flatRoot "$flat_root_digest" --arg runsc "$runsc_release" \
       '{materializationDigest:$materialization,flatRootDigest:$flatRoot,runscRelease:$runsc}' >"$root/identity.json"; \
-    (cd "$root" && sha256sum bin/runsc bin/secondbox-guest-agent materialization.json identity.json >SHA256SUMS)
+    (cd "$root" && sha256sum bin/runsc bin/secondbox-guest-agent bin/secondbox-flat-root-digest bin/secondbox-materialization-digest materialization.json identity.json >SHA256SUMS)
 
 # `--target metadata` exports the identity the release manifest records.
 FROM scratch AS metadata

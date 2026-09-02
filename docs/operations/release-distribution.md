@@ -34,11 +34,17 @@ From a clean checkout at the release tag:
 
 ```sh
 just test-scenario
+# on the no-KVM qualification host at the same tag, per gvisor-runtime.md
+just test-scenario-gvisor
+just test-scenario-gvisor-pod
+export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE=... SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE=...
 just release-candidate VERSION CANDIDATE_OUTPUT_DIR
 just test-installer-qualified
 just release-stage VERSION OUTPUT_DIR
 just release-upload VERSION OUTPUT_DIR
 ```
+
+Candidate and final staging refuse to proceed without both gVisor evidence files; the [gVisor runtime](gvisor-runtime.md) qualification section is the complete procedure for producing them (build directory, workspace root, and pod placement inputs).
 
 Run the scenario suite, build the non-publishable installer candidate, point `SECONDBOX_INSTALLER_RELEASE_DIRECTORY` at that candidate, and then run installer qualification on the qualified release host. The candidate contains the exact binaries, digest-pinned images, bundles, and protocol windows but no installer-evidence claim. Installer qualification records their shared qualification-subject digest. `release-stage` refuses absent, dirty, commit-mismatched, or release-mismatched evidence and emits the final publishable manifest; scenario evidence must name `HEAD` exactly. `release-publish` rejects candidate manifests.
 

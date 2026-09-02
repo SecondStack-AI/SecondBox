@@ -225,15 +225,56 @@ func DecodeGVisorMaterialization(data []byte) (GVisorMaterialization, error) {
 	if err := decodeStrict(data, &materialization); err != nil {
 		return GVisorMaterialization{}, contractError("decode gVisor materialization: %v", err)
 	}
-	if materialization.SchemaVersion != GVisorMaterializationSchema || materialization.Key.BackendKind != "gvisor" {
-		return GVisorMaterialization{}, contractError("gVisor materialization must be a %q gvisor document", GVisorMaterializationSchema)
+	if err := materialization.Validate(); err != nil {
+		return GVisorMaterialization{}, err
 	}
 	return materialization, nil
 }
 
+// Validate applies the runner's materialization invariants for the gVisor
+// backend, so a release cannot publish a document a runner would refuse.
+func (materialization GVisorMaterialization) Validate() error {
+	if materialization.SchemaVersion != GVisorMaterializationSchema || materialization.Key.BackendKind != "gvisor" {
+		return contractError("gVisor materialization must be a %q gvisor document", GVisorMaterializationSchema)
+	}
+	if materialization.Key.GuestArchitecture != "amd64" && materialization.Key.GuestArchitecture != "arm64" {
+		return contractError("gVisor materialization guest architecture is unsupported")
+	}
+	if !digestPattern.MatchString(materialization.Key.RuntimeManifestDigest) || !digestPattern.MatchString(materialization.Key.ToolchainManifestDigest) ||
+		materialization.Key.RuntimeManifestDigest == materialization.Key.ToolchainManifestDigest {
+		return contractError("gVisor materialization runtime and toolchain digests are invalid")
+	}
+	if !digestPattern.MatchString(materialization.SourceOCIManifestDigest) || !digestPattern.MatchString(materialization.FlatRootDigest) {
+		return contractError("gVisor materialization requires digest-pinned source OCI and flat root identity")
+	}
+	if strings.TrimSpace(materialization.HelperBuildID) == "" || strings.TrimSpace(materialization.BackendBuildID) == "" ||
+		materialization.AgentProtocolGeneration == 0 || len(materialization.LaunchArtifacts) == 0 {
+		return contractError("gVisor materialization build, agent, and launch identity is incomplete")
+	}
+	seen := map[string]bool{}
+	for index, artifact := range materialization.LaunchArtifacts {
+		if strings.TrimSpace(artifact.ID) == "" || !digestPattern.MatchString(artifact.SHA256) || seen[artifact.ID] {
+			return contractError("gVisor materialization launch artifact %d is incomplete or duplicated", index)
+		}
+		if index > 0 && materialization.LaunchArtifacts[index-1].ID >= artifact.ID {
+			return contractError("gVisor materialization launch artifacts must be sorted")
+		}
+		seen[artifact.ID] = true
+	}
+	for index, feature := range materialization.AgentFeatures {
+		if feature == "" || (index > 0 && materialization.AgentFeatures[index-1] >= feature) {
+			return contractError("gVisor materialization agent features must be sorted, unique, and non-empty")
+		}
+	}
+	return nil
+}
+
 // Digest is the canonical digest runners pin: sha256 over the compact JSON
-// encoding of the typed document.
+// encoding of the validated typed document.
 func (materialization GVisorMaterialization) Digest() (string, error) {
+	if err := materialization.Validate(); err != nil {
+		return "", err
+	}
 	encoded, err := json.Marshal(materialization)
 	if err != nil {
 		return "", contractError("encode gVisor materialization: %v", err)

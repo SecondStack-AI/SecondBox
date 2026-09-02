@@ -323,10 +323,25 @@ func TestLegacyManifestKeepsItsRecordedShape(t *testing.T) {
 
 func TestGVisorMaterializationVerification(t *testing.T) {
 	materialization := GVisorMaterialization{
-		SchemaVersion:  GVisorMaterializationSchema,
-		Key:            GVisorMaterializationKey{BackendKind: "gvisor", GuestArchitecture: "amd64", RuntimeManifestDigest: testDigest, ToolchainManifestDigest: "sha256:" + strings.Repeat("c", 64)},
-		FlatRootDigest: testDigest, LaunchArtifacts: []GVisorLaunchArtifact{{ID: "runsc", SHA256: testDigest}},
-		AgentProtocolGeneration: 1, AgentFeatures: []string{"pty"}, BackendBuildID: "secondbox-gvisor-release-1.2.3", HelperBuildID: "runsc-release-20260817.0",
+		SchemaVersion:           GVisorMaterializationSchema,
+		Key:                     GVisorMaterializationKey{BackendKind: "gvisor", GuestArchitecture: "amd64", RuntimeManifestDigest: testDigest, ToolchainManifestDigest: "sha256:" + strings.Repeat("c", 64)},
+		SourceOCIManifestDigest: testDigest, FlatRootDigest: testDigest,
+		LaunchArtifacts:         []GVisorLaunchArtifact{{ID: "guest-agent", SHA256: testDigest}, {ID: "runsc", SHA256: testDigest}},
+		AgentProtocolGeneration: 1, AgentFeatures: []string{"exec-streaming", "pty"}, BackendBuildID: "secondbox-gvisor-release-1.2.3", HelperBuildID: "runsc-release-20260817.0",
+	}
+	for name, mutate := range map[string]func(*GVisorMaterialization){
+		"unsorted artifacts": func(m *GVisorMaterialization) {
+			m.LaunchArtifacts = []GVisorLaunchArtifact{{ID: "runsc", SHA256: testDigest}, {ID: "guest-agent", SHA256: testDigest}}
+		},
+		"missing helper":    func(m *GVisorMaterialization) { m.HelperBuildID = "" },
+		"unsorted features": func(m *GVisorMaterialization) { m.AgentFeatures = []string{"pty", "exec-streaming"} },
+		"firecracker kind":  func(m *GVisorMaterialization) { m.Key.BackendKind = "firecracker" },
+	} {
+		invalid := materialization
+		mutate(&invalid)
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
 	}
 	data := mustJSON(t, materialization)
 	digest, err := materialization.Digest()

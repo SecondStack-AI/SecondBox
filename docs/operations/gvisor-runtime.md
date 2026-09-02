@@ -310,9 +310,9 @@ remains operator-authored and unqualified.
   `/secondbox-runner-gvisor`, whose contents become the node directory the reference pod mounts
   at `/opt/secondbox-gvisor` (`/var/lib/secondbox-gvisor-materialized` in the reference
   manifest): `rootfs/` is `SECONDBOX_GVISOR_FLAT_ROOT_PATH`, `materialization.json` is
-  `SECONDBOX_GVISOR_MATERIALIZATION_PATH`, and `bin/` holds the launch artifacts. Extract the
-  image layers with ownership, modes, timestamps, and extended attributes preserved, then
-  verify before enrolling:
+  `SECONDBOX_GVISOR_MATERIALIZATION_PATH`, and `bin/` holds the launch artifacts plus the two
+  verifier binaries built at the release's version. Extract the image layers with ownership,
+  modes, timestamps, and extended attributes preserved, then verify before enrolling:
 
   ```sh
   # OCI layout of the pinned image (skopeo copy docker://... oci:image, or an equivalent pull)
@@ -324,8 +324,8 @@ remains operator-authored and unqualified.
   done
   cd /var/lib/secondbox-gvisor-materialized
   sha256sum -c SHA256SUMS
-  secondbox-materialization-digest materialization.json   # must equal gvisor.materializationDigest
-  secondbox-flat-root-digest "$PWD/rootfs"                # must equal gvisor.flatRootDigest
+  bin/secondbox-materialization-digest materialization.json   # must equal gvisor.materializationDigest
+  bin/secondbox-flat-root-digest "$PWD/rootfs"                # must equal gvisor.flatRootDigest
   ```
 
   Never edit the published materialization: it is immutable and digest-bound. The runner
