@@ -428,7 +428,7 @@ track, retain evidence, and keep the host profile as the spike's sole qualified 
   only after both environment suites pass. Describe the gVisor isolation class, the host-mount
   provenance invariant, and the privileged-pod trust posture accurately, and keep
   `snapshot_resume` absent from gVisor capabilities.
-- [x] Remove the experimental label only in a later decision with production distribution,
+- [x] Remove the experimental label only in a later decision with production distribution (done: the release publishes `runner-gvisor` and `gvisor-artifacts`),
   sustained stress, upgrade/recovery evidence, and an explicit support policy; those are not
   spike exit criteria.
 

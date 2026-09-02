@@ -32,7 +32,7 @@ spec:
       effect: NoSchedule
   containers:
     - name: runner
-      image: OPERATOR_REGISTRY/secondbox/runner-gvisor@sha256:OPERATOR_IMAGE_DIGEST
+      image: ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:RELEASE_IMAGE_DIGEST
       imagePullPolicy: IfNotPresent
       securityContext:
         privileged: true

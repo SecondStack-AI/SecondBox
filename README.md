@@ -6,9 +6,9 @@
 [![Release](https://img.shields.io/github/v/release/SecondStack-AI/SecondBox)](https://github.com/SecondStack-AI/SecondBox/releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, long-lived dev environments — inside isolated Sandboxes whose filesystems survive between sessions. The supported production backend boots each Sandbox as a Firecracker microVM; an experimental gVisor backend serves hosts without KVM.
+SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, long-lived dev environments — inside isolated Sandboxes whose filesystems survive between sessions. The Firecracker backend boots each Sandbox as a microVM on KVM hosts; the gVisor backend serves Linux hosts without KVM, including Kubernetes nodes.
 
-- **Hardware isolation.** On the supported production path every Sandbox is a Firecracker microVM, not a container. The experimental gVisor backend substitutes a userspace-kernel sentry for hosts without hardware virtualization; its isolation boundary is the sentry, not KVM.
+- **Hardware isolation.** On KVM hosts every Sandbox is a Firecracker microVM, not a container. The gVisor backend substitutes a userspace-kernel sentry for hosts without hardware virtualization; its isolation boundary is the sentry, not KVM.
 - **Durable workspaces.** A Sandbox keeps its disk across stops, restarts, and generations. Snapshot it and restore in place.
 - **Real terminals.** A genuine PTY with raw mode, resize forwarding, and bounded reconnect — not a line-buffered exec loop.
 - **Multi-tenant by construction.** Every row is scoped to an opaque tenant and subject reference. Application tokens carry fixed scopes and explicit Profile grants.

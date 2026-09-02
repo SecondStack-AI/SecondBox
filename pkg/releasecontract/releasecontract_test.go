@@ -70,6 +70,13 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 		{name: "unsupported platform", mutate: func(value *ArtifactManifest) { value.Platforms.Runner = append(value.Platforms.Runner, "linux/arm64") }, want: "lacks required qualification"},
 		{name: "incompatible protocol window", mutate: func(value *ArtifactManifest) { value.RunnerProtocol = ProtocolWindow{Minimum: 3, Maximum: 2} }, want: "window is invalid"},
 		{name: "malformed signing identity", mutate: func(value *ArtifactManifest) { value.MicroVM.SigningKeyFingerprint = "SHA256:no" }, want: "fingerprint"},
+		{name: "mutable gVisor runner", mutate: func(value *ArtifactManifest) { value.GVisor.RunnerReference = GVisorRunnerImage + ":latest" }, want: "immutable canonical"},
+		{name: "noncanonical gVisor materialization", mutate: func(value *ArtifactManifest) {
+			value.GVisor.Materialization.Location = "https://example.com/materialization.json"
+		}, want: "not canonical"},
+		{name: "missing gVisor identity", mutate: func(value *ArtifactManifest) { value.GVisor.Identity = Identity{} }, want: "gVisor identity"},
+		{name: "missing runsc release", mutate: func(value *ArtifactManifest) { value.GVisor.RunscRelease = "" }, want: "runsc release"},
+		{name: "legacy manifest with gVisor", mutate: func(value *ArtifactManifest) { value.SchemaVersion = LegacyArtifactManifestSchema }, want: "must not carry a gVisor"},
 		{name: "missing qualification evidence", mutate: func(value *ArtifactManifest) { value.QualificationEvidence = Reference{} }, want: "qualification evidence"},
 		{name: "noncanonical qualification evidence", mutate: func(value *ArtifactManifest) {
 			value.QualificationEvidence.Location = "https://example.com/evidence.json"
@@ -249,6 +256,7 @@ func validManifest() ArtifactManifest {
 		InstallerTools:                 OCIArtifact{Identity: identity, Reference: InstallerToolsImage + "@" + testDigest},
 		BundledServices:                BundledServiceImages{Postgres: "docker.io/library/postgres@" + testDigest},
 		InstallBootstrap:               Reference{Location: InstallBootstrapLocation(identity.Version), Digest: testDigest},
+		GVisor:                         GVisorArtifact{Identity: identity, RunnerReference: GVisorRunnerImage + "@" + testDigest, ImageReference: GVisorImage + "@" + testDigest, Materialization: Reference{Location: GVisorMaterializationLocation(identity.Version), Digest: testDigest}, MaterializationDigest: testDigest, FlatRootDigest: testDigest, RunscRelease: "20260817.0"},
 		MicroVM:                        MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
 		Binaries:                       binaries,
 		SBOMs:                          []Reference{ref("sbom.spdx.json")},

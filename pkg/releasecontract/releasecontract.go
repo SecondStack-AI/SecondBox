@@ -19,7 +19,11 @@ import (
 )
 
 const (
-	ArtifactManifestSchema                     = "secondbox.release/artifact-manifest/v5"
+	ArtifactManifestSchema = "secondbox.release/artifact-manifest/v6"
+	// LegacyArtifactManifestSchema is accepted for recorded releases that
+	// predate the gVisor artifact section; a newer updater still
+	// authenticates them.
+	LegacyArtifactManifestSchema               = "secondbox.release/artifact-manifest/v5"
 	QualificationEvidenceSchema                = "secondbox.release/qualification-evidence/v2"
 	LegacyQualificationEvidenceSchema          = "secondbox.release/qualification-evidence/v1"
 	InstallerQualificationEvidenceSchema       = "secondbox.release/installer-qualification-evidence/v2"
@@ -31,6 +35,8 @@ const (
 	RunnerImage         = "ghcr.io/secondstack-ai/secondbox/runner"
 	MicroVMImage        = "ghcr.io/secondstack-ai/secondbox/microvm-artifacts"
 	InstallerToolsImage = "ghcr.io/secondstack-ai/secondbox/installer-tools"
+	GVisorRunnerImage   = "ghcr.io/secondstack-ai/secondbox/runner-gvisor"
+	GVisorImage         = "ghcr.io/secondstack-ai/secondbox/gvisor-artifacts"
 )
 
 var (
@@ -168,6 +174,20 @@ type MicroVMArtifact struct {
 	ToolchainBundle       SignedComponent `json:"toolchainBundle"`
 }
 
+// GVisorArtifact names the gVisor backend distribution: the runner image and
+// the artifact transport carrying the prepared flat root, the launch
+// artifacts, and the backend materialization whose canonical digest runners
+// and platform operators pin. The materialization is also a release file.
+type GVisorArtifact struct {
+	Identity              Identity  `json:"identity"`
+	RunnerReference       string    `json:"runnerReference"`
+	ImageReference        string    `json:"imageReference"`
+	Materialization       Reference `json:"materialization"`
+	MaterializationDigest string    `json:"materializationDigest"`
+	FlatRootDigest        string    `json:"flatRootDigest"`
+	RunscRelease          string    `json:"runscRelease"`
+}
+
 type BundledServiceImages struct {
 	Postgres string `json:"postgres"`
 }
@@ -189,6 +209,7 @@ type ArtifactManifest struct {
 	BundledServices                BundledServiceImages     `json:"bundledServices"`
 	InstallBootstrap               Reference                `json:"installBootstrap"`
 	MicroVM                        MicroVMArtifact          `json:"microvm"`
+	GVisor                         GVisorArtifact           `json:"gvisor"`
 	Binaries                       []BinaryArtifact         `json:"binaries"`
 	SBOMs                          []Reference              `json:"sboms"`
 	ArtifactAttestations           []Reference              `json:"artifactAttestations,omitempty"`
@@ -275,6 +296,12 @@ func InstallerQualificationEvidenceLocation(version string) string {
 
 func InstallBootstrapLocation(version string) string {
 	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/install.sh", version)
+}
+
+// GVisorMaterializationLocation is the canonical release file carrying the
+// gVisor backend materialization.
+func GVisorMaterializationLocation(version string) string {
+	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-gvisor-materialization.json", version, version)
 }
 
 func BinaryLocation(version, name, platform string) string {
@@ -417,8 +444,11 @@ func (manifest ArtifactManifest) InstallerQualificationSubjectDigest() (string, 
 }
 
 func (manifest ArtifactManifest) Validate() error {
-	if manifest.SchemaVersion != ArtifactManifestSchema {
-		return contractError("artifact manifest schemaVersion must be %q", ArtifactManifestSchema)
+	if manifest.SchemaVersion != ArtifactManifestSchema && manifest.SchemaVersion != LegacyArtifactManifestSchema {
+		return contractError("artifact manifest schemaVersion must be %q or legacy %q", ArtifactManifestSchema, LegacyArtifactManifestSchema)
+	}
+	if manifest.SchemaVersion == LegacyArtifactManifestSchema && manifest.GVisor != (GVisorArtifact{}) {
+		return contractError("legacy artifact manifest must not carry a gVisor artifact")
 	}
 	if err := validateIdentity(manifest.Identity); err != nil {
 		return err
@@ -427,7 +457,11 @@ func (manifest ArtifactManifest) Validate() error {
 		"OpenAPI": manifest.OpenAPI.Identity, "Go SDK": manifest.GoSDK.Identity,
 		"TypeScript SDK": manifest.TypeScriptSDK.Identity, "control plane": manifest.ControlPlane.Identity,
 		"Runner": manifest.Runner.Identity, "installer tools": manifest.InstallerTools.Identity, "microVM": manifest.MicroVM.Identity,
+		"gVisor": manifest.GVisor.Identity,
 	} {
+		if name == "gVisor" && manifest.SchemaVersion == LegacyArtifactManifestSchema {
+			continue
+		}
 		if identity != manifest.Identity {
 			return contractError("%s identity does not match artifact manifest", name)
 		}
@@ -504,6 +538,26 @@ func (manifest ArtifactManifest) Validate() error {
 	if manifest.MicroVM.SignedManifestDigest == manifest.MicroVM.RuntimeBundle.ManifestDigest ||
 		manifest.MicroVM.SignedManifestDigest == manifest.MicroVM.ToolchainBundle.ManifestDigest {
 		return contractError("microVM signed manifest and component digests must be distinct")
+	}
+	if manifest.SchemaVersion == ArtifactManifestSchema {
+		if err := validateOCIReference(GVisorRunnerImage, manifest.GVisor.RunnerReference); err != nil {
+			return err
+		}
+		if err := validateOCIReference(GVisorImage, manifest.GVisor.ImageReference); err != nil {
+			return err
+		}
+		if err := validateReference("gVisor materialization", manifest.GVisor.Materialization); err != nil {
+			return err
+		}
+		if manifest.GVisor.Materialization.Location != GVisorMaterializationLocation(manifest.Version) {
+			return contractError("gVisor materialization location is not canonical for %s", manifest.Tag)
+		}
+		if !digestPattern.MatchString(manifest.GVisor.MaterializationDigest) || !digestPattern.MatchString(manifest.GVisor.FlatRootDigest) {
+			return contractError("gVisor materialization and flat root digests must be canonical sha256")
+		}
+		if manifest.GVisor.RunscRelease == "" {
+			return contractError("gVisor artifact requires the runsc release")
+		}
 	}
 	if err := validateBinaries(manifest); err != nil {
 		return err

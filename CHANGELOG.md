@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- The gVisor backend is a supported backend for Linux amd64 hosts without KVM, Kubernetes nodes included. Every release now publishes `ghcr.io/secondstack-ai/secondbox/runner-gvisor` and `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts` (the prepared flat root, `runsc`, the guest agent, and the backend materialization, built from the repository and digest-pinned bases) plus the `secondbox-VERSION-gvisor-materialization.json` release file; the artifact manifest schema is `secondbox.release/artifact-manifest/v6` with a `gvisor` section recording both image digests, the materialization digest, the flat-root digest, and the `runsc` release.
+
 ### Added
 
 - Added tenant-aware egress contexts so several SecondStack installations can share one RunnerPool without sharing gateway PKI, interception authority, egress policy, or credential custody. Every Profile network policy now explicitly requires or declines a Tenant context through the required `requiresTenantEgressContext` field, and opaque context names use one bounded provider-neutral syntax across public contracts, Runner protocol, persistence, audit, and diagnostics.

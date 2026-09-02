@@ -28,6 +28,11 @@ type candidateInput struct {
 	MicroVMSigningKeyFingerprint string                          `json:"microvmSigningKeyFingerprint"`
 	MicroVMRuntimeBundle         releasecontract.SignedComponent `json:"microvmRuntimeBundle"`
 	MicroVMToolchainBundle       releasecontract.SignedComponent `json:"microvmToolchainBundle"`
+	GVisorRunnerDigest           string                          `json:"gvisorRunnerDigest"`
+	GVisorImageDigest            string                          `json:"gvisorImageDigest"`
+	GVisorMaterializationDigest  string                          `json:"gvisorMaterializationDigest"`
+	GVisorFlatRootDigest         string                          `json:"gvisorFlatRootDigest"`
+	GVisorRunscRelease           string                          `json:"gvisorRunscRelease"`
 }
 
 func main() {
@@ -161,6 +166,10 @@ func writeManifest(inputPath, outputDirectory string) error {
 	if err != nil {
 		return err
 	}
+	gvisorMaterialization, err := ref(fmt.Sprintf("secondbox-%s-gvisor-materialization.json", input.Version))
+	if err != nil {
+		return err
+	}
 	bundles := make([]releasecontract.StandardBundleArtifact, 0, len(standardresources.BundleNames()))
 	for _, name := range standardresources.BundleNames() {
 		filename := name + ".standard-bundle.json"
@@ -182,7 +191,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Identity: identity, Name: name, Document: bundleRef, Profiles: profiles})
 	}
-	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Candidate: input.Candidate, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"}, InstallerTools: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + input.InstallerToolsDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: input.PostgresImage}, InstallBootstrap: installBootstrap, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, SignedManifestDigest: input.MicroVMManifestDigest, SigningKeyFingerprint: "SHA256:" + strings.ToUpper(input.MicroVMSigningKeyFingerprint), RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, QualificationEvidence: qualificationEvidence, InstallerQualificationEvidence: installerQualificationEvidence, StandardBundles: bundles}
+	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Candidate: input.Candidate, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"}, InstallerTools: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + input.InstallerToolsDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: input.PostgresImage}, InstallBootstrap: installBootstrap, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, SignedManifestDigest: input.MicroVMManifestDigest, SigningKeyFingerprint: "SHA256:" + strings.ToUpper(input.MicroVMSigningKeyFingerprint), RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, GVisor: releasecontract.GVisorArtifact{Identity: identity, RunnerReference: releasecontract.GVisorRunnerImage + "@" + input.GVisorRunnerDigest, ImageReference: releasecontract.GVisorImage + "@" + input.GVisorImageDigest, Materialization: gvisorMaterialization, MaterializationDigest: input.GVisorMaterializationDigest, FlatRootDigest: input.GVisorFlatRootDigest, RunscRelease: input.GVisorRunscRelease}, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, QualificationEvidence: qualificationEvidence, InstallerQualificationEvidence: installerQualificationEvidence, StandardBundles: bundles}
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
@@ -354,9 +363,11 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 		}
 	}
 	for filename, artifact := range map[string]releasecontract.OCIArtifact{
-		"control-plane.oci.json":   manifest.ControlPlane,
-		"runner.oci.json":          manifest.Runner,
-		"installer-tools.oci.json": manifest.InstallerTools,
+		"control-plane.oci.json":    manifest.ControlPlane,
+		"runner.oci.json":           manifest.Runner,
+		"installer-tools.oci.json":  manifest.InstallerTools,
+		"runner-gvisor.oci.json":    {Identity: manifest.GVisor.Identity, Reference: manifest.GVisor.RunnerReference},
+		"gvisor-artifacts.oci.json": {Identity: manifest.GVisor.Identity, Reference: manifest.GVisor.ImageReference},
 	} {
 		if err := verifySyntheticOCIMetadata(directory, filename, manifest.Identity, artifact.Reference); err != nil {
 			return err

@@ -15,13 +15,15 @@ skopeo copy --all "oci-archive:$input/control-plane.oci.tar" "docker://ghcr.io/s
 skopeo copy --all "oci-archive:$input/runner.oci.tar" "docker://ghcr.io/secondstack-ai/secondbox/runner:$tag"
 skopeo copy --all "oci-archive:$input/installer-tools.oci.tar" "docker://ghcr.io/secondstack-ai/secondbox/installer-tools:$tag"
 skopeo copy --all "oci-archive:$input/microvm-artifacts.oci.tar" "docker://ghcr.io/secondstack-ai/secondbox/microvm-artifacts:$tag"
+skopeo copy --all "oci-archive:$input/runner-gvisor.oci.tar" "docker://ghcr.io/secondstack-ai/secondbox/runner-gvisor:$tag"
+skopeo copy --all "oci-archive:$input/gvisor-artifacts.oci.tar" "docker://ghcr.io/secondstack-ai/secondbox/gvisor-artifacts:$tag"
 skopeo logout ghcr.io >/dev/null
 
 if ! npm view "@secondstack-ai/secondbox@${version}" version >/dev/null 2>&1; then
   npm publish "$input/secondstack-ai-secondbox-${version}.tgz" --access public --tag latest --provenance
 fi
 
-for name in control-plane.oci.tar runner.oci.tar installer-tools.oci.tar microvm-artifacts.oci.tar candidate-allowlist.json; do
+for name in control-plane.oci.tar runner.oci.tar installer-tools.oci.tar microvm-artifacts.oci.tar runner-gvisor.oci.tar gvisor-artifacts.oci.tar candidate-allowlist.json; do
   gh release delete-asset "$tag" "$name" --yes
 done
 

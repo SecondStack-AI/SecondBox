@@ -162,6 +162,9 @@ func artifactManifest(ctx context.Context, location string, fetch FetchFunc, rec
 func verifyManifestObjects(ctx context.Context, manifest releasecontract.ArtifactManifest, fetch FetchFunc, recorded bool) error {
 	verifiedObjects := map[string][]byte{}
 	references := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}
+	if manifest.GVisor.Materialization != (releasecontract.Reference{}) {
+		references = append(references, manifest.GVisor.Materialization)
+	}
 	if manifest.SourceFreeSuite != (releasecontract.Reference{}) {
 		references = append(references, manifest.SourceFreeSuite)
 	}

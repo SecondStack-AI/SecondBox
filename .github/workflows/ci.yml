@@ -182,6 +182,11 @@ jobs:
             --output "type=oci,dest=/tmp/runner-gvisor.oci.tar" \
             --metadata-file /tmp/runner-gvisor.oci.json .
           echo "gVisor runner image digest: $(jq -er '."containerimage.digest"' /tmp/runner-gvisor.oci.json)"
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --build-arg "RELEASE_VERSION=ci" --build-arg "SOURCE_COMMIT=${GITHUB_SHA}" \
+            --file runner/deploy/gvisor-artifact-transport.Dockerfile --target metadata \
+            --output "type=local,dest=/tmp/gvisor-metadata" .
+          echo "gVisor materialization: $(jq -c . /tmp/gvisor-metadata/identity.json)"
       - name: Upload gVisor runner image digest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
