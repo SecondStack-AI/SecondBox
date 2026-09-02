@@ -17,6 +17,7 @@ A SecondBox release is a SemVer Git tag plus the locally built files attached to
 | gVisor runner | `ghcr.io/secondstack-ai/secondbox/runner-gvisor:vVERSION` |
 | gVisor artifacts | `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts:vVERSION` |
 | gVisor materialization | `secondbox-VERSION-gvisor-materialization.json` |
+| gVisor qualification evidence | `secondbox-VERSION-gvisor-qualification-evidence.json`, `secondbox-VERSION-gvisor-pod-qualification-evidence.json` |
 | CLI binary | `secondbox_VERSION_OS_ARCH` |
 | Deployment binary | `secondbox-deploy_VERSION_OS_ARCH` |
 | Guided-install bootstrap | versioned `releases/download/vVERSION/install.sh`; stable `releases/latest/download/install.sh` |

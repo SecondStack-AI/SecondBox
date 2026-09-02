@@ -77,6 +77,14 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 		{name: "missing gVisor identity", mutate: func(value *ArtifactManifest) { value.GVisor.Identity = Identity{} }, want: "gVisor identity"},
 		{name: "missing runsc release", mutate: func(value *ArtifactManifest) { value.GVisor.RunscRelease = "" }, want: "runsc release"},
 		{name: "legacy manifest with gVisor", mutate: func(value *ArtifactManifest) { value.SchemaVersion = LegacyArtifactManifestSchema }, want: "must not carry a gVisor"},
+		{name: "legacy schema on a gVisor-era release", mutate: func(value *ArtifactManifest) {
+			value.SchemaVersion = LegacyArtifactManifestSchema
+			value.GVisor = nil
+		}, want: "must use schemaVersion"},
+		{name: "missing gVisor artifact", mutate: func(value *ArtifactManifest) { value.GVisor = nil }, want: "requires the gVisor artifact"},
+		{name: "noncanonical gVisor evidence", mutate: func(value *ArtifactManifest) {
+			value.GVisor.PodQualificationEvidence.Location = "https://example.com/evidence.json"
+		}, want: "not canonical"},
 		{name: "missing qualification evidence", mutate: func(value *ArtifactManifest) { value.QualificationEvidence = Reference{} }, want: "qualification evidence"},
 		{name: "noncanonical qualification evidence", mutate: func(value *ArtifactManifest) {
 			value.QualificationEvidence.Location = "https://example.com/evidence.json"
@@ -256,7 +264,7 @@ func validManifest() ArtifactManifest {
 		InstallerTools:                 OCIArtifact{Identity: identity, Reference: InstallerToolsImage + "@" + testDigest},
 		BundledServices:                BundledServiceImages{Postgres: "docker.io/library/postgres@" + testDigest},
 		InstallBootstrap:               Reference{Location: InstallBootstrapLocation(identity.Version), Digest: testDigest},
-		GVisor:                         GVisorArtifact{Identity: identity, RunnerReference: GVisorRunnerImage + "@" + testDigest, ImageReference: GVisorImage + "@" + testDigest, Materialization: Reference{Location: GVisorMaterializationLocation(identity.Version), Digest: testDigest}, MaterializationDigest: testDigest, FlatRootDigest: testDigest, RunscRelease: "20260817.0"},
+		GVisor:                         &GVisorArtifact{Identity: identity, RunnerReference: GVisorRunnerImage + "@" + testDigest, ImageReference: GVisorImage + "@" + testDigest, Materialization: Reference{Location: GVisorMaterializationLocation(identity.Version), Digest: testDigest}, MaterializationDigest: testDigest, FlatRootDigest: testDigest, RunscRelease: "20260817.0", QualificationEvidence: Reference{Location: GVisorQualificationEvidenceLocation(identity.Version, false), Digest: testDigest}, PodQualificationEvidence: Reference{Location: GVisorQualificationEvidenceLocation(identity.Version, true), Digest: testDigest}},
 		MicroVM:                        MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
 		Binaries:                       binaries,
 		SBOMs:                          []Reference{ref("sbom.spdx.json")},
@@ -279,4 +287,65 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestLegacyManifestKeepsItsRecordedShape(t *testing.T) {
+	legacy := validManifest()
+	legacy.SchemaVersion = LegacyArtifactManifestSchema
+	legacy.Identity = Identity{Version: "0.8.3", Tag: "v0.8.3", SourceCommit: testCommit}
+	legacy.GoSDK.Coordinate = GoModule + "@v0.8.3"
+	legacy.TypeScriptSDK.Coordinate = TypeScriptPackage + "@0.8.3"
+	for _, fix := range []*Identity{&legacy.OpenAPI.Identity, &legacy.GoSDK.Identity, &legacy.TypeScriptSDK.Identity, &legacy.ControlPlane.Identity, &legacy.Runner.Identity, &legacy.InstallerTools.Identity, &legacy.MicroVM.Identity} {
+		*fix = legacy.Identity
+	}
+	for i := range legacy.Binaries {
+		legacy.Binaries[i].Identity = legacy.Identity
+		legacy.Binaries[i].Location = BinaryLocation("0.8.3", legacy.Binaries[i].Name, legacy.Binaries[i].Platform)
+	}
+	for i := range legacy.StandardBundles {
+		legacy.StandardBundles[i].Identity = legacy.Identity
+	}
+	legacy.InstallBootstrap.Location = InstallBootstrapLocation("0.8.3")
+	legacy.SourceFreeSuite.Location = SourceFreeSuiteLocation("0.8.3")
+	legacy.QualificationEvidence.Location = QualificationEvidenceLocation("0.8.3")
+	legacy.InstallerQualificationEvidence.Location = InstallerQualificationEvidenceLocation("0.8.3")
+	legacy.GVisor = nil
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("a recorded v5 release must stay valid: %v", err)
+	}
+	// The installer qualification subject of a recorded release is the
+	// digest of its historical shape: no gVisor key may appear.
+	encoded := mustJSON(t, legacy)
+	if strings.Contains(string(encoded), `"gvisor"`) {
+		t.Fatalf("legacy manifest re-encodes with a gVisor key: %s", encoded)
+	}
+}
+
+func TestGVisorMaterializationVerification(t *testing.T) {
+	materialization := GVisorMaterialization{
+		SchemaVersion:  GVisorMaterializationSchema,
+		Key:            GVisorMaterializationKey{BackendKind: "gvisor", GuestArchitecture: "amd64", RuntimeManifestDigest: testDigest, ToolchainManifestDigest: "sha256:" + strings.Repeat("c", 64)},
+		FlatRootDigest: testDigest, LaunchArtifacts: []GVisorLaunchArtifact{{ID: "runsc", SHA256: testDigest}},
+		AgentProtocolGeneration: 1, AgentFeatures: []string{"pty"}, BackendBuildID: "secondbox-gvisor-release-1.2.3", HelperBuildID: "runsc-release-20260817.0",
+	}
+	data := mustJSON(t, materialization)
+	digest, err := materialization.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := GVisorArtifact{MaterializationDigest: digest, FlatRootDigest: testDigest, RunscRelease: "20260817.0"}
+	if err := artifact.VerifyGVisorMaterialization(data); err != nil {
+		t.Fatalf("consistent materialization rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*GVisorArtifact){
+		"flat root": func(a *GVisorArtifact) { a.FlatRootDigest = "sha256:" + strings.Repeat("d", 64) },
+		"runsc":     func(a *GVisorArtifact) { a.RunscRelease = "20250101.0" },
+		"digest":    func(a *GVisorArtifact) { a.MaterializationDigest = "sha256:" + strings.Repeat("e", 64) },
+	} {
+		mutated := artifact
+		mutate(&mutated)
+		if err := mutated.VerifyGVisorMaterialization(data); err == nil {
+			t.Fatalf("%s mismatch accepted", name)
+		}
+	}
 }

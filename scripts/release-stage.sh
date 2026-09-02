@@ -80,6 +80,31 @@ validate_qualification_evidence() {
   }
 }
 
+# gVisor evidence comes from the no-KVM qualification host; both the host and
+# the pod scenario runs must bind the staged commit.
+validate_gvisor_qualification_evidence() {
+  local evidence="$1" suite="$2"
+  [[ -f "$evidence" && ! -L "$evidence" ]] || {
+    echo "release staging requires gVisor qualification evidence at $evidence; run just $suite on the no-KVM qualification host and copy the evidence here" >&2
+    exit 1
+  }
+  jq -e --arg schema "$qualification_evidence_schema" --arg commit "$source_commit" --arg suite "$suite" '
+    .schemaVersion == $schema and .sourceCommit == $commit and .repositoryDirty == false and
+    .suite == $suite and .backend == "gvisor" and
+    (.passCount | type == "number") and .passCount > 0 and .passCount == (.passCount | floor) and
+    (.wallClockSeconds | type == "number") and .wallClockSeconds >= 0 and .wallClockSeconds == (.wallClockSeconds | floor) and
+    .host.platform == "linux-amd64" and
+    .host.kvm == {required:false,present:false} and
+    (.host.workspaceFilesystem.mount | type == "string") and (.host.workspaceFilesystem.mount | length) > 0 and
+    (.host.workspaceFilesystem.type == "xfs" or .host.workspaceFilesystem.type == "btrfs") and
+    (.qualifiedAt | type == "string") and
+    (.qualifiedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+  ' "$evidence" >/dev/null || {
+    echo "release gVisor qualification evidence at $evidence does not describe a complete $suite run at $source_commit on a host without KVM" >&2
+    exit 1
+  }
+}
+
 validate_installer_qualification_evidence() {
   local evidence="$1"
   [[ -f "$evidence" && ! -L "$evidence" ]] || {
@@ -167,6 +192,21 @@ else
   install -m 0644 "$qualification_evidence_source" "$output_dir/$qualification_evidence_name"
 fi
 validate_qualification_evidence "$output_dir/$qualification_evidence_name"
+
+gvisor_qualification_evidence_name="secondbox-${version}-gvisor-qualification-evidence.json"
+gvisor_pod_qualification_evidence_name="secondbox-${version}-gvisor-pod-qualification-evidence.json"
+if $test_mode; then
+  for suite in test-scenario-gvisor test-scenario-gvisor-pod; do
+    target="$output_dir/$gvisor_qualification_evidence_name"
+    [[ "$suite" == test-scenario-gvisor ]] || target="$output_dir/$gvisor_pod_qualification_evidence_name"
+    jq -n --arg schemaVersion "$qualification_evidence_schema" --arg sourceCommit "$source_commit" --arg suite "$suite" '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:$suite,backend:"gvisor",passCount:16,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{required:false,present:false},tun:{required:false},workspaceFilesystem:{mount:"/synthetic/qualification xfs",type:"xfs"}},qualifiedAt:"1970-01-01T00:00:00Z"}' >"$target"
+  done
+else
+  install -m 0644 "${SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_qualification_evidence_name"
+  install -m 0644 "${SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-pod-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_pod_qualification_evidence_name"
+fi
+validate_gvisor_qualification_evidence "$output_dir/$gvisor_qualification_evidence_name" test-scenario-gvisor
+validate_gvisor_qualification_evidence "$output_dir/$gvisor_pod_qualification_evidence_name" test-scenario-gvisor-pod
 
 if $test_mode && ! $candidate_mode; then
   jq -n \

@@ -106,6 +106,10 @@ for stage in "$stage_one" "$stage_two" "$stage_dictionary_locale"; do
   [[ "$(sha256sum "$stage/secondbox-0.7.0-openapi.json" | awk '{print "sha256:"$1}')" == "$(jq -er '.openapi.digest' "$stage/secondbox-0.7.0-artifact-manifest.json")" ]]
   rg -q 'secondbox-0.7.0-qualification-evidence.json$' "$stage/SHA256SUMS"
   rg -q 'secondbox-0.7.0-installer-qualification-evidence.json$' "$stage/SHA256SUMS"
+  rg -q 'secondbox-0.7.0-gvisor-qualification-evidence.json$' "$stage/SHA256SUMS"
+  rg -q 'secondbox-0.7.0-gvisor-pod-qualification-evidence.json$' "$stage/SHA256SUMS"
+  rg -q 'secondbox-0.7.0-gvisor-materialization.json$' "$stage/SHA256SUMS"
+  jq -e '.gvisor.runscRelease != "" and (.gvisor.materializationDigest | test("^sha256:[0-9a-f]{64}$")) and (.gvisor.runnerReference | startswith("ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:")) and (.gvisor.imageReference | startswith("ghcr.io/secondstack-ai/secondbox/gvisor-artifacts@sha256:"))' "$stage/secondbox-0.7.0-artifact-manifest.json" >/dev/null
   rg -q 'install.sh$' "$stage/SHA256SUMS"
   rg -q "version='0.7.0'" "$stage/install.sh"
   rg -q "expected_sha256='$(sha256sum "$stage/secondbox-deploy_0.7.0_linux_amd64" | awk '{print $1}')'" "$stage/install.sh"

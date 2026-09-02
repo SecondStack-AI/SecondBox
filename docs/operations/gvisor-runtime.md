@@ -305,19 +305,35 @@ remains operator-authored and unqualified.
 - Provide the per-runner identity (mTLS keypair, CA, and runner credential) as a Secret; the
   flat root and materialization manifest arrive on the node through the operator's reviewed
   artifact flow.
-- The materialization must hash the exact binaries **inside the deployed image**, not a local
-  rebuild: `Dockerfile.gvisor` builds the guest agent with its own flags, so a locally built
-  binary hashes differently and leaves the runner permanently unready on digest mismatch.
-  Extract the deployed binaries from the pinned image and record their digests in the
-  manifest:
+- Materialize the released assets on each runner node from the `gvisor-artifacts` image the
+  artifact manifest pins (`gvisor.imageReference`). The image holds one directory,
+  `/secondbox-runner-gvisor`, whose contents become the node directory the reference pod mounts
+  at `/opt/secondbox-gvisor` (`/var/lib/secondbox-gvisor-materialized` in the reference
+  manifest): `rootfs/` is `SECONDBOX_GVISOR_FLAT_ROOT_PATH`, `materialization.json` is
+  `SECONDBOX_GVISOR_MATERIALIZATION_PATH`, and `bin/` holds the launch artifacts. Extract the
+  image layers with ownership, modes, timestamps, and extended attributes preserved, then
+  verify before enrolling:
 
   ```sh
-  container="$(docker create <registry>/secondbox/runner-gvisor@sha256:<pinned digest>)"
-  docker cp "$container":/usr/local/bin/runsc ./bin/runsc
-  docker cp "$container":/usr/local/bin/secondbox-guest-agent ./bin/secondbox-guest-agent
-  docker rm "$container"
-  sha256sum bin/runsc bin/secondbox-guest-agent
+  # OCI layout of the pinned image (skopeo copy docker://... oci:image, or an equivalent pull)
+  manifest="image/blobs/sha256/$(jq -r '.manifests[0].digest' image/index.json | cut -d: -f2)"
+  mkdir -p /var/lib/secondbox-gvisor-materialized
+  for layer in $(jq -r '.layers[].digest' "$manifest" | cut -d: -f2); do
+    tar --xattrs --xattrs-include='*' --acls --numeric-owner -xzf "image/blobs/sha256/$layer" \
+      -C /var/lib/secondbox-gvisor-materialized --strip-components=1 secondbox-runner-gvisor
+  done
+  cd /var/lib/secondbox-gvisor-materialized
+  sha256sum -c SHA256SUMS
+  secondbox-materialization-digest materialization.json   # must equal gvisor.materializationDigest
+  secondbox-flat-root-digest "$PWD/rootfs"                # must equal gvisor.flatRootDigest
   ```
+
+  Never edit the published materialization: it is immutable and digest-bound. The runner
+  image's `/usr/local/bin/runsc` and `/usr/local/bin/secondbox-guest-agent` are the same
+  bytes as `bin/runsc` and `bin/secondbox-guest-agent` in the artifacts image; compare either
+  against the materialization's `launchArtifacts` hashes and refuse to deploy on any mismatch.
+  Set `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST` in the pod to the manifest's
+  `gvisor.materializationDigest`.
 - The data plane is proxied through the control plane by default in clusters, and the
   reference manifest publishes no port. The only qualified direct-transport option is adding
   a `ports` entry to the runner container - `ports: [{containerPort: 9500, hostPort: 9500}]`
