@@ -162,6 +162,9 @@ func artifactManifest(ctx context.Context, location string, fetch FetchFunc, rec
 func verifyManifestObjects(ctx context.Context, manifest releasecontract.ArtifactManifest, fetch FetchFunc, recorded bool) error {
 	verifiedObjects := map[string][]byte{}
 	references := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}
+	if manifest.GVisor != nil {
+		references = append(references, manifest.GVisor.Materialization, manifest.GVisor.QualificationEvidence, manifest.GVisor.PodQualificationEvidence)
+	}
 	if manifest.SourceFreeSuite != (releasecontract.Reference{}) {
 		references = append(references, manifest.SourceFreeSuite)
 	}
@@ -191,6 +194,22 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 	}
 	if err := evidence.ValidateForRelease(manifest.SourceCommit); err != nil {
 		return err
+	}
+	if manifest.GVisor != nil {
+		// The published materialization must agree with the identities the
+		// manifest records, and both gVisor runs must bind this commit.
+		if err := manifest.GVisor.VerifyGVisorMaterialization(verifiedObjects[manifest.GVisor.Materialization.Location]); err != nil {
+			return err
+		}
+		for pod, reference := range map[bool]releasecontract.Reference{false: manifest.GVisor.QualificationEvidence, true: manifest.GVisor.PodQualificationEvidence} {
+			gvisorEvidence, err := releasecontract.DecodeGVisorQualificationEvidence(verifiedObjects[reference.Location], pod)
+			if err != nil {
+				return err
+			}
+			if err := gvisorEvidence.ValidateForRelease(manifest.SourceCommit, pod); err != nil {
+				return err
+			}
+		}
 	}
 	if !manifest.Candidate {
 		installerEvidenceData := verifiedObjects[manifest.InstallerQualificationEvidence.Location]

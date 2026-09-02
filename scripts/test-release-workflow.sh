@@ -46,7 +46,7 @@ fi
 test ! -e "$repo_root/pkg/releasefinalize"
 test ! -e "$repo_root/pkg/releasepublish"
 
-for dockerfile in "$repo_root/Dockerfile" "$repo_root/deploy/installer-tools.Dockerfile" "$repo_root/runner/Dockerfile" "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile"; do
+for dockerfile in "$repo_root/Dockerfile" "$repo_root/deploy/installer-tools.Dockerfile" "$repo_root/runner/Dockerfile" "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile" "$repo_root/runner/Dockerfile.gvisor" "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile"; do
   while IFS= read -r base; do
     [[ "$base" == "scratch" || "$base" == *@sha256:* ]] || { echo "release Dockerfile uses mutable base $base" >&2; exit 1; }
   done < <(awk '$1 == "FROM" {print $2}' "$dockerfile")

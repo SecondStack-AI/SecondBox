@@ -24,7 +24,7 @@ their own upstream resolution and gateway reachability.
 ## Backend topologies
 
 The Firecracker backend implements the outbound contract with per-TAP bridge-family firewall
-isolation on the Runner bridge, as described above. The experimental gVisor backend implements
+isolation on the Runner bridge, as described above. The gVisor backend implements
 the same contract with a different topology: each Instance runs in its own Linux network
 namespace connected by a routed veth pair, the shared enforcer renders the identical fail-closed
 policy into `inet`-family tables (with a paired `ip`-family NAT table for masqueraded egress),

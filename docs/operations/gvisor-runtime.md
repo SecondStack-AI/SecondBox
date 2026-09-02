@@ -1,7 +1,7 @@
-# Experimental gVisor runner on Linux hosts without KVM
+# gVisor runner on Linux hosts without KVM
 
-The gVisor runner is experimental. It is a separate, operator-managed Runner deployment for
-Linux x86_64 hosts that cannot expose `/dev/kvm`; it does not alter or replace the qualified
+The gVisor runner is the supported backend for Linux x86_64 hosts that cannot expose
+`/dev/kvm`, Kubernetes nodes included. It is a separate, operator-managed Runner deployment; it does not alter or replace the qualified
 Linux Firecracker installer, container, systemd units, network setup, or standard Profiles.
 
 ## Host contract
@@ -287,20 +287,16 @@ without KVM. The qualified surface is the reference manifest at
 `runner/deploy/gvisor-runner-pod.yaml`; anything broader — Deployments, operators, charts —
 remains operator-authored and unqualified.
 
-- Build and publish the gVisor runner image yourself; CI builds the image and records its
-  digest as workflow metadata (`runner-gvisor-oci-metadata`) but publishes no registry copy.
-  From the reviewed source commit:
-
-  ```sh
-  docker buildx create --name secondbox-oci --driver docker-container --use
-  docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-    --build-arg RELEASE_VERSION=<version> --build-arg SOURCE_COMMIT=$(git rev-parse HEAD) \
-    --file runner/Dockerfile.gvisor \
-    --tag <registry>/secondbox/runner-gvisor:<version> --push .
-  ```
-
-  Record the pushed digest (`docker buildx imagetools inspect`) and pin the pod to that exact
-  digest reference.
+- Every release publishes the runner image as `ghcr.io/secondstack-ai/secondbox/runner-gvisor:vVERSION`
+  and the backend assets as `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts:vVERSION`: the
+  prepared flat root under `/secondbox-runner-gvisor/rootfs`, `runsc` and the guest agent under
+  `/secondbox-runner-gvisor/bin`, and `materialization.json`. The same materialization is the
+  release file `secondbox-VERSION-gvisor-materialization.json`, and the artifact manifest records
+  both image digests, the materialization digest, and the flat-root digest. Pin the pod to the
+  runner image digest the artifact manifest names, and extract the artifacts image onto the node
+  with ownership, modes, timestamps, and extended attributes preserved (for example
+  `tar --xattrs --acls --numeric-owner`), since the flat-root digest covers them. The build
+  contract above remains the way to assemble the same directory from source for qualification.
 - Dedicate a tainted node pool: one runner pod per node, tolerating the pool taint, with a
   node-local reflink-capable volume for the WorkspaceStore.
 - Set the pod's resource requests and limits equal to the node's declared sandbox budget plus
@@ -309,19 +305,35 @@ remains operator-authored and unqualified.
 - Provide the per-runner identity (mTLS keypair, CA, and runner credential) as a Secret; the
   flat root and materialization manifest arrive on the node through the operator's reviewed
   artifact flow.
-- The materialization must hash the exact binaries **inside the deployed image**, not a local
-  rebuild: `Dockerfile.gvisor` builds the guest agent with its own flags, so a locally built
-  binary hashes differently and leaves the runner permanently unready on digest mismatch.
-  Extract the deployed binaries from the pinned image and record their digests in the
-  manifest:
+- Materialize the released assets on each runner node from the `gvisor-artifacts` image the
+  artifact manifest pins (`gvisor.imageReference`). The image holds one directory,
+  `/secondbox-runner-gvisor`, whose contents become the node directory the reference pod mounts
+  at `/opt/secondbox-gvisor` (`/var/lib/secondbox-gvisor-materialized` in the reference
+  manifest): `rootfs/` is `SECONDBOX_GVISOR_FLAT_ROOT_PATH`, `materialization.json` is
+  `SECONDBOX_GVISOR_MATERIALIZATION_PATH`, and `bin/` holds the launch artifacts plus the two
+  verifier binaries built at the release's version. Extract the image layers with ownership,
+  modes, timestamps, and extended attributes preserved, then verify before enrolling:
 
   ```sh
-  container="$(docker create <registry>/secondbox/runner-gvisor@sha256:<pinned digest>)"
-  docker cp "$container":/usr/local/bin/runsc ./bin/runsc
-  docker cp "$container":/usr/local/bin/secondbox-guest-agent ./bin/secondbox-guest-agent
-  docker rm "$container"
-  sha256sum bin/runsc bin/secondbox-guest-agent
+  # OCI layout of the pinned image (skopeo copy docker://... oci:image, or an equivalent pull)
+  manifest="image/blobs/sha256/$(jq -r '.manifests[0].digest' image/index.json | cut -d: -f2)"
+  mkdir -p /var/lib/secondbox-gvisor-materialized
+  for layer in $(jq -r '.layers[].digest' "$manifest" | cut -d: -f2); do
+    tar --xattrs --xattrs-include='*' --acls --numeric-owner -xzf "image/blobs/sha256/$layer" \
+      -C /var/lib/secondbox-gvisor-materialized --strip-components=1 secondbox-runner-gvisor
+  done
+  cd /var/lib/secondbox-gvisor-materialized
+  sha256sum -c SHA256SUMS
+  bin/secondbox-materialization-digest materialization.json   # must equal gvisor.materializationDigest
+  bin/secondbox-flat-root-digest "$PWD/rootfs"                # must equal gvisor.flatRootDigest
   ```
+
+  Never edit the published materialization: it is immutable and digest-bound. The runner
+  image's `/usr/local/bin/runsc` and `/usr/local/bin/secondbox-guest-agent` are the same
+  bytes as `bin/runsc` and `bin/secondbox-guest-agent` in the artifacts image; compare either
+  against the materialization's `launchArtifacts` hashes and refuse to deploy on any mismatch.
+  Set `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST` in the pod to the manifest's
+  `gvisor.materializationDigest`.
 - The data plane is proxied through the control plane by default in clusters, and the
   reference manifest publishes no port. The only qualified direct-transport option is adding
   a `ports` entry to the runner container - `ports: [{containerPort: 9500, hostPort: 9500}]`
@@ -367,5 +379,4 @@ just test-scenario-gvisor-pod
 The qualification wrappers refuse hosts that expose `/dev/kvm`, prepare and validate the flat-root
 contract before deriving its digest, verify the `runsc` binary against the reviewed pin, derive
 the materialization from the build directory, and run the complete control-plane scenario suite
-against the gVisor runner container. Passing this document's checks does not remove the
-experimental label.
+against the gVisor runner container.

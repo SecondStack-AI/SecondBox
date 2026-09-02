@@ -293,11 +293,11 @@ func runInstallPreflight(ctx context.Context, arguments []string, renderer cliui
 	}
 	probes.Backend = backend
 	if backend == "gvisor" && !slices.Contains(remaining, "--check") {
-		// The guided installer composes a Firecracker deployment; the gVisor
-		// backend has only the read-only preflight, so continuing past it
-		// would apply an incompatible install after intentionally skipping
-		// the Firecracker prerequisites.
-		return &deployExitError{code: 2, err: errors.New("SecondBox installer preflight: --backend gvisor supports only --check; the guided installer deploys the Firecracker backend")}
+		// The guided installer composes a Firecracker deployment. gVisor
+		// deployments are composed by Kubernetes operators from the released
+		// runner-gvisor and gvisor-artifacts images, so only the read-only
+		// preflight applies here.
+		return &deployExitError{code: 2, err: errors.New("SecondBox installer preflight: --backend gvisor supports only --check; the guided installer deploys the Firecracker backend, and gVisor deploys from the released runner-gvisor and gvisor-artifacts images")}
 	}
 	return runInstallPreflightWith(ctx, remaining, renderer, func(ctx context.Context) (install.HostFacts, error) {
 		return install.Preflight(ctx, probes)

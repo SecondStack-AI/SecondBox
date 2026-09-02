@@ -1,6 +1,6 @@
 # Release distribution
 
-Release inputs may describe multiple backend materializations, but each is strict and immutable: backend kind, guest architecture, runtime and toolchain digests, local launch-artifact digests, agent protocol/features, and backend/helper build identity. Microsandbox entries also name the digest-pinned source OCI manifest and content-addressed flat root. The published release artifacts themselves package only the Firecracker `microvm` bundle: Microsandbox materializations are not built or distributed through this release process and remain operator-local experimental inputs, assembled and digest-pinned from the operator's reviewed build as the Microsandbox operations guides describe. Publication does not make the experimental backend supported, and runners advertise only materializations already present and revalidated locally.
+Release inputs may describe multiple backend materializations, but each is strict and immutable: backend kind, guest architecture, runtime and toolchain digests, local launch-artifact digests, agent protocol/features, and backend/helper build identity. Microsandbox entries also name the digest-pinned source OCI manifest and content-addressed flat root. The published release artifacts package the Firecracker `microvm` bundle and the gVisor `gvisor-artifacts` transport (flat root, `runsc`, guest agent, and materialization, built from the repository and its digest-pinned bases). Microsandbox materializations are not built or distributed through this release process and remain operator-local experimental inputs, assembled and digest-pinned from the operator's reviewed build as the Microsandbox operations guides describe. Runners advertise only materializations already present and revalidated locally.
 
 A SecondBox release is a SemVer Git tag plus the locally built files attached to its stable GitHub Release. GitHub Actions publishes those supplied files without rebuilding them.
 
@@ -14,6 +14,10 @@ A SecondBox release is a SemVer Git tag plus the locally built files attached to
 | Runner | `ghcr.io/secondstack-ai/secondbox/runner:vVERSION` |
 | Installer tools | `ghcr.io/secondstack-ai/secondbox/installer-tools:vVERSION` |
 | microVM artifacts | `ghcr.io/secondstack-ai/secondbox/microvm-artifacts:vVERSION` |
+| gVisor runner | `ghcr.io/secondstack-ai/secondbox/runner-gvisor:vVERSION` |
+| gVisor artifacts | `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts:vVERSION` |
+| gVisor materialization | `secondbox-VERSION-gvisor-materialization.json` |
+| gVisor qualification evidence | `secondbox-VERSION-gvisor-qualification-evidence.json`, `secondbox-VERSION-gvisor-pod-qualification-evidence.json` |
 | CLI binary | `secondbox_VERSION_OS_ARCH` |
 | Deployment binary | `secondbox-deploy_VERSION_OS_ARCH` |
 | Guided-install bootstrap | versioned `releases/download/vVERSION/install.sh`; stable `releases/latest/download/install.sh` |
@@ -22,7 +26,7 @@ The release also includes checksums, the OpenAPI document, the Go module archive
 
 ## Supported platforms
 
-`secondbox` and `secondbox-deploy` ship for `linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64`. The guided installer, installer-tools image, Firecracker Runner, and microVM artifacts support `linux/amd64`. The control-plane image supports `linux/amd64` and `linux/arm64`.
+`secondbox` and `secondbox-deploy` ship for `linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64`. The guided installer, installer-tools image, Firecracker Runner, microVM artifacts, gVisor Runner, and gVisor artifacts support `linux/amd64`. The control-plane image supports `linux/amd64` and `linux/arm64`.
 
 ## Publishing
 
@@ -30,11 +34,17 @@ From a clean checkout at the release tag:
 
 ```sh
 just test-scenario
+# on the no-KVM qualification host at the same tag, per gvisor-runtime.md
+just test-scenario-gvisor
+just test-scenario-gvisor-pod
+export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE=... SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE=...
 just release-candidate VERSION CANDIDATE_OUTPUT_DIR
 just test-installer-qualified
 just release-stage VERSION OUTPUT_DIR
 just release-upload VERSION OUTPUT_DIR
 ```
+
+Candidate and final staging refuse to proceed without both gVisor evidence files; the [gVisor runtime](gvisor-runtime.md) qualification section is the complete procedure for producing them (build directory, workspace root, and pod placement inputs).
 
 Run the scenario suite, build the non-publishable installer candidate, point `SECONDBOX_INSTALLER_RELEASE_DIRECTORY` at that candidate, and then run installer qualification on the qualified release host. The candidate contains the exact binaries, digest-pinned images, bundles, and protocol windows but no installer-evidence claim. Installer qualification records their shared qualification-subject digest. `release-stage` refuses absent, dirty, commit-mismatched, or release-mismatched evidence and emits the final publishable manifest; scenario evidence must name `HEAD` exactly. `release-publish` rejects candidate manifests.
 

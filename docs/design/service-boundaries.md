@@ -1,14 +1,14 @@
 # Service boundaries
 
-SecondBox is a self-hostable network service for durable isolated Sandboxes. The public durable resource is a `Sandbox`; compute — a Firecracker microVM on the production backend, a gVisor sentry sandbox or Microsandbox microVM on the experimental backends — is a replaceable `Instance` attached to one fenced Sandbox generation.
+SecondBox is a self-hostable network service for durable isolated Sandboxes. The public durable resource is a `Sandbox`; compute — a Firecracker microVM on KVM hosts, a gVisor sentry sandbox on hosts without KVM, or a Microsandbox microVM on the experimental backend — is a replaceable `Instance` attached to one fenced Sandbox generation.
 
 ## Components
 
 The unprivileged control plane serves the HTTP API, resolves the deployment-wide platform token and persisted tenant-controller and application authorities, resolves immutable profile revisions, persists desired state, schedules work, and reconciles failures. PostgreSQL is its authority for Tenants, Subjects, non-recoverable credential verifiers, ownership refs, quota, desired state, generations, home assignments, leases, idempotency, audit, cleanup, and operation state. It never stores Workspace or Snapshot images.
 
-The runner is a separately deployed privileged process on a qualified host. It selects exactly one private compute backend at startup, establishes an outbound mutually authenticated connection to the control plane, advertises only locally revalidated materializations, and owns backend composition, its reflink-capable WorkspaceStore, and process cleanup. Firecracker remains the production backend while the experimental Microsandbox and gVisor backends are qualified Linux-first; the gVisor backend serves hosts without KVM. A runner accepts only fully resolved assignments and local-workspace commands addressed to its authenticated stable identity. It does not resolve profiles, authenticate HTTP callers, or choose ownership policy.
+The runner is a separately deployed privileged process on a qualified host. It selects exactly one private compute backend at startup, establishes an outbound mutually authenticated connection to the control plane, advertises only locally revalidated materializations, and owns backend composition, its reflink-capable WorkspaceStore, and process cleanup. Firecracker serves KVM hosts and gVisor serves hosts without KVM; the experimental Microsandbox backend is qualified Linux-first. A runner accepts only fully resolved assignments and local-workspace commands addressed to its authenticated stable identity. It does not resolve profiles, authenticate HTTP callers, or choose ownership policy.
 
-The guest agent runs inside each Instance: baked into the released Firecracker image and reached over vsock, or injected as a bind-mounted binary and reached over gofer-served Unix sockets on the experimental gVisor backend. It performs bounded command, filesystem, PTY, activity, and port operations for the runner over the independently versioned guest protocol, with the same negotiated identity guarantees on either transport. It has no control-plane database credentials.
+The guest agent runs inside each Instance: baked into the released Firecracker image and reached over vsock, or injected as a bind-mounted binary and reached over gofer-served Unix sockets on the gVisor backend. It performs bounded command, filesystem, PTY, activity, and port operations for the runner over the independently versioned guest protocol, with the same negotiated identity guarantees on either transport. It has no control-plane database credentials.
 
 ## Trust and network boundaries
 
@@ -31,7 +31,7 @@ SecondBox does not own end-user identity, billing, an LLM runtime, application s
 
 ## Supported v1 shape
 
-Firecracker remains the only supported v1 production backend. The experimental Microsandbox and gVisor spikes use the same provider-neutral compute port with explicit runner-wide selection and no per-assignment selection or fallback. RunnerPools are homogeneous and privately sealed to one backend kind; backend identity never enters public resources.
+Firecracker and gVisor are the supported v1 backends. They and the experimental Microsandbox backend use the same provider-neutral compute port with explicit runner-wide selection and no per-assignment selection or fallback. RunnerPools are homogeneous and privately sealed to one backend kind; backend identity never enters public resources.
 
 ## Future smolvm adapter contract
 

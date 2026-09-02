@@ -19,7 +19,11 @@ import (
 )
 
 const (
-	ArtifactManifestSchema                     = "secondbox.release/artifact-manifest/v5"
+	ArtifactManifestSchema = "secondbox.release/artifact-manifest/v6"
+	// LegacyArtifactManifestSchema is accepted for recorded releases that
+	// predate the gVisor artifact section; a newer updater still
+	// authenticates them.
+	LegacyArtifactManifestSchema               = "secondbox.release/artifact-manifest/v5"
 	QualificationEvidenceSchema                = "secondbox.release/qualification-evidence/v2"
 	LegacyQualificationEvidenceSchema          = "secondbox.release/qualification-evidence/v1"
 	InstallerQualificationEvidenceSchema       = "secondbox.release/installer-qualification-evidence/v2"
@@ -31,6 +35,8 @@ const (
 	RunnerImage         = "ghcr.io/secondstack-ai/secondbox/runner"
 	MicroVMImage        = "ghcr.io/secondstack-ai/secondbox/microvm-artifacts"
 	InstallerToolsImage = "ghcr.io/secondstack-ai/secondbox/installer-tools"
+	GVisorRunnerImage   = "ghcr.io/secondstack-ai/secondbox/runner-gvisor"
+	GVisorImage         = "ghcr.io/secondstack-ai/secondbox/gvisor-artifacts"
 )
 
 var (
@@ -168,6 +174,225 @@ type MicroVMArtifact struct {
 	ToolchainBundle       SignedComponent `json:"toolchainBundle"`
 }
 
+// GVisorArtifact names the gVisor backend distribution: the runner image and
+// the artifact transport carrying the prepared flat root, the launch
+// artifacts, and the backend materialization whose canonical digest runners
+// and platform operators pin. The materialization is also a release file.
+type GVisorArtifact struct {
+	Identity                 Identity  `json:"identity"`
+	RunnerReference          string    `json:"runnerReference"`
+	ImageReference           string    `json:"imageReference"`
+	Materialization          Reference `json:"materialization"`
+	MaterializationDigest    string    `json:"materializationDigest"`
+	FlatRootDigest           string    `json:"flatRootDigest"`
+	RunscRelease             string    `json:"runscRelease"`
+	QualificationEvidence    Reference `json:"qualificationEvidence"`
+	PodQualificationEvidence Reference `json:"podQualificationEvidence"`
+}
+
+// GVisorMaterialization mirrors the runner's backend materialization document
+// field for field, so its canonical digest here equals the runner's.
+type GVisorMaterialization struct {
+	SchemaVersion           string                   `json:"schemaVersion"`
+	Key                     GVisorMaterializationKey `json:"key"`
+	SourceOCIManifestDigest string                   `json:"sourceOciManifestDigest,omitempty"`
+	FlatRootDigest          string                   `json:"flatRootDigest,omitempty"`
+	LaunchArtifacts         []GVisorLaunchArtifact   `json:"launchArtifacts"`
+	AgentProtocolGeneration uint32                   `json:"agentProtocolGeneration"`
+	AgentFeatures           []string                 `json:"agentFeatures"`
+	BackendBuildID          string                   `json:"backendBuildId"`
+	HelperBuildID           string                   `json:"helperBuildId,omitempty"`
+}
+
+type GVisorMaterializationKey struct {
+	BackendKind             string `json:"backendKind"`
+	GuestArchitecture       string `json:"guestArchitecture"`
+	RuntimeManifestDigest   string `json:"runtimeManifestDigest"`
+	ToolchainManifestDigest string `json:"toolchainManifestDigest"`
+}
+
+type GVisorLaunchArtifact struct {
+	ID     string `json:"id"`
+	SHA256 string `json:"sha256"`
+}
+
+// GVisorMaterializationSchema is the runner's backend materialization schema.
+const GVisorMaterializationSchema = "secondbox.runner/backend-materialization/v1"
+
+// DecodeGVisorMaterialization strictly decodes a published materialization.
+func DecodeGVisorMaterialization(data []byte) (GVisorMaterialization, error) {
+	var materialization GVisorMaterialization
+	if err := decodeStrict(data, &materialization); err != nil {
+		return GVisorMaterialization{}, contractError("decode gVisor materialization: %v", err)
+	}
+	if err := materialization.Validate(); err != nil {
+		return GVisorMaterialization{}, err
+	}
+	return materialization, nil
+}
+
+// Validate applies the runner's materialization invariants for the gVisor
+// backend, so a release cannot publish a document a runner would refuse.
+func (materialization GVisorMaterialization) Validate() error {
+	if materialization.SchemaVersion != GVisorMaterializationSchema || materialization.Key.BackendKind != "gvisor" {
+		return contractError("gVisor materialization must be a %q gvisor document", GVisorMaterializationSchema)
+	}
+	// The published gVisor runner is linux/amd64 only, and its startup
+	// requires the runsc and guest-agent launch artifacts.
+	if materialization.Key.GuestArchitecture != "amd64" {
+		return contractError("gVisor materialization guest architecture must be amd64")
+	}
+	if !digestPattern.MatchString(materialization.Key.RuntimeManifestDigest) || !digestPattern.MatchString(materialization.Key.ToolchainManifestDigest) ||
+		materialization.Key.RuntimeManifestDigest == materialization.Key.ToolchainManifestDigest {
+		return contractError("gVisor materialization runtime and toolchain digests are invalid")
+	}
+	if !digestPattern.MatchString(materialization.SourceOCIManifestDigest) || !digestPattern.MatchString(materialization.FlatRootDigest) {
+		return contractError("gVisor materialization requires digest-pinned source OCI and flat root identity")
+	}
+	if strings.TrimSpace(materialization.HelperBuildID) == "" || strings.TrimSpace(materialization.BackendBuildID) == "" ||
+		materialization.AgentProtocolGeneration == 0 || len(materialization.LaunchArtifacts) == 0 {
+		return contractError("gVisor materialization build, agent, and launch identity is incomplete")
+	}
+	seen := map[string]bool{}
+	for index, artifact := range materialization.LaunchArtifacts {
+		if strings.TrimSpace(artifact.ID) == "" || !digestPattern.MatchString(artifact.SHA256) || seen[artifact.ID] {
+			return contractError("gVisor materialization launch artifact %d is incomplete or duplicated", index)
+		}
+		if index > 0 && materialization.LaunchArtifacts[index-1].ID >= artifact.ID {
+			return contractError("gVisor materialization launch artifacts must be sorted")
+		}
+		seen[artifact.ID] = true
+	}
+	for index, feature := range materialization.AgentFeatures {
+		if feature == "" || (index > 0 && materialization.AgentFeatures[index-1] >= feature) {
+			return contractError("gVisor materialization agent features must be sorted, unique, and non-empty")
+		}
+	}
+	if !seen["runsc"] || !seen["guest-agent"] {
+		return contractError("gVisor materialization must pin the runsc and guest-agent launch artifacts")
+	}
+	return nil
+}
+
+// Digest is the canonical digest runners pin: sha256 over the compact JSON
+// encoding of the validated typed document.
+func (materialization GVisorMaterialization) Digest() (string, error) {
+	if err := materialization.Validate(); err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(materialization)
+	if err != nil {
+		return "", contractError("encode gVisor materialization: %v", err)
+	}
+	return Digest(encoded), nil
+}
+
+// VerifyGVisorMaterialization checks that a published materialization agrees
+// with the identities the artifact manifest records for it.
+func (artifact GVisorArtifact) VerifyGVisorMaterialization(data []byte) error {
+	materialization, err := DecodeGVisorMaterialization(data)
+	if err != nil {
+		return err
+	}
+	digest, err := materialization.Digest()
+	if err != nil {
+		return err
+	}
+	if digest != artifact.MaterializationDigest {
+		return contractError("gVisor materialization canonical digest differs from the artifact manifest")
+	}
+	if materialization.FlatRootDigest != artifact.FlatRootDigest {
+		return contractError("gVisor materialization flat-root digest differs from the artifact manifest")
+	}
+	if materialization.HelperBuildID != "runsc-release-"+artifact.RunscRelease {
+		return contractError("gVisor materialization helper build differs from the artifact manifest runsc release")
+	}
+	return nil
+}
+
+// GVisorQualificationEvidence is the scenario evidence of a gVisor host or
+// pod run: the same schema as the Firecracker evidence, on a host without
+// KVM and naming its backend.
+type GVisorQualificationEvidence struct {
+	SchemaVersion    string                          `json:"schemaVersion"`
+	SourceCommit     string                          `json:"sourceCommit"`
+	RepositoryDirty  bool                            `json:"repositoryDirty"`
+	Suite            string                          `json:"suite"`
+	Backend          string                          `json:"backend"`
+	PassCount        int64                           `json:"passCount"`
+	WallClockSeconds int64                           `json:"wallClockSeconds"`
+	Host             GVisorQualificationHostEvidence `json:"host"`
+	QualifiedAt      string                          `json:"qualifiedAt"`
+}
+
+type GVisorQualificationHostEvidence struct {
+	Platform            string                            `json:"platform"`
+	KVM                 GVisorQualificationDeviceEvidence `json:"kvm"`
+	TUN                 GVisorQualificationDeviceEvidence `json:"tun"`
+	WorkspaceFilesystem QualificationFilesystemEvidence   `json:"workspaceFilesystem"`
+}
+
+type GVisorQualificationDeviceEvidence struct {
+	Required bool `json:"required"`
+	Present  bool `json:"present"`
+}
+
+// GVisorQualificationSuite names the evidence suite of a gVisor run.
+func GVisorQualificationSuite(pod bool) string {
+	if pod {
+		return "test-scenario-gvisor-pod"
+	}
+	return "test-scenario-gvisor"
+}
+
+func DecodeGVisorQualificationEvidence(data []byte, pod bool) (GVisorQualificationEvidence, error) {
+	var evidence GVisorQualificationEvidence
+	if err := decodeStrict(data, &evidence); err != nil {
+		return GVisorQualificationEvidence{}, contractError("decode gVisor qualification evidence: %v", err)
+	}
+	if err := evidence.Validate(pod); err != nil {
+		return GVisorQualificationEvidence{}, err
+	}
+	return evidence, nil
+}
+
+func (evidence GVisorQualificationEvidence) Validate(pod bool) error {
+	if evidence.SchemaVersion != QualificationEvidenceSchema {
+		return contractError("gVisor qualification evidence schemaVersion must be %q", QualificationEvidenceSchema)
+	}
+	if !commitPattern.MatchString(evidence.SourceCommit) {
+		return contractError("gVisor qualification evidence source commit must be a full lowercase Git object ID")
+	}
+	if evidence.Suite != GVisorQualificationSuite(pod) || evidence.Backend != "gvisor" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 {
+		return contractError("gVisor qualification evidence must describe a complete %s run", GVisorQualificationSuite(pod))
+	}
+	if evidence.Host.Platform != "linux-amd64" || evidence.Host.KVM.Present || evidence.Host.KVM.Required {
+		return contractError("gVisor qualification evidence must come from a linux-amd64 host without KVM")
+	}
+	if strings.TrimSpace(evidence.Host.WorkspaceFilesystem.Mount) == "" ||
+		(evidence.Host.WorkspaceFilesystem.Type != "xfs" && evidence.Host.WorkspaceFilesystem.Type != "btrfs") {
+		return contractError("gVisor qualification evidence workspace filesystem facts are incomplete")
+	}
+	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
+	if err != nil || evidence.QualifiedAt != qualifiedAt.UTC().Format("2006-01-02T15:04:05Z") {
+		return contractError("gVisor qualification evidence qualifiedAt must be a canonical UTC timestamp")
+	}
+	return nil
+}
+
+func (evidence GVisorQualificationEvidence) ValidateForRelease(sourceCommit string, pod bool) error {
+	if err := evidence.Validate(pod); err != nil {
+		return err
+	}
+	if evidence.SourceCommit != sourceCommit {
+		return contractError("gVisor qualification evidence source commit does not match release")
+	}
+	if evidence.RepositoryDirty {
+		return contractError("gVisor qualification evidence was produced from a dirty repository")
+	}
+	return nil
+}
+
 type BundledServiceImages struct {
 	Postgres string `json:"postgres"`
 }
@@ -189,6 +414,7 @@ type ArtifactManifest struct {
 	BundledServices                BundledServiceImages     `json:"bundledServices"`
 	InstallBootstrap               Reference                `json:"installBootstrap"`
 	MicroVM                        MicroVMArtifact          `json:"microvm"`
+	GVisor                         *GVisorArtifact          `json:"gvisor,omitempty"`
 	Binaries                       []BinaryArtifact         `json:"binaries"`
 	SBOMs                          []Reference              `json:"sboms"`
 	ArtifactAttestations           []Reference              `json:"artifactAttestations,omitempty"`
@@ -275,6 +501,22 @@ func InstallerQualificationEvidenceLocation(version string) string {
 
 func InstallBootstrapLocation(version string) string {
 	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/install.sh", version)
+}
+
+// GVisorMaterializationLocation is the canonical release file carrying the
+// gVisor backend materialization.
+func GVisorMaterializationLocation(version string) string {
+	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-gvisor-materialization.json", version, version)
+}
+
+// GVisorQualificationEvidenceLocation is the canonical release file carrying
+// the gVisor host (or pod) scenario evidence.
+func GVisorQualificationEvidenceLocation(version string, pod bool) string {
+	name := "gvisor"
+	if pod {
+		name = "gvisor-pod"
+	}
+	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-%s-qualification-evidence.json", version, version, name)
 }
 
 func BinaryLocation(version, name, platform string) string {
@@ -417,8 +659,20 @@ func (manifest ArtifactManifest) InstallerQualificationSubjectDigest() (string, 
 }
 
 func (manifest ArtifactManifest) Validate() error {
-	if manifest.SchemaVersion != ArtifactManifestSchema {
-		return contractError("artifact manifest schemaVersion must be %q", ArtifactManifestSchema)
+	if manifest.SchemaVersion != ArtifactManifestSchema && manifest.SchemaVersion != LegacyArtifactManifestSchema {
+		return contractError("artifact manifest schemaVersion must be %q or legacy %q", ArtifactManifestSchema, LegacyArtifactManifestSchema)
+	}
+	if manifest.SchemaVersion == LegacyArtifactManifestSchema {
+		// The legacy schema is only what pre-gVisor releases recorded; a
+		// release that must distribute gVisor cannot opt out through it.
+		if manifest.GVisor != nil {
+			return contractError("legacy artifact manifest must not carry a gVisor artifact")
+		}
+		if order, err := CompareVersions(manifest.Version, "0.9.0"); err == nil && order >= 0 {
+			return contractError("artifact manifest %s must use schemaVersion %q", manifest.Tag, ArtifactManifestSchema)
+		}
+	} else if manifest.GVisor == nil {
+		return contractError("artifact manifest requires the gVisor artifact")
 	}
 	if err := validateIdentity(manifest.Identity); err != nil {
 		return err
@@ -504,6 +758,43 @@ func (manifest ArtifactManifest) Validate() error {
 	if manifest.MicroVM.SignedManifestDigest == manifest.MicroVM.RuntimeBundle.ManifestDigest ||
 		manifest.MicroVM.SignedManifestDigest == manifest.MicroVM.ToolchainBundle.ManifestDigest {
 		return contractError("microVM signed manifest and component digests must be distinct")
+	}
+	if manifest.GVisor != nil {
+		if manifest.GVisor.Identity != manifest.Identity {
+			return contractError("gVisor identity does not match artifact manifest")
+		}
+		if err := validateOCIReference(GVisorRunnerImage, manifest.GVisor.RunnerReference); err != nil {
+			return err
+		}
+		if err := validateOCIReference(GVisorImage, manifest.GVisor.ImageReference); err != nil {
+			return err
+		}
+		if err := validateReference("gVisor materialization", manifest.GVisor.Materialization); err != nil {
+			return err
+		}
+		if manifest.GVisor.Materialization.Location != GVisorMaterializationLocation(manifest.Version) {
+			return contractError("gVisor materialization location is not canonical for %s", manifest.Tag)
+		}
+		if !digestPattern.MatchString(manifest.GVisor.MaterializationDigest) || !digestPattern.MatchString(manifest.GVisor.FlatRootDigest) {
+			return contractError("gVisor materialization and flat root digests must be canonical sha256")
+		}
+		if manifest.GVisor.RunscRelease == "" {
+			return contractError("gVisor artifact requires the runsc release")
+		}
+		for name, evidence := range map[string]struct {
+			reference Reference
+			location  string
+		}{
+			"gVisor qualification evidence":     {manifest.GVisor.QualificationEvidence, GVisorQualificationEvidenceLocation(manifest.Version, false)},
+			"gVisor pod qualification evidence": {manifest.GVisor.PodQualificationEvidence, GVisorQualificationEvidenceLocation(manifest.Version, true)},
+		} {
+			if err := validateReference(name, evidence.reference); err != nil {
+				return err
+			}
+			if evidence.reference.Location != evidence.location {
+				return contractError("%s location is not canonical for %s", name, manifest.Tag)
+			}
+		}
 	}
 	if err := validateBinaries(manifest); err != nil {
 		return err
