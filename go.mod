@@ -5,6 +5,7 @@ go 1.25.12
 retract v0.7.0 // The public Go proxy cached an intermediate release-preparation commit; use v0.7.1.
 
 retract [v0.8.0, v0.8.2] // Pre-release tags cut before qualification completed (v0.8.0 has an unresolvable module graph; v0.8.1 and v0.8.2 predate the qualification-driver fixes); use v0.8.3.
+retract v0.9.0 // Tagged before the installer qualification driver accepted the v6 artifact manifest; use v0.9.1.
 
 require (
 	charm.land/bubbles/v2 v2.1.1
