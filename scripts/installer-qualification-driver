@@ -197,7 +197,7 @@ release_directory="$candidate_snapshot"
 mapfile -t manifests < <(find "$release_directory" -maxdepth 1 -type f -name 'secondbox-*-artifact-manifest.json' -print)
 [[ "${#manifests[@]}" -eq 1 ]] || { echo 'qualification release directory must contain exactly one artifact manifest' >&2; exit 1; }
 manifest="${manifests[0]}"
-jq -e '.candidate == true and .schemaVersion == "secondbox.release/artifact-manifest/v5"' "$manifest" >/dev/null || { echo 'qualification requires a v5 candidate artifact manifest' >&2; exit 1; }
+jq -e '.candidate == true and .schemaVersion == "secondbox.release/artifact-manifest/v6"' "$manifest" >/dev/null || { echo 'qualification requires a v6 candidate artifact manifest' >&2; exit 1; }
 release_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$manifest")"
 candidate_manifest_digest="sha256:$(sha256sum "$manifest" | awk '{print $1}')"
 
