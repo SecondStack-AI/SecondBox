@@ -237,8 +237,10 @@ func (materialization GVisorMaterialization) Validate() error {
 	if materialization.SchemaVersion != GVisorMaterializationSchema || materialization.Key.BackendKind != "gvisor" {
 		return contractError("gVisor materialization must be a %q gvisor document", GVisorMaterializationSchema)
 	}
-	if materialization.Key.GuestArchitecture != "amd64" && materialization.Key.GuestArchitecture != "arm64" {
-		return contractError("gVisor materialization guest architecture is unsupported")
+	// The published gVisor runner is linux/amd64 only, and its startup
+	// requires the runsc and guest-agent launch artifacts.
+	if materialization.Key.GuestArchitecture != "amd64" {
+		return contractError("gVisor materialization guest architecture must be amd64")
 	}
 	if !digestPattern.MatchString(materialization.Key.RuntimeManifestDigest) || !digestPattern.MatchString(materialization.Key.ToolchainManifestDigest) ||
 		materialization.Key.RuntimeManifestDigest == materialization.Key.ToolchainManifestDigest {
@@ -265,6 +267,9 @@ func (materialization GVisorMaterialization) Validate() error {
 		if feature == "" || (index > 0 && materialization.AgentFeatures[index-1] >= feature) {
 			return contractError("gVisor materialization agent features must be sorted, unique, and non-empty")
 		}
+	}
+	if !seen["runsc"] || !seen["guest-agent"] {
+		return contractError("gVisor materialization must pin the runsc and guest-agent launch artifacts")
 	}
 	return nil
 }

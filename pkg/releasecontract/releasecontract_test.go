@@ -336,6 +336,10 @@ func TestGVisorMaterializationVerification(t *testing.T) {
 		"missing helper":    func(m *GVisorMaterialization) { m.HelperBuildID = "" },
 		"unsorted features": func(m *GVisorMaterialization) { m.AgentFeatures = []string{"pty", "exec-streaming"} },
 		"firecracker kind":  func(m *GVisorMaterialization) { m.Key.BackendKind = "firecracker" },
+		"arm64 guest":       func(m *GVisorMaterialization) { m.Key.GuestArchitecture = "arm64" },
+		"missing runsc": func(m *GVisorMaterialization) {
+			m.LaunchArtifacts = []GVisorLaunchArtifact{{ID: "guest-agent", SHA256: testDigest}}
+		},
 	} {
 		invalid := materialization
 		mutate(&invalid)
