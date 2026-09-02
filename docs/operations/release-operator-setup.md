@@ -41,8 +41,10 @@ v0.7.0 through v0.8.3 carry the v0.6.0 Firecracker microVM bundle and trust anch
 Tag the clean commit. On the qualified host, run the unfiltered scenario suite, stage the same commit, then upload the draft:
 
 ```sh
+# Tag locally only; the tag is pushed right before the upload, once every
+# qualification has passed, so a failed qualification never leaves an
+# unusable public module tag.
 git tag v0.9.1
-git push origin refs/tags/v0.9.1
 
 export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
 export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$artifact_target"
@@ -78,6 +80,7 @@ export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256="$qualification_image_sha2
 just test-installer-qualified
 
 just release-stage 0.9.1 /protected/releases/secondbox-0.9.1
+git push origin refs/tags/v0.9.1
 just release-upload 0.9.1 /protected/releases/secondbox-0.9.1
 ```
 
