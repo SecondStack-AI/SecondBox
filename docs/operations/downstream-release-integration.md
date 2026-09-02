@@ -2,6 +2,18 @@
 
 Integrate v0.9.1 only after the stable GitHub Release is public. The release is the immutable `v0.9.1` tag plus the locally built files attached to that release; the publishing workflow does not rebuild them. Do not use the retracted v0.7.0 or v0.8.0 Go module coordinates.
 
+## v0.9.1 transition
+
+v0.9.0 was tagged but retracted before publication; pin v0.9.1 or later. From v0.9.1 the artifact manifest uses schema `secondbox.release/artifact-manifest/v6`, and downstream consumers that deploy the gVisor backend track its `gvisor` section in addition to the Firecracker `microvm` bundle:
+
+- `ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:...` (`gvisor.runnerReference`), the runner image.
+- `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts@sha256:...` (`gvisor.imageReference`), the transport carrying the flat root, launch artifacts, verifiers, and materialization.
+- `secondbox-0.9.1-gvisor-materialization.json` (`gvisor.materialization`), with `gvisor.materializationDigest` and `gvisor.flatRootDigest` as the identities a node materialization must reproduce, and `gvisor.runscRelease`.
+- `secondbox-0.9.1-gvisor-qualification-evidence.json` and `secondbox-0.9.1-gvisor-pod-qualification-evidence.json` (`gvisor.qualificationEvidence`, `gvisor.podQualificationEvidence`), the host and pod scenario evidence bound to the release commit.
+
+Recorded v5 manifests of earlier releases remain readable by the v0.9.1 updater; a v0.9.1 or later release always ships v6.
+
+
 Download the `secondbox-deploy_0.9.1_OS_ARCH` binary and verify it against the public `SHA256SUMS`. Then verify the published artifact manifest and every HTTP release object it references:
 
 ```text
