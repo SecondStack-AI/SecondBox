@@ -22,6 +22,25 @@ type guestFileOperationSender struct {
 	binding      *guestv1.OperationBinding
 	mu           sync.Mutex
 	nextSequence uint64
+	cancelOnce   sync.Once
+}
+
+// oversizedGuestReadDetail names the refusal of a file larger than the bound
+// the control plane admitted for one read.
+const oversizedGuestReadDetail = "file exceeds the admitted read bound"
+
+// sendCancel emits at most one cancellation frame for the operation. Context
+// cancellation and an oversized-read refusal both ask the guest to stop, and a
+// second cancellation can reach the guest after it retired the operation,
+// which fails the whole shared protocol connection.
+func (sender *guestFileOperationSender) sendCancel(reason string) error {
+	var err error
+	sender.cancelOnce.Do(func() {
+		err = sender.send(&guestv1.FileFrame{
+			Payload: &guestv1.FileFrame_Cancel{Cancel: &guestv1.ExecCancel{Reason: reason}},
+		})
+	})
+	return err
 }
 
 func (sender *guestFileOperationSender) send(frame *guestv1.FileFrame) error {
@@ -106,11 +125,7 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 	if request.Operation == guestv1.FileOperation_FILE_OPERATION_READ ||
 		request.Operation == guestv1.FileOperation_FILE_OPERATION_WRITE {
 		stopCancellation = context.AfterFunc(ctx, func() {
-			cancellationSendError <- sender.send(&guestv1.FileFrame{
-				Payload: &guestv1.FileFrame_Cancel{Cancel: &guestv1.ExecCancel{
-					Reason: "runner operation context cancelled",
-				}},
-			})
+			cancellationSendError <- sender.sendCancel("runner operation context cancelled")
 		})
 		defer func() {
 			if !stopCancellation() {
@@ -136,19 +151,27 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 	}
 	result = GuestFileOperationResult{Metadata: metadata}
 	expectedSequence := uint64(2)
+	declined := false
 	if request.Operation == guestv1.FileOperation_FILE_OPERATION_READ {
-		if request.ExpectedSize == 0 || metadata.Size > request.ExpectedSize {
-			return GuestFileOperationResult{}, fmt.Errorf("guest file read exceeds declared maximum size")
+		if request.ExpectedSize == 0 {
+			return GuestFileOperationResult{}, fmt.Errorf("guest file read requires a positive maximum size")
 		}
-		if ctx.Err() == nil {
-			err = sender.send(&guestv1.FileFrame{
+		if metadata.Size > request.ExpectedSize {
+			// Refuse before granting content credit. The guest stops the read
+			// and answers with its own terminal frame, so the shared session
+			// stays in sequence and remains usable.
+			declined = true
+			if err := sender.sendCancel(oversizedGuestReadDetail); err != nil {
+				return GuestFileOperationResult{}, fmt.Errorf("send guest oversized read refusal: %w", err)
+			}
+		} else if ctx.Err() == nil {
+			if err := sender.send(&guestv1.FileFrame{
 				Payload: &guestv1.FileFrame_Credit{
 					Credit: &guestv1.ByteCredit{ByteCount: request.ExpectedSize},
 				},
-			})
-		}
-		if err != nil {
-			return GuestFileOperationResult{}, fmt.Errorf("send guest file read credit: %w", err)
+			}); err != nil {
+				return GuestFileOperationResult{}, fmt.Errorf("send guest file read credit: %w", err)
+			}
 		}
 	}
 	for {
@@ -179,6 +202,16 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 			terminal.Kind == guestv1.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED &&
 			uint64(len(result.Content)) != metadata.Size {
 			return GuestFileOperationResult{}, fmt.Errorf("guest file read content does not match metadata size")
+		}
+		if declined && ctx.Err() == nil {
+			// The guest reports its stop as a cancellation. Cancelling the
+			// operation was this bridge's decision, so the refusal is the real
+			// outcome; a caller-driven cancellation keeps the guest's terminal.
+			result.Content = nil
+			result.Terminal = &guestv1.FileTerminal{
+				Kind:       guestv1.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED,
+				SafeDetail: oversizedGuestReadDetail,
+			}
 		}
 		return result, nil
 	}

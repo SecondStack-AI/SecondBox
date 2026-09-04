@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -782,5 +783,165 @@ func seedDataPlaneReadyAssignment(
 	return dataPlaneReadySeed{
 		Fence: fence, RunnerID: runnerID, CredentialSerial: credentialSerial,
 		ConnectionOne: connectionOne, ConnectionTwo: connectionTwo,
+	}
+}
+
+func TestPostgresDataPlaneReadAdmissionClampsToSessionLimit(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "read-clamp")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-read-clamp")
+	if transferLimit := testProfileSpec(1).Execution.MaximumTransferBytes; transferLimit <= 4<<20 {
+		t.Fatalf("fixture Profile transfer limit %d must exceed the session limit", transferLimit)
+	}
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "read-clamp-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	readAdmission := func(id string, maximumResponseBytes int64) runnercontrol.DataPlaneAdmission {
+		return runnercontrol.DataPlaneAdmission{
+			ID: "dps_" + id + "_" + sandbox.ID, StreamID: "stream_" + id + "_" + sandbox.ID,
+			TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+			SubjectRef: principal.SubjectRef, RequestID: "request-" + id,
+			Generation: sandbox.Generation, Kind: "file", Operation: "read",
+			RequestHash: id + "-hash",
+			DeadlineAt:  now.Add(30 * time.Second), MaximumResponseBytes: maximumResponseBytes,
+			UseProfileStreamWindow: true,
+			FileOpen: &runnerv1.FileOpen{
+				Operation:             runnerv1.FileOperation_FILE_OPERATION_READ,
+				WorkspaceRelativePath: "workspace/report.html",
+			},
+			Request: map[string]any{"path": "workspace/report.html", "operation": "read"}, Now: now,
+		}
+	}
+	session, replayed, err := relay.AdmitDataPlane(t.Context(), readAdmission("read_unbounded", 0))
+	if err != nil || replayed {
+		t.Fatalf("unbounded read admission = %#v, replayed=%t, error=%v", session, replayed, err)
+	}
+	if session.MaximumResponseBytes != 4<<20 || session.MaximumRequestBytes != 0 ||
+		session.State != "pending" {
+		t.Fatalf("unbounded read session = %#v, want a 4 MiB response bound", session)
+	}
+	_, _, err = relay.AdmitDataPlane(t.Context(), readAdmission("read_oversized", 8<<20))
+	if !errors.Is(err, runnercontrol.ErrDataPlaneSessionLimit) {
+		t.Fatalf("explicit read bound above the session limit error = %v", err)
+	}
+	session, replayed, err = relay.AdmitDataPlane(t.Context(), readAdmission("read_bounded", 1024))
+	if err != nil || replayed || session.MaximumResponseBytes != 1024 {
+		t.Fatalf("bounded read admission = %#v, replayed=%t, error=%v", session, replayed, err)
+	}
+}
+
+func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "profile-bounds")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-profile-bounds")
+	policy := testProfileSpec(1).Execution
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "profile-bounds-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 4, 12, 30, 0, 0, time.UTC)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	execAdmission := func(id string) runnercontrol.DataPlaneAdmission {
+		return runnercontrol.DataPlaneAdmission{
+			ID: "dps_" + id + "_" + sandbox.ID, StreamID: "stream_" + id + "_" + sandbox.ID,
+			TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+			SubjectRef: principal.SubjectRef, RequestID: "request-" + id,
+			Generation: sandbox.Generation, Kind: "exec", Operation: "exec",
+			IdempotencyKey: id, RequestHash: id + "-hash",
+			DeadlineAt: now.Add(time.Minute), MaximumResponseBytes: 1024,
+			UseProfileStreamWindow: true,
+			ExecOpen: &runnerv1.ExecOpen{
+				Command:        &runnerv1.ExecOpen_Shell{Shell: "true"},
+				DeadlineUnixMs: uint64(now.Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024,
+			},
+			Request: map[string]any{"command": "true", "id": id}, Now: now,
+		}
+	}
+	oversizedOutput := execAdmission("exec_output_bound")
+	oversizedOutput.MaximumResponseBytes = policy.MaximumBufferedOutputBytes + 1
+	oversizedOutput.ExecOpen.OutputLimitBytes = uint64(policy.MaximumBufferedOutputBytes + 1)
+	if _, _, err := relay.AdmitDataPlane(t.Context(), oversizedOutput); !errors.Is(err, runnercontrol.ErrDataPlaneOutputLimit) ||
+		errors.Is(err, ports.ErrQuotaExceeded) {
+		t.Fatalf("output bound above the Profile error = %v", err)
+	}
+	oversizedStdin := execAdmission("exec_request_bound")
+	oversizedStdin.MaximumRequestBytes = policy.MaximumTransferBytes + 1
+	if _, _, err := relay.AdmitDataPlane(t.Context(), oversizedStdin); !errors.Is(err, runnercontrol.ErrDataPlaneSessionLimit) ||
+		errors.Is(err, ports.ErrQuotaExceeded) {
+		t.Fatalf("request bound above the Profile error = %v", err)
+	}
+	oversizedWindow := execAdmission("exec_stream_window")
+	oversizedWindow.Operation = "exec-stream"
+	oversizedWindow.ExecOpen.Streaming = true
+	oversizedWindow.UseProfileStreamWindow = false
+	oversizedWindow.UseProfileRequestLimit = true
+	oversizedWindow.DeferResponseCredit = true
+	oversizedWindow.StreamWindowBytes = policy.StreamWindowBytes + 1
+	if _, _, err := relay.AdmitDataPlane(t.Context(), oversizedWindow); !errors.Is(err, runnercontrol.ErrDataPlaneStreamWindow) ||
+		errors.Is(err, ports.ErrQuotaExceeded) {
+		t.Fatalf("stream window above the Profile error = %v", err)
+	}
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var activeSessions int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.data_plane_sessions WHERE sandbox_id=$1`, sandbox.ID,
+	).Scan(&activeSessions); err != nil {
+		t.Fatal(err)
+	}
+	if activeSessions != 0 {
+		t.Fatalf("refused admissions left %d sessions behind, want none", activeSessions)
+	}
+	session, replayed, err := relay.AdmitDataPlane(t.Context(), execAdmission("exec_within_profile"))
+	if err != nil || replayed || session.State != "pending" {
+		t.Fatalf("exec within the Profile admission = %#v, replayed=%t, error=%v", session, replayed, err)
+	}
+	concurrentOperations := testProfileSpec(1).Resources.ConcurrentOperations
+	for index := int64(1); index < concurrentOperations; index++ {
+		id := fmt.Sprintf("exec_saturating_%d", index)
+		if _, _, err := relay.AdmitDataPlane(t.Context(), execAdmission(id)); err != nil {
+			t.Fatalf("saturating admission %s error = %v", id, err)
+		}
+	}
+	saturatedOutput := execAdmission("exec_output_bound_saturated")
+	saturatedOutput.MaximumResponseBytes = policy.MaximumBufferedOutputBytes + 1
+	saturatedOutput.ExecOpen.OutputLimitBytes = uint64(policy.MaximumBufferedOutputBytes + 1)
+	if _, _, err := relay.AdmitDataPlane(t.Context(), saturatedOutput); !errors.Is(err, runnercontrol.ErrDataPlaneOutputLimit) {
+		t.Fatalf("output bound above the Profile at saturated capacity error = %v", err)
+	}
+	if _, _, err := relay.AdmitDataPlane(t.Context(), execAdmission("exec_saturated")); !errors.Is(err, ports.ErrQuotaExceeded) {
+		t.Fatalf("in-policy exec at saturated capacity error = %v", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -209,4 +210,38 @@ func (writer *disconnectingWriter) Write(content []byte) (int, error) {
 	}
 	writer.written += remaining
 	return remaining, errors.New("client disconnected")
+}
+
+func TestDataPlaneProfileBoundErrorsAreTypedInvalidRequests(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		err   error
+		title string
+	}{
+		{
+			name: "output limit", err: runnercontrol.ErrDataPlaneOutputLimit,
+			title: "Requested output limit exceeds the Profile execution policy",
+		},
+		{
+			name: "stream window", err: runnercontrol.ErrDataPlaneStreamWindow,
+			title: "Requested stream window exceeds the Profile execution policy",
+		},
+	} {
+		status, code, title, retryable := classifyError(testCase.err)
+		if status != http.StatusBadRequest || code != "invalid_request" ||
+			title != testCase.title || retryable {
+			t.Fatalf(
+				"%s classification = status %d code %q title %q retryable %t",
+				testCase.name, status, code, title, retryable,
+			)
+		}
+	}
+	status, code, _, _ := classifyError(runnercontrol.ErrDataPlaneSessionLimit)
+	if status != http.StatusRequestEntityTooLarge || code != "limit_exceeded" {
+		t.Fatalf("session limit classification = status %d code %q", status, code)
+	}
+	status, code, _, _ = classifyError(ports.ErrQuotaExceeded)
+	if status != http.StatusTooManyRequests || code != "quota_exceeded" {
+		t.Fatalf("quota classification = status %d code %q", status, code)
+	}
 }

@@ -49,7 +49,7 @@
     "maximumDeadlineMilliseconds": 60000,
     "maximumBufferedOutputBytes": 1048576,
     "streamWindowBytes": 65536,
-    "maximumTransferBytes": 1048576,
+    "maximumTransferBytes": 268435456,
     "terminalDetachSeconds": 30,
     "dataPlaneTransport": "proxied"
   },

@@ -24,6 +24,8 @@ var (
 	ErrDataPlaneSequence     = errors.New("SecondBox data-plane sequence is invalid")
 	ErrDataPlaneFrameLimit   = errors.New("SecondBox data-plane frame limit exceeded")
 	ErrDataPlaneSessionLimit = errors.New("SecondBox data-plane session limit exceeded")
+	ErrDataPlaneOutputLimit  = errors.New("SecondBox data-plane output limit exceeds the pinned Profile")
+	ErrDataPlaneStreamWindow = errors.New("SecondBox data-plane stream window exceeds the pinned Profile")
 	ErrDataPlaneNotFound     = errors.New("SecondBox data-plane session not found")
 	ErrDataPlaneDeadline     = errors.New("SecondBox data-plane operation deadline exceeded")
 	ErrTerminalAttached      = errors.New("SecondBox Terminal session already has an active attachment")
@@ -263,7 +265,7 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, sandboxCapacityKey); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox Sandbox data-plane capacity lock: %w", err)
 	}
-	session, policy, err := lockDataPlaneAuthority(ctx, tx, input)
+	session, policy, capacity, err := lockDataPlaneAuthority(ctx, tx, input)
 	if err != nil {
 		return DataPlaneSession{}, false, err
 	}
@@ -298,7 +300,11 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	if input.Kind == "file" && input.FileOpen != nil &&
 		input.FileOpen.Operation == runnerv1.FileOperation_FILE_OPERATION_READ {
 		if input.MaximumResponseBytes == 0 {
-			input.MaximumResponseBytes = policy.MaximumTransferBytes
+			// A read without a caller bound is capped by whichever is smaller:
+			// the pinned Profile transfer limit or the process-wide session
+			// limit. Both are ceilings, not the actual file size, so the file
+			// itself is still bounded by the guest against the admitted cap.
+			input.MaximumResponseBytes = min(policy.MaximumTransferBytes, store.maximumSessionBytes)
 		}
 		input.FileOpen = proto.Clone(input.FileOpen).(*runnerv1.FileOpen)
 		input.FileOpen.ExpectedSize = uint64(input.MaximumResponseBytes)
@@ -312,15 +318,17 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 		)
 	}
 	if input.DeferResponseCredit && input.StreamWindowBytes > policy.StreamWindowBytes {
-		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
+		return DataPlaneSession{}, false, ErrDataPlaneStreamWindow
 	}
 	responseLimit := policy.MaximumBufferedOutputBytes
 	if input.Kind == "file" {
 		responseLimit = policy.MaximumTransferBytes
 	}
-	if input.MaximumResponseBytes > responseLimit ||
-		input.MaximumRequestBytes > policy.MaximumTransferBytes {
-		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
+	if input.MaximumResponseBytes > responseLimit {
+		return DataPlaneSession{}, false, ErrDataPlaneOutputLimit
+	}
+	if input.MaximumRequestBytes > policy.MaximumTransferBytes {
+		return DataPlaneSession{}, false, ErrDataPlaneSessionLimit
 	}
 	session.ID, session.StreamID = input.ID, input.StreamID
 	session.TenantRef, session.SandboxID = input.TenantRef, input.SandboxID
@@ -334,6 +342,12 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	session.CreatedAt, session.UpdatedAt = input.Now.UTC(), input.Now.UTC()
 	if input.MaximumResponseBytes > store.maximumSessionBytes {
 		return DataPlaneSession{}, false, ErrDataPlaneSessionLimit
+	}
+	// Capacity is refused only for a request that would otherwise be admitted,
+	// so a malformed bound is reported as such even while the Sandbox,
+	// Subject, or Tenant is saturated.
+	if capacity.exhausted() {
+		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
 	}
 	requestJSON, err := json.Marshal(input.Request)
 	if err != nil {
@@ -536,11 +550,25 @@ func lockDataPlaneSessionQuota(ctx context.Context, tx pgx.Tx, sessionID string)
 	return rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef)
 }
 
+// dataPlaneCapacity records the concurrency usage observed under the
+// admission locks so the capacity refusal can follow request validation.
+type dataPlaneCapacity struct {
+	sandboxActive, sandboxMaximum int64
+	subjectActive, subjectMaximum int64
+	tenantActive, tenantMaximum   int64
+}
+
+func (capacity dataPlaneCapacity) exhausted() bool {
+	return capacity.sandboxActive >= capacity.sandboxMaximum ||
+		capacity.subjectActive >= capacity.subjectMaximum ||
+		capacity.tenantActive >= capacity.tenantMaximum
+}
+
 func lockDataPlaneAuthority(
 	ctx context.Context,
 	tx pgx.Tx,
 	input DataPlaneAdmission,
-) (DataPlaneSession, contracts.ExecutionPolicy, error) {
+) (DataPlaneSession, contracts.ExecutionPolicy, dataPlaneCapacity, error) {
 	var session DataPlaneSession
 	var sandboxState, assignmentState string
 	var runnerConnected bool
@@ -576,18 +604,18 @@ func lockDataPlaneAuthority(
 		&runnerConnected,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrSandboxNotFound
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrSandboxNotFound
 	}
 	if err != nil {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox data-plane authority lookup: %w", err)
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox data-plane authority lookup: %w", err)
 	}
 	if session.Generation != input.Generation {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrGenerationFenced
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrGenerationFenced
 	}
 	if sandboxState != contracts.SandboxStateReady ||
 		assignmentState != "ready" ||
 		!runnerConnected {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrLifecycleUnavailable
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrLifecycleUnavailable
 	}
 	if input.LeaseID != "" {
 		var leaseGeneration int64
@@ -600,24 +628,24 @@ func lockDataPlaneAuthority(
 			input.TenantRef, input.SubjectRef, input.SandboxID, input.LeaseID,
 		).Scan(&leaseGeneration, &leaseAccount, &leaseState, &leaseExpiry); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrLeaseNotFound
+				return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrLeaseNotFound
 			}
-			return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox data-plane Lease lookup: %w", err)
+			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox data-plane Lease lookup: %w", err)
 		}
 		if leaseGeneration != input.Generation || leaseAccount != input.SubjectRef ||
 			leaseState != contracts.LeaseStateActive || !input.Now.Before(leaseExpiry) {
-			return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrLeaseInactive
+			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrLeaseInactive
 		}
 	}
 	var spec contracts.ProfileRevisionSpec
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox data-plane Profile policy decoding: %w", err)
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox data-plane Profile policy decoding: %w", err)
 	}
 	session.Transport = dataPlaneTransport(spec.Execution.DataPlaneTransport, input.Kind, input.Operation)
 	if session.Transport == contracts.DataPlaneTransportDirect {
 		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)
 		if err != nil {
-			return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrLifecycleUnavailable
+			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrLifecycleUnavailable
 		}
 		session.DataPlaneAddress = endpoint.Address
 		session.DataPlaneCertificateSPKI = endpoint.CertificateSPKISHA256
@@ -634,17 +662,17 @@ func lockDataPlaneAuthority(
 		WHERE tenant.ref=$1
 		FOR UPDATE OF tenant,quota`, input.TenantRef,
 	).Scan(&tenantState, &tenantExpiresAt, &tenantMaximum, &tenantActive); err != nil {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox Tenant operation quota lookup: %w", err)
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox Tenant operation quota lookup: %w", err)
 	}
 	if tenantState == contracts.TenantStateSuspended {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrTenantSuspended
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrTenantSuspended
 	}
 	if tenantState == contracts.TenantStateExpired ||
 		tenantExpiresAt != nil && !tenantExpiresAt.After(input.Now.UTC()) {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrResourceExpired
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrResourceExpired
 	}
 	if tenantState != contracts.TenantStateActive {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrInvalidLifecycleTransition
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrInvalidLifecycleTransition
 	}
 	var sandboxActive, subjectActive, subjectMaximum int64
 	if err := tx.QueryRow(ctx, `
@@ -652,7 +680,7 @@ func lockDataPlaneAuthority(
 		WHERE sandbox_id=$1 AND state IN ('pending','running','cancelling')`,
 		input.SandboxID,
 	).Scan(&sandboxActive); err != nil {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox Sandbox operation usage lookup: %w", err)
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox Sandbox operation usage lookup: %w", err)
 	}
 	if err := tx.QueryRow(ctx, `
 		SELECT quota.max_concurrent_operations,
@@ -664,13 +692,13 @@ func lockDataPlaneAuthority(
 		FOR UPDATE`,
 		input.TenantRef, input.SubjectRef,
 	).Scan(&subjectMaximum, &subjectActive); err != nil {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox subject operation quota lookup: %w", err)
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox subject operation quota lookup: %w", err)
 	}
-	if sandboxActive >= spec.Resources.ConcurrentOperations || subjectActive >= subjectMaximum ||
-		tenantActive >= tenantMaximum {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrQuotaExceeded
-	}
-	return session, spec.Execution, nil
+	return session, spec.Execution, dataPlaneCapacity{
+		sandboxActive: sandboxActive, sandboxMaximum: spec.Resources.ConcurrentOperations,
+		subjectActive: subjectActive, subjectMaximum: subjectMaximum,
+		tenantActive: tenantActive, tenantMaximum: tenantMaximum,
+	}, nil
 }
 
 const dataPlaneSessionSelect = `
