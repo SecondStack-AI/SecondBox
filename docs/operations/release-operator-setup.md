@@ -44,7 +44,7 @@ Tag the clean commit. On the qualified host, run the unfiltered scenario suite, 
 # Tag locally only; the tag is pushed right before the upload, once every
 # qualification has passed, so a failed qualification never leaves an
 # unusable public module tag.
-git tag v0.9.1
+git tag v0.9.2
 
 export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
 export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$artifact_target"
@@ -68,7 +68,7 @@ export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE=/protected/releases/evidence/gvis
 export SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE=/protected/releases/evidence/gvisor-pod-linux-scenario-qualification-evidence.json
 
 export SECONDBOX_RELEASE_POSTGRES_IMAGE='docker.io/library/postgres@sha256:REVIEWED_DIGEST'
-just release-candidate 0.9.1 /protected/releases/installer-candidate
+just release-candidate 0.9.2 /protected/releases/installer-candidate
 
 export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
 export SECONDBOX_INSTALLER_RELEASE_DIRECTORY=/protected/releases/installer-candidate
@@ -79,9 +79,9 @@ export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE="$qualification_image"
 export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256="$qualification_image_sha256"
 just test-installer-qualified
 
-just release-stage 0.9.1 /protected/releases/secondbox-0.9.1
-git push origin refs/tags/v0.9.1
-just release-upload 0.9.1 /protected/releases/secondbox-0.9.1
+just release-stage 0.9.2 /protected/releases/secondbox-0.9.2
+git push origin refs/tags/v0.9.2
+just release-upload 0.9.2 /protected/releases/secondbox-0.9.2
 ```
 
 `test-scenario` writes `.tmp/scenario-qualification-evidence.json` only after the full suite and cleanup pass. Its `sourceCommit` must equal `HEAD`, so run it after the release pull request merges and before staging; do not reuse evidence from the review branch. `release-candidate` then builds an explicitly non-publishable manifest with the reviewed, digest-pinned bundled-service images and no installer-qualification claim. The repository-owned QEMU/libvirt driver tests that candidate and writes `.tmp/installer-qualification-evidence.json` after its clean-host, reboot, resume, uninstall, purge, and real-microVM assertions pass. The helper downloads the pinned Ubuntu qualification image only when the target path is absent and prints its reviewed SHA-256 for the explicit driver input; retain that image for subsequent releases or choose a new absent target after the repository pin changes. The candidate and final manifest share a qualification-subject digest: every final manifest field participates except the candidate marker and installer-evidence reference. `release-stage` requires both evidence documents, rejects evidence for different release bytes, and emits the publishable final manifest. `release-upload` creates a private draft and dispatches the GitHub workflow; the workflow does not rebuild or qualify anything.
