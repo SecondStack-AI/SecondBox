@@ -1074,6 +1074,10 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "operation_deadline_exceeded", "Operation deadline exceeded", false
 	case errors.Is(err, runnercontrol.ErrDataPlaneSessionLimit), errors.Is(err, runnercontrol.ErrDataPlaneFrameLimit):
 		return http.StatusRequestEntityTooLarge, "limit_exceeded", "Configured byte limit exceeded", false
+	case errors.Is(err, runnercontrol.ErrDataPlaneOutputLimit):
+		return http.StatusBadRequest, "invalid_request", "Requested output limit exceeds the Profile execution policy", false
+	case errors.Is(err, runnercontrol.ErrDataPlaneStreamWindow):
+		return http.StatusBadRequest, "invalid_request", "Requested stream window exceeds the Profile execution policy", false
 	case errors.Is(err, ports.ErrQuotaExceeded):
 		return http.StatusTooManyRequests, "quota_exceeded", "Quota exceeded", false
 	case errors.Is(err, ports.ErrPortBackpressure):

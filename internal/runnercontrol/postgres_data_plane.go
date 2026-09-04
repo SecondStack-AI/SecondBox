@@ -24,6 +24,8 @@ var (
 	ErrDataPlaneSequence     = errors.New("SecondBox data-plane sequence is invalid")
 	ErrDataPlaneFrameLimit   = errors.New("SecondBox data-plane frame limit exceeded")
 	ErrDataPlaneSessionLimit = errors.New("SecondBox data-plane session limit exceeded")
+	ErrDataPlaneOutputLimit  = errors.New("SecondBox data-plane output limit exceeds the pinned Profile")
+	ErrDataPlaneStreamWindow = errors.New("SecondBox data-plane stream window exceeds the pinned Profile")
 	ErrDataPlaneNotFound     = errors.New("SecondBox data-plane session not found")
 	ErrDataPlaneDeadline     = errors.New("SecondBox data-plane operation deadline exceeded")
 	ErrTerminalAttached      = errors.New("SecondBox Terminal session already has an active attachment")
@@ -298,7 +300,11 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	if input.Kind == "file" && input.FileOpen != nil &&
 		input.FileOpen.Operation == runnerv1.FileOperation_FILE_OPERATION_READ {
 		if input.MaximumResponseBytes == 0 {
-			input.MaximumResponseBytes = policy.MaximumTransferBytes
+			// A read without a caller bound is capped by whichever is smaller:
+			// the pinned Profile transfer limit or the process-wide session
+			// limit. Both are ceilings, not the actual file size, so the file
+			// itself is still bounded by the guest against the admitted cap.
+			input.MaximumResponseBytes = min(policy.MaximumTransferBytes, store.maximumSessionBytes)
 		}
 		input.FileOpen = proto.Clone(input.FileOpen).(*runnerv1.FileOpen)
 		input.FileOpen.ExpectedSize = uint64(input.MaximumResponseBytes)
@@ -312,15 +318,17 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 		)
 	}
 	if input.DeferResponseCredit && input.StreamWindowBytes > policy.StreamWindowBytes {
-		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
+		return DataPlaneSession{}, false, ErrDataPlaneStreamWindow
 	}
 	responseLimit := policy.MaximumBufferedOutputBytes
 	if input.Kind == "file" {
 		responseLimit = policy.MaximumTransferBytes
 	}
-	if input.MaximumResponseBytes > responseLimit ||
-		input.MaximumRequestBytes > policy.MaximumTransferBytes {
-		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
+	if input.MaximumResponseBytes > responseLimit {
+		return DataPlaneSession{}, false, ErrDataPlaneOutputLimit
+	}
+	if input.MaximumRequestBytes > policy.MaximumTransferBytes {
+		return DataPlaneSession{}, false, ErrDataPlaneSessionLimit
 	}
 	session.ID, session.StreamID = input.ID, input.StreamID
 	session.TenantRef, session.SandboxID = input.TenantRef, input.SandboxID
