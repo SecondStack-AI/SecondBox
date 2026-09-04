@@ -114,6 +114,7 @@ func TestExecuteFileOperationChunksLargeWritesOverFirecrackerVsockTransport(t *t
 	assertGuestFileWriteChunkBoundaries(t, session, recordingStream, workspace)
 	assertGuestLargeFileWrite(t, session, recordingStream, workspace)
 	assertGuestFileFailureKeepsProtocolStreamUsable(t, session, recordingStream)
+	assertGuestOversizedReadIsTypedAndKeepsProtocolStreamUsable(t, session, recordingStream)
 }
 
 func assertGuestFileWriteChunkBoundaries(
@@ -283,5 +284,51 @@ func assertGuestFileFailureKeepsProtocolStreamUsable(
 	if execResult.Terminal.GetKind() != guestv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED ||
 		string(execResult.Stdout) != "protocol-recovered" {
 		t.Fatalf("exec after failed file operation = %#v", execResult)
+	}
+}
+
+func assertGuestOversizedReadIsTypedAndKeepsProtocolStreamUsable(
+	t *testing.T,
+	session *GuestProtocolSession,
+	recordingStream *recordingGuestProtocolStream,
+) {
+	t.Helper()
+	content := make([]byte, 8<<10)
+	for index := range content {
+		content[index] = byte(index % 251)
+	}
+	written, err := session.ExecuteFileOperation(t.Context(), "assignment-oversized-read", &guestv1.FileRequest{
+		Operation:             guestv1.FileOperation_FILE_OPERATION_WRITE,
+		WorkspaceRelativePath: "oversized-read.bin",
+		ExpectedSize:          uint64(len(content)),
+		ExpectedChecksum:      fmt.Sprintf("sha256:%x", sha256.Sum256(content)),
+		CreateMode:            0o600,
+	}, content)
+	if err != nil || written.Terminal.GetKind() != guestv1.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED {
+		t.Fatalf("oversized read fixture write = %#v, error=%v", written, err)
+	}
+	recordingStream.takeChunks()
+
+	declined, err := session.ExecuteFileOperation(t.Context(), "assignment-oversized-read", &guestv1.FileRequest{
+		Operation:             guestv1.FileOperation_FILE_OPERATION_READ,
+		WorkspaceRelativePath: "oversized-read.bin",
+		ExpectedSize:          uint64(len(content) / 2),
+	}, nil)
+	if err != nil {
+		t.Fatalf("oversized read returned a bridge error instead of a typed terminal: %v", err)
+	}
+	if declined.Terminal.GetKind() != guestv1.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED ||
+		len(declined.Content) != 0 || declined.Metadata.GetSize() != uint64(len(content)) {
+		t.Fatalf("oversized read = %#v", declined)
+	}
+
+	read, err := session.ExecuteFileOperation(t.Context(), "assignment-oversized-read", &guestv1.FileRequest{
+		Operation:             guestv1.FileOperation_FILE_OPERATION_READ,
+		WorkspaceRelativePath: "oversized-read.bin",
+		ExpectedSize:          uint64(len(content)),
+	}, nil)
+	if err != nil || read.Terminal.GetKind() != guestv1.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED ||
+		!bytes.Equal(read.Content, content) {
+		t.Fatalf("read after declined oversized read = %#v, error=%v", read, err)
 	}
 }

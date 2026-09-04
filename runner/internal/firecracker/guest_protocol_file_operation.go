@@ -137,8 +137,11 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 	result = GuestFileOperationResult{Metadata: metadata}
 	expectedSequence := uint64(2)
 	if request.Operation == guestv1.FileOperation_FILE_OPERATION_READ {
-		if request.ExpectedSize == 0 || metadata.Size > request.ExpectedSize {
-			return GuestFileOperationResult{}, fmt.Errorf("guest file read exceeds declared maximum size")
+		if request.ExpectedSize == 0 {
+			return GuestFileOperationResult{}, fmt.Errorf("guest file read requires a positive maximum size")
+		}
+		if metadata.Size > request.ExpectedSize {
+			return s.declineOversizedGuestRead(sender, binding, metadata)
 		}
 		if ctx.Err() == nil {
 			err = sender.send(&guestv1.FileFrame{
@@ -181,5 +184,44 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 			return GuestFileOperationResult{}, fmt.Errorf("guest file read content does not match metadata size")
 		}
 		return result, nil
+	}
+}
+
+// declineOversizedGuestRead refuses a read whose file is larger than the
+// admitted bound before any content credit is granted. The guest is told to
+// stop and its terminal frame is consumed so the session stays in sequence,
+// and the caller receives the typed limit outcome instead of a bridge failure.
+func (s *GuestProtocolSession) declineOversizedGuestRead(
+	sender *guestFileOperationSender,
+	binding *guestv1.OperationBinding,
+	metadata *guestv1.FileMetadata,
+) (GuestFileOperationResult, error) {
+	const detail = "file exceeds the admitted read bound"
+	if err := sender.send(&guestv1.FileFrame{
+		Payload: &guestv1.FileFrame_Cancel{Cancel: &guestv1.ExecCancel{Reason: detail}},
+	}); err != nil {
+		return GuestFileOperationResult{}, fmt.Errorf("send guest oversized read cancellation: %w", err)
+	}
+	expectedSequence := uint64(2)
+	for {
+		response, err := s.Stream.Recv()
+		if err != nil {
+			return GuestFileOperationResult{}, fmt.Errorf("receive guest oversized read outcome: %w", err)
+		}
+		frame := response.GetFile()
+		if err := validateGuestFileResponseBinding(frame, binding, expectedSequence); err != nil {
+			return GuestFileOperationResult{}, err
+		}
+		expectedSequence++
+		if frame.GetTerminal() == nil {
+			continue
+		}
+		return GuestFileOperationResult{
+			Metadata: metadata,
+			Terminal: &guestv1.FileTerminal{
+				Kind:       guestv1.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED,
+				SafeDetail: detail,
+			},
+		}, nil
 	}
 }

@@ -101,6 +101,10 @@ func RunDataPlane(t *testing.T, fixture DataPlaneFixture) {
 		if err != nil || !bytes.Equal(read.Content, content) || read.Metadata.GetChecksum() != checksum {
 			t.Fatalf("read = %#v, %v", read, err)
 		}
+		oversized, err := fixture.Backend.ExecuteFile(t.Context(), fixture.Fence, &runnerprotocol.FileOpen{Operation: runnerprotocol.FileOperation_FILE_OPERATION_READ, WorkspaceRelativePath: path, ExpectedSize: uint64(len(content) - 1)}, nil)
+		if err != nil || oversized.Terminal.GetKind() != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED || bytes.Equal(oversized.Content, content) {
+			t.Fatalf("read above the admitted bound = %#v, %v", oversized, err)
+		}
 		exists, err := fixture.Backend.ExecuteFile(t.Context(), fixture.Fence, &runnerprotocol.FileOpen{Operation: runnerprotocol.FileOperation_FILE_OPERATION_EXISTS, WorkspaceRelativePath: path}, nil)
 		if err != nil || !exists.Metadata.GetExists() {
 			t.Fatalf("exists = %#v, %v", exists, err)

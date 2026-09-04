@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -926,5 +927,21 @@ func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testin
 	session, replayed, err := relay.AdmitDataPlane(t.Context(), execAdmission("exec_within_profile"))
 	if err != nil || replayed || session.State != "pending" {
 		t.Fatalf("exec within the Profile admission = %#v, replayed=%t, error=%v", session, replayed, err)
+	}
+	concurrentOperations := testProfileSpec(1).Resources.ConcurrentOperations
+	for index := int64(1); index < concurrentOperations; index++ {
+		id := fmt.Sprintf("exec_saturating_%d", index)
+		if _, _, err := relay.AdmitDataPlane(t.Context(), execAdmission(id)); err != nil {
+			t.Fatalf("saturating admission %s error = %v", id, err)
+		}
+	}
+	saturatedOutput := execAdmission("exec_output_bound_saturated")
+	saturatedOutput.MaximumResponseBytes = policy.MaximumBufferedOutputBytes + 1
+	saturatedOutput.ExecOpen.OutputLimitBytes = uint64(policy.MaximumBufferedOutputBytes + 1)
+	if _, _, err := relay.AdmitDataPlane(t.Context(), saturatedOutput); !errors.Is(err, runnercontrol.ErrDataPlaneOutputLimit) {
+		t.Fatalf("output bound above the Profile at saturated capacity error = %v", err)
+	}
+	if _, _, err := relay.AdmitDataPlane(t.Context(), execAdmission("exec_saturated")); !errors.Is(err, ports.ErrQuotaExceeded) {
+		t.Fatalf("in-policy exec at saturated capacity error = %v", err)
 	}
 }
