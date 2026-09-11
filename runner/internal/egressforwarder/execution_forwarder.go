@@ -9,13 +9,15 @@ import (
 	"net"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"github.com/SecondStack-AI/SecondBox/runner/egressattribution"
 )
 
 // ForwardAttributedExecution takes ownership of listener. The backend must restrict
 // access to this generation before opening guest networking and wait for return
-// before releasing its network resources. A relay failure terminates forwarding.
+// before releasing its network resources. A gateway setup or listener failure
+// terminates forwarding; a closed guest stream ends only that connection.
 func ForwardAttributedExecution(parent context.Context, listener *net.TCPListener, gatewaySocket string, attribution egressattribution.ExecutionAttribution, maxConnections int) error {
 	if listener == nil {
 		return errors.New("SecondBox execution forwarder requires a listener")
@@ -107,6 +109,16 @@ func relayAttributedExecution(ctx context.Context, guest *net.TCPConn, gatewaySo
 		_ = gateway.Close()
 	}
 	second := <-completed
+	if first != nil && errors.Is(second, net.ErrClosed) {
+		// Closing both sockets above interrupts the other copy.
+		second = nil
+	}
+	for _, result := range []*error{&first, &second} {
+		if errors.Is(*result, syscall.ECONNRESET) || errors.Is(*result, syscall.EPIPE) || errors.Is(*result, syscall.ENOTCONN) {
+			// A peer can abandon this stream without revoking the generation.
+			*result = nil
+		}
+	}
 	if err := errors.Join(first, second); err != nil {
 		return fmt.Errorf("SecondBox execution forwarder relay failed: %w", err)
 	}

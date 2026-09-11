@@ -186,3 +186,77 @@ func TestExecutionForwarderMissingGatewayFailsClosed(t *testing.T) {
 		t.Fatalf("guest was not closed: %v", err)
 	}
 }
+
+func TestExecutionForwarderConnectionCloseKeepsGenerationUsable(t *testing.T) {
+	for _, closeKind := range []string{"guest reset", "completed gateway response"} {
+		t.Run(closeKind, func(t *testing.T) {
+			gateway := testForwarderGateway(t)
+			attribution := forwarderTestAttribution()
+			address, cancel, done := startTestForwarder(t, gateway.Addr().String(), attribution, 2)
+			guest := dialTestForwarder(t, address)
+			upstream := acceptForwarderAttribution(t, gateway, attribution)
+			if closeKind == "guest reset" {
+				if err := guest.SetLinger(0); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := io.WriteString(upstream, "complete response"); err != nil {
+					t.Fatal(err)
+				}
+				if err := upstream.Close(); err != nil {
+					t.Fatal(err)
+				}
+				response, err := io.ReadAll(guest)
+				if err != nil || string(response) != "complete response" {
+					t.Fatalf("response = %q, error = %v", response, err)
+				}
+			}
+			if err := guest.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if closeKind == "guest reset" {
+				if _, err := upstream.Read(make([]byte, 1)); err != io.EOF {
+					t.Fatalf("reset guest left its relay open: %v", err)
+				}
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("connection close terminated the generation: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			next := dialTestForwarder(t, address)
+			nextUpstream := acceptForwarderAttribution(t, gateway, attribution)
+			if _, err := io.WriteString(next, "next request"); err != nil {
+				t.Fatal(err)
+			}
+			buffer := make([]byte, len("next request"))
+			if _, err := io.ReadFull(nextUpstream, buffer); err != nil || string(buffer) != "next request" {
+				t.Fatalf("next request = %q, error = %v", buffer, err)
+			}
+			cancel()
+			if err := waitTestForwarder(t, done); !errors.Is(err, context.Canceled) {
+				t.Fatalf("termination = %v", err)
+			}
+		})
+	}
+}
+
+func TestExecutionForwarderGatewayLossClosesExistingRelays(t *testing.T) {
+	gateway := testForwarderGateway(t)
+	attribution := forwarderTestAttribution()
+	address, _, done := startTestForwarder(t, gateway.Addr().String(), attribution, 2)
+	guest := dialTestForwarder(t, address)
+	upstream := acceptForwarderAttribution(t, gateway, attribution)
+	if err := gateway.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next := dialTestForwarder(t, address)
+	if err := waitTestForwarder(t, done); err == nil || !strings.Contains(err.Error(), "gateway connection failed") {
+		t.Fatalf("gateway loss = %v", err)
+	}
+	for _, connection := range []net.Conn{guest, upstream, next} {
+		if _, err := connection.Read(make([]byte, 1)); err != io.EOF {
+			t.Fatalf("gateway loss left relay open: %v", err)
+		}
+	}
+}

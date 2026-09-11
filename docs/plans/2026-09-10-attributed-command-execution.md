@@ -159,7 +159,7 @@ Real Unix-socket tests cover peer refusal, read timeout, expiry, malformed/overs
 `just verify-generated` passes with the repository-pinned protoc 35.1, and `just test` passes against the dedicated `secondbox_test_attributed_command` database with explicit `sslmode=disable`.
 `runner/internal/egressforwarder` now owns a TCP listener with a fixed attribution value, a connection limit, and a host cancellation/deadline boundary.
 It sends the preface to the configured Unix gateway before guest bytes, preserves half-close responses, and waits for relays to close before returning.
-Gateway or relay failure ends forwarding; capacity exhaustion refuses only the new connection.
+Gateway setup, listener, and unexpected relay failures end forwarding; capacity exhaustion and ordinary peer stream closure affect only that connection.
 Real socket race tests cover bidirectional bytes, forged guest headers, half-close, active-connection cancellation/expiry, capacity refusal, and an absent gateway.
 The complete `just test` and `just verify-generated` checks also pass with this forwarding component present.
 These network checks alone do not qualify complete sandbox execution. Compute and public lifecycle evidence is recorded below; downstream gateway consumption requires the qualified release.

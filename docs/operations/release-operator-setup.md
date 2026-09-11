@@ -34,7 +34,7 @@ Rebuilding the bundle rotates its identity. The guest agent, `/init`, and the mi
 
 v0.3.0 rotated the anchor and the bundle: snapshot-resume needs a guest agent that supports template mode and the one-time assignment bind, and both live in the rootfs.
 
-v0.7.0 through v0.10.0 carry the v0.6.0 Firecracker microVM bundle and trust anchor forward unchanged. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact previously published signed bundle; do not rebuild it from other guest sources. A different runtime or toolchain component-manifest digest makes the v1 guided updater reject these releases because existing Sandboxes remain pinned to their immutable Profile revisions. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
+v0.7.0 through v0.10.1 carry the v0.6.0 Firecracker microVM bundle and trust anchor forward unchanged. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact previously published signed bundle; do not rebuild it from other guest sources. A different runtime or toolchain component-manifest digest makes the v1 guided updater reject these releases because existing Sandboxes remain pinned to their immutable Profile revisions. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
 
 ## Release
 
@@ -44,7 +44,7 @@ Tag the clean commit. On the qualified host, run the unfiltered scenario suite, 
 # Tag locally only; the tag is pushed right before the upload, once every
 # qualification has passed, so a failed qualification never leaves an
 # unusable public module tag.
-git tag v0.10.0
+git tag v0.10.1
 
 export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
 export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$artifact_target"
@@ -68,7 +68,7 @@ export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE=/protected/releases/evidence/gvis
 export SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE=/protected/releases/evidence/gvisor-pod-linux-scenario-qualification-evidence.json
 
 export SECONDBOX_RELEASE_POSTGRES_IMAGE='docker.io/library/postgres@sha256:REVIEWED_DIGEST'
-just release-candidate 0.10.0 /protected/releases/installer-candidate
+just release-candidate 0.10.1 /protected/releases/installer-candidate
 
 export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
 export SECONDBOX_INSTALLER_RELEASE_DIRECTORY=/protected/releases/installer-candidate
@@ -79,9 +79,9 @@ export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE="$qualification_image"
 export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256="$qualification_image_sha256"
 just test-installer-qualified
 
-just release-stage 0.10.0 /protected/releases/secondbox-0.10.0
-git push origin refs/tags/v0.10.0
-just release-upload 0.10.0 /protected/releases/secondbox-0.10.0
+just release-stage 0.10.1 /protected/releases/secondbox-0.10.1
+git push origin refs/tags/v0.10.1
+just release-upload 0.10.1 /protected/releases/secondbox-0.10.1
 ```
 
 `test-scenario` writes `.tmp/scenario-qualification-evidence.json` only after the full suite and cleanup pass. Its `sourceCommit` must equal `HEAD`, so run it after the release pull request merges and before staging; do not reuse evidence from the review branch. `release-candidate` then builds an explicitly non-publishable manifest with the reviewed, digest-pinned bundled-service images and no installer-qualification claim. The repository-owned QEMU/libvirt driver tests that candidate and writes `.tmp/installer-qualification-evidence.json` after its clean-host, reboot, resume, uninstall, purge, and real-microVM assertions pass. The helper downloads the pinned Ubuntu qualification image only when the target path is absent and prints its reviewed SHA-256 for the explicit driver input; retain that image for subsequent releases or choose a new absent target after the repository pin changes. The candidate and final manifest share a qualification-subject digest: every final manifest field participates except the candidate marker and installer-evidence reference. `release-stage` requires both evidence documents, rejects evidence for different release bytes, and emits the publishable final manifest. `release-upload` creates a private draft and dispatches the GitHub workflow; the workflow does not rebuild or qualify anything.
