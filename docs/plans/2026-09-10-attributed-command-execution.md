@@ -1,6 +1,6 @@
 # Plan: Attributed command execution
 
-Status: design agreed with Fable 5.1; implementation in progress, based on `eebb488`.
+Status: design agreed with Fable 5.1; implementation submitted in PR #123. Exact-release-commit qualification and publication are pending.
 Provide trusted network attribution for one command and its descendants without making guest code an identity authority.
 The application retains authorization and credential custody; SecondBox supplies isolated execution and lifecycle evidence.
 No application credentials, provider names, tokens, or integration policies enter SecondBox.
