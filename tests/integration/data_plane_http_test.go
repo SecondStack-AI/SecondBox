@@ -118,6 +118,16 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	if err != nil || !bytes.Equal(stdout, stdin) {
 		t.Fatalf("Exec stdout = %v, %v", stdout, err)
 	}
+	delayedResponse := dataPlaneJSONRequest(t, server.URL+"/v1/sandboxes/"+sandbox.ID+"/exec", key.Credential, sandbox.Generation, "exec-delayed-teardown", map[string]any{
+		"command":     map[string]any{"mode": "shell", "command": "success-before-delayed-teardown"},
+		"environment": map[string]string{}, "stdinBase64": base64.StdEncoding.EncodeToString(stdin),
+		"deadlineMilliseconds": 500, "maximumOutputBytes": 1024,
+	})
+	assertHTTPStatus(t, delayedResponse, http.StatusOK)
+	decodeHTTPJSON(t, delayedResponse, &exited)
+	if exited.Kind != "exited" || exited.Output.StdoutBase64 != base64.StdEncoding.EncodeToString(stdin) {
+		t.Fatalf("delayed teardown lost successful outcome: %#v", exited)
+	}
 
 	mkdirResponse := dataPlaneJSONRequest(t, server.URL+"/v1/sandboxes/"+sandbox.ID+"/directories", key.Credential, sandbox.Generation, "mkdir-http-key", map[string]any{
 		"path": "workspace", "recursive": false,
@@ -822,6 +832,15 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 				return nil
 			}
 			if !open.Streaming {
+				if open.GetShell() == "success-before-delayed-teardown" {
+					timer := time.NewTimer(time.Until(time.UnixMilli(int64(open.DeadlineUnixMs))) + 100*time.Millisecond)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
 				stdout, stderr, exitCode := open.Stdin, []byte(nil), int32(0)
 				if open.GetShell() == "printf flue" {
 					stdout, stderr, exitCode = []byte("flue-out"), []byte("flue-err"), 17

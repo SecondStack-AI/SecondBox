@@ -72,7 +72,8 @@ func TestAttributedExecReportsCompletionAfterHostStop(t *testing.T) {
 				asyncErrors := make(chan error, 1)
 				open := relayExecOpen(fence, "exec", "stream", "true")
 				open.GetOpen().Streaming = streaming
-				open.GetOpen().DeadlineUnixMs = uint64(time.Now().Add(10 * time.Second).UnixMilli())
+				deadline := time.Now().Add(500 * time.Millisecond)
+				open.GetOpen().DeadlineUnixMs = uint64(deadline.UnixMilli())
 				if err := service.handleExecFrame(t.Context(), stream, open, map[runnerprotocol.RunnerFeature]bool{runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING: true}, asyncErrors); err != nil {
 					t.Fatal(err)
 				}
@@ -84,6 +85,7 @@ func TestAttributedExecReportsCompletionAfterHostStop(t *testing.T) {
 				if len(stream.messages()) != 0 {
 					t.Error("terminal result was sent before host stop")
 				}
+				<-time.After(time.Until(deadline) + 10*time.Millisecond)
 				close(release)
 				waitRunnerMessages(t, stream, 1)
 				terminal := stream.messages()[0].GetExec().GetBufferedResult().GetTerminal()

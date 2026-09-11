@@ -265,7 +265,7 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, sandboxCapacityKey); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox Sandbox data-plane capacity lock: %w", err)
 	}
-	session, policy, capacity, err := lockDataPlaneAuthority(ctx, tx, input)
+	session, policy, capacity, err := lockDataPlaneAuthority(ctx, tx, &input)
 	if err != nil {
 		return DataPlaneSession{}, false, err
 	}
@@ -567,7 +567,7 @@ func (capacity dataPlaneCapacity) exhausted() bool {
 func lockDataPlaneAuthority(
 	ctx context.Context,
 	tx pgx.Tx,
-	input DataPlaneAdmission,
+	input *DataPlaneAdmission,
 ) (DataPlaneSession, contracts.ExecutionPolicy, dataPlaneCapacity, error) {
 	var session DataPlaneSession
 	var sandboxState, assignmentState, desiredState string

@@ -20,13 +20,15 @@ type attributedDisconnectBackend struct {
 
 type disconnectAfterStartStream struct {
 	recordingProtocolStream
-	started <-chan struct{}
+	started          <-chan struct{}
+	beforeDisconnect func()
 }
 
 func (stream *disconnectAfterStartStream) Recv() (*runnerprotocol.ControlPlaneToRunner, error) {
 	frame, err := stream.recordingProtocolStream.Recv()
 	if errors.Is(err, io.EOF) {
 		<-stream.started
+		stream.beforeDisconnect()
 	}
 	return frame, err
 }
@@ -39,11 +41,16 @@ func TestRunnerDisconnectCancelsPendingAttributedStart(t *testing.T) {
 		started: make(chan struct{}), release: make(chan struct{}),
 	}
 	assignment := resolvedAssignmentCommand()
-	assignment.AttributedExecution = &runnerprotocol.AttributedExecution{AuthorizationRef: "pending"}
+	assignment.AttributedExecution = &runnerprotocol.AttributedExecution{AuthorizationRef: "pending", ExpiresAtUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli())}
 	assignment.Requirements.RequiredCapabilities = append(assignment.Requirements.RequiredCapabilities, "attributed-execution")
 	stream := &disconnectAfterStartStream{started: backend.started, recordingProtocolStream: recordingProtocolStream{inbound: []*runnerprotocol.ControlPlaneToRunner{
 		runnerWelcomeFrame("pending"), {Message: &runnerprotocol.ControlPlaneToRunner_Assignment{Assignment: assignment}},
 	}}}
+	stream.beforeDisconnect = func() {
+		if err := backend.startContext.Err(); err != nil {
+			t.Errorf("startup expired before disconnect: %v", err)
+		}
+	}
 	service, err := NewRunnerProtocolService(testRunnerConfig(), backend, staticProtocolConnector{stream: stream})
 	if err != nil {
 		t.Fatal(err)

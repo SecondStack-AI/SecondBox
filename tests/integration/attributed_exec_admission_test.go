@@ -94,9 +94,12 @@ func TestAttributedGenerationKeepsOneExecAfterSessionCleanup(t *testing.T) {
 	}
 	read := admission("read-only")
 	read.Kind, read.Operation, read.ExecOpen = "file", "stat", nil
+	read.DeadlineAt = now.Add(30 * time.Second)
 	read.FileOpen = &runnerv1.FileOpen{Operation: runnerv1.FileOperation_FILE_OPERATION_STAT, WorkspaceRelativePath: "file"}
-	if _, _, err := relay.AdmitDataPlane(t.Context(), read); err != nil {
+	if session, _, err := relay.AdmitDataPlane(t.Context(), read); err != nil {
 		t.Fatalf("read-only admission = %v", err)
+	} else if !session.DeadlineAt.Equal(now.Add(20 * time.Second)) {
+		t.Fatalf("read-only deadline = %v", session.DeadlineAt)
 	}
 	type result struct {
 		input   runnercontrol.DataPlaneAdmission

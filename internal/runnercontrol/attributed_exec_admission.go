@@ -20,7 +20,7 @@ type attributedAssignmentAuthority struct {
 
 // The caller holds the Sandbox and assignment row locks. The consumed session ID
 // stays on the assignment even after data-plane result retention removes it.
-func (authority attributedAssignmentAuthority) admitDataPlane(ctx context.Context, tx pgx.Tx, assignmentID, desiredState string, input DataPlaneAdmission) error {
+func (authority attributedAssignmentAuthority) admitDataPlane(ctx context.Context, tx pgx.Tx, assignmentID, desiredState string, input *DataPlaneAdmission) error {
 	if authority.reference == nil && authority.expiresAt == nil && authority.sessionID == nil {
 		return nil
 	}
@@ -30,10 +30,13 @@ func (authority attributedAssignmentAuthority) admitDataPlane(ctx context.Contex
 	if desiredState != contracts.SandboxDesiredStateRunning {
 		return ports.ErrLifecycleUnavailable
 	}
-	if !input.Now.Before(*authority.expiresAt) || input.DeadlineAt.After(*authority.expiresAt) {
+	if !input.Now.Before(*authority.expiresAt) {
 		return ErrDataPlaneDeadline
 	}
 	if input.Kind == "exec" && input.ExecOpen != nil && !input.ExecOpen.AllocatePty {
+		if input.DeadlineAt.After(*authority.expiresAt) {
+			return ErrDataPlaneDeadline
+		}
 		if authority.sessionID != nil {
 			return ports.ErrLifecycleUnavailable
 		}
@@ -46,6 +49,9 @@ func (authority attributedAssignmentAuthority) admitDataPlane(ctx context.Contex
 		switch input.FileOpen.Operation {
 		case runnerv1.FileOperation_FILE_OPERATION_READ, runnerv1.FileOperation_FILE_OPERATION_STAT,
 			runnerv1.FileOperation_FILE_OPERATION_LIST, runnerv1.FileOperation_FILE_OPERATION_EXISTS:
+			if input.DeadlineAt.After(*authority.expiresAt) {
+				input.DeadlineAt = *authority.expiresAt
+			}
 			return nil
 		}
 	}

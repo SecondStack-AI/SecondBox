@@ -197,6 +197,10 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 	if len(agent.Revisions) != 4 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 2 {
 		t.Fatalf("changed-bundle lineage = agent %#v coding %#v isolated %#v", agent.Revisions, coding.Revisions, isolated.Revisions)
 	}
+	priorAssetRevision := agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000)
+	if !reflect.DeepEqual(agent.Revisions[2].Spec, priorAssetRevision) {
+		t.Fatalf("attributed permission replaced the previous asset revision: %#v", agent.Revisions[2])
+	}
 	if agent.Revisions[0].SpecDigest != "sha256:054dc1ce0afc837bf729c32ddbb64b532ba6a8a75793dd492d9d8698765c1e88" {
 		t.Fatalf("changed bundle rewrote agent revision 1: %#v", agent.Revisions)
 	}
@@ -219,10 +223,17 @@ func TestDevelopmentProfileLineageUsesOnlySyntheticAssets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(profile.Revisions) != 1 || profile.Revisions[0].Number != 1 {
+		wantRevisions := 1
+		if name == AgentCompartment {
+			wantRevisions = 2
+		}
+		if len(profile.Revisions) != wantRevisions || profile.Revisions[0].Number != 1 {
 			t.Fatalf("development %s lineage = %#v", name, profile.Revisions)
 		}
 		spec := profile.Revisions[0].Spec
+		if name == AgentCompartment && !reflect.DeepEqual(spec, agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000)) {
+			t.Fatalf("attributed permission replaced development revision 1: %#v", spec)
+		}
 		if spec.RuntimeBundleDigest != runtimeDigest || spec.ToolchainBundleDigest != toolchainDigest {
 			t.Fatalf("development %s assets = %#v", name, spec)
 		}
