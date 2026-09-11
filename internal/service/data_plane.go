@@ -545,7 +545,7 @@ func (service *ControlPlaneService) waitForDataPlane(
 	defer ticker.Stop()
 	wait := time.Duration(maximumWaitMilliseconds) * time.Millisecond
 	if session.Kind == "exec" && session.Operation == "exec" {
-		wait += bufferedExecCompletionGrace
+		wait += runnercontrol.BufferedExecCompletionGrace
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()

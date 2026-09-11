@@ -24,10 +24,6 @@ import (
 
 const liveDataPlaneChunkBytes = 64 << 10
 
-// The Runner enforces execution time separately and can need 30 seconds to
-// confirm host teardown before delivering a buffered outcome.
-const bufferedExecCompletionGrace = 30 * time.Second
-
 const dataPlaneCredentialDomain = "secondbox/data-plane/v1\x00"
 
 type dataPlaneStream interface {
@@ -270,7 +266,7 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 	session runnercontrol.DataPlaneSession,
 	open *runnerv1.ExecOpen,
 ) (runnercontrol.DataPlaneSession, error) {
-	operationCtx, cancel := context.WithDeadline(ctx, session.DeadlineAt.Add(bufferedExecCompletionGrace))
+	operationCtx, cancel := context.WithDeadline(ctx, session.DeadlineAt.Add(runnercontrol.BufferedExecCompletionGrace))
 	defer cancel()
 	stream, err := service.openDataPlaneStream(operationCtx, session)
 	if err != nil {

@@ -330,6 +330,18 @@ echo "$peak"' "${arguments[1]}"
       "${compose[@]}" "${arguments[@]}"
     fi
     ;;
+  kill)
+    service="${arguments[${#arguments[@]}-1]}"
+    if [[ "$service" == secondbox-runner || "$service" == secondbox-runner-relocation ]]; then
+      [[ ${#arguments[@]} == 4 && "${arguments[1]}" == "-s" ]] || fail "runner kill requires an explicit signal"
+      container_id="$(kubectl get pod "$service" --output=json |
+        jq -er '.status.containerStatuses[] | select(.name == "runner") | .containerID | select(startswith("containerd://")) | ltrimstr("containerd://")')" ||
+        fail "runner pod $service has no containerd task"
+      ${SECONDBOX_SCENARIO_POD_CTR:-k3s ctr} --namespace k8s.io tasks kill --signal "${arguments[2]}" "$container_id"
+    else
+      "${compose[@]}" "${arguments[@]}"
+    fi
+    ;;
   logs)
     tail_lines=""
     compose_services=()
