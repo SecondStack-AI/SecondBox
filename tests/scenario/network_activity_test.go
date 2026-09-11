@@ -516,6 +516,8 @@ func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *te
 		t.Fatal(err)
 	}
 	networkSpec := networkLineage.Revisions[len(networkLineage.Revisions)-1].Spec
+	// These ordinary network probes do not use a Tenant egress context.
+	networkSpec.AttributedExecution = nil
 	networkSpec.Network = contracts.NetworkPolicy{Mode: "allow_list", Destinations: []contracts.NetworkDestination{{Protocol: "http", CIDR: "1.1.1.1/32", Port: 80}}, RequiresTenantEgressContext: new(bool)}
 	networkProfile := createScenarioProfile(t, fixture, "scenario-agent-compartment-network-enabled", networkSpec)
 
