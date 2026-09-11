@@ -21,6 +21,10 @@ policy, not a DNS record: the proxy does not synthesize guest answers for the
 logical domain. Network-enabled production deployments must provide and qualify
 their own upstream resolution and gateway reachability.
 
+## Attributed command forwarding
+
+An attributed generation has its own TCP listener. The Runner sends its immutable execution identity to the configured Unix gateway before forwarding guest bytes. A peer reset, broken pipe, or close after a completed response ends only that connection; other requests retain the same authority. Gateway connection or identity-preface failure, listener failure, cancellation, and expiry still terminate forwarding and retire the generation. Ordinary stream closure does not authorize a replacement transport or bypass the gateway.
+
 ## Backend topologies
 
 The Firecracker backend implements the outbound contract with per-TAP bridge-family firewall

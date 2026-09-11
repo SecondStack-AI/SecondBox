@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Fixed attributed commands terminating after an individual HTTP client reset or closed its connection. Subsequent requests retain their command authority, while gateway failure, cancellation, and expiry still stop forwarding.
+
 ### Changed
 
 - The gVisor backend is a supported backend for Linux amd64 hosts without KVM, Kubernetes nodes included. Every release now publishes `ghcr.io/secondstack-ai/secondbox/runner-gvisor` and `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts` (the prepared flat root, `runsc`, the guest agent, and the backend materialization, built from the repository and digest-pinned bases) plus the `secondbox-VERSION-gvisor-materialization.json` release file; the artifact manifest schema is `secondbox.release/artifact-manifest/v6` with a `gvisor` section recording both image digests, the materialization digest, the flat-root digest, and the `runsc` release, and the gVisor host and pod scenario evidence every release now carries.
