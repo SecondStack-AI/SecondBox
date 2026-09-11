@@ -313,6 +313,9 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	assignment *runnerprotocol.AssignmentCommand,
 	ownClaim *activeAssignment,
 ) error {
+	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+		return incompatibleAssignment(err)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -328,7 +331,7 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	backend.mu.Lock()
 	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
 		defer backend.mu.Unlock()
-		if active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, assignment) {
+		if active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, nil, assignment) {
 			if active.fenced {
 				return infrastructureAssignment(fmt.Errorf("SecondBox Microsandbox replayed assignment is being fenced"))
 			}
@@ -400,6 +403,9 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignment *runnerprotocol.AssignmentCommand,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (result runnercontrol.BackendInstance, resultErr error) {
+	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+		return result, incompatibleAssignment(err)
+	}
 	started := time.Now()
 	if assignment == nil || assignment.Fence == nil || !completeFence(assignment.Fence) {
 		return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment fence identity is incomplete"))
@@ -412,7 +418,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignmentID := assignment.Fence.AssignmentId
 	backend.mu.Lock()
 	if existing, exists := backend.assignments[assignmentID]; exists {
-		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, assignment) {
+		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, nil, assignment) {
 			backend.mu.Unlock()
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment ID was reused with different fencing"))
 		}
@@ -432,7 +438,7 @@ func (backend *AssignmentBackend) StartAssignment(
 			backend.mu.Lock()
 			reference = ""
 			if current, still := backend.assignments[assignmentID]; still && current != nil &&
-				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, assignment) && !current.fenced {
+				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, nil, assignment) && !current.fenced {
 				reference = current.backendRef
 			}
 			backend.mu.Unlock()

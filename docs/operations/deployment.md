@@ -96,6 +96,8 @@ A Runner can support several names. Each maps to its own Runner-local logical-ga
 
 Logical mappings authorize network policy and never create guest DNS. Agent Platform continues to inject its installation's configured Runner-local gateway IP through the existing proxy variables. The same IP may appear more than once within or across contexts; operators select distinct addresses where isolation requires them. A context pins the mapping indirection rather than an address list or digest.
 
+A gateway entry can also declare `attributed_socket`, rendered as `attributedSocket` in the Runner JSON. It names a canonical absolute Unix socket path, up to 107 bytes, for attributed execution forwarding. Each entry needs an `address`, an `attributed_socket`, or both. Socket-only entries do not authorize ordinary IP egress. The Runner resolves sockets only within the assignment's pinned context; another context or the ordinary address is never substituted. This configuration support does not enable the attributed-execution capability before backend qualification.
+
 Runner context configuration is static for one connection. To replace or remove a mapping, drain the Runner, stop every active Sandbox using that context, update the reviewed configuration, and restart. A stopped Sandbox pinned to a removed context remains durable but cannot start until the mapping returns or the Sandbox is retired. There is no dynamic gateway health discovery, live remapping, default context, cross-context retry, or automatic reassignment.
 
 State the mapping in the Runner declaration; never edit the generated JSON or environment transport:
@@ -320,7 +322,7 @@ egress_context_config_path = ''
 # Context-indexed Runner-local mappings. Replace the empty list with one or more
 # [[runners.egress_contexts]] tables, each containing a unique valid name, and
 # [[runners.egress_contexts.gateways]] tables containing logical_name and
-# address. The generator emits the strict JSON file; do not hand-edit it.
+# address, attributed_socket, or both. The generator emits the strict JSON file.
 egress_contexts = []
 # Upstream DNS resolver; must be an IP:port with a nonzero port.
 network_policy_dns_upstream = ''

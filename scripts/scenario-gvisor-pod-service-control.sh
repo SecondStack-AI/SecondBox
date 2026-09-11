@@ -23,6 +23,7 @@ for name in \
   SECONDBOX_SCENARIO_GVISOR_BUILD \
   SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION \
   SECONDBOX_SCENARIO_IDENTITY_DIR \
+  SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR \
   SECONDBOX_SCENARIO_STATE_DIR \
   SECONDBOX_SCENARIO_WORKSPACE_DIR \
   SECONDBOX_SCENARIO_RELOCATION_IDENTITY_DIR \
@@ -200,6 +201,9 @@ $(emit_env \
         - name: identity
           mountPath: /opt/secondbox-runner-identity
           readOnly: true
+        - name: attributed-gateway
+          mountPath: /opt/secondbox-attributed-gateway
+          readOnly: true
         - name: gvisor-build
           mountPath: /opt/secondbox-gvisor
           readOnly: true
@@ -222,6 +226,10 @@ $(emit_env \
     - name: identity
       hostPath:
         path: $service_identity
+        type: Directory
+    - name: attributed-gateway
+      hostPath:
+        path: $SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR
         type: Directory
     - name: gvisor-build
       hostPath:

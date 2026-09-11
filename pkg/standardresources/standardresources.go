@@ -110,9 +110,10 @@ func ProfileLineage(name, runtimeDigest, toolchainDigest string) (resourceapply.
 			agentSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest, 120000),
 			// Callers may request a command deadline up to the Sandbox's outer lifetime.
 			agentSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest, 900000),
+			attributedAgentSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest),
 		}
 		if runtimeDigest != v030RuntimeBundleDigest || toolchainDigest != v030ToolchainBundleDigest {
-			specs = append(specs, agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000))
+			specs = append(specs, attributedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest))
 		}
 	case DurableCoding:
 		specs = []secondboxclient.ProfileRevisionSpec{codingSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest)}
@@ -137,7 +138,7 @@ func DevelopmentProfileLineage(name, runtimeDigest, toolchainDigest string) (res
 	var specs []secondboxclient.ProfileRevisionSpec
 	switch name {
 	case AgentCompartment:
-		specs = []secondboxclient.ProfileRevisionSpec{agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000)}
+		specs = []secondboxclient.ProfileRevisionSpec{attributedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest)}
 	case DurableCoding:
 		specs = []secondboxclient.ProfileRevisionSpec{codingSpec(PoolAMD64, runtimeDigest, toolchainDigest)}
 	case AgentCompartmentIsolated:
@@ -203,6 +204,12 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilli
 		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: AgentGateway, Port: 443}}, RequiresTenantEgressContext: &requiresTenantEgressContext},
 		Ports:     []secondboxclient.PortPolicy{},
 	}
+}
+
+func attributedAgentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
+	spec := agentSpec(pool, runtimeDigest, toolchainDigest, 900000)
+	spec.AttributedExecution = &secondboxclient.AttributedExecutionPolicy{Gateway: AgentGateway, MaximumConnections: 2}
+	return spec
 }
 
 func isolatedAgentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {

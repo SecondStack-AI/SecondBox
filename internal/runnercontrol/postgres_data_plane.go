@@ -570,7 +570,8 @@ func lockDataPlaneAuthority(
 	input DataPlaneAdmission,
 ) (DataPlaneSession, contracts.ExecutionPolicy, dataPlaneCapacity, error) {
 	var session DataPlaneSession
-	var sandboxState, assignmentState string
+	var sandboxState, assignmentState, desiredState string
+	var attribution attributedAssignmentAuthority
 	var runnerConnected bool
 	var encodedDataPlaneEndpoint string
 	var specJSON []byte
@@ -579,7 +580,8 @@ func lockDataPlaneAuthority(
 		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
 		       assignment.fencing_token,assignment.state,revision.spec_json,
-		       COALESCE(runner.data_plane_address,''),
+		       COALESCE(runner.data_plane_address,''),sandbox.desired_state,
+		       assignment.execution_authorization_ref,assignment.execution_expires_at,assignment.execution_session_id,
 		       EXISTS (
 		         SELECT 1
 		         FROM secondbox.runner_connections AS connection
@@ -600,7 +602,8 @@ func lockDataPlaneAuthority(
 		&session.TenantRef, &session.SubjectRef,
 		&session.ProfileRevisionID, &session.Generation, &sandboxState,
 		&session.AssignmentID, &session.InstanceID, &session.RunnerID,
-		&session.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint,
+		&session.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint, &desiredState,
+		&attribution.reference, &attribution.expiresAt, &attribution.sessionID,
 		&runnerConnected,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -636,6 +639,9 @@ func lockDataPlaneAuthority(
 			leaseState != contracts.LeaseStateActive || !input.Now.Before(leaseExpiry) {
 			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrLeaseInactive
 		}
+	}
+	if err := attribution.admitDataPlane(ctx, tx, session.AssignmentID, desiredState, input); err != nil {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, err
 	}
 	var spec contracts.ProfileRevisionSpec
 	if err := json.Unmarshal(specJSON, &spec); err != nil {

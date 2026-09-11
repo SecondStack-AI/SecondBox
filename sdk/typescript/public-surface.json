@@ -49,6 +49,20 @@
     ],
     "optional": []
   },
+  "AttributedExecutionPolicy": {
+    "required": [
+      "gateway",
+      "maximumConnections"
+    ],
+    "optional": []
+  },
+  "AttributedExecutionRequest": {
+    "required": [
+      "authorizationRef",
+      "expiresAt"
+    ],
+    "optional": []
+  },
   "AuditAttribution": {
     "required": [
       "actorAuthorityId",
@@ -629,7 +643,9 @@
       "startup",
       "toolchainBundleDigest"
     ],
-    "optional": []
+    "optional": [
+      "attributedExecution"
+    ]
   },
   "QuotaUsage": {
     "required": [
@@ -819,6 +835,12 @@
     ],
     "optional": [
       "nextCursor"
+    ]
+  },
+  "StartSandboxRequest": {
+    "required": [],
+    "optional": [
+      "attributedExecution"
     ]
   },
   "StartupPolicy": {

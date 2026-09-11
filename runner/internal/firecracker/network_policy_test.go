@@ -12,6 +12,42 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 )
 
+func TestNFTablesExecutionListenerPolicy(t *testing.T) {
+	compiled, err := networkpolicy.CompileExecutionListener(netip.MustParseAddrPort("198.18.43.1:41000"), networkpolicy.CompileOptions{
+		MaximumPins: 1, MaximumTTL: time.Second,
+		RunnerGateways: map[string]netip.Addr{"ordinary.internal": netip.MustParseAddr("10.0.0.2")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var script string
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		run: func(_ context.Context, _ string, _ []string, stdin string) ([]byte, error) {
+			script = stdin
+			return nil, nil
+		},
+		nftPath: "/usr/sbin/nft",
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "execution-test", TapName: "sbtap1", GuestIP: "198.18.43.2",
+		DNSAddress: netip.MustParseAddr("198.18.43.1"), Policy: compiled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	allow := "ip daddr 198.18.43.1 tcp dport 41000 ct mark set 0x53425801 accept"
+	if strings.Count(script, allow) != 1 || strings.Index(script, allow) > strings.Index(script, "ip daddr 198.18.0.0/15 drop") {
+		t.Fatalf("private endpoint must precede protected drops:\n%s", script)
+	}
+	for _, arp := range []string{"arp daddr ip 198.18.43.1 accept", "arp saddr ip 198.18.43.1 accept"} {
+		if !strings.Contains(script, arp) {
+			t.Fatalf("private endpoint ARP missing:\n%s", script)
+		}
+	}
+	if strings.Contains(script, "dport 53 ") || strings.Contains(script, "daddr 10.0.0.2 ") {
+		t.Fatalf("private execution policy inherited DNS or ordinary gateway:\n%s", script)
+	}
+}
+
 func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *testing.T) {
 	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
 		Mode: networkpolicy.ModeAllowList,

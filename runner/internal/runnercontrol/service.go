@@ -215,6 +215,8 @@ type RunnerProtocolService struct {
 	stateMu                    sync.Mutex
 	drain                      runnerprotocol.DrainPhase
 	active                     map[string]*runnerprotocol.ActiveAssignmentSummary
+	attributedLifetimes        map[string]*attributedAssignmentLifetime
+	attributedFailures         chan error
 	operationMu                sync.Mutex
 	execOperations             map[string]*runnerExecOperation
 	fileOperations             map[string]*runnerFileOperation
@@ -345,6 +347,7 @@ func NewRunnerProtocolService(
 		evidence:                   runnerevidence.SlogSink{},
 		correlations:               make(map[string]*runnerprotocol.Correlation),
 		dataPlane:                  newDataPlaneListener(),
+		attributedFailures:         make(chan error, 1),
 		dataPlaneSPKIPin:           dataPlaneSPKIPin,
 		directPorts:                newDirectPortRegistry(),
 		directDataPlane:            newDirectDataPlaneRegistry(),
@@ -430,8 +433,11 @@ func (s *RunnerProtocolService) SetEvidenceSink(sink runnerevidence.Sink) {
 	}
 }
 
-// Run preserves Runner-owned Instances while reconnecting transient control-plane sessions.
+// Run preserves ordinary Instances while reconnecting transient control-plane sessions.
 func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
+	if err := s.fenceDisconnectedAttributedAssignments(ctx); err != nil {
+		return err
+	}
 	stopDataPlane, err := s.startDataPlaneListener(ctx)
 	if err != nil {
 		return err
@@ -446,6 +452,9 @@ func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
 		}
 		sessionEstablished, sessionErr := s.runProtocolSession(ctx)
 		sessionErr = errors.Join(sessionErr, s.abortWorkspaceRelocations(), s.connector.Close())
+		if err := s.fenceDisconnectedAttributedAssignments(ctx); err != nil {
+			return errors.Join(sessionErr, err)
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -719,6 +728,7 @@ func (s *RunnerProtocolService) consumeCommands(
 			return ctx.Err()
 		case frame := <-received:
 			if frame.err != nil {
+				cancelConnection()
 				assignmentsInFlight.Wait()
 				workspaceCreatesInFlight.Wait()
 				select {
@@ -816,6 +826,8 @@ func (s *RunnerProtocolService) consumeCommands(
 		case err := <-asyncErrors:
 			return err
 		case err := <-dataPlaneFailures:
+			return err
+		case err := <-s.attributedFailures:
 			return err
 		case terminal := <-s.instanceTerminals:
 			s.directPorts.closeAssignment(
@@ -1196,7 +1208,13 @@ func (s *RunnerProtocolService) handleAssignment(
 	progress := func(stage runnerprotocol.AssignmentProgressStage) error {
 		return s.sendAssignmentProgress(stream, assignment, stage, time.Now())
 	}
-	instance, err := s.backend.StartAssignment(ctx, assignment, progress)
+	startCtx := ctx
+	if execution := assignment.AttributedExecution; execution != nil {
+		var cancel context.CancelFunc
+		startCtx, cancel = context.WithDeadline(ctx, time.UnixMilli(int64(execution.ExpiresAtUnixMs)))
+		defer cancel()
+	}
+	instance, err := s.backend.StartAssignment(startCtx, assignment, progress)
 	terminal := runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY
 	safeDetail := ""
 	if err != nil {
@@ -1215,6 +1233,7 @@ func (s *RunnerProtocolService) handleAssignment(
 	} else {
 		s.recordActiveAssignment(assignment.Fence, instance.BackendReference, assignment.EgressContext)
 		s.recordAssignmentCorrelation(assignment)
+		s.armAttributedAssignmentExpiry(ctx, assignment)
 	}
 	if evidenceErr := s.emitEvidence(
 		ctx,
@@ -1408,12 +1427,12 @@ func (s *RunnerProtocolService) handleFence(
 	// The fence revokes assignment authority, so every admitted direct Port
 	// socket for it must be closed before the fence result claims the instance
 	// is stopped.
-	s.directPorts.closeAssignment(command.Fence.GetAssignmentId(), "assignment fenced")
-	s.directDataPlane.closeAssignment(command.Fence.GetAssignmentId(), "assignment fenced")
-	evidence, err := s.backend.FenceAssignment(ctx, command)
+	s.directPorts.closeAssignment(command.Fence.AssignmentId, "assignment fenced")
+	s.directDataPlane.closeAssignment(command.Fence.AssignmentId, "assignment fenced")
+	evidence, err := s.fenceAssignment(ctx, command)
 	if err != nil {
 		evidence.Result = runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_FAILED
-	} else if command != nil && command.Fence != nil {
+	} else {
 		s.removeActiveAssignment(command.Fence.AssignmentId)
 	}
 	result := &runnerprotocol.FenceResult{
@@ -1549,6 +1568,10 @@ func (s *RunnerProtocolService) recordActiveAssignment(
 
 func (s *RunnerProtocolService) removeActiveAssignment(assignmentID string) {
 	s.stateMu.Lock()
+	if lifetime := s.attributedLifetimes[assignmentID]; lifetime != nil {
+		lifetime.timer.Stop()
+		delete(s.attributedLifetimes, assignmentID)
+	}
 	delete(s.active, assignmentID)
 	delete(s.correlations, assignmentID)
 	if s.drain == runnerprotocol.DrainPhase_DRAIN_PHASE_DRAINING && len(s.active) == 0 {
@@ -1739,6 +1762,9 @@ func (s *RunnerProtocolService) sendRunnerFrame(
 }
 
 func validateResolvedAssignment(assignment *runnerprotocol.AssignmentCommand) error {
+	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+		return err
+	}
 	if assignment == nil || assignment.Fence == nil {
 		return fmt.Errorf("SecondBox runner assignment is missing fencing identity")
 	}

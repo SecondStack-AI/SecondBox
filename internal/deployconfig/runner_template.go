@@ -119,7 +119,7 @@ egress_context_config_path = ''
 # Context-indexed Runner-local mappings. Replace the empty list with one or more
 # [[runners.egress_contexts]] tables, each containing a unique valid name, and
 # [[runners.egress_contexts.gateways]] tables containing logical_name and
-# address. The generator emits the strict JSON file; do not hand-edit it.
+# address, attributed_socket, or both. The generator emits the strict JSON file.
 egress_contexts = []
 # Upstream DNS resolver; must be an IP:port with a nonzero port.
 network_policy_dns_upstream = ''

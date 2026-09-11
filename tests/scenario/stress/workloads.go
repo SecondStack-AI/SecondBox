@@ -562,7 +562,7 @@ func (driver *stressDriver) transition(
 		}
 		switch action {
 		case "start":
-			operation, refreshErr = handle.Start(ctx, options)
+			operation, refreshErr = handle.Start(ctx, secondboxclient.StartSandboxRequest{}, options)
 		case "stop":
 			operation, refreshErr = handle.Stop(ctx, options)
 		case "restore":

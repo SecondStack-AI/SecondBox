@@ -282,6 +282,9 @@ var operations = map[string]OperationMetadata{
 	},
 	"startSandbox": {
 		OperationID: "startSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:start",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "StartSandboxRequest"},
+		},
 	},
 	"statSandboxFile": {
 		OperationID: "statSandboxFile", Method: "GET", PathTemplate: "/v1/sandboxes/{sandboxId}/files:stat",

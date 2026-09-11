@@ -8,6 +8,8 @@ scripts/verify-guest-protocol-generated.sh
 scripts/verify-microsandbox-helper-generated.sh
 scripts/verify-portdirect-mirrored.sh
 scripts/verify-network-policy-contract-mirrored.sh
+cmp pkg/egressattribution/framing.go runner/egressattribution/framing.go
+cmp pkg/egressattribution/peer_linux.go runner/egressattribution/peer_linux.go
 scripts/verify-sdk-generated.sh
 go test ./internal/deployconfig -run TestExampleManifestIsGeneratedFromTheRegistry -count=1
 go test ./sdk/go/secondboxclient

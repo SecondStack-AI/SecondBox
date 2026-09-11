@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/egressforwarder"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 )
 
@@ -53,12 +54,13 @@ func dnsAddressForProfile(profile uint32) string {
 }
 
 type instanceNetwork struct {
-	index         uint32
-	namespaceName string
-	hostVeth      string
-	guestVeth     string
-	hostAddress   string
-	guestAddress  string
+	executionForwarder *egressforwarder.ExecutionForwarder
+	index              uint32
+	namespaceName      string
+	hostVeth           string
+	guestVeth          string
+	hostAddress        string
+	guestAddress       string
 }
 
 func (network instanceNetwork) namespacePath() string {
@@ -170,6 +172,11 @@ func destroyInstanceNetwork(ctx context.Context, network instanceNetwork) error 
 // profiles' resources belong to other runners.
 func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
 	var joined error
+	interfaces := make([]string, 0, maximumNetworkslots)
+	for index := uint32(0); index < maximumNetworkslots; index++ {
+		interfaces = append(interfaces, networkForIndex(profile, index).hostVeth)
+	}
+	joined = errors.Join(joined, egressforwarder.RemoveExecutionListenerRules(ctx, "nft", interfaces))
 	namespacePrefix := fmt.Sprintf("%s%d-", namespaceNamePrefix, profile)
 	if output, err := exec.CommandContext(ctx, "ip", "netns", "list").Output(); err != nil {
 		joined = errors.Join(joined, fmt.Errorf("list network namespaces: %w", err))

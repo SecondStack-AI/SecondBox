@@ -229,7 +229,9 @@ func (driver *lifecycleDriver) startSandbox(
 	timings *startupTimingSamples,
 ) (time.Duration, error) {
 	startedAt := time.Now()
-	operation, err := issueWithRevisionRetry(ctx, handle, key, handle.Start)
+	operation, err := issueWithRevisionRetry(ctx, handle, key, func(ctx context.Context, options secondboxclient.LifecycleOptions) (secondboxclient.Operation, error) {
+		return handle.Start(ctx, secondboxclient.StartSandboxRequest{}, options)
+	})
 	if err != nil {
 		return time.Since(startedAt), err
 	}

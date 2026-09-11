@@ -1643,6 +1643,10 @@
         "post": {
           "tags": ["Sandboxes"],
           "operationId": "startSandbox",
+          "requestBody": {
+            "required": false,
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StartSandboxRequest"}}}
+          },
           "parameters": [
             {"$ref": "#/components/parameters/SandboxID"},
             {"$ref": "#/components/parameters/IfMatch"},
@@ -2286,7 +2290,34 @@
           "retention": {"$ref": "#/components/schemas/RetentionPolicy"},
           "execution": {"$ref": "#/components/schemas/ExecutionPolicy"},
           "network": {"$ref": "#/components/schemas/NetworkPolicy"},
+          "attributedExecution": {"$ref": "#/components/schemas/AttributedExecutionPolicy"},
           "ports": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/PortPolicy"}}
+        }
+      },
+      "StartSandboxRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "attributedExecution": {"$ref": "#/components/schemas/AttributedExecutionRequest"}
+        }
+      },
+      "AttributedExecutionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["authorizationRef", "expiresAt"],
+        "properties": {
+          "authorizationRef": {"type": "string", "minLength": 1, "maxLength": 256},
+          "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "AttributedExecutionPolicy": {
+        "type": "object",
+        "description": "Permits one isolated exec through the named installation gateway. Requires the Tenant egress context; it does not extend ordinary generation network policy.",
+        "additionalProperties": false,
+        "required": ["gateway", "maximumConnections"],
+        "properties": {
+          "gateway": {"type": "string", "minLength": 1, "maxLength": 253},
+          "maximumConnections": {"type": "integer", "format": "int64", "minimum": 1, "maximum": 4096}
         }
       },
       "ResourcePolicy": {

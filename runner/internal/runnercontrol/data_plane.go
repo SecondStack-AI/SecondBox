@@ -741,6 +741,7 @@ func (s *RunnerProtocolService) executeStreamingOperation(
 	asyncErrors chan<- error,
 ) {
 	defer s.setActiveOperation(state.fence.AssignmentId, state.operationID, false)
+	ctx, finishAttributedExec := s.beginAttributedExec(ctx, state.fence, open.DeadlineUnixMs)
 	terminal, err := s.dataPlaneBackend.ExecuteStreaming(
 		ctx, cloneRunnerFence(state.fence), proto.Clone(open).(*runnerprotocol.ExecOpen),
 		state.controls,
@@ -748,14 +749,18 @@ func (s *RunnerProtocolService) executeStreamingOperation(
 			return s.sendRunnerExecBytes(ctx, stream, state, channel, content)
 		},
 	)
+	err = errors.Join(err, context.Cause(ctx))
 	if err != nil {
 		kind := runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED
 		detail := "runner execution bridge failed"
-		if errors.Is(err, context.Canceled) || errors.Is(context.Cause(ctx), context.Canceled) {
+		if errors.Is(context.Cause(ctx), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			kind = runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED
+			detail = "command deadline exceeded"
+		} else if errors.Is(err, context.Canceled) || errors.Is(context.Cause(ctx), context.Canceled) {
 			kind = runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED
 			detail = "command cancelled"
 		}
-		if kind == runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
+		if kind == runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED || kind == runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED {
 			terminal = &runnerprotocol.ExecTerminal{Kind: kind, ExitCode: -1, SafeDetail: detail}
 		} else {
 			terminal = runnerInfrastructureTerminal(
@@ -772,7 +777,12 @@ func (s *RunnerProtocolService) executeStreamingOperation(
 			true, "runner execution bridge returned no terminal outcome",
 		)
 	}
-	if err := s.sendExecTerminal(stream, state, terminal); err != nil {
+	stopErr := finishAttributedExec()
+	if stopErr != nil {
+		terminal = runnerInfrastructureTerminal(runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
+			runnerprotocol.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_EXECUTION_NODE, false, "attributed execution termination is unconfirmed")
+	}
+	if err := errors.Join(stopErr, s.sendExecTerminal(stream, state, terminal)); err != nil {
 		reportRunnerAsyncError(asyncErrors, err)
 	}
 }
@@ -785,11 +795,18 @@ func (s *RunnerProtocolService) executeBufferedOperation(
 	asyncErrors chan<- error,
 ) {
 	defer s.setActiveOperation(state.fence.AssignmentId, state.operationID, false)
+	ctx, finishAttributedExec := s.beginAttributedExec(ctx, state.fence, open.DeadlineUnixMs)
 	result, err := s.dataPlaneBackend.ExecuteBuffered(
 		ctx, cloneRunnerFence(state.fence), proto.Clone(open).(*runnerprotocol.ExecOpen),
 	)
+	err = errors.Join(err, context.Cause(ctx))
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(context.Cause(ctx), context.Canceled) {
+		if errors.Is(context.Cause(ctx), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			result.Terminal = &runnerprotocol.ExecTerminal{
+				Kind:     runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED,
+				ExitCode: -1, SafeDetail: "command deadline exceeded",
+			}
+		} else if errors.Is(err, context.Canceled) || errors.Is(context.Cause(ctx), context.Canceled) {
 			result.Terminal = &runnerprotocol.ExecTerminal{
 				Kind:     runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED,
 				ExitCode: -1, SafeDetail: "command cancelled",
@@ -809,7 +826,12 @@ func (s *RunnerProtocolService) executeBufferedOperation(
 			true, "runner buffered execution returned no terminal outcome",
 		)
 	}
-	if err := s.sendExecBufferedResult(stream, state, result); err != nil {
+	stopErr := finishAttributedExec()
+	if stopErr != nil {
+		result.Terminal = runnerInfrastructureTerminal(runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
+			runnerprotocol.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_EXECUTION_NODE, false, "attributed execution termination is unconfirmed")
+	}
+	if err := errors.Join(stopErr, s.sendExecBufferedResult(stream, state, result)); err != nil {
 		reportRunnerAsyncError(asyncErrors, err)
 	}
 }

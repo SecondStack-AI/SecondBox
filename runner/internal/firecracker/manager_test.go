@@ -1412,8 +1412,26 @@ func TestStartBoundsRunningStartupOrphanStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	orig := firecrackerProcessRunningFunc
-	firecrackerProcessRunningFunc = func(string) (bool, error) { return true, nil }
-	t.Cleanup(func() { firecrackerProcessRunningFunc = orig })
+	var running atomic.Bool
+	running.Store(true)
+	probeFinished := make(chan struct{})
+	firecrackerProcessRunningFunc = func(string) (bool, error) {
+		if running.Load() {
+			return true, nil
+		}
+		close(probeFinished)
+		return false, nil
+	}
+	t.Cleanup(func() {
+		// The orphan watcher outlives the bounded Start call. End its probe before restoring it.
+		running.Store(false)
+		select {
+		case <-probeFinished:
+			firecrackerProcessRunningFunc = orig
+		case <-time.After(time.Second):
+			t.Fatal("orphan watcher did not finish its process probe")
+		}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

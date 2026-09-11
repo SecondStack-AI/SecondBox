@@ -24,6 +24,23 @@ import {
 } from "./client.ts";
 import { SecondBoxAPIError, SecondBoxClient, type TerminalSession } from "./transport.ts";
 
+test("Sandbox start sends attributed execution with lifecycle authority", async () => {
+  const attributedExecution = { authorizationRef: "command-sdk", expiresAt: "2026-09-10T12:00:00Z" };
+  const fetcher: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    assert.equal(request.method, "POST");
+    assert.equal(new URL(request.url).pathname, "/v1/sandboxes/sandbox-1:start");
+    assert.equal(request.headers.get("Idempotency-Key"), "start-command-sdk");
+    assert.equal(request.headers.get("If-Match"), '"revision-7"');
+    assert.deepEqual(await request.json(), { attributedExecution });
+    return Response.json({ id: "operation-start", state: "pending", kind: "start" });
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, { ...sandbox("stopped"), revision: 7 });
+  const operation = await handle.start({ attributedExecution, idempotencyKey: "start-command-sdk" });
+  assert.equal(operation.id, "operation-start");
+});
+
 test("requestJSON uses generated operation metadata", async () => {
   let requested = "";
   const fetcher: typeof fetch = async (input) => {

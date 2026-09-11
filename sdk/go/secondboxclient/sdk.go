@@ -187,8 +187,8 @@ func (handle *SandboxHandle) Wait(
 }
 
 // Start requests that the caller-owned Sandbox become ready.
-func (handle *SandboxHandle) Start(ctx context.Context, options LifecycleOptions) (Operation, error) {
-	return handle.lifecycle(ctx, "startSandbox", options, nil)
+func (handle *SandboxHandle) Start(ctx context.Context, request StartSandboxRequest, options LifecycleOptions) (Operation, error) {
+	return handle.lifecycle(ctx, "startSandbox", options, request)
 }
 
 // Drain rejects new Sandbox data-plane operations before stop or deletion.

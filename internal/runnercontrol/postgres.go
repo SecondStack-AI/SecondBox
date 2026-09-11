@@ -367,6 +367,9 @@ func (store *PostgresStateStore) RecordRegistration(
 	if registration.Capabilities.SnapshotResumeReady {
 		capabilities = append(capabilities, contracts.RunnerCapabilitySnapshotResume)
 	}
+	if registration.Capabilities.AttributedExecutionReady {
+		capabilities = append(capabilities, contracts.RunnerCapabilityAttributedExecution)
+	}
 	architecturesJSON, err := json.Marshal([]string{registration.Capabilities.Architecture})
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner architecture encoding: %w", err)

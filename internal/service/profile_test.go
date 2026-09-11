@@ -20,6 +20,37 @@ func TestValidateProfileRevisionSpecRequiresExplicitTenantEgressContextPolicy(t 
 	}
 }
 
+func TestValidateProfileAttributedExecutionPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		gateway         string
+		connections     int64
+		requiresContext bool
+		valid           bool
+	}{
+		{"valid", "agent-runner-gateway", 32, true, true},
+		{"missing context", "agent-runner-gateway", 32, false, false},
+		{"missing gateway", "", 32, true, false},
+		{"gateway IP", "127.0.0.1", 32, true, false},
+		{"gateway URL", "https://gateway.example", 32, true, false},
+		{"gateway wildcard", "*.example", 32, true, false},
+		{"noncanonical gateway", "Gateway.example.", 32, true, false},
+		{"missing connection bound", "gateway.example", 0, true, false},
+		{"excess connection bound", "gateway.example", 4097, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validProfileRevisionSpecForValidation()
+			spec.Network.RequiresTenantEgressContext = &test.requiresContext
+			spec.AttributedExecution = &contracts.AttributedExecutionPolicy{
+				Gateway: test.gateway, MaximumConnections: test.connections,
+			}
+			if err := validateProfileRevisionSpec(spec); (err == nil) != test.valid {
+				t.Fatalf("profile validation = %v; valid = %v", err, test.valid)
+			}
+		})
+	}
+}
+
 func validProfileRevisionSpecForValidation() contracts.ProfileRevisionSpec {
 	return contracts.ProfileRevisionSpec{
 		Pool:                  "pool",

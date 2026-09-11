@@ -155,6 +155,33 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		if err := json.Unmarshal(specJSON, &spec); err != nil {
 			return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle quota Profile decoding failed: %w", err)
 		}
+		attributed, err := contracts.ParseAttributedExecutionMetadata(input.Operation.RequestMetadata)
+		if err != nil {
+			return contracts.Operation{}, fmt.Errorf("%w: %w", ports.ErrInvalidRequest, err)
+		}
+		if attributed != nil {
+			if observed != contracts.SandboxStateStopped || desired != contracts.SandboxDesiredStateStopped || locked.CurrentInstanceID != "" {
+				return contracts.Operation{}, ports.ErrWorkspaceMutation
+			}
+			if spec.AttributedExecution == nil || spec.Network.RequiresTenantEgressContext == nil ||
+				!*spec.Network.RequiresTenantEgressContext || locked.EgressContext == nil {
+				return contracts.Operation{}, fmt.Errorf("%w: SecondBox attributed start requires Profile permission and pinned Tenant routing", ports.ErrInvalidRequest)
+			}
+			remaining := attributed.ExpiresAt.Sub(input.Now)
+			maximum := spec.Execution.MaximumDeadlineMilliseconds
+			if remaining <= 0 || remaining.Milliseconds() > maximum ||
+				remaining.Milliseconds() == maximum && remaining%time.Millisecond != 0 {
+				return contracts.Operation{}, fmt.Errorf("%w: SecondBox attributed start expiry exceeds its execution deadline", ports.ErrInvalidRequest)
+			}
+			var supported bool
+			if err := tx.QueryRow(ctx, `SELECT capabilities_json ? $2 FROM secondbox.runners WHERE id=$1 FOR SHARE`,
+				locked.Workspace.HomeRunnerID, contracts.RunnerCapabilityAttributedExecution).Scan(&supported); err != nil {
+				return contracts.Operation{}, fmt.Errorf("SecondBox attributed start Runner capability lookup failed: %w", err)
+			}
+			if !supported {
+				return contracts.Operation{}, ports.ErrHomeRunnerUnavailable
+			}
+		}
 		subjectUsage, err := readSubjectQuotaUsage(
 			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef,
 		)
@@ -655,6 +682,11 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		UPDATE secondbox.sandboxes
 		SET state=$1,lifecycle_action=CASE WHEN $2='wait' THEN lifecycle_action ELSE $2 END,
 		    desired_state=CASE
+		      WHEN $2 IN ('drain','finish_stop') AND desired_state='running' AND EXISTS (
+		        SELECT 1 FROM secondbox.assignments AS assignment
+		        WHERE assignment.instance_id=secondbox.sandboxes.current_instance_id
+		          AND assignment.execution_authorization_ref IS NOT NULL
+		      ) THEN 'stopped'
 		      WHEN $2='drain' AND $3 IN ('idle_timeout','maximum_duration') THEN 'stopped'
 		      ELSE desired_state
 		    END,

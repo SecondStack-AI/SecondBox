@@ -408,6 +408,9 @@ func workspaceDeletePayload(
 }
 
 type startPlan struct {
+	tenantRef         string
+	subjectRef        string
+	attributed        *contracts.AttributedExecutionRequest
 	workspaceID       string
 	mutationID        string
 	generation        int64
@@ -452,6 +455,15 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	if err != nil {
 		return broker.failInvalidProfileStart(ctx, claim, plan, err, now.UTC())
 	}
+	if plan.attributed != nil {
+		if !plan.attributed.ExpiresAt.After(now) || plan.spec.AttributedExecution == nil || plan.operationID == "" {
+			return broker.failInvalidProfileStart(ctx, claim, plan,
+				errors.New("SecondBox attributed start requires a current explicit Operation and Profile permission"), now.UTC())
+		}
+		// The backend installs the private forwarder path from the attributed
+		// binding. Ordinary destinations must never accompany this generation.
+		networkPolicy = &runnerv1.NetworkPolicy{Mode: runnerv1.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL}
+	}
 	assets, guestProtocolGeneration, err := resolveProfileAssets(
 		broker.config.AssetCatalog, plan.spec,
 	)
@@ -463,6 +475,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	// whether it can honour a mode from its own start paths rather than from a
 	// capability string the control plane echoed back at it.
 	requiredCapabilities := []string{"network-policy", "storage", "cleanup", "local-workspace"}
+	if plan.attributed != nil {
+		requiredCapabilities = append(requiredCapabilities, contracts.RunnerCapabilityAttributedExecution)
+	}
 	// Placement additionally requires advertised resume capacity for a
 	// snapshot_resume revision. There is no cold-boot substitution, so this is a
 	// hard admission filter rather than a preference, and it is a control-plane
@@ -475,6 +490,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		)
 	}
 	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
+	if plan.attributed != nil && plan.attributed.ExpiresAt.Before(deadline) {
+		deadline = plan.attributed.ExpiresAt
+	}
 	assignmentCommand := &runnerv1.AssignmentCommand{
 		Fence: &runnerv1.AssignmentFence{
 			AssignmentId: assignmentID, SandboxId: claim.SandboxID, InstanceId: instanceID,
@@ -503,6 +521,15 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	}
 	if plan.egressContext != nil {
 		assignmentCommand.EgressContext = *plan.egressContext
+	}
+	if plan.attributed != nil {
+		assignmentCommand.AttributedExecution = &runnerv1.AttributedExecution{
+			TenantRef: plan.tenantRef, SubjectRef: plan.subjectRef,
+			AuthorizationRef:   plan.attributed.AuthorizationRef,
+			ExpiresAtUnixMs:    uint64(plan.attributed.ExpiresAt.UnixMilli()),
+			Gateway:            plan.spec.AttributedExecution.Gateway,
+			MaximumConnections: uint32(plan.spec.AttributedExecution.MaximumConnections),
+		}
 	}
 	planReadyAt, err := broker.observeAtOrAfter(effectStartedAt)
 	if err != nil {
@@ -766,8 +793,10 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 ) (startPlan, error) {
 	var plan startPlan
 	var specJSON []byte
+	var metadataJSON []byte
 	err := broker.pool.QueryRow(ctx, `
-		SELECT sandbox.workspace_id,sandbox.generation,sandbox.profile_revision_id,
+		SELECT sandbox.tenant_ref,sandbox.subject_ref,sandbox.lifecycle_request_metadata_json,
+		       sandbox.workspace_id,sandbox.generation,sandbox.profile_revision_id,
 		       sandbox.egress_context,
 		       revision.spec_json,workspace.mutation_id,
 		       COALESCE(operation.id,''),COALESCE(operation.request_id,'')
@@ -779,6 +808,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		WHERE sandbox.id=$1 AND sandbox.reconcile_owner=$2`,
 		claim.SandboxID, claim.WorkerID,
 	).Scan(
+		&plan.tenantRef, &plan.subjectRef, &metadataJSON,
 		&plan.workspaceID, &plan.generation, &plan.profileRevisionID, &plan.egressContext,
 		&specJSON, &plan.mutationID, &plan.operationID, &plan.requestID,
 	)
@@ -790,6 +820,16 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	}
 	if err := json.Unmarshal(specJSON, &plan.spec); err != nil {
 		return startPlan{}, fmt.Errorf("SecondBox lifecycle start Profile decoding failed: %w", err)
+	}
+	var metadata map[string]string
+	if len(metadataJSON) != 0 {
+		if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+			return startPlan{}, fmt.Errorf("SecondBox lifecycle start binding decoding failed: %w", err)
+		}
+	}
+	plan.attributed, err = contracts.ParseAttributedExecutionMetadata(metadata)
+	if err != nil {
+		return startPlan{}, err
 	}
 	if plan.spec.Network.RequiresTenantEgressContext == nil {
 		return startPlan{}, errors.New("SecondBox lifecycle start Profile egress-context requirement is absent")
@@ -804,7 +844,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	} else if plan.egressContext != nil {
 		return startPlan{}, errors.New("SecondBox lifecycle start isolated Sandbox has an unexpected egress-context pin")
 	}
-	if plan.operationID == "" {
+	if plan.operationID == "" && plan.attributed == nil {
 		plan.operationID = stableEffectID(
 			"automatic-start",
 			claim.SandboxID,

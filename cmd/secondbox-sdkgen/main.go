@@ -21,6 +21,8 @@ var httpMethods = []string{"delete", "get", "patch", "post", "put"}
 
 var goContractSchemas = stringSet([]string{
 	"AcquireLeaseRequest",
+	"AttributedExecutionPolicy",
+	"AttributedExecutionRequest",
 	"BootStageTiming",
 	"BootTiming",
 	"CreateProfileRequest",
@@ -56,6 +58,7 @@ var goContractSchemas = stringSet([]string{
 	"Snapshot",
 	"SnapshotPage",
 	"StartupPolicy",
+	"StartSandboxRequest",
 })
 
 type document struct {

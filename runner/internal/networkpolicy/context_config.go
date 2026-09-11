@@ -39,14 +39,20 @@ type egressContextDocument struct {
 }
 
 type logicalGatewayDocument struct {
-	LogicalName string `json:"logicalName"`
-	Address     string `json:"address"`
+	LogicalName      string `json:"logicalName"`
+	Address          string `json:"address"`
+	AttributedSocket string `json:"attributedSocket,omitempty"`
+}
+
+type runnerGatewayRoute struct {
+	address          netip.Addr
+	attributedSocket string
 }
 
 // EgressContextConfig is the immutable context-indexed Runner gateway
 // authority loaded once before protocol registration or backend recovery.
 type EgressContextConfig struct {
-	contexts           map[string]map[string]netip.Addr
+	contexts           map[string]map[string]runnerGatewayRoute
 	protectedAddresses []netip.Addr
 }
 
@@ -170,7 +176,7 @@ func decodeEgressContextConfig(content []byte) (EgressContextConfig, error) {
 	if len(*document.Contexts) > maximumEgressContexts {
 		return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context config exceeds %d contexts", maximumEgressContexts)
 	}
-	config := EgressContextConfig{contexts: make(map[string]map[string]netip.Addr, len(*document.Contexts))}
+	config := EgressContextConfig{contexts: make(map[string]map[string]runnerGatewayRoute, len(*document.Contexts))}
 	protected := make(map[netip.Addr]struct{})
 	for _, contextDocument := range *document.Contexts {
 		if err := ValidateEgressContextName(contextDocument.Name); err != nil {
@@ -185,7 +191,7 @@ func decodeEgressContextConfig(content []byte) (EgressContextConfig, error) {
 		if len(contextDocument.Gateways) > maximumLogicalGatewaysPerContext {
 			return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context %q exceeds %d gateways", contextDocument.Name, maximumLogicalGatewaysPerContext)
 		}
-		gateways := make(map[string]netip.Addr, len(contextDocument.Gateways))
+		gateways := make(map[string]runnerGatewayRoute, len(contextDocument.Gateways))
 		for _, gateway := range contextDocument.Gateways {
 			logicalName, err := normalizeDomain(gateway.LogicalName)
 			if err != nil {
@@ -197,13 +203,24 @@ func decodeEgressContextConfig(content []byte) (EgressContextConfig, error) {
 			if _, duplicate := gateways[logicalName]; duplicate {
 				return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context %q repeats logical name %q", contextDocument.Name, logicalName)
 			}
-			address, err := netip.ParseAddr(gateway.Address)
-			if err != nil {
-				return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context %q logical name %q has an invalid IP", contextDocument.Name, logicalName)
+			if gateway.Address == "" && gateway.AttributedSocket == "" {
+				return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context %q logical name %q has no route", contextDocument.Name, logicalName)
 			}
-			address = normalizeAddress(address)
-			gateways[logicalName] = address
-			protected[address] = struct{}{}
+			route := runnerGatewayRoute{attributedSocket: gateway.AttributedSocket}
+			if gateway.Address != "" {
+				address, err := netip.ParseAddr(gateway.Address)
+				if err != nil {
+					return EgressContextConfig{}, fmt.Errorf("SecondBox Runner egress context %q logical name %q has an invalid IP", contextDocument.Name, logicalName)
+				}
+				route.address = normalizeAddress(address)
+				protected[route.address] = struct{}{}
+			}
+			if gateway.AttributedSocket != "" {
+				if err := networkpolicycontract.ValidateAttributedGatewaySocket(gateway.AttributedSocket); err != nil {
+					return EgressContextConfig{}, err
+				}
+			}
+			gateways[logicalName] = route
 		}
 		config.contexts[contextDocument.Name] = gateways
 	}
@@ -226,6 +243,17 @@ func ValidateEgressContextName(name string) error {
 	return nil
 }
 
+func (config EgressContextConfig) HasAttributedGateway() bool {
+	for _, gateways := range config.contexts {
+		for _, gateway := range gateways {
+			if gateway.attributedSocket != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ContextNames returns the immutable, sorted Runner advertisement set.
 func (config EgressContextConfig) ContextNames() []string {
 	names := make([]string, 0, len(config.contexts))
@@ -246,8 +274,21 @@ func (config EgressContextConfig) CompileOptionsForContext(contextName string, b
 	base.RunnerAddresses = append([]netip.Addr(nil), base.RunnerAddresses...)
 	base.ManagementPrefixes = append([]netip.Prefix(nil), base.ManagementPrefixes...)
 	base.ProtectedAddresses = append([]netip.Addr(nil), config.protectedAddresses...)
-	base.RunnerGateways = cloneGatewayMapping(gateways)
+	base.RunnerGateways = make(map[string]netip.Addr, len(gateways))
+	for name, route := range gateways {
+		if route.address.IsValid() {
+			base.RunnerGateways[name] = route.address
+		}
+	}
 	return base, nil
+}
+
+func (config EgressContextConfig) AttributedGatewaySocket(contextName, logicalName string) (string, error) {
+	route, found := config.contexts[contextName][logicalName]
+	if !found || route.attributedSocket == "" {
+		return "", fmt.Errorf("SecondBox Runner attributed gateway %q is not configured in egress context %q", logicalName, contextName)
+	}
+	return route.attributedSocket, nil
 }
 
 func (config EgressContextConfig) compileOptionsWithoutContext(base CompileOptions) CompileOptions {
@@ -256,12 +297,4 @@ func (config EgressContextConfig) compileOptionsWithoutContext(base CompileOptio
 	base.ProtectedAddresses = append([]netip.Addr(nil), config.protectedAddresses...)
 	base.RunnerGateways = nil
 	return base
-}
-
-func cloneGatewayMapping(source map[string]netip.Addr) map[string]netip.Addr {
-	result := make(map[string]netip.Addr, len(source))
-	for logicalName, address := range source {
-		result[logicalName] = address
-	}
-	return result
 }

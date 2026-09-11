@@ -199,15 +199,13 @@ func bridgeAddress(cidr string) netip.Addr {
 	return prefix.Addr()
 }
 
-func (m *Manager) joinInstanceNetworkCleanup(ctx context.Context, instanceID, tapName string, cause error) error {
-	if err := m.cleanupNetworkChecked(ctx, instanceID, tapName); err != nil {
-		return errors.Join(cause, fmt.Errorf("remove microVM network after launch failure: %w", err))
-	}
-	return cause
-}
-
 func (m *Manager) cleanupNetworkChecked(ctx context.Context, instanceID, tapName string) error {
 	var cleanupErr error
+	if m.cfg != nil && m.cfg.NetworkPolicyNFTPath != "" && tapName != "" {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cleanupErr = m.cleanupExecutionListenerRules(cleanupCtx, tapName)
+		cancel()
+	}
 	if m.networkPolicy != nil && strings.TrimSpace(instanceID) != "" {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		err := m.networkPolicy.Remove(cleanupCtx, instanceID)

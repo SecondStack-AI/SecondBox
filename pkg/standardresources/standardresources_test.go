@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
+	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
 func TestRecordedBundleAcceptsImmutablePrefixAfterPolicyAppends(t *testing.T) {
@@ -95,7 +96,7 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 		}
 		wantRevisions := 1
 		if profile.Name == AgentCompartment {
-			wantRevisions = 2
+			wantRevisions = 3
 		}
 		if len(profile.Revisions) != wantRevisions {
 			t.Fatalf("lineage = %#v", profile.Revisions)
@@ -125,6 +126,15 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 		t.Fatalf("agent-compartment revision 2 changed more than its deadline: %#v", agent.Revisions)
 	}
 	currentAgent := agent.Revisions[len(agent.Revisions)-1].Spec
+	wantAttributed := &secondboxclient.AttributedExecutionPolicy{Gateway: AgentGateway, MaximumConnections: 2}
+	if !reflect.DeepEqual(currentAgent.AttributedExecution, wantAttributed) {
+		t.Fatalf("agent-compartment attributed policy = %#v", currentAgent.AttributedExecution)
+	}
+	previousAgent = agent.Revisions[1].Spec
+	previousAgent.AttributedExecution = wantAttributed
+	if !reflect.DeepEqual(previousAgent, currentAgent) {
+		t.Fatalf("agent-compartment revision 3 changed more than attributed permission: %#v", agent.Revisions)
+	}
 	if currentAgent.Network.RequiresTenantEgressContext == nil || !*currentAgent.Network.RequiresTenantEgressContext || currentAgent.Network.Mode != "allow_list" || len(currentAgent.Network.Destinations) != 1 || currentAgent.Network.Destinations[0].Domain != AgentGateway || len(currentAgent.Ports) != 0 || currentAgent.Retention.SnapshotLimit != 0 {
 		t.Fatalf("agent-compartment is over-capable: %#v", currentAgent)
 	}
@@ -137,6 +147,7 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 	}
 	networkAgent := currentAgent
 	networkAgent.Network = isolatedSpec.Network
+	networkAgent.AttributedExecution = nil
 	if !reflect.DeepEqual(networkAgent, isolatedSpec) {
 		t.Fatalf("isolated Profile changed more than network policy: agent=%#v isolated=%#v", currentAgent, isolatedSpec)
 	}
@@ -183,7 +194,7 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agent.Revisions) != 3 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 2 {
+	if len(agent.Revisions) != 4 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 2 {
 		t.Fatalf("changed-bundle lineage = agent %#v coding %#v isolated %#v", agent.Revisions, coding.Revisions, isolated.Revisions)
 	}
 	if agent.Revisions[0].SpecDigest != "sha256:054dc1ce0afc837bf729c32ddbb64b532ba6a8a75793dd492d9d8698765c1e88" {

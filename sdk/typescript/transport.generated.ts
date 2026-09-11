@@ -54,6 +54,17 @@ export interface ArgvCommand {
   readonly mode: "argv";
 }
 
+/** Permits one isolated exec through the named installation gateway. Requires the Tenant egress context; it does not extend ordinary generation network policy. */
+export interface AttributedExecutionPolicy {
+  readonly gateway: string;
+  readonly maximumConnections: number;
+}
+
+export interface AttributedExecutionRequest {
+  readonly authorizationRef: string;
+  readonly expiresAt: Timestamp;
+}
+
 /** Attribution recorded for every management mutation and denial. Credential bearer and verifier material is never recorded. */
 export interface AuditAttribution {
   readonly actorAuthorityId: AuthorityID;
@@ -549,6 +560,7 @@ export interface ProfileRevision {
 
 export interface ProfileRevisionSpec {
   readonly architecture: "amd64" | "arm64";
+  readonly attributedExecution?: AttributedExecutionPolicy;
   readonly execution: ExecutionPolicy;
   readonly lifecycle: LifecyclePolicy;
   readonly network: NetworkPolicy;
@@ -725,6 +737,10 @@ export interface SnapshotPage {
 }
 
 export type SpawnFailureKind = "not_found" | "permission_denied" | "invalid_cwd" | "malformed_executable";
+
+export interface StartSandboxRequest {
+  readonly attributedExecution?: AttributedExecutionRequest;
+}
 
 /** cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot. */
 export type StartupMode = "cold_boot" | "snapshot_resume";
@@ -1156,7 +1172,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   rotateApplicationAuthority: { method: "POST", path: "/v1/application-authorities/{authorityId}:rotate" },
   rotateTenantControllerAuthority: { method: "POST", path: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}:rotate" },
   sandboxFileExists: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:exists" },
-  startSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:start" },
+  startSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:start", contentType: "application/json" },
   statSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:stat" },
   stopSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:stop" },
   suspendTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:suspend" },

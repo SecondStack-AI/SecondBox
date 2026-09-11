@@ -189,6 +189,7 @@ services:
     volumes:
       - ./scenario-runner-entrypoint.sh:/usr/local/bin/secondbox-scenario-runner-entrypoint:ro
       - ${SECONDBOX_SCENARIO_IDENTITY_DIR:?SECONDBOX_SCENARIO_IDENTITY_DIR is required}:/opt/secondbox-runner-identity:ro
+      - ${SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR:?SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR is required}:/opt/secondbox-attributed-gateway:ro
       - ${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR is required}:/opt/secondbox-artifacts:ro
       - ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is required}:/opt/secondbox-artifact-public-key.pem:ro
       - scenario-egress-context-config:/etc/secondbox-runner:ro

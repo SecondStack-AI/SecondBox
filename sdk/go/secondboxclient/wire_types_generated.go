@@ -64,6 +64,11 @@ type ArgvCommand struct {
 	Mode       string   `json:"mode"`
 }
 
+// AttributedExecutionPolicy Permits one isolated exec through the named installation gateway. Requires the Tenant egress context; it does not extend ordinary generation network policy.
+type AttributedExecutionPolicy = contracts.AttributedExecutionPolicy
+
+type AttributedExecutionRequest = contracts.AttributedExecutionRequest
+
 // AuditAttribution Attribution recorded for every management mutation and denial. Credential bearer and verifier material is never recorded.
 type AuditAttribution struct {
 	ActorAuthorityID    AuthorityID              `json:"actorAuthorityId"`
@@ -711,6 +716,8 @@ const (
 	SpawnFailureKindInvalidCwd          SpawnFailureKind = "invalid_cwd"
 	SpawnFailureKindMalformedExecutable SpawnFailureKind = "malformed_executable"
 )
+
+type StartSandboxRequest = contracts.StartSandboxRequest
 
 // StartupMode cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot.
 type StartupMode = string

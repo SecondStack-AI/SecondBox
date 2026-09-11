@@ -2093,9 +2093,10 @@ type RunnerCapabilities struct {
 	// resume template cache root, requires the jailer, and holds at least one
 	// admitted template built from the exact signed bundle it verified. It is not
 	// a prerequisite: a runner without it stays fully eligible for cold boot.
-	SnapshotResumeReady bool `protobuf:"varint,12,opt,name=snapshot_resume_ready,json=snapshotResumeReady,proto3" json:"snapshot_resume_ready,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	SnapshotResumeReady      bool `protobuf:"varint,12,opt,name=snapshot_resume_ready,json=snapshotResumeReady,proto3" json:"snapshot_resume_ready,omitempty"`
+	AttributedExecutionReady bool `protobuf:"varint,13,opt,name=attributed_execution_ready,json=attributedExecutionReady,proto3" json:"attributed_execution_ready,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *RunnerCapabilities) Reset() {
@@ -2208,6 +2209,13 @@ func (x *RunnerCapabilities) GetDataPlaneReady() bool {
 func (x *RunnerCapabilities) GetSnapshotResumeReady() bool {
 	if x != nil {
 		return x.SnapshotResumeReady
+	}
+	return false
+}
+
+func (x *RunnerCapabilities) GetAttributedExecutionReady() bool {
+	if x != nil {
+		return x.AttributedExecutionReady
 	}
 	return false
 }
@@ -3392,9 +3400,10 @@ type AssignmentCommand struct {
 	WorkspaceId       string                 `protobuf:"bytes,11,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
 	// egress_context is the Sandbox's immutable creation-time pin. It is empty
 	// exactly when requirements.requires_tenant_egress_context is false.
-	EgressContext string `protobuf:"bytes,12,opt,name=egress_context,json=egressContext,proto3" json:"egress_context,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EgressContext       string               `protobuf:"bytes,12,opt,name=egress_context,json=egressContext,proto3" json:"egress_context,omitempty"`
+	AttributedExecution *AttributedExecution `protobuf:"bytes,13,opt,name=attributed_execution,json=attributedExecution,proto3" json:"attributed_execution,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AssignmentCommand) Reset() {
@@ -3504,6 +3513,99 @@ func (x *AssignmentCommand) GetEgressContext() string {
 	return ""
 }
 
+func (x *AssignmentCommand) GetAttributedExecution() *AttributedExecution {
+	if x != nil {
+		return x.AttributedExecution
+	}
+	return nil
+}
+
+// Attribution is control-plane authority fixed before guest networking opens.
+// AssignmentFence supplies its Sandbox, Instance, and generation binding.
+type AttributedExecution struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TenantRef          string                 `protobuf:"bytes,1,opt,name=tenant_ref,json=tenantRef,proto3" json:"tenant_ref,omitempty"`
+	SubjectRef         string                 `protobuf:"bytes,2,opt,name=subject_ref,json=subjectRef,proto3" json:"subject_ref,omitempty"`
+	AuthorizationRef   string                 `protobuf:"bytes,3,opt,name=authorization_ref,json=authorizationRef,proto3" json:"authorization_ref,omitempty"`
+	ExpiresAtUnixMs    uint64                 `protobuf:"varint,4,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"`
+	Gateway            string                 `protobuf:"bytes,5,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	MaximumConnections uint32                 `protobuf:"varint,6,opt,name=maximum_connections,json=maximumConnections,proto3" json:"maximum_connections,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *AttributedExecution) Reset() {
+	*x = AttributedExecution{}
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttributedExecution) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttributedExecution) ProtoMessage() {}
+
+func (x *AttributedExecution) ProtoReflect() protoreflect.Message {
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttributedExecution.ProtoReflect.Descriptor instead.
+func (*AttributedExecution) Descriptor() ([]byte, []int) {
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *AttributedExecution) GetTenantRef() string {
+	if x != nil {
+		return x.TenantRef
+	}
+	return ""
+}
+
+func (x *AttributedExecution) GetSubjectRef() string {
+	if x != nil {
+		return x.SubjectRef
+	}
+	return ""
+}
+
+func (x *AttributedExecution) GetAuthorizationRef() string {
+	if x != nil {
+		return x.AuthorizationRef
+	}
+	return ""
+}
+
+func (x *AttributedExecution) GetExpiresAtUnixMs() uint64 {
+	if x != nil {
+		return x.ExpiresAtUnixMs
+	}
+	return 0
+}
+
+func (x *AttributedExecution) GetGateway() string {
+	if x != nil {
+		return x.Gateway
+	}
+	return ""
+}
+
+func (x *AttributedExecution) GetMaximumConnections() uint32 {
+	if x != nil {
+		return x.MaximumConnections
+	}
+	return 0
+}
+
 type AssignmentAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MessageId     string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
@@ -3518,7 +3620,7 @@ type AssignmentAck struct {
 
 func (x *AssignmentAck) Reset() {
 	*x = AssignmentAck{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[19]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3530,7 +3632,7 @@ func (x *AssignmentAck) String() string {
 func (*AssignmentAck) ProtoMessage() {}
 
 func (x *AssignmentAck) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[19]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3543,7 +3645,7 @@ func (x *AssignmentAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignmentAck.ProtoReflect.Descriptor instead.
 func (*AssignmentAck) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{19}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AssignmentAck) GetMessageId() string {
@@ -3603,7 +3705,7 @@ type AssignmentProgress struct {
 
 func (x *AssignmentProgress) Reset() {
 	*x = AssignmentProgress{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[20]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3615,7 +3717,7 @@ func (x *AssignmentProgress) String() string {
 func (*AssignmentProgress) ProtoMessage() {}
 
 func (x *AssignmentProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[20]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3628,7 +3730,7 @@ func (x *AssignmentProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignmentProgress.ProtoReflect.Descriptor instead.
 func (*AssignmentProgress) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{20}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AssignmentProgress) GetMessageId() string {
@@ -3696,7 +3798,7 @@ type AssignmentResult struct {
 
 func (x *AssignmentResult) Reset() {
 	*x = AssignmentResult{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[21]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3708,7 +3810,7 @@ func (x *AssignmentResult) String() string {
 func (*AssignmentResult) ProtoMessage() {}
 
 func (x *AssignmentResult) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[21]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3721,7 +3823,7 @@ func (x *AssignmentResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignmentResult.ProtoReflect.Descriptor instead.
 func (*AssignmentResult) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{21}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *AssignmentResult) GetMessageId() string {
@@ -3794,7 +3896,7 @@ type FenceCommand struct {
 
 func (x *FenceCommand) Reset() {
 	*x = FenceCommand{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[22]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3806,7 +3908,7 @@ func (x *FenceCommand) String() string {
 func (*FenceCommand) ProtoMessage() {}
 
 func (x *FenceCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[22]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3819,7 +3921,7 @@ func (x *FenceCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FenceCommand.ProtoReflect.Descriptor instead.
 func (*FenceCommand) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{22}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *FenceCommand) GetMessageId() string {
@@ -3879,7 +3981,7 @@ type FenceResult struct {
 
 func (x *FenceResult) Reset() {
 	*x = FenceResult{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[23]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3891,7 +3993,7 @@ func (x *FenceResult) String() string {
 func (*FenceResult) ProtoMessage() {}
 
 func (x *FenceResult) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[23]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3904,7 +4006,7 @@ func (x *FenceResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FenceResult.ProtoReflect.Descriptor instead.
 func (*FenceResult) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{23}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *FenceResult) GetMessageId() string {
@@ -3968,7 +4070,7 @@ type DrainCommand struct {
 
 func (x *DrainCommand) Reset() {
 	*x = DrainCommand{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[24]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3980,7 +4082,7 @@ func (x *DrainCommand) String() string {
 func (*DrainCommand) ProtoMessage() {}
 
 func (x *DrainCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[24]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3993,7 +4095,7 @@ func (x *DrainCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainCommand.ProtoReflect.Descriptor instead.
 func (*DrainCommand) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{24}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *DrainCommand) GetMessageId() string {
@@ -4036,7 +4138,7 @@ type DrainState struct {
 
 func (x *DrainState) Reset() {
 	*x = DrainState{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[25]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4048,7 +4150,7 @@ func (x *DrainState) String() string {
 func (*DrainState) ProtoMessage() {}
 
 func (x *DrainState) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[25]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4061,7 +4163,7 @@ func (x *DrainState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainState.ProtoReflect.Descriptor instead.
 func (*DrainState) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{25}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *DrainState) GetMessageId() string {
@@ -4101,7 +4203,7 @@ type StreamCredit struct {
 
 func (x *StreamCredit) Reset() {
 	*x = StreamCredit{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[26]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4113,7 +4215,7 @@ func (x *StreamCredit) String() string {
 func (*StreamCredit) ProtoMessage() {}
 
 func (x *StreamCredit) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[26]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4126,7 +4228,7 @@ func (x *StreamCredit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamCredit.ProtoReflect.Descriptor instead.
 func (*StreamCredit) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{26}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *StreamCredit) GetByteCount() uint64 {
@@ -4158,7 +4260,7 @@ type ExecOpen struct {
 
 func (x *ExecOpen) Reset() {
 	*x = ExecOpen{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[27]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4170,7 +4272,7 @@ func (x *ExecOpen) String() string {
 func (*ExecOpen) ProtoMessage() {}
 
 func (x *ExecOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[27]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4183,7 +4285,7 @@ func (x *ExecOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecOpen.ProtoReflect.Descriptor instead.
 func (*ExecOpen) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{27}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ExecOpen) GetCommand() isExecOpen_Command {
@@ -4299,7 +4401,7 @@ type ArgvCommand struct {
 
 func (x *ArgvCommand) Reset() {
 	*x = ArgvCommand{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[28]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4311,7 +4413,7 @@ func (x *ArgvCommand) String() string {
 func (*ArgvCommand) ProtoMessage() {}
 
 func (x *ArgvCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[28]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4324,7 +4426,7 @@ func (x *ArgvCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArgvCommand.ProtoReflect.Descriptor instead.
 func (*ArgvCommand) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{28}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ArgvCommand) GetArgument() []string {
@@ -4344,7 +4446,7 @@ type EnvironmentEntry struct {
 
 func (x *EnvironmentEntry) Reset() {
 	*x = EnvironmentEntry{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[29]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4356,7 +4458,7 @@ func (x *EnvironmentEntry) String() string {
 func (*EnvironmentEntry) ProtoMessage() {}
 
 func (x *EnvironmentEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[29]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4369,7 +4471,7 @@ func (x *EnvironmentEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvironmentEntry.ProtoReflect.Descriptor instead.
 func (*EnvironmentEntry) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{29}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *EnvironmentEntry) GetName() string {
@@ -4396,7 +4498,7 @@ type ExecInput struct {
 
 func (x *ExecInput) Reset() {
 	*x = ExecInput{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[30]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4408,7 +4510,7 @@ func (x *ExecInput) String() string {
 func (*ExecInput) ProtoMessage() {}
 
 func (x *ExecInput) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[30]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4421,7 +4523,7 @@ func (x *ExecInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecInput.ProtoReflect.Descriptor instead.
 func (*ExecInput) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{30}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ExecInput) GetData() []byte {
@@ -4448,7 +4550,7 @@ type ExecOutput struct {
 
 func (x *ExecOutput) Reset() {
 	*x = ExecOutput{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[31]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4460,7 +4562,7 @@ func (x *ExecOutput) String() string {
 func (*ExecOutput) ProtoMessage() {}
 
 func (x *ExecOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[31]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4473,7 +4575,7 @@ func (x *ExecOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecOutput.ProtoReflect.Descriptor instead.
 func (*ExecOutput) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{31}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ExecOutput) GetChannel() ExecOutputChannel {
@@ -4504,7 +4606,7 @@ type ExecBufferedResult struct {
 
 func (x *ExecBufferedResult) Reset() {
 	*x = ExecBufferedResult{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[32]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4516,7 +4618,7 @@ func (x *ExecBufferedResult) String() string {
 func (*ExecBufferedResult) ProtoMessage() {}
 
 func (x *ExecBufferedResult) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[32]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4529,7 +4631,7 @@ func (x *ExecBufferedResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecBufferedResult.ProtoReflect.Descriptor instead.
 func (*ExecBufferedResult) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{32}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ExecBufferedResult) GetStdout() []byte {
@@ -4562,7 +4664,7 @@ type ExecCancel struct {
 
 func (x *ExecCancel) Reset() {
 	*x = ExecCancel{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[33]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4574,7 +4676,7 @@ func (x *ExecCancel) String() string {
 func (*ExecCancel) ProtoMessage() {}
 
 func (x *ExecCancel) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[33]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4587,7 +4689,7 @@ func (x *ExecCancel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecCancel.ProtoReflect.Descriptor instead.
 func (*ExecCancel) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{33}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ExecCancel) GetReason() string {
@@ -4615,7 +4717,7 @@ type ExecTerminal struct {
 
 func (x *ExecTerminal) Reset() {
 	*x = ExecTerminal{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[34]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4627,7 +4729,7 @@ func (x *ExecTerminal) String() string {
 func (*ExecTerminal) ProtoMessage() {}
 
 func (x *ExecTerminal) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[34]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4640,7 +4742,7 @@ func (x *ExecTerminal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecTerminal.ProtoReflect.Descriptor instead.
 func (*ExecTerminal) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{34}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ExecTerminal) GetKind() ExecTerminalKind {
@@ -4736,7 +4838,7 @@ type ExecFrame struct {
 
 func (x *ExecFrame) Reset() {
 	*x = ExecFrame{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[35]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4748,7 +4850,7 @@ func (x *ExecFrame) String() string {
 func (*ExecFrame) ProtoMessage() {}
 
 func (x *ExecFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[35]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4761,7 +4863,7 @@ func (x *ExecFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecFrame.ProtoReflect.Descriptor instead.
 func (*ExecFrame) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{35}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ExecFrame) GetFence() *AssignmentFence {
@@ -4929,7 +5031,7 @@ type FileOpen struct {
 
 func (x *FileOpen) Reset() {
 	*x = FileOpen{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[36]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4941,7 +5043,7 @@ func (x *FileOpen) String() string {
 func (*FileOpen) ProtoMessage() {}
 
 func (x *FileOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[36]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4954,7 +5056,7 @@ func (x *FileOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileOpen.ProtoReflect.Descriptor instead.
 func (*FileOpen) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{36}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *FileOpen) GetOperation() FileOperation {
@@ -5009,7 +5111,7 @@ type FileChunk struct {
 
 func (x *FileChunk) Reset() {
 	*x = FileChunk{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[37]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5021,7 +5123,7 @@ func (x *FileChunk) String() string {
 func (*FileChunk) ProtoMessage() {}
 
 func (x *FileChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[37]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5034,7 +5136,7 @@ func (x *FileChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileChunk.ProtoReflect.Descriptor instead.
 func (*FileChunk) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{37}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *FileChunk) GetOffset() uint64 {
@@ -5067,7 +5169,7 @@ type FileMetadata struct {
 
 func (x *FileMetadata) Reset() {
 	*x = FileMetadata{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[38]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5079,7 +5181,7 @@ func (x *FileMetadata) String() string {
 func (*FileMetadata) ProtoMessage() {}
 
 func (x *FileMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[38]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5092,7 +5194,7 @@ func (x *FileMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileMetadata.ProtoReflect.Descriptor instead.
 func (*FileMetadata) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{38}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *FileMetadata) GetExists() bool {
@@ -5163,7 +5265,7 @@ type FileMetadataEntry struct {
 
 func (x *FileMetadataEntry) Reset() {
 	*x = FileMetadataEntry{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[39]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5175,7 +5277,7 @@ func (x *FileMetadataEntry) String() string {
 func (*FileMetadataEntry) ProtoMessage() {}
 
 func (x *FileMetadataEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[39]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5188,7 +5290,7 @@ func (x *FileMetadataEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileMetadataEntry.ProtoReflect.Descriptor instead.
 func (*FileMetadataEntry) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{39}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *FileMetadataEntry) GetPath() string {
@@ -5229,7 +5331,7 @@ type FileTerminal struct {
 
 func (x *FileTerminal) Reset() {
 	*x = FileTerminal{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[40]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5241,7 +5343,7 @@ func (x *FileTerminal) String() string {
 func (*FileTerminal) ProtoMessage() {}
 
 func (x *FileTerminal) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[40]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5254,7 +5356,7 @@ func (x *FileTerminal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileTerminal.ProtoReflect.Descriptor instead.
 func (*FileTerminal) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{40}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *FileTerminal) GetKind() FileTerminalKind {
@@ -5293,7 +5395,7 @@ type FileFrame struct {
 
 func (x *FileFrame) Reset() {
 	*x = FileFrame{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[41]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5305,7 +5407,7 @@ func (x *FileFrame) String() string {
 func (*FileFrame) ProtoMessage() {}
 
 func (x *FileFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[41]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5318,7 +5420,7 @@ func (x *FileFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileFrame.ProtoReflect.Descriptor instead.
 func (*FileFrame) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{41}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *FileFrame) GetFence() *AssignmentFence {
@@ -5466,7 +5568,7 @@ type PtyInput struct {
 
 func (x *PtyInput) Reset() {
 	*x = PtyInput{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[42]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5478,7 +5580,7 @@ func (x *PtyInput) String() string {
 func (*PtyInput) ProtoMessage() {}
 
 func (x *PtyInput) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[42]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5491,7 +5593,7 @@ func (x *PtyInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PtyInput.ProtoReflect.Descriptor instead.
 func (*PtyInput) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{42}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *PtyInput) GetData() []byte {
@@ -5511,7 +5613,7 @@ type PtyResize struct {
 
 func (x *PtyResize) Reset() {
 	*x = PtyResize{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[43]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5523,7 +5625,7 @@ func (x *PtyResize) String() string {
 func (*PtyResize) ProtoMessage() {}
 
 func (x *PtyResize) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[43]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5536,7 +5638,7 @@ func (x *PtyResize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PtyResize.ProtoReflect.Descriptor instead.
 func (*PtyResize) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{43}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *PtyResize) GetRows() uint32 {
@@ -5562,7 +5664,7 @@ type PtyDetach struct {
 
 func (x *PtyDetach) Reset() {
 	*x = PtyDetach{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[44]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5574,7 +5676,7 @@ func (x *PtyDetach) String() string {
 func (*PtyDetach) ProtoMessage() {}
 
 func (x *PtyDetach) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[44]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5587,7 +5689,7 @@ func (x *PtyDetach) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PtyDetach.ProtoReflect.Descriptor instead.
 func (*PtyDetach) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{44}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *PtyDetach) GetReconnectId() string {
@@ -5608,7 +5710,7 @@ type PtyAttach struct {
 
 func (x *PtyAttach) Reset() {
 	*x = PtyAttach{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[45]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5620,7 +5722,7 @@ func (x *PtyAttach) String() string {
 func (*PtyAttach) ProtoMessage() {}
 
 func (x *PtyAttach) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[45]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5633,7 +5735,7 @@ func (x *PtyAttach) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PtyAttach.ProtoReflect.Descriptor instead.
 func (*PtyAttach) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{45}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *PtyAttach) GetReconnectId() string {
@@ -5669,7 +5771,7 @@ type PtyAttachResult struct {
 
 func (x *PtyAttachResult) Reset() {
 	*x = PtyAttachResult{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[46]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5681,7 +5783,7 @@ func (x *PtyAttachResult) String() string {
 func (*PtyAttachResult) ProtoMessage() {}
 
 func (x *PtyAttachResult) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[46]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5694,7 +5796,7 @@ func (x *PtyAttachResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PtyAttachResult.ProtoReflect.Descriptor instead.
 func (*PtyAttachResult) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{46}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *PtyAttachResult) GetKind() PtyAttachResultKind {
@@ -5749,7 +5851,7 @@ type PtyFrame struct {
 
 func (x *PtyFrame) Reset() {
 	*x = PtyFrame{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[47]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5761,7 +5863,7 @@ func (x *PtyFrame) String() string {
 func (*PtyFrame) ProtoMessage() {}
 
 func (x *PtyFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[47]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5774,7 +5876,7 @@ func (x *PtyFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PtyFrame.ProtoReflect.Descriptor instead.
 func (*PtyFrame) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{47}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *PtyFrame) GetFence() *AssignmentFence {
@@ -5954,7 +6056,7 @@ type PortOpen struct {
 
 func (x *PortOpen) Reset() {
 	*x = PortOpen{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[48]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5966,7 +6068,7 @@ func (x *PortOpen) String() string {
 func (*PortOpen) ProtoMessage() {}
 
 func (x *PortOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[48]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5979,7 +6081,7 @@ func (x *PortOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortOpen.ProtoReflect.Descriptor instead.
 func (*PortOpen) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{48}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *PortOpen) GetGuestPort() uint32 {
@@ -6012,7 +6114,7 @@ type PortBytes struct {
 
 func (x *PortBytes) Reset() {
 	*x = PortBytes{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[49]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6024,7 +6126,7 @@ func (x *PortBytes) String() string {
 func (*PortBytes) ProtoMessage() {}
 
 func (x *PortBytes) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[49]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6037,7 +6139,7 @@ func (x *PortBytes) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortBytes.ProtoReflect.Descriptor instead.
 func (*PortBytes) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{49}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PortBytes) GetData() []byte {
@@ -6057,7 +6159,7 @@ type PortTerminal struct {
 
 func (x *PortTerminal) Reset() {
 	*x = PortTerminal{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[50]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6069,7 +6171,7 @@ func (x *PortTerminal) String() string {
 func (*PortTerminal) ProtoMessage() {}
 
 func (x *PortTerminal) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[50]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6082,7 +6184,7 @@ func (x *PortTerminal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortTerminal.ProtoReflect.Descriptor instead.
 func (*PortTerminal) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{50}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *PortTerminal) GetKind() PortTerminalKind {
@@ -6117,7 +6219,7 @@ type PortDirectOpen struct {
 
 func (x *PortDirectOpen) Reset() {
 	*x = PortDirectOpen{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[51]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6129,7 +6231,7 @@ func (x *PortDirectOpen) String() string {
 func (*PortDirectOpen) ProtoMessage() {}
 
 func (x *PortDirectOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[51]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6142,7 +6244,7 @@ func (x *PortDirectOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortDirectOpen.ProtoReflect.Descriptor instead.
 func (*PortDirectOpen) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{51}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *PortDirectOpen) GetGuestPort() uint32 {
@@ -6204,7 +6306,7 @@ type PortDirectConsume struct {
 
 func (x *PortDirectConsume) Reset() {
 	*x = PortDirectConsume{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[52]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6216,7 +6318,7 @@ func (x *PortDirectConsume) String() string {
 func (*PortDirectConsume) ProtoMessage() {}
 
 func (x *PortDirectConsume) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[52]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6229,7 +6331,7 @@ func (x *PortDirectConsume) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortDirectConsume.ProtoReflect.Descriptor instead.
 func (*PortDirectConsume) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{52}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *PortDirectConsume) GetMessageId() string {
@@ -6298,7 +6400,7 @@ type PortDirectAdmission struct {
 
 func (x *PortDirectAdmission) Reset() {
 	*x = PortDirectAdmission{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[53]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6310,7 +6412,7 @@ func (x *PortDirectAdmission) String() string {
 func (*PortDirectAdmission) ProtoMessage() {}
 
 func (x *PortDirectAdmission) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[53]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6323,7 +6425,7 @@ func (x *PortDirectAdmission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortDirectAdmission.ProtoReflect.Descriptor instead.
 func (*PortDirectAdmission) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{53}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *PortDirectAdmission) GetMessageId() string {
@@ -6390,7 +6492,7 @@ type DataPlaneDirectOpen struct {
 
 func (x *DataPlaneDirectOpen) Reset() {
 	*x = DataPlaneDirectOpen{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[54]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6402,7 +6504,7 @@ func (x *DataPlaneDirectOpen) String() string {
 func (*DataPlaneDirectOpen) ProtoMessage() {}
 
 func (x *DataPlaneDirectOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[54]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6415,7 +6517,7 @@ func (x *DataPlaneDirectOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataPlaneDirectOpen.ProtoReflect.Descriptor instead.
 func (*DataPlaneDirectOpen) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{54}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *DataPlaneDirectOpen) GetMessageId() string {
@@ -6511,7 +6613,7 @@ type DataPlaneDirectConsume struct {
 
 func (x *DataPlaneDirectConsume) Reset() {
 	*x = DataPlaneDirectConsume{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[55]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6523,7 +6625,7 @@ func (x *DataPlaneDirectConsume) String() string {
 func (*DataPlaneDirectConsume) ProtoMessage() {}
 
 func (x *DataPlaneDirectConsume) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[55]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6536,7 +6638,7 @@ func (x *DataPlaneDirectConsume) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataPlaneDirectConsume.ProtoReflect.Descriptor instead.
 func (*DataPlaneDirectConsume) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{55}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *DataPlaneDirectConsume) GetMessageId() string {
@@ -6610,7 +6712,7 @@ type DataPlaneDirectAdmission struct {
 
 func (x *DataPlaneDirectAdmission) Reset() {
 	*x = DataPlaneDirectAdmission{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[56]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6622,7 +6724,7 @@ func (x *DataPlaneDirectAdmission) String() string {
 func (*DataPlaneDirectAdmission) ProtoMessage() {}
 
 func (x *DataPlaneDirectAdmission) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[56]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6635,7 +6737,7 @@ func (x *DataPlaneDirectAdmission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataPlaneDirectAdmission.ProtoReflect.Descriptor instead.
 func (*DataPlaneDirectAdmission) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{56}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *DataPlaneDirectAdmission) GetMessageId() string {
@@ -6705,7 +6807,7 @@ type DataPlaneCancelCommand struct {
 
 func (x *DataPlaneCancelCommand) Reset() {
 	*x = DataPlaneCancelCommand{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[57]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6717,7 +6819,7 @@ func (x *DataPlaneCancelCommand) String() string {
 func (*DataPlaneCancelCommand) ProtoMessage() {}
 
 func (x *DataPlaneCancelCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[57]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6730,7 +6832,7 @@ func (x *DataPlaneCancelCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataPlaneCancelCommand.ProtoReflect.Descriptor instead.
 func (*DataPlaneCancelCommand) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{57}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *DataPlaneCancelCommand) GetMessageId() string {
@@ -6804,7 +6906,7 @@ type PortFrame struct {
 
 func (x *PortFrame) Reset() {
 	*x = PortFrame{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[58]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6816,7 +6918,7 @@ func (x *PortFrame) String() string {
 func (*PortFrame) ProtoMessage() {}
 
 func (x *PortFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[58]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6829,7 +6931,7 @@ func (x *PortFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortFrame.ProtoReflect.Descriptor instead.
 func (*PortFrame) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{58}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *PortFrame) GetFence() *AssignmentFence {
@@ -6990,7 +7092,7 @@ type LocalWorkspaceCommand struct {
 
 func (x *LocalWorkspaceCommand) Reset() {
 	*x = LocalWorkspaceCommand{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[59]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7002,7 +7104,7 @@ func (x *LocalWorkspaceCommand) String() string {
 func (*LocalWorkspaceCommand) ProtoMessage() {}
 
 func (x *LocalWorkspaceCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[59]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7015,7 +7117,7 @@ func (x *LocalWorkspaceCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalWorkspaceCommand.ProtoReflect.Descriptor instead.
 func (*LocalWorkspaceCommand) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{59}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *LocalWorkspaceCommand) GetMessageId() string {
@@ -7131,7 +7233,7 @@ type LocalWorkspaceInventoryItem struct {
 
 func (x *LocalWorkspaceInventoryItem) Reset() {
 	*x = LocalWorkspaceInventoryItem{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[60]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7143,7 +7245,7 @@ func (x *LocalWorkspaceInventoryItem) String() string {
 func (*LocalWorkspaceInventoryItem) ProtoMessage() {}
 
 func (x *LocalWorkspaceInventoryItem) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[60]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7156,7 +7258,7 @@ func (x *LocalWorkspaceInventoryItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalWorkspaceInventoryItem.ProtoReflect.Descriptor instead.
 func (*LocalWorkspaceInventoryItem) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{60}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *LocalWorkspaceInventoryItem) GetWorkspaceId() string {
@@ -7224,7 +7326,7 @@ type LocalWorkspaceReceiptItem struct {
 
 func (x *LocalWorkspaceReceiptItem) Reset() {
 	*x = LocalWorkspaceReceiptItem{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[61]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7236,7 +7338,7 @@ func (x *LocalWorkspaceReceiptItem) String() string {
 func (*LocalWorkspaceReceiptItem) ProtoMessage() {}
 
 func (x *LocalWorkspaceReceiptItem) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[61]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7249,7 +7351,7 @@ func (x *LocalWorkspaceReceiptItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalWorkspaceReceiptItem.ProtoReflect.Descriptor instead.
 func (*LocalWorkspaceReceiptItem) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{61}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *LocalWorkspaceReceiptItem) GetKind() LocalWorkspaceCommandKind {
@@ -7334,7 +7436,7 @@ type LocalWorkspaceResult struct {
 
 func (x *LocalWorkspaceResult) Reset() {
 	*x = LocalWorkspaceResult{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[62]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7346,7 +7448,7 @@ func (x *LocalWorkspaceResult) String() string {
 func (*LocalWorkspaceResult) ProtoMessage() {}
 
 func (x *LocalWorkspaceResult) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[62]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7359,7 +7461,7 @@ func (x *LocalWorkspaceResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalWorkspaceResult.ProtoReflect.Descriptor instead.
 func (*LocalWorkspaceResult) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{62}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *LocalWorkspaceResult) GetMessageId() string {
@@ -7505,7 +7607,7 @@ type Evidence struct {
 
 func (x *Evidence) Reset() {
 	*x = Evidence{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[63]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7517,7 +7619,7 @@ func (x *Evidence) String() string {
 func (*Evidence) ProtoMessage() {}
 
 func (x *Evidence) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[63]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7530,7 +7632,7 @@ func (x *Evidence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Evidence.ProtoReflect.Descriptor instead.
 func (*Evidence) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{63}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *Evidence) GetMessageId() string {
@@ -7596,7 +7698,7 @@ type WorkspaceTransferOpen struct {
 
 func (x *WorkspaceTransferOpen) Reset() {
 	*x = WorkspaceTransferOpen{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[64]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7608,7 +7710,7 @@ func (x *WorkspaceTransferOpen) String() string {
 func (*WorkspaceTransferOpen) ProtoMessage() {}
 
 func (x *WorkspaceTransferOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[64]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7621,7 +7723,7 @@ func (x *WorkspaceTransferOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceTransferOpen.ProtoReflect.Descriptor instead.
 func (*WorkspaceTransferOpen) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{64}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *WorkspaceTransferOpen) GetLogicalCapacityBytes() uint64 {
@@ -7648,7 +7750,7 @@ type WorkspaceTransferChunk struct {
 
 func (x *WorkspaceTransferChunk) Reset() {
 	*x = WorkspaceTransferChunk{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[65]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7660,7 +7762,7 @@ func (x *WorkspaceTransferChunk) String() string {
 func (*WorkspaceTransferChunk) ProtoMessage() {}
 
 func (x *WorkspaceTransferChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[65]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7673,7 +7775,7 @@ func (x *WorkspaceTransferChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceTransferChunk.ProtoReflect.Descriptor instead.
 func (*WorkspaceTransferChunk) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{65}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *WorkspaceTransferChunk) GetOffset() uint64 {
@@ -7700,7 +7802,7 @@ type WorkspaceTransferCommit struct {
 
 func (x *WorkspaceTransferCommit) Reset() {
 	*x = WorkspaceTransferCommit{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[66]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7712,7 +7814,7 @@ func (x *WorkspaceTransferCommit) String() string {
 func (*WorkspaceTransferCommit) ProtoMessage() {}
 
 func (x *WorkspaceTransferCommit) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[66]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7725,7 +7827,7 @@ func (x *WorkspaceTransferCommit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceTransferCommit.ProtoReflect.Descriptor instead.
 func (*WorkspaceTransferCommit) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{66}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *WorkspaceTransferCommit) GetSizeBytes() uint64 {
@@ -7754,7 +7856,7 @@ type WorkspaceTransferResult struct {
 
 func (x *WorkspaceTransferResult) Reset() {
 	*x = WorkspaceTransferResult{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[67]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7766,7 +7868,7 @@ func (x *WorkspaceTransferResult) String() string {
 func (*WorkspaceTransferResult) ProtoMessage() {}
 
 func (x *WorkspaceTransferResult) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[67]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7779,7 +7881,7 @@ func (x *WorkspaceTransferResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceTransferResult.ProtoReflect.Descriptor instead.
 func (*WorkspaceTransferResult) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{67}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *WorkspaceTransferResult) GetTerminal() WorkspaceTransferTerminalKind {
@@ -7819,7 +7921,7 @@ type WorkspaceTransferCancel struct {
 
 func (x *WorkspaceTransferCancel) Reset() {
 	*x = WorkspaceTransferCancel{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[68]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7831,7 +7933,7 @@ func (x *WorkspaceTransferCancel) String() string {
 func (*WorkspaceTransferCancel) ProtoMessage() {}
 
 func (x *WorkspaceTransferCancel) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[68]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7844,7 +7946,7 @@ func (x *WorkspaceTransferCancel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceTransferCancel.ProtoReflect.Descriptor instead.
 func (*WorkspaceTransferCancel) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{68}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *WorkspaceTransferCancel) GetSafeDetail() string {
@@ -7876,7 +7978,7 @@ type WorkspaceTransferFrame struct {
 
 func (x *WorkspaceTransferFrame) Reset() {
 	*x = WorkspaceTransferFrame{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[69]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7888,7 +7990,7 @@ func (x *WorkspaceTransferFrame) String() string {
 func (*WorkspaceTransferFrame) ProtoMessage() {}
 
 func (x *WorkspaceTransferFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[69]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7901,7 +8003,7 @@ func (x *WorkspaceTransferFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceTransferFrame.ProtoReflect.Descriptor instead.
 func (*WorkspaceTransferFrame) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{69}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *WorkspaceTransferFrame) GetOperationId() string {
@@ -8058,7 +8160,7 @@ type InstanceTerminal struct {
 
 func (x *InstanceTerminal) Reset() {
 	*x = InstanceTerminal{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[70]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8070,7 +8172,7 @@ func (x *InstanceTerminal) String() string {
 func (*InstanceTerminal) ProtoMessage() {}
 
 func (x *InstanceTerminal) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[70]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8083,7 +8185,7 @@ func (x *InstanceTerminal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceTerminal.ProtoReflect.Descriptor instead.
 func (*InstanceTerminal) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{70}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *InstanceTerminal) GetMessageId() string {
@@ -8164,7 +8266,7 @@ type RunnerToControlPlane struct {
 
 func (x *RunnerToControlPlane) Reset() {
 	*x = RunnerToControlPlane{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[71]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8176,7 +8278,7 @@ func (x *RunnerToControlPlane) String() string {
 func (*RunnerToControlPlane) ProtoMessage() {}
 
 func (x *RunnerToControlPlane) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[71]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8189,7 +8291,7 @@ func (x *RunnerToControlPlane) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunnerToControlPlane.ProtoReflect.Descriptor instead.
 func (*RunnerToControlPlane) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{71}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *RunnerToControlPlane) GetMessage() isRunnerToControlPlane_Message {
@@ -8499,7 +8601,7 @@ type ControlPlaneToRunner struct {
 
 func (x *ControlPlaneToRunner) Reset() {
 	*x = ControlPlaneToRunner{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[72]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8511,7 +8613,7 @@ func (x *ControlPlaneToRunner) String() string {
 func (*ControlPlaneToRunner) ProtoMessage() {}
 
 func (x *ControlPlaneToRunner) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[72]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8524,7 +8626,7 @@ func (x *ControlPlaneToRunner) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlPlaneToRunner.ProtoReflect.Descriptor instead.
 func (*ControlPlaneToRunner) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{72}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *ControlPlaneToRunner) GetMessage() isControlPlaneToRunner_Message {
@@ -8795,7 +8897,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\tinstances\x18\x04 \x01(\rR\tinstances\x12\x1e\n" +
 	"\n" +
 	"operations\x18\x05 \x01(\rR\n" +
-	"operations\"\xe2\x04\n" +
+	"operations\"\xa0\x05\n" +
 	"\x12RunnerCapabilities\x12\"\n" +
 	"\farchitecture\x18\x01 \x01(\tR\farchitecture\x12%\n" +
 	"\x0ekernel_release\x18\x02 \x01(\tR\rkernelRelease\x126\n" +
@@ -8809,7 +8911,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x1aguest_protocol_generations\x18\n" +
 	" \x01(\v2).secondbox.runner.v1.ProtocolVersionRangeR\x18guestProtocolGenerations\x12(\n" +
 	"\x10data_plane_ready\x18\v \x01(\bR\x0edataPlaneReady\x122\n" +
-	"\x15snapshot_resume_ready\x18\f \x01(\bR\x13snapshotResumeReady\"\xb8\x05\n" +
+	"\x15snapshot_resume_ready\x18\f \x01(\bR\x13snapshotResumeReady\x12<\n" +
+	"\x1aattributed_execution_ready\x18\r \x01(\bR\x18attributedExecutionReady\"\xb8\x05\n" +
 	"\x1eBackendMaterializationEvidence\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12J\n" +
 	"\fbackend_kind\x18\x02 \x01(\x0e2'.secondbox.runner.v1.ComputeBackendKindR\vbackendKind\x12-\n" +
@@ -8925,7 +9028,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x06target\"\x98\x01\n" +
 	"\rNetworkPolicy\x12:\n" +
 	"\x04mode\x18\x01 \x01(\x0e2&.secondbox.runner.v1.NetworkPolicyModeR\x04mode\x12K\n" +
-	"\fdestinations\x18\x02 \x03(\v2'.secondbox.runner.v1.NetworkDestinationR\fdestinations\"\xce\x04\n" +
+	"\fdestinations\x18\x02 \x03(\v2'.secondbox.runner.v1.NetworkDestinationR\fdestinations\"\xab\x05\n" +
 	"\x11AssignmentCommand\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -8939,7 +9042,17 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x0enetwork_policy\x18\n" +
 	" \x01(\v2\".secondbox.runner.v1.NetworkPolicyR\rnetworkPolicy\x12!\n" +
 	"\fworkspace_id\x18\v \x01(\tR\vworkspaceId\x12%\n" +
-	"\x0eegress_context\x18\f \x01(\tR\regressContextJ\x04\b\a\x10\b\"\xb8\x02\n" +
+	"\x0eegress_context\x18\f \x01(\tR\regressContext\x12[\n" +
+	"\x14attributed_execution\x18\r \x01(\v2(.secondbox.runner.v1.AttributedExecutionR\x13attributedExecutionJ\x04\b\a\x10\b\"\xfa\x01\n" +
+	"\x13AttributedExecution\x12\x1d\n" +
+	"\n" +
+	"tenant_ref\x18\x01 \x01(\tR\ttenantRef\x12\x1f\n" +
+	"\vsubject_ref\x18\x02 \x01(\tR\n" +
+	"subjectRef\x12+\n" +
+	"\x11authorization_ref\x18\x03 \x01(\tR\x10authorizationRef\x12+\n" +
+	"\x12expires_at_unix_ms\x18\x04 \x01(\x04R\x0fexpiresAtUnixMs\x12\x18\n" +
+	"\agateway\x18\x05 \x01(\tR\agateway\x12/\n" +
+	"\x13maximum_connections\x18\x06 \x01(\rR\x12maximumConnections\"\xb8\x02\n" +
 	"\rAssignmentAck\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -9638,7 +9751,7 @@ func file_contracts_runner_v1_runner_proto_rawDescGZIP() []byte {
 }
 
 var file_contracts_runner_v1_runner_proto_enumTypes = make([]protoimpl.EnumInfo, 29)
-var file_contracts_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 73)
+var file_contracts_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
 var file_contracts_runner_v1_runner_proto_goTypes = []any{
 	(RunnerFeature)(0),                     // 0: secondbox.runner.v1.RunnerFeature
 	(ProtocolRejectionKind)(0),             // 1: secondbox.runner.v1.ProtocolRejectionKind
@@ -9688,60 +9801,61 @@ var file_contracts_runner_v1_runner_proto_goTypes = []any{
 	(*NetworkDestination)(nil),             // 45: secondbox.runner.v1.NetworkDestination
 	(*NetworkPolicy)(nil),                  // 46: secondbox.runner.v1.NetworkPolicy
 	(*AssignmentCommand)(nil),              // 47: secondbox.runner.v1.AssignmentCommand
-	(*AssignmentAck)(nil),                  // 48: secondbox.runner.v1.AssignmentAck
-	(*AssignmentProgress)(nil),             // 49: secondbox.runner.v1.AssignmentProgress
-	(*AssignmentResult)(nil),               // 50: secondbox.runner.v1.AssignmentResult
-	(*FenceCommand)(nil),                   // 51: secondbox.runner.v1.FenceCommand
-	(*FenceResult)(nil),                    // 52: secondbox.runner.v1.FenceResult
-	(*DrainCommand)(nil),                   // 53: secondbox.runner.v1.DrainCommand
-	(*DrainState)(nil),                     // 54: secondbox.runner.v1.DrainState
-	(*StreamCredit)(nil),                   // 55: secondbox.runner.v1.StreamCredit
-	(*ExecOpen)(nil),                       // 56: secondbox.runner.v1.ExecOpen
-	(*ArgvCommand)(nil),                    // 57: secondbox.runner.v1.ArgvCommand
-	(*EnvironmentEntry)(nil),               // 58: secondbox.runner.v1.EnvironmentEntry
-	(*ExecInput)(nil),                      // 59: secondbox.runner.v1.ExecInput
-	(*ExecOutput)(nil),                     // 60: secondbox.runner.v1.ExecOutput
-	(*ExecBufferedResult)(nil),             // 61: secondbox.runner.v1.ExecBufferedResult
-	(*ExecCancel)(nil),                     // 62: secondbox.runner.v1.ExecCancel
-	(*ExecTerminal)(nil),                   // 63: secondbox.runner.v1.ExecTerminal
-	(*ExecFrame)(nil),                      // 64: secondbox.runner.v1.ExecFrame
-	(*FileOpen)(nil),                       // 65: secondbox.runner.v1.FileOpen
-	(*FileChunk)(nil),                      // 66: secondbox.runner.v1.FileChunk
-	(*FileMetadata)(nil),                   // 67: secondbox.runner.v1.FileMetadata
-	(*FileMetadataEntry)(nil),              // 68: secondbox.runner.v1.FileMetadataEntry
-	(*FileTerminal)(nil),                   // 69: secondbox.runner.v1.FileTerminal
-	(*FileFrame)(nil),                      // 70: secondbox.runner.v1.FileFrame
-	(*PtyInput)(nil),                       // 71: secondbox.runner.v1.PtyInput
-	(*PtyResize)(nil),                      // 72: secondbox.runner.v1.PtyResize
-	(*PtyDetach)(nil),                      // 73: secondbox.runner.v1.PtyDetach
-	(*PtyAttach)(nil),                      // 74: secondbox.runner.v1.PtyAttach
-	(*PtyAttachResult)(nil),                // 75: secondbox.runner.v1.PtyAttachResult
-	(*PtyFrame)(nil),                       // 76: secondbox.runner.v1.PtyFrame
-	(*PortOpen)(nil),                       // 77: secondbox.runner.v1.PortOpen
-	(*PortBytes)(nil),                      // 78: secondbox.runner.v1.PortBytes
-	(*PortTerminal)(nil),                   // 79: secondbox.runner.v1.PortTerminal
-	(*PortDirectOpen)(nil),                 // 80: secondbox.runner.v1.PortDirectOpen
-	(*PortDirectConsume)(nil),              // 81: secondbox.runner.v1.PortDirectConsume
-	(*PortDirectAdmission)(nil),            // 82: secondbox.runner.v1.PortDirectAdmission
-	(*DataPlaneDirectOpen)(nil),            // 83: secondbox.runner.v1.DataPlaneDirectOpen
-	(*DataPlaneDirectConsume)(nil),         // 84: secondbox.runner.v1.DataPlaneDirectConsume
-	(*DataPlaneDirectAdmission)(nil),       // 85: secondbox.runner.v1.DataPlaneDirectAdmission
-	(*DataPlaneCancelCommand)(nil),         // 86: secondbox.runner.v1.DataPlaneCancelCommand
-	(*PortFrame)(nil),                      // 87: secondbox.runner.v1.PortFrame
-	(*LocalWorkspaceCommand)(nil),          // 88: secondbox.runner.v1.LocalWorkspaceCommand
-	(*LocalWorkspaceInventoryItem)(nil),    // 89: secondbox.runner.v1.LocalWorkspaceInventoryItem
-	(*LocalWorkspaceReceiptItem)(nil),      // 90: secondbox.runner.v1.LocalWorkspaceReceiptItem
-	(*LocalWorkspaceResult)(nil),           // 91: secondbox.runner.v1.LocalWorkspaceResult
-	(*Evidence)(nil),                       // 92: secondbox.runner.v1.Evidence
-	(*WorkspaceTransferOpen)(nil),          // 93: secondbox.runner.v1.WorkspaceTransferOpen
-	(*WorkspaceTransferChunk)(nil),         // 94: secondbox.runner.v1.WorkspaceTransferChunk
-	(*WorkspaceTransferCommit)(nil),        // 95: secondbox.runner.v1.WorkspaceTransferCommit
-	(*WorkspaceTransferResult)(nil),        // 96: secondbox.runner.v1.WorkspaceTransferResult
-	(*WorkspaceTransferCancel)(nil),        // 97: secondbox.runner.v1.WorkspaceTransferCancel
-	(*WorkspaceTransferFrame)(nil),         // 98: secondbox.runner.v1.WorkspaceTransferFrame
-	(*InstanceTerminal)(nil),               // 99: secondbox.runner.v1.InstanceTerminal
-	(*RunnerToControlPlane)(nil),           // 100: secondbox.runner.v1.RunnerToControlPlane
-	(*ControlPlaneToRunner)(nil),           // 101: secondbox.runner.v1.ControlPlaneToRunner
+	(*AttributedExecution)(nil),            // 48: secondbox.runner.v1.AttributedExecution
+	(*AssignmentAck)(nil),                  // 49: secondbox.runner.v1.AssignmentAck
+	(*AssignmentProgress)(nil),             // 50: secondbox.runner.v1.AssignmentProgress
+	(*AssignmentResult)(nil),               // 51: secondbox.runner.v1.AssignmentResult
+	(*FenceCommand)(nil),                   // 52: secondbox.runner.v1.FenceCommand
+	(*FenceResult)(nil),                    // 53: secondbox.runner.v1.FenceResult
+	(*DrainCommand)(nil),                   // 54: secondbox.runner.v1.DrainCommand
+	(*DrainState)(nil),                     // 55: secondbox.runner.v1.DrainState
+	(*StreamCredit)(nil),                   // 56: secondbox.runner.v1.StreamCredit
+	(*ExecOpen)(nil),                       // 57: secondbox.runner.v1.ExecOpen
+	(*ArgvCommand)(nil),                    // 58: secondbox.runner.v1.ArgvCommand
+	(*EnvironmentEntry)(nil),               // 59: secondbox.runner.v1.EnvironmentEntry
+	(*ExecInput)(nil),                      // 60: secondbox.runner.v1.ExecInput
+	(*ExecOutput)(nil),                     // 61: secondbox.runner.v1.ExecOutput
+	(*ExecBufferedResult)(nil),             // 62: secondbox.runner.v1.ExecBufferedResult
+	(*ExecCancel)(nil),                     // 63: secondbox.runner.v1.ExecCancel
+	(*ExecTerminal)(nil),                   // 64: secondbox.runner.v1.ExecTerminal
+	(*ExecFrame)(nil),                      // 65: secondbox.runner.v1.ExecFrame
+	(*FileOpen)(nil),                       // 66: secondbox.runner.v1.FileOpen
+	(*FileChunk)(nil),                      // 67: secondbox.runner.v1.FileChunk
+	(*FileMetadata)(nil),                   // 68: secondbox.runner.v1.FileMetadata
+	(*FileMetadataEntry)(nil),              // 69: secondbox.runner.v1.FileMetadataEntry
+	(*FileTerminal)(nil),                   // 70: secondbox.runner.v1.FileTerminal
+	(*FileFrame)(nil),                      // 71: secondbox.runner.v1.FileFrame
+	(*PtyInput)(nil),                       // 72: secondbox.runner.v1.PtyInput
+	(*PtyResize)(nil),                      // 73: secondbox.runner.v1.PtyResize
+	(*PtyDetach)(nil),                      // 74: secondbox.runner.v1.PtyDetach
+	(*PtyAttach)(nil),                      // 75: secondbox.runner.v1.PtyAttach
+	(*PtyAttachResult)(nil),                // 76: secondbox.runner.v1.PtyAttachResult
+	(*PtyFrame)(nil),                       // 77: secondbox.runner.v1.PtyFrame
+	(*PortOpen)(nil),                       // 78: secondbox.runner.v1.PortOpen
+	(*PortBytes)(nil),                      // 79: secondbox.runner.v1.PortBytes
+	(*PortTerminal)(nil),                   // 80: secondbox.runner.v1.PortTerminal
+	(*PortDirectOpen)(nil),                 // 81: secondbox.runner.v1.PortDirectOpen
+	(*PortDirectConsume)(nil),              // 82: secondbox.runner.v1.PortDirectConsume
+	(*PortDirectAdmission)(nil),            // 83: secondbox.runner.v1.PortDirectAdmission
+	(*DataPlaneDirectOpen)(nil),            // 84: secondbox.runner.v1.DataPlaneDirectOpen
+	(*DataPlaneDirectConsume)(nil),         // 85: secondbox.runner.v1.DataPlaneDirectConsume
+	(*DataPlaneDirectAdmission)(nil),       // 86: secondbox.runner.v1.DataPlaneDirectAdmission
+	(*DataPlaneCancelCommand)(nil),         // 87: secondbox.runner.v1.DataPlaneCancelCommand
+	(*PortFrame)(nil),                      // 88: secondbox.runner.v1.PortFrame
+	(*LocalWorkspaceCommand)(nil),          // 89: secondbox.runner.v1.LocalWorkspaceCommand
+	(*LocalWorkspaceInventoryItem)(nil),    // 90: secondbox.runner.v1.LocalWorkspaceInventoryItem
+	(*LocalWorkspaceReceiptItem)(nil),      // 91: secondbox.runner.v1.LocalWorkspaceReceiptItem
+	(*LocalWorkspaceResult)(nil),           // 92: secondbox.runner.v1.LocalWorkspaceResult
+	(*Evidence)(nil),                       // 93: secondbox.runner.v1.Evidence
+	(*WorkspaceTransferOpen)(nil),          // 94: secondbox.runner.v1.WorkspaceTransferOpen
+	(*WorkspaceTransferChunk)(nil),         // 95: secondbox.runner.v1.WorkspaceTransferChunk
+	(*WorkspaceTransferCommit)(nil),        // 96: secondbox.runner.v1.WorkspaceTransferCommit
+	(*WorkspaceTransferResult)(nil),        // 97: secondbox.runner.v1.WorkspaceTransferResult
+	(*WorkspaceTransferCancel)(nil),        // 98: secondbox.runner.v1.WorkspaceTransferCancel
+	(*WorkspaceTransferFrame)(nil),         // 99: secondbox.runner.v1.WorkspaceTransferFrame
+	(*InstanceTerminal)(nil),               // 100: secondbox.runner.v1.InstanceTerminal
+	(*RunnerToControlPlane)(nil),           // 101: secondbox.runner.v1.RunnerToControlPlane
+	(*ControlPlaneToRunner)(nil),           // 102: secondbox.runner.v1.ControlPlaneToRunner
 }
 var file_contracts_runner_v1_runner_proto_depIdxs = []int32{
 	29,  // 0: secondbox.runner.v1.RunnerHello.supported_versions:type_name -> secondbox.runner.v1.ProtocolVersionRange
@@ -9772,148 +9886,149 @@ var file_contracts_runner_v1_runner_proto_depIdxs = []int32{
 	44,  // 25: secondbox.runner.v1.AssignmentCommand.assets:type_name -> secondbox.runner.v1.AssetReference
 	40,  // 26: secondbox.runner.v1.AssignmentCommand.correlation:type_name -> secondbox.runner.v1.Correlation
 	46,  // 27: secondbox.runner.v1.AssignmentCommand.network_policy:type_name -> secondbox.runner.v1.NetworkPolicy
-	41,  // 28: secondbox.runner.v1.AssignmentAck.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	7,   // 29: secondbox.runner.v1.AssignmentAck.decision:type_name -> secondbox.runner.v1.AssignmentDecision
-	42,  // 30: secondbox.runner.v1.AssignmentAck.reservation:type_name -> secondbox.runner.v1.CapacityReservation
-	41,  // 31: secondbox.runner.v1.AssignmentProgress.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	8,   // 32: secondbox.runner.v1.AssignmentProgress.stage:type_name -> secondbox.runner.v1.AssignmentProgressStage
-	40,  // 33: secondbox.runner.v1.AssignmentProgress.correlation:type_name -> secondbox.runner.v1.Correlation
-	41,  // 34: secondbox.runner.v1.AssignmentResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	9,   // 35: secondbox.runner.v1.AssignmentResult.terminal:type_name -> secondbox.runner.v1.AssignmentTerminalKind
-	40,  // 36: secondbox.runner.v1.AssignmentResult.correlation:type_name -> secondbox.runner.v1.Correlation
-	41,  // 37: secondbox.runner.v1.FenceCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	10,  // 38: secondbox.runner.v1.FenceCommand.reason:type_name -> secondbox.runner.v1.FenceReason
-	40,  // 39: secondbox.runner.v1.FenceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
-	41,  // 40: secondbox.runner.v1.FenceResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	11,  // 41: secondbox.runner.v1.FenceResult.result:type_name -> secondbox.runner.v1.FenceResultKind
-	40,  // 42: secondbox.runner.v1.FenceResult.correlation:type_name -> secondbox.runner.v1.Correlation
-	12,  // 43: secondbox.runner.v1.DrainCommand.mode:type_name -> secondbox.runner.v1.DrainMode
-	4,   // 44: secondbox.runner.v1.DrainState.phase:type_name -> secondbox.runner.v1.DrainPhase
-	38,  // 45: secondbox.runner.v1.DrainState.remaining_assignments:type_name -> secondbox.runner.v1.ActiveAssignmentSummary
-	57,  // 46: secondbox.runner.v1.ExecOpen.argv:type_name -> secondbox.runner.v1.ArgvCommand
-	58,  // 47: secondbox.runner.v1.ExecOpen.environment:type_name -> secondbox.runner.v1.EnvironmentEntry
-	13,  // 48: secondbox.runner.v1.ExecOutput.channel:type_name -> secondbox.runner.v1.ExecOutputChannel
-	63,  // 49: secondbox.runner.v1.ExecBufferedResult.terminal:type_name -> secondbox.runner.v1.ExecTerminal
-	14,  // 50: secondbox.runner.v1.ExecTerminal.kind:type_name -> secondbox.runner.v1.ExecTerminalKind
-	15,  // 51: secondbox.runner.v1.ExecTerminal.spawn_failure_reason:type_name -> secondbox.runner.v1.SpawnFailureReason
-	16,  // 52: secondbox.runner.v1.ExecTerminal.infrastructure_failure_reason:type_name -> secondbox.runner.v1.InfrastructureFailureReason
-	41,  // 53: secondbox.runner.v1.ExecFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	40,  // 54: secondbox.runner.v1.ExecFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	56,  // 55: secondbox.runner.v1.ExecFrame.open:type_name -> secondbox.runner.v1.ExecOpen
-	59,  // 56: secondbox.runner.v1.ExecFrame.input:type_name -> secondbox.runner.v1.ExecInput
-	60,  // 57: secondbox.runner.v1.ExecFrame.output:type_name -> secondbox.runner.v1.ExecOutput
-	55,  // 58: secondbox.runner.v1.ExecFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	62,  // 59: secondbox.runner.v1.ExecFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
-	63,  // 60: secondbox.runner.v1.ExecFrame.terminal:type_name -> secondbox.runner.v1.ExecTerminal
-	61,  // 61: secondbox.runner.v1.ExecFrame.buffered_result:type_name -> secondbox.runner.v1.ExecBufferedResult
-	17,  // 62: secondbox.runner.v1.FileOpen.operation:type_name -> secondbox.runner.v1.FileOperation
-	18,  // 63: secondbox.runner.v1.FileMetadata.kind:type_name -> secondbox.runner.v1.FileKind
-	68,  // 64: secondbox.runner.v1.FileMetadata.direct_child_entries:type_name -> secondbox.runner.v1.FileMetadataEntry
-	18,  // 65: secondbox.runner.v1.FileMetadataEntry.kind:type_name -> secondbox.runner.v1.FileKind
-	19,  // 66: secondbox.runner.v1.FileTerminal.kind:type_name -> secondbox.runner.v1.FileTerminalKind
-	41,  // 67: secondbox.runner.v1.FileFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	40,  // 68: secondbox.runner.v1.FileFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	65,  // 69: secondbox.runner.v1.FileFrame.open:type_name -> secondbox.runner.v1.FileOpen
-	66,  // 70: secondbox.runner.v1.FileFrame.chunk:type_name -> secondbox.runner.v1.FileChunk
-	67,  // 71: secondbox.runner.v1.FileFrame.metadata:type_name -> secondbox.runner.v1.FileMetadata
-	55,  // 72: secondbox.runner.v1.FileFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	62,  // 73: secondbox.runner.v1.FileFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
-	69,  // 74: secondbox.runner.v1.FileFrame.terminal:type_name -> secondbox.runner.v1.FileTerminal
-	20,  // 75: secondbox.runner.v1.PtyAttachResult.kind:type_name -> secondbox.runner.v1.PtyAttachResultKind
-	41,  // 76: secondbox.runner.v1.PtyFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	40,  // 77: secondbox.runner.v1.PtyFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	71,  // 78: secondbox.runner.v1.PtyFrame.input:type_name -> secondbox.runner.v1.PtyInput
-	60,  // 79: secondbox.runner.v1.PtyFrame.output:type_name -> secondbox.runner.v1.ExecOutput
-	72,  // 80: secondbox.runner.v1.PtyFrame.resize:type_name -> secondbox.runner.v1.PtyResize
-	73,  // 81: secondbox.runner.v1.PtyFrame.detach:type_name -> secondbox.runner.v1.PtyDetach
-	74,  // 82: secondbox.runner.v1.PtyFrame.attach:type_name -> secondbox.runner.v1.PtyAttach
-	55,  // 83: secondbox.runner.v1.PtyFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	63,  // 84: secondbox.runner.v1.PtyFrame.terminal:type_name -> secondbox.runner.v1.ExecTerminal
-	75,  // 85: secondbox.runner.v1.PtyFrame.attach_result:type_name -> secondbox.runner.v1.PtyAttachResult
-	21,  // 86: secondbox.runner.v1.PortTerminal.kind:type_name -> secondbox.runner.v1.PortTerminalKind
-	41,  // 87: secondbox.runner.v1.PortDirectConsume.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	40,  // 88: secondbox.runner.v1.PortDirectConsume.correlation:type_name -> secondbox.runner.v1.Correlation
-	41,  // 89: secondbox.runner.v1.PortDirectAdmission.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	22,  // 90: secondbox.runner.v1.PortDirectAdmission.kind:type_name -> secondbox.runner.v1.PortDirectAdmissionKind
-	41,  // 91: secondbox.runner.v1.DataPlaneDirectOpen.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	40,  // 92: secondbox.runner.v1.DataPlaneDirectOpen.correlation:type_name -> secondbox.runner.v1.Correlation
-	23,  // 93: secondbox.runner.v1.DataPlaneDirectOpen.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
-	80,  // 94: secondbox.runner.v1.DataPlaneDirectOpen.port:type_name -> secondbox.runner.v1.PortDirectOpen
-	41,  // 95: secondbox.runner.v1.DataPlaneDirectConsume.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	40,  // 96: secondbox.runner.v1.DataPlaneDirectConsume.correlation:type_name -> secondbox.runner.v1.Correlation
-	23,  // 97: secondbox.runner.v1.DataPlaneDirectConsume.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
-	41,  // 98: secondbox.runner.v1.DataPlaneDirectAdmission.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	23,  // 99: secondbox.runner.v1.DataPlaneDirectAdmission.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
-	24,  // 100: secondbox.runner.v1.DataPlaneDirectAdmission.admission:type_name -> secondbox.runner.v1.DataPlaneDirectAdmissionKind
-	41,  // 101: secondbox.runner.v1.DataPlaneCancelCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	23,  // 102: secondbox.runner.v1.DataPlaneCancelCommand.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
-	41,  // 103: secondbox.runner.v1.PortFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	40,  // 104: secondbox.runner.v1.PortFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	77,  // 105: secondbox.runner.v1.PortFrame.open:type_name -> secondbox.runner.v1.PortOpen
-	78,  // 106: secondbox.runner.v1.PortFrame.bytes:type_name -> secondbox.runner.v1.PortBytes
-	55,  // 107: secondbox.runner.v1.PortFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	62,  // 108: secondbox.runner.v1.PortFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
-	79,  // 109: secondbox.runner.v1.PortFrame.terminal:type_name -> secondbox.runner.v1.PortTerminal
-	80,  // 110: secondbox.runner.v1.PortFrame.direct_open:type_name -> secondbox.runner.v1.PortDirectOpen
-	25,  // 111: secondbox.runner.v1.LocalWorkspaceCommand.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
-	40,  // 112: secondbox.runner.v1.LocalWorkspaceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
-	25,  // 113: secondbox.runner.v1.LocalWorkspaceReceiptItem.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
-	25,  // 114: secondbox.runner.v1.LocalWorkspaceResult.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
-	26,  // 115: secondbox.runner.v1.LocalWorkspaceResult.terminal:type_name -> secondbox.runner.v1.LocalWorkspaceTerminalKind
-	89,  // 116: secondbox.runner.v1.LocalWorkspaceResult.inventory:type_name -> secondbox.runner.v1.LocalWorkspaceInventoryItem
-	40,  // 117: secondbox.runner.v1.LocalWorkspaceResult.correlation:type_name -> secondbox.runner.v1.Correlation
-	90,  // 118: secondbox.runner.v1.LocalWorkspaceResult.receipts:type_name -> secondbox.runner.v1.LocalWorkspaceReceiptItem
-	40,  // 119: secondbox.runner.v1.Evidence.correlation:type_name -> secondbox.runner.v1.Correlation
-	27,  // 120: secondbox.runner.v1.WorkspaceTransferResult.terminal:type_name -> secondbox.runner.v1.WorkspaceTransferTerminalKind
-	93,  // 121: secondbox.runner.v1.WorkspaceTransferFrame.open:type_name -> secondbox.runner.v1.WorkspaceTransferOpen
-	94,  // 122: secondbox.runner.v1.WorkspaceTransferFrame.chunk:type_name -> secondbox.runner.v1.WorkspaceTransferChunk
-	55,  // 123: secondbox.runner.v1.WorkspaceTransferFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	95,  // 124: secondbox.runner.v1.WorkspaceTransferFrame.commit:type_name -> secondbox.runner.v1.WorkspaceTransferCommit
-	96,  // 125: secondbox.runner.v1.WorkspaceTransferFrame.result:type_name -> secondbox.runner.v1.WorkspaceTransferResult
-	97,  // 126: secondbox.runner.v1.WorkspaceTransferFrame.cancel:type_name -> secondbox.runner.v1.WorkspaceTransferCancel
-	41,  // 127: secondbox.runner.v1.InstanceTerminal.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	28,  // 128: secondbox.runner.v1.InstanceTerminal.reason:type_name -> secondbox.runner.v1.InstanceObservedTerminationReason
-	40,  // 129: secondbox.runner.v1.InstanceTerminal.correlation:type_name -> secondbox.runner.v1.Correlation
-	30,  // 130: secondbox.runner.v1.RunnerToControlPlane.hello:type_name -> secondbox.runner.v1.RunnerHello
-	37,  // 131: secondbox.runner.v1.RunnerToControlPlane.registration:type_name -> secondbox.runner.v1.RunnerRegistration
-	39,  // 132: secondbox.runner.v1.RunnerToControlPlane.heartbeat:type_name -> secondbox.runner.v1.RunnerHeartbeat
-	48,  // 133: secondbox.runner.v1.RunnerToControlPlane.assignment_ack:type_name -> secondbox.runner.v1.AssignmentAck
-	49,  // 134: secondbox.runner.v1.RunnerToControlPlane.assignment_progress:type_name -> secondbox.runner.v1.AssignmentProgress
-	50,  // 135: secondbox.runner.v1.RunnerToControlPlane.assignment_result:type_name -> secondbox.runner.v1.AssignmentResult
-	52,  // 136: secondbox.runner.v1.RunnerToControlPlane.fence_result:type_name -> secondbox.runner.v1.FenceResult
-	54,  // 137: secondbox.runner.v1.RunnerToControlPlane.drain_state:type_name -> secondbox.runner.v1.DrainState
-	64,  // 138: secondbox.runner.v1.RunnerToControlPlane.exec:type_name -> secondbox.runner.v1.ExecFrame
-	70,  // 139: secondbox.runner.v1.RunnerToControlPlane.file:type_name -> secondbox.runner.v1.FileFrame
-	76,  // 140: secondbox.runner.v1.RunnerToControlPlane.pty:type_name -> secondbox.runner.v1.PtyFrame
-	87,  // 141: secondbox.runner.v1.RunnerToControlPlane.port:type_name -> secondbox.runner.v1.PortFrame
-	92,  // 142: secondbox.runner.v1.RunnerToControlPlane.evidence:type_name -> secondbox.runner.v1.Evidence
-	99,  // 143: secondbox.runner.v1.RunnerToControlPlane.instance_terminal:type_name -> secondbox.runner.v1.InstanceTerminal
-	91,  // 144: secondbox.runner.v1.RunnerToControlPlane.local_workspace_result:type_name -> secondbox.runner.v1.LocalWorkspaceResult
-	81,  // 145: secondbox.runner.v1.RunnerToControlPlane.port_direct_consume:type_name -> secondbox.runner.v1.PortDirectConsume
-	84,  // 146: secondbox.runner.v1.RunnerToControlPlane.data_plane_direct_consume:type_name -> secondbox.runner.v1.DataPlaneDirectConsume
-	98,  // 147: secondbox.runner.v1.RunnerToControlPlane.workspace_transfer:type_name -> secondbox.runner.v1.WorkspaceTransferFrame
-	31,  // 148: secondbox.runner.v1.ControlPlaneToRunner.welcome:type_name -> secondbox.runner.v1.RunnerWelcome
-	32,  // 149: secondbox.runner.v1.ControlPlaneToRunner.rejection:type_name -> secondbox.runner.v1.ProtocolRejection
-	47,  // 150: secondbox.runner.v1.ControlPlaneToRunner.assignment:type_name -> secondbox.runner.v1.AssignmentCommand
-	51,  // 151: secondbox.runner.v1.ControlPlaneToRunner.fence:type_name -> secondbox.runner.v1.FenceCommand
-	53,  // 152: secondbox.runner.v1.ControlPlaneToRunner.drain:type_name -> secondbox.runner.v1.DrainCommand
-	64,  // 153: secondbox.runner.v1.ControlPlaneToRunner.exec:type_name -> secondbox.runner.v1.ExecFrame
-	70,  // 154: secondbox.runner.v1.ControlPlaneToRunner.file:type_name -> secondbox.runner.v1.FileFrame
-	76,  // 155: secondbox.runner.v1.ControlPlaneToRunner.pty:type_name -> secondbox.runner.v1.PtyFrame
-	87,  // 156: secondbox.runner.v1.ControlPlaneToRunner.port:type_name -> secondbox.runner.v1.PortFrame
-	88,  // 157: secondbox.runner.v1.ControlPlaneToRunner.local_workspace:type_name -> secondbox.runner.v1.LocalWorkspaceCommand
-	82,  // 158: secondbox.runner.v1.ControlPlaneToRunner.port_direct_admission:type_name -> secondbox.runner.v1.PortDirectAdmission
-	83,  // 159: secondbox.runner.v1.ControlPlaneToRunner.data_plane_direct_open:type_name -> secondbox.runner.v1.DataPlaneDirectOpen
-	85,  // 160: secondbox.runner.v1.ControlPlaneToRunner.data_plane_direct_admission:type_name -> secondbox.runner.v1.DataPlaneDirectAdmission
-	86,  // 161: secondbox.runner.v1.ControlPlaneToRunner.data_plane_cancel:type_name -> secondbox.runner.v1.DataPlaneCancelCommand
-	98,  // 162: secondbox.runner.v1.ControlPlaneToRunner.workspace_transfer:type_name -> secondbox.runner.v1.WorkspaceTransferFrame
-	100, // 163: secondbox.runner.v1.RunnerControl.Connect:input_type -> secondbox.runner.v1.RunnerToControlPlane
-	101, // 164: secondbox.runner.v1.RunnerControl.Connect:output_type -> secondbox.runner.v1.ControlPlaneToRunner
-	164, // [164:165] is the sub-list for method output_type
-	163, // [163:164] is the sub-list for method input_type
-	163, // [163:163] is the sub-list for extension type_name
-	163, // [163:163] is the sub-list for extension extendee
-	0,   // [0:163] is the sub-list for field type_name
+	48,  // 28: secondbox.runner.v1.AssignmentCommand.attributed_execution:type_name -> secondbox.runner.v1.AttributedExecution
+	41,  // 29: secondbox.runner.v1.AssignmentAck.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	7,   // 30: secondbox.runner.v1.AssignmentAck.decision:type_name -> secondbox.runner.v1.AssignmentDecision
+	42,  // 31: secondbox.runner.v1.AssignmentAck.reservation:type_name -> secondbox.runner.v1.CapacityReservation
+	41,  // 32: secondbox.runner.v1.AssignmentProgress.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	8,   // 33: secondbox.runner.v1.AssignmentProgress.stage:type_name -> secondbox.runner.v1.AssignmentProgressStage
+	40,  // 34: secondbox.runner.v1.AssignmentProgress.correlation:type_name -> secondbox.runner.v1.Correlation
+	41,  // 35: secondbox.runner.v1.AssignmentResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	9,   // 36: secondbox.runner.v1.AssignmentResult.terminal:type_name -> secondbox.runner.v1.AssignmentTerminalKind
+	40,  // 37: secondbox.runner.v1.AssignmentResult.correlation:type_name -> secondbox.runner.v1.Correlation
+	41,  // 38: secondbox.runner.v1.FenceCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	10,  // 39: secondbox.runner.v1.FenceCommand.reason:type_name -> secondbox.runner.v1.FenceReason
+	40,  // 40: secondbox.runner.v1.FenceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
+	41,  // 41: secondbox.runner.v1.FenceResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	11,  // 42: secondbox.runner.v1.FenceResult.result:type_name -> secondbox.runner.v1.FenceResultKind
+	40,  // 43: secondbox.runner.v1.FenceResult.correlation:type_name -> secondbox.runner.v1.Correlation
+	12,  // 44: secondbox.runner.v1.DrainCommand.mode:type_name -> secondbox.runner.v1.DrainMode
+	4,   // 45: secondbox.runner.v1.DrainState.phase:type_name -> secondbox.runner.v1.DrainPhase
+	38,  // 46: secondbox.runner.v1.DrainState.remaining_assignments:type_name -> secondbox.runner.v1.ActiveAssignmentSummary
+	58,  // 47: secondbox.runner.v1.ExecOpen.argv:type_name -> secondbox.runner.v1.ArgvCommand
+	59,  // 48: secondbox.runner.v1.ExecOpen.environment:type_name -> secondbox.runner.v1.EnvironmentEntry
+	13,  // 49: secondbox.runner.v1.ExecOutput.channel:type_name -> secondbox.runner.v1.ExecOutputChannel
+	64,  // 50: secondbox.runner.v1.ExecBufferedResult.terminal:type_name -> secondbox.runner.v1.ExecTerminal
+	14,  // 51: secondbox.runner.v1.ExecTerminal.kind:type_name -> secondbox.runner.v1.ExecTerminalKind
+	15,  // 52: secondbox.runner.v1.ExecTerminal.spawn_failure_reason:type_name -> secondbox.runner.v1.SpawnFailureReason
+	16,  // 53: secondbox.runner.v1.ExecTerminal.infrastructure_failure_reason:type_name -> secondbox.runner.v1.InfrastructureFailureReason
+	41,  // 54: secondbox.runner.v1.ExecFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	40,  // 55: secondbox.runner.v1.ExecFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	57,  // 56: secondbox.runner.v1.ExecFrame.open:type_name -> secondbox.runner.v1.ExecOpen
+	60,  // 57: secondbox.runner.v1.ExecFrame.input:type_name -> secondbox.runner.v1.ExecInput
+	61,  // 58: secondbox.runner.v1.ExecFrame.output:type_name -> secondbox.runner.v1.ExecOutput
+	56,  // 59: secondbox.runner.v1.ExecFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	63,  // 60: secondbox.runner.v1.ExecFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
+	64,  // 61: secondbox.runner.v1.ExecFrame.terminal:type_name -> secondbox.runner.v1.ExecTerminal
+	62,  // 62: secondbox.runner.v1.ExecFrame.buffered_result:type_name -> secondbox.runner.v1.ExecBufferedResult
+	17,  // 63: secondbox.runner.v1.FileOpen.operation:type_name -> secondbox.runner.v1.FileOperation
+	18,  // 64: secondbox.runner.v1.FileMetadata.kind:type_name -> secondbox.runner.v1.FileKind
+	69,  // 65: secondbox.runner.v1.FileMetadata.direct_child_entries:type_name -> secondbox.runner.v1.FileMetadataEntry
+	18,  // 66: secondbox.runner.v1.FileMetadataEntry.kind:type_name -> secondbox.runner.v1.FileKind
+	19,  // 67: secondbox.runner.v1.FileTerminal.kind:type_name -> secondbox.runner.v1.FileTerminalKind
+	41,  // 68: secondbox.runner.v1.FileFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	40,  // 69: secondbox.runner.v1.FileFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	66,  // 70: secondbox.runner.v1.FileFrame.open:type_name -> secondbox.runner.v1.FileOpen
+	67,  // 71: secondbox.runner.v1.FileFrame.chunk:type_name -> secondbox.runner.v1.FileChunk
+	68,  // 72: secondbox.runner.v1.FileFrame.metadata:type_name -> secondbox.runner.v1.FileMetadata
+	56,  // 73: secondbox.runner.v1.FileFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	63,  // 74: secondbox.runner.v1.FileFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
+	70,  // 75: secondbox.runner.v1.FileFrame.terminal:type_name -> secondbox.runner.v1.FileTerminal
+	20,  // 76: secondbox.runner.v1.PtyAttachResult.kind:type_name -> secondbox.runner.v1.PtyAttachResultKind
+	41,  // 77: secondbox.runner.v1.PtyFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	40,  // 78: secondbox.runner.v1.PtyFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	72,  // 79: secondbox.runner.v1.PtyFrame.input:type_name -> secondbox.runner.v1.PtyInput
+	61,  // 80: secondbox.runner.v1.PtyFrame.output:type_name -> secondbox.runner.v1.ExecOutput
+	73,  // 81: secondbox.runner.v1.PtyFrame.resize:type_name -> secondbox.runner.v1.PtyResize
+	74,  // 82: secondbox.runner.v1.PtyFrame.detach:type_name -> secondbox.runner.v1.PtyDetach
+	75,  // 83: secondbox.runner.v1.PtyFrame.attach:type_name -> secondbox.runner.v1.PtyAttach
+	56,  // 84: secondbox.runner.v1.PtyFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	64,  // 85: secondbox.runner.v1.PtyFrame.terminal:type_name -> secondbox.runner.v1.ExecTerminal
+	76,  // 86: secondbox.runner.v1.PtyFrame.attach_result:type_name -> secondbox.runner.v1.PtyAttachResult
+	21,  // 87: secondbox.runner.v1.PortTerminal.kind:type_name -> secondbox.runner.v1.PortTerminalKind
+	41,  // 88: secondbox.runner.v1.PortDirectConsume.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	40,  // 89: secondbox.runner.v1.PortDirectConsume.correlation:type_name -> secondbox.runner.v1.Correlation
+	41,  // 90: secondbox.runner.v1.PortDirectAdmission.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	22,  // 91: secondbox.runner.v1.PortDirectAdmission.kind:type_name -> secondbox.runner.v1.PortDirectAdmissionKind
+	41,  // 92: secondbox.runner.v1.DataPlaneDirectOpen.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	40,  // 93: secondbox.runner.v1.DataPlaneDirectOpen.correlation:type_name -> secondbox.runner.v1.Correlation
+	23,  // 94: secondbox.runner.v1.DataPlaneDirectOpen.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
+	81,  // 95: secondbox.runner.v1.DataPlaneDirectOpen.port:type_name -> secondbox.runner.v1.PortDirectOpen
+	41,  // 96: secondbox.runner.v1.DataPlaneDirectConsume.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	40,  // 97: secondbox.runner.v1.DataPlaneDirectConsume.correlation:type_name -> secondbox.runner.v1.Correlation
+	23,  // 98: secondbox.runner.v1.DataPlaneDirectConsume.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
+	41,  // 99: secondbox.runner.v1.DataPlaneDirectAdmission.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	23,  // 100: secondbox.runner.v1.DataPlaneDirectAdmission.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
+	24,  // 101: secondbox.runner.v1.DataPlaneDirectAdmission.admission:type_name -> secondbox.runner.v1.DataPlaneDirectAdmissionKind
+	41,  // 102: secondbox.runner.v1.DataPlaneCancelCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	23,  // 103: secondbox.runner.v1.DataPlaneCancelCommand.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
+	41,  // 104: secondbox.runner.v1.PortFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	40,  // 105: secondbox.runner.v1.PortFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	78,  // 106: secondbox.runner.v1.PortFrame.open:type_name -> secondbox.runner.v1.PortOpen
+	79,  // 107: secondbox.runner.v1.PortFrame.bytes:type_name -> secondbox.runner.v1.PortBytes
+	56,  // 108: secondbox.runner.v1.PortFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	63,  // 109: secondbox.runner.v1.PortFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
+	80,  // 110: secondbox.runner.v1.PortFrame.terminal:type_name -> secondbox.runner.v1.PortTerminal
+	81,  // 111: secondbox.runner.v1.PortFrame.direct_open:type_name -> secondbox.runner.v1.PortDirectOpen
+	25,  // 112: secondbox.runner.v1.LocalWorkspaceCommand.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	40,  // 113: secondbox.runner.v1.LocalWorkspaceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
+	25,  // 114: secondbox.runner.v1.LocalWorkspaceReceiptItem.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	25,  // 115: secondbox.runner.v1.LocalWorkspaceResult.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	26,  // 116: secondbox.runner.v1.LocalWorkspaceResult.terminal:type_name -> secondbox.runner.v1.LocalWorkspaceTerminalKind
+	90,  // 117: secondbox.runner.v1.LocalWorkspaceResult.inventory:type_name -> secondbox.runner.v1.LocalWorkspaceInventoryItem
+	40,  // 118: secondbox.runner.v1.LocalWorkspaceResult.correlation:type_name -> secondbox.runner.v1.Correlation
+	91,  // 119: secondbox.runner.v1.LocalWorkspaceResult.receipts:type_name -> secondbox.runner.v1.LocalWorkspaceReceiptItem
+	40,  // 120: secondbox.runner.v1.Evidence.correlation:type_name -> secondbox.runner.v1.Correlation
+	27,  // 121: secondbox.runner.v1.WorkspaceTransferResult.terminal:type_name -> secondbox.runner.v1.WorkspaceTransferTerminalKind
+	94,  // 122: secondbox.runner.v1.WorkspaceTransferFrame.open:type_name -> secondbox.runner.v1.WorkspaceTransferOpen
+	95,  // 123: secondbox.runner.v1.WorkspaceTransferFrame.chunk:type_name -> secondbox.runner.v1.WorkspaceTransferChunk
+	56,  // 124: secondbox.runner.v1.WorkspaceTransferFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	96,  // 125: secondbox.runner.v1.WorkspaceTransferFrame.commit:type_name -> secondbox.runner.v1.WorkspaceTransferCommit
+	97,  // 126: secondbox.runner.v1.WorkspaceTransferFrame.result:type_name -> secondbox.runner.v1.WorkspaceTransferResult
+	98,  // 127: secondbox.runner.v1.WorkspaceTransferFrame.cancel:type_name -> secondbox.runner.v1.WorkspaceTransferCancel
+	41,  // 128: secondbox.runner.v1.InstanceTerminal.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	28,  // 129: secondbox.runner.v1.InstanceTerminal.reason:type_name -> secondbox.runner.v1.InstanceObservedTerminationReason
+	40,  // 130: secondbox.runner.v1.InstanceTerminal.correlation:type_name -> secondbox.runner.v1.Correlation
+	30,  // 131: secondbox.runner.v1.RunnerToControlPlane.hello:type_name -> secondbox.runner.v1.RunnerHello
+	37,  // 132: secondbox.runner.v1.RunnerToControlPlane.registration:type_name -> secondbox.runner.v1.RunnerRegistration
+	39,  // 133: secondbox.runner.v1.RunnerToControlPlane.heartbeat:type_name -> secondbox.runner.v1.RunnerHeartbeat
+	49,  // 134: secondbox.runner.v1.RunnerToControlPlane.assignment_ack:type_name -> secondbox.runner.v1.AssignmentAck
+	50,  // 135: secondbox.runner.v1.RunnerToControlPlane.assignment_progress:type_name -> secondbox.runner.v1.AssignmentProgress
+	51,  // 136: secondbox.runner.v1.RunnerToControlPlane.assignment_result:type_name -> secondbox.runner.v1.AssignmentResult
+	53,  // 137: secondbox.runner.v1.RunnerToControlPlane.fence_result:type_name -> secondbox.runner.v1.FenceResult
+	55,  // 138: secondbox.runner.v1.RunnerToControlPlane.drain_state:type_name -> secondbox.runner.v1.DrainState
+	65,  // 139: secondbox.runner.v1.RunnerToControlPlane.exec:type_name -> secondbox.runner.v1.ExecFrame
+	71,  // 140: secondbox.runner.v1.RunnerToControlPlane.file:type_name -> secondbox.runner.v1.FileFrame
+	77,  // 141: secondbox.runner.v1.RunnerToControlPlane.pty:type_name -> secondbox.runner.v1.PtyFrame
+	88,  // 142: secondbox.runner.v1.RunnerToControlPlane.port:type_name -> secondbox.runner.v1.PortFrame
+	93,  // 143: secondbox.runner.v1.RunnerToControlPlane.evidence:type_name -> secondbox.runner.v1.Evidence
+	100, // 144: secondbox.runner.v1.RunnerToControlPlane.instance_terminal:type_name -> secondbox.runner.v1.InstanceTerminal
+	92,  // 145: secondbox.runner.v1.RunnerToControlPlane.local_workspace_result:type_name -> secondbox.runner.v1.LocalWorkspaceResult
+	82,  // 146: secondbox.runner.v1.RunnerToControlPlane.port_direct_consume:type_name -> secondbox.runner.v1.PortDirectConsume
+	85,  // 147: secondbox.runner.v1.RunnerToControlPlane.data_plane_direct_consume:type_name -> secondbox.runner.v1.DataPlaneDirectConsume
+	99,  // 148: secondbox.runner.v1.RunnerToControlPlane.workspace_transfer:type_name -> secondbox.runner.v1.WorkspaceTransferFrame
+	31,  // 149: secondbox.runner.v1.ControlPlaneToRunner.welcome:type_name -> secondbox.runner.v1.RunnerWelcome
+	32,  // 150: secondbox.runner.v1.ControlPlaneToRunner.rejection:type_name -> secondbox.runner.v1.ProtocolRejection
+	47,  // 151: secondbox.runner.v1.ControlPlaneToRunner.assignment:type_name -> secondbox.runner.v1.AssignmentCommand
+	52,  // 152: secondbox.runner.v1.ControlPlaneToRunner.fence:type_name -> secondbox.runner.v1.FenceCommand
+	54,  // 153: secondbox.runner.v1.ControlPlaneToRunner.drain:type_name -> secondbox.runner.v1.DrainCommand
+	65,  // 154: secondbox.runner.v1.ControlPlaneToRunner.exec:type_name -> secondbox.runner.v1.ExecFrame
+	71,  // 155: secondbox.runner.v1.ControlPlaneToRunner.file:type_name -> secondbox.runner.v1.FileFrame
+	77,  // 156: secondbox.runner.v1.ControlPlaneToRunner.pty:type_name -> secondbox.runner.v1.PtyFrame
+	88,  // 157: secondbox.runner.v1.ControlPlaneToRunner.port:type_name -> secondbox.runner.v1.PortFrame
+	89,  // 158: secondbox.runner.v1.ControlPlaneToRunner.local_workspace:type_name -> secondbox.runner.v1.LocalWorkspaceCommand
+	83,  // 159: secondbox.runner.v1.ControlPlaneToRunner.port_direct_admission:type_name -> secondbox.runner.v1.PortDirectAdmission
+	84,  // 160: secondbox.runner.v1.ControlPlaneToRunner.data_plane_direct_open:type_name -> secondbox.runner.v1.DataPlaneDirectOpen
+	86,  // 161: secondbox.runner.v1.ControlPlaneToRunner.data_plane_direct_admission:type_name -> secondbox.runner.v1.DataPlaneDirectAdmission
+	87,  // 162: secondbox.runner.v1.ControlPlaneToRunner.data_plane_cancel:type_name -> secondbox.runner.v1.DataPlaneCancelCommand
+	99,  // 163: secondbox.runner.v1.ControlPlaneToRunner.workspace_transfer:type_name -> secondbox.runner.v1.WorkspaceTransferFrame
+	101, // 164: secondbox.runner.v1.RunnerControl.Connect:input_type -> secondbox.runner.v1.RunnerToControlPlane
+	102, // 165: secondbox.runner.v1.RunnerControl.Connect:output_type -> secondbox.runner.v1.ControlPlaneToRunner
+	165, // [165:166] is the sub-list for method output_type
+	164, // [164:165] is the sub-list for method input_type
+	164, // [164:164] is the sub-list for extension type_name
+	164, // [164:164] is the sub-list for extension extendee
+	0,   // [0:164] is the sub-list for field type_name
 }
 
 func init() { file_contracts_runner_v1_runner_proto_init() }
@@ -9925,11 +10040,11 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*NetworkDestination_Domain)(nil),
 		(*NetworkDestination_Cidr)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[27].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[28].OneofWrappers = []any{
 		(*ExecOpen_Shell)(nil),
 		(*ExecOpen_Argv)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[35].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[36].OneofWrappers = []any{
 		(*ExecFrame_Open)(nil),
 		(*ExecFrame_Input)(nil),
 		(*ExecFrame_Output)(nil),
@@ -9938,7 +10053,7 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*ExecFrame_Terminal)(nil),
 		(*ExecFrame_BufferedResult)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[41].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[42].OneofWrappers = []any{
 		(*FileFrame_Open)(nil),
 		(*FileFrame_Chunk)(nil),
 		(*FileFrame_Metadata)(nil),
@@ -9946,8 +10061,8 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*FileFrame_Cancel)(nil),
 		(*FileFrame_Terminal)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[46].OneofWrappers = []any{}
-	file_contracts_runner_v1_runner_proto_msgTypes[47].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[47].OneofWrappers = []any{}
+	file_contracts_runner_v1_runner_proto_msgTypes[48].OneofWrappers = []any{
 		(*PtyFrame_Input)(nil),
 		(*PtyFrame_Output)(nil),
 		(*PtyFrame_Resize)(nil),
@@ -9957,7 +10072,7 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*PtyFrame_Terminal)(nil),
 		(*PtyFrame_AttachResult)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[58].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[59].OneofWrappers = []any{
 		(*PortFrame_Open)(nil),
 		(*PortFrame_Bytes)(nil),
 		(*PortFrame_Credit)(nil),
@@ -9965,7 +10080,7 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*PortFrame_Terminal)(nil),
 		(*PortFrame_DirectOpen)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[69].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[70].OneofWrappers = []any{
 		(*WorkspaceTransferFrame_Open)(nil),
 		(*WorkspaceTransferFrame_Chunk)(nil),
 		(*WorkspaceTransferFrame_Credit)(nil),
@@ -9973,7 +10088,7 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*WorkspaceTransferFrame_Result)(nil),
 		(*WorkspaceTransferFrame_Cancel)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[71].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[72].OneofWrappers = []any{
 		(*RunnerToControlPlane_Hello)(nil),
 		(*RunnerToControlPlane_Registration)(nil),
 		(*RunnerToControlPlane_Heartbeat)(nil),
@@ -9993,7 +10108,7 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*RunnerToControlPlane_DataPlaneDirectConsume)(nil),
 		(*RunnerToControlPlane_WorkspaceTransfer)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[72].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[73].OneofWrappers = []any{
 		(*ControlPlaneToRunner_Welcome)(nil),
 		(*ControlPlaneToRunner_Rejection)(nil),
 		(*ControlPlaneToRunner_Assignment)(nil),
@@ -10016,7 +10131,7 @@ func file_contracts_runner_v1_runner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_contracts_runner_v1_runner_proto_rawDesc), len(file_contracts_runner_v1_runner_proto_rawDesc)),
 			NumEnums:      29,
-			NumMessages:   73,
+			NumMessages:   74,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

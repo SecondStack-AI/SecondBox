@@ -8,9 +8,9 @@ import (
 
 func TestContextSelectionUsesOneMappingAndProtectsEveryContextAddress(t *testing.T) {
 	config := EgressContextConfig{
-		contexts: map[string]map[string]netip.Addr{
-			"installation-a": {"agent-gateway.secondbox.internal": netip.MustParseAddr("8.8.8.8")},
-			"installation-b": {"agent-gateway.secondbox.internal": netip.MustParseAddr("9.9.9.9")},
+		contexts: map[string]map[string]runnerGatewayRoute{
+			"installation-a": {"agent-gateway.secondbox.internal": {address: netip.MustParseAddr("8.8.8.8")}},
+			"installation-b": {"agent-gateway.secondbox.internal": {address: netip.MustParseAddr("9.9.9.9")}},
 		},
 		protectedAddresses: []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("9.9.9.9")},
 	}

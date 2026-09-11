@@ -31,11 +31,13 @@ Snapshot creation is a lifecycle-scoped, revision-guarded, idempotent reflink of
 }
 ```
 
-Tenant and subject ownership come from the trusted request headers. A Sandbox request cannot override backend, image, resources, lifecycle, storage, network, timeouts, ports, runner pool, placement, generation, or Instance state.
+Tenant and subject ownership come from the trusted request headers. A Sandbox creation request cannot override backend, image, resources, lifecycle, storage, network, timeouts, ports, runner pool, placement, generation, or Instance state.
 
 ## Lifecycle semantics
 
 Create, start, drain, stop, Snapshot create/delete/restore, and Sandbox delete are idempotent asynchronous mutations that return `202` with a durable `Operation`. `GET /v1/operations/{id}` is the canonical polling surface. `wait` is a bounded long-poll for declared Sandbox states and never changes activity.
+
+Start accepts an optional `attributedExecution` body member with `authorizationRef` and `expiresAt`. Omission requests ordinary execution; explicit null or malformed attribution is invalid. The binding participates in idempotency, so reusing a key with a different command reference conflicts. Profile policy supplies routing and bounds, and an unsupported home Runner refuses admission. The Go SDK accepts `StartSandboxRequest` before `LifecycleOptions`; the TypeScript start options include the same optional member.
 
 `get` and `list` return durable projections. `inspect` returns the latest generation-fenced guest heartbeat and active-session evidence persisted by the runner path; it does not renew activity or synthesize a fresh observation while no synchronous runner-effect broker exists. `ping` reports that same persisted guest liveness without touch. `touch` explicitly renews useful activity for the current generation and may carry a Lease. `drain` rejects new work immediately, waits only through the profile grace, and then allows stop to fence remaining work. `stop` removes compute without deleting the Sandbox or workspace. `delete` never occurs on connection loss.
 
