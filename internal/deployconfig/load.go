@@ -644,7 +644,9 @@ func runnerGatewayNames(contexts []RunnerEgressContext) map[string]bool {
 	result := map[string]bool{}
 	for _, context := range contexts {
 		for _, gateway := range context.Gateways {
-			result[gateway.LogicalName] = true
+			if gateway.Address != "" {
+				result[gateway.LogicalName] = true
+			}
 		}
 	}
 	return result
@@ -850,8 +852,18 @@ func validateRunnerEgressContexts(path string, contexts []RunnerEgressContext) e
 				return manifestError(gatewayPath+".logical_name must be a unique canonical domain", nil)
 			}
 			seenGateways[logicalName] = true
-			if err := validateRunnerGateways(gatewayPath, gateway.LogicalName+"="+gateway.Address); err != nil {
-				return err
+			if gateway.Address == "" && gateway.AttributedSocket == "" {
+				return manifestError(gatewayPath+" must declare an address or attributed_socket", nil)
+			}
+			if gateway.Address != "" {
+				if err := validateRunnerGateways(gatewayPath, gateway.LogicalName+"="+gateway.Address); err != nil {
+					return err
+				}
+			}
+			if gateway.AttributedSocket != "" {
+				if err := networkpolicycontract.ValidateAttributedGatewaySocket(gateway.AttributedSocket); err != nil {
+					return manifestError(gatewayPath+".attributed_socket is invalid", err)
+				}
 			}
 		}
 	}

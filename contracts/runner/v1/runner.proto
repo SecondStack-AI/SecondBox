@@ -84,6 +84,7 @@ message RunnerCapabilities {
   // admitted template built from the exact signed bundle it verified. It is not
   // a prerequisite: a runner without it stays fully eligible for cold boot.
   bool snapshot_resume_ready = 12;
+  bool attributed_execution_ready = 13;
 }
 
 enum ComputeBackendKind {
@@ -290,6 +291,18 @@ message AssignmentCommand {
   // egress_context is the Sandbox's immutable creation-time pin. It is empty
   // exactly when requirements.requires_tenant_egress_context is false.
   string egress_context = 12;
+  AttributedExecution attributed_execution = 13;
+}
+
+// Attribution is control-plane authority fixed before guest networking opens.
+// AssignmentFence supplies its Sandbox, Instance, and generation binding.
+message AttributedExecution {
+  string tenant_ref = 1;
+  string subject_ref = 2;
+  string authorization_ref = 3;
+  uint64 expires_at_unix_ms = 4;
+  string gateway = 5;
+  uint32 maximum_connections = 6;
 }
 
 enum AssignmentDecision {

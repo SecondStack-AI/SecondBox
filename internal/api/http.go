@@ -572,7 +572,25 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 		return
 	}
 	switch action {
-	case "start", "drain", "stop":
+	case "start":
+		var body *contracts.StartSandboxRequest
+		if request.Body != nil {
+			if err := decodeStrictJSON(request, &body); err != nil {
+				if !errors.Is(err, io.EOF) {
+					apiHandler.writeError(writer, request, err)
+					return
+				}
+			} else if body == nil {
+				apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox start request must be an object")))
+				return
+			}
+		}
+		var metadata map[string]string
+		if body != nil && body.AttributedExecution != nil {
+			metadata = body.AttributedExecution.AttributedExecutionMetadata()
+		}
+		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, metadata)
+	case "drain", "stop":
 		if err := requireEmptyBody(request); err != nil {
 			apiHandler.writeError(writer, request, err)
 			return

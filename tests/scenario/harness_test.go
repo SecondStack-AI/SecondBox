@@ -520,7 +520,7 @@ func startScenarioSandbox(
 		if refreshErr != nil {
 			t.Fatalf("SecondBox scenario refresh before start: %v", refreshErr)
 		}
-		operation, err = handle.Start(ctx, secondboxclient.LifecycleOptions{
+		operation, err = handle.Start(ctx, secondboxclient.StartSandboxRequest{}, secondboxclient.LifecycleOptions{
 			IdempotencyKey: uniqueScenarioKey(t, key),
 			IfMatch:        sandboxRevisionETag(current.Revision),
 		})

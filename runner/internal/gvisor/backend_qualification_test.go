@@ -79,10 +79,18 @@ func newQualificationFixture(t *testing.T, suffix string) qualificationFixture {
 
 func newQualificationFixtureWithDNS(t *testing.T, suffix, dnsUpstream string) qualificationFixture {
 	t.Helper()
-	runsc, agent, rootfs := qualificationBuild(t)
 	if dnsUpstream == "" {
 		dnsUpstream = "127.0.0.1:53"
 	}
+	return newQualificationFixtureWithNetworkPolicy(t, suffix, networkpolicy.RunnerConfig{
+		CompileOptions: networkpolicy.CompileOptions{MaximumPins: 64, MaximumTTL: 5 * time.Minute},
+		DNSUpstream:    netip.MustParseAddrPort(dnsUpstream),
+	})
+}
+
+func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, policy networkpolicy.RunnerConfig) qualificationFixture {
+	t.Helper()
+	runsc, agent, rootfs := qualificationBuild(t)
 
 	qualificationRoot := t.TempDir()
 	if parent := os.Getenv("SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM"); parent != "" {
@@ -149,11 +157,8 @@ func newQualificationFixtureWithDNS(t *testing.T, suffix, dnsUpstream string) qu
 		MaterializationPath: manifestPath, MaterializationDigest: manifestDigest,
 		RuntimeDir: runtimeDir, WorkspaceRoot: filepath.Join(qualificationRoot, "store"),
 		SelfExecutable: selfExecutable,
-		NetworkPolicy: networkpolicy.RunnerConfig{
-			CompileOptions: networkpolicy.CompileOptions{MaximumPins: 64, MaximumTTL: 5 * time.Minute},
-			DNSUpstream:    netip.MustParseAddrPort(dnsUpstream),
-		},
-		MaximumVCPUs: 2, MaximumMemoryBytes: 1 << 30,
+		NetworkPolicy:  policy,
+		MaximumVCPUs:   2, MaximumMemoryBytes: 1 << 30,
 		MaximumDiskBytes: uint64(backendQualificationWorkspaceBytes),
 		MaximumInstances: 1, MaximumOperations: 8, WorkspaceStore: store,
 	})
@@ -207,6 +212,10 @@ func newQualificationFixtureWithDNS(t *testing.T, suffix, dnsUpstream string) qu
 func TestQualifiedGVisorBackendBootsAgentAndWorkspace(t *testing.T) {
 	fixture := newQualificationFixture(t, "primary")
 	backend, fence := fixture.backend, fixture.fence
+	readiness, readinessErr := backend.Readiness(t.Context())
+	if readinessErr != nil || readiness.Capabilities.GetAttributedExecutionReady() {
+		t.Fatalf("ordinary readiness: %+v %v", readiness, readinessErr)
+	}
 	t.Cleanup(func() { _ = backend.Shutdown(context.Background()) })
 
 	// An exact allow-list compiles and validates; a rule with no exact

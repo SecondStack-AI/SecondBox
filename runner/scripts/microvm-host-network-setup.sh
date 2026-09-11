@@ -187,6 +187,9 @@ install_firewall() {
   iptables -N "$ipv4_input_chain" >/dev/null 2>&1 || true
   iptables -F "$ipv4_input_chain"
   iptables_add "$ipv4_input_chain" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables_add "$ipv4_input_chain" -d "$bridge_address" -p tcp \
+    -m connmark --mark "$policy_connection_mark" \
+    -m comment --comment secondbox-runner-policy-allow -j ACCEPT
   for protocol in udp tcp; do
     iptables_add "$ipv4_input_chain" -d "$bridge_address" -p "$protocol" --dport 53 \
       -m comment --comment secondbox-runner-dns -j ACCEPT

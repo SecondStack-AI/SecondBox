@@ -15,6 +15,36 @@ import (
 	"time"
 )
 
+func TestSandboxStartSendsAttributedExecution(t *testing.T) {
+	request := StartSandboxRequest{AttributedExecution: &AttributedExecutionRequest{
+		AuthorizationRef: "command-sdk", ExpiresAt: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC),
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
+		if incoming.Method != http.MethodPost || incoming.URL.Path != "/v1/sandboxes/sandbox-start:start" ||
+			incoming.Header.Get("If-Match") != `"revision-7"` || incoming.Header.Get("Idempotency-Key") != "start-command-sdk" {
+			t.Errorf("start request = %s %s, headers = %v", incoming.Method, incoming.URL.Path, incoming.Header)
+		}
+		var actual StartSandboxRequest
+		if err := json.NewDecoder(incoming.Body).Decode(&actual); err != nil || actual.AttributedExecution == nil || *actual.AttributedExecution != *request.AttributedExecution {
+			t.Errorf("start binding = %+v, error = %v", actual, err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if _, err := io.WriteString(writer, `{"id":"operation-start","state":"pending","kind":"start"}`); err != nil {
+			t.Errorf("write start response: %v", err)
+		}
+	}))
+	defer server.Close()
+	client, err := NewSecondBoxClient(server.URL, "token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := NewSandboxHandle(client, Sandbox{ID: "sandbox-start", Revision: 7})
+	operation, err := handle.Start(t.Context(), request, LifecycleOptions{IdempotencyKey: "start-command-sdk"})
+	if err != nil || operation.ID != "operation-start" {
+		t.Fatalf("start = %+v, error = %v", operation, err)
+	}
+}
+
 func TestNewIdempotencyKeyIsPrefixedAndUnique(t *testing.T) {
 	seen := make(map[string]struct{}, 64)
 	for range 64 {

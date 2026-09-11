@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -205,6 +206,57 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			reconcileOwner, reconcileClaimExpiry, persistedNext, revision,
 		)
 	}
+	t.Run("attributed start carries immutable binding", func(t *testing.T) {
+		spec.AttributedExecution = &contracts.AttributedExecutionPolicy{Gateway: "gateway", MaximumConnections: 32}
+		requiresContext := true
+		spec.Network.RequiresTenantEgressContext = &requiresContext
+		spec.Network.Mode = "allow_list"
+		spec.Network.Destinations = []contracts.NetworkDestination{{Protocol: "tcp", Domain: "ordinary.example", Port: 443}}
+		specJSON, err := json.Marshal(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding := contracts.AttributedExecutionRequest{AuthorizationRef: "command-authorization", ExpiresAt: now.Add(20 * time.Second)}
+		metadata, err := json.Marshal(binding.AttributedExecutionMetadata())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(t.Context(), `
+			UPDATE secondbox.profile_revisions SET spec_json=$1 WHERE id='revision-automatic-start';
+			UPDATE secondbox.sandboxes SET egress_context='tenant-blue',lifecycle_request_metadata_json=$2,
+			  reconcile_owner='worker-automatic-start',reconcile_claim_expires_at=$3
+			  WHERE id='sandbox-automatic-start';
+			INSERT INTO secondbox.operations(id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,
+			  request_id,request_metadata_json,error_code,error_message,retryable,created_at,updated_at)
+			VALUES('attributed-operation','tenant','subject','sandbox-automatic-start','','start','pending',
+			  'attributed-request',$2,'','',false,$4,$4);
+			UPDATE secondbox.workspaces SET mutation_operation_id='attributed-operation'
+			  WHERE id='workspace-automatic-start'`, pgx.QueryExecModeSimpleProtocol, string(specJSON), string(metadata), now.Add(time.Minute), now); err != nil {
+			t.Fatal(err)
+		}
+		recordingScheduler.err = schedulerFailure
+		err = broker.ExecuteLifecycleEffect(t.Context(), ports.LifecycleReconcileClaim{
+			SandboxID: "sandbox-automatic-start", WorkerID: "worker-automatic-start", Revision: 5,
+		}, lifecycle.Decision{Action: lifecycle.ActionStartInstance}, now, now.Add(time.Second))
+		if !errors.Is(err, schedulerFailure) {
+			t.Fatalf("attributed scheduling = %v", err)
+		}
+		request := recordingScheduler.request
+		command := request.AssignmentCommand
+		expected := &runnerv1.AttributedExecution{
+			TenantRef: "tenant", SubjectRef: "subject", AuthorizationRef: binding.AuthorizationRef,
+			ExpiresAtUnixMs: uint64(binding.ExpiresAt.UnixMilli()), Gateway: "gateway", MaximumConnections: 32,
+		}
+		if command == nil || !proto.Equal(command.AttributedExecution, expected) ||
+			command.Correlation.OperationId != "attributed-operation" ||
+			command.NetworkPolicy.Mode != runnerv1.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL ||
+			len(command.NetworkPolicy.Destinations) != 0 ||
+			!slices.Contains(command.Requirements.RequiredCapabilities, contracts.RunnerCapabilityAttributedExecution) ||
+			!slices.Contains(request.Requirements.RequiredCapabilities, contracts.RunnerCapabilityAttributedExecution) ||
+			!request.OperationDeadline.Equal(binding.ExpiresAt) {
+			t.Fatalf("attributed scheduling lost authority: %+v", request)
+		}
+	})
 }
 
 func TestOrdinaryStopAndSnapshotDeleteSerializeAcrossControlPlaneReplicas(t *testing.T) {

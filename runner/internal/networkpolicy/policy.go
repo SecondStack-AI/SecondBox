@@ -115,17 +115,24 @@ type CompiledPolicy struct {
 	managementPrefixes []netip.Prefix
 	protectedAddresses map[netip.Addr]struct{}
 	runnerGateways     map[string]netip.Addr
+	executionListener  netip.AddrPort
 
 	mu   sync.Mutex
 	pins map[pinKey]DNSPin
 }
 
-// RunnerGatewayDestinations returns Profile destinations explicitly bound to Runner-local gateways.
+// RunnerGatewayDestinations returns the exact host gateway exceptions for enforcement.
 func (policy *CompiledPolicy) RunnerGatewayDestinations() []RunnerGatewayDestination {
 	if policy == nil {
 		return nil
 	}
 	result := make([]RunnerGatewayDestination, 0, len(policy.runnerGateways))
+	if policy.executionListener.IsValid() {
+		result = append(result, RunnerGatewayDestination{
+			Destination: Destination{Protocol: ProtocolTCP, Port: policy.executionListener.Port()},
+			Address:     policy.executionListener.Addr(),
+		})
+	}
 	for _, destination := range policy.destinations {
 		address, found := policy.runnerGateways[destination.Domain]
 		if !found {
@@ -399,6 +406,10 @@ func (policy *CompiledPolicy) AuthorizeIP(
 		return Decision{Reason: ReasonPolicyDenyAll}
 	}
 	address = normalizeAddress(address)
+	if protocol == ProtocolTCP && policy.executionListener.IsValid() &&
+		policy.executionListener == netip.AddrPortFrom(address, port) {
+		return Decision{Allowed: true, Reason: ReasonAllowedRunnerGateway}
+	}
 	if policy.isProtected(address) {
 		return Decision{Reason: ReasonProtectedDestination}
 	}

@@ -32,6 +32,16 @@ Every ProfileRevision contains:
 - outbound network and DNS policy, including the required `network.requiresTenantEgressContext` Boolean;
 - approved exposed ports, protocols, and session limits.
 
+An optional `attributedExecution` block permits a single-command generation through a named installation gateway and bounds its concurrent connections. It requires `network.requiresTenantEgressContext: true`; the gateway is a canonical logical name, never a caller-selected URL or host socket. This policy is separate from ordinary outbound destinations.
+
+An attributed start supplies an application authorization reference and an absolute expiry within the Profile execution limit. Admission requires stopped compute and an attributed-capable home Runner. The binding is stored with lifecycle intent and travels in the assignment under the Sandbox's Tenant and Subject. Firecracker and gVisor advertise this capability only with configured attributed routing. Qualification and release requirements are tracked in the [attributed execution plan](../plans/2026-09-10-attributed-command-execution.md).
+
+The release-owned `agent-compartment` appends this permission to its existing ordinary policy, with the same logical Agent gateway and a limit of two simultaneous attributed connections per generation. This is the limit exercised by backend and public scenario qualification. Use the generated bundle identity: the attributed revision is 3 for baseline assets, 4 after a nonbaseline ordinary asset revision, and 2 for development. Earlier revisions remain immutable; existing Sandboxes keep their pinned revision. The isolated Profile retains `deny_all` networking and no attributed permission.
+
+The assignment retains the execution binding and its one admitted exec session ID. Result cleanup cannot reopen that allowance, and changing lifecycle intent cannot remove the active assignment's restriction. Control-plane admission and the Runner permit bounded read-only files but refuse PTYs, ports, file writes, and another exec.
+
+Completion, expiry, or connection loss retires the attributed Instance and clears its running intent. The next command needs a new explicit start and authorization binding. Only the Workspace persists across generations. A hard compute or Runner crash can lose guest writes that were not flushed before the crash.
+
 SecondBox releases three explicitly selected standard Profile bundles:
 
 - `agent-compartment` is bounded ephemeral compute for Flue-style agent turns. It starts immediately, has short idle and maximum-duration bounds, exposes no ports, and states `requiresTenantEgressContext: true`.

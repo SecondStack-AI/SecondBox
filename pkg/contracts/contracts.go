@@ -142,17 +142,25 @@ type ProfileRevision struct {
 
 // ProfileRevisionSpec resolves every execution, durability, and placement bound.
 type ProfileRevisionSpec struct {
-	Pool                  string          `json:"pool"`
-	Architecture          string          `json:"architecture"`
-	RuntimeBundleDigest   string          `json:"runtimeBundleDigest"`
-	ToolchainBundleDigest string          `json:"toolchainBundleDigest"`
-	Resources             ResourcePolicy  `json:"resources"`
-	Startup               StartupPolicy   `json:"startup"`
-	Lifecycle             LifecyclePolicy `json:"lifecycle"`
-	Retention             RetentionPolicy `json:"retention"`
-	Execution             ExecutionPolicy `json:"execution"`
-	Network               NetworkPolicy   `json:"network"`
-	Ports                 []PortPolicy    `json:"ports"`
+	Pool                  string                     `json:"pool"`
+	Architecture          string                     `json:"architecture"`
+	RuntimeBundleDigest   string                     `json:"runtimeBundleDigest"`
+	ToolchainBundleDigest string                     `json:"toolchainBundleDigest"`
+	Resources             ResourcePolicy             `json:"resources"`
+	Startup               StartupPolicy              `json:"startup"`
+	Lifecycle             LifecyclePolicy            `json:"lifecycle"`
+	Retention             RetentionPolicy            `json:"retention"`
+	Execution             ExecutionPolicy            `json:"execution"`
+	Network               NetworkPolicy              `json:"network"`
+	Ports                 []PortPolicy               `json:"ports"`
+	AttributedExecution   *AttributedExecutionPolicy `json:"attributedExecution,omitempty"`
+}
+
+// AttributedExecutionPolicy permits one isolated exec through a Runner-owned
+// forwarder. It never adds destinations to an ordinary generation's network.
+type AttributedExecutionPolicy struct {
+	Gateway            string `json:"gateway"`
+	MaximumConnections int64  `json:"maximumConnections"`
 }
 
 // StartupPolicy states how an Instance of a Profile revision reaches ready.

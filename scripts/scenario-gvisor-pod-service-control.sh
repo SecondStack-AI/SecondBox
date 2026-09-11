@@ -23,6 +23,7 @@ for name in \
   SECONDBOX_SCENARIO_GVISOR_BUILD \
   SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION \
   SECONDBOX_SCENARIO_IDENTITY_DIR \
+  SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR \
   SECONDBOX_SCENARIO_STATE_DIR \
   SECONDBOX_SCENARIO_WORKSPACE_DIR \
   SECONDBOX_SCENARIO_RELOCATION_IDENTITY_DIR \
@@ -200,6 +201,9 @@ $(emit_env \
         - name: identity
           mountPath: /opt/secondbox-runner-identity
           readOnly: true
+        - name: attributed-gateway
+          mountPath: /opt/secondbox-attributed-gateway
+          readOnly: true
         - name: gvisor-build
           mountPath: /opt/secondbox-gvisor
           readOnly: true
@@ -222,6 +226,10 @@ $(emit_env \
     - name: identity
       hostPath:
         path: $service_identity
+        type: Directory
+    - name: attributed-gateway
+      hostPath:
+        path: $SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR
         type: Directory
     - name: gvisor-build
       hostPath:
@@ -318,6 +326,18 @@ echo "$peak"' "${arguments[1]}"
     done
     if [[ "$service" == secondbox-runner || "$service" == secondbox-runner-relocation ]]; then
       runner_stop "$service" "$grace"
+    else
+      "${compose[@]}" "${arguments[@]}"
+    fi
+    ;;
+  kill)
+    service="${arguments[${#arguments[@]}-1]}"
+    if [[ "$service" == secondbox-runner || "$service" == secondbox-runner-relocation ]]; then
+      [[ ${#arguments[@]} == 4 && "${arguments[1]}" == "-s" ]] || fail "runner kill requires an explicit signal"
+      container_id="$(kubectl get pod "$service" --output=json |
+        jq -er '.status.containerStatuses[] | select(.name == "runner") | .containerID | select(startswith("containerd://")) | ltrimstr("containerd://")')" ||
+        fail "runner pod $service has no containerd task"
+      ${SECONDBOX_SCENARIO_POD_CTR:-k3s ctr} --namespace k8s.io tasks kill --signal "${arguments[2]}" "$container_id"
     else
       "${compose[@]}" "${arguments[@]}"
     fi

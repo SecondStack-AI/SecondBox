@@ -18,6 +18,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/SecondStack-AI/SecondBox/pkg/networkpolicycontract"
 )
 
 const defaultIdempotencyRetention = 24 * time.Hour
@@ -1288,6 +1289,18 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	}
 	if spec.Network.RequiresTenantEgressContext == nil {
 		return invalidRequest(errors.New("SecondBox Profile network policy must explicitly state requiresTenantEgressContext"))
+	}
+	if policy := spec.AttributedExecution; policy != nil {
+		gateway, err := networkpolicycontract.NormalizeLogicalGatewayName(policy.Gateway)
+		if err != nil || gateway != policy.Gateway {
+			return invalidRequest(errors.New("SecondBox Profile attributed execution gateway must be a canonical logical gateway name"))
+		}
+		if !*spec.Network.RequiresTenantEgressContext {
+			return invalidRequest(errors.New("SecondBox Profile attributed execution requires the Tenant egress context"))
+		}
+		if policy.MaximumConnections < 1 || policy.MaximumConnections > 4096 {
+			return invalidRequest(errors.New("SecondBox Profile attributed execution maximumConnections must be between 1 and 4096"))
+		}
 	}
 	if spec.Network.Mode == "deny_all" && len(spec.Network.Destinations) != 0 {
 		return invalidRequest(errors.New("SecondBox Profile deny_all network policy cannot contain destinations"))

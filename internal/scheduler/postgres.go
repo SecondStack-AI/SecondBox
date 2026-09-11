@@ -106,6 +106,8 @@ type DurableAssignment struct {
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
 	EgressContext           *string
+	ExecutionReference      *string
+	ExecutionExpiry         *time.Time
 }
 
 // NewPostgresStore connects the scheduler to PostgreSQL authority.
@@ -232,6 +234,18 @@ func (store *PostgresStore) scheduleOnce(
 	currentInstanceID := locked.CurrentInstanceID
 	workspace := locked.Workspace
 	homeRunnerID := workspace.HomeRunnerID
+	var executionReference *string
+	var executionExpiry *time.Time
+	if attribution := request.AssignmentCommand.AttributedExecution; attribution != nil {
+		expiresAt := time.UnixMilli(int64(attribution.ExpiresAtUnixMs)).UTC()
+		if attribution.TenantRef != locked.TenantRef || attribution.SubjectRef != locked.SubjectRef ||
+			attribution.AuthorizationRef == "" {
+			return DurableAssignment{}, false, errors.New("SecondBox scheduler attributed execution binding is invalid")
+		}
+		reference := attribution.AuthorizationRef
+		executionReference = &reference
+		executionExpiry = &expiresAt
+	}
 	if homeRunnerID == "" {
 		return DurableAssignment{}, false, ErrHomeRunnerUnavailable
 	}
@@ -250,6 +264,13 @@ func (store *PostgresStore) scheduleOnce(
 	}
 	existing, err := readAssignment(ctx, tx, request.SandboxID, generation)
 	if err == nil {
+		sameBinding := existing.ExecutionReference == nil && executionReference == nil && existing.ExecutionExpiry == nil && executionExpiry == nil
+		if existing.ExecutionReference != nil && executionReference != nil && existing.ExecutionExpiry != nil && executionExpiry != nil {
+			sameBinding = *existing.ExecutionReference == *executionReference && existing.ExecutionExpiry.Equal(*executionExpiry)
+		}
+		if !sameBinding {
+			return DurableAssignment{}, false, ErrProfileRevisionMismatch
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler existing assignment commit: %w", err)
 		}
@@ -257,6 +278,9 @@ func (store *PostgresStore) scheduleOnce(
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return DurableAssignment{}, false, err
+	}
+	if executionExpiry != nil && !executionExpiry.After(request.Now) {
+		return DurableAssignment{}, false, errors.New("SecondBox scheduler attributed execution has expired")
 	}
 	if workspace.Mutation.State != "" &&
 		(workspace.Mutation.ID != request.StartMutationID || workspace.Mutation.Kind != "start") {
@@ -323,6 +347,7 @@ func (store *PostgresStore) scheduleOnce(
 		return DurableAssignment{}, false, err
 	}
 	assignment := DurableAssignment{
+		ExecutionReference: executionReference, ExecutionExpiry: executionExpiry,
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,
 		RunnerID: selected.ID, ProfileRevisionID: request.ProfileRevisionID,
 		BackendKind: selected.BackendKind, Generation: generation,
@@ -368,15 +393,16 @@ func (store *PostgresStore) scheduleOnce(
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
 			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
-			next_reconcile_at,revision,created_at,updated_at,egress_context
+			next_reconcile_at,revision,created_at,updated_at,egress_context,
+			execution_authorization_ref,execution_expires_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,'{}','',0,$12,$13,$14,'',$15,$13,1,$15,$15,$16
+			$1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,'{}','',0,$12,$13,$14,'',$15,$13,1,$15,$15,$16,$17,$18
 		)`,
 		assignment.ID, assignment.SandboxID, assignment.InstanceID, assignment.RunnerID,
 		assignment.ProfileRevisionID, assignment.BackendKind, assignment.Generation,
 		assignment.FencingToken, assignment.State, capabilitiesJSON, artifactsJSON,
 		assignment.RetryLimit, assignment.OperationDeadline, assignment.ClaimExpiresAt, placementAt,
-		request.Requirements.EgressContext,
+		request.Requirements.EgressContext, executionReference, executionExpiry,
 	)
 	// The command is always queued pending. Assigning its stream sequence here
 	// meant locking the runner's single runner_connections row inside every
@@ -636,7 +662,7 @@ func readAssignment(
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
 			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
-			next_reconcile_at,revision,created_at,updated_at,egress_context
+			next_reconcile_at,revision,created_at,updated_at,egress_context,execution_authorization_ref,execution_expires_at
 		FROM secondbox.assignments WHERE sandbox_id=$1 AND generation=$2`,
 		sandboxID, generation,
 	).Scan(
@@ -648,6 +674,7 @@ func readAssignment(
 		&assignment.ReconcileOwner, &assignment.ReconcileClaimExpiresAt,
 		&assignment.NextReconcileAt,
 		&assignment.Revision, &assignment.CreatedAt, &assignment.UpdatedAt, &assignment.EgressContext,
+		&assignment.ExecutionReference, &assignment.ExecutionExpiry,
 	)
 	if err != nil {
 		return DurableAssignment{}, err

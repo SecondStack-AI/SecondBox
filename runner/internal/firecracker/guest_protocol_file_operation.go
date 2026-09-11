@@ -95,6 +95,17 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
+	if s.attributedExecution != nil {
+		switch request.Operation {
+		case guestv1.FileOperation_FILE_OPERATION_READ, guestv1.FileOperation_FILE_OPERATION_STAT,
+			guestv1.FileOperation_FILE_OPERATION_LIST_DIRECT_CHILDREN, guestv1.FileOperation_FILE_OPERATION_EXISTS:
+			if err := s.attributedExecution.AdmitRead(assignmentID); err != nil {
+				return GuestFileOperationResult{}, err
+			}
+		default:
+			return GuestFileOperationResult{}, fmt.Errorf("attributed execution forbids file mutation")
+		}
+	}
 	binding, err := s.newFileOperationBinding(assignmentID)
 	if err != nil {
 		return GuestFileOperationResult{}, err

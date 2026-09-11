@@ -358,6 +358,20 @@ await handle.delete({
 
 Lifecycle methods generate one request key when absent and fence the handle's observed revision. A caller may supply a durable idempotency key or an explicit expected revision, but the SDK never refreshes and replays after a fence. Data-plane helpers bind the handle’s observed generation and optional Lease ID. Poll intervals, deadlines, and output limits remain explicit. The full operation matrix is in [Consumer operation matrix](../design/consumer-operation-matrix.md).
 
+## Attributed commands
+
+Create the Sandbox with a Profile revision that permits attributed execution. Stop its ordinary Instance explicitly before starting an attributed generation. With the TypeScript SDK, call `handle.start({ ...options, attributedExecution: { authorizationRef, expiresAt } })`, where `authorizationRef` is the application's bounded non-secret authorization reference and `expiresAt` is an absolute UTC timestamp within the Profile execution limit. Wait for the start Operation before executing one command. The application retains credential selection and authorization; SecondBox supplies the generation identity.
+
+The Runner injects `SECONDBOX_EXECUTION_GATEWAY` into that command as an IPv4 `host:port`, without a URL scheme. Configure the command's HTTP proxy variables explicitly, for example in its shell wrapper:
+
+```sh
+export HTTP_PROXY="http://${SECONDBOX_EXECUTION_GATEWAY}"
+export HTTPS_PROXY="$HTTP_PROXY"
+exec integration-cli read
+```
+
+The variable is routing information. It contains no credentials and conveys no authority by itself. Caller-supplied values for this reserved name are rejected in ordinary and attributed execs, including whitespace-normalized names. Ordinary execs receive no injected value. Attributed generations have only the declared forwarder route; they cannot use ordinary gateway or direct egress. Completion, cancellation or expiry destroys compute before confirming the command result. Buffered result delivery allows a separate bounded teardown interval after the execution deadline; the command's deadline and credential expiry do not extend. The next command needs a new explicit attributed start, while the Workspace persists.
+
 ## Flue adapter
 
 The adapter targets the exact public contract from [`@flue/runtime` 2.0.1](https://www.npmjs.com/package/@flue/runtime/v/2.0.1), upstream tag [`v2.0.1`](https://github.com/withastro/flue/tree/v2.0.1) at commit `a67f00955ac48c14d4b97ffb71962d24e39af84d`, package integrity `sha512-as+rrm8oHLuaLfpSReExwsuzOb1gC0sxQWgz3o+RvJUwHyGcQAcfBcn/R6j8logAq1j+ryfH1WsXf4J7Th9puQ==`, and Flue's [Sandbox Adapter API](https://flueframework.com/docs/reference/sandbox-api/). The package declares Flue 2.x as a peer and imports its real `createSandboxSessionEnv`, `SandboxApi`, `FileStat`, and `SandboxFactory`; there is no copied runtime or compatibility fallback.

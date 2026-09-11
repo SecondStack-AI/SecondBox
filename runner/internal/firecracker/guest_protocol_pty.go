@@ -53,6 +53,9 @@ func (s *GuestProtocolSession) ExecutePTY(
 	if s == nil || s.Stream == nil || s.Binding == nil {
 		return GuestPTYResult{}, fmt.Errorf("guest protocol session is not ready")
 	}
+	if s.attributedExecution != nil {
+		return GuestPTYResult{}, fmt.Errorf("attributed execution forbids terminals")
+	}
 	if !s.EnabledFeatures[guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC] ||
 		!s.EnabledFeatures[guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE] {
 		return GuestPTYResult{}, fmt.Errorf("guest protocol PTY features were not negotiated")
@@ -74,6 +77,10 @@ func (s *GuestProtocolSession) ExecutePTY(
 	}
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
+	request, err := s.prepareExecutionGateway(request)
+	if err != nil {
+		return GuestPTYResult{}, err
+	}
 
 	operationID, err := randomGuestOperationID()
 	if err != nil {

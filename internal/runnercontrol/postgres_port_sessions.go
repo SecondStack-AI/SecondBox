@@ -650,13 +650,15 @@ func lockPortAdmissionAuthority(
 	var tunnel PortTunnel
 	var encodedDataPlaneEndpoint string
 	var sandboxState, assignmentState string
+	var executionReference *string
+	var executionExpiry *time.Time
 	var specJSON []byte
 	err := tx.QueryRow(ctx, `
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,
 		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
 		       assignment.fencing_token,assignment.state,revision.spec_json,
-		       COALESCE(runner.data_plane_address,'')
+		       COALESCE(runner.data_plane_address,''),assignment.execution_authorization_ref,assignment.execution_expires_at
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.assignments AS assignment
 		  ON assignment.instance_id=sandbox.current_instance_id
@@ -671,13 +673,16 @@ func lockPortAdmissionAuthority(
 		&tunnel.TenantRef, &tunnel.SubjectRef,
 		&tunnel.ProfileRevisionID, &tunnel.Session.Generation, &sandboxState,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID,
-		&tunnel.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint,
+		&tunnel.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint, &executionReference, &executionExpiry,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrSandboxNotFound
 	}
 	if err != nil {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, fmt.Errorf("SecondBox Port authority lookup: %w", err)
+	}
+	if executionReference != nil || executionExpiry != nil {
+		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrPortPolicyDenied
 	}
 	if input.Session.Transport == contracts.PortTransportDirect {
 		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)

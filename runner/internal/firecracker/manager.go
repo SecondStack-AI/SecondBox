@@ -105,6 +105,8 @@ type runtimeInstanceKey struct {
 }
 
 type instance struct {
+	executionForwarder     instanceExecutionForwarder
+	attributedExecution    *runtimemanager.AttributedExecutionGuard
 	id                     string
 	sandboxID              string
 	sandboxGeneration      uint64
@@ -868,15 +870,16 @@ func (m *Manager) startCompartmentInstance(ctx context.Context, sandboxID, compa
 // Ownership transfers to the running Instance at transferOwnership; until then
 // release reclaims whatever was acquired, in the reverse order.
 type instanceHostReservation struct {
-	manager   *Manager
-	id        string
-	jailerUID int
-	guestIP   string
-	tapName   string
-	dir       string
-	logPath   string
-	logFile   *os.File
-	timer     *coldStartStageTimer
+	executionForwarder instanceExecutionForwarder
+	manager            *Manager
+	id                 string
+	jailerUID          int
+	guestIP            string
+	tapName            string
+	dir                string
+	logPath            string
+	logFile            *os.File
+	timer              *coldStartStageTimer
 
 	releaseJailerUID bool
 	releaseIP        bool
@@ -893,6 +896,9 @@ func (m *Manager) reserveInstanceHost(
 	compartmentID string,
 	opts runtimemanager.StartOpts,
 ) (host *instanceHostReservation, err error) {
+	if (opts.AttributedExecution != nil) != (opts.ExecutionNetwork != nil) || (opts.ExecutionNetwork != nil && (opts.TemplateMode || !m.networkRequired(opts))) {
+		return nil, fmt.Errorf("Firecracker attributed execution requires its network binding and a non-template networked Instance")
+	}
 	id, err := newInstanceID(sandboxID, compartmentID)
 	if err != nil {
 		return nil, err
@@ -910,12 +916,22 @@ func (m *Manager) reserveInstanceHost(
 		jailerUID:        jailerUID,
 		releaseJailerUID: true,
 	}
-	defer func() {
+	defer func(reservation *instanceHostReservation) {
 		if err != nil {
-			host.release()
+			reservation.release()
 			host = nil
 		}
-	}()
+	}(host)
+	// Recovery must discover the Instance before any persistent host networking exists.
+	dir := filepath.Join(m.cfg.MicroVMRunDir, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create instance dir: %w", err)
+	}
+	host.dir = dir
+	host.cleanupDir = true
+	if err := m.writeJailerUIDLease(dir, jailerUID); err != nil {
+		return nil, fmt.Errorf("persist jailer UID lease: %w", err)
+	}
 	guestIP, err := m.reserveGuestIP(id)
 	if err != nil {
 		return nil, fmt.Errorf("reserve guest IP: %w", err)
@@ -928,6 +944,7 @@ func (m *Manager) reserveInstanceHost(
 		if m.network == nil {
 			return nil, fmt.Errorf("microVM tap networking is required but no host network configurer is available")
 		}
+		host.tapName = tapName
 		if err := m.network.ConfigureTap(setupCtx, TapConfig{
 			SandboxID:  sandboxID,
 			InstanceID: id,
@@ -937,10 +954,15 @@ func (m *Manager) reserveInstanceHost(
 			BridgeCIDR: m.cfg.MicroVMBridgeCIDR,
 			OwnerUID:   m.tapOwnerUID(jailerUID),
 		}); err != nil {
-			return nil, fmt.Errorf("configure microVM tap: %w", err)
+			return nil, host.joinNetworkCleanup(setupCtx, fmt.Errorf("configure microVM tap: %w", err))
 		}
-		host.tapName = tapName
 		policy := opts.NetworkPolicy
+		if opts.ExecutionNetwork != nil {
+			policy, err = host.startExecutionForwarder(setupCtx, opts.ExecutionNetwork)
+			if err != nil {
+				return nil, host.joinNetworkCleanup(setupCtx, err)
+			}
+		}
 		if policy == nil {
 			policy = m.defaultNetworkPolicy
 		}
@@ -981,18 +1003,6 @@ func (m *Manager) reserveInstanceHost(
 			)
 		}
 	}
-	dir := filepath.Join(m.cfg.MicroVMRunDir, id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, host.joinNetworkCleanup(ctx, fmt.Errorf("create instance dir: %w", err))
-	}
-	// The per-instance dir holds disposable launch state (the rootfs copy, the
-	// firecracker config, the identity file). Reclaim it on any early failure;
-	// ownership transfers to the running instance once it is registered.
-	host.dir = dir
-	host.cleanupDir = true
-	if err := m.writeJailerUIDLease(dir, jailerUID); err != nil {
-		return nil, host.joinNetworkCleanup(ctx, fmt.Errorf("persist jailer UID lease: %w", err))
-	}
 	logPath := filepath.Join(m.cfg.MicroVMLogDir, id+".log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -1008,7 +1018,13 @@ func (m *Manager) reserveInstanceHost(
 // the joined evidence. Every start-path failure after the reservation exists
 // and before the Instance is registered goes through it.
 func (h *instanceHostReservation) joinNetworkCleanup(ctx context.Context, cause error) error {
-	return h.manager.joinInstanceNetworkCleanup(ctx, h.id, h.tapName, cause)
+	forwardErr := closeExecutionForwarder(h.executionForwarder)
+	networkErr := h.manager.cleanupNetworkChecked(ctx, h.id, h.tapName)
+	if forwardErr != nil || networkErr != nil {
+		h.releaseIP, h.releaseJailerUID = false, false
+		h.cleanupDir = false
+	}
+	return errors.Join(cause, forwardErr, networkErr)
 }
 
 // release reclaims everything the reservation still owns. Cleanup failures are
@@ -1017,6 +1033,11 @@ func (h *instanceHostReservation) joinNetworkCleanup(ctx context.Context, cause 
 func (h *instanceHostReservation) release() {
 	if h == nil {
 		return
+	}
+	if err := closeExecutionForwarder(h.executionForwarder); err != nil {
+		h.manager.recordCleanupFailure(err)
+		h.releaseIP, h.releaseJailerUID = false, false
+		h.cleanupDir = false
 	}
 	if h.logFile != nil {
 		if err := h.logFile.Close(); err != nil {
@@ -1045,6 +1066,7 @@ func (h *instanceHostReservation) release() {
 // transferOwnership hands the guest identity, the jailer UID lease, and the run
 // directory to the registered Instance. Teardown releases them from there.
 func (h *instanceHostReservation) transferOwnership() {
+	h.executionForwarder = nil
 	h.releaseIP = false
 	h.releaseJailerUID = false
 	h.cleanupDir = false
@@ -1119,6 +1141,8 @@ func (m *Manager) registerLaunchedInstance(
 	onRegisteredLocked func(),
 ) (*instance, error) {
 	inst := &instance{
+		executionForwarder:  host.executionForwarder,
+		attributedExecution: opts.AttributedExecution,
 		id:                  host.id,
 		sandboxID:           sandboxID,
 		sandboxGeneration:   opts.SandboxGeneration,
@@ -1150,9 +1174,16 @@ func (m *Manager) registerLaunchedInstance(
 		memoryMiB:           m.requestedMemoryMiB(opts),
 	}
 	m.registerStartingInstance(inst, onRegisteredLocked)
-	// Start the reaper before any stopInstance call so the process is always
-	// waited on (no zombie) and cleanup runs exactly once.
+	// Start the reaper before a forwarding failure can request teardown.
 	go m.reap(inst)
+	if inst.executionForwarder != nil {
+		host.transferOwnership()
+		go func() {
+			if err := inst.executionForwarder.Wait(); !errors.Is(err, context.Canceled) {
+				m.handleNetworkPolicyFailure(inst.id, err)
+			}
+		}()
+	}
 	host.timer.mark("instance_registered")
 	if opts.StartupProgress != nil {
 		if progressErr := opts.StartupProgress(runtimemanager.StartupStageComputeStarted); progressErr != nil {
@@ -1394,6 +1425,7 @@ func (m *Manager) finishInstance(inst *instance) {
 		return
 	}
 	inst.doneOnce.Do(func() {
+		forwardErr := closeExecutionForwarder(inst.executionForwarder)
 		if err := m.observeNaturalTermination(inst); err != nil {
 			inst.cleanupErr = errors.Join(inst.cleanupErr, fmt.Errorf("observe natural instance termination: %w", err))
 			m.recordCleanupFailure(inst.cleanupErr)
@@ -1419,7 +1451,7 @@ func (m *Manager) finishInstance(inst *instance) {
 		// If cleanup fails the jailed process may still claim this IP/MAC, so retain the
 		// reservation fail-closed rather than let a concurrent start recycle it into
 		// an ownership conflict.
-		if err := m.cleanupNetworkChecked(context.Background(), inst.id, inst.tapName); err != nil {
+		if err := errors.Join(forwardErr, m.cleanupNetworkChecked(context.Background(), inst.id, inst.tapName)); err != nil {
 			inst.cleanupErr = errors.Join(inst.cleanupErr, err)
 			m.recordCleanupFailure(inst.cleanupErr)
 		} else {
@@ -1672,6 +1704,9 @@ func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles 
 	if inst == nil {
 		return nil
 	}
+	if inst.executionForwarder != nil {
+		inst.executionForwarder.Revoke()
+	}
 	m.mu.Lock()
 	inst.explicitStop = true
 	m.mu.Unlock()
@@ -1754,7 +1789,7 @@ func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles 
 		}
 	}
 	stopErr = errors.Join(stopErr, inst.cleanupErr)
-	if removeFiles {
+	if removeFiles && inst.cleanupErr == nil {
 		if err := os.RemoveAll(inst.dir); err != nil {
 			stopErr = errors.Join(stopErr, fmt.Errorf("remove instance run directory %q: %w", inst.dir, err))
 		}
@@ -1983,6 +2018,9 @@ func (m *Manager) PutWorkspaceFileStream(ctx context.Context, instanceID, relPat
 	if inst == nil {
 		return 0, "", fmt.Errorf("unknown microVM instance %q", instanceID)
 	}
+	if inst.attributedExecution != nil {
+		return 0, "", fmt.Errorf("attributed execution forbids legacy workspace writes")
+	}
 	return inst.controlClient(0).PutWorkspaceFileStream(ctx, relPath, r)
 }
 
@@ -1990,6 +2028,9 @@ func (m *Manager) ExecuteTool(ctx context.Context, instanceID string, req ToolEx
 	inst := m.lookup(instanceID)
 	if inst == nil {
 		return ToolExecResponse{}, fmt.Errorf("unknown microVM instance %q", instanceID)
+	}
+	if inst.attributedExecution != nil {
+		return ToolExecResponse{}, fmt.Errorf("attributed execution forbids legacy tool execution")
 	}
 	return inst.controlClient(maxSandboxToolTimeout(req)).ExecuteTool(ctx, req)
 }
@@ -2025,6 +2066,9 @@ func (m *Manager) ApplySecrets(ctx context.Context, instanceID string, bundle Se
 	inst := m.lookup(instanceID)
 	if inst == nil {
 		return fmt.Errorf("unknown microVM instance %q", instanceID)
+	}
+	if inst.attributedExecution != nil {
+		return fmt.Errorf("attributed execution forbids legacy secret mutation")
 	}
 	return inst.controlClient(10*time.Second).ApplySecrets(ctx, bundle)
 }

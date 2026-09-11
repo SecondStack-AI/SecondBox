@@ -266,7 +266,7 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 	session runnercontrol.DataPlaneSession,
 	open *runnerv1.ExecOpen,
 ) (runnercontrol.DataPlaneSession, error) {
-	operationCtx, cancel := dataPlaneDeadlineContext(ctx, session)
+	operationCtx, cancel := context.WithDeadline(ctx, session.DeadlineAt.Add(runnercontrol.BufferedExecCompletionGrace))
 	defer cancel()
 	stream, err := service.openDataPlaneStream(operationCtx, session)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"google.golang.org/protobuf/proto"
@@ -99,6 +100,16 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 	}
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
+	if s.attributedExecution != nil && request.Pty != nil {
+		return BufferedGuestExecResult{}, fmt.Errorf("attributed execution forbids PTY exec")
+	}
+	request, err := s.prepareExecutionGateway(request)
+	if err != nil {
+		return BufferedGuestExecResult{}, err
+	}
+	if err := s.attributedExecution.AdmitExec(assignmentID, time.UnixMilli(int64(request.DeadlineUnixMs))); err != nil {
+		return BufferedGuestExecResult{}, err
+	}
 
 	operationID, err := randomGuestOperationID()
 	if err != nil {

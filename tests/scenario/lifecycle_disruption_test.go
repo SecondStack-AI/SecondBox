@@ -129,7 +129,7 @@ func TestScenarioControlPlaneRestartDuringStartConverges(t *testing.T) {
 		handle,
 		"control-restart-start",
 		func(options secondboxclient.LifecycleOptions) (contracts.Operation, error) {
-			return handle.Start(ctx, options)
+			return handle.Start(ctx, secondboxclient.StartSandboxRequest{}, options)
 		},
 	)
 	starting := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateStarting)

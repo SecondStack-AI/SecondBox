@@ -455,6 +455,7 @@ if [[ "$runner_placement" == "pod" ]]; then
 fi
 
 run_dir="$(mktemp -d "$scenario_root/run.XXXXXX")"
+export SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR="$(mktemp -d /tmp/secondbox-attributed.XXXXXX)"
 pki_dir="$run_dir/pki"
 identity_dir="$run_dir/runner-identity"
 state_dir="$run_dir/runner-state"
@@ -612,11 +613,13 @@ jq -n --arg address "$SECONDBOX_SCENARIO_BRIDGE_ADDRESS" '{
   contexts: [
     {name: "scenario-primary", gateways: [
       {logicalName: "agent-gateway.secondbox.internal", address: $address},
-      {logicalName: "platform-gateway.secondbox.internal", address: $address}
+      {logicalName: "platform-gateway.secondbox.internal", address: $address},
+      {logicalName: "execution.secondbox.internal", attributedSocket: "/opt/secondbox-attributed-gateway/gateway.sock"}
     ]},
     {name: "scenario-replacement", gateways: [
       {logicalName: "agent-gateway.secondbox.internal", address: $address},
-      {logicalName: "platform-gateway.secondbox.internal", address: $address}
+      {logicalName: "platform-gateway.secondbox.internal", address: $address},
+      {logicalName: "execution.secondbox.internal", attributedSocket: "/opt/secondbox-attributed-gateway/gateway.sock"}
     ]}
   ]
 }' >"$SECONDBOX_SCENARIO_EGRESS_CONTEXT_CONFIG"
@@ -831,6 +834,10 @@ cleanup() {
     echo "SecondBox scenario run-directory cleanup failed: $run_dir" >&2
     status=1
   fi
+  if ! rm -rf -- "$SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR"; then
+    echo "SecondBox scenario attributed gateway cleanup failed" >&2
+    status=1
+  fi
   if [[ "$status" -eq 0 && "$qualification_complete" == "true" &&
         "$scenario_mode" == "suite" && -z "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
     qualification_evidence_temporary="$qualification_evidence.tmp.$$"
@@ -911,7 +918,7 @@ compose up --detach --wait --wait-timeout 240 postgres control-plane
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
   bootstrap_subject="scenario-subject"
-  bootstrap_profile_grants='["agent-compartment-isolated","scenario-agent-compartment-network-enabled","scenario-concurrent-instance-isolation","scenario-control-restart","scenario-data-paths","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-microsandbox-cold-start-observation","scenario-microsandbox-relocation","scenario-microsandbox-snapshot-resume-rejected","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle","scenario-uncached-materialization","scenario-unsupported-architecture"]'
+  bootstrap_profile_grants='["agent-compartment-isolated","scenario-attributed","scenario-agent-compartment-network-enabled","scenario-concurrent-instance-isolation","scenario-control-restart","scenario-data-paths","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-microsandbox-cold-start-observation","scenario-microsandbox-relocation","scenario-microsandbox-snapshot-resume-rejected","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle","scenario-uncached-materialization","scenario-unsupported-architecture"]'
 else
   bootstrap_tenant="$(jq -er '.tenantRef' "$SECONDBOX_STRESS_CONFIG")"
   bootstrap_subject="$(jq -er '.subjectRef' "$SECONDBOX_STRESS_CONFIG")"

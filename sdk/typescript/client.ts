@@ -34,6 +34,7 @@ import {
   type Sandbox,
   type SandboxPage,
   type SandboxState,
+  type StartSandboxRequest,
   type Snapshot,
   type SnapshotPage,
   type StreamingExecRequest,
@@ -60,6 +61,8 @@ export type {
   Profile,
   ProfilePage,
   ProfileRevisionSpec,
+  AttributedExecutionRequest,
+  StartSandboxRequest,
   Problem,
   RelocateSandboxRequest,
   Sandbox,
@@ -1038,8 +1041,11 @@ export class SandboxHandle implements SandboxFilesystem {
     return new LeaseKeeper(this.#api, lease, durationSeconds, minimumDelayMilliseconds);
   }
 
-  public start(options: LifecycleOptions): Promise<Operation> {
-    return this.lifecycle("startSandbox", options);
+  public start(options: LifecycleOptions & StartSandboxRequest): Promise<Operation> {
+    const request: JSONValue = options.attributedExecution === undefined
+      ? {}
+      : { attributedExecution: { ...options.attributedExecution } };
+    return this.lifecycle("startSandbox", options, request);
   }
 
   public drain(options: LifecycleOptions): Promise<Operation> {

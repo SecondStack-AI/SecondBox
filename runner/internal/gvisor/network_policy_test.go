@@ -12,6 +12,28 @@ import (
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
+func TestRenderInetExecutionListenerPolicy(t *testing.T) {
+	compiled, err := networkpolicy.CompileExecutionListener(netip.MustParseAddrPort("169.254.104.1:41000"), networkpolicy.CompileOptions{
+		MaximumPins: 1, MaximumTTL: time.Second,
+		RunnerGateways: map[string]netip.Addr{"ordinary.internal": netip.MustParseAddr("10.0.0.2")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := renderInetPolicy("sbx_execution", "gvh0", "169.254.104.2", netip.MustParseAddr("169.254.99.53"), compiled.AllowsDNS(),
+		compiled.ProtectedPrefixes(), compiled.Destinations(), compiled.RunnerGatewayDestinations(), nil)
+	for _, chain := range []string{"input", "forward"} {
+		allow := `add rule inet sbx_execution ` + chain + ` iifname "gvh0" ip daddr 169.254.104.1 tcp dport 41000 ct mark set 0x53425801 accept`
+		drop := `add rule inet sbx_execution ` + chain + ` iifname "gvh0" drop`
+		if !strings.Contains(script, allow) || strings.Index(script, drop) < strings.Index(script, allow) {
+			t.Fatalf("private endpoint must precede terminal drop in %s:\n%s", chain, script)
+		}
+	}
+	if strings.Contains(script, "dport 53 ") || strings.Contains(script, "daddr 10.0.0.2 ") {
+		t.Fatalf("private execution policy inherited DNS or ordinary gateway:\n%s", script)
+	}
+}
+
 func TestTranslateNetworkPolicyUsesCompleteRunnerConfiguration(t *testing.T) {
 	options := networkpolicy.CompileOptions{
 		MaximumPins:        1,

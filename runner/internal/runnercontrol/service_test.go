@@ -1600,8 +1600,9 @@ func (err classifiedAssignmentError) AssignmentTerminal() runnerprotocol.Assignm
 
 type blockingAssignmentBackend struct {
 	recordingAssignmentBackend
-	started chan struct{}
-	release chan struct{}
+	startContext context.Context
+	started      chan struct{}
+	release      chan struct{}
 }
 
 func (backend *blockingAssignmentBackend) StartAssignment(
@@ -1611,6 +1612,7 @@ func (backend *blockingAssignmentBackend) StartAssignment(
 ) (BackendInstance, error) {
 	backend.startCalls.Add(1)
 	backend.recordingAssignmentBackend.started = assignment
+	backend.startContext = ctx
 	close(backend.started)
 	select {
 	case <-backend.release:

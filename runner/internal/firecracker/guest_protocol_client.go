@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,8 +29,10 @@ const (
 )
 
 type GuestProtocolNegotiation struct {
-	UDSPath string
-	Port    uint32
+	AttributedExecution *runtimemanager.AttributedExecutionGuard
+	ExecutionGateway    netip.AddrPort
+	UDSPath             string
+	Port                uint32
 	// DirectUnixSocket dials UDSPath as a plain filesystem Unix socket with
 	// no Firecracker vsock CONNECT framing and no port. This is the gVisor
 	// transport, where the agent listens on a gofer-passed host socket.
@@ -45,6 +49,8 @@ type GuestProtocolNegotiation struct {
 
 // GuestProtocolSession is one negotiated, assignment-bound guest connection.
 type GuestProtocolSession struct {
+	attributedExecution     *runtimemanager.AttributedExecutionGuard
+	executionGateway        netip.AddrPort
 	Connection              *grpc.ClientConn
 	Stream                  guestv1.GuestAgent_ConnectClient
 	Binding                 *guestv1.ConnectionBinding
@@ -80,6 +86,9 @@ func guestProtocolConnectParams() grpc.ConnectParams {
 }
 
 func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiation) (*GuestProtocolSession, error) {
+	if err := validateExecutionGateway(request.AttributedExecution != nil, request.ExecutionGateway); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(request.UDSPath) == "" {
 		return nil, fmt.Errorf("guest protocol UDS path is required")
 	}
@@ -204,6 +213,8 @@ func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiatio
 		return closeWithError(ctx.Err())
 	}
 	return &GuestProtocolSession{
+		attributedExecution:     request.AttributedExecution,
+		executionGateway:        request.ExecutionGateway,
 		Connection:              connection,
 		Stream:                  stream,
 		Binding:                 binding,

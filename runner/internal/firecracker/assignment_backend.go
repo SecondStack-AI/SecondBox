@@ -27,6 +27,7 @@ import (
 )
 
 type activeRunnerAssignment struct {
+	executionBinding *runnerprotocol.AttributedExecution
 	fence            *runnerprotocol.AssignmentFence
 	correlation      *runnerprotocol.Correlation
 	backendReference string
@@ -124,6 +125,18 @@ func (b *AssignmentBackend) RecoveredAssignments() []*runnerprotocol.ActiveAssig
 		}
 	}
 	return result
+}
+
+func (b *AssignmentBackend) AttributedAssignmentFences() []*runnerprotocol.AssignmentFence {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var fences []*runnerprotocol.AssignmentFence
+	for _, active := range b.assignments {
+		if active.executionBinding != nil {
+			fences = append(fences, proto.CloneOf(active.fence))
+		}
+	}
+	return fences
 }
 
 // MarkAssignmentReady starts natural-exit observation only after the ready
@@ -308,7 +321,8 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 				Minimum: manifest.GuestProtocol.Minimum,
 				Maximum: manifest.GuestProtocol.Maximum,
 			},
-			SnapshotResumeReady: snapshotResumeReady,
+			SnapshotResumeReady:      snapshotResumeReady,
+			AttributedExecutionReady: b.manager.cfg.NetworkPolicyEgressContexts.HasAttributedGateway(),
 		},
 		BackendKind:      runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 		Materializations: materializations,
@@ -448,6 +462,9 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if assignment == nil || assignment.Fence == nil || assignment.Requirements == nil {
 		return fmt.Errorf("SecondBox Firecracker assignment is incomplete")
 	}
+	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+		return err
+	}
 	if strings.TrimSpace(assignment.WorkspaceId) == "" {
 		return fmt.Errorf("SecondBox Firecracker assignment Workspace identity is required")
 	}
@@ -455,7 +472,7 @@ func (b *AssignmentBackend) ValidateAssignment(
 	active, alreadyActive := b.assignments[assignment.Fence.AssignmentId]
 	b.mu.Unlock()
 	if alreadyActive {
-		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, assignment) {
+		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) {
 			return nil
 		}
 		return fmt.Errorf("SecondBox Firecracker assignment ID was reused with different fencing")
@@ -476,22 +493,28 @@ func (b *AssignmentBackend) ValidateAssignment(
 		return fmt.Errorf("SecondBox Firecracker assignment deadline has expired")
 	}
 	supportedCapabilities := map[string]bool{
-		"cgroup":           true,
-		"cleanup":          true,
-		"evidence":         true,
-		"firecracker":      true,
-		"jailer":           true,
-		"kvm":              true,
-		"local-workspace":  true,
-		"network-policy":   true,
-		"signed-artifacts": true,
-		"storage":          true,
-		"tap":              true,
-		"vsock":            true,
+		"attributed-execution": b.manager.cfg.NetworkPolicyEgressContexts.HasAttributedGateway(),
+		"cgroup":               true,
+		"cleanup":              true,
+		"evidence":             true,
+		"firecracker":          true,
+		"jailer":               true,
+		"kvm":                  true,
+		"local-workspace":      true,
+		"network-policy":       true,
+		"signed-artifacts":     true,
+		"storage":              true,
+		"tap":                  true,
+		"vsock":                true,
 	}
 	for _, capability := range requirements.RequiredCapabilities {
 		if !supportedCapabilities[capability] {
 			return fmt.Errorf("SecondBox Firecracker assignment requires unsupported capability %q", capability)
+		}
+	}
+	if execution := assignment.AttributedExecution; execution != nil {
+		if _, err := b.manager.cfg.NetworkPolicyEgressContexts.AttributedGatewaySocket(assignment.EgressContext, execution.Gateway); err != nil {
+			return err
 		}
 	}
 	if _, err := b.validateAssignmentStartupMode(requirements.StartupMode); err != nil {
@@ -569,12 +592,15 @@ func (b *AssignmentBackend) StartAssignment(
 	assignment *runnerprotocol.AssignmentCommand,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (result runnercontrol.BackendInstance, resultErr error) {
+	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+		return result, err
+	}
 	if assignment == nil || assignment.Fence == nil || assignment.Requirements == nil {
 		return runnercontrol.BackendInstance{}, fmt.Errorf("SecondBox Firecracker assignment is incomplete")
 	}
 	b.mu.Lock()
 	if active, ok := b.assignments[assignment.Fence.AssignmentId]; ok {
-		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, assignment) {
+		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) {
 			b.mu.Unlock()
 			return runnercontrol.BackendInstance{
 				BackendKind:      "firecracker",
@@ -664,7 +690,20 @@ func (b *AssignmentBackend) StartAssignment(
 			resultErr = errors.Join(resultErr, workspaceAttachment.Close())
 		}
 	}()
+	var attributedExecution *runtimemanager.AttributedExecutionGuard
+	executionNetwork, err := b.executionNetworkForAssignment(assignment)
+	if err != nil {
+		return runnercontrol.BackendInstance{}, err
+	}
+	if execution := assignment.AttributedExecution; execution != nil {
+		attributedExecution, err = runtimemanager.NewAttributedExecutionGuard(assignment.Fence.AssignmentId, time.UnixMilli(int64(execution.ExpiresAtUnixMs)))
+		if err != nil {
+			return runnercontrol.BackendInstance{}, err
+		}
+	}
 	backendReference, err := b.manager.createAndStart(ctx, assignment.Fence.SandboxId, runtimemanager.StartOpts{
+		AttributedExecution:     attributedExecution,
+		ExecutionNetwork:        executionNetwork,
 		CompartmentID:           assignment.Fence.InstanceId,
 		WorkspaceAttachment:     workspaceAttachment,
 		ShapeFingerprint:        assignment.ProfileRevisionId,
@@ -718,7 +757,8 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	b.mu.Lock()
 	b.assignments[assignment.Fence.AssignmentId] = activeRunnerAssignment{
-		egressContext: assignment.EgressContext,
+		egressContext:    assignment.EgressContext,
+		executionBinding: proto.CloneOf(assignment.AttributedExecution),
 		fence: &runnerprotocol.AssignmentFence{
 			AssignmentId:      assignment.Fence.AssignmentId,
 			SandboxId:         assignment.Fence.SandboxId,

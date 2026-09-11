@@ -187,17 +187,17 @@ type Runner struct {
 	DataPlaneAdvertisedAddress    string                `toml:"data_plane_advertised_address"`
 }
 
-// RunnerEgressContext is one Runner-local routing authority. It deliberately
-// contains only logical gateway names and Runner-local addresses.
+// RunnerEgressContext is one Runner-local routing authority.
 type RunnerEgressContext struct {
 	Name     string                 `toml:"name" json:"name"`
 	Gateways []RunnerLogicalGateway `toml:"gateways" json:"gateways"`
 }
 
-// RunnerLogicalGateway binds one Profile logical destination to a Runner-local IP.
+// RunnerLogicalGateway binds a Profile destination to operator-owned local routes.
 type RunnerLogicalGateway struct {
-	LogicalName string `toml:"logical_name" json:"logicalName"`
-	Address     string `toml:"address" json:"address"`
+	LogicalName      string `toml:"logical_name" json:"logicalName"`
+	Address          string `toml:"address" json:"address,omitempty"`
+	AttributedSocket string `toml:"attributed_socket" json:"attributedSocket,omitempty"`
 }
 
 // ResolvedDeployment is the typed, validated result. Environment is the

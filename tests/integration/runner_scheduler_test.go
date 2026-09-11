@@ -171,12 +171,8 @@ func TestRunnerPoolSealsToFirstHealthyBackendAndRejectsMismatch(t *testing.T) {
 	}
 }
 
-// TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt pins
-// the one place the scheduler's capability vocabulary is minted. Resume capacity
-// is optional: a Runner that does not report it registers normally and stays
-// fully schedulable for cold_boot, and only a Runner that reports it becomes
-// visible to a snapshot_resume Profile.
-func TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt(t *testing.T) {
+// Registration turns optional Runner readiness into scheduler capabilities.
+func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T) {
 	now := time.Date(2026, 8, 7, 15, 0, 0, 0, time.UTC)
 	poolName := task4ID("resume-capability-pool")
 	task4InsertRunnerPool(t, poolName, now)
@@ -194,11 +190,14 @@ func TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt(t 
 	t.Cleanup(databasePool.Close)
 
 	for _, testCase := range []struct {
-		name                string
-		snapshotResumeReady bool
+		name                     string
+		snapshotResumeReady      bool
+		attributedExecutionReady bool
 	}{
-		{"cold boot only", false},
-		{"snapshot resume ready", true},
+		{"cold boot only", false, false},
+		{"snapshot resume ready", true, false},
+		{"attributed execution ready", false, true},
+		{"both ready", true, true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			runnerID := task4ID("runner")
@@ -215,6 +214,7 @@ func TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt(t 
 			registration := task4Registration(runnerID, connectionID, poolName)
 			registration.SupportedEgressContexts = []string{"tenant-blue", "tenant-green"}
 			registration.Capabilities.SnapshotResumeReady = testCase.snapshotResumeReady
+			registration.Capabilities.AttributedExecutionReady = testCase.attributedExecutionReady
 			if duplicate, err := stateStore.RecordRegistration(
 				t.Context(), registration, now,
 			); err != nil || duplicate {
@@ -239,6 +239,9 @@ func TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt(t 
 				t.Fatalf("persisted egress contexts = %v, want %v", egressContexts, registration.SupportedEgressContexts)
 			}
 			advertised := slices.Contains(capabilities, contracts.RunnerCapabilitySnapshotResume)
+			if slices.Contains(capabilities, contracts.RunnerCapabilityAttributedExecution) != testCase.attributedExecutionReady {
+				t.Fatalf("wrong attributed-execution capability: %v", capabilities)
+			}
 			if advertised != testCase.snapshotResumeReady {
 				t.Fatalf(
 					"snapshot-resume advertised = %t, want %t (capabilities %v)",
@@ -318,6 +321,9 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatal(err)
 	}
 	requiredEgressContext := "tenant-blue"
+	if _, err := contextPool.Exec(t.Context(), `UPDATE secondbox.runners SET capabilities_json=capabilities_json || '["attributed-execution"]'::jsonb WHERE id=$1`, runnerID); err != nil {
+		t.Fatal(err)
+	}
 	firstScheduler, err := scheduler.NewPostgresStore(
 		t.Context(), scheduler.PostgresStoreConfig{
 			DatabaseURL: integrationDatabaseURL,
@@ -343,6 +349,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		assignment scheduler.DurableAssignment
 		created    bool
 		err        error
+		request    scheduler.ScheduleRequest
 	}
 	start := make(chan struct{})
 	results := make(chan result, len(stores))
@@ -357,13 +364,13 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			fencingToken := []byte("01234567890123456789012345678901")
 			runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-			assignment, created, err := schedulerStore.Schedule(t.Context(), scheduler.ScheduleRequest{
+			request := scheduler.ScheduleRequest{
 				AssignmentID: assignmentID, AssignmentCommandID: task4IDForIndex("assignment-command", index),
 				InstanceID: instanceID, SandboxID: sandboxID, ProfileRevisionID: profileRevisionID,
 				WorkspaceID: workspaceID, StartMutationID: task4IDForIndex("workspace-start", index),
 				Requirements: scheduler.Requirements{
 					PoolName: poolName, Architecture: "amd64", EgressContext: &requiredEgressContext,
-					RequiredCapabilities:    []string{"local-workspace", "network-policy"},
+					RequiredCapabilities:    []string{"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution},
 					GuestProtocolGeneration: 1,
 					Capacity: scheduler.Capacity{
 						VCPUCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
@@ -372,6 +379,10 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					PreferredArtifactDigests: []string{runtimeDigest, toolchainDigest},
 				},
 				AssignmentCommand: &runnerv1.AssignmentCommand{
+					AttributedExecution: &runnerv1.AttributedExecution{
+						TenantRef: "task4-project", SubjectRef: "task4-subject", AuthorizationRef: "scheduler-command",
+						ExpiresAtUnixMs: uint64(now.Add(2 * time.Minute).UnixMilli()), Gateway: "gateway", MaximumConnections: 32,
+					},
 					WorkspaceId: workspaceID,
 					Fence: &runnerv1.AssignmentFence{
 						AssignmentId: assignmentID, SandboxId: sandboxID, InstanceId: instanceID,
@@ -380,7 +391,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					ProfileRevisionId: profileRevisionID,
 					Requirements: &runnerv1.ProfileRequirements{
 						VcpuCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
-						Architecture: "amd64", RequiredCapabilities: []string{"local-workspace", "network-policy"},
+						Architecture: "amd64", RequiredCapabilities: []string{"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution},
 						MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 						RequiresTenantEgressContext: true,
 					},
@@ -405,8 +416,9 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 				RetryLimit: 2, SerializationRetryLimit: 3,
 				HeartbeatTimeout: 30 * time.Second, Now: now,
 				EffectStartedAt: now, PlanReadyAt: now,
-			})
-			results <- result{assignment: assignment, created: created, err: err}
+			}
+			assignment, created, err := schedulerStore.Schedule(t.Context(), request)
+			results <- result{assignment: assignment, created: created, err: err, request: request}
 		}(index, schedulerStore)
 	}
 	close(start)
@@ -414,12 +426,14 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	close(results)
 	createdCount := 0
 	var durableAssignment scheduler.DurableAssignment
+	var admittedRequest scheduler.ScheduleRequest
 	for result := range results {
 		if result.err != nil {
 			t.Fatalf("replica Schedule failed: %v", result.err)
 		}
 		if result.created {
 			createdCount++
+			admittedRequest = result.request
 		}
 		if durableAssignment.ID == "" {
 			durableAssignment = result.assignment
@@ -438,6 +452,19 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	if createdCount != 1 {
 		t.Fatalf("replica race created %d Assignments, want exactly 1", createdCount)
+	}
+	var executionReference string
+	var executionExpiry time.Time
+	if err := contextPool.QueryRow(t.Context(), `SELECT execution_authorization_ref,execution_expires_at FROM secondbox.assignments WHERE id=$1`, durableAssignment.ID).Scan(&executionReference, &executionExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if executionReference != "scheduler-command" || !executionExpiry.Equal(now.Add(2*time.Minute)) {
+		t.Fatalf("durable execution binding = %q %s", executionReference, executionExpiry)
+	}
+	admittedRequest.AssignmentCommand = proto.Clone(admittedRequest.AssignmentCommand).(*runnerv1.AssignmentCommand)
+	admittedRequest.AssignmentCommand.AttributedExecution.AuthorizationRef = "different-command"
+	if _, _, err := firstScheduler.Schedule(t.Context(), admittedRequest); !errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
+		t.Fatalf("assignment reuse with another command = %v", err)
 	}
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {

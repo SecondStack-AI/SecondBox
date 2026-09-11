@@ -96,6 +96,10 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	t.Cleanup(server.Close)
 	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo)
 	defer detachFake()
+	fake.beforeDelayedCompletion = func(ctx context.Context) error {
+		_, err := relay.SweepDataPlane(ctx, time.Now().UTC(), 100)
+		return err
+	}
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
 	fakeErrors := make(chan error, 1)
@@ -117,6 +121,16 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	stdout, err := base64.StdEncoding.DecodeString(exited.Output.StdoutBase64)
 	if err != nil || !bytes.Equal(stdout, stdin) {
 		t.Fatalf("Exec stdout = %v, %v", stdout, err)
+	}
+	delayedResponse := dataPlaneJSONRequest(t, server.URL+"/v1/sandboxes/"+sandbox.ID+"/exec", key.Credential, sandbox.Generation, "exec-delayed-teardown", map[string]any{
+		"command":     map[string]any{"mode": "shell", "command": "success-before-delayed-teardown"},
+		"environment": map[string]string{}, "stdinBase64": base64.StdEncoding.EncodeToString(stdin),
+		"deadlineMilliseconds": 500, "maximumOutputBytes": 1024,
+	})
+	assertHTTPStatus(t, delayedResponse, http.StatusOK)
+	decodeHTTPJSON(t, delayedResponse, &exited)
+	if exited.Kind != "exited" || exited.Output.StdoutBase64 != base64.StdEncoding.EncodeToString(stdin) {
+		t.Fatalf("delayed teardown lost successful outcome: %#v", exited)
 	}
 
 	mkdirResponse := dataPlaneJSONRequest(t, server.URL+"/v1/sandboxes/"+sandbox.ID+"/directories", key.Credential, sandbox.Generation, "mkdir-http-key", map[string]any{
@@ -699,26 +713,27 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 }
 
 type relayFakeRunner struct {
-	broker          *runnercontrol.LiveDataPlaneBroker
-	session         *runnercontrol.Session
-	runnerID        string
-	connectionID    string
-	incoming        chan *runnerv1.ControlPlaneToRunner
-	mu              sync.Mutex
-	execStdin       []byte
-	mkdirRecursive  *bool
-	removeRecursive *bool
-	removeForce     *bool
-	readMaximumSize uint64
-	execOpen        *runnerv1.ExecOpen
-	execObservedAt  time.Time
-	workspaceFiles  map[string][]byte
-	directories     map[string]bool
-	modifiedAt      map[string]time.Time
-	writeAttempts   map[string]int
-	exec            map[string]*runnerv1.ExecFrame
-	files           map[string]*fakeFileOperation
-	execStarted     chan string
+	beforeDelayedCompletion func(context.Context) error
+	broker                  *runnercontrol.LiveDataPlaneBroker
+	session                 *runnercontrol.Session
+	runnerID                string
+	connectionID            string
+	incoming                chan *runnerv1.ControlPlaneToRunner
+	mu                      sync.Mutex
+	execStdin               []byte
+	mkdirRecursive          *bool
+	removeRecursive         *bool
+	removeForce             *bool
+	readMaximumSize         uint64
+	execOpen                *runnerv1.ExecOpen
+	execObservedAt          time.Time
+	workspaceFiles          map[string][]byte
+	directories             map[string]bool
+	modifiedAt              map[string]time.Time
+	writeAttempts           map[string]int
+	exec                    map[string]*runnerv1.ExecFrame
+	files                   map[string]*fakeFileOperation
+	execStarted             chan string
 }
 
 type fakeFileOperation struct {
@@ -822,6 +837,18 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 				return nil
 			}
 			if !open.Streaming {
+				if open.GetShell() == "success-before-delayed-teardown" {
+					timer := time.NewTimer(time.Until(time.UnixMilli(int64(open.DeadlineUnixMs))) + 100*time.Millisecond)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					if err := fake.beforeDelayedCompletion(ctx); err != nil {
+						return err
+					}
+				}
 				stdout, stderr, exitCode := open.Stdin, []byte(nil), int32(0)
 				if open.GetShell() == "printf flue" {
 					stdout, stderr, exitCode = []byte("flue-out"), []byte("flue-err"), 17

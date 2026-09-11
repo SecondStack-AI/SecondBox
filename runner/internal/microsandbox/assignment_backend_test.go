@@ -77,7 +77,7 @@ func TestStartAssignmentReplayWaitsForTheClaimedLaunch(t *testing.T) {
 	go func() {
 		instance, err := backend.StartAssignment(
 			context.Background(),
-			&runnerprotocol.AssignmentCommand{Fence: cloneFence(fence)},
+			&runnerprotocol.AssignmentCommand{Fence: cloneFence(fence), Requirements: &runnerprotocol.ProfileRequirements{}},
 			func(runnerprotocol.AssignmentProgressStage) error { return nil },
 		)
 		if err != nil {
