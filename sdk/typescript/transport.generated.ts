@@ -158,6 +158,7 @@ export interface CreateRunnerPoolRequest {
 export interface CreateSandboxRequest {
   readonly metadata: Metadata;
   readonly profile: ProfileName;
+  readonly resources?: SandboxResourceRequest;
   readonly sourceSnapshotId?: OpaqueID;
 }
 
@@ -515,9 +516,11 @@ export interface PortSession {
 }
 
 export interface Problem {
+  readonly ceiling?: SandboxResources;
   readonly code: ProblemCode;
   readonly details?: readonly ProblemDetail[];
   readonly requestId: CorrelationID;
+  readonly requested?: SandboxResources;
   readonly retryAfterMilliseconds?: number;
   readonly retryable: boolean;
   readonly status: number;
@@ -525,7 +528,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "resources_exceed_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -683,6 +686,7 @@ export interface Sandbox {
   readonly metadata: Metadata;
   readonly profile: ProfileName;
   readonly profileRevisionId: OpaqueID;
+  readonly resources: SandboxResources;
   readonly revision: number;
   readonly state: SandboxState;
   readonly updatedAt: Timestamp;
@@ -702,6 +706,18 @@ export interface SandboxInspection {
 export interface SandboxPage {
   readonly items: readonly Sandbox[];
   readonly nextCursor?: string;
+}
+
+export interface SandboxResourceRequest {
+  readonly memoryBytes?: number;
+  readonly vcpuCount?: number;
+  readonly workspaceBytes?: number;
+}
+
+export interface SandboxResources {
+  readonly memoryBytes: number;
+  readonly vcpuCount: number;
+  readonly workspaceBytes: number;
 }
 
 export type SandboxState = "creating" | "stopped" | "starting" | "ready" | "draining" | "stopping" | "failed" | "deleting" | "deleted";

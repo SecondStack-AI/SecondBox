@@ -711,6 +711,7 @@ function sandbox(state: Sandbox["state"]): Sandbox {
     profile: "default",
     profileRevisionId: "profile-revision-1",
     egressContext: null,
+    resources: { vcpuCount: 1, memoryBytes: 1073741824, workspaceBytes: 1073741824 },
     state,
     desiredState: "running",
     generation: 7,
@@ -785,8 +786,10 @@ test("decodeExecOutcome decodes output alongside a failing status", () => {
 
 test("createSandbox returns a handle for the created resource", async () => {
   let idempotency = "";
+  const resources = { memoryBytes: 512 * 1024 * 1024 };
   const fetcher: typeof fetch = async (input, init) => {
     if (init?.method === "POST") {
+      assert.deepEqual(JSON.parse(String(init.body)).resources, resources);
       idempotency = new Headers(init.headers).get("Idempotency-Key") ?? "";
       return Response.json({
         id: "operation-1",
@@ -801,7 +804,7 @@ test("createSandbox returns a handle for the created resource", async () => {
     return Response.json(sandbox("creating"));
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
-  const { handle, operation } = await api.createSandbox({ profile: "durable-coding" });
+  const { handle, operation } = await api.createSandbox({ profile: "durable-coding", resources });
   assert.equal(operation.sandboxId, "sandbox-1");
   assert.equal(handle.snapshot.id, "sandbox-1");
   assert.notEqual(idempotency, "");
@@ -877,10 +880,12 @@ test("waitFor returns immediately when the state already holds", async () => {
 test("run creates, waits, and executes one command", async () => {
   const paths: string[] = [];
   let execBody: unknown;
+  const resources = { memoryBytes: 512 * 1024 * 1024 };
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     paths.push(`${init?.method ?? "GET"} ${url.pathname}`);
     if (url.pathname === "/v1/sandboxes" && init?.method === "POST") {
+      assert.deepEqual(JSON.parse(String(init.body)).resources, resources);
       return Response.json({
         id: "operation-1",
         sandboxId: "sandbox-1",
@@ -908,6 +913,7 @@ test("run creates, waits, and executes one command", async () => {
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const outcome = await api.run({
     profile: "durable-coding",
+    resources,
     command: { mode: "shell", command: "cat" },
     stdinBase64: "aGVsbG8K",
     deadlineMilliseconds: 5_000,

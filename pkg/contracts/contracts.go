@@ -171,12 +171,27 @@ type StartupPolicy struct {
 	Mode string `json:"mode"`
 }
 
-// ResourcePolicy contains per-Sandbox enforceable compute and workspace limits.
+// ResourcePolicy defines the default and ceiling for Sandbox compute and workspace
+// allocations, plus the revision-owned concurrent operation limit.
 type ResourcePolicy struct {
 	VCPUCount            int64 `json:"vcpuCount"`
 	MemoryBytes          int64 `json:"memoryBytes"`
 	WorkspaceBytes       int64 `json:"workspaceBytes"`
 	ConcurrentOperations int64 `json:"concurrentOperations"`
+}
+
+// SandboxResources is the immutable compute and workspace allocation of a Sandbox.
+type SandboxResources struct {
+	VCPUCount      int64 `json:"vcpuCount"`
+	MemoryBytes    int64 `json:"memoryBytes"`
+	WorkspaceBytes int64 `json:"workspaceBytes"`
+}
+
+// SandboxResourceRequest selects individual axes within the pinned Profile ceiling.
+type SandboxResourceRequest struct {
+	VCPUCount      *int64 `json:"vcpuCount,omitempty"`
+	MemoryBytes    *int64 `json:"memoryBytes,omitempty"`
+	WorkspaceBytes *int64 `json:"workspaceBytes,omitempty"`
 }
 
 // LifecyclePolicy contains explicit Instance timing and initial-state policy.
@@ -501,6 +516,7 @@ type ActivitySession struct {
 
 // Sandbox is durable Project intent pinned to one immutable ProfileRevision.
 type Sandbox struct {
+	Resources         SandboxResources  `json:"resources"`
 	ID                string            `json:"id"`
 	TenantRef         string            `json:"-"`
 	SubjectRef        string            `json:"-"`
@@ -529,9 +545,10 @@ type SandboxPage struct {
 // CreateSandboxRequest contains a caller-selected Profile, bounded metadata,
 // and an optional retained Snapshot used to seed generation one.
 type CreateSandboxRequest struct {
-	Profile          string            `json:"profile"`
-	Metadata         map[string]string `json:"metadata"`
-	SourceSnapshotID string            `json:"sourceSnapshotId,omitempty"`
+	Resources        *SandboxResourceRequest `json:"resources,omitempty"`
+	Profile          string                  `json:"profile"`
+	Metadata         map[string]string       `json:"metadata"`
+	SourceSnapshotID string                  `json:"sourceSnapshotId,omitempty"`
 }
 
 // UpdateSandboxMetadataRequest replaces bounded application correlation metadata.
@@ -967,14 +984,16 @@ type DeploymentTimingSummary struct {
 
 // Problem is the stable typed failure envelope.
 type Problem struct {
-	Type                   string          `json:"type"`
-	Title                  string          `json:"title"`
-	Status                 int             `json:"status"`
-	Code                   string          `json:"code"`
-	RequestID              string          `json:"requestId"`
-	Retryable              bool            `json:"retryable"`
-	RetryAfterMilliseconds *int64          `json:"retryAfterMilliseconds,omitempty"`
-	Details                []ProblemDetail `json:"details,omitempty"`
+	Ceiling                *SandboxResources `json:"ceiling,omitempty"`
+	Requested              *SandboxResources `json:"requested,omitempty"`
+	Type                   string            `json:"type"`
+	Title                  string            `json:"title"`
+	Status                 int               `json:"status"`
+	Code                   string            `json:"code"`
+	RequestID              string            `json:"requestId"`
+	Retryable              bool              `json:"retryable"`
+	RetryAfterMilliseconds *int64            `json:"retryAfterMilliseconds,omitempty"`
+	Details                []ProblemDetail   `json:"details,omitempty"`
 }
 
 // ProblemDetail identifies one bounded invalid field.

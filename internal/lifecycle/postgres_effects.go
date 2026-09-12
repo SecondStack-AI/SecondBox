@@ -408,6 +408,7 @@ func workspaceDeletePayload(
 }
 
 type startPlan struct {
+	resources         contracts.SandboxResources
 	tenantRef         string
 	subjectRef        string
 	attributed        *contracts.AttributedExecutionRequest
@@ -500,9 +501,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		},
 		ProfileRevisionId: plan.profileRevisionID,
 		Requirements: &runnerv1.ProfileRequirements{
-			VcpuCount:                   uint32(plan.spec.Resources.VCPUCount),
-			MemoryBytes:                 uint64(plan.spec.Resources.MemoryBytes),
-			DiskBytes:                   uint64(plan.spec.Resources.WorkspaceBytes),
+			VcpuCount:                   uint32(plan.resources.VCPUCount),
+			MemoryBytes:                 uint64(plan.resources.MemoryBytes),
+			DiskBytes:                   uint64(plan.resources.WorkspaceBytes),
 			Architecture:                plan.spec.Architecture,
 			RequiredCapabilities:        requiredCapabilities,
 			StartupMode:                 plan.spec.Startup.Mode,
@@ -545,9 +546,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			Architecture: plan.spec.Architecture, RequiredCapabilities: placementCapabilities,
 			EgressContext: plan.egressContext,
 			Capacity: scheduler.Capacity{
-				VCPUCount:   plan.spec.Resources.VCPUCount,
-				MemoryBytes: plan.spec.Resources.MemoryBytes,
-				DiskBytes:   plan.spec.Resources.WorkspaceBytes,
+				VCPUCount:   plan.resources.VCPUCount,
+				MemoryBytes: plan.resources.MemoryBytes,
+				DiskBytes:   plan.resources.WorkspaceBytes,
 				Instances:   1, Operations: plan.spec.Resources.ConcurrentOperations,
 			},
 			GuestProtocolGeneration: guestProtocolGeneration,
@@ -797,7 +798,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	err := broker.pool.QueryRow(ctx, `
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,sandbox.lifecycle_request_metadata_json,
 		       sandbox.workspace_id,sandbox.generation,sandbox.profile_revision_id,
-		       sandbox.egress_context,
+		       sandbox.egress_context,sandbox.vcpu_count,sandbox.memory_bytes,sandbox.workspace_bytes,
 		       revision.spec_json,workspace.mutation_id,
 		       COALESCE(operation.id,''),COALESCE(operation.request_id,'')
 		FROM secondbox.sandboxes AS sandbox
@@ -810,6 +811,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	).Scan(
 		&plan.tenantRef, &plan.subjectRef, &metadataJSON,
 		&plan.workspaceID, &plan.generation, &plan.profileRevisionID, &plan.egressContext,
+		&plan.resources.VCPUCount, &plan.resources.MemoryBytes, &plan.resources.WorkspaceBytes,
 		&specJSON, &plan.mutationID, &plan.operationID, &plan.requestID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

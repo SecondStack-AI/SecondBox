@@ -556,6 +556,7 @@ const (
 	ProblemCodeWorkspaceRelocationSnapshotsPresent  ProblemCode = "workspace_relocation_snapshots_present"
 	ProblemCodeWorkspaceRelocationTargetUnavailable ProblemCode = "workspace_relocation_target_unavailable"
 	ProblemCodeQuotaExceeded                        ProblemCode = "quota_exceeded"
+	ProblemCodeResourcesExceedProfile               ProblemCode = "resources_exceed_profile"
 	ProblemCodeLimitExceeded                        ProblemCode = "limit_exceeded"
 	ProblemCodeGuestUnavailable                     ProblemCode = "guest_unavailable"
 	ProblemCodeExecutionNodeUnavailable             ProblemCode = "execution_node_unavailable"
@@ -673,6 +674,10 @@ type SandboxInspection struct {
 }
 
 type SandboxPage = contracts.SandboxPage
+
+type SandboxResourceRequest = contracts.SandboxResourceRequest
+
+type SandboxResources = contracts.SandboxResources
 
 type SandboxState = string
 

@@ -1010,6 +1010,11 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		Type: "https://secondbox.dev/problems/" + code, Title: title, Status: status,
 		Code: code, RequestID: writer.Header().Get("X-Request-ID"), Retryable: retryable,
 	}
+	var resourcesError *ports.ResourcesExceedProfileError
+	if errors.As(err, &resourcesError) {
+		problem.Ceiling = &resourcesError.Ceiling
+		problem.Requested = &resourcesError.Requested
+	}
 	if errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		retryAfterMilliseconds := int64(time.Second / time.Millisecond)
 		problem.RetryAfterMilliseconds = &retryAfterMilliseconds
@@ -1096,6 +1101,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusBadRequest, "invalid_request", "Requested output limit exceeds the Profile execution policy", false
 	case errors.Is(err, runnercontrol.ErrDataPlaneStreamWindow):
 		return http.StatusBadRequest, "invalid_request", "Requested stream window exceeds the Profile execution policy", false
+	case errors.Is(err, ports.ErrResourcesExceedProfile):
+		return http.StatusBadRequest, "resources_exceed_profile", "Requested resources exceed the Profile ceiling", false
 	case errors.Is(err, ports.ErrQuotaExceeded):
 		return http.StatusTooManyRequests, "quota_exceeded", "Quota exceeded", false
 	case errors.Is(err, ports.ErrPortBackpressure):

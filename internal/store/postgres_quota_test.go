@@ -289,11 +289,11 @@ func TestSubjectQuotaUsageCountsComputeForActiveStatesOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := controlPlaneStore.pool.Exec(t.Context(), `
-			INSERT INTO secondbox.sandboxes (
+			INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 				id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,
 				desired_state,generation,workspace_id,current_instance_id,
 				metadata_json,compatibility_summary_json,revision,created_at,updated_at
-			) VALUES ($1,$4,$5,'profile-usage','revision-usage',$6,'stopped',1,$2,'','{}','{}',$7,$3,$3)`,
+			) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$2),$1,$4,$5,'profile-usage','revision-usage',$6,'stopped',1,$2,'','{}','{}',$7,$3,$3)`,
 			sandboxID, workspaceID, now, tenantRef, subjectRef, state, int64(index+1),
 		); err != nil {
 			t.Fatal(err)

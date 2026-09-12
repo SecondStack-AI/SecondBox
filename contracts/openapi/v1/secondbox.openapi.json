@@ -2609,10 +2609,29 @@
         "enum": ["creating", "stopped", "starting", "ready", "draining", "stopping", "failed", "deleting", "deleted"]
       },
       "SandboxDesiredState": {"type": "string", "enum": ["running", "stopped", "deleted"]},
+      "SandboxResources": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vcpuCount", "memoryBytes", "workspaceBytes"],
+        "properties": {
+          "vcpuCount": {"type": "integer", "minimum": 1},
+          "memoryBytes": {"type": "integer", "format": "int64", "minimum": 67108864},
+          "workspaceBytes": {"type": "integer", "format": "int64", "minimum": 1048576}
+        }
+      },
+      "SandboxResourceRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "vcpuCount": {"type": "integer", "minimum": 1},
+          "memoryBytes": {"type": "integer", "format": "int64", "minimum": 67108864},
+          "workspaceBytes": {"type": "integer", "format": "int64", "minimum": 1048576}
+        }
+      },
       "Sandbox": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "profile", "profileRevisionId", "egressContext", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "profile", "profileRevisionId", "egressContext", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt", "resources"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "profile": {"$ref": "#/components/schemas/ProfileName"},
@@ -2628,7 +2647,8 @@
           "revision": {"type": "integer", "format": "int64", "minimum": 1},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"},
-          "deletedAt": {"$ref": "#/components/schemas/Timestamp"}
+          "deletedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "resources": {"$ref": "#/components/schemas/SandboxResources"}
         }
       },
       "CreateSandboxRequest": {
@@ -2638,7 +2658,8 @@
         "properties": {
           "profile": {"$ref": "#/components/schemas/ProfileName"},
           "metadata": {"$ref": "#/components/schemas/Metadata"},
-          "sourceSnapshotId": {"$ref": "#/components/schemas/OpaqueID"}
+          "sourceSnapshotId": {"$ref": "#/components/schemas/OpaqueID"},
+          "resources": {"$ref": "#/components/schemas/SandboxResourceRequest"}
         }
       },
       "RelocateSandboxRequest": {
@@ -3496,6 +3517,7 @@
           "workspace_relocation_snapshots_present",
           "workspace_relocation_target_unavailable",
           "quota_exceeded",
+          "resources_exceed_profile",
           "limit_exceeded",
           "guest_unavailable",
           "execution_node_unavailable",
@@ -3526,7 +3548,9 @@
           "requestId": {"$ref": "#/components/schemas/CorrelationID"},
           "retryable": {"type": "boolean"},
           "retryAfterMilliseconds": {"type": "integer", "format": "int64", "minimum": 1, "maximum": 60000},
-          "details": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/ProblemDetail"}}
+          "details": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/ProblemDetail"}},
+          "ceiling": {"$ref": "#/components/schemas/SandboxResources"},
+          "requested": {"$ref": "#/components/schemas/SandboxResources"}
         }
       }
     }

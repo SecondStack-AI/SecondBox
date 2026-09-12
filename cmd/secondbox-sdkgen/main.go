@@ -54,6 +54,8 @@ var goContractSchemas = stringSet([]string{
 	"RunnerPoolPage",
 	"Sandbox",
 	"SandboxPage",
+	"SandboxResources",
+	"SandboxResourceRequest",
 	"SandboxTiming",
 	"Snapshot",
 	"SnapshotPage",
