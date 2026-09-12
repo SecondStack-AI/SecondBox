@@ -125,7 +125,7 @@ func TestScenarioCustomerSharedTenancyEndToEnd(t *testing.T) {
 		if runnerRunning {
 			return
 		}
-		scenarioCompose(t, "start", "secondbox-runner")
+		scenarioStartService(t, "secondbox-runner")
 		waitForScenarioRunner(t, fixture, 90*time.Second)
 	})
 	scenarioCompose(t, "stop", "secondbox-runner")
@@ -147,7 +147,7 @@ func TestScenarioCustomerSharedTenancyEndToEnd(t *testing.T) {
 	if page, err := clientB.ListSandboxes(ctx, secondboxclient.SandboxListOptions{}); err != nil || !customerSharedPageContains(page, readyB.ID) {
 		t.Fatalf("SecondBox tenant B read while tenant A cleanup is durable = %#v error=%v", page, err)
 	}
-	scenarioCompose(t, "start", "secondbox-runner")
+	scenarioStartService(t, "secondbox-runner")
 	runnerRunning = true
 	waitForScenarioRunner(t, fixture, 90*time.Second)
 	waitForScenarioGenerationReady(t, ctx, handleB, readyB.Generation+1)

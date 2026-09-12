@@ -197,7 +197,7 @@ func TestScenarioRunnerLossDuringExecRecoversHomeWorkspace(t *testing.T) {
 		if runnerRunning {
 			return
 		}
-		scenarioCompose(t, "start", "secondbox-runner")
+		scenarioStartService(t, "secondbox-runner")
 		waitForScenarioRunner(t, fixture, 90*time.Second)
 	})
 	scenarioCompose(t, "stop", "secondbox-runner")
@@ -232,7 +232,7 @@ func TestScenarioRunnerLossDuringExecRecoversHomeWorkspace(t *testing.T) {
 	// prevents a control-plane restart from being misclassified as runner loss.
 	time.Sleep(6 * time.Second)
 
-	scenarioCompose(t, "start", "secondbox-runner")
+	scenarioStartService(t, "secondbox-runner")
 	runnerRunning = true
 	waitForScenarioRunner(t, fixture, 90*time.Second)
 	recovered := waitForScenarioGenerationReady(

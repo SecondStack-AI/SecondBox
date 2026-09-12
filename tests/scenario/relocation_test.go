@@ -83,7 +83,7 @@ func TestScenarioStoppedSnapshotFreeWorkspaceRelocatesBetweenCompatibleRunners(t
 	baselineStopped := false
 	t.Cleanup(func() {
 		if baselineStopped {
-			scenarioCompose(t, "start", "secondbox-runner")
+			scenarioStartService(t, "secondbox-runner")
 			waitForScenarioRunner(t, fixture, 90*time.Second)
 		}
 	})
@@ -103,7 +103,7 @@ func TestScenarioStoppedSnapshotFreeWorkspaceRelocatesBetweenCompatibleRunners(t
 		t.Fatal("SecondBox control-plane logs retained relocated Workspace contents")
 	}
 
-	scenarioCompose(t, "start", "secondbox-runner")
+	scenarioStartService(t, "secondbox-runner")
 	waitForScenarioRunner(t, fixture, 90*time.Second)
 	baselineStopped = false
 

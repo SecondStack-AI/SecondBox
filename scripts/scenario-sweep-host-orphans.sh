@@ -97,6 +97,9 @@ mapfile -t host_bridges < <(
 )
 for bridge in ${host_bridges[@]+"${host_bridges[@]}"}; do
   [[ "$bridge" =~ $bridge_pattern ]] || continue
+  # A suite may sweep only its own resources: another live suite can have a
+  # deliberately stopped runner whose declarations are absent from docker ps.
+  [[ -z "${SECONDBOX_SCENARIO_SWEEP_BRIDGE:-}" || "$bridge" == "$SECONDBOX_SCENARIO_SWEEP_BRIDGE" ]] || continue
   if [[ -n "${declared_by_running_container[$bridge]:-}" ]]; then
     kept_bridges+=("$bridge is declared by a running container")
     continue
@@ -147,6 +150,7 @@ for directory in "$cgroup_root"/*; do
   [[ -d "$directory" ]] || continue
   parent="${directory##*/}"
   [[ "$parent" =~ $cgroup_pattern ]] || continue
+  [[ -z "${SECONDBOX_SCENARIO_SWEEP_CGROUP_PARENT:-}" || "$parent" == "$SECONDBOX_SCENARIO_SWEEP_CGROUP_PARENT" ]] || continue
   if [[ -n "${declared_by_running_container[$parent]:-}" ]]; then
     kept_parents+=("$parent is declared by a running container")
     continue
