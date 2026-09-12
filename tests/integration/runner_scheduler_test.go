@@ -1157,11 +1157,11 @@ func task4InsertSchedulableSandbox(
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,generation,
 			workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			last_activity_at,revision,created_at,updated_at,deleted_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$1),
 			$2,'task4-project','task4-subject','task4-profile',$4,'creating','running',1,$1,'',
 			'{}','{}',NULL,1,$3,$3,NULL
 		)`, workspaceID, sandboxID, now, profileRevisionID,

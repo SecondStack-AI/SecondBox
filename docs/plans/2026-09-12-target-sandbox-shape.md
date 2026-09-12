@@ -240,21 +240,21 @@ a header. Names and identifiers are accepted everywhere the existing
 This is the only task that changes a published contract and persisted
 schema.
 
-- [ ] OpenAPI: add `SandboxResourceRequest` (`vcpuCount?`, `memoryBytes?`,
+- [x] OpenAPI: add `SandboxResourceRequest` (`vcpuCount?`, `memoryBytes?`,
   `workspaceBytes?`, same minimums as `ProfileResources`,
   `additionalProperties: false`) as optional `resources` on
   `CreateSandboxRequest`; add required `resources` (`vcpuCount`,
   `memoryBytes`, `workspaceBytes`) to `Sandbox`. Add problem code
   `resources_exceed_profile` with `ceiling` and `requested` detail fields.
   Regenerate both SDKs (`just verify-generated`).
-- [ ] Migration `00NN_sandbox_resources.sql`: add non-null resource columns to
+- [x] Migration `00NN_sandbox_resources.sql`: add non-null resource columns to
   the sandbox table, backfilled from each row's pinned ProfileRevision spec.
   Follow the forward-only migration conventions in `migrations/postgres`.
-- [ ] Creation (`internal/service`, `internal/store/postgres_store.go`):
+- [x] Creation (`internal/service`, `internal/store/postgres_store.go`):
   resolve requested against the pinned revision, refuse above-ceiling with
   the typed problem before allocating durable intent, persist resolved values,
   reserve Tenant and Subject quota from the resolved vCPU and memory.
-- [ ] Every later read of resources uses the Sandbox row, never a join to
+- [x] Every later read of resources uses the Sandbox row, never a join to
   `profile_revisions.spec_json`. Known sites: quota usage sums in
   `readSubjectQuotaUsage`, `readTenantQuotaUsage`, and
   `readDeploymentQuotaUsage` (`internal/store/postgres_store.go`); the start
@@ -266,22 +266,22 @@ schema.
   `loadStartPlan` plus `AssignmentCommand.Requirements` and the scheduler
   `Capacity` in `internal/lifecycle/postgres_effects.go`.
   `concurrentOperations` is not requestable and stays on the revision.
-- [ ] Runner protocol: `ProfileRequirements` already carries explicit
+- [x] Runner protocol: `ProfileRequirements` already carries explicit
   `vcpu_count`, `memory_bytes`, and `disk_bytes`, so no protocol change is
   expected. Do not bump the protocol generation.
-- [ ] Runner: no protocol change if the Assignment already carries explicit
+- [x] Runner: no protocol change if the Assignment already carries explicit
   vCPU, memory, and workspace capacity. If it carries a revision reference
   instead, add the fields; do not bump the protocol generation unless the
   runner cannot otherwise honor them.
-- [ ] SDK: `CreateSandboxRequest.Resources` in Go and TypeScript; `Run` and
+- [x] SDK: `CreateSandboxRequest.Resources` in Go and TypeScript; `Run` and
   `createSandbox` pass it through.
-- [ ] Cover: contract tests for the new schema and problem; store tests for
+- [x] Cover: contract tests for the new schema and problem; store tests for
   ceiling refusal, partial requests, backfill migration; integration test in
   `tests/integration` creating below, at, and above the ceiling and asserting
   quota accounting uses the resolved values.
-- [ ] Run `just verify-generated`, `just test-contract`, `just test`,
-  `just test-compose`. `just test-scenario` on the KVM host is required before
-  merge.
+- [x] Run `just verify-generated`, `just test-contract`, `just test`,
+  `just test-compose`.
+- [ ] Shepherd: run `just test-scenario` on the qualified KVM host before merge.
 
 ### Task 4: `run` and `create` accept sizes
 

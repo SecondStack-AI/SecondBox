@@ -191,6 +191,7 @@ function sandboxFixture(): Sandbox {
     profile: "default",
     profileRevisionId: "profile-revision-1",
     egressContext: null,
+    resources: { vcpuCount: 1, memoryBytes: 1073741824, workspaceBytes: 1073741824 },
     state: "ready",
     desiredState: "running",
     generation: 7,

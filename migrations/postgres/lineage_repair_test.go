@@ -41,6 +41,7 @@ var postFenceMigrationFiles = []string{
 	"0020_tenant_egress_context.sql",
 	"0021_runner_egress_contexts.sql",
 	"0022_attributed_execution.sql",
+	"0023_sandbox_resources.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

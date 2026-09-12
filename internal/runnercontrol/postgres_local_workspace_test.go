@@ -1197,11 +1197,11 @@ func TestLocalRestoreCommitFencesEveryPreviousGenerationAuthority(t *testing.T) 
 			'sandbox-restore-neighbor','runner-neighbor','ready',
 			8589934592,9,'','','','',NULL,NULL,'','{"neighbor":true}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,
 			desired_state,generation,workspace_id,current_instance_id,
 			metadata_json,compatibility_summary_json,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-restore-neighbor'),
 			'sandbox-restore-neighbor','tenant','subject','profile','revision',
 			'stopped','stopped',9,'workspace-restore-neighbor','','{}','{}',7,$1,$1
 		)`,
@@ -1475,11 +1475,11 @@ func TestGenerationAdvanceReceiptRetainsStopMutationUntilDatabaseCommit(t *testi
 			8589934592,3,'stop','effect-stop','effect-stop','effect-stop',
 			3,4,'advancing','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-stop'),
 			'sandbox-stop','tenant','subject','profile','revision','stopping','stopped',
 			3,'workspace-stop','','{}','{}',$1,1,$1,$1
 		);
@@ -1676,11 +1676,11 @@ func TestWorkspaceCreateReceiptHandsRunningSandboxDirectlyToStartMutation(t *tes
 			'runner-home','creating',8589934592,1,'create','effect-create-running',
 			'effect-create-running','operation-create-running',1,1,'queued','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			lifecycle_intent_kind,next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-create-running'),
 			'sandbox-create-running','tenant','subject','profile','revision','creating','running',
 			1,'workspace-create-running','','{}','{}','create_workspace',$1,1,$1,$1
 		);
@@ -1771,11 +1771,11 @@ func TestWorkspaceDeleteReceiptFinalizesSandboxAndAllLocalSnapshotMetadata(t *te
 			'runner-home','deleting',8589934592,3,'workspace_delete','effect-delete-result',
 			'effect-delete-result','operation-delete-result',3,3,'deleting','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-delete-result'),
 			'sandbox-delete-result','tenant','subject','profile','revision','deleting','deleted',
 			3,'workspace-delete-result','','{}','{}',$1,5,$1,$1
 		);
@@ -2477,11 +2477,11 @@ func seedStartingAssignment(
 			$1,'tenant','subject',$2,'runner-home','ready',8589934592,
 			3,'start','operation-start',$3,'operation-start',3,3,'assigned','{}',$4,$4
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$1),
 			$2,'tenant','subject','profile','revision','starting','running',
 			3,$1,$5,'{}','{}',2,$4,$4
 		);
@@ -2770,12 +2770,12 @@ func seedPendingWorkspaceCreation(
 			'runner-home','creating',8589934592,1,'create','effect-create-reconcile',
 			'effect-create-reconcile','operation-create-reconcile',1,1,'queued','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			lifecycle_intent_kind,reconcile_owner,reconcile_claim_expires_at,
 			next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-create-reconcile'),
 			'sandbox-create-reconcile','tenant','subject','profile','revision',
 			'creating','stopped',1,'workspace-create-reconcile','','{}','{}',
 			'create_workspace','lifecycle-worker',$3,$1,1,$1,$1
@@ -2830,11 +2830,11 @@ func seedReadyReconciledWorkspace(
 			'workspace-ready-reconcile','tenant','subject','sandbox-ready-reconcile',
 			'runner-home','ready',8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-ready-reconcile'),
 			'sandbox-ready-reconcile','tenant','subject','profile','revision',
 			'stopped','stopped',3,'workspace-ready-reconcile','','{}','{}',$1,1,$1,$1
 		)`,
@@ -2908,11 +2908,11 @@ func seedRunnerLocalRestore(
 			'workspace-restore','tenant','subject','sandbox-restore','runner-home','ready',
 			8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-restore'),
 			'sandbox-restore','tenant','subject','profile','revision','stopped','stopped',
 			3,'workspace-restore','','{}','{}',1,$1,$1
 		);

@@ -99,6 +99,7 @@ type AdminIdempotencyResult struct {
 
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
+	Resources          *contracts.SandboxResourceRequest
 	Principal          contracts.Principal
 	SubjectQuota       contracts.QuotaLimits
 	Sandbox            contracts.Sandbox

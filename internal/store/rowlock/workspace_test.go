@@ -261,11 +261,11 @@ func seedRowlockFixture(t *testing.T, pool *pgxpool.Pool, suffix string) rowlock
 			mutation_effect_id,mutation_operation_id,mutation_state,local_receipt_json,
 			created_at,updated_at
 		) VALUES ($1,$2,$3,$4,'runner-rowlock','ready',1048576,1,'','','','','','{}',$5,$5);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,
 			compatibility_summary_json,revision,created_at,updated_at
-		) VALUES ($4,$2,$3,'profile-rowlock','revision-rowlock','stopped','stopped',
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$1),$4,$2,$3,'profile-rowlock','revision-rowlock','stopped','stopped',
 			1,$1,'','{}','{}',1,$5,$5);
 		INSERT INTO secondbox.snapshots (
 			id,tenant_ref,subject_ref,sandbox_id,workspace_id,home_runner_id,

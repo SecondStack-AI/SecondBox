@@ -197,11 +197,11 @@ func seedWorkspaceRelocationAuthority(
 			'command-relocation-export-' || $1,'operation-relocation-' || $1,3,3,
 			'queued','{}',$2,$2
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,
 			compatibility_summary_json,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-relocation-' || $1),
 			'sandbox-relocation-' || $1,'tenant','subject','profile','revision',
 			'stopped','stopped',3,'workspace-relocation-' || $1,'','{}','{}',1,$2,$2
 		);

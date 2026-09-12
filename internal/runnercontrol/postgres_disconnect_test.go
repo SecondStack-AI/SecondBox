@@ -26,19 +26,19 @@ func TestHeartbeatPreservesAndReleasesDurableAssignmentReservations(t *testing.T
 			id,profile_name,revision_number,spec_json,created_at
 		) VALUES (
 			'profile-reservation','profile',1,
-			'{"resources":{"vcpuCount":1,"memoryBytes":536870912,"workspaceBytes":1073741824,"concurrentOperations":4}}',
+			'{"resources":{"vcpuCount":4,"memoryBytes":2147483648,"workspaceBytes":8589934592,"concurrentOperations":4}}',
 			$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
 		) VALUES
-		(
+		(1,536870912,1073741824,
 			'sandbox','tenant','subject','profile','profile-reservation','starting','running',
 			1,'workspace','instance','{}','{}',1,$1,$1
 		),
-		(
+		(1,536870912,1073741824,
 			'sandbox-stale','tenant','subject-stale','profile','profile-reservation','stopped','stopped',
 			2,'workspace-stale','instance-current','{}','{}',1,$1,$1
 		);

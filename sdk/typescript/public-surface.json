@@ -161,6 +161,7 @@
       "profile"
     ],
     "optional": [
+      "resources",
       "sourceSnapshotId"
     ]
   },
@@ -589,7 +590,9 @@
       "type"
     ],
     "optional": [
+      "ceiling",
       "details",
+      "requested",
       "retryAfterMilliseconds"
     ]
   },
@@ -770,6 +773,7 @@
       "metadata",
       "profile",
       "profileRevisionId",
+      "resources",
       "revision",
       "state",
       "updatedAt",
@@ -798,6 +802,22 @@
     "optional": [
       "nextCursor"
     ]
+  },
+  "SandboxResourceRequest": {
+    "required": [],
+    "optional": [
+      "memoryBytes",
+      "vcpuCount",
+      "workspaceBytes"
+    ]
+  },
+  "SandboxResources": {
+    "required": [
+      "memoryBytes",
+      "vcpuCount",
+      "workspaceBytes"
+    ],
+    "optional": []
   },
   "SandboxTiming": {
     "required": [

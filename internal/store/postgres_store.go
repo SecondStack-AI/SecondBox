@@ -380,6 +380,11 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if profile.State != contracts.ProfileStateEnabled {
 		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrProfileDisabled
 	}
+	resolvedResources, err := resolveSandboxResources(profile.CurrentRevision.Spec.Resources, input.Resources)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	placementSpec := sandboxPlacementSpec(profile.CurrentRevision.Spec, resolvedResources)
 	var tenantEgressContext *string
 	if err := tx.QueryRow(ctx, `SELECT egress_context FROM secondbox.tenants WHERE ref=$1`, input.Principal.TenantRef).Scan(&tenantEgressContext); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Tenant egress-context lookup failed: %w", err)
@@ -402,14 +407,14 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 	homeRunnerID := ""
 	if input.SourceSnapshotID == "" {
-		homeRunnerID, err = selectInitialHomeRunner(ctx, tx, profile.CurrentRevision.Spec, tenantEgressContext)
+		homeRunnerID, err = selectInitialHomeRunner(ctx, tx, placementSpec, tenantEgressContext)
 	} else {
 		homeRunnerID, err = selectSnapshotCloneHomeRunner(
 			ctx,
 			tx,
 			input.Principal,
 			input.SourceSnapshotID,
-			profile.CurrentRevision.Spec,
+			placementSpec,
 			tenantEgressContext,
 			input.Sandbox.CreatedAt,
 		)
@@ -430,8 +435,8 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	requestedActiveInstances := int64(0)
 	if profile.CurrentRevision.Spec.Lifecycle.InitialState == contracts.SandboxDesiredStateRunning {
 		requestedActiveInstances = 1
-		requestedCPU = profile.CurrentRevision.Spec.Resources.VCPUCount
-		requestedMemory = profile.CurrentRevision.Spec.Resources.MemoryBytes
+		requestedCPU = resolvedResources.VCPUCount
+		requestedMemory = resolvedResources.MemoryBytes
 	}
 	if quotaWouldExceed(
 		subjectQuota, subjectUsage, requestedCPU, requestedMemory, requestedActiveInstances,
@@ -443,6 +448,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 
 	sandbox := input.Sandbox
+	sandbox.Resources = resolvedResources
 	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.SubjectRef = input.Principal.SubjectRef
@@ -453,7 +459,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	sandbox.Workspace.SubjectRef = input.Principal.SubjectRef
 	sandbox.Workspace.Generation = sandbox.Generation
 	sandbox.Workspace.State = "creating"
-	sandbox.Workspace.SizeBytes = profile.CurrentRevision.Spec.Resources.WorkspaceBytes
+	sandbox.Workspace.SizeBytes = resolvedResources.WorkspaceBytes
 	if input.WorkspaceEffectID == "" || input.WorkspaceCommandID == "" || len(input.FencingToken) < 32 {
 		return contracts.Sandbox{}, contracts.Operation{}, false,
 			errors.New("SecondBox Workspace create effect identity and fence are required")
@@ -493,7 +499,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			$10,$11
 		)`,
 		sandbox.Workspace.ID, sandbox.TenantRef, sandbox.SubjectRef,
-		sandbox.ID, homeRunnerID, profile.CurrentRevision.Spec.Resources.WorkspaceBytes,
+		sandbox.ID, homeRunnerID, resolvedResources.WorkspaceBytes,
 		sandbox.Workspace.Generation, input.WorkspaceEffectID, input.Operation.ID,
 		sandbox.Workspace.CreatedAt, sandbox.Workspace.UpdatedAt,
 		workspaceMutationKind,
@@ -506,13 +512,14 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			current_instance_id,egress_context,metadata_json,compatibility_summary_json,last_activity_at,revision,
 			lifecycle_termination_reason,lifecycle_failure_class,lifecycle_failure_message,lifecycle_intent_kind,
 			reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,reconcile_retry_count,
-			reconcile_retry_limit,created_at,updated_at,deleted_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
+			reconcile_retry_limit,created_at,updated_at,deleted_at,vcpu_count,memory_bytes,workspace_bytes
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)`,
 		sandbox.ID, sandbox.TenantRef, sandbox.SubjectRef,
 		sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
 		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", sandbox.EgressContext, metadataJSON,
 		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
 		"", nil, nil, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
+		sandbox.Resources.VCPUCount, sandbox.Resources.MemoryBytes, sandbox.Resources.WorkspaceBytes,
 	); err != nil {
 		if isSandboxNameConflict(err) {
 			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrSandboxNameConflict
@@ -533,7 +540,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		SnapshotId:           input.SourceSnapshotID,
 		ExpectedGeneration:   uint64(sandbox.Generation),
 		NextGeneration:       uint64(sandbox.Generation),
-		LogicalCapacityBytes: uint64(profile.CurrentRevision.Spec.Resources.WorkspaceBytes),
+		LogicalCapacityBytes: uint64(resolvedResources.WorkspaceBytes),
 		FencingToken:         append([]byte(nil), input.FencingToken...),
 		Correlation: &runnerv1.Correlation{
 			RequestId: input.Operation.RequestID, OperationId: input.Operation.ID,
@@ -1028,6 +1035,7 @@ func scanProfile(row rowScanner) (contracts.Profile, error) {
 const sandboxSelect = `
 	SELECT sandbox.id,sandbox.tenant_ref,sandbox.subject_ref,
 	       sandbox.profile_name,sandbox.profile_revision_id,sandbox.egress_context,
+	       sandbox.vcpu_count,sandbox.memory_bytes,sandbox.workspace_bytes,
 	       sandbox.state,sandbox.desired_state,sandbox.generation,sandbox.metadata_json,
 	       sandbox.last_activity_at,sandbox.revision,sandbox.created_at,sandbox.updated_at,sandbox.deleted_at,
 	       workspace.id,workspace.tenant_ref,workspace.subject_ref,
@@ -1048,6 +1056,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	if err := row.Scan(
 		&sandbox.ID, &sandbox.TenantRef, &sandbox.SubjectRef,
 		&sandbox.Profile, &sandbox.ProfileRevisionID, &sandbox.EgressContext,
+		&sandbox.Resources.VCPUCount, &sandbox.Resources.MemoryBytes, &sandbox.Resources.WorkspaceBytes,
 		&sandbox.State, &sandbox.DesiredState, &sandbox.Generation, &metadataJSON,
 		&sandbox.LastActivityAt, &sandbox.Revision, &sandbox.CreatedAt, &sandbox.UpdatedAt,
 		&sandbox.DeletedAt, &sandbox.Workspace.ID,
@@ -1461,11 +1470,11 @@ func readSubjectQuotaUsage(
 		       count(*) FILTER (WHERE (sandbox.desired_state='running'
 		           AND sandbox.state IN ('creating','stopped'))
 		         OR sandbox.state IN ('starting','ready','draining','stopping')),
-		       COALESCE(sum((revision.spec_json->'resources'->>'vcpuCount')::bigint)
+		       COALESCE(sum(sandbox.vcpu_count)
 		         FILTER (WHERE (sandbox.desired_state='running'
 		             AND sandbox.state IN ('creating','stopped'))
 		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
-		       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint)
+		       COALESCE(sum(sandbox.memory_bytes)
 		         FILTER (WHERE (sandbox.desired_state='running'
 		             AND sandbox.state IN ('creating','stopped'))
 		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
@@ -1477,7 +1486,6 @@ func readSubjectQuotaUsage(
 		       (SELECT count(*) FROM secondbox.data_plane_sessions
 		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('pending','running','cancelling'))
 		FROM secondbox.sandboxes AS sandbox
-		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.state<>'deleted'`,
 		tenantRef, subjectRef).Scan(
@@ -1502,11 +1510,11 @@ func readTenantQuotaUsage(
 		       count(*) FILTER (WHERE (sandbox.desired_state='running'
 		           AND sandbox.state IN ('creating','stopped'))
 		         OR sandbox.state IN ('starting','ready','draining','stopping')),
-		       COALESCE(sum((revision.spec_json->'resources'->>'vcpuCount')::bigint)
+		       COALESCE(sum(sandbox.vcpu_count)
 		         FILTER (WHERE (sandbox.desired_state='running'
 		             AND sandbox.state IN ('creating','stopped'))
 		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
-		       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint)
+		       COALESCE(sum(sandbox.memory_bytes)
 		         FILTER (WHERE (sandbox.desired_state='running'
 		             AND sandbox.state IN ('creating','stopped'))
 		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
@@ -1523,7 +1531,6 @@ func readTenantQuotaUsage(
 		        WHERE tenant_ref=$1 AND state='active'
 		          AND (expires_at IS NULL OR expires_at>$2))
 		FROM secondbox.sandboxes AS sandbox
-		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
 		WHERE sandbox.tenant_ref=$1 AND sandbox.state<>'deleted'`, tenantRef, now.UTC()).Scan(
 		&usage.Sandboxes, &usage.ActiveInstances, &usage.VCPUCount, &usage.MemoryBytes,
 		&usage.Snapshots, &usage.PortSessions, &usage.ConcurrentOperations,
@@ -1545,14 +1552,12 @@ func readDeploymentQuotaUsage(
 		       (SELECT count(*) FROM secondbox.sandboxes
 		        WHERE (desired_state='running' AND state IN ('creating','stopped'))
 		           OR state IN ('starting','ready','draining','stopping')),
-		       (SELECT COALESCE(sum((revision.spec_json->'resources'->>'vcpuCount')::bigint),0)
+		       (SELECT COALESCE(sum(sandbox.vcpu_count),0)
 		        FROM secondbox.sandboxes AS sandbox
-		        JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
 		        WHERE (sandbox.desired_state='running' AND sandbox.state IN ('creating','stopped'))
 		           OR sandbox.state IN ('starting','ready','draining','stopping')),
-		       (SELECT COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0)
+		       (SELECT COALESCE(sum(sandbox.memory_bytes),0)
 		        FROM secondbox.sandboxes AS sandbox
-		        JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
 		        WHERE (sandbox.desired_state='running' AND sandbox.state IN ('creating','stopped'))
 		           OR sandbox.state IN ('starting','ready','draining','stopping')),
 		       (SELECT count(*) FROM secondbox.snapshots

@@ -44,11 +44,11 @@ func TestTimingHTTPReadsPersistedStageEvidenceAndCurrentAPILatency(t *testing.T)
 	if _, err := pool.Exec(
 		t.Context(),
 		`
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,1073741824,
 			'sbox_timing_http','tenant-timing-http','subject-timing-http',
 			'profile','profile-revision','ready','running',1,'workspace-timing-http',
 			'instance-timing-http','{}','{}',1,$1,$1

@@ -49,11 +49,11 @@ func TestInvalidProfileStartFailsBeforeAssignmentAndReleasesWorkspace(t *testing
 			8589934592,3,'start','operation-profile','operation-profile','operation-profile',
 			3,3,'queued','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			reconcile_owner,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-profile'),
 			'sandbox-profile','tenant','subject','profile','revision-bogus','stopped','running',
 			3,'workspace-profile','','{}','{}','worker-profile',2,$1,$1
 		);
@@ -153,11 +153,11 @@ func TestSucceededDeleteEffectWithoutFinalizedSandboxDefers(t *testing.T) {
 			8589934592,3,'workspace_delete','effect-del','effect-del','operation-del',
 			3,3,'deleting','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			reconcile_owner,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-del'),
 			'sandbox-del','tenant','subject','profile','revision','deleting','deleted',
 			3,'workspace-del','','{}','{}','worker-del',6,$1,$1
 		);

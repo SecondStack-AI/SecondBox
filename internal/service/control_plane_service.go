@@ -516,7 +516,7 @@ func (service *ControlPlaneService) createSandboxOperation(
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
 		IdempotencyEnds:   service.idempotencyExpiration(now),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
-		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID,
+		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID, Resources: request.Resources,
 	})
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err

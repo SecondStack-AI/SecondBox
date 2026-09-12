@@ -23,11 +23,11 @@ func TestClaimNextIgnoresAssignmentWithoutCurrentSandboxAuthority(t *testing.T) 
 	store := openReconcileTestDatabase(t)
 	now := time.Date(2026, 7, 30, 3, 0, 0, 0, time.UTC)
 	if _, err := store.pool.Exec(t.Context(), `
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,1073741824,
 			'sandbox-stale','tenant','subject','profile','revision','stopped','stopped',
 			2,'workspace-stale','instance-current','{}','{}',1,$1,$1
 		);
@@ -78,11 +78,11 @@ func TestFencedRunnerLossQueuesHomeLocalAdvanceWithoutRelocation(t *testing.T) {
 			'workspace-loss','tenant','subject','sandbox-loss','runner-home','ready',
 			8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-loss'),
 			'sandbox-loss','tenant','subject','profile','revision','ready','running',
 			3,'workspace-loss','instance-loss','{}','{}',4,$1,$1
 		);
@@ -177,11 +177,11 @@ func TestFencedRunnerLossReplacesItsExpiredStartMutation(t *testing.T) {
 			8589934592,3,'start','operation-start','command-start','operation-start',
 			3,3,'assigned','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-start-loss'),
 			'sandbox-start-loss','tenant','subject','profile','revision','starting','running',
 			3,'workspace-start-loss','instance-start-loss','{}','{}',4,$1,$1
 		);
@@ -268,11 +268,11 @@ func TestClaimNextDefersAssignmentWithInvalidCommandPayload(t *testing.T) {
 	store := openReconcileTestDatabase(t)
 	now := time.Date(2026, 8, 6, 13, 45, 0, 0, time.UTC)
 	if _, err := store.pool.Exec(t.Context(), `
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,1073741824,
 			'sandbox-poison','tenant','subject','profile','revision','starting','running',
 			3,'workspace-poison','instance-poison','{}','{}',1,$1,$1
 		);
@@ -334,11 +334,11 @@ func TestAdvanceFencedGenerationStaleRevisionIsClaimLost(t *testing.T) {
 			'workspace-adv','tenant','subject','sandbox-adv','runner-home','ready',
 			8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-adv'),
 			'sandbox-adv','tenant','subject','profile','revision','ready','running',
 			3,'workspace-adv','instance-adv','{}','{}',4,$1,$1
 		);
@@ -381,11 +381,11 @@ func TestTerminalFailureWithStopMutationReturnsWorkspaceMutationSentinel(t *test
 			8589934592,3,'stop','effect-stop-term','effect-stop-term','effect-stop-term',
 			3,4,'stopping','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-term'),
 			'sandbox-term','tenant','subject','profile','revision','stopping','stopped',
 			3,'workspace-term','instance-term','{}','{}',4,$1,$1
 		);
@@ -473,11 +473,11 @@ func TestFencedRunnerLossAndWorkspaceMutationSerializeWithoutDeadlock(t *testing
 			'workspace-loss-race','tenant','subject','sandbox-loss-race','runner-home','ready',
 			8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-loss-race'),
 			'sandbox-loss-race','tenant','subject','profile','revision','ready','running',
 			3,'workspace-loss-race','instance-loss-race','{}','{}',4,$1,$1
 		);
