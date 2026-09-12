@@ -539,6 +539,7 @@ const (
 	ProblemCodeIdempotencyConflict                  ProblemCode = "idempotency_conflict"
 	ProblemCodePreconditionFailed                   ProblemCode = "precondition_failed"
 	ProblemCodeStateConflict                        ProblemCode = "state_conflict"
+	ProblemCodeSnapshotNameConflict                 ProblemCode = "snapshot_name_conflict"
 	ProblemCodeInvalidLifecycleTransition           ProblemCode = "invalid_lifecycle_transition"
 	ProblemCodeResourceExpired                      ProblemCode = "resource_expired"
 	ProblemCodeTenantSuspended                      ProblemCode = "tenant_suspended"

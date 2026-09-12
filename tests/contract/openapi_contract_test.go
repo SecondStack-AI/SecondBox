@@ -640,7 +640,7 @@ func TestManagementContractRejectsUnsafeShapes(t *testing.T) {
 			"authority_kind_mismatch", "invalid_lifecycle_transition", "resource_expired", "tenant_suspended",
 			"grant_escalation_denied", "quota_exceeded", "precondition_failed",
 			"cleanup_state_conflict", "management_unavailable", "credential_response_unavailable",
-			"tenant_egress_context_required",
+			"tenant_egress_context_required", "snapshot_name_conflict",
 		} {
 			if !codes[code] {
 				t.Errorf("ProblemCode is missing management error %q", code)
