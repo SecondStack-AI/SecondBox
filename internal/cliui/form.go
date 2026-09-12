@@ -80,7 +80,7 @@ func (spec HuhForm) Run(ctx context.Context, handles FormHandles) error {
 		// Huh creates a new buffered Scanner for each field. Bound each read so
 		// one field cannot consume pasted answers intended for later fields or
 		// later form groups.
-		accessibleInput := &endTrackingReader{target: boundedAccessibleReader(handles.Input)}
+		accessibleInput := newEndTrackingReader(boundedAccessibleReader(handles.Input))
 		for groupIndex, fields := range accessibleGroups {
 			if title := spec.Groups[groupIndex].Title; title != "" {
 				if _, err := fmt.Fprintln(accessibleOutput, Sanitize(title)); err != nil {
@@ -88,15 +88,17 @@ func (spec HuhForm) Run(ctx context.Context, handles FormHandles) error {
 				}
 			}
 			for fieldIndex, field := range fields {
-				if accessibleInput.ended {
+				if accessibleInput.state().ended {
 					return errors.New("SecondBox CLI accessible form: input ended before every field was answered")
 				}
+				consumedBefore := accessibleInput.state().consumed
 				if err := runAccessibleField(field, accessibleOutput, accessibleInput); err != nil {
 					return fmt.Errorf("SecondBox CLI accessible form: %w", err)
 				}
-				// A field that met end of input must not stand as answered: Huh
-				// treats the empty read as accepting whatever the field held.
-				if accessibleInput.ended {
+				// A field that read nothing before end of input must not stand as
+				// answered: Huh treats the empty read as accepting whatever the
+				// field held. An answer without a trailing newline is fine.
+				if state := accessibleInput.state(); state.ended && state.consumed == consumedBefore {
 					return errors.New("SecondBox CLI accessible form: input ended before every field was answered")
 				}
 				spec := spec.Groups[groupIndex].Fields[fieldIndex]
@@ -132,21 +134,51 @@ func (spec HuhForm) Run(ctx context.Context, handles FormHandles) error {
 
 type ansiStrippingWriter struct{ target io.Writer }
 
-// endTrackingReader remembers that the scripted or piped answers ran out, so
-// the form can refuse the next field with a clear error instead of letting a
-// field misread end-of-input as a selection.
+// endTrackingReader remembers that the scripted or piped answers ran out and
+// how many bytes each field consumed, so the form can refuse a field that met
+// end of input before reading an answer instead of letting Huh accept the
+// field's current value. The descriptor-carrying variant keeps Fd visible,
+// which Huh needs to read a real terminal (password fields refuse otherwise).
+type endTrackingState struct {
+	ended    bool
+	consumed int
+}
+
+type endTrackingInput interface {
+	io.Reader
+	state() endTrackingState
+}
+
 type endTrackingReader struct {
 	target io.Reader
-	ended  bool
+	track  endTrackingState
+}
+
+type endTrackingFileDescriptorReader struct {
+	*endTrackingReader
+	descriptor fileDescriptorReader
+}
+
+func newEndTrackingReader(target io.Reader) endTrackingInput {
+	reader := &endTrackingReader{target: target}
+	if descriptor, ok := target.(fileDescriptorReader); ok {
+		return endTrackingFileDescriptorReader{endTrackingReader: reader, descriptor: descriptor}
+	}
+	return reader
 }
 
 func (reader *endTrackingReader) Read(content []byte) (int, error) {
 	count, err := reader.target.Read(content)
+	reader.track.consumed += count
 	if errors.Is(err, io.EOF) {
-		reader.ended = true
+		reader.track.ended = true
 	}
 	return count, err
 }
+
+func (reader *endTrackingReader) state() endTrackingState { return reader.track }
+
+func (reader endTrackingFileDescriptorReader) Fd() uintptr { return reader.descriptor.Fd() }
 
 // runAccessibleField converts a field's panic on exhausted input, which Huh's
 // accessible select raises as an index error, into an ordinary error so an
