@@ -28,7 +28,8 @@ if [[ "${1:-}" == --guest ]]; then
     local code=$?
     ((code == 0)) || status=$code
     chown -R "$QUALIFY_GVISOR_SSH_USER:$QUALIFY_GVISOR_SSH_USER" .git || status=1
-    echo "$status" >"$remote/result"
+    echo "$status" >"$remote/result.tmp"
+    mv "$remote/result.tmp" "$remote/result"
   }
   trap finish EXIT
   [[ ! -e /dev/kvm ]] || fail 'VM exposes /dev/kvm'
@@ -45,7 +46,8 @@ if [[ "${1:-}" == --guest ]]; then
     start=$SECONDS code=0
     name="$suite"; [[ "$suite" != gvisor ]] || name=gvisor-host
     scripts/test-scenario-$suite.sh 2>&1 | tee "$remote/$name.log" || code=$?
-    printf '%s\t%s\t%s\n' "$name" "$code" "$((SECONDS-start))" >"$remote/$name.status"
+    printf '%s\t%s\t%s\n' "$name" "$code" "$((SECONDS-start))" >"$remote/$name.status.tmp"
+    mv "$remote/$name.status.tmp" "$remote/$name.status"
     ((code == 0)) || status=1
   done
   [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'VM source changed during qualification'
