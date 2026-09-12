@@ -29,7 +29,7 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 		name     string
 		context  bool
 		exitCode int
-	}{{"isolated", false, 0}, {"both-profiles", true, 0}, {"guest-failure", true, 7}} {
+	}{{"both-profiles", true, 0}, {"guest-failure", true, 7}} {
 		t.Run(test.name, func(t *testing.T) {
 			advertisesContext := test.context
 			plan := install.InstallPlan{OperationID: "install_0123456789abcdef", CLI: install.CLIPlan{ConfigPath: filepath.Join(t.TempDir(), "config.json"), TenantRef: "local", SubjectRef: "local-operator"}, Paths: []install.PlannedPath{{Name: "secondbox-binary", Path: binary}}}

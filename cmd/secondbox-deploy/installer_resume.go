@@ -626,14 +626,10 @@ func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contra
 			continue
 		}
 		expectedContext := expectedInstallerComposeProject(plan)
-		if !slices.Contains(runner.SupportedEgressContexts, expectedContext) && plan.CLI.TenantRef == "" {
+		if !slices.Contains(runner.SupportedEgressContexts, expectedContext) {
 			continue
 		}
-		evidence := map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}
-		if slices.Contains(runner.SupportedEgressContexts, expectedContext) {
-			evidence["egressContext"] = expectedContext
-		}
-		return evidence, true
+		return map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "egressContext": expectedContext, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}, true
 	}
 	return nil, false
 }
@@ -668,31 +664,25 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 	if err != nil {
 		return nil, err
 	}
-	if slices.Contains(runner.SupportedEgressContexts, expectedInstallerComposeProject(plan)) {
-		command, stdout, stderr = installedCLICommand(
-			ctx, plan, "--output", "json", "diagnostics", "egress-contexts",
-		)
-		if err := command.Run(); err != nil {
-			return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight: %w: %s", err, cliui.Sanitize(stderr.String()))
-		}
-		var preflight contracts.EgressContextPreflight
-		if err := json.Unmarshal(stdout.Bytes(), &preflight); err != nil {
-			return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight decode: %w", err)
-		}
-		if !preflight.Ready || preflight.Truncated {
-			return nil, errors.New("SecondBox installer qualification egress-context preflight is not ready and complete")
-		}
-		evidence["egressContextPreflight"] = "ready"
-	} else {
-		evidence["egressContextPreflight"] = "skipped; generated context not advertised"
+	command, stdout, stderr = installedCLICommand(
+		ctx, plan, "--output", "json", "diagnostics", "egress-contexts",
+	)
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight: %w: %s", err, cliui.Sanitize(stderr.String()))
 	}
+	var preflight contracts.EgressContextPreflight
+	if err := json.Unmarshal(stdout.Bytes(), &preflight); err != nil {
+		return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight decode: %w", err)
+	}
+	if !preflight.Ready || preflight.Truncated {
+		return nil, errors.New("SecondBox installer qualification egress-context preflight is not ready and complete")
+	}
+	evidence["egressContextPreflight"] = "ready"
 	evidence["smoke"] = "record-only; tenancy bootstrap not selected"
 	if plan.CLI.TenantRef != "" {
-		profiles := []string{"agent-compartment-isolated"}
-		if slices.Contains(runner.SupportedEgressContexts, expectedInstallerComposeProject(plan)) {
-			profiles = append(profiles, "durable-coding")
-		}
-		for _, profile := range profiles {
+		// Readiness already proved the Runner advertises the generated egress
+		// context, so both the isolated and the context-requiring Profile boot.
+		for _, profile := range []string{"agent-compartment-isolated", "durable-coding"} {
 			command, stdout, stderr := installedCLICommand(ctx, plan, "run", profile, "--", "/bin/echo", "hello")
 			err := command.Run()
 			evidence[profile+".stdout"] = stdout.String()
