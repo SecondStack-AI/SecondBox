@@ -767,9 +767,9 @@ func durableRunnerReservation(
 	var capacity runnerCapacity
 	if err := tx.QueryRow(ctx, `
 		SELECT
-		  COALESCE(sum((revision.spec_json->'resources'->>'vcpuCount')::bigint),0),
-		  COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
-		  COALESCE(sum((revision.spec_json->'resources'->>'workspaceBytes')::bigint),0),
+		  COALESCE(sum(sandbox.vcpu_count),0),
+		  COALESCE(sum(sandbox.memory_bytes),0),
+		  COALESCE(sum(sandbox.workspace_bytes),0),
 		  count(*),
 		  COALESCE(sum((revision.spec_json->'resources'->>'concurrentOperations')::bigint),0)
 		FROM secondbox.assignments AS assignment

@@ -176,7 +176,7 @@ func TestRetainedSandboxKeepsLegacyDiagnosticInNonTTYMode(t *testing.T) {
 	capabilities := cliui.ForWriter(io.Discard, &diagnostic)
 	renderer := cliui.Renderer{Output: io.Discard, Diagnostic: &diagnostic, Capabilities: capabilities, OutputMode: cliui.OutputAuto, ColorMode: cliui.ColorAuto}
 	ctx := withPresentation(context.Background(), presentation{renderer: renderer})
-	if err := writeRetainedSandbox(ctx, &diagnostic, "sbx_retained"); err != nil {
+	if err := writeRetainedSandbox(ctx, &diagnostic, secondboxclient.Sandbox{ID: "sbx_retained"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := diagnostic.String(), "SecondBox retained Sandbox sbx_retained\n"; got != want {

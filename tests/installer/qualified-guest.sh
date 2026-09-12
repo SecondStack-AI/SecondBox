@@ -157,9 +157,24 @@ create_qualification_workload() {
   fi
 
   jq -n '{profile:"durable-coding",metadata:{qualification:"installer-qualified-workload"}}' >"$root/sandbox.json"
-  if ! sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create \
-    --body "$root/sandbox.json" --header "Idempotency-Key=qualified-sandbox-$key_suffix")"; then
-    echo 'explicit qualification Sandbox creation failed' >&2
+  # The installer's guest smoke deletes its durable-coding Sandbox moments before
+  # this create, and the Runner's reported reservation for it can lag one
+  # heartbeat; on a minimum host that refuses placement transiently.
+  local create_attempt create_error=''
+  sandbox_operation=''
+  for create_attempt in $(seq 1 30); do
+    if ! sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create \
+      --body "$root/sandbox.json" --header "Idempotency-Key=qualified-sandbox-$key_suffix-$create_attempt" 2>"$root/create-error.txt")"; then
+      create_error="$(<"$root/create-error.txt")"
+      [[ "$create_error" == *"code=home_runner_unavailable"* ]] || break
+      sleep 2
+      continue
+    fi
+    create_error=''
+    break
+  done
+  if [[ -z "$sandbox_operation" || -n "$create_error" ]]; then
+    echo "explicit qualification Sandbox creation failed: $create_error" >&2
     return 1
   fi
   sandbox_id="$(jq -er .sandboxId <<<"$sandbox_operation")"
@@ -271,7 +286,7 @@ if [[ "$phase" == install ]]; then
     jq -e '.status == "purged"' "$source_operation/install-receipt.json" >/dev/null
 
     install_log="$qualification_root/install-candidate-${mode}.log"
-    printf '1\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
+    printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
     operation=''
     while IFS= read -r candidate_operation; do
       if [[ "$candidate_operation" != "$source_operation" ]] && jq -e --arg target "$candidate_version" '.release.version == $target' "$candidate_operation/install-plan.json" >/dev/null 2>&1; then
@@ -284,7 +299,7 @@ if [[ "$phase" == install ]]; then
   else
     setup_candidate_registry
     install_log="$qualification_root/install-${mode}.log"
-    setsid bash -c 'printf "1\ny\n1\ny\ny\n" | "$1" --accessible install --candidate-directory "$2"' bash "$deploy" "$release_directory" >"$install_log" 2>&1 &
+    setsid bash -c 'printf "1\ny\ny\n1\ny\ny\n" | "$1" --accessible install --candidate-directory "$2"' bash "$deploy" "$release_directory" >"$install_log" 2>&1 &
     install_pid=$!
     operation=''
     interrupted=false

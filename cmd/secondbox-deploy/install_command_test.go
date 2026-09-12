@@ -45,7 +45,7 @@ func TestGuidedInstallAccessibleAcceptsAndPersistsCanonicalPlan(t *testing.T) {
 	capabilities.Accessible = true
 	renderer := cliui.Renderer{Output: &output, Diagnostic: &diagnostic, Capabilities: capabilities, OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
 	dependencies := guidedInstallDependencies{
-		Input:          strings.NewReader("1\ny\n1\ny\ny\n"),
+		Input:          strings.NewReader("1\ny\ny\n1\ny\ny\n"),
 		Now:            func() time.Time { return now },
 		HomeDirectory:  func() (string, error) { return home, nil },
 		AvailableBytes: func(string) (int64, error) { return 100 << 30, nil },
@@ -91,7 +91,7 @@ func TestGuidedInstallOffersAndPersistsExistingReflinkFilesystem(t *testing.T) {
 	capabilities.Accessible = true
 	renderer := cliui.Renderer{Output: &bytes.Buffer{}, Diagnostic: &bytes.Buffer{}, Capabilities: capabilities, OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
 	dependencies := guidedInstallDependencies{
-		Input: strings.NewReader("1\ny\n1\ny\ny\n"), Now: time.Now,
+		Input: strings.NewReader("1\ny\ny\n1\ny\ny\n"), Now: time.Now,
 		HomeDirectory:  func() (string, error) { return home, nil },
 		AvailableBytes: func(string) (int64, error) { return 100 << 30, nil },
 		VerifyRelease:  func(context.Context, string) (releaseverify.VerifiedRelease, error) { return fakeGuidedRelease(), nil },
@@ -227,8 +227,8 @@ func TestGuidedInstallAdvancedReviewUsesSharedFormsAndPersistsOverrides(t *testi
 	if err := runGuidedInstallWith(context.Background(), renderer, guidedFacts(), true, dependencies); err != nil {
 		t.Fatal(err)
 	}
-	if formCalls != 6 {
-		t.Fatalf("advanced installer form calls = %d, want workspace, standard bundles, retention, advanced, capacity, final", formCalls)
+	if formCalls != 7 {
+		t.Fatalf("advanced installer form calls = %d, want workspace, standard bundles, tenancy, retention, advanced, capacity, final", formCalls)
 	}
 	plan, _, err := install.ReadPlan(filepath.Join(home, "secondbox-install_0123456789abcdef", "install-plan.json"))
 	if err != nil {
@@ -300,6 +300,34 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 		err := runPrivateHostPurgeValidate(arguments)
 		if err == nil || !strings.HasPrefix(err.Error(), "SecondBox installer private host purge validation:") {
 			t.Fatalf("purge validation arguments %#v error = %v", arguments, err)
+		}
+	}
+}
+
+func TestUnattendedTenancySelection(t *testing.T) {
+	for _, test := range []struct {
+		args    []string
+		want    bool
+		invalid bool
+	}{
+		{[]string{"--unattended"}, true, false},
+		{[]string{"--unattended", "--tenancy=no"}, false, false},
+		{[]string{"--unattended", "--tenancy=yes"}, true, false},
+		{[]string{"--unattended", "--tenancy=maybe"}, false, true},
+		{[]string{"--tenancy=no"}, false, true},
+	} {
+		got, err := unattendedTenancy(test.args)
+		if (err != nil) != test.invalid || got != test.want {
+			t.Fatalf("%v = %t, %v", test.args, got, err)
+		}
+		if !test.invalid {
+			selected := true
+			if err := acceptUnattendedInstallForm(cliui.TenancyBootstrapForm(&selected), got); err != nil {
+				t.Fatal(err)
+			}
+			if selected != test.want {
+				t.Fatalf("form tenancy=%t", selected)
+			}
 		}
 	}
 }

@@ -445,11 +445,11 @@ func insertPlacementReservation(
 			mutation_expected_generation,mutation_target_generation,mutation_state,
 			local_receipt_json,created_at,updated_at
 		) VALUES ($1,'tenant','subject',$2,$3,'creating',$4,1,'','','','',NULL,NULL,'','{}',$5,$5);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES ($2,'tenant','subject',$6,$6,'creating','stopped',1,$1,'','{}','{}',1,$5,$5)`,
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$1),$2,'tenant','subject',$6,$6,'creating','stopped',1,$1,'','{}','{}',1,$5,$5)`,
 		pgx.QueryExecModeSimpleProtocol,
 		"workspace-placement-"+suffix,
 		"sandbox-placement-"+suffix,

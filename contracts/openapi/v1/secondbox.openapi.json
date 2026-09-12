@@ -2275,6 +2275,17 @@
           "createdAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },
+      "ProfileResourceCeiling": {
+        "type": "object",
+        "description": "Optional Profile size bounds. Every axis is explicit: null leaves that axis bounded only by quota and Runner admission. Integer bounds must be at least the matching resources default. Finite memoryBytes and workspaceBytes bounds must use whole MiB (multiples of 1048576 bytes). Not permitted with snapshot_resume.",
+        "additionalProperties": false,
+        "required": ["vcpuCount", "memoryBytes", "workspaceBytes"],
+        "properties": {
+          "vcpuCount": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+          "memoryBytes": {"oneOf": [{"type": "integer", "format": "int64", "minimum": 67108864}, {"type": "null"}]},
+          "workspaceBytes": {"oneOf": [{"type": "integer", "format": "int64", "minimum": 1048576}, {"type": "null"}]}
+        }
+      },
       "ProfileRevisionSpec": {
         "type": "object",
         "additionalProperties": false,
@@ -2285,6 +2296,7 @@
           "runtimeBundleDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "toolchainBundleDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "resources": {"$ref": "#/components/schemas/ResourcePolicy"},
+          "resourceCeiling": {"$ref": "#/components/schemas/ProfileResourceCeiling"},
           "startup": {"$ref": "#/components/schemas/StartupPolicy"},
           "lifecycle": {"$ref": "#/components/schemas/LifecyclePolicy"},
           "retention": {"$ref": "#/components/schemas/RetentionPolicy"},
@@ -2321,6 +2333,7 @@
         }
       },
       "ResourcePolicy": {
+        "description": "Default Sandbox resources and concurrent operation limit. Also the size ceiling when resourceCeiling is absent. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes).",
         "type": "object",
         "additionalProperties": false,
         "required": ["vcpuCount", "memoryBytes", "workspaceBytes", "concurrentOperations"],
@@ -2609,10 +2622,30 @@
         "enum": ["creating", "stopped", "starting", "ready", "draining", "stopping", "failed", "deleting", "deleted"]
       },
       "SandboxDesiredState": {"type": "string", "enum": ["running", "stopped", "deleted"]},
+      "SandboxResources": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vcpuCount", "memoryBytes", "workspaceBytes"],
+        "properties": {
+          "vcpuCount": {"type": "integer", "minimum": 1},
+          "memoryBytes": {"type": "integer", "format": "int64", "minimum": 67108864},
+          "workspaceBytes": {"type": "integer", "format": "int64", "minimum": 1048576}
+        }
+      },
+      "SandboxResourceRequest": {
+        "description": "Requested Sandbox size. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes), validated before disk rounding; otherwise invalid_request identifies the field. Omitted axes use Profile defaults unchanged. Requested workspaceBytes rounds up to a power of two before ceiling checks; when a request fits a finite ceiling but rounding would exceed it, the ceiling is used. snapshot_resume accepts only the exact Profile size.",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "vcpuCount": {"type": "integer", "minimum": 1},
+          "memoryBytes": {"type": "integer", "format": "int64", "minimum": 67108864},
+          "workspaceBytes": {"type": "integer", "format": "int64", "minimum": 1048576}
+        }
+      },
       "Sandbox": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "profile", "profileRevisionId", "egressContext", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "profile", "profileRevisionId", "egressContext", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt", "resources"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "profile": {"$ref": "#/components/schemas/ProfileName"},
@@ -2628,7 +2661,8 @@
           "revision": {"type": "integer", "format": "int64", "minimum": 1},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"},
-          "deletedAt": {"$ref": "#/components/schemas/Timestamp"}
+          "deletedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "resources": {"$ref": "#/components/schemas/SandboxResources"}
         }
       },
       "CreateSandboxRequest": {
@@ -2638,7 +2672,8 @@
         "properties": {
           "profile": {"$ref": "#/components/schemas/ProfileName"},
           "metadata": {"$ref": "#/components/schemas/Metadata"},
-          "sourceSnapshotId": {"$ref": "#/components/schemas/OpaqueID"}
+          "sourceSnapshotId": {"$ref": "#/components/schemas/OpaqueID"},
+          "resources": {"$ref": "#/components/schemas/SandboxResourceRequest"}
         }
       },
       "RelocateSandboxRequest": {
@@ -3479,6 +3514,7 @@
           "idempotency_conflict",
           "precondition_failed",
           "state_conflict",
+          "snapshot_name_conflict",
           "invalid_lifecycle_transition",
           "resource_expired",
           "tenant_suspended",
@@ -3496,6 +3532,8 @@
           "workspace_relocation_snapshots_present",
           "workspace_relocation_target_unavailable",
           "quota_exceeded",
+          "resources_exceed_profile",
+          "resources_fixed_by_profile",
           "limit_exceeded",
           "guest_unavailable",
           "execution_node_unavailable",
@@ -3526,7 +3564,9 @@
           "requestId": {"$ref": "#/components/schemas/CorrelationID"},
           "retryable": {"type": "boolean"},
           "retryAfterMilliseconds": {"type": "integer", "format": "int64", "minimum": 1, "maximum": 60000},
-          "details": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/ProblemDetail"}}
+          "details": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/ProblemDetail"}},
+          "ceiling": {"$ref": "#/components/schemas/SandboxResourceRequest", "description": "Effective Profile bounds, omitting unbounded axes; the fixed size for resources_fixed_by_profile."},
+          "requested": {"$ref": "#/components/schemas/SandboxResources"}
         }
       }
     }

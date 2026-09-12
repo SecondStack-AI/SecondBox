@@ -648,10 +648,20 @@ func TestWaitForRequiresDeadlineAndStates(t *testing.T) {
 }
 
 func TestCreateSandboxReturnsHandleForTheCreatedResource(t *testing.T) {
+	memoryBytes := int64(512 << 20)
+	resources := &SandboxResourceRequest{MemoryBytes: &memoryBytes}
 	var observedKey string
 	client := newLifecycleClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		if request.Method == http.MethodPost {
+			var create CreateSandboxRequest
+			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
+				t.Error(err)
+				return
+			}
+			if create.Resources == nil || create.Resources.MemoryBytes == nil || *create.Resources.MemoryBytes != memoryBytes || create.Resources.VCPUCount != nil {
+				t.Errorf("create resources = %+v", create.Resources)
+			}
 			observedKey = request.Header.Get("Idempotency-Key")
 			_, _ = io.WriteString(writer, `{"id":"operation-1","sandboxId":"sandbox-1",
 				"kind":"create","state":"pending","requestId":"request-1",
@@ -661,7 +671,7 @@ func TestCreateSandboxReturnsHandleForTheCreatedResource(t *testing.T) {
 		_, _ = io.WriteString(writer, sandboxJSON("sandbox-1", "creating"))
 	})
 	handle, operation, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
-		Profile: "durable-coding", Metadata: Metadata{},
+		Profile: "durable-coding", Resources: resources, Metadata: Metadata{},
 	}, "")
 	if err != nil {
 		t.Fatal(err)
@@ -690,6 +700,8 @@ func TestCreateSandboxRejectsOperationWithoutSandboxReference(t *testing.T) {
 }
 
 func TestRunCreatesWaitsAndExecutes(t *testing.T) {
+	memoryBytes := int64(512 << 20)
+	resources := &SandboxResourceRequest{MemoryBytes: &memoryBytes}
 	var mutex sync.Mutex
 	var paths []string
 	var execRequest BufferedExecRequest
@@ -700,6 +712,15 @@ func TestRunCreatesWaitsAndExecutes(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch {
 		case request.URL.Path == "/v1/sandboxes" && request.Method == http.MethodPost:
+			var create CreateSandboxRequest
+			if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
+				t.Error(err)
+				return
+			}
+			if create.Resources == nil || create.Resources.MemoryBytes == nil || *create.Resources.MemoryBytes != memoryBytes || create.Resources.VCPUCount != nil {
+				t.Errorf("create resources = %+v", create.Resources)
+			}
+
 			_, _ = io.WriteString(writer, `{"id":"operation-1","sandboxId":"sandbox-1",
 				"kind":"create","state":"pending","requestId":"request-1",
 				"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
@@ -720,7 +741,7 @@ func TestRunCreatesWaitsAndExecutes(t *testing.T) {
 	defer cancel()
 	stdinBase64 := base64.StdEncoding.EncodeToString([]byte("input\n"))
 	handle, result, err := client.Run(ctx, RunRequest{
-		Profile: "durable-coding",
+		Profile: "durable-coding", Resources: resources,
 		Command: Command{ArgvCommand: &ArgvCommand{
 			Mode: "argv", Executable: "echo", Arguments: []string{"hello"},
 		}},

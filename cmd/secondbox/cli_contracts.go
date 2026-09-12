@@ -42,6 +42,9 @@ var commandContracts = map[string]cliui.CommandContract{
 }
 
 func init() {
+	for _, command := range []string{"create", "start", "stop", "rm", "delete", "ls", "list", "get", "cp", "ls-files", "ports forward", "snapshot", "snapshots", "restore", "snapshot rm"} {
+		commandContracts[command] = cliui.CommandContract{Command: command, Output: cliui.OutputBoundedHuman, ReadsStdin: command == "rm" || command == "delete", LongLived: command == "ports forward", ExitOwner: "api"}
+	}
 	for command := range commandAliases {
 		if _, exists := commandContracts[command]; exists {
 			continue

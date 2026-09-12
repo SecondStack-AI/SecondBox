@@ -172,3 +172,51 @@ func TestWriterFenceSurvivesParentCloseWhileChildHoldsDescriptor(t *testing.T) {
 	}
 	_ = replacement.Close()
 }
+
+// A Snapshot of a Workspace that a guest mounted carries a mount time newer
+// than its last check, which makes tune2fs refuse a UUID rewrite. The clone
+// path must check the exclusively owned copy and then rewrite.
+func TestLinuxSetUUIDRewritesMountedSinceCheckFilesystem(t *testing.T) {
+	for _, tool := range []string{"mke2fs", "tune2fs", "e2fsck", "debugfs"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is not installed", tool)
+		}
+	}
+	driver, err := newLinuxDriver(FormatterMke2fs, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := filepath.Join(t.TempDir(), "workspace.ext4")
+	if output, err := exec.Command("mke2fs", "-q", "-F", "-t", "ext4", "-O", "metadata_csum,^metadata_csum_seed", image, "16M").CombinedOutput(); err != nil {
+		t.Fatalf("mke2fs: %v: %s", err, output)
+	}
+	const rewritten = "3f0c3a1e-6c2d-4c1a-9c2e-0f1a2b3c4d5e"
+	for _, test := range []struct {
+		name         string
+		mountedAfter bool
+	}{{"fresh", false}, {"mounted since check", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.mountedAfter {
+				// s_mtime is the last mount time; 2033 is later than any check time this test observes.
+				if output, err := exec.Command("debugfs", "-w", "-R", "set_super_value mtime 2000000000", image).CombinedOutput(); err != nil {
+					t.Fatalf("debugfs: %v: %s", err, output)
+				}
+				if output, err := exec.Command("tune2fs", "-U", rewritten, image).CombinedOutput(); err == nil || !strings.Contains(string(output), tune2fsFreshCheckRequired) {
+					t.Fatalf("fixture does not reproduce the refusal: %v: %s", err, output)
+				}
+			}
+			workspace, err := os.OpenFile(image, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer workspace.Close()
+			if err := driver.SetUUID(t.Context(), workspace, rewritten); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command("tune2fs", "-l", image).CombinedOutput()
+			if err != nil || !strings.Contains(string(output), "Filesystem UUID:          "+rewritten) {
+				t.Fatalf("UUID not rewritten: %v: %s", err, output)
+			}
+		})
+	}
+}

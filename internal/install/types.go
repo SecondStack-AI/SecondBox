@@ -63,10 +63,11 @@ const (
 	StageComposeStarted         Stage = "compose_started"
 	StageCLILogin               Stage = "cli_login"
 	StageReadiness              Stage = "readiness"
+	StageTenancyBootstrap       Stage = "tenancy_bootstrap"
 	StageSmokeExecution         Stage = "smoke_execution"
 )
 
-var StageSequence = []Stage{StagePreflight, StagePlanAccepted, StageHostApply, StageReleaseVerified, StageAssetsMaterialized, StageDeploymentMaterialized, StageRunnerEnrolled, StageComposeStarted, StageCLILogin, StageReadiness, StageSmokeExecution}
+var StageSequence = []Stage{StagePreflight, StagePlanAccepted, StageHostApply, StageReleaseVerified, StageAssetsMaterialized, StageDeploymentMaterialized, StageRunnerEnrolled, StageComposeStarted, StageCLILogin, StageReadiness, StageTenancyBootstrap, StageSmokeExecution}
 
 type UpdateStatus string
 
@@ -195,6 +196,7 @@ type StoragePlan struct {
 	ImageSizeBytes         int64         `json:"imageSizeBytes,omitempty"`
 	MountUnitPath          string        `json:"mountUnitPath,omitempty"`
 }
+
 // CapacityPlan states the host's compute ceiling. Plan identity is the digest
 // of the exact recorded document, so a plan accepted by a release that stated
 // CPU in milli-units keeps that spelling on disk forever: LegacyMaxCPUMillis
@@ -211,6 +213,7 @@ type CapacityPlan struct {
 	StoragePressurePercent int64            `json:"storagePressurePercent"`
 	SubjectQuotas          map[string]int64 `json:"subjectQuotas"`
 }
+
 // VCPUCount reports the planned compute ceiling in whole vCPUs regardless of
 // which spelling the recorded plan used, rounding legacy milli-units up to
 // the whole vCPU that already covered the stated allowance.
@@ -274,6 +277,8 @@ type ReleaseActivation struct {
 }
 type CLIPlan struct {
 	ConfigPath string `json:"configPath"`
+	TenantRef  string `json:"tenantRef,omitempty"`
+	SubjectRef string `json:"subjectRef,omitempty"`
 }
 
 type InstallPlan struct {
@@ -348,6 +353,8 @@ type UpdateRecord struct {
 }
 
 type InstallReceipt struct {
+	LastSmokeEvidence   map[string]string `json:"lastSmokeEvidence,omitempty"`
+	TenancyBootstraps   []StageRecord     `json:"tenancyBootstraps,omitempty"`
 	SchemaVersion       string            `json:"schemaVersion"`
 	OperationID         string            `json:"operationId"`
 	PlanDigest          string            `json:"planDigest"`
