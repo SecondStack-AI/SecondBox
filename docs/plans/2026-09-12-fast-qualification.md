@@ -62,25 +62,34 @@ About 55 minutes serial when everything passes. Today it took six hours:
 
 ## Task 1: Reliable scenario harness
 
-- [ ] After the deliberate runner SIGKILL in `tests/scenario/attributed_execution_test.go`
+- [x] After the deliberate runner SIGKILL in `tests/scenario/attributed_execution_test.go`
   (and any other kill/start pair), bring the container back with
   `compose up -d --no-deps <service>` and poll `docker inspect` until it is
   running, retrying the start once; fail the test within 30 s with the compose
   and inspect output if it does not come back. Investigate why `compose start`
   after `kill -s SIGKILL` under `restart: unless-stopped` intermittently does
   nothing and fix the cause if it is in the harness or compose file.
-- [ ] Fail fast on a lost runner: when `waitForScenarioRunner` times out, record
+- [x] Fail fast on a lost runner: when `waitForScenarioRunner` times out, record
   a package-level "runner lost since <test>" marker so every later fixture
   fails immediately with that reason instead of waiting 90 s each. Keep the
   first failure's diagnostics complete.
-- [ ] Capture each `scenarioCompose` invocation's output into the test log on
+- [x] Capture each `scenarioCompose` invocation's output into the test log on
   failure, so a stalled restart is diagnosable after teardown.
-- [ ] Add `SECONDBOX_SCENARIO_SHARD=i/N` to `scripts/test-scenario.sh`: list the
+- [x] Add `SECONDBOX_SCENARIO_SHARD=i/N` to `scripts/test-scenario.sh`: list the
   package's top-level tests with `go test -list`, split deterministically, and
   run only shard `i`. Sharded runs never write qualification evidence. The
   smoke template publish runs once per shard (it is the suite's precondition).
-- [ ] Cover the shard splitter with a test and prove two concurrent shards on
+- [x] Cover the shard splitter with a test and prove two concurrent shards on
   this host complete without interfering (distinct project names and /24s).
+
+Task 1 verification on the KVM release host (2026-09-12): the unsharded
+Firecracker suite passed in 542 s; concurrent shards 1/2 and 2/2 passed in
+451 s and 229 s (14 + 13 disjoint top-level tests). Each shard published one
+template and used its own project and guest/Compose /24s. A deliberate no-op
+start injection exercised both start attempts and the bounded failure; the
+next fixture failed in 0.00 s with the original runner-lost marker. Generated
+verification, Go tests, lint, scenario vet/compile, shell syntax, and diff
+checks passed. No scenario assertions changed.
 
 ## Task 2: `just qualify`
 

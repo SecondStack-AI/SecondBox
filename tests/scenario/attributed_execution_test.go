@@ -153,7 +153,7 @@ func TestScenarioAttributedConnectionLossRevokesExecution(t *testing.T) {
 			}
 			if service == "secondbox-runner" {
 				scenarioCompose(t, "kill", "-s", "SIGKILL", service)
-				scenarioCompose(t, "start", service)
+				scenarioStartService(t, service)
 			} else {
 				scenarioCompose(t, "restart", "--no-deps", service)
 			}

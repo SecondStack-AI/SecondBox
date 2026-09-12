@@ -60,7 +60,10 @@ if [[ "$scenario_backend" == "gvisor" ]]; then
     microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-25-gvisor-pod-$scenario_host_platform-cold-starts.json"
   fi
 fi
-rm -f -- "$qualification_evidence" "$snapshot_resume_evidence" "$microsandbox_cold_start_evidence"
+# Shards must neither delete nor publish shared qualification evidence.
+if [[ -z "${SECONDBOX_SCENARIO_SHARD:-}" ]]; then
+  rm -f -- "$qualification_evidence" "$snapshot_resume_evidence" "$microsandbox_cold_start_evidence"
+fi
 compose_file="$repo_root/scripts/scenario-compose.yml"
 compose_override_file=""
 if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
@@ -100,6 +103,17 @@ sha256_stream() {
 if [[ "$scenario_mode" != "suite" && "$scenario_mode" != "stress" &&
       "$scenario_mode" != "lifecycle" ]]; then
   fail "SECONDBOX_SCENARIO_MODE must be suite, stress, or lifecycle"
+fi
+
+scenario_shard_pattern=""
+if [[ -n "${SECONDBOX_SCENARIO_SHARD:-}" ]]; then
+  [[ "$scenario_mode" == "suite" ]] || fail "sharding requires suite mode"
+  [[ -z "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]] ||
+    fail "SECONDBOX_SCENARIO_SHARD and SECONDBOX_SCENARIO_TEST_PATTERN are mutually exclusive"
+  scenario_test_list="$(go test -tags=scenario_live -list '^Test' ./tests/scenario)" ||
+    fail "could not list scenario tests"
+  scenario_shard_pattern="$(bash "$repo_root/scripts/scenario-shard.sh" "$SECONDBOX_SCENARIO_SHARD" <<<"$scenario_test_list")" ||
+    fail "invalid scenario shard"
 fi
 
 if [[ "${SECONDBOX_REQUIRE_QUALIFIED_SCENARIO:-}" != "1" ]]; then
@@ -211,7 +225,7 @@ required_commands=(curl date docker git go jq openssl python3 seq)
 if [[ "$native_macos" == "true" ]]; then
   required_commands+=(diskutil pgrep ps shasum sysctl)
 else
-  required_commands+=(findmnt ip mountpoint sha256sum)
+  required_commands+=(findmnt flock ip mountpoint sha256sum)
 fi
 for command in "${required_commands[@]}"; do
   command -v "$command" >/dev/null 2>&1 ||
@@ -409,18 +423,26 @@ fi
 export SECONDBOX_SCENARIO_ARCHITECTURE="$architecture"
 
 mkdir -p "$scenario_root"
+run_dir="$(mktemp -d "$scenario_root/run.XXXXXX")"
+scenario_build_dir="$run_dir/build"
+mkdir -p "$scenario_build_dir"
+export SECONDBOX_SCENARIO_BUILD_DIR="$scenario_build_dir"
+if [[ -n "$scenario_shard_pattern" ]]; then
+  export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_EVIDENCE="$run_dir/snapshot-resume.json"
+  export SECONDBOX_SCENARIO_MICROSANDBOX_COLD_START_EVIDENCE="$run_dir/cold-starts.json"
+fi
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-  -trimpath -buildvcs=false -o "$scenario_root/secondboxd" "$repo_root/cmd/secondboxd"
-chmod 0755 "$scenario_root/secondboxd"
+  -trimpath -buildvcs=false -o "$scenario_build_dir/secondboxd" "$repo_root/cmd/secondboxd"
+chmod 0755 "$scenario_build_dir/secondboxd"
 runner_dockerfile="$repo_root/runner/Dockerfile"
 if [[ "$scenario_backend" != "firecracker" && "$native_macos" != "true" ]]; then
   (
     cd "$repo_root/runner"
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-      -trimpath -buildvcs=false -o "$scenario_root/secondbox-runner" \
+      -trimpath -buildvcs=false -o "$scenario_build_dir/secondbox-runner" \
       ./cmd/secondbox-runner
   )
-  chmod 0755 "$scenario_root/secondbox-runner"
+  chmod 0755 "$scenario_build_dir/secondbox-runner"
   runner_dockerfile="$repo_root/runner/Dockerfile.microsandbox-scenario"
   if [[ "$scenario_backend" == "gvisor" ]]; then
     runner_dockerfile="$repo_root/runner/Dockerfile.gvisor-scenario"
@@ -434,14 +456,14 @@ if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; th
   (
     cd "$repo_root/runner"
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c ./internal/firecracker \
-      -o "$scenario_root/snapshot-template-publish.test"
+      -o "$scenario_build_dir/snapshot-template-publish.test"
   )
-  chmod 0755 "$scenario_root/snapshot-template-publish.test"
+  chmod 0755 "$scenario_build_dir/snapshot-template-publish.test"
 fi
 if [[ "$native_macos" != "true" ]]; then
   runner_build_arguments=(--quiet --file "$runner_dockerfile" --tag "$runner_image")
   if [[ "$scenario_backend" != "firecracker" ]]; then
-    runner_build_arguments+=(--build-context "scenario=$scenario_root")
+    runner_build_arguments+=(--build-context "scenario=$scenario_build_dir")
   fi
   docker build "${runner_build_arguments[@]}" "$repo_root" >/dev/null
 else
@@ -454,7 +476,6 @@ if [[ "$runner_placement" == "pod" ]]; then
   export SECONDBOX_SCENARIO_SERVICE_CONTROL="$repo_root/scripts/scenario-gvisor-pod-service-control.sh"
 fi
 
-run_dir="$(mktemp -d "$scenario_root/run.XXXXXX")"
 export SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR="$(mktemp -d /tmp/secondbox-attributed.XXXXXX)"
 pki_dir="$run_dir/pki"
 identity_dir="$run_dir/runner-identity"
@@ -576,13 +597,19 @@ export SECONDBOX_SCENARIO_ARTIFACT_MANIFEST_DIGEST="$manifest_digest"
 export SECONDBOX_SCENARIO_CGROUP_PARENT="secondbox-scenario-$$"
 export SECONDBOX_SCENARIO_BRIDGE_NAME="sbxq$(( $$ % 100000 ))"
 export SECONDBOX_SCENARIO_TAP_PREFIX="sq$(( $$ % 1000 ))"
+# Reserve both subnet types before Docker or the runner installs a route.
+# Locks stay open until the process exits, including its complete teardown.
+source "$repo_root/scripts/scenario-network.sh"
+scenario_network_lock_dir="$workspace_root/.scenario-network-locks"
 scenario_network_found=false
 for offset in $(seq 0 511); do
   scenario_network_index=$(( ($$ + offset) % 512 ))
   scenario_network_second_octet=$(( 18 + scenario_network_index / 256 ))
   scenario_network_third_octet=$(( scenario_network_index % 256 ))
   scenario_guest_cidr="198.${scenario_network_second_octet}.${scenario_network_third_octet}.0/24"
-  if [[ "$native_macos" == "true" ]] || [[ -z "$(ip route show "$scenario_guest_cidr")" ]]; then
+  if [[ "$native_macos" == "true" ]] ||
+     { [[ -z "$(ip route show "$scenario_guest_cidr")" ]] &&
+       scenario_reserve_network "$scenario_network_lock_dir" "$scenario_network_index" scenario_guest_network_lock; }; then
     scenario_network_found=true
     break
   fi
@@ -595,7 +622,9 @@ for offset in $(seq 1 511); do
   scenario_compose_second_octet=$(( 18 + scenario_compose_network_index / 256 ))
   scenario_compose_third_octet=$(( scenario_compose_network_index % 256 ))
   scenario_compose_cidr="198.${scenario_compose_second_octet}.${scenario_compose_third_octet}.0/24"
-  if [[ "$native_macos" == "true" ]] || [[ -z "$(ip route show "$scenario_compose_cidr")" ]]; then
+  if [[ "$native_macos" == "true" ]] ||
+     { [[ -z "$(ip route show "$scenario_compose_cidr")" ]] &&
+       scenario_reserve_network "$scenario_network_lock_dir" "$scenario_compose_network_index" scenario_compose_network_lock; }; then
     scenario_compose_network_found=true
     break
   fi
@@ -655,6 +684,8 @@ sweep_host_orphans() {
     return 0
   fi
   SECONDBOX_SCENARIO_SWEEP_IMAGE="$runner_image" \
+    SECONDBOX_SCENARIO_SWEEP_BRIDGE="$SECONDBOX_SCENARIO_BRIDGE_NAME" \
+    SECONDBOX_SCENARIO_SWEEP_CGROUP_PARENT="$SECONDBOX_SCENARIO_CGROUP_PARENT" \
     "$repo_root/scripts/scenario-sweep-host-orphans.sh"
 }
 
@@ -839,7 +870,8 @@ cleanup() {
     status=1
   fi
   if [[ "$status" -eq 0 && "$qualification_complete" == "true" &&
-        "$scenario_mode" == "suite" && -z "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
+        "$scenario_mode" == "suite" && -z "${SECONDBOX_SCENARIO_SHARD:-}" &&
+        -z "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
     qualification_evidence_temporary="$qualification_evidence.tmp.$$"
     qualified_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     wall_clock_seconds="$(( $(date +%s) - scenario_started_epoch ))"
@@ -1033,6 +1065,10 @@ if [[ "$scenario_mode" == "suite" ]]; then
   scenario_test_arguments=(-count=1 -tags=scenario_live -timeout=30m -v)
   if [[ -n "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
     scenario_test_arguments+=(-run "$SECONDBOX_SCENARIO_TEST_PATTERN")
+  fi
+  if [[ -n "$scenario_shard_pattern" ]]; then
+    echo "SecondBox scenario shard $SECONDBOX_SCENARIO_SHARD: $scenario_shard_pattern"
+    scenario_test_arguments+=(-run "$scenario_shard_pattern")
   fi
   scenario_test_output="$run_dir/scenario-test-output.log"
   go test "${scenario_test_arguments[@]}" ./tests/scenario 2>&1 |
