@@ -271,7 +271,7 @@ if [[ "$phase" == install ]]; then
     jq -e '.status == "purged"' "$source_operation/install-receipt.json" >/dev/null
 
     install_log="$qualification_root/install-candidate-${mode}.log"
-    printf '1\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
+    printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
     operation=''
     while IFS= read -r candidate_operation; do
       if [[ "$candidate_operation" != "$source_operation" ]] && jq -e --arg target "$candidate_version" '.release.version == $target' "$candidate_operation/install-plan.json" >/dev/null 2>&1; then
@@ -284,7 +284,7 @@ if [[ "$phase" == install ]]; then
   else
     setup_candidate_registry
     install_log="$qualification_root/install-${mode}.log"
-    setsid bash -c 'printf "1\ny\n1\ny\ny\n" | "$1" --accessible install --candidate-directory "$2"' bash "$deploy" "$release_directory" >"$install_log" 2>&1 &
+    setsid bash -c 'printf "1\ny\ny\n1\ny\ny\n" | "$1" --accessible install --candidate-directory "$2"' bash "$deploy" "$release_directory" >"$install_log" 2>&1 &
     install_pid=$!
     operation=''
     interrupted=false

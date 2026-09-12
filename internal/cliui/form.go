@@ -80,7 +80,7 @@ func (spec HuhForm) Run(ctx context.Context, handles FormHandles) error {
 		// Huh creates a new buffered Scanner for each field. Bound each read so
 		// one field cannot consume pasted answers intended for later fields or
 		// later form groups.
-		accessibleInput := boundedAccessibleReader(handles.Input)
+		accessibleInput := &endTrackingReader{target: boundedAccessibleReader(handles.Input)}
 		for groupIndex, fields := range accessibleGroups {
 			if title := spec.Groups[groupIndex].Title; title != "" {
 				if _, err := fmt.Fprintln(accessibleOutput, Sanitize(title)); err != nil {
@@ -88,7 +88,10 @@ func (spec HuhForm) Run(ctx context.Context, handles FormHandles) error {
 				}
 			}
 			for fieldIndex, field := range fields {
-				if err := field.RunAccessible(accessibleOutput, accessibleInput); err != nil {
+				if accessibleInput.ended {
+					return errors.New("SecondBox CLI accessible form: input ended before every field was answered")
+				}
+				if err := runAccessibleField(field, accessibleOutput, accessibleInput); err != nil {
 					return fmt.Errorf("SecondBox CLI accessible form: %w", err)
 				}
 				spec := spec.Groups[groupIndex].Fields[fieldIndex]
@@ -123,6 +126,34 @@ func (spec HuhForm) Run(ctx context.Context, handles FormHandles) error {
 }
 
 type ansiStrippingWriter struct{ target io.Writer }
+
+// endTrackingReader remembers that the scripted or piped answers ran out, so
+// the form can refuse the next field with a clear error instead of letting a
+// field misread end-of-input as a selection.
+type endTrackingReader struct {
+	target io.Reader
+	ended  bool
+}
+
+func (reader *endTrackingReader) Read(content []byte) (int, error) {
+	count, err := reader.target.Read(content)
+	if errors.Is(err, io.EOF) {
+		reader.ended = true
+	}
+	return count, err
+}
+
+// runAccessibleField converts a field's panic on exhausted input, which Huh's
+// accessible select raises as an index error, into an ordinary error so an
+// installer driven by piped answers fails with a message rather than a trace.
+func runAccessibleField(field huh.Field, output io.Writer, input io.Reader) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("input ended before the field was answered: %v", recovered)
+		}
+	}()
+	return field.RunAccessible(output, input)
+}
 
 type singleByteReader struct{ target io.Reader }
 
