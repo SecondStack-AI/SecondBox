@@ -56,7 +56,7 @@ func TestSnapshotNameMigrationReportsExistingDuplicates(t *testing.T) {
 	workspace, sandbox := seedLocalWorkspace(t, store, "migration-names", now)
 	first := seedReadyLocalSnapshot(t, store, "migration-name-first", sandbox, workspace, now)
 	second := seedReadyLocalSnapshot(t, store, "migration-name-second", sandbox, workspace, now)
-	migration, err := os.ReadFile("../../migrations/postgres/0023_snapshot_name_index.sql")
+	migration, err := os.ReadFile("../../migrations/postgres/0024_snapshot_name_index.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
