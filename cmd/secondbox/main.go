@@ -311,6 +311,24 @@ func runOperationalCommand(
 	if handled, err := runManagementCommand(ctx, session, args, output, http.DefaultClient); handled {
 		return true, err
 	}
+	switch args[0] {
+	case "create", "start", "stop", "rm", "delete", "ls", "list", "get":
+		return true, runLifecycleVerb(ctx, session, args[0], args[1:], output, http.DefaultClient)
+	case "cp":
+		return true, runCopyVerb(ctx, session, args[1:], output, http.DefaultClient)
+	case "ls-files":
+		return true, runListFilesVerb(ctx, session, args[1:], output, http.DefaultClient)
+	case "snapshot", "restore":
+		return true, runSnapshotVerb(ctx, session, args[0], args[1:], output, http.DefaultClient)
+	case "snapshots":
+		if len(args) < 2 || !isSnapshotAlias(args[1]) {
+			return true, runSnapshotVerb(ctx, session, args[0], args[1:], output, http.DefaultClient)
+		}
+	case "ports":
+		if len(args) > 1 && args[1] == "forward" {
+			return true, runPortForwardVerb(ctx, session, args[2:], output, http.DefaultClient)
+		}
+	}
 	if args[0] == "exec" && !isExecSubcommand(args) {
 		return true, runExecCommand(ctx, session, args[1:], execCommandEnvironment{
 			stdin: os.Stdin, stdout: output, stderr: os.Stderr,
@@ -398,6 +416,14 @@ func clientForSession(session cliSession, httpClient *http.Client) (*secondboxcl
 // from `exec <sandbox> -- command`.
 func isExecSubcommand(args []string) bool {
 	return len(args) >= 2 && (args[1] == "stream" || args[1] == "cancel")
+}
+
+func isSnapshotAlias(value string) bool {
+	switch value {
+	case "create", "list", "get", "delete", "restore":
+		return true
+	}
+	return false
 }
 
 // isShellSubcommand distinguishes the terminal negotiation aliases from
@@ -532,6 +558,7 @@ func commandSummary() string {
 	}
 	keys = append(
 		keys,
+		"create", "start", "stop", "rm", "delete", "ls", "list", "get", "cp", "ls-files", "ports forward", "snapshot", "snapshots", "restore", "snapshot rm",
 		"application login", "controller login", "diagnostics bundle", "exec", "login", "logout", "logs follow", "logs tail", "platform login",
 		"run", "sandbox shell", "shell", "timings operation", "timings sandbox",
 		"timings summary", "tenant", "subject", "application-authority", "usage", "whoami",

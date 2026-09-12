@@ -3500,6 +3500,7 @@
           "idempotency_conflict",
           "precondition_failed",
           "state_conflict",
+          "snapshot_name_conflict",
           "invalid_lifecycle_transition",
           "resource_expired",
           "tenant_suspended",

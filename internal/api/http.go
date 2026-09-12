@@ -1067,6 +1067,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "profile_unavailable", "Profile is unavailable", false
 	case errors.Is(err, ports.ErrSnapshotUnavailable):
 		return http.StatusConflict, "state_conflict", "Snapshot requires stopped committed disk state", false
+	case errors.Is(err, ports.ErrSnapshotNameConflict):
+		return http.StatusConflict, "snapshot_name_conflict", "Snapshot name is already held by a ready Snapshot in this Sandbox", false
 	case errors.Is(err, ports.ErrWorkspaceMutation):
 		return http.StatusConflict, "workspace_mutation_conflict", "Workspace has a conflicting mutation", false
 	case errors.Is(err, ports.ErrSandboxNotStopped):

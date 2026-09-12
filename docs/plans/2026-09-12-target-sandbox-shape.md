@@ -195,45 +195,45 @@ Route every everyday operation through `SandboxHandle` so no user computes
 a header. Names and identifiers are accepted everywhere the existing
 `resolveSandboxReference` (`cmd/secondbox/sandbox_reference.go`) is used.
 
-- [ ] Add `cmd/secondbox/verbs_lifecycle.go`: `create <profile> [--name]
+- [x] Add `cmd/secondbox/verbs_lifecycle.go`: `create <profile> [--name]
   [--metadata k=v] [--from <ref>]`, `start <sandbox>`, `stop <sandbox>`,
   `rm <sandbox>` (alias `delete`), `ls` (alias `list`, with `--all` for other
   states and `--name` filter through the `metadata` query parameter), and
   `get <sandbox>`. `start`, `stop`, and `rm` wait for the terminal state by
   default with `--no-wait` to return the Operation. `rm --force` skips the
   interactive confirmation that runs only on a TTY.
-- [ ] Add `cmd/secondbox/verbs_files.go`: `cp <src> <dst>` where exactly one
+- [x] Add `cmd/secondbox/verbs_files.go`: `cp <src> <dst>` where exactly one
   side is `<sandbox>:<absolute-path>`; directories recurse with `-r`; files
   stream through `SandboxHandle.WriteFile` / `ReadFile` with the `Digest`
   header the SDK already computes. Add `ls-files <sandbox> <path>` only if
   `listDirectory` output needs a human table; otherwise leave the alias.
-- [ ] Add `cmd/secondbox/verbs_ports.go`: `ports forward <sandbox>
+- [x] Add `cmd/secondbox/verbs_ports.go`: `ports forward <sandbox>
   <local>:<remote>` (or `<port>` for same-on-both) that creates a port
   session, listens on `127.0.0.1:<local>`, and pumps each accepted connection
   through `ConnectPortTunnel` (`sdk/go/secondboxclient`), holding a Lease for
   the session and closing the port session on exit or signal. `--bind` for a
   different local address.
-- [ ] Add `cmd/secondbox/verbs_snapshots.go`: `snapshot <sandbox> --name
+- [x] Add `cmd/secondbox/verbs_snapshots.go`: `snapshot <sandbox> --name
   <name>` (waits for `ready`), `snapshots <sandbox>` list, `restore <sandbox>
   <sandbox>/<name>`, `snapshot rm <sandbox>/<name>`.
-- [ ] Add a snapshot reference resolver next to `resolveSandboxReference`:
+- [x] Add a snapshot reference resolver next to `resolveSandboxReference`:
   `<sandbox>/<name>` lists that Sandbox's Snapshots and matches `name`;
   `snp_…` is used as is. Make the server reject a duplicate ready Snapshot
   name per Sandbox (typed `snapshot_name_conflict`, checked in
   `createSnapshot`), so the reference is unambiguous; existing duplicates are
   guarded by a migration message the way `0002_sandbox_name_index.sql` guards
   Sandbox names.
-- [ ] Register every verb in `commandSummary`, the `cliui` help, and the
+- [x] Register every verb in `commandSummary`, the `cliui` help, and the
   output-classification table so the coverage test in `cmd/secondbox` passes.
   `--output json` emits the API response bytes; TTY output uses the bounded
   views in `bounded_views.go`.
-- [ ] Cover each verb in `cmd/secondbox/*_test.go` against the existing
+- [x] Cover each verb in `cmd/secondbox/*_test.go` against the existing
   httptest transport: header computation is never in the CLI (assert the
   requests carry `If-Match`, `SecondBox-Generation`, `Idempotency-Key` from the
   SDK), name and identifier resolution, `cp` both directions and the
   refusal of two remote sides, `ports forward` end-to-end over a local
   WebSocket stub, and `rm` confirmation on TTY only.
-- [ ] Run `just test-cli-ui`, `go test ./cmd/secondbox -race`, `just test`.
+- [x] Run `just test-cli-ui`, `go test ./cmd/secondbox -race`, `just test`.
 
 ### Task 3: Requested resources within the Profile ceiling
 
