@@ -3,6 +3,17 @@ set -Eeuo pipefail
 umask 077
 fail() { echo "SecondBox gVisor qualification: $*" >&2; exit 1; }
 
+vm_idle() {
+  local projects processes
+  projects="$(sudo -n docker ps -a --format '{{.Label "com.docker.compose.project"}}')" || return
+  processes="$(ps -eo args=)" || return
+  if grep -q '^secondbox-suite-' <<<"$projects" ||
+    grep -Eq '^(bash|/bin/bash) .*[/](test-scenario(-gvisor(-pod)?)?|ux-gvisor-chain[^ /]*)[.]sh( |$)' <<<"$processes"; then
+    echo 'SecondBox gVisor qualification: VM is occupied by another scenario run; wait for its owner to finish and clean up' >&2
+    return 1
+  fi
+}
+
 # This entry point runs in the dedicated VM, under a root systemd service.
 if [[ "${1:-}" == --guest ]]; then
   source "$2"
@@ -21,6 +32,7 @@ if [[ "${1:-}" == --guest ]]; then
   }
   trap finish EXIT
   [[ ! -e /dev/kvm ]] || fail 'VM exposes /dev/kvm'
+  [[ "$(git rev-parse HEAD)" == "$source_commit" ]] || fail 'VM source changed before the guest build'
   export GOTOOLCHAIN="go$(awk '$1 == "go" {print $2; exit}' go.mod)"
   agent="$(mktemp)"
   (cd runner && CGO_ENABLED=0 go build -trimpath -o "$agent" ./cmd/secondbox-guest-agent)
@@ -29,12 +41,14 @@ if [[ "${1:-}" == --guest ]]; then
   mountpoint -q "$QUALIFY_GVISOR_REFLINK_MOUNT" || mount -o loop "$QUALIFY_GVISOR_REFLINK_IMAGE" "$QUALIFY_GVISOR_REFLINK_MOUNT"
   mkdir -p "$SECONDBOX_RUNNER_WORKSPACE_ROOT"
   for suite in gvisor gvisor-pod; do
+    [[ "$(git rev-parse HEAD)" == "$source_commit" ]] || fail 'VM source changed between suites'
     start=$SECONDS code=0
     name="$suite"; [[ "$suite" != gvisor ]] || name=gvisor-host
     scripts/test-scenario-$suite.sh 2>&1 | tee "$remote/$name.log" || code=$?
     printf '%s\t%s\t%s\n' "$name" "$code" "$((SECONDS-start))" >"$remote/$name.status"
     ((code == 0)) || status=1
   done
+  [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'VM source changed during qualification'
   exit "$status"
 fi
 
@@ -53,6 +67,7 @@ ssh_vm() { ssh "${ssh_options[@]}" -p "$QUALIFY_GVISOR_SSH_PORT" "$QUALIFY_GVISO
 if [[ "${1:-}" == --preflight ]]; then
   # If online, validate remote prerequisites before any local stages start.
   if (echo >/dev/tcp/127.0.0.1/"$QUALIFY_GVISOR_SSH_PORT") 2>/dev/null; then
+    { declare -f vm_idle; echo vm_idle; } | ssh_vm bash -s
     ssh_vm "test ! -e /dev/kvm && sudo -n true && test -d $QUALIFY_GVISOR_REPO/.git && test -x $QUALIFY_GVISOR_BUILD_ROOT/bin/runsc && test -d $QUALIFY_GVISOR_BUILD_ROOT/rootfs && test -f $QUALIFY_GVISOR_REFLINK_IMAGE && test -d $QUALIFY_GVISOR_REFLINK_MOUNT && sudo -n docker info >/dev/null && sudo -n k3s kubectl get nodes >/dev/null" || fail 'VM prerequisites failed'
   fi
   exit
@@ -80,20 +95,22 @@ for ((attempt=0; attempt<60; attempt++)); do
   sleep 2
 done
 $ready || fail 'VM SSH did not become ready'
+{ declare -f vm_idle; echo vm_idle; } | ssh_vm bash -s
 # Ship a self-contained commit without creating or moving any branch or tag.
 git bundle create "$directory/source.bundle" HEAD
 ssh_vm "mkdir -m 700 $remote"
 scp "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$directory/source.bundle" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/source.bundle"
 {
-  declare -p QUALIFY_GVISOR_REPO QUALIFY_GVISOR_BUILD_ROOT QUALIFY_GVISOR_REFLINK_IMAGE QUALIFY_GVISOR_REFLINK_MOUNT QUALIFY_GVISOR_SSH_USER run remote
+  declare -p QUALIFY_GVISOR_REPO QUALIFY_GVISOR_BUILD_ROOT QUALIFY_GVISOR_REFLINK_IMAGE QUALIFY_GVISOR_REFLINK_MOUNT QUALIFY_GVISOR_SSH_USER run remote source_commit
 } >"$directory/guest.env"
 scp "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$directory/guest.env" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/guest.env"
 # The remote lock covers checkout and the complete chain, including other hosts.
-ssh_vm bash -s -- "$QUALIFY_GVISOR_REPO" "$source_commit" "$remote" "$run" "$QUALIFY_GVISOR_SSH_USER" <<'REMOTE'
+{ declare -f vm_idle; cat <<'REMOTE'
 set -euo pipefail
 repo="$1" commit="$2" remote="$3" run="$4" user="$5"
 exec 9>/tmp/secondbox-suite-qualify.lock
 flock -n 9 || { echo 'SecondBox gVisor VM is already qualifying'; exit 1; }
+vm_idle
 sudo chown -R "$user:$user" "$repo"
 cd "$repo"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo 'SecondBox gVisor VM checkout is dirty'; exit 1; }
@@ -113,6 +130,7 @@ while [[ ! -f "$remote/result" ]]; do
 done
 sudo chmod -R a+rX "$remote"
 REMOTE
+} | ssh_vm bash -s -- "$QUALIFY_GVISOR_REPO" "$source_commit" "$remote" "$run" "$QUALIFY_GVISOR_SSH_USER"
 scp "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/*.log" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/*.status" "$directory/"
 # Keep the guest result separate from the supervisor result.
 ssh_vm "cat $remote/result" >"$directory/gvisor-result"

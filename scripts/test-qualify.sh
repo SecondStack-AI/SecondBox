@@ -54,4 +54,18 @@ run="$(basename "$(find .tmp/qualify -mindepth 1 -maxdepth 1 -type d)")"
 [[ "$(wc -l <".tmp/qualify/$run/timing.md")" == 13 ]]
 rg -q '\| test \| PASS' ".tmp/qualify/$run/timing.md"
 expect_failure 'FAIL \(17\)' scripts/qualify.sh --wait "$run"
+
+# Exercise the remote occupancy probe without a VM or privileged operations.
+source <(sed -n '/^vm_idle() {/,/^}/p' "$repo_root/scripts/qualify-gvisor.sh")
+sudo() { shift; "$@"; }
+docker() { printf '%s\n' "$vm_projects"; }
+ps() { printf '%s\n' "$vm_processes"; }
+vm_projects= vm_processes='/usr/local/bin/k3s server'
+vm_idle
+vm_projects=secondbox-suite-123
+expect_failure 'VM is occupied' vm_idle
+vm_projects= vm_processes='bash /tmp/ux-gvisor-chain.sh'
+expect_failure 'VM is occupied' vm_idle
+vm_processes='bash /home/debian/SecondBox/scripts/test-scenario.sh'
+expect_failure 'VM is occupied' vm_idle
 echo 'SecondBox qualification orchestration tests passed'
