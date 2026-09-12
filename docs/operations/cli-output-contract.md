@@ -37,10 +37,10 @@ without a classification fails command tests.
 | management mutations, mutating Sandbox aliases, and `resources check/apply` | optional request/file input | machine JSON; credential creation and rotation include the one-time bearer token | API/CLI |
 | `operation OPERATION_ID` | operation-defined | original response bytes | API |
 | `files read`, logs | no | raw file or log bytes | CLI/API |
-| `run`, `exec`, `shell`, `sandbox shell`, `exec stream` | guest stdin/control stream | guest stdout/control bytes | guest stderr and guest exit status |
+| `run` (including `--size`, resource axes, `--from`, `--keep`, `--tty`), `exec`, `shell`, `sandbox shell`, `exec stream` | guest stdin/control stream | guest stdout/control bytes; `run --json` and `exec --json` explicitly emit ExecOutcome JSON | guest stderr and guest exit status; TTY `run --keep` receipt reports identifier and resolved resources |
 | timings and diagnostics receipt | no | bounded report or declared archive/path | CLI |
-| `create`, `start`, `stop`, `rm`/`delete`, `snapshot`, `restore`, `snapshot rm` | `rm`/`delete` confirmation on TTY unless `--force` | bounded human result; JSON preserves the admitted Operation bytes even when waiting | API/CLI |
-| `ls`/`list`, `get`, `snapshots`, `ls-files` | no | bounded human view or original API page/resource JSON; `ls` lists every state the API returns | API/CLI |
+| `create` (including `--size`, resource axes, `--from`), `start`, `stop`, `rm`/`delete`, `snapshot`, `restore`, `snapshot rm` | `rm`/`delete` confirmation on TTY unless `--force` | bounded human result; JSON preserves the admitted Operation bytes even when waiting | API/CLI |
+| `ls`/`list`, `get`, `snapshots`, `ls-files` | no | bounded human view or original API page/resource JSON; `ls` lists every state the API returns; `get` human view includes resolved CPU, memory, and Workspace capacity | API/CLI |
 | `cp [-r] SRC DST` | no | human copy receipt; machine upload emits each original FileWriteResult, download writes API file bytes to the destination and leaves stdout empty | API/CLI |
 | `ports forward SANDBOX LOCAL:REMOTE` | no | human listener summary or original initial PortSession JSON; runs until interrupted | API/CLI |
 
@@ -70,10 +70,17 @@ operation response is required.
 
 Stored sessions include an explicit authority kind. A platform session cannot
 be populated with a controller credential, a controller session cannot be used
-for Sandbox commands, and only an application session stores Tenant and Subject
+for Sandbox commands, and platform sessions may carry explicit Tenant and
+Subject references for application routes. Application sessions require both
 references. Authority reads and lists never print bearer material. Creation and
 rotation output is the only recovery point for a generated bearer token; route
 redirected JSON immediately into protected secret handling.
+
+Resource-ceiling errors preserve the API problem and its `ceiling`/`requested`
+details. On a TTY stderr, `resources_exceed_profile` from `run` or `create`
+adds a hint naming the Profile, its ceiling, and resource flags to retry with.
+This does not add output to guest stdout or change the machine response path.
+Snapshot clone refusals retain the existing `state_conflict` problem.
 
 ## Release footprint measurement
 

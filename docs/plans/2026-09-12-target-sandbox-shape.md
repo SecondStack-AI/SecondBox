@@ -318,13 +318,13 @@ validation of this workflow.
 
 ### Task 6: Documentation and README
 
-- [ ] Rewrite the "Using the CLI" section of `README.md` around the target
+- [x] Rewrite the "Using the CLI" section of `README.md` around the target
   shape, keep the transport section as "Everything else", and keep the
   installer sentence truthful.
-- [ ] Update `docs/operations/cli-output-contract.md` classification for every
+- [x] Update `docs/operations/cli-output-contract.md` classification for every
   new verb.
-- [ ] Add a CHANGELOG entry under Unreleased following `update-changelog`.
-- [ ] Run `just test-install-docs` and `scripts/test-install-docs.sh`.
+- [x] Add a CHANGELOG entry under Unreleased following `update-changelog`.
+- [x] Run `just test-install-docs` and `scripts/test-install-docs.sh`.
 
 ## Deferred
 
