@@ -142,7 +142,7 @@ The installer writes a platform session with no tenant or subject reference
 (`internal/install/cli_login.go`), and its final stage reads records instead
 of executing anything.
 
-- [ ] Add `internal/install/tenancy.go` with a Go implementation of the
+- [x] Add `internal/install/tenancy.go` with a Go implementation of the
   bootstrap the shell script performs, using `sdk/go/secondboxclient`
   management helpers: platform-authenticated `createTenant` (with the
   installer's generated egress context name, the three standard Profile grants,
@@ -152,41 +152,41 @@ of executing anything.
   authority and return its bearer token once. Expiry ceilings use the
   contract maximum, not 24 hours; a development install must not stop working
   the next day.
-- [ ] Add `secondbox-deploy bootstrap-tenancy <operation-directory>` with
+- [x] Add `secondbox-deploy bootstrap-tenancy <operation-directory>` with
   `--tenant-ref`, `--subject-ref` (defaults `local` / `local-operator`),
   `--application`, and `--check`. It reads the recorded platform token path
   from the operation record, never from flags or environment. Idempotent: an
   existing Tenant or Subject with the same ref is a recorded no-op, not an
   error.
-- [ ] Add a recorded installer stage `tenancy_bootstrap` to
+- [x] Add a recorded installer stage `tenancy_bootstrap` to
   `install.StageSequence` (`internal/install/types.go`) between `readiness`
   and `smoke_execution`, completed in `cmd/secondbox-deploy/installer_resume.go`
   like its neighbors and resumable by index like every other stage. In the wizard it is one
   confirm ("Create a local tenant and subject so `secondbox run` works")
   defaulting to yes; `--unattended` accepts `--tenancy=no`. The operation
   record stores the refs and the stage evidence; it never stores a token.
-- [ ] Change `internal/install/cli_login.go` to write tenant and subject refs
+- [x] Change `internal/install/cli_login.go` to write tenant and subject refs
   into the platform session when the stage ran. Confirm `platform login`
   accepts both refs and that sandbox routes accept a platform session carrying
   them; if the CLI refuses, fix the CLI, not the design.
-- [ ] Make `runInstalledSmoke` in `cmd/secondbox-deploy/installer_resume.go`
+- [x] Make `runInstalledSmoke` in `cmd/secondbox-deploy/installer_resume.go`
   actually run `secondbox run agent-compartment-isolated -- /bin/echo hello`
   through the installed CLI when the tenancy stage ran (isolated needs no
   egress context and boots in 1 vCPU), then `secondbox run durable-coding`
   only when the runner advertises the generated context. Record the guest
   exit status and stdout in the evidence. Without the tenancy stage keep the
   present record-only smoke and say so in the receipt.
-- [ ] Fix `README.md` line 31 to describe what the installer does, and keep
+- [x] Fix `README.md` line 31 to describe what the installer does, and keep
   it true after this task.
-- [ ] Cover in `internal/install/tenancy_test.go` against an httptest control
+- [x] Cover in `internal/install/tenancy_test.go` against an httptest control
   plane: happy path, idempotent rerun, refusal when the platform token file is
   absent, and that no token appears in the operation record or receipt.
   Extend `cmd/secondbox-deploy` tests for the new stage and the unattended
   flag, and `tests/cliui` golden output for the receipt.
-- [ ] Update `docs/operations/guided-single-host-install.md` and
+- [x] Update `docs/operations/guided-single-host-install.md` and
   `docs/operations/deployment.md`; the shell script stays for the non-guided
   path and now documents that `bootstrap-tenancy` is the maintained form.
-- [ ] Run `just test-installer`, `just test-deployment`, `just test-cli-ui`,
+- [x] Run `just test-installer`, `just test-deployment`, `just test-cli-ui`,
   `just test-install-docs`.
 
 ### Task 2: Friendly lifecycle, file, port, and snapshot verbs

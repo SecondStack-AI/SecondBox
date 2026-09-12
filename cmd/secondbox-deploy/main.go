@@ -110,6 +110,9 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 		}
 		return cliui.WriteJSONPassthrough(os.Stdout, encoded.Bytes())
 	case "install":
+		if slices.Contains(arguments[1:], "--unattended") {
+			return runUnattendedInstall(context.Background(), arguments[1:], renderer)
+		}
 		if len(arguments) == 3 && arguments[1] == "--resume" {
 			return runInstallResume(context.Background(), arguments[2], renderer)
 		}
@@ -128,6 +131,8 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 		return runInstallPreflight(context.Background(), arguments[1:], renderer, install.SystemPreflightProbes())
 	case "uninstall":
 		return runInstallUninstall(context.Background(), arguments[1:], renderer)
+	case "bootstrap-tenancy":
+		return runBootstrapTenancy(context.Background(), arguments[1:], renderer)
 	case "update":
 		return runUpdateCommand(context.Background(), arguments[1:], renderer)
 	case "_install-host-apply":

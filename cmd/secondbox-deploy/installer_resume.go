@@ -39,6 +39,7 @@ type installResumeDependencies struct {
 	ComposeProject         func(string) (string, error)
 	Login                  func(context.Context, install.InstallPlan) ([]install.CreatedResource, error)
 	Readiness              func(context.Context, install.InstallPlan) (map[string]string, error)
+	Tenancy                func(context.Context, install.InstallPlan) (map[string]string, error)
 	Smoke                  func(context.Context, install.InstallPlan) (map[string]string, error)
 }
 
@@ -82,6 +83,10 @@ func systemInstallResumeDependencies(renderer cliui.Renderer) installResumeDepen
 			return waitForInstalledRunner(ctx, plan)
 		},
 		Smoke: runInstalledSmoke,
+		Tenancy: func(ctx context.Context, plan install.InstallPlan) (map[string]string, error) {
+			result, err := install.BootstrapTenancy(ctx, plan, install.TenancyOptions{TenantRef: plan.CLI.TenantRef, SubjectRef: plan.CLI.SubjectRef, EgressContext: expectedInstallerComposeProject(plan)}, httpClient)
+			return result.Evidence, err
+		},
 	}
 }
 
@@ -405,10 +410,33 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 		last = install.StageReadiness
 	}
 	if last == install.StageReadiness {
+		evidence := map[string]string{"status": "skipped; record-only smoke"}
+		if plan.CLI.TenantRef != "" {
+			if dependencies.Tenancy == nil {
+				return errors.New("SecondBox installer tenancy dependency is absent")
+			}
+			if err := runInstallPhase(ctx, renderer, "Local tenancy", "create Tenant and Subject", func() error {
+				var err error
+				evidence, err = dependencies.Tenancy(ctx, plan)
+				return err
+			}); err != nil {
+				return markResumeFailure(&receipt, install.StageTenancyBootstrap, install.FailureRetryable, dependencies.Now(), persist, err)
+			}
+		}
+		if err := receipt.CompleteStage(install.StageTenancyBootstrap, dependencies.Now(), evidence); err != nil {
+			return err
+		}
+		if err := persist(receipt); err != nil {
+			return err
+		}
+		last = install.StageTenancyBootstrap
+	}
+	if last == install.StageTenancyBootstrap {
 		var evidence map[string]string
 		if err := runInstallPhase(ctx, renderer, "Installation qualification", "authenticated RunnerPool and Runner readiness", func() error {
 			var smokeErr error
 			evidence, smokeErr = dependencies.Smoke(ctx, plan)
+			receipt.LastSmokeEvidence = evidence
 			return smokeErr
 		}); err != nil {
 			return markResumeFailure(&receipt, install.StageSmokeExecution, install.FailureRetryable, dependencies.Now(), persist, err)
@@ -598,10 +626,14 @@ func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contra
 			continue
 		}
 		expectedContext := expectedInstallerComposeProject(plan)
-		if !slices.Contains(runner.SupportedEgressContexts, expectedContext) {
+		if !slices.Contains(runner.SupportedEgressContexts, expectedContext) && plan.CLI.TenantRef == "" {
 			continue
 		}
-		return map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "egressContext": expectedContext, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}, true
+		evidence := map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}
+		if slices.Contains(runner.SupportedEgressContexts, expectedContext) {
+			evidence["egressContext"] = expectedContext
+		}
+		return evidence, true
 	}
 	return nil, false
 }
@@ -636,20 +668,46 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 	if err != nil {
 		return nil, err
 	}
-	command, stdout, stderr = installedCLICommand(
-		ctx, plan, "--output", "json", "diagnostics", "egress-contexts",
-	)
-	if err := command.Run(); err != nil {
-		return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight: %w: %s", err, cliui.Sanitize(stderr.String()))
+	if slices.Contains(runner.SupportedEgressContexts, expectedInstallerComposeProject(plan)) {
+		command, stdout, stderr = installedCLICommand(
+			ctx, plan, "--output", "json", "diagnostics", "egress-contexts",
+		)
+		if err := command.Run(); err != nil {
+			return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight: %w: %s", err, cliui.Sanitize(stderr.String()))
+		}
+		var preflight contracts.EgressContextPreflight
+		if err := json.Unmarshal(stdout.Bytes(), &preflight); err != nil {
+			return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight decode: %w", err)
+		}
+		if !preflight.Ready || preflight.Truncated {
+			return nil, errors.New("SecondBox installer qualification egress-context preflight is not ready and complete")
+		}
+		evidence["egressContextPreflight"] = "ready"
+	} else {
+		evidence["egressContextPreflight"] = "skipped; generated context not advertised"
 	}
-	var preflight contracts.EgressContextPreflight
-	if err := json.Unmarshal(stdout.Bytes(), &preflight); err != nil {
-		return nil, fmt.Errorf("SecondBox installer qualification egress-context preflight decode: %w", err)
+	evidence["smoke"] = "record-only; tenancy bootstrap not selected"
+	if plan.CLI.TenantRef != "" {
+		profiles := []string{"agent-compartment-isolated"}
+		if slices.Contains(runner.SupportedEgressContexts, expectedInstallerComposeProject(plan)) {
+			profiles = append(profiles, "durable-coding")
+		}
+		for _, profile := range profiles {
+			command, stdout, stderr := installedCLICommand(ctx, plan, "run", profile, "--", "/bin/echo", "hello")
+			err := command.Run()
+			evidence[profile+".stdout"] = stdout.String()
+			if command.ProcessState != nil {
+				evidence[profile+".exitStatus"] = strconv.Itoa(command.ProcessState.ExitCode())
+			}
+			if err != nil {
+				return evidence, fmt.Errorf("SecondBox installer guest smoke %s: %w: %s", profile, err, cliui.Sanitize(stderr.String()))
+			}
+			if stdout.tooLong || stdout.String() != "hello\n" {
+				return evidence, fmt.Errorf("SecondBox installer guest smoke %s: unexpected stdout", profile)
+			}
+		}
+		evidence["smoke"] = "guest execution verified"
 	}
-	if !preflight.Ready || preflight.Truncated {
-		return nil, errors.New("SecondBox installer qualification egress-context preflight is not ready and complete")
-	}
-	evidence["egressContextPreflight"] = "ready"
 	return evidence, nil
 }
 
@@ -718,6 +776,18 @@ func installerCommandEnvironment(configPath string) []string {
 }
 
 func writeInstallerSuccess(renderer cliui.Renderer, plan install.InstallPlan, receipt install.InstallReceipt) error {
+	profile := "agent-compartment-isolated"
+	for _, record := range receipt.CompletedStages {
+		if record.Stage == install.StageSmokeExecution && record.Evidence["durable-coding.exitStatus"] == "0" {
+			profile = "durable-coding"
+		}
+	}
+	next := cliui.InstallerTenancyNext("", "", installerPlannedPath(plan, "deployment"), profile)
+	for _, record := range receipt.CompletedStages {
+		if record.Stage == install.StageTenancyBootstrap && record.Evidence["tenantRef"] != "" {
+			next = cliui.InstallerTenancyNext(record.Evidence["tenantRef"], record.Evidence["subjectRef"], installerPlannedPath(plan, "deployment"), profile)
+		}
+	}
 	pairs := []cliui.Pair{{Key: "Release", Value: plan.Release.Version}, {Key: "Manifest", Value: installerPlannedPath(plan, "manifest")}, {Key: "Workspace", Value: plan.Storage.WorkspacePath}, {Key: "Generated authority", Value: installerPlannedPath(plan, "secrets")}, {Key: "Runner logs", Value: installerPlannedPath(plan, "logs")}, {Key: "Installed binaries", Value: installerPlannedPath(plan, "binary-directory")}, {Key: "CLI configuration", Value: plan.CLI.ConfigPath}, {Key: "Receipt", Value: filepath.Join(installerPlannedPath(plan, "deployment"), "install-receipt.json")}}
 	for _, record := range receipt.CompletedStages {
 		if record.Stage == install.StageReadiness {
@@ -726,7 +796,7 @@ func writeInstallerSuccess(renderer cliui.Renderer, plan install.InstallPlan, re
 			}
 		}
 	}
-	return renderer.WriteSummary(cliui.Summary{Title: "SecondBox single-host installation complete", Status: cliui.StatusComplete, Pairs: pairs, Next: "Health: secondbox whoami && secondbox runners list\nBootstrap an explicit Tenant and Subject before creating a Sandbox.\nSupport: secondbox-deploy install --support " + installerPlannedPath(plan, "deployment") + " --output /secure/path/secondbox-installer-support.tar.gz\nUninstall: secondbox-deploy uninstall " + installerPlannedPath(plan, "deployment") + "\nResume: secondbox-deploy install --resume " + installerPlannedPath(plan, "deployment")})
+	return renderer.WriteSummary(cliui.Summary{Title: "SecondBox single-host installation complete", Status: cliui.StatusComplete, Pairs: pairs, Next: "Health: secondbox whoami && secondbox runners list\n" + next + "\nSupport: secondbox-deploy install --support " + installerPlannedPath(plan, "deployment") + " --output /secure/path/secondbox-installer-support.tar.gz\nUninstall: secondbox-deploy uninstall " + installerPlannedPath(plan, "deployment") + "\nResume: secondbox-deploy install --resume " + installerPlannedPath(plan, "deployment")})
 }
 
 func runInstallUninstall(ctx context.Context, arguments []string, renderer cliui.Renderer) error {

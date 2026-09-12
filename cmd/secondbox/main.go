@@ -379,6 +379,9 @@ func runOperationalCommand(
 func clientForSession(session cliSession, httpClient *http.Client) (*secondboxclient.Client, error) {
 	switch session.authority {
 	case sessionAuthorityPlatform:
+		if session.tenantRef != "" || session.subjectRef != "" {
+			return secondboxclient.NewSecondBoxSubjectClient(session.url, session.token, session.tenantRef, session.subjectRef, httpClient)
+		}
 		return secondboxclient.NewSecondBoxClient(session.url, session.token, httpClient)
 	case sessionAuthorityTenantController:
 		return secondboxclient.NewSecondBoxTenantControllerClient(session.url, session.token, httpClient)

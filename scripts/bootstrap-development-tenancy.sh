@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 umask 077
 
+# For recorded guided operations, secondbox-deploy bootstrap-tenancy is the
+# maintained form. This helper remains for the explicit non-guided path.
+
 if [[ "$#" -ne 6 ]]; then
   echo "usage: scripts/bootstrap-development-tenancy.sh SECONDBOX_CLI URL PLATFORM_TOKEN_FILE TENANT_REF SUBJECT_REF PROFILE" >&2
   exit 2
