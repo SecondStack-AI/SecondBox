@@ -1,7 +1,7 @@
 ---
 title: Target Sandbox Shape
 date: 2026-09-12
-status: implemented
+status: in-progress
 owner: SecondStack
 provenance: UX audit of the user-facing surface against E2B, Daytona, Modal, and Vercel Sandbox, 2026-09-12
 ---
@@ -457,6 +457,77 @@ disk request resolved to 64 MiB; no new Profile grant is needed.
 
 The implementor's local gates pass. The shepherd still owns qualified KVM
 execution of `TestScenarioCLITargetShape`; no live scenario was run here.
+
+### Task 9: Dark Review findings on PR #126
+
+All six findings were verified against the code and are correct.
+
+- [ ] **Port forwarding requests sessions longer than its Lease (High).**
+  `ForwardPort` (`sdk/go/secondboxclient/port_forward.go`) acquires a
+  one-minute Lease, then requests PortSessions of
+  `min(policy.MaximumSessionSeconds, 86400)` seconds. Admission in
+  `internal/runnercontrol/postgres_port_sessions.go` refuses a session whose
+  expiry lies beyond the Lease expiry, so forwarding on standard
+  `durable-coding` (86,400 s) fails before accepting a connection. Bound every
+  session request, initial and per-connection, by the Lease's remaining
+  lifetime as the `LeaseKeeper` observed it from the service, minus a small
+  margin, and never above the policy maximum. Make the CLI and SDK test stubs
+  enforce production's rule (reject a session expiring after the Lease) so the
+  regression cannot hide again; add a test where the policy maximum exceeds
+  the Lease.
+- [ ] **One connection error cancels the whole forward (Medium).**
+  `fail()` in `ForwardPort` cancels the shared context on any per-connection
+  error. Keep per-connection failures scoped to that connection (log through
+  the existing error channel or return them at the end without cancelling);
+  cancel globally only for listener, Lease, or context failures. Test that
+  forwarding survives one local client resetting its connection while another
+  connection keeps flowing.
+- [ ] **Resolved sizes must be whole MiB (Medium).** Firecracker and gVisor
+  admission both refuse memory or disk that is not a multiple of 1 MiB
+  (`runner/internal/firecracker/assignment_backend.go`,
+  `runner/internal/gvisor/assignment_backend.go`), so an unaligned request
+  allocates state and quota but can never start. In `resolveSandboxResources`
+  refuse unaligned `memoryBytes` and `workspaceBytes` with a typed
+  `invalid_request` detail before allocation (a rounded disk is always
+  aligned; check the pre-rounding value for the ceiling-clamp path too), and
+  in `validateProfileRevisionSpec` require finite ceilings and `resources`
+  defaults to be whole MiB. State the constraint in the OpenAPI descriptions
+  and `docs/design/profiles-and-authorization.md`. Replace the
+  `1<<30 + 1` fixtures in store, integration, and scenario tests with aligned
+  values and add unaligned refusal tests. CLI byte parsing stays as is; the
+  server refuses and the CLI renders the detail.
+- [ ] **Sequential smoke runs race deletion (Medium).** `runInstalledSmoke`
+  (`cmd/secondbox-deploy/installer_resume.go`) runs `secondbox run` twice; `run`
+  returns after DELETE admission (`deleteRunSandbox` in
+  `cmd/secondbox/run_command.go`), while reconciliation still holds the first
+  Sandbox's capacity. On a host sized for one Instance the second run can be
+  refused. After each smoke run, poll `sandboxes get` through the installed
+  CLI until the Sandbox is deleted (404 or `deleted` state) with a bounded
+  wait before starting the next; record the wait in the evidence. Extend
+  `installer_guest_smoke_test.go` with distinct Sandbox IDs per run and a
+  fixture that reports the first Sandbox as still deleting for a few polls,
+  asserting the second create is not issued before deletion completes.
+- [ ] **Upgrade guidance for migration 0024 (Medium).** Migration
+  `0024_snapshot_name_index.sql` refuses to start the control plane when a
+  Sandbox holds two ready Snapshots with the same name. Document in
+  `docs/operations/deployment.md` (upgrade section) and
+  `docs/operations/guided-single-host-install.md` (update procedure) how to
+  list duplicates on the source release (`secondbox snapshots <sandbox>` or the
+  `snapshots list` alias) and delete the unwanted ones by identifier before
+  updating, and add the prerequisite to the CHANGELOG entry.
+- [ ] **Profile design doc contradicts the create contract (Medium).**
+  `docs/design/profiles-and-authorization.md`, "Creation and compatibility",
+  still says `POST /v1/sandboxes` contains only `profile` and metadata and
+  rejects resource fields. Rewrite that paragraph: optional `resources` axes,
+  omitted-axis defaults, ceilings and `null` axes, whole-MiB alignment, disk
+  rounding, the pinned immutable allocation on the Sandbox, quota accounting
+  from the pinned values, and the `resources_exceed_profile` and
+  `resources_fixed_by_profile` responses. Backend, image, lifecycle, network,
+  port, and placement fields remain rejected.
+- [ ] Run `go test ./sdk/go/secondboxclient ./cmd/secondbox ./cmd/secondbox-deploy -race -count=1`,
+  `just test-cli-ui`, `just test-contract`, `just test`, `just test-installer`,
+  `just test-install-docs`, `just lint`, `just verify-generated`,
+  `git diff --check`. The shepherd re-runs the qualified suites.
 
 ## Defects found by the qualified CLI scenario
 
