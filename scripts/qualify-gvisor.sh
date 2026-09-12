@@ -130,7 +130,7 @@ while [[ ! -f "$remote/result" ]]; do
   fi
   sleep 2
 done
-sudo chmod -R a+rX "$remote"
+sudo chown -R "$user:$user" "$remote"
 REMOTE
 } | ssh_vm bash -s -- "$QUALIFY_GVISOR_REPO" "$source_commit" "$remote" "$run" "$QUALIFY_GVISOR_SSH_USER"
 scp "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/*.log" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/*.status" "$directory/"
