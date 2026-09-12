@@ -368,6 +368,25 @@ Local gates passed with protoc 35.1 and isolated Go/linter caches. Additional
 `scenario_live` lint reports existing findings in `snapshot_test.go:76` and
 `runner_enrollment_test.go:171`; the Task 7 files have no reported findings.
 
+## Defects found by the qualified CLI scenario
+
+- **Cross-Sandbox clone of a used Workspace failed on the Runner (fixed).**
+  `tune2fs -U` refuses a `metadata_csum` filesystem whose last mount time is
+  newer than its last check, and every Snapshot of a Workspace a guest
+  mounted is in that state. The prior cross-Sandbox Snapshot scenario cloned
+  a Workspace that had never been mounted, so it never saw the refusal. The
+  Linux and Darwin drivers now run `e2fsck -f -y` only on that refusal and
+  rewrite again; a never-mounted template keeps the zero-fsck fast path.
+  Covered by `TestLinuxSetUUIDRewritesMountedSinceCheckFilesystem`.
+- **A Runner-failed clone command is retried without bound (open).** With
+  the defect above, the control plane re-dispatched the failing
+  `CLONE_FROM_SNAPSHOT` command about three times a second (2 076 attempts
+  in two minutes) instead of failing the create Operation, and the HTTP API
+  became unresponsive for the rest of the suite. Deleting the Sandbox then
+  reported `workspace_local_data_absent`. A permanent
+  `LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED` result should fail the
+  Operation, or at least back off; this needs its own plan.
+
 ## Deferred
 
 - **Images as a first-class axis.** Needs a Firecracker runner that verifies
