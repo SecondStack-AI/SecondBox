@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="$repo_root/scripts/compose-test.yml"
 binary_dir="$repo_root/.tmp/compose-test"
-project_name="secondbox-compose-test-$$"
+project_name="secondbox-suite-compose-test-$$"
 network_name="$project_name-network"
 
 for command in curl docker go jq node openssl; do
