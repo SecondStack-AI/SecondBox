@@ -31,6 +31,7 @@ import {
   type ReviseProfileRequest,
   type RestoreSnapshotRequest,
   type RemovePathRequest,
+  type SandboxResourceRequest,
   type Sandbox,
   type SandboxPage,
   type SandboxState,
@@ -65,6 +66,8 @@ export type {
   StartSandboxRequest,
   Problem,
   RelocateSandboxRequest,
+  SandboxResourceRequest,
+  SandboxResources,
   Sandbox,
   SandboxPage,
   SandboxState,
@@ -382,6 +385,7 @@ export class SecondBox {
       body: encodeJSONBody({
         profile: request.profile,
         metadata: request.metadata ?? {},
+        ...(request.resources === undefined ? {} : { resources: request.resources }),
         ...(request.sourceSnapshotId === undefined
           ? {}
           : { sourceSnapshotId: request.sourceSnapshotId }),
@@ -411,6 +415,7 @@ export class SecondBox {
     const { handle } = await this.createSandbox({
       profile: request.profile,
       ...(request.metadata === undefined ? {} : { metadata: request.metadata }),
+      ...(request.resources === undefined ? {} : { resources: request.resources }),
       ...(request.sourceSnapshotId === undefined
         ? {}
         : { sourceSnapshotId: request.sourceSnapshotId }),
@@ -1597,6 +1602,7 @@ export interface CreateSandboxOptions {
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
+  readonly resources?: SandboxResourceRequest;
   readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
@@ -1610,6 +1616,7 @@ export interface RunRequest extends Omit<BufferedExecRequest, "environment"> {
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
+  readonly resources?: SandboxResourceRequest;
   readonly environment?: BufferedExecRequest["environment"];
   readonly readyTimeoutMilliseconds: number;
   readonly signal?: AbortSignal;

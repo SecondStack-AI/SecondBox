@@ -41,7 +41,19 @@ func (client *Client) RequestJSON(ctx context.Context, operationID string, optio
 	if err != nil {
 		return err
 	}
-	decodeErr := json.NewDecoder(response.Body).Decode(target)
+	var decodeErr error
+	if capture, ok := ctx.Value(responseCaptureKey{}).(responseCapture); ok && capture.operation == operationID {
+		content, readErr := io.ReadAll(response.Body)
+		decodeErr = readErr
+		if decodeErr == nil {
+			decodeErr = json.Unmarshal(content, target)
+		}
+		if decodeErr == nil && capture.receive != nil {
+			capture.receive(content)
+		}
+	} else {
+		decodeErr = json.NewDecoder(response.Body).Decode(target)
+	}
 	closeErr := response.Body.Close()
 	if responseErr := errors.Join(decodeErr, closeErr); responseErr != nil {
 		return fmt.Errorf("SecondBox client decode and close %s response: %w", operationID, responseErr)

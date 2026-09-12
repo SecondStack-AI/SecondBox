@@ -45,11 +45,11 @@ func insertSandboxFixture(
 		t.Fatal(err)
 	}
 	_, err = controlPlaneStore.pool.Exec(t.Context(), `
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at,deleted_at
-		) VALUES ($1,$2,$3,'profile-1','prv_1','ready','running',1,$4,'',$5,'{}',1,$6,$6,$7)`,
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$4),$1,$2,$3,'profile-1','prv_1','ready','running',1,$4,'',$5,'{}',1,$6,$6,$7)`,
 		id, tenantRef, subjectRef, workspaceID, metadataJSON, createdAt, deletedAt,
 	)
 	return err

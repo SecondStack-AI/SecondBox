@@ -135,11 +135,11 @@ func TestCompletedCreateEffectReplayIsAbsorbedAfterMutationHandoff(t *testing.T)
 			'runner-home','creating',8589934592,1,'create','effect-create-replay',
 			'effect-create-replay','operation-create-replay',1,1,'queued','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			lifecycle_intent_kind,next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-create-replay'),
 			'sandbox-create-replay','tenant','subject','profile','revision','creating','running',
 			1,'workspace-create-replay','','{}','{}','create_workspace',$1,1,$1,$1
 		);

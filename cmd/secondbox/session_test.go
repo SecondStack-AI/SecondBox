@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/internal/cliui"
+	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 	"github.com/creack/pty"
 )
 
@@ -581,5 +582,46 @@ func TestRunReportsEveryCredentialSource(t *testing.T) {
 	err := run(context.Background(), []string{"sandboxes", "list"}, &output)
 	if err == nil || !strings.Contains(err.Error(), sessionSourceHint) {
 		t.Fatalf("run error = %v; want guidance naming every credential source", err)
+	}
+}
+
+func TestPlatformLoginPreservesApplicationReferences(t *testing.T) {
+	path := newSessionEnvironment(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer platform-token" {
+			t.Error("platform authority lost")
+		}
+		if r.URL.Path == "/v1/sandboxes" && (r.Header.Get("X-SecondBox-Tenant-Ref") != "local" || r.Header.Get("X-SecondBox-Subject-Ref") != "local-operator") {
+			t.Errorf("application refs lost: %v", r.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer server.Close()
+	session, err := resolveSession(cliSession{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runAuthorityLoginCommand(t.Context(), session, sessionAuthorityPlatform, []string{"--url", server.URL, "--token", "platform-token", "--tenant-ref", "local", "--subject-ref", "local-operator"}, &output, server.Client()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := readSessionFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Authority != "platform" || stored.TenantRef != "local" || stored.SubjectRef != "local-operator" {
+		t.Fatalf("stored session=%#v", stored)
+	}
+	session, err = resolveSession(cliSession{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := clientForSession(session, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListSandboxes(t.Context(), secondboxclient.SandboxListOptions{}); err != nil {
+		t.Fatal(err)
 	}
 }

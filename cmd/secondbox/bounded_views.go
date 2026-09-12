@@ -22,6 +22,16 @@ var boundedOperations = map[string]bool{
 
 func renderBoundedOperation(operationID string, content []byte, renderer cliui.Renderer) error {
 	switch operationID {
+	case "listSandboxDirectory":
+		var listing secondboxclient.DirectoryListing
+		if err := decodeView(content, &listing); err != nil {
+			return err
+		}
+		rows := make([]cliui.Row, 0, len(listing.Entries))
+		for _, item := range listing.Entries {
+			rows = append(rows, cliui.Row{"path": item.Path, "kind": item.Kind, "size": strconv.FormatInt(item.SizeBytes, 10)})
+		}
+		return renderer.WriteTable(cliui.Table{Columns: []cliui.Column{{Key: "path", Title: "PATH", MinWidth: 16}, {Key: "kind", Title: "KIND", Priority: 1, MinWidth: 10}, {Key: "size", Title: "BYTES", Priority: 2, MinWidth: 8}}, Rows: rows, Empty: "No files found."})
 	case "listProfiles":
 		var page secondboxclient.ProfilePage
 		if err := decodeView(content, &page); err != nil {
@@ -95,7 +105,7 @@ func renderBoundedOperation(operationID string, content []byte, renderer cliui.R
 		if err := decodeView(content, &item); err != nil {
 			return err
 		}
-		return renderer.WriteSummary(cliui.Summary{Title: "Sandbox", Status: viewStatus(item.State), Pairs: []cliui.Pair{{Key: "ID", Value: item.ID}, {Key: "Profile", Value: item.Profile}, {Key: "State", Value: item.State}, {Key: "Desired state", Value: item.DesiredState}, {Key: "Generation", Value: strconv.FormatInt(item.Generation, 10)}, {Key: "Revision", Value: strconv.FormatInt(item.Revision, 10)}}})
+		return renderer.WriteSummary(cliui.Summary{Title: "Sandbox", Status: viewStatus(item.State), Pairs: []cliui.Pair{{Key: "ID", Value: item.ID}, {Key: "Profile", Value: item.Profile}, {Key: "State", Value: item.State}, {Key: "Resources", Value: sandboxResourceSummary(item.Resources)}, {Key: "Desired state", Value: item.DesiredState}, {Key: "Generation", Value: strconv.FormatInt(item.Generation, 10)}, {Key: "Revision", Value: strconv.FormatInt(item.Revision, 10)}}})
 	case "getSnapshot":
 		var item secondboxclient.Snapshot
 		if err := decodeView(content, &item); err != nil {

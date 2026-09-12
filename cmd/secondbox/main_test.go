@@ -94,6 +94,7 @@ func TestEveryCommandHasOutputContract(t *testing.T) {
 		"platform login", "controller login", "application login", "tenant",
 		"controller-authority", "subject", "application-authority", "usage",
 		"deployment usage",
+		"create", "start", "stop", "rm", "delete", "ls", "list", "get", "cp", "ls-files", "ports forward", "snapshot", "snapshots", "restore", "snapshot rm",
 	} {
 		contract, found := commandContracts[command]
 		if !found || contract.Command != command || contract.Output == "" || contract.ExitOwner == "" {

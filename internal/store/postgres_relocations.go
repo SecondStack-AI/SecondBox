@@ -146,6 +146,7 @@ func (store *PostgresControlPlaneStore) RelocateSandbox(
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox Workspace relocation ProfileRevision decoding failed: %w", err)
 	}
+	spec = sandboxPlacementSpec(spec, locked.Resources)
 	if input.RunnerPool != "" && input.RunnerPool != spec.Pool {
 		return contracts.Operation{}, ports.ErrRelocationTargetUnavailable
 	}

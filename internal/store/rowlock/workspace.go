@@ -15,6 +15,7 @@ import (
 
 // SandboxWorkspace is the durable authority protected by the first two locks.
 type SandboxWorkspace struct {
+	Resources         contracts.SandboxResources
 	SandboxID         string
 	TenantRef         string
 	SubjectRef        string
@@ -54,7 +55,7 @@ func SandboxWorkspaceForSubject(
 	locked.SandboxID = sandboxID
 	if err := tx.QueryRow(ctx, `
 		SELECT tenant_ref,subject_ref,workspace_id,profile_revision_id,egress_context,state,desired_state,generation,revision,
-		       current_instance_id,COALESCE(reconcile_owner,'')
+		       current_instance_id,COALESCE(reconcile_owner,''),vcpu_count,memory_bytes,workspace_bytes
 		FROM secondbox.sandboxes
 		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3 AND state<>'deleted'
 		FOR UPDATE`,
@@ -64,6 +65,7 @@ func SandboxWorkspaceForSubject(
 		&locked.WorkspaceID, &locked.ProfileRevisionID, &locked.EgressContext, &locked.SandboxState,
 		&locked.DesiredState, &locked.Generation, &locked.Revision,
 		&locked.CurrentInstanceID, &locked.ReconcileOwner,
+		&locked.Resources.VCPUCount, &locked.Resources.MemoryBytes, &locked.Resources.WorkspaceBytes,
 	); err != nil {
 		return SandboxWorkspace{}, err
 	}
@@ -99,7 +101,7 @@ func SandboxWorkspaceByID(
 	locked.SandboxID = sandboxID
 	if err := tx.QueryRow(ctx, `
 		SELECT tenant_ref,subject_ref,workspace_id,profile_revision_id,egress_context,state,desired_state,generation,revision,
-		       current_instance_id,COALESCE(reconcile_owner,'')
+		       current_instance_id,COALESCE(reconcile_owner,''),vcpu_count,memory_bytes,workspace_bytes
 		FROM secondbox.sandboxes
 		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3
 		FOR UPDATE`,
@@ -109,6 +111,7 @@ func SandboxWorkspaceByID(
 		&locked.WorkspaceID, &locked.ProfileRevisionID, &locked.EgressContext, &locked.SandboxState,
 		&locked.DesiredState, &locked.Generation, &locked.Revision,
 		&locked.CurrentInstanceID, &locked.ReconcileOwner,
+		&locked.Resources.VCPUCount, &locked.Resources.MemoryBytes, &locked.Resources.WorkspaceBytes,
 	); err != nil {
 		return SandboxWorkspace{}, err
 	}
