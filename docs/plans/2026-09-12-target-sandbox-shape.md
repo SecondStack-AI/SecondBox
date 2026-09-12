@@ -1,7 +1,7 @@
 ---
 title: Target Sandbox Shape
 date: 2026-09-12
-status: implemented
+status: in-progress
 owner: SecondStack
 provenance: UX audit of the user-facing surface against E2B, Daytona, Modal, and Vercel Sandbox, 2026-09-12
 ---
@@ -367,6 +367,82 @@ memory to 1 GiB and retains the 64 MiB Workspace and four-Snapshot policy.
 Local gates passed with protoc 35.1 and isolated Go/linter caches. Additional
 `scenario_live` lint reports existing findings in `snapshot_test.go:76` and
 `runner_enrollment_test.go:171`; the Task 7 files have no reported findings.
+
+### Task 8: Size bounded by quota and Runner admission, not by the Profile
+
+Task 3 made the Profile's `resources` both default and ceiling. That was the
+smallest compatible step, not a principle: Tenant and Subject quota already
+account vCPU and memory per Sandbox, and Runner admission already refuses
+what a host cannot hold. The Profile keeps owning image, network, ports,
+execution bounds, and startup mode; it stops being the size catalog.
+
+Decisions:
+
+- `ProfileRevisionSpec.resourceCeiling` is an optional object. Absent means
+  what Task 3 shipped: `resources` is the ceiling. Present, it carries all
+  three axes `vcpuCount`, `memoryBytes`, `workspaceBytes`, each either a
+  positive integer at or above the matching `resources` value or `null`,
+  meaning the Profile places no bound on that axis and only quota and Runner
+  admission do. No axis may be omitted; the control plane never infers one.
+- A `snapshot_resume` revision rejects `resourceCeiling` at publish time,
+  because a resume template is keyed by vCPU count and memory bytes
+  (`runner/internal/firecracker/snapshot_template.go`). A create request on
+  a resume Profile that states any axis different from `resources` is refused
+  with the new typed problem `resources_fixed_by_profile`; equal values are
+  accepted.
+- A requested `workspaceBytes` is rounded up to the next power of two before
+  the ceiling check, so the WorkspaceStore serves a small set of ext4
+  templates rather than one per arbitrary value. The Sandbox pins and reports
+  the rounded value. An omitted axis still takes the Profile value unrounded
+  (standard bundles use 50 GiB).
+- The Runner prewarms every power-of-two ext4 template from the schema
+  minimum that is at or below its configured maximum Workspace capacity,
+  in addition to that maximum, so a rounded request never formats on the
+  create path.
+- vCPU and memory stay continuous integers.
+
+- [ ] OpenAPI (`contracts/openapi/v1/secondbox.openapi.json`,
+  `ProfileRevisionSpec`) and `pkg/contracts/contracts.go`: add
+  `resourceCeiling` with per-axis `integer | null`; add problem code
+  `resources_fixed_by_profile`; regenerate both SDKs and the TypeScript
+  public surface (`just verify-generated` with the pinned protoc on PATH).
+- [ ] `validateProfileRevisionSpec` (`internal/service/control_plane_service.go`):
+  ceiling axes at or above `resources`; ceiling rejected on
+  `snapshot_resume`; every axis present when the object is present.
+- [ ] `resolveSandboxResources` (`internal/store/sandbox_resources.go`):
+  round `workspaceBytes` requests up to a power of two (never below the
+  schema minimum), apply the per-axis ceiling or the `resources` value when
+  the object is absent, skip the bound for a `null` axis, refuse any
+  difference on resume Profiles with `resources_fixed_by_profile`. The
+  `resources_exceed_profile` problem's `ceiling` reports the effective bound
+  and omits a `null` axis.
+- [ ] Runner prewarm (`runner/internal/workspacestore/store.go`, the
+  `ensureTemplate` call at open with `templateCapacityBytes`): also ensure
+  each power-of-two capacity from `minimumExt4Bytes` up to
+  `templateCapacityBytes`. Keep the validation of existing templates exact.
+- [ ] Standard bundles are unchanged (absent ceiling). Add
+  `examples/resources/durable-coding-flexible.json`: `durable-coding`'s spec
+  with `resourceCeiling: {vcpuCount: null, memoryBytes: null,
+  workspaceBytes: 274877906944}` validated by a test through the resource
+  engine like the registries example.
+- [ ] CLI: `--disk` help and the retained-Sandbox summary state that disk
+  rounds up to a power of two; render `resources_fixed_by_profile` with a
+  hint naming the Profile's fixed size.
+- [ ] Cover: contract tests for the schema and both problem codes; service
+  tests for ceiling validation and the resume rejection; store tests for
+  rounding, `null` axes, absent object, and the resume refusal; a
+  `tests/integration` test creating above the Profile default but under
+  quota on a `null`-ceiling Profile and refused by quota beyond it; a
+  workspacestore test proving every power-of-two template exists after open;
+  extend `TestScenarioCLITargetShape` (or add a sibling scenario) so a
+  `null`-memory-ceiling Profile boots a Sandbox with `--memory` above the
+  Profile default, and `--disk` reports the rounded value.
+- [ ] Update `docs/design/profiles-and-authorization.md`, the README size
+  section, `docs/operations/sdk-cli-and-flue.md`, and the CHANGELOG entry.
+- [ ] Run `just verify-generated`, `just test-contract`, `just test`,
+  `just test-standard-resources`, `just test-cli-ui`, `just lint`,
+  `go test ./runner/internal/workspacestore`, `git diff --check`.
+  `just test-scenario` on the KVM host is the shepherd's gate.
 
 ## Defects found by the qualified CLI scenario
 
