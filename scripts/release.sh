@@ -54,7 +54,8 @@ done
 nested_file=/sys/module/kvm_amd/parameters/nested
 [[ -f "$nested_file" ]] || nested_file=/sys/module/kvm_intel/parameters/nested
 [[ "$(cat "$nested_file")" =~ ^(1|Y)$ ]] || fail 'installer guests require nested KVM'
-docker buildx inspect >/dev/null
+: "${BUILDX_BUILDER:?set BUILDX_BUILDER to an operator-owned release builder}"
+docker buildx inspect "$BUILDX_BUILDER" >/dev/null
 virsh -c qemu:///system uri >/dev/null
 domains="$(virsh -c qemu:///system list --all --name)"
 ! grep -q '^sbq-' <<<"$domains" || fail 'libvirt has sbq- domains; wait for their owner'

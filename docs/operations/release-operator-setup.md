@@ -44,7 +44,16 @@ qualification, and `deploy/release.env.example` to
 supply `SECONDBOX_TEST_DATABASE_URL` for a disposable test PostgreSQL database.
 The release file includes every qualification key and is the sole configuration
 used by `just release`; it does not recover inputs from an older release directory.
-Run `npm ci --ignore-scripts` once in the checkout. Create the configured
+Run `npm ci --ignore-scripts` once in the checkout. Provision your own named
+Buildx builder without changing the caller's selected builder, and set
+`BUILDX_BUILDER` in the release file:
+
+```sh
+docker buildx create --name secondbox-suite-release --driver docker-container \
+  --driver-opt image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+```
+
+ Create the configured
 `RELEASE_OUTPUT_ROOT` and `SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT` parents;
 the latter must be on Btrfs or XFS and traversable by the system libvirt account.
 The checked-in examples describe the reviewed release host using public paths.
