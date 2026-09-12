@@ -320,6 +320,48 @@ schema.
 - [ ] Add a CHANGELOG entry under Unreleased following `update-changelog`.
 - [ ] Run `just test-install-docs` and `scripts/test-install-docs.sh`.
 
+### Task 7: Qualified CLI target-shape scenario
+
+The implementor writes and locally verifies the test; the shepherd runs the
+qualified Firecracker scenario suite before merging.
+
+- [x] Add `tests/scenario/cli_target_shape_test.go` under `scenario_live`,
+  using the existing fixture, explicit scenario application authority,
+  runner/Profile helpers, polling, and failure cleanup. Build the real CLI
+  once per test binary in a temporary directory and isolate subprocess
+  configuration from ambient sessions. Never print credentials.
+- [x] Create a Snapshot-enabled harness Profile with a 1 GiB memory ceiling
+  and explicitly grant it in the scenario bootstrap. Exercise retained
+  `run` with 1 vCPU/1 GiB, JSON `get`, and an above-ceiling refusal.
+- [x] Exercise file upload, guest `exec`, download with byte comparison,
+  named Snapshot creation, `create --from <sandbox>/golden`, clone start,
+  and guest reads proving the cloned Workspace contains the file.
+- [x] Exercise stop/start, filtered `ls`, and `rm --force` for both
+  Sandboxes, asserting subprocess stdout/exit status and terminal states.
+  Bound the workflow to two minutes; omit ports because this Profile has none.
+- [x] Add untagged subprocess checks against an HTTP stub for resource
+  arguments/refusal, session isolation, file bytes/digest, guest streams and
+  exit status, and cancellation. Keep real compute verification separate.
+- [x] Run `go vet ./tests/scenario ./cmd/secondbox`,
+  `go test -c -o /dev/null ./tests/scenario`, their `scenario_live`
+  equivalents, the stub test, `just verify-generated`, `just test`,
+  `just lint`, and `git diff --check`.
+- [ ] Shepherd: run `just test-scenario` on the qualified Firecracker host
+  and confirm the workflow runtime before merge.
+
+Task 7 deviations from the requested command sequence: Snapshots require a
+stopped Sandbox, so explicitly stop the source before Snapshot creation.
+The running Profile required by `run` also boots cloned Sandboxes; wait for
+clone creation and stop it before testing explicit `start`. Piped lifecycle
+and Snapshot stdout currently contains the admitted Operation, so assert that
+JSON plus the terminal resource state through the fixture. The original
+harness Profile has a 256 MiB ceiling; this dedicated Profile raises only
+memory to 1 GiB and retains the 64 MiB Workspace and four-Snapshot policy.
+
+Local gates passed with protoc 35.1 and isolated Go/linter caches. Additional
+`scenario_live` lint reports existing findings in `snapshot_test.go:76` and
+`runner_enrollment_test.go:171`; the Task 7 files have no reported findings.
+
 ## Deferred
 
 - **Images as a first-class axis.** Needs a Firecracker runner that verifies
