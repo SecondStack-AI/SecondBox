@@ -14,6 +14,7 @@ import (
 
 // PortConnection is a Runner-private stream to one guest loopback port.
 type PortConnection interface {
+	// Read returns at most the requested number of bytes; a short read retains unused capacity.
 	Read(context.Context, int) ([]byte, error)
 	Write(context.Context, []byte) error
 	Close() error
@@ -185,6 +186,10 @@ func (s *RunnerProtocolService) pumpPortReads(
 			return
 		}
 		data, err := state.connection.Read(ctx, int(credit))
+		if uint64(len(data)) > credit {
+			reportRunnerAsyncError(asyncErrors, fmt.Errorf("SecondBox runner Port read exceeds reserved credit"))
+			return
+		}
 		if unused := credit - uint64(len(data)); unused > 0 {
 			if creditErr := state.credit.add(unused); creditErr != nil {
 				reportRunnerAsyncError(asyncErrors, creditErr)
