@@ -84,13 +84,13 @@ About 55 minutes serial when everything passes. Today it took six hours:
 
 ## Task 2: `just qualify`
 
-- [ ] `scripts/qualify.sh [--tier pr|release] [--only gates|firecracker|gvisor]`
+- [x] `scripts/qualify.sh [--tier pr|release] [--only gates|firecracker|gvisor]`
   reading `~/.config/secondbox/qualify.env`, with `deploy/qualify.env.example`
   checked in and every key documented: microVM artifacts dir, artifact public
   key and fingerprint, workspace root, runtime and toolchain digests, gVisor VM
   directory (qcow2, seed, key), VM SSH port, VM build root and reflink mount.
   Missing or invalid values fail before anything starts.
-- [ ] PR tier runs, concurrently: the ten non-KVM gates (one process each),
+- [x] PR tier runs, concurrently: the ten non-KVM gates (one process each),
   and the Firecracker suite sharded across N stacks (N from
   `QUALIFY_FIRECRACKER_SHARDS`, default 4). Target: under 6 minutes on this
   host.
@@ -103,17 +103,85 @@ About 55 minutes serial when everything passes. Today it took six hours:
   needed, run the host and pod suites as root under `systemd-run`, copy both
   evidence files back into `.tmp`, and leave the VM running. Target: under
   16 minutes on this host.
-- [ ] Every stage streams to its own log under `.tmp/qualify/<run>/` and the
+- [x] Every stage streams to its own log under `.tmp/qualify/<run>/` and the
   command ends with a table of stage, result, and wall clock; the exit status
   is non-zero if any stage failed. Stages run detached from the calling shell
   (`systemd-run --user` when available, `setsid` otherwise) so a dropped
   terminal does not kill them; `just qualify --wait <run>` reattaches.
-- [ ] Toolchain footguns: `scripts/verify-generated.sh` installs the pinned
+- [x] Toolchain footguns: `scripts/verify-generated.sh` installs the pinned
   protoc into `.tmp/protoc` when the system version differs and uses it;
   `Justfile` sets `GOTOOLCHAIN` from `go.mod` so shims cannot change the Go
   version; `just qualify` refuses a dirty tree in release tier.
 - [ ] Prove it: run `just qualify --tier pr` and `just qualify --tier release`
   on this host and record both timing tables in the plan.
+
+### Task 2 validation
+
+The ten gates are `verify-generated`, `test`, `test-contract`, `test-compose`,
+`test-image-policy`, `test-sdk-packages`, `test-deployment`, `test-install-docs`,
+`test-release-workflow`, and `lint`. Packaging waits for generated SDK output;
+the processes otherwise start concurrently. Lint uses a cache per checkout:
+sharing cached source paths across worktrees caused existing path exclusions to
+miss. No lint rule or test assertion was changed.
+
+The independent Task 2 checkout passed PR qualification with one stack in
+8m03s (`20260912T215226-2424972`, source `8aabe8f`); its harness lacks Task 1.
+The intended four-shard PR tier passed in **5m46s** in an isolated checkout
+combining Task 1 with Task 2 (`20260912T220613-2997563`, source
+`c3720a4443abe6dde1487cac83712a9099bd7761`). Task 2's branch does not include
+the Task 1 dependency.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| firecracker-1 | PASS | 2m 50s |
+| firecracker-2 | PASS | 2m 33s |
+| firecracker-3 | PASS | 5m 46s |
+| firecracker-4 | PASS | 2m 36s |
+| lint | PASS | 0m 1s |
+| test-compose | PASS | 0m 30s |
+| test-contract | PASS | 0m 4s |
+| test-deployment | PASS | 0m 2s |
+| test-image-policy | PASS | 0m 3s |
+| test-install-docs | PASS | 0m 2s |
+| test-release-workflow | PASS | 0m 0s |
+| test-sdk-packages | PASS | 0m 11s |
+| test | PASS | 2m 3s |
+| verify-generated | PASS | 0m 6s |
+| Total | PASS | 5m 46s |
+
+Release attempt `20260912T215616-2591202` (assembled source `925e2a7`) did
+**not** qualify. Firecracker passed, but the VM stage was stopped after another
+operator's concurrent run was discovered. The lint failure below came from the
+cross-worktree cache issue described above; the unchanged lint configuration
+subsequently passed with an isolated cache.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| firecracker | PASS | 8m 2s |
+| gvisor | FAIL (1), interrupted | 2m 8s |
+| lint | FAIL (1), cache paths | 0m 9s |
+| test-compose | PASS | 0m 24s |
+| test-contract | PASS | 0m 10s |
+| test-deployment | PASS | 0m 6s |
+| test-image-policy | PASS | 0m 5s |
+| test-install-docs | PASS | 0m 3s |
+| test-release-workflow | PASS | 0m 1s |
+| test-sdk-packages | PASS | 0m 13s |
+| test | PASS | 2m 37s |
+| verify-generated | PASS | 0m 9s |
+| Total | FAIL | 8m 2s |
+
+Full release proof remains blocked on the no-KVM VM. After operator unit
+`ux-gvisor-chain11` became inactive, its project `secondbox-suite-628122` still
+had four containers, a network, and a volume. The final assembled source
+`8ce10d194dee5c5074ac6418bf6ba68eaa499412` correctly refused that occupied VM
+before starting any stage. Cleanup requires its owner or an explicit exception
+to the instruction forbidding changes to resources created by others.
+
+The driver now checks occupancy immediately before checkout and source identity
+throughout the guest chain. Earlier independent release testing also reproduced
+the known pre-Task-1 runner restart failure. The QEMU cold-boot path remains
+untested because the existing VM is running and belongs to the operator.
 
 ## Task 3: `just release VERSION`
 
