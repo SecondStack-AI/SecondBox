@@ -462,7 +462,7 @@ execution of `TestScenarioCLITargetShape`; no live scenario was run here.
 
 All six findings were verified against the code and are correct.
 
-- [ ] **Port forwarding requests sessions longer than its Lease (High).**
+- [x] **Port forwarding requests sessions longer than its Lease (High).**
   `ForwardPort` (`sdk/go/secondboxclient/port_forward.go`) acquires a
   one-minute Lease, then requests PortSessions of
   `min(policy.MaximumSessionSeconds, 86400)` seconds. Admission in
@@ -475,14 +475,14 @@ All six findings were verified against the code and are correct.
   enforce production's rule (reject a session expiring after the Lease) so the
   regression cannot hide again; add a test where the policy maximum exceeds
   the Lease.
-- [ ] **One connection error cancels the whole forward (Medium).**
+- [x] **One connection error cancels the whole forward (Medium).**
   `fail()` in `ForwardPort` cancels the shared context on any per-connection
   error. Keep per-connection failures scoped to that connection (log through
   the existing error channel or return them at the end without cancelling);
   cancel globally only for listener, Lease, or context failures. Test that
   forwarding survives one local client resetting its connection while another
   connection keeps flowing.
-- [ ] **Resolved sizes must be whole MiB (Medium).** Firecracker and gVisor
+- [x] **Resolved sizes must be whole MiB (Medium).** Firecracker and gVisor
   admission both refuse memory or disk that is not a multiple of 1 MiB
   (`runner/internal/firecracker/assignment_backend.go`,
   `runner/internal/gvisor/assignment_backend.go`), so an unaligned request
@@ -496,7 +496,7 @@ All six findings were verified against the code and are correct.
   `1<<30 + 1` fixtures in store, integration, and scenario tests with aligned
   values and add unaligned refusal tests. CLI byte parsing stays as is; the
   server refuses and the CLI renders the detail.
-- [ ] **Sequential smoke runs race deletion (Medium).** `runInstalledSmoke`
+- [x] **Sequential smoke runs race deletion (Medium).** `runInstalledSmoke`
   (`cmd/secondbox-deploy/installer_resume.go`) runs `secondbox run` twice; `run`
   returns after DELETE admission (`deleteRunSandbox` in
   `cmd/secondbox/run_command.go`), while reconciliation still holds the first
@@ -507,7 +507,7 @@ All six findings were verified against the code and are correct.
   `installer_guest_smoke_test.go` with distinct Sandbox IDs per run and a
   fixture that reports the first Sandbox as still deleting for a few polls,
   asserting the second create is not issued before deletion completes.
-- [ ] **Upgrade guidance for migration 0024 (Medium).** Migration
+- [x] **Upgrade guidance for migration 0024 (Medium).** Migration
   `0024_snapshot_name_index.sql` refuses to start the control plane when a
   Sandbox holds two ready Snapshots with the same name. Document in
   `docs/operations/deployment.md` (upgrade section) and
@@ -515,7 +515,7 @@ All six findings were verified against the code and are correct.
   list duplicates on the source release (`secondbox snapshots <sandbox>` or the
   `snapshots list` alias) and delete the unwanted ones by identifier before
   updating, and add the prerequisite to the CHANGELOG entry.
-- [ ] **Profile design doc contradicts the create contract (Medium).**
+- [x] **Profile design doc contradicts the create contract (Medium).**
   `docs/design/profiles-and-authorization.md`, "Creation and compatibility",
   still says `POST /v1/sandboxes` contains only `profile` and metadata and
   rejects resource fields. Rewrite that paragraph: optional `resources` axes,
@@ -524,10 +524,25 @@ All six findings were verified against the code and are correct.
   from the pinned values, and the `resources_exceed_profile` and
   `resources_fixed_by_profile` responses. Backend, image, lifecycle, network,
   port, and placement fields remain rejected.
-- [ ] Run `go test ./sdk/go/secondboxclient ./cmd/secondbox ./cmd/secondbox-deploy -race -count=1`,
+- [x] Run `go test ./sdk/go/secondboxclient ./cmd/secondbox ./cmd/secondbox-deploy -race -count=1`,
   `just test-cli-ui`, `just test-contract`, `just test`, `just test-installer`,
   `just test-install-docs`, `just lint`, `just verify-generated`,
   `git diff --check`. The shepherd re-runs the qualified suites.
+
+Task 9 implementation notes: every PortSession duration uses the observed Lease
+expiry minus a one-second admission margin. Connection errors are retained and
+returned when forwarding ends. Whole-MiB refusals include a typed public field
+detail and title; resolution also guards legacy unaligned ceilings after disk
+clamping. The existing scenario already uses aligned 1 GiB memory and 33 MiB
+disk, so it remains unchanged. Smoke runs receive unique names because `run`
+prints only guest output; the installed CLI resolves the resulting ID, then
+polls deletion for up to two minutes and records its duration and outcome.
+
+Local Task 9 gates passed. `just test-installer` ran with an explicitly
+unsupported `DOCKER_CONTEXT`, which makes its unattended host preflight report
+a blocked Docker selection before invoking Docker or Compose; this does not
+qualify the host. No Docker Compose or qualified compute suite was run. The
+shepherd owns review, merge, and qualified scenario execution.
 
 ## Defects found by the qualified CLI scenario
 
