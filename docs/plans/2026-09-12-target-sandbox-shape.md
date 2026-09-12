@@ -563,6 +563,17 @@ shepherd owns review, merge, and qualified scenario execution.
   `LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED` result should fail the
   Operation, or at least back off; this needs its own plan.
 
+- **Placement refuses a create for one heartbeat after a deletion (open).**
+  On a host sized for one Instance, creating a Sandbox right after deleting
+  the previous one is refused with `home_runner_unavailable` (503,
+  non-retryable) although the deleted Sandbox is gone: home selection reads
+  the Runner's last reported reservation, which the Runner refreshes on its
+  next heartbeat. Found twice by the installer qualification, once in the
+  guest smoke and once in the driver's workload create; both now retry for up
+  to a minute. The control plane should either exclude terminated assignments
+  from the reported reservation immediately or mark the refusal retryable with
+  a `retryAfterMilliseconds`, so clients do not need to guess.
+
 ## Deferred
 
 - **Images as a first-class axis.** Needs a Firecracker runner that verifies
