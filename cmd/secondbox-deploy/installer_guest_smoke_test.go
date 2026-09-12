@@ -42,6 +42,8 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 			executions, deletions := 0, 0
 			sandboxes := map[string]contracts.Sandbox{}
 			deletionPolls := map[string]int{}
+			assignmentPolls := map[string]int{}
+			lastActiveAssignments := int64(0)
 			currentID := ""
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mutex.Lock()
@@ -58,8 +60,34 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 				case "GET /v1/runners/" + runner.ID:
 					_ = json.NewEncoder(w).Encode(runner)
 				case "GET /v1/diagnostics/egress-contexts":
-					_, _ = w.Write([]byte(`{"ready":true,"truncated":false}`))
+					// The deleted Sandbox's assignment lingers for two preflight polls
+					// after the deleted state; the next create must wait for it.
+					active := int64(0)
+					for id, sandbox := range sandboxes {
+						if sandbox.State == "deleting" || (sandbox.State == "deleted" && assignmentPolls[id] < 2) {
+							active = 1
+							if sandbox.State == "deleted" {
+								assignmentPolls[id]++
+							}
+						}
+					}
+					lastActiveAssignments = active
+					context := expectedInstallerComposeProject(plan)
+					_ = json.NewEncoder(w).Encode(contracts.EgressContextPreflight{
+						Ready:        true,
+						Requirements: []contracts.EgressContextRequirement{{TenantRef: "local", ProfileName: "durable-coding", PoolName: runner.PoolName, EgressContext: &context, CompatibleRunnerIDs: []string{runner.ID}, Status: "ready"}},
+						Runners:      []contracts.EgressContextRunner{{RunnerID: runner.ID, PoolName: runner.PoolName, State: "ready", Connected: true, AdvertisedContexts: []string{context}}},
+						ActiveAssignments: func() []contracts.EgressContextAssignmentGroup {
+							if active == 0 {
+								return nil
+							}
+							return []contracts.EgressContextAssignmentGroup{{EgressContext: &context, RunnerID: runner.ID, State: "active", Count: active}}
+						}(),
+					})
 				case "POST /v1/sandboxes":
+					if lastActiveAssignments != 0 {
+						t.Errorf("create issued while %d assignment(s) were still active", lastActiveAssignments)
+					}
 					var request secondboxclient.CreateSandboxRequest
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 						t.Error(err)
@@ -86,12 +114,13 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 					if sandbox.State == "deleting" {
 						deletionPolls[currentID]++
 						if deletionPolls[currentID] >= 3 {
+							sandbox.State = "deleted"
+							sandboxes[currentID] = sandbox
 							if len(profiles) == 2 {
 								w.WriteHeader(404)
 								_, _ = w.Write([]byte(`{"code":"not_found","title":"Resource not found"}`))
 								return
 							}
-							sandbox.State = "deleted"
 						}
 					}
 					_ = json.NewEncoder(w).Encode(sandbox)

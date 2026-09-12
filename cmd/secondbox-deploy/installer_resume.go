@@ -684,6 +684,16 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 		// Readiness already proved the Runner advertises the generated egress
 		// context, so both the isolated and the context-requiring Profile boot.
 		for _, profile := range []string{"agent-compartment-isolated", "durable-coding"} {
+			// A deleted Sandbox's assignment can outlive its deleted state on the
+			// Runner; on a host sized for one Instance the next create would be
+			// refused. Wait until the preflight reports the tenant's requirement
+			// for this Profile ready on the installed Runner with no active
+			// assignment, exactly as the qualification driver does.
+			placementStarted := time.Now()
+			if err := waitInstalledSmokePlacement(ctx, plan, profile, runnerID); err != nil {
+				return evidence, err
+			}
+			evidence[profile+".placementWait"] = time.Since(placementStarted).String()
 			name := "installer-smoke-" + strings.ToLower(rand.Text())
 			command, stdout, stderr := installedCLICommand(ctx, plan, "run", profile, "--name", name, "--", "/bin/echo", "hello")
 			err := command.Run()
@@ -707,6 +717,46 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 		evidence["smoke"] = "guest execution verified"
 	}
 	return evidence, nil
+}
+
+// waitInstalledSmokePlacement polls the platform preflight until the tenant's
+// requirement for profile can place on runnerID and no assignment is active.
+// A Profile that declines an egress context has no requirement entry; it then
+// needs only a ready preflight and an idle Runner.
+func waitInstalledSmokePlacement(ctx context.Context, plan install.InstallPlan, profile string, runnerID string) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	for {
+		command, stdout, stderr := installedCLICommand(ctx, plan, "--output", "json", "diagnostics", "egress-contexts")
+		if err := command.Run(); err != nil {
+			return fmt.Errorf("SecondBox installer smoke placement preflight %s: %w: %s", profile, err, cliui.Sanitize(stderr.String()))
+		}
+		var preflight contracts.EgressContextPreflight
+		if err := json.Unmarshal(stdout.Bytes(), &preflight); err != nil {
+			return fmt.Errorf("SecondBox installer smoke placement preflight decode: %w", err)
+		}
+		active := int64(0)
+		for _, group := range preflight.ActiveAssignments {
+			active += group.Count
+		}
+		requirementReady := true
+		for _, requirement := range preflight.Requirements {
+			if requirement.TenantRef != plan.CLI.TenantRef || requirement.ProfileName != profile {
+				continue
+			}
+			requirementReady = requirement.Status == "ready" && slices.Contains(requirement.CompatibleRunnerIDs, runnerID)
+		}
+		if preflight.Ready && !preflight.Truncated && active == 0 && requirementReady {
+			return nil
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("SecondBox installer smoke placement for %s did not become ready: %w", profile, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 // run emits guest output, so use a unique reserved name to discover its ID even
