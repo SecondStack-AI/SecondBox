@@ -13,7 +13,7 @@ import (
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
-func TestGuestPortAdapterBoundsReadsAndGrantsOnlyAdditionalCredit(t *testing.T) {
+func TestGuestPortAdapterBoundsReadsAndGrantsPerFrame(t *testing.T) {
 	stream := &recordingPortCreditStream{}
 	connection := &guestPortConnection{
 		stream: stream, binding: &guestv1.OperationBinding{},
@@ -22,13 +22,15 @@ func TestGuestPortAdapterBoundsReadsAndGrantsOnlyAdditionalCredit(t *testing.T) 
 	for _, data := range []string{"a", "b", "cdefgh", "i", "jkl"} {
 		connection.reads <- guestPortRead{data: []byte(data)}
 	}
+	// Every new frame is preceded by a grant of the caller's full bound; reads
+	// served from a buffered frame grant nothing.
 	for _, step := range []struct {
 		maximum int
 		want    string
 		granted uint64
 	}{
-		{8, "a", 8}, {7, "b", 8}, {2, "cd", 8}, {2, "ef", 8},
-		{2, "gh", 8}, {1, "i", 9}, {3, "jkl", 12},
+		{8, "a", 8}, {7, "b", 15}, {2, "cd", 17}, {2, "ef", 17},
+		{2, "gh", 17}, {1, "i", 18}, {3, "jkl", 21},
 	} {
 		data, err := connection.Read(t.Context(), step.maximum)
 		if err != nil || string(data) != step.want || stream.granted != step.granted {
@@ -38,15 +40,34 @@ func TestGuestPortAdapterBoundsReadsAndGrantsOnlyAdditionalCredit(t *testing.T) 
 	}
 }
 
-func TestGuestPortAdapterRejectsBytesBeyondGrantedCredit(t *testing.T) {
+// A guest agent from a signed bundle built before the short-read credit fix
+// discards whatever part of a grant a short read left unused. The adapter must
+// keep granting for each new frame instead of waiting on credit the guest no
+// longer holds; otherwise every interactive Port stalls after its first short
+// reply. The fake guest below models that legacy behavior exactly.
+func TestGuestPortAdapterKeepsGrantingToLegacyGuestAfterShortReads(t *testing.T) {
+	stream := &recordingPortCreditStream{}
 	connection := &guestPortConnection{
-		stream: &recordingPortCreditStream{}, binding: &guestv1.OperationBinding{},
-		reads: make(chan guestPortRead, 1), cancel: func() {},
+		stream: stream, binding: &guestv1.OperationBinding{},
+		reads: make(chan guestPortRead, 5), cancel: func() {},
 	}
-	connection.reads <- guestPortRead{data: []byte("123456789")}
-	data, err := connection.Read(t.Context(), 8)
-	if len(data) != 0 || err == nil || !strings.Contains(err.Error(), "exceed granted credit") {
-		t.Fatalf("over-credit Port read = %q, error = %v", data, err)
+	legacyGuestCredit := uint64(0)
+	stream.onGrant = func(granted uint64) {
+		legacyGuestCredit += granted
+		// The legacy guest reserves the whole grant for one socket read and
+		// forgets the remainder after a short read; only the bytes read are
+		// delivered.
+		connection.reads <- guestPortRead{data: []byte("x")}
+		legacyGuestCredit = 0
+	}
+	for i := range 3 {
+		data, err := connection.Read(t.Context(), 8)
+		if err != nil || string(data) != "x" {
+			t.Fatalf("legacy short read %d = %q, error = %v", i, data, err)
+		}
+		if stream.granted != uint64(8*(i+1)) {
+			t.Fatalf("legacy short read %d granted %d in total, want %d", i, stream.granted, 8*(i+1))
+		}
 	}
 }
 
@@ -91,12 +112,17 @@ func (stream *scriptedPortReceiveStream) Recv() (*guestv1.GuestToRunner, error) 
 }
 
 type recordingPortCreditStream struct {
+	onGrant func(uint64)
 	guestv1.GuestAgent_ConnectClient
 	granted uint64
 }
 
 func (stream *recordingPortCreditStream) Send(frame *guestv1.RunnerToGuest) error {
-	stream.granted += frame.GetPort().GetCredit().GetByteCount()
+	granted := frame.GetPort().GetCredit().GetByteCount()
+	stream.granted += granted
+	if stream.onGrant != nil {
+		stream.onGrant(granted)
+	}
 	return nil
 }
 
