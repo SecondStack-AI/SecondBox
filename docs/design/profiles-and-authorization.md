@@ -19,9 +19,12 @@ leaves CPU and memory unbounded and caps Workspace capacity at 256 GiB.
 A requested `workspaceBytes` rounds up to a power of two before checking its
 ceiling, except that a request at or below a bounded ceiling resolves to the
 ceiling itself when rounding would exceed it, so rounding never refuses a
-request that fits; omitted axes retain the Profile default unchanged. vCPU and memory
-remain continuous integers within schema minimums. The Sandbox pins and
-reports the resolved allocation; quota, home selection, Workspace commands,
+request that fits; omitted axes retain the Profile default unchanged. vCPU
+remains a whole integer within schema minimums. Memory and Workspace
+requests, Profile defaults, and finite ceilings must use whole MiB (multiples
+of 1,048,576 bytes). Unaligned requests return `invalid_request` with a field
+detail before disk rounding, durable intent, or quota allocation. The Sandbox
+pins and reports the resolved allocation; quota, home selection, Workspace commands,
 and Instance assignments use those pinned values. A finite ceiling refusal
 returns `resources_exceed_profile`, with unbounded axes omitted from its
 `ceiling` details. Runner startup prewarms power-of-two ext4 templates from
@@ -89,7 +92,25 @@ Ordinary stop always flushes and detaches compute, advances the local Workspace 
 
 ## Creation and compatibility
 
-`POST /v1/sandboxes` contains only `profile` and bounded string metadata. The client supplies `Idempotency-Key` as a header. Resource, backend, image, lifecycle, storage, network, timeout, port, and placement fields are rejected as unknown properties.
+`POST /v1/sandboxes` accepts `profile`, bounded string `metadata`, an optional
+`sourceSnapshotId`, and optional `resources` axes (`vcpuCount`, `memoryBytes`,
+`workspaceBytes`). The client supplies the `Idempotency-Key` header. Each
+omitted axis uses the pinned ProfileRevision's default. Without
+`resourceCeiling`, defaults also bound requests; with it, each explicit integer
+bounds its axis and `null` removes the Profile bound. Tenant/Subject quota and
+Runner admission still apply.
+
+Memory and Workspace requests, Profile defaults, and finite ceilings must be
+whole MiB. Invalid alignment returns `invalid_request` with a field detail
+before allocation. Requested disk rounds up to a power of two, using the finite
+ceiling instead if the original request fits but rounding would exceed it;
+omitted disk keeps its exact default. The Sandbox pins and reports the resolved
+immutable allocation. Quota accounting, Workspace capacity, placement, and
+later Instance assignments read those pinned values. Requests beyond a finite
+bound return `resources_exceed_profile`; `snapshot_resume` accepts only exact
+Profile defaults without rounding and returns `resources_fixed_by_profile`
+for a different size. Backend, image, lifecycle, storage, network, timeout,
+port, and placement fields remain rejected as unknown properties.
 
 Creation fails before allocating durable intent when the profile is absent, disabled, requires an egress context that the authenticated Tenant lacks, or has no RunnerPool capable of its immutable requirements. Successful creation persists the exact ProfileRevision ID, the immutable Tenant-context pin when required, and a resolved compatibility summary. Later Tenant or Runner availability changes do not rewrite that selection.
 

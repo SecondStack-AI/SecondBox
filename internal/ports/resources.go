@@ -27,3 +27,11 @@ type ResourcesFixedByProfileError struct {
 
 func (err *ResourcesFixedByProfileError) Error() string { return ErrResourcesFixedByProfile.Error() }
 func (err *ResourcesFixedByProfileError) Unwrap() error { return ErrResourcesFixedByProfile }
+
+// ResourceAlignmentError identifies a public size field refused before allocation.
+type ResourceAlignmentError struct{ Field string }
+
+func (err *ResourceAlignmentError) Error() string {
+	return "SecondBox " + err.Field + " must use whole MiB (multiples of 1048576 bytes)"
+}
+func (err *ResourceAlignmentError) Unwrap() error { return ErrInvalidRequest }

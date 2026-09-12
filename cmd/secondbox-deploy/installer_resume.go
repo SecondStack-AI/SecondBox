@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -683,14 +684,21 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 		// Readiness already proved the Runner advertises the generated egress
 		// context, so both the isolated and the context-requiring Profile boot.
 		for _, profile := range []string{"agent-compartment-isolated", "durable-coding"} {
-			command, stdout, stderr := installedCLICommand(ctx, plan, "run", profile, "--", "/bin/echo", "hello")
+			name := "installer-smoke-" + strings.ToLower(rand.Text())
+			command, stdout, stderr := installedCLICommand(ctx, plan, "run", profile, "--name", name, "--", "/bin/echo", "hello")
 			err := command.Run()
 			evidence[profile+".stdout"] = stdout.String()
 			if command.ProcessState != nil {
 				evidence[profile+".exitStatus"] = strconv.Itoa(command.ProcessState.ExitCode())
 			}
+			waitStarted := time.Now()
+			waitErr := waitInstalledSmokeDeletion(ctx, plan, name, evidence, profile)
+			evidence[profile+".deletionWait"] = time.Since(waitStarted).String()
 			if err != nil {
-				return evidence, fmt.Errorf("SecondBox installer guest smoke %s: %w: %s", profile, err, cliui.Sanitize(stderr.String()))
+				return evidence, errors.Join(waitErr, fmt.Errorf("SecondBox installer guest smoke %s: %w: %s", profile, err, cliui.Sanitize(stderr.String())))
+			}
+			if waitErr != nil {
+				return evidence, waitErr
 			}
 			if stdout.tooLong || stdout.String() != "hello\n" {
 				return evidence, fmt.Errorf("SecondBox installer guest smoke %s: unexpected stdout", profile)
@@ -699,6 +707,54 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 		evidence["smoke"] = "guest execution verified"
 	}
 	return evidence, nil
+}
+
+// run emits guest output, so use a unique reserved name to discover its ID even
+// after DELETE admission. Deleted Sandboxes retain metadata and remain listable.
+func waitInstalledSmokeDeletion(ctx context.Context, plan install.InstallPlan, name string, evidence map[string]string, profile string) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	command, stdout, stderr := installedCLICommand(ctx, plan, "--output", "json", "sandboxes", "list", "--query", "metadata="+contracts.SandboxNameMetadataKey+"="+name)
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("SecondBox installer smoke deletion lookup: %w: %s", err, cliui.Sanitize(stderr.String()))
+	}
+	var page contracts.SandboxPage
+	if err := json.Unmarshal(stdout.Bytes(), &page); err != nil {
+		return fmt.Errorf("SecondBox installer smoke deletion lookup decode: %w", err)
+	}
+	if len(page.Items) != 1 || page.NextCursor != nil || page.Items[0].ID == "" || page.Items[0].Metadata[contracts.SandboxNameMetadataKey] != name {
+		return errors.New("SecondBox installer smoke deletion lookup requires exactly one matching Sandbox")
+	}
+	id := page.Items[0].ID
+	evidence[profile+".sandboxId"] = id
+	for {
+		command, stdout, stderr := installedCLICommand(ctx, plan, "--output", "json", "sandboxes", "get", "--path", "sandboxId="+id)
+		if err := command.Run(); err != nil {
+			if strings.Contains(stderr.String(), "SecondBox API request failed: status=404 code=not_found ") {
+				evidence[profile+".deletion"] = "not_found"
+				return nil
+			}
+			return fmt.Errorf("SecondBox installer smoke deletion get %s: %w: %s", id, err, cliui.Sanitize(stderr.String()))
+		}
+		var sandbox contracts.Sandbox
+		if err := json.Unmarshal(stdout.Bytes(), &sandbox); err != nil {
+			return fmt.Errorf("SecondBox installer smoke deletion decode: %w", err)
+		}
+		if sandbox.ID != id {
+			return errors.New("SecondBox installer smoke deletion returned a different Sandbox")
+		}
+		if sandbox.State == "deleted" {
+			evidence[profile+".deletion"] = "deleted"
+			return nil
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("SecondBox installer smoke deletion wait %s: %w", id, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func installedSmokeEvidence(

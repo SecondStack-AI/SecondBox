@@ -181,3 +181,33 @@ func TestCreationResourceProblemHints(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateRendersResourceAlignmentRefusal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request sb.CreateSandboxRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.Resources == nil || request.Resources.MemoryBytes == nil || *request.Resources.MemoryBytes != 1<<30+1 {
+			t.Errorf("CLI changed requested bytes: %+v", request.Resources)
+		}
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"code":"invalid_request","title":"SecondBox resources.memoryBytes must use whole MiB (multiples of 1048576 bytes)","details":[{"field":"resources.memoryBytes","reason":"must use whole MiB (multiples of 1048576 bytes)"}]}`)
+	}))
+	defer server.Close()
+	err := runLifecycleVerb(t.Context(), verbTestSession(server), "create", []string{"durable-coding", "--memory", "1073741825"}, io.Discard, server.Client())
+	if err == nil {
+		t.Fatal("unaligned request accepted")
+	}
+	var diagnostic bytes.Buffer
+	renderer := cliui.Renderer{Output: io.Discard, Diagnostic: &diagnostic, Capabilities: cliui.ForWriter(io.Discard, &diagnostic), OutputMode: cliui.OutputPlain}
+	if err := renderer.WriteError(err, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"invalid_request", "resources.memoryBytes", "whole MiB", "1048576"} {
+		if !strings.Contains(diagnostic.String(), want) {
+			t.Errorf("diagnostic=%q lacks %q", diagnostic.String(), want)
+		}
+	}
+}

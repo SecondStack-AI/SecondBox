@@ -40,6 +40,9 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 			var mutex sync.Mutex
 			var profiles []string
 			executions, deletions := 0, 0
+			sandboxes := map[string]contracts.Sandbox{}
+			deletionPolls := map[string]int{}
+			currentID := ""
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mutex.Lock()
 				defer mutex.Unlock()
@@ -61,11 +64,38 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 						t.Error(err)
 					}
+					if currentID != "" && deletionPolls[currentID] < 3 {
+						t.Error("next create raced prior deletion")
+						w.WriteHeader(429)
+						return
+					}
 					profiles = append(profiles, request.Profile)
-					_, _ = w.Write([]byte(`{"id":"op_1","sandboxId":"sbx_smoke","kind":"create","state":"pending"}`))
-				case "GET /v1/sandboxes/sbx_smoke":
-					_, _ = w.Write([]byte(`{"id":"sbx_smoke","profile":"agent-compartment-isolated","profileRevisionId":"prv_1","state":"ready","desiredState":"running","generation":1,"revision":1,"metadata":{},"workspace":{"id":"wsp_1","generation":1,"state":"ready","sizeBytes":1024}}`))
-				case "POST /v1/sandboxes/sbx_smoke/exec":
+					currentID = "sbx_smoke_" + strconv.Itoa(len(profiles))
+					sandboxes[currentID] = contracts.Sandbox{ID: currentID, Profile: request.Profile, ProfileRevisionID: "prv_1", State: "ready", DesiredState: "running", Generation: 1, Revision: 1, Metadata: map[string]string(request.Metadata)}
+					_ = json.NewEncoder(w).Encode(contracts.Operation{ID: "op_create", SandboxID: currentID, Kind: "create", State: "pending"})
+				case "GET /v1/sandboxes":
+					var items []contracts.Sandbox
+					for _, sandbox := range sandboxes {
+						if r.URL.Query().Get("metadata") == contracts.SandboxNameMetadataKey+"="+sandbox.Metadata[contracts.SandboxNameMetadataKey] {
+							items = append(items, sandbox)
+						}
+					}
+					_ = json.NewEncoder(w).Encode(contracts.SandboxPage{Items: items})
+				case "GET /v1/sandboxes/" + currentID:
+					sandbox := sandboxes[currentID]
+					if sandbox.State == "deleting" {
+						deletionPolls[currentID]++
+						if deletionPolls[currentID] >= 3 {
+							if len(profiles) == 2 {
+								w.WriteHeader(404)
+								_, _ = w.Write([]byte(`{"code":"not_found","title":"Resource not found"}`))
+								return
+							}
+							sandbox.State = "deleted"
+						}
+					}
+					_ = json.NewEncoder(w).Encode(sandbox)
+				case "POST /v1/sandboxes/" + currentID + "/exec":
 					var request secondboxclient.BufferedExecRequest
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 						t.Error(err)
@@ -75,9 +105,12 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 					}
 					executions++
 					_, _ = w.Write([]byte(`{"kind":"exited","exitCode":` + strconv.Itoa(test.exitCode) + `,"elapsedMilliseconds":5,"output":{"stdoutBase64":"aGVsbG8K","stderrBase64":""}}`))
-				case "DELETE /v1/sandboxes/sbx_smoke":
+				case "DELETE /v1/sandboxes/" + currentID:
 					deletions++
-					_, _ = w.Write([]byte(`{"id":"op_2","sandboxId":"sbx_smoke","kind":"delete","state":"pending"}`))
+					sandbox := sandboxes[currentID]
+					sandbox.State = "deleting"
+					sandboxes[currentID] = sandbox
+					_ = json.NewEncoder(w).Encode(contracts.Operation{ID: "op_delete", SandboxID: currentID, Kind: "delete", State: "pending"})
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL)
 					w.WriteHeader(500)
@@ -115,7 +148,7 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 				t.Fatalf("profiles=%v execs=%d deletes=%d", profiles, executions, deletions)
 			}
 			for _, profile := range want {
-				if evidence[profile+".stdout"] != "hello\n" || evidence[profile+".exitStatus"] != "0" {
+				if evidence[profile+".stdout"] != "hello\n" || evidence[profile+".exitStatus"] != "0" || evidence[profile+".deletionWait"] == "" || evidence[profile+".deletion"] == "" || deletionPolls[evidence[profile+".sandboxId"]] != 3 {
 					t.Fatalf("guest evidence=%v", evidence)
 				}
 			}

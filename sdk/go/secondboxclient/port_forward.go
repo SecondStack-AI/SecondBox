@@ -12,9 +12,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// ForwardPort owns listener until cancellation or failure. Every accepted TCP
-// connection consumes a fresh PortSession credential; one renewed Lease fences
-// the whole forwarding lifetime. All sessions are closed before Lease release.
+// ForwardPort owns listener until cancellation or a listener or Lease failure.
+// Connection failures are returned when forwarding ends and do not stop peers.
+// Every accepted TCP connection consumes a fresh PortSession credential; one
+// renewed Lease fences the whole lifetime. Sessions close before Lease release.
 func (handle *SandboxHandle) ForwardPort(ctx context.Context, listener net.Listener, policy PortPolicy, ready func(PortSession) error) (resultErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -24,8 +25,7 @@ func (handle *SandboxHandle) ForwardPort(ctx context.Context, listener net.Liste
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, keeper.Close()) }()
-	request := CreatePortSessionRequest{Name: policy.Name, DurationSeconds: min(policy.MaximumSessionSeconds, int64(86400))}
-	initial, err := handle.CreatePortSession(ctx, request, "", keeper.ID())
+	initial, err := handle.createForwardSession(ctx, policy, keeper)
 	if err != nil {
 		return err
 	}
@@ -43,10 +43,13 @@ func (handle *SandboxHandle) ForwardPort(ctx context.Context, listener net.Liste
 	var workers sync.WaitGroup
 	var failures []error
 	var failureMu sync.Mutex
-	fail := func(err error) {
+	recordFailure := func(err error) {
 		failureMu.Lock()
 		failures = append(failures, err)
 		failureMu.Unlock()
+	}
+	fail := func(err error) {
+		recordFailure(err)
 		cancel()
 	}
 	monitorDone := make(chan struct{})
@@ -85,8 +88,8 @@ func (handle *SandboxHandle) ForwardPort(ctx context.Context, listener net.Liste
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			if err := handle.forwardConnection(ctx, connection, request, keeper.ID(), initialSession); err != nil {
-				fail(err)
+			if err := handle.forwardConnection(ctx, connection, policy, keeper, initialSession); err != nil {
+				recordFailure(err)
 			}
 		}()
 	}
@@ -94,9 +97,25 @@ func (handle *SandboxHandle) ForwardPort(ctx context.Context, listener net.Liste
 	workers.Wait()
 	<-monitorDone
 	if len(failures) != 0 {
-		return errors.Join(failures...)
+		return errors.Join(append(failures, ctx.Err())...)
 	}
 	return ctx.Err()
+}
+
+// Leave time for admission after the request crosses the network. Each request
+// reads the latest service-granted expiry, including successful Lease renewals.
+func (handle *SandboxHandle) createForwardSession(ctx context.Context, policy PortPolicy, keeper *LeaseKeeper) (PortSession, error) {
+	keeper.mu.Lock()
+	expiresAt, leaseID, failure := keeper.lease.ExpiresAt, keeper.lease.ID, keeper.failure
+	keeper.mu.Unlock()
+	if failure != nil {
+		return PortSession{}, fmt.Errorf("SecondBox Port forwarding Lease: %w", failure)
+	}
+	seconds := min(int64((time.Until(expiresAt)-time.Second)/time.Second), policy.MaximumSessionSeconds, int64(86400))
+	if seconds < 1 {
+		return PortSession{}, errors.New("SecondBox Port forwarding Lease has insufficient remaining lifetime")
+	}
+	return handle.CreatePortSession(ctx, CreatePortSessionRequest{Name: policy.Name, DurationSeconds: seconds}, "", leaseID)
 }
 
 func (handle *SandboxHandle) closeForwardSession(session PortSession) error {
@@ -105,7 +124,7 @@ func (handle *SandboxHandle) closeForwardSession(session PortSession) error {
 	return handle.ClosePortSession(cleanup, session.ID, "")
 }
 
-func (handle *SandboxHandle) forwardConnection(ctx context.Context, connection net.Conn, request CreatePortSessionRequest, leaseID string, initial *PortSession) (resultErr error) {
+func (handle *SandboxHandle) forwardConnection(ctx context.Context, connection net.Conn, policy PortPolicy, keeper *LeaseKeeper, initial *PortSession) (resultErr error) {
 	defer connection.Close()
 	// The listener may have been idle longer than the initial session's bound.
 	if initial != nil && !time.Now().Before(initial.ExpiresAt) {
@@ -119,7 +138,7 @@ func (handle *SandboxHandle) forwardConnection(ctx context.Context, connection n
 		session = *initial
 	} else {
 		var err error
-		session, err = handle.CreatePortSession(ctx, request, "", leaseID)
+		session, err = handle.createForwardSession(ctx, policy, keeper)
 		if err != nil {
 			return err
 		}

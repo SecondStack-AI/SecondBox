@@ -283,9 +283,12 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 		status    int
 		code      string
 	}{
+		{"unaligned memory", map[string]int64{"memoryBytes": 1<<30 + 1}, http.StatusBadRequest, "invalid_request"},
+		{"unaligned disk", map[string]int64{"workspaceBytes": 1<<30 + 1}, http.StatusBadRequest, "invalid_request"},
+		{"unaligned disk before clamp", map[string]int64{"workspaceBytes": 7<<30 + 1}, http.StatusBadRequest, "invalid_request"},
 		{"cpu quota", map[string]int64{"vcpuCount": 2}, http.StatusTooManyRequests, "quota_exceeded"},
 		{"memory quota", map[string]int64{"memoryBytes": 1 << 30}, http.StatusTooManyRequests, "quota_exceeded"},
-		{"rounded disk ceiling", map[string]int64{"workspaceBytes": 8<<30 + 1}, http.StatusBadRequest, "resources_exceed_profile"},
+		{"rounded disk ceiling", map[string]int64{"workspaceBytes": 8<<30 + 1<<20}, http.StatusBadRequest, "resources_exceed_profile"},
 	} {
 		response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-"+strings.ReplaceAll(test.name, " ", "-"), map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": test.resources})
 		if response.StatusCode != test.status {
@@ -295,6 +298,9 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 		decodeResponseJSON(t, response, &problem)
 		if problem.Code != test.code {
 			t.Fatalf("%s problem=%+v", test.name, problem)
+		}
+		if test.code == "invalid_request" && (len(problem.Details) != 1 || !strings.Contains(problem.Details[0].Reason, "whole MiB") || !strings.HasPrefix(problem.Details[0].Field, "resources.") || !strings.Contains(problem.Title, "whole MiB")) {
+			t.Fatalf("alignment detail=%+v", problem)
 		}
 		if test.code == "resources_exceed_profile" && (problem.Ceiling == nil || problem.Ceiling.VCPUCount != nil || problem.Ceiling.MemoryBytes != nil || *problem.Ceiling.WorkspaceBytes != diskCeiling || problem.Requested.WorkspaceBytes != 16<<30) {
 			t.Fatalf("effective ceiling=%+v", problem)

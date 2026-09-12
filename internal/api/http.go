@@ -1010,6 +1010,11 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		Type: "https://secondbox.dev/problems/" + code, Title: title, Status: status,
 		Code: code, RequestID: writer.Header().Get("X-Request-ID"), Retryable: retryable,
 	}
+	var alignment *ports.ResourceAlignmentError
+	if errors.As(err, &alignment) {
+		problem.Title = alignment.Error()
+		problem.Details = []contracts.ProblemDetail{{Field: alignment.Field, Reason: "must use whole MiB (multiples of 1048576 bytes)"}}
+	}
 	var resourcesError *ports.ResourcesExceedProfileError
 	if errors.As(err, &resourcesError) {
 		problem.Ceiling = &resourcesError.Ceiling

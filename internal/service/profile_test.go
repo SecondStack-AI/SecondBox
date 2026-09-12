@@ -58,7 +58,7 @@ func validProfileRevisionSpecForValidation() contracts.ProfileRevisionSpec {
 		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
 		ToolchainBundleDigest: "sha256:" + strings.Repeat("b", 64),
 		Resources: contracts.ResourcePolicy{
-			VCPUCount: 1, MemoryBytes: 1, WorkspaceBytes: 1, ConcurrentOperations: 1,
+			VCPUCount: 1, MemoryBytes: 64 << 20, WorkspaceBytes: 1 << 20, ConcurrentOperations: 1,
 		},
 		Startup: contracts.StartupPolicy{Mode: contracts.StartupModeColdBoot},
 		Lifecycle: contracts.LifecyclePolicy{
@@ -89,8 +89,8 @@ func TestValidateProfileResourceCeiling(t *testing.T) {
 	}{
 		{"absent", nil, false, true},
 		{"null axes", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil}, false, true},
-		{"equal bounds", contracts.ProfileResourceCeiling{"vcpuCount": pointer(1), "memoryBytes": pointer(1), "workspaceBytes": pointer(1)}, false, true},
-		{"higher bounds", contracts.ProfileResourceCeiling{"vcpuCount": pointer(2), "memoryBytes": pointer(2), "workspaceBytes": pointer(2)}, false, true},
+		{"equal bounds", contracts.ProfileResourceCeiling{"vcpuCount": pointer(1), "memoryBytes": pointer(64 << 20), "workspaceBytes": pointer(1 << 20)}, false, true},
+		{"higher bounds", contracts.ProfileResourceCeiling{"vcpuCount": pointer(2), "memoryBytes": pointer(128 << 20), "workspaceBytes": pointer(2 << 20)}, false, true},
 		{"below cpu", contracts.ProfileResourceCeiling{"vcpuCount": pointer(0), "memoryBytes": nil, "workspaceBytes": nil}, false, false},
 		{"below memory", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": pointer(0), "workspaceBytes": nil}, false, false},
 		{"below disk", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": pointer(0)}, false, false},
@@ -113,5 +113,25 @@ func TestValidateProfileResourceCeiling(t *testing.T) {
 				t.Fatalf("validation = %v; valid=%t", err, test.valid)
 			}
 		})
+	}
+}
+
+func TestValidateProfileResourcesRequireWholeMiB(t *testing.T) {
+	for _, axis := range []string{"memoryBytes", "workspaceBytes"} {
+		for _, ceiling := range []bool{false, true} {
+			spec := validProfileRevisionSpecForValidation()
+			if ceiling {
+				bound := int64(1<<30 + 1)
+				spec.ResourceCeiling = contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil}
+				spec.ResourceCeiling[axis] = &bound
+			} else if axis == "memoryBytes" {
+				spec.Resources.MemoryBytes++
+			} else {
+				spec.Resources.WorkspaceBytes++
+			}
+			if err := validateProfileRevisionSpec(spec); err == nil || !strings.Contains(err.Error(), axis+" must use whole MiB") {
+				t.Fatalf("axis=%s ceiling=%t error=%v", axis, ceiling, err)
+			}
+		}
 	}
 }

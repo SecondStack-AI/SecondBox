@@ -584,7 +584,7 @@ type ProfilePage struct {
 	NextCursor *string   `json:"nextCursor,omitempty"`
 }
 
-// ProfileResourceCeiling Optional Profile size bounds. Every axis is explicit: null leaves that axis bounded only by quota and Runner admission. Integer bounds must be at least the matching resources default. Not permitted with snapshot_resume.
+// ProfileResourceCeiling Optional Profile size bounds. Every axis is explicit: null leaves that axis bounded only by quota and Runner admission. Integer bounds must be at least the matching resources default. Finite memoryBytes and workspaceBytes bounds must use whole MiB (multiples of 1048576 bytes). Not permitted with snapshot_resume.
 type ProfileResourceCeiling = contracts.ProfileResourceCeiling
 
 type ProfileRevision struct {
@@ -626,7 +626,7 @@ type RemovePathRequest struct {
 
 type RenewLeaseRequest = contracts.RenewLeaseRequest
 
-// ResourcePolicy Default Sandbox resources and concurrent operation limit. Also the size ceiling when resourceCeiling is absent.
+// ResourcePolicy Default Sandbox resources and concurrent operation limit. Also the size ceiling when resourceCeiling is absent. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes).
 type ResourcePolicy = contracts.ResourcePolicy
 
 type RestoreSnapshotRequest = contracts.RestoreSnapshotRequest
@@ -681,7 +681,7 @@ type SandboxInspection struct {
 
 type SandboxPage = contracts.SandboxPage
 
-// SandboxResourceRequest Requested Sandbox size. Omitted axes use Profile defaults unchanged. Requested workspaceBytes rounds up to a power of two before ceiling checks. snapshot_resume accepts only the exact Profile size.
+// SandboxResourceRequest Requested Sandbox size. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes), validated before disk rounding; otherwise invalid_request identifies the field. Omitted axes use Profile defaults unchanged. Requested workspaceBytes rounds up to a power of two before ceiling checks; when a request fits a finite ceiling but rounding would exceed it, the ceiling is used. snapshot_resume accepts only the exact Profile size.
 type SandboxResourceRequest = contracts.SandboxResourceRequest
 
 type SandboxResources = contracts.SandboxResources

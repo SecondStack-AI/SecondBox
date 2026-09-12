@@ -111,6 +111,32 @@ to bind the existing platform session to those refs.
 
 Updates are explicit and operator-initiated; there is no automatic background updater. Use the target release's bootstrap so the temporary, checksum-verified `secondbox-deploy` binary understands that release's update contract even when the installed binary is older.
 
+Before upgrading across migration `0024_snapshot_name_index.sql`, inspect every
+Sandbox's ready Snapshots on the **source release**. Migration 0024 refuses
+control-plane startup if two ready Snapshots on one Sandbox share a name.
+List them with `secondbox snapshots <sandbox>` or the source-compatible alias:
+
+```sh
+secondbox snapshots list --path sandboxId=sbx_SOURCE
+```
+
+Follow any `nextCursor` with `--query cursor=<cursor>` to inspect every page.
+Compare names among `ready` entries within each Sandbox, choose the Snapshot
+to retain, and delete each unwanted duplicate **by identifier** while the
+source control plane is still running:
+
+```sh
+secondbox snapshots delete --path snapshotId=snp_UNWANTED \
+  --header Idempotency-Key=cleanup-snp_UNWANTED
+```
+
+Repeat the listing until each ready name is unique, then take the pre-upgrade
+backup and activate the target release. Snapshot deletion discards that retained
+restore point; preserve the intended one. If migration 0024 already refused
+startup, complete this cleanup using the source deployment before retrying the
+upgrade; follow the backup/restore requirements below if other forward-only
+migrations have already changed the database.
+
 First stop every live Sandbox. The updater refuses to change desired state, leases, or workload lifecycle on the operator's behalf.
 
 Take and verify a PostgreSQL backup before activating a compatible target release: migrations are forward-only, and a target that carries a representation change (such as the vCPU conversion in migration `0019`) leaves the database unreadable by the source release's binaries. Rolling back after activation means restoring that backup and redeploying the source release; there is no in-place downgrade. The tenant-egress release uses Runner protocol generation 4 and is a clean recreation from v0.7.2, not an update. For later compatible releases, the single-host updater stops the Runner with the rest of the Compose project and restarts it after the control plane; a multi-runner deployment must coordinate the same order because a mixed-generation fleet is refused.

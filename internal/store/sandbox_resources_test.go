@@ -26,6 +26,9 @@ func TestResolveSandboxResources(t *testing.T) {
 		{name: "cpu ceiling", request: &contracts.SandboxResourceRequest{VCPUCount: pointer(5)}, err: ports.ErrResourcesExceedProfile},
 		{name: "memory ceiling", request: &contracts.SandboxResourceRequest{MemoryBytes: pointer(9 << 30)}, err: ports.ErrResourcesExceedProfile},
 		{name: "disk ceiling", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(51 << 30)}, err: ports.ErrResourcesExceedProfile},
+		{name: "unaligned memory", request: &contracts.SandboxResourceRequest{MemoryBytes: pointer(1<<30 + 1)}, err: ports.ErrInvalidRequest},
+		{name: "unaligned disk before rounding", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(1<<30 + 1)}, err: ports.ErrInvalidRequest},
+		{name: "unaligned disk before ceiling clamp", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(49<<30 + 1)}, err: ports.ErrInvalidRequest},
 		{name: "zero cpu", request: &contracts.SandboxResourceRequest{VCPUCount: pointer(0)}, err: ports.ErrInvalidRequest},
 		{name: "negative memory", request: &contracts.SandboxResourceRequest{MemoryBytes: pointer(-1)}, err: ports.ErrInvalidRequest},
 		{name: "small disk", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer((1 << 20) - 1)}, err: ports.ErrInvalidRequest},
@@ -56,15 +59,16 @@ func TestResolveFlexibleSandboxResources(t *testing.T) {
 		disk    int64
 		err     error
 	}{
-		{name: "unbounded continuous cpu and memory", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": pointer(256 << 30)}, request: &contracts.SandboxResourceRequest{VCPUCount: pointer(7), MemoryBytes: pointer(1<<30 + 1)}, disk: 50 << 30},
+		{name: "unbounded cpu and aligned memory", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": pointer(256 << 30)}, request: &contracts.SandboxResourceRequest{VCPUCount: pointer(7), MemoryBytes: pointer(1<<30 + 1<<20)}, disk: 50 << 30},
 		{name: "round disk", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil}, request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(20 << 30)}, disk: 32 << 30},
-		{name: "round near minimum", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(1<<20 + 1)}, disk: 2 << 20},
+		{name: "round near minimum", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(3 << 20)}, disk: 4 << 20},
 		{name: "fits under a non-power-of-two ceiling resolves to the ceiling", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(50 << 30)}, disk: 50 << 30},
 		{name: "fits under an explicit ceiling resolves to the ceiling", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": pointer(48 << 30)}, request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(33 << 30)}, disk: 48 << 30},
-		{name: "above the ceiling is refused after rounding", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(50<<30 + 1)}, err: ports.ErrResourcesExceedProfile},
+		{name: "above the ceiling is refused after rounding", request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(50<<30 + 1<<20)}, err: ports.ErrResourcesExceedProfile},
+		{name: "legacy unaligned ceiling clamp", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": pointer(50<<30 + 1)}, request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(49 << 30)}, err: ports.ErrInvalidRequest},
 		{name: "explicit upper bound", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": pointer(2), "memoryBytes": nil, "workspaceBytes": nil}, request: &contracts.SandboxResourceRequest{VCPUCount: pointer(3)}, err: ports.ErrResourcesExceedProfile},
 		{name: "largest rounded capacity", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil}, request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(1 << 62)}, disk: 1 << 62},
-		{name: "round overflow", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil}, request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(1<<62 + 1)}, err: ports.ErrInvalidRequest},
+		{name: "round overflow", ceiling: contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil}, request: &contracts.SandboxResourceRequest{WorkspaceBytes: pointer(1<<62 + 1<<20)}, err: ports.ErrInvalidRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			spec := contracts.ProfileRevisionSpec{Resources: policy, ResourceCeiling: test.ceiling}

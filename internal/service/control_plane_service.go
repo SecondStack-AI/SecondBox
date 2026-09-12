@@ -1259,6 +1259,16 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		spec.Resources.ConcurrentOperations < 1 {
 		return invalidRequest(errors.New("SecondBox Profile resource limits must be positive"))
 	}
+	for _, axis := range []struct {
+		name  string
+		value int64
+	}{
+		{"memoryBytes", spec.Resources.MemoryBytes}, {"workspaceBytes", spec.Resources.WorkspaceBytes},
+	} {
+		if axis.value%(1<<20) != 0 {
+			return &ports.ResourceAlignmentError{Field: "resources." + axis.name}
+		}
+	}
 	if spec.ResourceCeiling != nil {
 		if spec.Startup.Mode == contracts.StartupModeSnapshotResume {
 			return invalidRequest(errors.New("SecondBox Profile snapshot_resume forbids resourceCeiling"))
@@ -1273,6 +1283,9 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 			{"vcpuCount", spec.Resources.VCPUCount}, {"memoryBytes", spec.Resources.MemoryBytes}, {"workspaceBytes", spec.Resources.WorkspaceBytes},
 		} {
 			bound, present := spec.ResourceCeiling[axis.name]
+			if bound != nil && axis.name != "vcpuCount" && *bound%(1<<20) != 0 {
+				return &ports.ResourceAlignmentError{Field: "resourceCeiling." + axis.name}
+			}
 			if !present || (bound != nil && *bound < axis.minimum) {
 				return invalidRequest(fmt.Errorf("SecondBox Profile resourceCeiling.%s must be explicit null or at least resources.%s", axis.name, axis.name))
 			}
