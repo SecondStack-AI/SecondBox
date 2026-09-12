@@ -44,6 +44,7 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 			deletionPolls := map[string]int{}
 			assignmentPolls := map[string]int{}
 			lastActiveAssignments := int64(0)
+			placementRefusals := 0
 			currentID := ""
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mutex.Lock()
@@ -87,6 +88,14 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 				case "POST /v1/sandboxes":
 					if lastActiveAssignments != 0 {
 						t.Errorf("create issued while %d assignment(s) were still active", lastActiveAssignments)
+					}
+					// The Runner's reported reservation lags one heartbeat: refuse the
+					// second create once, and expect the smoke to retry it.
+					if len(profiles) == 1 && placementRefusals == 0 {
+						placementRefusals++
+						w.WriteHeader(503)
+						_, _ = w.Write([]byte(`{"type":"about:blank","title":"Sandbox home runner is unavailable","status":503,"code":"home_runner_unavailable","requestId":"req_1","retryable":false}`))
+						return
 					}
 					var request secondboxclient.CreateSandboxRequest
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -173,8 +182,8 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 			if advertisesContext {
 				want = append(want, "durable-coding")
 			}
-			if !slices.Equal(profiles, want) || executions != len(want) || deletions != len(want) {
-				t.Fatalf("profiles=%v execs=%d deletes=%d", profiles, executions, deletions)
+			if !slices.Equal(profiles, want) || executions != len(want) || deletions != len(want) || placementRefusals != 1 || evidence["durable-coding.placementRetries"] != "1" {
+				t.Fatalf("profiles=%v execs=%d deletes=%d refusals=%d evidence=%v", profiles, executions, deletions, placementRefusals, evidence)
 			}
 			for _, profile := range want {
 				if evidence[profile+".stdout"] != "hello\n" || evidence[profile+".exitStatus"] != "0" || evidence[profile+".deletionWait"] == "" || evidence[profile+".deletion"] == "" || deletionPolls[evidence[profile+".sandboxId"]] != 3 {

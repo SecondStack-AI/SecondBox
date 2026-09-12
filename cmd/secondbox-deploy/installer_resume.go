@@ -694,9 +694,32 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 				return evidence, err
 			}
 			evidence[profile+".placementWait"] = time.Since(placementStarted).String()
+			// The Runner's reported reservation for the previous Sandbox can lag
+			// one heartbeat behind its deletion, and durable-coding needs the
+			// whole single-Instance budget of a minimum host. A placement refusal
+			// here is transient, so retry it briefly before treating it as real.
 			name := "installer-smoke-" + strings.ToLower(rand.Text())
-			command, stdout, stderr := installedCLICommand(ctx, plan, "run", profile, "--name", name, "--", "/bin/echo", "hello")
-			err := command.Run()
+			var command *exec.Cmd
+			var stdout, stderr *boundedCommandBuffer
+			var err error
+			placementRetries := 0
+			for attempt := 0; ; attempt++ {
+				name = "installer-smoke-" + strings.ToLower(rand.Text())
+				command, stdout, stderr = installedCLICommand(ctx, plan, "run", profile, "--name", name, "--", "/bin/echo", "hello")
+				err = command.Run()
+				if err == nil || attempt >= 30 || !strings.Contains(stderr.String(), "code=home_runner_unavailable") {
+					break
+				}
+				placementRetries++
+				timer := time.NewTimer(2 * time.Second)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return evidence, fmt.Errorf("SecondBox installer guest smoke %s placement retry: %w", profile, ctx.Err())
+				case <-timer.C:
+				}
+			}
+			evidence[profile+".placementRetries"] = strconv.Itoa(placementRetries)
 			evidence[profile+".stdout"] = stdout.String()
 			if command.ProcessState != nil {
 				evidence[profile+".exitStatus"] = strconv.Itoa(command.ProcessState.ExitCode())
