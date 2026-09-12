@@ -92,7 +92,7 @@ func main() {
 	}
 	var presented *commandPresentationError
 	if errors.As(err, &presented) && presented.renderer.Capabilities.Diagnostic.TTY && !presented.renderer.Capabilities.Dumb {
-		_ = presented.renderer.WriteError(err, "Run the command with --output plain for a stable diagnostic transcript.")
+		_ = presented.renderer.WriteError(err, presented.hint())
 	} else {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 	}

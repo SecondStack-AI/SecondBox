@@ -105,7 +105,7 @@ func renderBoundedOperation(operationID string, content []byte, renderer cliui.R
 		if err := decodeView(content, &item); err != nil {
 			return err
 		}
-		return renderer.WriteSummary(cliui.Summary{Title: "Sandbox", Status: viewStatus(item.State), Pairs: []cliui.Pair{{Key: "ID", Value: item.ID}, {Key: "Profile", Value: item.Profile}, {Key: "State", Value: item.State}, {Key: "Desired state", Value: item.DesiredState}, {Key: "Generation", Value: strconv.FormatInt(item.Generation, 10)}, {Key: "Revision", Value: strconv.FormatInt(item.Revision, 10)}}})
+		return renderer.WriteSummary(cliui.Summary{Title: "Sandbox", Status: viewStatus(item.State), Pairs: []cliui.Pair{{Key: "ID", Value: item.ID}, {Key: "Profile", Value: item.Profile}, {Key: "State", Value: item.State}, {Key: "Resources", Value: sandboxResourceSummary(item.Resources)}, {Key: "Desired state", Value: item.DesiredState}, {Key: "Generation", Value: strconv.FormatInt(item.Generation, 10)}, {Key: "Revision", Value: strconv.FormatInt(item.Revision, 10)}}})
 	case "getSnapshot":
 		var item secondboxclient.Snapshot
 		if err := decodeView(content, &item); err != nil {

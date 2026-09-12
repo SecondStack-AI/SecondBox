@@ -213,6 +213,105 @@ The service rejects a reserved name that could never resolve: one that is blank,
 
 `--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling, `--stdin`, and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails. Standard input is read before anything is created, so an oversized input leaves no Sandbox behind.
 
+### Resource sizes and retained Sandboxes
+
+Both `run PROFILE` and `create PROFILE` accept `--size small|medium|large`,
+`--cpus`, `--memory`, and `--disk`. Presets request respectively
+1 vCPU / 1 GiB / 4 GiB, 2 vCPU / 4 GiB / 16 GiB, and
+4 vCPU / 8 GiB / 50 GiB (CPU / memory / Workspace).
+Explicit axes override the preset regardless of flag order. Memory and disk
+accept positive whole bytes or case-insensitive `KiB`, `MiB`, `GiB`,
+`k`, `m`, `g` binary units. Omitted axes use the pinned Profile's values.
+
+The Profile's resource values are both defaults and ceilings. Requests above
+any ceiling fail with `resources_exceed_profile`; they are never clamped.
+TTY errors name the Profile and its ceiling and suggest the next command.
+`get` and the TTY `run --keep` receipt show the resolved allocation.
+
+```sh
+secondbox run durable-coding --size large --name mybox --keep -- true
+secondbox get mybox
+secondbox create durable-coding --cpus 2 --memory 4GiB --disk 20GiB --name worker
+secondbox get worker
+```
+
+`create` returns the admitted Operation without waiting. The Profile selects
+the initial state; inspect it with `get` until it is ready before the first
+`exec` (`start` is for a stopped or failed Sandbox). `run` requires a command after `--`, or `--tty` for a terminal.
+
+### Golden-snapshot workflow
+
+A Snapshot captures the durable Workspace of a **stopped** Sandbox. Install
+project dependencies and tools under `/workspace`, stop the Sandbox, then
+snapshot it. Root-filesystem package changes and running processes are not a
+reusable Workspace toolchain.
+
+The release-owned `durable-coding` Profile permits only the platform gateway.
+The operator example
+[durable-coding-registries.json](../../examples/resources/durable-coding-registries.json)
+derives its policy from that Profile and additionally permits HTTPS on port
+443 to `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`,
+`deb.debian.org`, and `proxy.golang.org`. It is not a standard bundle and
+is never installed automatically.
+
+Before applying a copy, the operator must review its explicit RunnerPool
+inventory, capacity policy, and runtime/toolchain digests against the deployed
+release. Replace the example inventory with the intended pool's exact values
+and use that release's verified execution-asset digests. After changing a
+Profile spec, recompute `specDigest` with Go's `resourceapply.SpecDigest`;
+`resources check` rejects a stale digest. The example has no mutable pool
+fields, so drift fails instead of changing an existing pool. For later changes,
+append a revision to the operator Profile's complete lineage.
+
+The Tenant must have an explicit egress context supported by the pool, and the
+Tenant and application authority must grant `durable-coding-registries` and
+`sandbox:read`, `sandbox:lifecycle` (including Snapshots), `sandbox:exec`,
+and `sandbox:files`. The retained
+platform gateway mapping is still required. Apply with a platform session;
+then use an authorized application session, or a platform session carrying
+Tenant and Subject references:
+
+```sh
+secondbox resources check --file ./durable-coding-registries.json
+secondbox resources apply --file ./durable-coding-registries.json
+```
+
+With a local Node project containing `package.json` and `package-lock.json`
+(and a test script), prepare and reuse its dependencies:
+
+```sh
+secondbox run durable-coding-registries --size medium --name golden --keep -- true
+secondbox cp -r ./project golden:/workspace/project
+secondbox exec golden --cwd project --deadline 10m -- npm ci --registry=https://registry.npmjs.org
+secondbox stop golden
+secondbox snapshot golden --name with-deps
+secondbox snapshots golden
+secondbox run durable-coding-registries --size medium --from golden/with-deps --cwd project -- npm test
+secondbox create durable-coding-registries --size medium --from golden/with-deps --name nextbox
+secondbox get nextbox
+```
+
+`run --from` also works with `--tty`. Both `run` and `create` resolve
+`<sandbox>/<snapshot-name>` to a ready Snapshot; `snp_…` identifiers go
+straight to the API. Names are scoped to the source Sandbox and must be unique
+among its ready Snapshots.
+
+The new Sandbox's **resolved disk capacity must equal the Snapshot's capacity**.
+Profile identity need not match; using the same Profile alone is insufficient
+if the source requested a smaller disk. Keep the source disk axis (16 GiB in
+this example), even if you change CPU or memory. The Snapshot must be ready,
+unexpired, and owned by the same Tenant and Subject; its home must be available
+and compatible with the target Profile. A capacity/state/expiry rejection is
+HTTP 409 `state_conflict` (the current title is “Snapshot requires stopped
+committed disk state”); the CLI preserves that typed problem. An unavailable
+home reports `home_runner_unavailable`.
+
+Only the listed destinations are allowed. Package redirects, Git dependencies,
+Go checksum services, and Debian sources using HTTP require separately reviewed
+policy or package-manager configuration; this example does not promise every
+registry workflow. Snapshot retention follows the pinned Profile, and reuse
+stays on the source home. This is not a portable backup or a machine image.
+
 ### Opening an interactive shell
 
 ```sh
