@@ -17,7 +17,9 @@ Standard bundle lineages are unchanged and omit this object. The operator
 leaves CPU and memory unbounded and caps Workspace capacity at 256 GiB.
 
 A requested `workspaceBytes` rounds up to a power of two before checking its
-ceiling; omitted axes retain the Profile default unchanged. vCPU and memory
+ceiling, except that a request at or below a bounded ceiling resolves to the
+ceiling itself when rounding would exceed it, so rounding never refuses a
+request that fits; omitted axes retain the Profile default unchanged. vCPU and memory
 remain continuous integers within schema minimums. The Sandbox pins and
 reports the resolved allocation; quota, home selection, Workspace commands,
 and Instance assignments use those pinned values. A finite ceiling refusal

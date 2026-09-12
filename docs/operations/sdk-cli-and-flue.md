@@ -224,10 +224,11 @@ accept positive whole bytes or case-insensitive `KiB`, `MiB`, `GiB`,
 `k`, `m`, `g` binary units. Omitted axes use the pinned Profile's values.
 
 Requested Workspace capacity rounds up to the next power of two before checking
-bounds: `--disk 20GiB` pins 32 GiB. An omitted disk axis keeps the Profile
-value unchanged, including its 50 GiB default. The large preset requests 50 GiB,
-which rounds to 64 GiB and exceeds the standard `durable-coding` ceiling;
-use default resources or `--size large --disk 32GiB` with that Profile.
+bounds: `--disk 20GiB` pins 32 GiB. A request within a bounded disk ceiling
+never fails because of rounding; when the rounded value would exceed the
+ceiling, the Sandbox pins the ceiling itself, so `--size large` (50 GiB) still
+fits standard `durable-coding`. An omitted disk axis keeps the Profile value
+unchanged.
 
 Without `resourceCeiling`, Profile resource values are both defaults and
 ceilings. Operators can publish a `resourceCeiling` object containing all

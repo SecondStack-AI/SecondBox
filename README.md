@@ -133,10 +133,12 @@ secondbox get mybox
 Explicit `--cpus`, `--memory`, and `--disk` override individual preset axes.
 Byte sizes accept `GiB`, `MiB`, `KiB`, `g`, `m`, `k` (case-insensitive binary
 units), or plain bytes. Without a preset, omitted axes use the Profile values.
-Requested disk capacity rounds up to the next power of two before admission:
-20 GiB becomes 32 GiB, and the large preset's 50 GiB becomes 64 GiB. Omitted
-disk uses the Profile default unchanged. Standard `durable-coding` has a
-50 GiB ceiling, so use its defaults (as above), or `--size large --disk 32GiB`.
+Requested disk capacity rounds up to the next power of two before admission,
+so 20 GiB becomes 32 GiB, except that a request within the Profile's disk
+ceiling never fails because of rounding: it resolves to the ceiling itself
+when the rounded value would exceed it, which is why `--size large` still
+fits standard `durable-coding` at 50 GiB. Omitted disk uses the Profile
+default unchanged.
 
 Without `resourceCeiling`, Profile resource defaults are also ceilings.
 Operators may publish explicit bounds for all three axes, using `null` to

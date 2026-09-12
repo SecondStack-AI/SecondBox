@@ -36,15 +36,22 @@ func resolveSandboxResources(spec contracts.ProfileRevisionSpec, request *contra
 		}
 		return resolved, nil
 	}
+	if spec.ResourceCeiling != nil {
+		ceiling = contracts.SandboxResourceRequest{VCPUCount: spec.ResourceCeiling["vcpuCount"], MemoryBytes: spec.ResourceCeiling["memoryBytes"], WorkspaceBytes: spec.ResourceCeiling["workspaceBytes"]}
+	}
 	if request != nil && request.WorkspaceBytes != nil {
 		// The next power of two must remain representable as a positive int64.
 		if resolved.WorkspaceBytes > 1<<62 {
 			return contracts.SandboxResources{}, fmt.Errorf("%w: SecondBox Sandbox rounded workspaceBytes exceeds int64 capacity", ports.ErrInvalidRequest)
 		}
-		resolved.WorkspaceBytes = int64(1) << bits.Len64(uint64(resolved.WorkspaceBytes-1))
-	}
-	if spec.ResourceCeiling != nil {
-		ceiling = contracts.SandboxResourceRequest{VCPUCount: spec.ResourceCeiling["vcpuCount"], MemoryBytes: spec.ResourceCeiling["memoryBytes"], WorkspaceBytes: spec.ResourceCeiling["workspaceBytes"]}
+		requested := resolved.WorkspaceBytes
+		resolved.WorkspaceBytes = int64(1) << bits.Len64(uint64(requested-1))
+		// Rounding never turns a request that fits into a refusal: a bounded
+		// axis whose ceiling is not a power of two (durable-coding's 50 GiB)
+		// resolves to the ceiling itself, which the Runner also serves.
+		if ceiling.WorkspaceBytes != nil && requested <= *ceiling.WorkspaceBytes && resolved.WorkspaceBytes > *ceiling.WorkspaceBytes {
+			resolved.WorkspaceBytes = *ceiling.WorkspaceBytes
+		}
 	}
 	if (ceiling.VCPUCount != nil && resolved.VCPUCount > *ceiling.VCPUCount) ||
 		(ceiling.MemoryBytes != nil && resolved.MemoryBytes > *ceiling.MemoryBytes) ||
