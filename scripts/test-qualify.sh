@@ -66,6 +66,8 @@ vm_projects=secondbox-suite-123
 expect_failure 'VM is occupied' vm_idle
 vm_projects= vm_processes='bash /tmp/ux-gvisor-chain.sh'
 expect_failure 'VM is occupied' vm_idle
+vm_processes='bash /tmp/release-gvisor.sh'
+expect_failure 'VM is occupied' vm_idle
 vm_processes='bash /home/debian/SecondBox/scripts/test-scenario.sh'
 expect_failure 'VM is occupied' vm_idle
 echo 'SecondBox qualification orchestration tests passed'

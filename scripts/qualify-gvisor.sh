@@ -8,7 +8,7 @@ vm_idle() {
   projects="$(sudo -n docker ps -a --format '{{.Label "com.docker.compose.project"}}')" || return
   processes="$(ps -eo args=)" || return
   if grep -q '^secondbox-suite-' <<<"$projects" ||
-    grep -Eq '^(bash|/bin/bash) .*[/](test-scenario(-gvisor(-pod)?)?|ux-gvisor-chain[^ /]*)[.]sh( |$)' <<<"$processes"; then
+    grep -Eq '^(bash|/bin/bash) .*[/](test-scenario(-[^ /]+)?|[^ /]*gvisor[^ /]*)[.]sh( |$)' <<<"$processes"; then
     echo 'SecondBox gVisor qualification: VM is occupied by another scenario run; wait for its owner to finish and clean up' >&2
     return 1
   fi
