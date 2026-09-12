@@ -185,6 +185,12 @@ func (s *RunnerProtocolService) pumpPortReads(
 			return
 		}
 		data, err := state.connection.Read(ctx, int(credit))
+		if unused := credit - uint64(len(data)); unused > 0 {
+			if creditErr := state.credit.add(unused); creditErr != nil {
+				reportRunnerAsyncError(asyncErrors, creditErr)
+				return
+			}
+		}
 		if len(data) > 0 {
 			if sendErr := s.sendPortBytes(stream, state, data); sendErr != nil {
 				reportRunnerAsyncError(asyncErrors, sendErr)

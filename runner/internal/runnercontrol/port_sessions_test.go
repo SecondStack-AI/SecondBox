@@ -11,6 +11,40 @@ import (
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
+func TestRunnerPortProxyPreservesCreditAfterShortReads(t *testing.T) {
+	connection := newTestPortConnection()
+	service, err := NewRunnerProtocolService(testRunnerConfig(), &portRelayAssignmentBackend{
+		connection: connection,
+	}, staticProtocolConnector{stream: &threadSafeRunnerStream{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &threadSafeRunnerStream{}
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	enabled := map[runnerprotocol.RunnerFeature]bool{runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY: true}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errors := make(chan error, 1)
+	if err := service.handlePortFrame(ctx, stream, relayPortOpen(fence, "short", "short-stream"), enabled, errors); err != nil {
+		t.Fatal(err)
+	}
+	waitRunnerMessages(t, stream, 1)
+	if err := service.handlePortFrame(ctx, stream, &runnerprotocol.PortFrame{
+		Fence: cloneRunnerFence(fence), OperationId: "short", StreamId: "short-stream", Sequence: 2,
+		Payload: &runnerprotocol.PortFrame_Credit{Credit: &runnerprotocol.StreamCredit{ByteCount: 8}},
+	}, enabled, errors); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 8 {
+		connection.queueRead([]byte{byte(index)}, nil)
+		waitRunnerMessages(t, stream, index+2)
+		if got := stream.messages()[index+1].GetPort().GetBytes().Data; !bytes.Equal(got, []byte{byte(index)}) {
+			t.Fatalf("short-read response %d = %v", index, got)
+		}
+	}
+}
+
 func TestRunnerPortProxyIsFencedBackpressuredAndCancelled(t *testing.T) {
 	connection := newTestPortConnection()
 	backend := &portRelayAssignmentBackend{
