@@ -4,10 +4,128 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"strings"
 	"testing"
+	"time"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 )
+
+func TestGuestPortProxyRejectsInvalidSocketReadCount(t *testing.T) {
+	for _, count := range []int{-1, 9} {
+		stream := &recordingGuestPortStream{}
+		connection := &protocolConnection{stream: stream}
+		state := &protocolPortState{
+			binding: &guestv1.OperationBinding{}, credit: newProtocolPortCredit(),
+			connection: &invalidPortReadConnection{count: count},
+		}
+		if err := state.credit.add(8); err != nil {
+			t.Fatal(err)
+		}
+		connection.wait.Add(1)
+		connection.pumpPortConnection(t.Context(), "invalid-read", state)
+		err := connection.recordedAsyncError()
+		if err == nil || !strings.Contains(err.Error(), "invalid guest Port socket read count") || stream.sent != 0 {
+			t.Fatalf("socket read count %d: error = %v, sent = %d", count, err, stream.sent)
+		}
+	}
+}
+
+type invalidPortReadConnection struct {
+	net.Conn
+	count int
+}
+
+func (connection *invalidPortReadConnection) Read([]byte) (int, error) {
+	return connection.count, io.EOF
+}
+func (*invalidPortReadConnection) Close() error { return nil }
+
+type recordingGuestPortStream struct {
+	guestv1.GuestAgent_ConnectServer
+	sent int
+}
+
+func (stream *recordingGuestPortStream) Send(*guestv1.GuestToRunner) error {
+	stream.sent++
+	return nil
+}
+
+func TestGuestPortProxyPreservesCreditAfterShortSocketReads(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverErrors := make(chan error, 1)
+	go func() {
+		connection, err := listener.Accept()
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer connection.Close()
+		_, err = io.Copy(connection, connection)
+		serverErrors <- err
+	}()
+	stream, binding, cleanup := openNegotiatedProtocolTestStreamWithFeatures(
+		t, t.TempDir(), []guestv1.GuestFeature{guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY},
+	)
+	defer cleanup()
+	request := &guestv1.PortFrame{
+		Binding: protocolTestOperationBinding(binding, "port-short-reads", 1),
+		Payload: &guestv1.PortFrame_Request{Request: &guestv1.PortRequest{
+			GuestPort: uint32(listener.Addr().(*net.TCPAddr).Port), Protocol: "tcp", IdleTimeoutMs: 5_000,
+		}},
+	}
+	if err := stream.Send(&guestv1.RunnerToGuest{Message: &guestv1.RunnerToGuest_Port{Port: request}}); err != nil {
+		t.Fatal(err)
+	}
+	receiveProtocolPort(t, stream)
+	if err := stream.Send(&guestv1.RunnerToGuest{Message: &guestv1.RunnerToGuest_Port{Port: &guestv1.PortFrame{
+		Binding: protocolTestOperationBinding(binding, "port-short-reads", 2),
+		Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: 8}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	responses := make(chan *guestv1.PortFrame, 16)
+	receiveErrors := make(chan error, 1)
+	go func() {
+		for {
+			frame, err := stream.Recv()
+			if err != nil {
+				receiveErrors <- err
+				return
+			}
+			responses <- frame.GetPort()
+		}
+	}()
+	for index := range 8 {
+		if err := stream.Send(&guestv1.RunnerToGuest{Message: &guestv1.RunnerToGuest_Port{Port: &guestv1.PortFrame{
+			Binding: protocolTestOperationBinding(binding, "port-short-reads", uint64(index+3)),
+			Payload: &guestv1.PortFrame_Bytes{Bytes: &guestv1.PortBytes{Data: []byte{byte(index)}}},
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		// Waiting for each echo forces separate short reads against one eight-byte grant.
+		for receivedCredit, receivedBytes := false, false; !receivedCredit || !receivedBytes; {
+			select {
+			case frame := <-responses:
+				if frame.GetCredit() != nil {
+					receivedCredit = true
+				} else if frame.GetBytes() != nil && bytes.Equal(frame.GetBytes().Data, []byte{byte(index)}) {
+					receivedBytes = true
+				} else {
+					t.Fatalf("unexpected port frame: %v", frame)
+				}
+			case err := <-receiveErrors:
+				t.Fatal(err)
+			case <-time.After(2 * time.Second):
+				t.Fatalf("short socket read exhausted credit at byte %d", index)
+			}
+		}
+	}
+}
 
 func TestGuestPortProxyUsesOnlyApprovedLoopbackDialAndByteCredit(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

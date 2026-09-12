@@ -15,15 +15,20 @@ import (
 const firecrackerGuestPortFrameBytes = 64 << 10
 
 type guestPortConnection struct {
-	stream    guestv1.GuestAgent_ConnectClient
-	binding   *guestv1.OperationBinding
-	cancel    context.CancelFunc
-	sendMu    sync.Mutex
-	nextSend  uint64
-	credit    *guestPortCredit
-	reads     chan guestPortRead
-	closeOnce sync.Once
-	closeErr  error
+	stream        guestv1.GuestAgent_ConnectClient
+	binding       *guestv1.OperationBinding
+	cancel        context.CancelFunc
+	sendMu        sync.Mutex
+	nextSend      uint64
+	credit        *guestPortCredit
+	reads         chan guestPortRead
+	readMu        sync.Mutex
+	readCredit    uint64
+	readPending   []byte
+	receiveMu     sync.Mutex
+	receiveCredit uint64
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 type guestPortRead struct {
@@ -236,6 +241,18 @@ func (connection *guestPortConnection) receive(ctx context.Context) {
 				connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port byte ordering is invalid")})
 				return
 			}
+			if len(frame.GetBytes().Data) > firecrackerGuestPortFrameBytes {
+				connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port bytes exceed the frame bound")})
+				return
+			}
+			connection.receiveMu.Lock()
+			if uint64(len(frame.GetBytes().Data)) > connection.receiveCredit {
+				connection.receiveMu.Unlock()
+				connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port bytes exceed granted credit")})
+				return
+			}
+			connection.receiveCredit -= uint64(len(frame.GetBytes().Data))
+			connection.receiveMu.Unlock()
 			connection.deliver(guestPortRead{data: bytes.Clone(frame.GetBytes().Data)})
 		case frame.GetTerminal() != nil:
 			detail := frame.GetTerminal().SafeDetail
@@ -271,19 +288,45 @@ func (connection *guestPortConnection) Read(
 	if maximum < 1 || maximum > firecrackerGuestPortFrameBytes {
 		return nil, fmt.Errorf("Firecracker guest Port read bound is invalid")
 	}
-	if err := connection.send(&guestv1.PortFrame{
-		Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{
-			ByteCount: uint64(maximum),
-		}},
-	}); err != nil {
+	connection.readMu.Lock()
+	defer connection.readMu.Unlock()
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case read := <-connection.reads:
-		return read.data, read.err
+	if len(connection.readPending) == 0 {
+		// Credit includes guest frames queued by receive but not yet consumed here.
+		if uint64(maximum) > connection.readCredit {
+			additional := uint64(maximum) - connection.readCredit
+			connection.receiveMu.Lock()
+			connection.receiveCredit += additional
+			connection.receiveMu.Unlock()
+			if err := connection.send(&guestv1.PortFrame{
+				Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: additional}},
+			}); err != nil {
+				connection.cancel()
+				return nil, err
+			}
+			connection.readCredit += additional
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case read := <-connection.reads:
+			if read.err != nil {
+				return nil, read.err
+			}
+			if uint64(len(read.data)) > connection.readCredit {
+				connection.cancel()
+				return nil, fmt.Errorf("Firecracker guest Port bytes exceed granted credit")
+			}
+			connection.readCredit -= uint64(len(read.data))
+			connection.readPending = read.data
+		}
 	}
+	size := min(maximum, len(connection.readPending))
+	data := connection.readPending[:size:size]
+	connection.readPending = connection.readPending[size:]
+	return data, nil
 }
 
 func (connection *guestPortConnection) Write(

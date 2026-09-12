@@ -187,6 +187,16 @@ func (c *protocolConnection) pumpPortConnection(
 			return
 		}
 		count, readErr := state.connection.Read(buffer[:credit])
+		if count < 0 || uint64(count) > credit {
+			c.recordAsyncError("invalid guest Port socket read count", fmt.Errorf("read count %d exceeds reserved credit %d", count, credit))
+			return
+		}
+		if unused := credit - uint64(count); unused > 0 {
+			if err := state.credit.add(unused); err != nil {
+				c.recordAsyncError("return unused guest Port credit", err)
+				return
+			}
+		}
 		if count > 0 {
 			if err := c.sendPort(state, &guestv1.PortFrame{
 				Payload: &guestv1.PortFrame_Bytes{Bytes: &guestv1.PortBytes{

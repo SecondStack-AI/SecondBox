@@ -4,12 +4,85 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
+
+func TestRunnerPortProxyRejectsReadBeyondReservedCredit(t *testing.T) {
+	service, err := NewRunnerProtocolService(testRunnerConfig(), &portRelayAssignmentBackend{
+		connection: newTestPortConnection(),
+	}, staticProtocolConnector{stream: &threadSafeRunnerStream{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := relayPortOpen(relayRunnerFence(), "oversized", "oversized-stream")
+	state := &runnerPortOperation{
+		fence: open.Fence, correlation: open.Correlation, operationID: open.OperationId,
+		streamID: open.StreamId, nextOutgoing: 1, credit: newRunnerCreditWindow(),
+		connection: &oversizedPortReadConnection{PortConnection: newTestPortConnection()},
+	}
+	if err := state.credit.add(8); err != nil {
+		t.Fatal(err)
+	}
+	stream := &threadSafeRunnerStream{}
+	asyncErrors := make(chan error, 1)
+	service.pumpPortReads(t.Context(), stream, state, asyncErrors)
+	select {
+	case err := <-asyncErrors:
+		if !strings.Contains(err.Error(), "exceeds reserved credit") {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("oversized Port read did not fail")
+	}
+	if len(stream.messages()) != 0 {
+		t.Fatal("oversized Port read was forwarded")
+	}
+}
+
+type oversizedPortReadConnection struct{ PortConnection }
+
+func (*oversizedPortReadConnection) Read(context.Context, int) ([]byte, error) {
+	return []byte("123456789"), io.EOF
+}
+
+func TestRunnerPortProxyPreservesCreditAfterShortReads(t *testing.T) {
+	connection := newTestPortConnection()
+	service, err := NewRunnerProtocolService(testRunnerConfig(), &portRelayAssignmentBackend{
+		connection: connection,
+	}, staticProtocolConnector{stream: &threadSafeRunnerStream{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &threadSafeRunnerStream{}
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	enabled := map[runnerprotocol.RunnerFeature]bool{runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY: true}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errors := make(chan error, 1)
+	if err := service.handlePortFrame(ctx, stream, relayPortOpen(fence, "short", "short-stream"), enabled, errors); err != nil {
+		t.Fatal(err)
+	}
+	waitRunnerMessages(t, stream, 1)
+	if err := service.handlePortFrame(ctx, stream, &runnerprotocol.PortFrame{
+		Fence: cloneRunnerFence(fence), OperationId: "short", StreamId: "short-stream", Sequence: 2,
+		Payload: &runnerprotocol.PortFrame_Credit{Credit: &runnerprotocol.StreamCredit{ByteCount: 8}},
+	}, enabled, errors); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 8 {
+		connection.queueRead([]byte{byte(index)}, nil)
+		waitRunnerMessages(t, stream, index+2)
+		if got := stream.messages()[index+1].GetPort().GetBytes().Data; !bytes.Equal(got, []byte{byte(index)}) {
+			t.Fatalf("short-read response %d = %v", index, got)
+		}
+	}
+}
 
 func TestRunnerPortProxyIsFencedBackpressuredAndCancelled(t *testing.T) {
 	connection := newTestPortConnection()
