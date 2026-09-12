@@ -558,6 +558,7 @@ const (
 	ProblemCodeWorkspaceRelocationTargetUnavailable ProblemCode = "workspace_relocation_target_unavailable"
 	ProblemCodeQuotaExceeded                        ProblemCode = "quota_exceeded"
 	ProblemCodeResourcesExceedProfile               ProblemCode = "resources_exceed_profile"
+	ProblemCodeResourcesFixedByProfile              ProblemCode = "resources_fixed_by_profile"
 	ProblemCodeLimitExceeded                        ProblemCode = "limit_exceeded"
 	ProblemCodeGuestUnavailable                     ProblemCode = "guest_unavailable"
 	ProblemCodeExecutionNodeUnavailable             ProblemCode = "execution_node_unavailable"
@@ -582,6 +583,9 @@ type ProfilePage struct {
 	Items      []Profile `json:"items"`
 	NextCursor *string   `json:"nextCursor,omitempty"`
 }
+
+// ProfileResourceCeiling Optional Profile size bounds. Every axis is explicit: null leaves that axis bounded only by quota and Runner admission. Integer bounds must be at least the matching resources default. Not permitted with snapshot_resume.
+type ProfileResourceCeiling = contracts.ProfileResourceCeiling
 
 type ProfileRevision struct {
 	CreatedAt Timestamp           `json:"createdAt"`
@@ -622,6 +626,7 @@ type RemovePathRequest struct {
 
 type RenewLeaseRequest = contracts.RenewLeaseRequest
 
+// ResourcePolicy Default Sandbox resources and concurrent operation limit. Also the size ceiling when resourceCeiling is absent.
 type ResourcePolicy = contracts.ResourcePolicy
 
 type RestoreSnapshotRequest = contracts.RestoreSnapshotRequest
@@ -676,6 +681,7 @@ type SandboxInspection struct {
 
 type SandboxPage = contracts.SandboxPage
 
+// SandboxResourceRequest Requested Sandbox size. Omitted axes use Profile defaults unchanged. Requested workspaceBytes rounds up to a power of two before ceiling checks. snapshot_resume accepts only the exact Profile size.
 type SandboxResourceRequest = contracts.SandboxResourceRequest
 
 type SandboxResources = contracts.SandboxResources

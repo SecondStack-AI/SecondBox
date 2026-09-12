@@ -223,13 +223,31 @@ Explicit axes override the preset regardless of flag order. Memory and disk
 accept positive whole bytes or case-insensitive `KiB`, `MiB`, `GiB`,
 `k`, `m`, `g` binary units. Omitted axes use the pinned Profile's values.
 
-The Profile's resource values are both defaults and ceilings. Requests above
-any ceiling fail with `resources_exceed_profile`; they are never clamped.
-TTY errors name the Profile and its ceiling and suggest the next command.
-`get` and the TTY `run --keep` receipt show the resolved allocation.
+Requested Workspace capacity rounds up to the next power of two before checking
+bounds: `--disk 20GiB` pins 32 GiB. An omitted disk axis keeps the Profile
+value unchanged, including its 50 GiB default. The large preset requests 50 GiB,
+which rounds to 64 GiB and exceeds the standard `durable-coding` ceiling;
+use default resources or `--size large --disk 32GiB` with that Profile.
+
+Without `resourceCeiling`, Profile resource values are both defaults and
+ceilings. Operators can publish a `resourceCeiling` object containing all
+three axes: each integer must be at least its default; `null` leaves the axis
+bounded only by Tenant/Subject quota and Runner admission. The
+[durable-coding-flexible example](../../examples/resources/durable-coding-flexible.json)
+keeps the standard image and policies, sets CPU and memory ceilings to `null`,
+and bounds Workspace capacity at 256 GiB. It is an operator document, not a
+standard bundle. Apply and grant it explicitly before using its Profile name.
+
+Requests above a finite ceiling fail with `resources_exceed_profile`; its
+`ceiling` details omit unbounded axes. TTY errors name the Profile and suggest
+a retry within its effective bounds. A `snapshot_resume` revision cannot
+publish `resourceCeiling`; requests must match its defaults exactly or fail
+with `resources_fixed_by_profile`. Equal explicit values remain unchanged,
+including disk, to preserve resume identity. `get` and the TTY `run --keep`
+receipt show the resolved allocation.
 
 ```sh
-secondbox run durable-coding --size large --name mybox --keep -- true
+secondbox run durable-coding --name mybox --keep -- true
 secondbox get mybox
 secondbox create durable-coding --cpus 2 --memory 4GiB --disk 20GiB --name worker
 secondbox get worker

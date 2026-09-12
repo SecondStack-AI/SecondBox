@@ -1015,6 +1015,11 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		problem.Ceiling = &resourcesError.Ceiling
 		problem.Requested = &resourcesError.Requested
 	}
+	var fixedResources *ports.ResourcesFixedByProfileError
+	if errors.As(err, &fixedResources) {
+		problem.Ceiling = &fixedResources.Fixed
+		problem.Requested = &fixedResources.Requested
+	}
 	if errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		retryAfterMilliseconds := int64(time.Second / time.Millisecond)
 		problem.RetryAfterMilliseconds = &retryAfterMilliseconds
@@ -1103,6 +1108,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusBadRequest, "invalid_request", "Requested output limit exceeds the Profile execution policy", false
 	case errors.Is(err, runnercontrol.ErrDataPlaneStreamWindow):
 		return http.StatusBadRequest, "invalid_request", "Requested stream window exceeds the Profile execution policy", false
+	case errors.Is(err, ports.ErrResourcesFixedByProfile):
+		return http.StatusBadRequest, "resources_fixed_by_profile", "Requested resources differ from the fixed Profile size", false
 	case errors.Is(err, ports.ErrResourcesExceedProfile):
 		return http.StatusBadRequest, "resources_exceed_profile", "Requested resources exceed the Profile ceiling", false
 	case errors.Is(err, ports.ErrQuotaExceeded):

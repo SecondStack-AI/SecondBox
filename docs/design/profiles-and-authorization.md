@@ -2,7 +2,36 @@
 
 Profile resources state integer `vcpuCount`, guest memory, Workspace capacity, concurrency, duration, and output bounds. They make no universal CPU-share or guest PID-enforcement promise; those controls remain backend-specific. Profiles select a homogeneous RunnerPool but contain no backend kind.
 
-Profiles are server-owned policy. Application clients select an authorized profile name; they do not assemble compute policy in a Sandbox request.
+Profiles are server-owned policy. Application clients select an authorized
+Profile name and may request Sandbox size within its policy, Tenant/Subject
+quota, and Runner admission. Image, network, ports, execution bounds, and
+startup mode remain owned by the immutable Profile revision.
+
+`resources` supplies defaults for vCPU, memory, and Workspace capacity. An
+absent `resourceCeiling` makes those values the size ceiling as well. A present
+object must explicitly contain `vcpuCount`, `memoryBytes`, and `workspaceBytes`;
+each is an integer at least its matching default or `null`, meaning the
+Profile imposes no bound on that axis. Quota and Runner admission still apply.
+Standard bundle lineages are unchanged and omit this object. The operator
+[flexible example](../../examples/resources/durable-coding-flexible.json)
+leaves CPU and memory unbounded and caps Workspace capacity at 256 GiB.
+
+A requested `workspaceBytes` rounds up to a power of two before checking its
+ceiling; omitted axes retain the Profile default unchanged. vCPU and memory
+remain continuous integers within schema minimums. The Sandbox pins and
+reports the resolved allocation; quota, home selection, Workspace commands,
+and Instance assignments use those pinned values. A finite ceiling refusal
+returns `resources_exceed_profile`, with unbounded axes omitted from its
+`ceiling` details. Runner startup prewarms power-of-two ext4 templates from
+its supported 64 MiB creation floor through its configured maximum Workspace
+capacity, plus the exact maximum; existing template validation remains exact.
+The public schema's 1 MiB minimum is lower than the runner's supported
+creation floor; requests below that floor still cannot create a Workspace.
+
+A `snapshot_resume` revision rejects `resourceCeiling` at publication because
+resume identity includes compute size. Creation accepts only the exact
+Profile defaults (omitted or explicitly equal, without disk rounding).
+Any changed axis returns `resources_fixed_by_profile` with the fixed size.
 
 ## HTTP authorities
 

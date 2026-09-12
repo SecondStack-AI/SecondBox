@@ -147,6 +147,7 @@ type ProfileRevisionSpec struct {
 	RuntimeBundleDigest   string                     `json:"runtimeBundleDigest"`
 	ToolchainBundleDigest string                     `json:"toolchainBundleDigest"`
 	Resources             ResourcePolicy             `json:"resources"`
+	ResourceCeiling       ProfileResourceCeiling     `json:"resourceCeiling,omitzero"`
 	Startup               StartupPolicy              `json:"startup"`
 	Lifecycle             LifecyclePolicy            `json:"lifecycle"`
 	Retention             RetentionPolicy            `json:"retention"`
@@ -171,8 +172,12 @@ type StartupPolicy struct {
 	Mode string `json:"mode"`
 }
 
-// ResourcePolicy defines the default and ceiling for Sandbox compute and workspace
-// allocations, plus the revision-owned concurrent operation limit.
+// ProfileResourceCeiling preserves axis presence independently of null (unbounded).
+// A present ceiling must name exactly vcpuCount, memoryBytes, and workspaceBytes.
+type ProfileResourceCeiling map[string]*int64
+
+// ResourcePolicy defines default allocations and the concurrent operation limit.
+// Without resourceCeiling, these allocations are also the Profile size bounds.
 type ResourcePolicy struct {
 	VCPUCount            int64 `json:"vcpuCount"`
 	MemoryBytes          int64 `json:"memoryBytes"`
@@ -984,16 +989,16 @@ type DeploymentTimingSummary struct {
 
 // Problem is the stable typed failure envelope.
 type Problem struct {
-	Ceiling                *SandboxResources `json:"ceiling,omitempty"`
-	Requested              *SandboxResources `json:"requested,omitempty"`
-	Type                   string            `json:"type"`
-	Title                  string            `json:"title"`
-	Status                 int               `json:"status"`
-	Code                   string            `json:"code"`
-	RequestID              string            `json:"requestId"`
-	Retryable              bool              `json:"retryable"`
-	RetryAfterMilliseconds *int64            `json:"retryAfterMilliseconds,omitempty"`
-	Details                []ProblemDetail   `json:"details,omitempty"`
+	Ceiling                *SandboxResourceRequest `json:"ceiling,omitempty"`
+	Requested              *SandboxResources       `json:"requested,omitempty"`
+	Type                   string                  `json:"type"`
+	Title                  string                  `json:"title"`
+	Status                 int                     `json:"status"`
+	Code                   string                  `json:"code"`
+	RequestID              string                  `json:"requestId"`
+	Retryable              bool                    `json:"retryable"`
+	RetryAfterMilliseconds *int64                  `json:"retryAfterMilliseconds,omitempty"`
+	Details                []ProblemDetail         `json:"details,omitempty"`
 }
 
 // ProblemDetail identifies one bounded invalid field.

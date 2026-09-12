@@ -123,7 +123,7 @@ func TestCreationCeilingProblemPresentation(t *testing.T) {
 			if err := renderer.WriteError(presented, presented.hint()); err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"resources_exceed_profile", "Profile", "durable-coding", "--cpus 4 --memory 8589934592 --disk 53687091200"} {
+			for _, want := range []string{"resources_exceed_profile", "Profile", "durable-coding", "--cpus 4 --memory 8589934592 --disk 34359738368"} {
 				if !strings.Contains(diagnostic.String(), want) {
 					t.Errorf("diagnostic %q lacks %q", diagnostic.String(), want)
 				}
@@ -149,7 +149,35 @@ func TestResolvedResourceViews(t *testing.T) {
 	if err := writeRetainedSandbox(ctx, &output, sandbox); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(output.String(), sandboxResourceSummary(sandbox.Resources)) != 2 {
+	if strings.Count(output.String(), sandboxResourceSummary(sandbox.Resources)) != 2 || !strings.Contains(output.String(), "requested disk rounds up to a power of two") {
 		t.Fatalf("views = %q", output.String())
+	}
+}
+
+func TestCreationResourceProblemHints(t *testing.T) {
+	pointer := func(value int64) *int64 { return &value }
+	for _, test := range []struct {
+		name         string
+		code         sb.ProblemCode
+		ceiling      sb.SandboxResourceRequest
+		want, absent []string
+	}{
+		{"fixed resume", sb.ProblemCodeResourcesFixedByProfile, sb.SandboxResourceRequest{VCPUCount: pointer(4), MemoryBytes: pointer(1 << 30), WorkspaceBytes: pointer(50 << 30)}, []string{`Profile "resume-profile"`, "fixed size", "--cpus 4 --memory 1073741824 --disk 53687091200", "omit resource flags"}, []string{"or lower"}},
+		{"unbounded compute", sb.ProblemCodeResourcesExceedProfile, sb.SandboxResourceRequest{WorkspaceBytes: pointer(50 << 30)}, []string{`Profile "resume-profile"`, "53687091200 Workspace bytes", "--disk 34359738368"}, []string{"--cpus", "--memory", "0 vCPU", "0 memory"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failure := &commandPresentationError{cause: &sandboxCreationError{profile: "resume-profile", cause: &sb.APIError{Problem: &sb.Problem{Code: test.code, Ceiling: &test.ceiling}}}}
+			hint := failure.hint()
+			for _, want := range test.want {
+				if !strings.Contains(hint, want) {
+					t.Errorf("hint=%q missing=%q", hint, want)
+				}
+			}
+			for _, absent := range test.absent {
+				if strings.Contains(hint, absent) {
+					t.Errorf("hint=%q includes=%q", hint, absent)
+				}
+			}
+		})
 	}
 }

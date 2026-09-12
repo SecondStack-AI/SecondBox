@@ -5,7 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,7 +111,7 @@ func TestSandboxRequestedResourcesHTTPAndQuota(t *testing.T) {
 			decodeResponseJSON(t, response, &problem)
 			requested := ceiling
 			requested.VCPUCount = 5
-			if problem.Code != "resources_exceed_profile" || problem.Ceiling == nil || *problem.Ceiling != ceiling || problem.Requested == nil || *problem.Requested != requested {
+			if problem.Code != "resources_exceed_profile" || problem.Ceiling == nil || !reflect.DeepEqual(*problem.Ceiling, contracts.SandboxResourceRequest{VCPUCount: &ceiling.VCPUCount, MemoryBytes: &ceiling.MemoryBytes, WorkspaceBytes: &ceiling.WorkspaceBytes}) || problem.Requested == nil || *problem.Requested != requested {
 				t.Fatalf("ceiling problem = %+v", problem)
 			}
 			usage, err := databaseStore.GetSubjectUsage(t.Context(), tenant.ID, account.ID)
@@ -237,5 +239,86 @@ func TestSandboxRequestedResourcesFitSmallerHomeRunner(t *testing.T) {
 	request.Resources = nil
 	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "resources-placement-default", request); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		t.Fatalf("Profile-sized placement = %v", err)
+	}
+}
+
+func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
+	quota := generousQuota()
+	quota.MaxVCPUCount = 3
+	quota.MaxMemoryBytes = 1536 << 20
+	controlPlane, databaseStore := newControlPlaneFixture(t, quota)
+	admin := fixtureAdmin(t, controlPlane)
+	tenant, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "resources-flexible")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-resources-flexible")
+	spec := profile.CurrentRevision.Spec
+	spec.Resources.MemoryBytes = 64 << 20
+	spec.Resources.WorkspaceBytes = 1 << 30
+	spec.Lifecycle.InitialState = contracts.SandboxDesiredStateRunning
+	diskCeiling := int64(8 << 30)
+	spec.ResourceCeiling = contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": &diskCeiling}
+	if _, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{Spec: spec}); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := api.NewHandler(api.HandlerConfig{Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), MaximumDataPlaneBodyBytes: 4 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := contractServer(t, handler)
+	t.Cleanup(server.Close)
+	response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-create", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 2, "memoryBytes": 1 << 30, "workspaceBytes": 3 << 30}})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", response.StatusCode, readResponse(t, response))
+	}
+	var operation contracts.Operation
+	decodeResponseJSON(t, response, &operation)
+	get := authenticatedJSONRequest(t, http.MethodGet, server.URL+"/v1/sandboxes/"+operation.SandboxID, credential, "", nil)
+	var sandbox contracts.Sandbox
+	decodeResponseJSON(t, get, &sandbox)
+	if sandbox.Resources != (contracts.SandboxResources{VCPUCount: 2, MemoryBytes: 1 << 30, WorkspaceBytes: 4 << 30}) || sandbox.Workspace.SizeBytes != 4<<30 {
+		t.Fatalf("resolved resources=%+v workspace=%+v", sandbox.Resources, sandbox.Workspace)
+	}
+	for _, test := range []struct {
+		name      string
+		resources map[string]int64
+		status    int
+		code      string
+	}{
+		{"cpu quota", map[string]int64{"vcpuCount": 2}, http.StatusTooManyRequests, "quota_exceeded"},
+		{"memory quota", map[string]int64{"memoryBytes": 1 << 30}, http.StatusTooManyRequests, "quota_exceeded"},
+		{"rounded disk ceiling", map[string]int64{"workspaceBytes": 8<<30 + 1}, http.StatusBadRequest, "resources_exceed_profile"},
+	} {
+		response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-"+strings.ReplaceAll(test.name, " ", "-"), map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": test.resources})
+		if response.StatusCode != test.status {
+			t.Fatalf("%s status=%d body=%s", test.name, response.StatusCode, readResponse(t, response))
+		}
+		var problem contracts.Problem
+		decodeResponseJSON(t, response, &problem)
+		if problem.Code != test.code {
+			t.Fatalf("%s problem=%+v", test.name, problem)
+		}
+		if test.code == "resources_exceed_profile" && (problem.Ceiling == nil || problem.Ceiling.VCPUCount != nil || problem.Ceiling.MemoryBytes != nil || *problem.Ceiling.WorkspaceBytes != diskCeiling || problem.Requested.WorkspaceBytes != 16<<30) {
+			t.Fatalf("effective ceiling=%+v", problem)
+		}
+	}
+	usage, err := databaseStore.GetSubjectUsage(t.Context(), tenant.ID, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Usage.Sandboxes != 1 || usage.Usage.VCPUCount != 2 || usage.Usage.MemoryBytes != 1<<30 {
+		t.Fatalf("refusal changed quota=%+v", usage)
+	}
+	spec.ResourceCeiling = nil
+	spec.Startup.Mode = contracts.StartupModeSnapshotResume
+	if _, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{Spec: spec}); err != nil {
+		t.Fatal(err)
+	}
+	response = authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resume-refused", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"memoryBytes": 128 << 20}})
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("resume status=%d body=%s", response.StatusCode, readResponse(t, response))
+	}
+	var problem contracts.Problem
+	decodeResponseJSON(t, response, &problem)
+	if problem.Code != "resources_fixed_by_profile" || problem.Ceiling == nil || *problem.Ceiling.MemoryBytes != spec.Resources.MemoryBytes || *problem.Ceiling.WorkspaceBytes != spec.Resources.WorkspaceBytes || *problem.Ceiling.VCPUCount != spec.Resources.VCPUCount {
+		t.Fatalf("resume problem=%+v", problem)
 	}
 }

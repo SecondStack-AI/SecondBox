@@ -31,7 +31,8 @@ func TestScenarioCLITargetShape(t *testing.T) {
 	ensureScenarioRunnerPool(t, fixture)
 	waitForScenarioRunner(t, fixture, 15*time.Second)
 	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
-	spec.Resources.MemoryBytes = 1 << 30
+	cpuCeiling, diskCeiling := spec.Resources.VCPUCount, spec.Resources.WorkspaceBytes
+	spec.ResourceCeiling = contracts.ProfileResourceCeiling{"vcpuCount": &cpuCeiling, "memoryBytes": nil, "workspaceBytes": &diskCeiling}
 	profile := createScenarioProfile(t, fixture, "scenario-cli-target-shape", spec)
 	name := uniqueScenarioKey(t, "original")
 	cloneName := uniqueScenarioKey(t, "clone")
@@ -53,11 +54,11 @@ func TestScenarioCLITargetShape(t *testing.T) {
 			}
 		})
 	}
-	if got := cli.success(t, ctx, "run", profile.Name, "--keep", "--name", name, "--cpus", "1", "--memory", "1GiB", "--", "/bin/sh", "-c", "echo hello"); got != "hello\n" {
+	if got := cli.success(t, ctx, "run", profile.Name, "--keep", "--name", name, "--cpus", "1", "--memory", "1GiB", "--disk", "33MiB", "--", "/bin/sh", "-c", "echo hello"); got != "hello\n" {
 		t.Fatalf("SecondBox scenario CLI run stdout=%q", got)
 	}
 	original := scenarioCLIJSON[sb.Sandbox](t, cli.success(t, ctx, "--output", "json", "get", name))
-	if original.ID == "" || original.Metadata[contracts.SandboxNameMetadataKey] != name || original.Resources.VCPUCount != 1 || original.Resources.MemoryBytes != 1<<30 {
+	if original.ID == "" || original.Metadata[contracts.SandboxNameMetadataKey] != name || original.Resources.VCPUCount != 1 || original.Resources.MemoryBytes != 1<<30 || original.Resources.WorkspaceBytes != 64<<20 {
 		t.Fatalf("SecondBox scenario CLI get unexpected Sandbox: %+v", original)
 	}
 	originalHandle := sb.NewSandboxHandle(fixture.subject, original)
@@ -100,7 +101,7 @@ func TestScenarioCLITargetShape(t *testing.T) {
 	if snapshot.State != "ready" || snapshot.SandboxID != original.ID {
 		t.Fatalf("SecondBox scenario CLI snapshot not ready: %+v", snapshot)
 	}
-	created := scenarioCLIJSON[sb.Operation](t, cli.success(t, ctx, "create", profile.Name, "--name", cloneName, "--from", name+"/golden"))
+	created := scenarioCLIJSON[sb.Operation](t, cli.success(t, ctx, "create", profile.Name, "--memory", "1GiB", "--name", cloneName, "--from", name+"/golden"))
 	if created.ID == "" || created.SandboxID == "" || created.SandboxID == original.ID {
 		t.Fatalf("SecondBox scenario CLI clone Operation: %+v", created)
 	}

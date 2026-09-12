@@ -380,7 +380,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if profile.State != contracts.ProfileStateEnabled {
 		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrProfileDisabled
 	}
-	resolvedResources, err := resolveSandboxResources(profile.CurrentRevision.Spec.Resources, input.Resources)
+	resolvedResources, err := resolveSandboxResources(profile.CurrentRevision.Spec, input.Resources)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}

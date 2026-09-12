@@ -12,7 +12,7 @@ SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, l
 - **Durable workspaces.** A Sandbox keeps its disk across stops, restarts, and generations. Snapshot it and restore in place.
 - **Real terminals.** A genuine PTY with raw mode, resize forwarding, and bounded reconnect — not a line-buffered exec loop.
 - **Multi-tenant by construction.** Every row is scoped to an opaque tenant and subject reference. Application tokens carry fixed scopes and explicit Profile grants.
-- **Immutable Profiles.** Operators fix image, resources, lifecycle, network, and port policy. Each Sandbox pins the revision resolved at creation.
+- **Immutable Profiles.** Operators fix image, resource defaults and optional ceilings, lifecycle, network, and port policy. Each Sandbox pins the revision resolved at creation.
 - **Self-hosted.** One unprivileged control plane, PostgreSQL, and one or more privileged runners you place yourself.
 
 > [!NOTE]
@@ -119,7 +119,7 @@ secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
 it. Add `--keep` to retain its Workspace and report its identifier:
 
 ```sh
-secondbox run durable-coding --size large --name mybox --keep -- true
+secondbox run durable-coding --name mybox --keep -- true
 secondbox run durable-coding --cpus 2 --memory 4GiB --disk 20GiB -- python3 -c 'print("hello")'
 secondbox get mybox
 ```
@@ -133,9 +133,20 @@ secondbox get mybox
 Explicit `--cpus`, `--memory`, and `--disk` override individual preset axes.
 Byte sizes accept `GiB`, `MiB`, `KiB`, `g`, `m`, `k` (case-insensitive binary
 units), or plain bytes. Without a preset, omitted axes use the Profile values.
-The Profile owns the ceilings: a larger request fails with
-`resources_exceed_profile`, never silently shrinks. `get` and the TTY retained
-Sandbox summary show the resolved resources.
+Requested disk capacity rounds up to the next power of two before admission:
+20 GiB becomes 32 GiB, and the large preset's 50 GiB becomes 64 GiB. Omitted
+disk uses the Profile default unchanged. Standard `durable-coding` has a
+50 GiB ceiling, so use its defaults (as above), or `--size large --disk 32GiB`.
+
+Without `resourceCeiling`, Profile resource defaults are also ceilings.
+Operators may publish explicit bounds for all three axes, using `null` to
+leave an axis bounded only by Tenant/Subject quota and Runner admission.
+The [flexible Profile example](examples/resources/durable-coding-flexible.json)
+permits unbounded CPU/memory and up to 256 GiB of Workspace capacity. Requests
+above a finite bound fail with `resources_exceed_profile`, never shrink.
+`snapshot_resume` Profiles require their exact default size and reject changes
+with `resources_fixed_by_profile`. `get` and the TTY retained Sandbox summary
+show the resolved resources.
 
 For creation without an initial command, use `create`. It returns the admitted
 Operation immediately; the Profile chooses the initial state. Inspect readiness
@@ -189,7 +200,7 @@ Profile's ceilings:
 secondbox stop mybox
 secondbox snapshot mybox --name with-deps
 secondbox snapshots mybox
-secondbox run durable-coding --size large --from mybox/with-deps -- cat /workspace/out.txt
+secondbox run durable-coding --from mybox/with-deps -- cat /workspace/out.txt
 secondbox start mybox
 secondbox stop mybox
 secondbox rm mybox

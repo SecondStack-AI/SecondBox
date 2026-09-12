@@ -44,6 +44,7 @@ var goContractSchemas = stringSet([]string{
 	"Problem",
 	"Profile",
 	"ProfileRevisionSpec",
+	"ProfileResourceCeiling",
 	"RenewLeaseRequest",
 	"ResourcePolicy",
 	"RestoreSnapshotRequest",

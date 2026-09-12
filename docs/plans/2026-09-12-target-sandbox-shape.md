@@ -401,34 +401,34 @@ Decisions:
   create path.
 - vCPU and memory stay continuous integers.
 
-- [ ] OpenAPI (`contracts/openapi/v1/secondbox.openapi.json`,
+- [x] OpenAPI (`contracts/openapi/v1/secondbox.openapi.json`,
   `ProfileRevisionSpec`) and `pkg/contracts/contracts.go`: add
   `resourceCeiling` with per-axis `integer | null`; add problem code
   `resources_fixed_by_profile`; regenerate both SDKs and the TypeScript
   public surface (`just verify-generated` with the pinned protoc on PATH).
-- [ ] `validateProfileRevisionSpec` (`internal/service/control_plane_service.go`):
+- [x] `validateProfileRevisionSpec` (`internal/service/control_plane_service.go`):
   ceiling axes at or above `resources`; ceiling rejected on
   `snapshot_resume`; every axis present when the object is present.
-- [ ] `resolveSandboxResources` (`internal/store/sandbox_resources.go`):
+- [x] `resolveSandboxResources` (`internal/store/sandbox_resources.go`):
   round `workspaceBytes` requests up to a power of two (never below the
   schema minimum), apply the per-axis ceiling or the `resources` value when
   the object is absent, skip the bound for a `null` axis, refuse any
   difference on resume Profiles with `resources_fixed_by_profile`. The
   `resources_exceed_profile` problem's `ceiling` reports the effective bound
   and omits a `null` axis.
-- [ ] Runner prewarm (`runner/internal/workspacestore/store.go`, the
+- [x] Runner prewarm (`runner/internal/workspacestore/store.go`, the
   `ensureTemplate` call at open with `templateCapacityBytes`): also ensure
   each power-of-two capacity from `minimumExt4Bytes` up to
   `templateCapacityBytes`. Keep the validation of existing templates exact.
-- [ ] Standard bundles are unchanged (absent ceiling). Add
+- [x] Standard bundles are unchanged (absent ceiling). Add
   `examples/resources/durable-coding-flexible.json`: `durable-coding`'s spec
   with `resourceCeiling: {vcpuCount: null, memoryBytes: null,
   workspaceBytes: 274877906944}` validated by a test through the resource
   engine like the registries example.
-- [ ] CLI: `--disk` help and the retained-Sandbox summary state that disk
+- [x] CLI: `--disk` help and the retained-Sandbox summary state that disk
   rounds up to a power of two; render `resources_fixed_by_profile` with a
   hint naming the Profile's fixed size.
-- [ ] Cover: contract tests for the schema and both problem codes; service
+- [x] Cover: contract tests for the schema and both problem codes; service
   tests for ceiling validation and the resume rejection; store tests for
   rounding, `null` axes, absent object, and the resume refusal; a
   `tests/integration` test creating above the Profile default but under
@@ -437,12 +437,26 @@ Decisions:
   extend `TestScenarioCLITargetShape` (or add a sibling scenario) so a
   `null`-memory-ceiling Profile boots a Sandbox with `--memory` above the
   Profile default, and `--disk` reports the rounded value.
-- [ ] Update `docs/design/profiles-and-authorization.md`, the README size
+- [x] Update `docs/design/profiles-and-authorization.md`, the README size
   section, `docs/operations/sdk-cli-and-flue.md`, and the CHANGELOG entry.
-- [ ] Run `just verify-generated`, `just test-contract`, `just test`,
+- [x] Run `just verify-generated`, `just test-contract`, `just test`,
   `just test-standard-resources`, `just test-cli-ui`, `just lint`,
   `go test ./runner/internal/workspacestore`, `git diff --check`.
   `just test-scenario` on the KVM host is the shepherd's gate.
+
+Task 8 implementation notes: prewarming uses the Runner's existing
+`minimumExt4Bytes` (64 MiB), not the OpenAPI minimum (1 MiB). The qualified
+formatter requires that floor; lowering it is outside this task. Explicitly
+equal resume resources bypass disk rounding so non-power-of-two defaults keep
+their exact resume identity. Disk rounding makes the unchanged large preset's
+50 GiB request resolve to 64 GiB; the unchanged standard durable-coding ceiling
+refuses it. Documentation now uses omitted disk defaults or an explicit 32 GiB
+override. The existing granted `scenario-cli-target-shape` Profile now has a
+null memory ceiling and exercises 1 GiB above its 256 MiB default plus a 33 MiB
+disk request resolved to 64 MiB; no new Profile grant is needed.
+
+The implementor's local gates pass. The shepherd still owns qualified KVM
+execution of `TestScenarioCLITargetShape`; no live scenario was run here.
 
 ## Defects found by the qualified CLI scenario
 
