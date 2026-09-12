@@ -29,7 +29,19 @@ just deploy-config .tmp/secondbox-development/secondbox.toml
 
 The reviewed development topology intentionally starts no privileged Runner. Runner enrollment and host qualification remain separate operations on a qualified Linux host.
 
-Create development tenancy only as an observable post-start step. The repository helper follows the same platform login, Tenant and controller creation, controller login, Subject and application-authority creation, application login, and authenticated Sandbox-list sequence as the qualified scenario harness:
+Create development tenancy only as an observable post-start step. For a recorded
+guided installation, `secondbox-deploy bootstrap-tenancy <operation-directory>`
+is the maintained form. It accepts `--tenant-ref` and `--subject-ref` (defaults
+`local` and `local-operator`), `--check` for prerequisite verification, and
+`--application` to return one new application bearer token. It reads only the
+recorded platform-token path, journals non-secret evidence, and revokes its
+transient controller. Existing Tenant and Subject refs remain unchanged.
+Guided installation offers this stage by default; production initialization
+and `deploy-development-up` do not bootstrap tenancy.
+
+The shell helper remains for the non-guided path. It follows the platform login,
+Tenant and controller creation, controller login, Subject and application-authority
+creation, application login, and authenticated Sandbox-list sequence:
 
 ```sh
 scripts/bootstrap-development-tenancy.sh \

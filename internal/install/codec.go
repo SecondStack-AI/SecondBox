@@ -361,6 +361,9 @@ func (plan InstallPlan) Validate() error {
 	if err := validateSafePath(plan.CLI.ConfigPath); err != nil {
 		return installerError("CLI authority plan is incomplete or invalid", err)
 	}
+	if (plan.CLI.TenantRef == "") != (plan.CLI.SubjectRef == "") {
+		return installerError("CLI tenancy plan requires both Tenant and Subject references", nil)
+	}
 	cliIndex := slices.IndexFunc(plan.Paths, func(path PlannedPath) bool { return path.Name == "cli-config" })
 	if cliIndex < 0 || plan.Paths[cliIndex].Path != plan.CLI.ConfigPath || plan.Paths[cliIndex].Kind != ResourceFile || plan.Paths[cliIndex].Mode != 0o600 {
 		return installerError("CLI configuration does not match its planned resource", nil)

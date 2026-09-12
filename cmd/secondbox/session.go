@@ -280,7 +280,7 @@ func runAuthorityLoginCommand(
 	rawURL := flags.String("url", session.url, "absolute SecondBox API endpoint")
 	token := flags.String("token", session.token, "SecondBox API token")
 	defaultTenantRef, defaultSubjectRef := "", ""
-	if authority == sessionAuthorityApplication {
+	if authority == sessionAuthorityApplication || authority == sessionAuthorityPlatform {
 		defaultTenantRef, defaultSubjectRef = session.tenantRef, session.subjectRef
 	}
 	tenantRef := flags.String("tenant-ref", defaultTenantRef, "trusted caller tenant reference")
@@ -298,7 +298,7 @@ func runAuthorityLoginCommand(
 		Token:     strings.TrimSpace(*token),
 		Authority: string(authority),
 	}
-	if authority == sessionAuthorityApplication {
+	if authority == sessionAuthorityApplication || authority == sessionAuthorityPlatform {
 		stored.TenantRef = strings.TrimSpace(*tenantRef)
 		stored.SubjectRef = strings.TrimSpace(*subjectRef)
 	} else if strings.TrimSpace(*tenantRef) != "" || strings.TrimSpace(*subjectRef) != "" {
@@ -376,6 +376,9 @@ func authorityLoginTokenTitle(authority sessionAuthorityKind) string {
 func clientForStoredAuthority(stored sessionFile, httpClient *http.Client) (*secondboxclient.Client, error) {
 	switch sessionAuthorityKind(stored.Authority) {
 	case sessionAuthorityPlatform:
+		if stored.TenantRef != "" || stored.SubjectRef != "" {
+			return secondboxclient.NewSecondBoxSubjectClient(stored.URL, stored.Token, stored.TenantRef, stored.SubjectRef, httpClient)
+		}
 		return secondboxclient.NewSecondBoxClient(stored.URL, stored.Token, httpClient)
 	case sessionAuthorityTenantController:
 		return secondboxclient.NewSecondBoxTenantControllerClient(stored.URL, stored.Token, httpClient)
