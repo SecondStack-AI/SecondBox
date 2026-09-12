@@ -60,6 +60,8 @@ worker() {
   fi
   local -a jobs=()
   if [[ "$only" == all || "$only" == gates ]]; then
+    # Cached diagnostics contain source paths; do not share them across worktrees.
+    export GOLANGCI_LINT_CACHE="$repo_root/.tmp/golangci-lint"
     for name in verify-generated test test-contract test-compose test-image-policy test-sdk-packages test-deployment test-install-docs test-release-workflow lint; do
       if [[ "$name" == test-sdk-packages ]]; then
         stage "$name" sdk_packages & jobs+=("$!")
