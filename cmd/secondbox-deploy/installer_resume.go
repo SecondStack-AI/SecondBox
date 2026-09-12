@@ -698,7 +698,7 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 			// one heartbeat behind its deletion, and durable-coding needs the
 			// whole single-Instance budget of a minimum host. A placement refusal
 			// here is transient, so retry it briefly before treating it as real.
-			name := "installer-smoke-" + strings.ToLower(rand.Text())
+			var name string
 			var command *exec.Cmd
 			var stdout, stderr *boundedCommandBuffer
 			var err error
