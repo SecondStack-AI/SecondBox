@@ -94,6 +94,11 @@ func (spec HuhForm) Run(ctx context.Context, handles FormHandles) error {
 				if err := runAccessibleField(field, accessibleOutput, accessibleInput); err != nil {
 					return fmt.Errorf("SecondBox CLI accessible form: %w", err)
 				}
+				// A field that met end of input must not stand as answered: Huh
+				// treats the empty read as accepting whatever the field held.
+				if accessibleInput.ended {
+					return errors.New("SecondBox CLI accessible form: input ended before every field was answered")
+				}
 				spec := spec.Groups[groupIndex].Fields[fieldIndex]
 				if spec.ValidateString != nil && spec.StringValue != nil {
 					if err := spec.ValidateString(*spec.StringValue); err != nil {
