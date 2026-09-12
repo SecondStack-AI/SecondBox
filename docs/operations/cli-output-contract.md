@@ -39,6 +39,10 @@ without a classification fails command tests.
 | `files read`, logs | no | raw file or log bytes | CLI/API |
 | `run`, `exec`, `shell`, `sandbox shell`, `exec stream` | guest stdin/control stream | guest stdout/control bytes | guest stderr and guest exit status |
 | timings and diagnostics receipt | no | bounded report or declared archive/path | CLI |
+| `create`, `start`, `stop`, `rm`/`delete`, `snapshot`, `restore`, `snapshot rm` | `rm`/`delete` confirmation on TTY unless `--force` | bounded human result; JSON preserves the admitted Operation bytes even when waiting | API/CLI |
+| `ls`/`list`, `get`, `snapshots`, `ls-files` | no | bounded human view or original API page/resource JSON; `ls` human output shows ready Sandboxes unless `--all`, JSON always preserves all API states | API/CLI |
+| `cp [-r] SRC DST` | no | human copy receipt; machine upload emits each original FileWriteResult, download writes API file bytes to the destination and leaves stdout empty | API/CLI |
+| `ports forward SANDBOX LOCAL:REMOTE` | no | human listener summary or original initial PortSession JSON; runs until interrupted | API/CLI |
 
 | `secondbox-deploy` surface | stdin | stdout authority | stderr and exit owner |
 |---|---:|---|---|
