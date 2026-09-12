@@ -8,21 +8,26 @@ set -euo pipefail
 export LC_ALL=C
 
 usage() {
-	echo "usage: scripts/release-stage.sh [--test-mode] [--candidate] VERSION OUTPUT_DIR" >&2
+	echo "usage: scripts/release-stage.sh [--test-mode] [--candidate] [--build-only | --from-build DIR] VERSION OUTPUT_DIR" >&2
   exit 2
 }
 
 test_mode=false
 candidate_mode=false
+build_only=false
+from_build=''
 while [[ "${1:-}" == --* ]]; do
 	case "$1" in
 		--test-mode) test_mode=true ;;
 		--candidate) candidate_mode=true ;;
+    --build-only) build_only=true ;;
+    --from-build) [[ $# -ge 2 ]] || usage; from_build="$2"; shift ;;
 		*) usage ;;
 	esac
 	shift
 done
 [[ "$#" -eq 2 ]] || usage
+! $build_only || { [[ -z "$from_build" ]] && ! $candidate_mode; } || usage
 version="$1"
 output_dir="$2"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -146,7 +151,7 @@ if $test_mode; then
       sha256sum | awk '{print substr($1,1,40)}')"
 fi
 if ! $test_mode; then
-  validate_qualification_evidence "$qualification_evidence_source"
+  if ! $build_only; then validate_qualification_evidence "$qualification_evidence_source"; fi
   [[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] || {
     echo "release staging requires a clean repository" >&2
     exit 1
@@ -169,58 +174,19 @@ temporary="$(mktemp -d "$repo_root/.tmp/release-stage.XXXXXX")"
 cleanup() { rm -rf "$temporary"; }
 trap cleanup EXIT
 
-if $test_mode; then
-	jq -n \
-    --arg schemaVersion "$qualification_evidence_schema" \
-    --arg sourceCommit "$source_commit" \
-    '{
-      schemaVersion: $schemaVersion,
-      sourceCommit: $sourceCommit,
-      repositoryDirty: false,
-      suite: "test-scenario",
-      passCount: 16,
-      wallClockSeconds: 1,
-      host: {
-        platform: "linux-amd64",
-        kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
-        tun: {path: "/dev/net/tun", present: true, readable: true, writable: true},
-        workspaceFilesystem: {mount: "/synthetic/qualification xfs", type: "xfs"}
-      },
-      qualifiedAt: "1970-01-01T00:00:00Z"
-    }' >"$output_dir/$qualification_evidence_name"
+if [[ -n "$from_build" ]]; then
+  [[ -d "$from_build" && ! -L "$from_build" ]] || { echo 'invalid release build directory' >&2; exit 1; }
+  from_build="$(cd "$from_build" && pwd)"
+  [[ -z "$(find "$from_build" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]] || { echo 'release build contains a non-regular entry' >&2; exit 1; }
+  # Authenticate the complete intermediate file set before binding any evidence.
+  (cd "$from_build" && sha256sum --check .release-build-sums >/dev/null)
+  diff -u <(cd "$from_build" && find . -maxdepth 1 -type f ! -name .release-build-sums -printf '%f\n' | sort) \
+    <(sed 's/^[a-f0-9]*  //' "$from_build/.release-build-sums" | sort)
+  jq -e --arg version "$version" --arg commit "$source_commit" '.version == $version and .sourceCommit == $commit' "$from_build/.release-build.json" >/dev/null
+  cp -a -- "$from_build/." "$output_dir/"
+  mv "$output_dir/.release-build.json" "$temporary/candidate-input.json"
+  rm -- "$output_dir/.release-build-sums"
 else
-  install -m 0644 "$qualification_evidence_source" "$output_dir/$qualification_evidence_name"
-fi
-validate_qualification_evidence "$output_dir/$qualification_evidence_name"
-
-gvisor_qualification_evidence_name="secondbox-${version}-gvisor-qualification-evidence.json"
-gvisor_pod_qualification_evidence_name="secondbox-${version}-gvisor-pod-qualification-evidence.json"
-if $test_mode; then
-  for suite in test-scenario-gvisor test-scenario-gvisor-pod; do
-    target="$output_dir/$gvisor_qualification_evidence_name"
-    [[ "$suite" == test-scenario-gvisor ]] || target="$output_dir/$gvisor_pod_qualification_evidence_name"
-    jq -n --arg schemaVersion "$qualification_evidence_schema" --arg sourceCommit "$source_commit" --arg suite "$suite" '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:$suite,backend:"gvisor",passCount:16,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{required:false,present:false},tun:{required:false},workspaceFilesystem:{mount:"/synthetic/qualification xfs",type:"xfs"}},qualifiedAt:"1970-01-01T00:00:00Z"}' >"$target"
-  done
-else
-  install -m 0644 "${SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_qualification_evidence_name"
-  install -m 0644 "${SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-pod-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_pod_qualification_evidence_name"
-fi
-validate_gvisor_qualification_evidence "$output_dir/$gvisor_qualification_evidence_name" test-scenario-gvisor
-validate_gvisor_qualification_evidence "$output_dir/$gvisor_pod_qualification_evidence_name" test-scenario-gvisor-pod
-
-if $test_mode && ! $candidate_mode; then
-  jq -n \
-    --arg schemaVersion "$installer_qualification_evidence_schema" \
-    --arg sourceCommit "$source_commit" \
-    --arg releaseManifestDigest "sha256:$(printf '%s' "$source_commit-installer-qualified" | sha256sum | awk '{print $1}')" \
-    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:24,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
-elif ! $candidate_mode; then
-	install -m 0644 "$installer_qualification_evidence_source" "$output_dir/$installer_qualification_evidence_name"
-fi
-if ! $candidate_mode; then
-	validate_installer_qualification_evidence "$output_dir/$installer_qualification_evidence_name"
-fi
-
 if $test_mode; then
 	postgres_image="docker.io/library/postgres@sha256:$(printf postgres | sha256sum | awk '{print $1}')"
 else
@@ -228,7 +194,7 @@ else
 	postgres_image="$SECONDBOX_RELEASE_POSTGRES_IMAGE"
 fi
 
-if ! $test_mode; then
+if ! $test_mode && ! $build_only; then
   "$repo_root/scripts/verify-generated.sh"
 fi
 
@@ -249,7 +215,10 @@ go -C "$module_smoke" mod verify
 go -C "$module_smoke" list ./sdk/go/secondboxclient >/dev/null
 
 sdk_copy="$temporary/sdk-typescript"
-cp -a "$repo_root/sdk/typescript" "$sdk_copy"
+# Qualification may replace dist concurrently; copy only SDK build inputs.
+mkdir "$sdk_copy"
+tar -C "$repo_root/sdk/typescript" --exclude=./dist --exclude=./node_modules -cf - . | tar -C "$sdk_copy" -xf -
+"$repo_root/node_modules/.bin/tsc" -p "$sdk_copy/tsconfig.build.json"
 npm --prefix "$sdk_copy" version "$version" --no-git-tag-version --ignore-scripts >/dev/null
 npm pack "$sdk_copy" --pack-destination "$output_dir" >/dev/null
 typescript_name="secondstack-ai-secondbox-${version}.tgz"
@@ -374,6 +343,69 @@ go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$microvm
 jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
 jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"
 jq -n --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" --arg gvisorRunner "$gvisor_runner_digest" --arg gvisorImage "$gvisor_image_digest" --arg gvisorMaterialization "$gvisor_materialization_digest" --arg gvisorFlatRoot "$gvisor_flat_root_digest" --arg gvisorRunsc "$gvisor_runsc_release" '{candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain,gvisorRunnerDigest:$gvisorRunner,gvisorImageDigest:$gvisorImage,gvisorMaterializationDigest:$gvisorMaterialization,gvisorFlatRootDigest:$gvisorFlatRoot,gvisorRunscRelease:$gvisorRunsc}' >"$temporary/candidate-input.json"
+fi
+if $build_only; then
+  cp "$temporary/candidate-input.json" "$output_dir/.release-build.json"
+  (cd "$output_dir" && find . -maxdepth 1 -type f ! -name .release-build-sums -printf '%f\n' | sort | xargs sha256sum >.release-build-sums)
+  echo "Unbound release build: $output_dir"
+  exit 0
+fi
+if $test_mode; then
+	jq -n \
+    --arg schemaVersion "$qualification_evidence_schema" \
+    --arg sourceCommit "$source_commit" \
+    '{
+      schemaVersion: $schemaVersion,
+      sourceCommit: $sourceCommit,
+      repositoryDirty: false,
+      suite: "test-scenario",
+      passCount: 16,
+      wallClockSeconds: 1,
+      host: {
+        platform: "linux-amd64",
+        kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
+        tun: {path: "/dev/net/tun", present: true, readable: true, writable: true},
+        workspaceFilesystem: {mount: "/synthetic/qualification xfs", type: "xfs"}
+      },
+      qualifiedAt: "1970-01-01T00:00:00Z"
+    }' >"$output_dir/$qualification_evidence_name"
+else
+  install -m 0644 "$qualification_evidence_source" "$output_dir/$qualification_evidence_name"
+fi
+validate_qualification_evidence "$output_dir/$qualification_evidence_name"
+
+gvisor_qualification_evidence_name="secondbox-${version}-gvisor-qualification-evidence.json"
+gvisor_pod_qualification_evidence_name="secondbox-${version}-gvisor-pod-qualification-evidence.json"
+if $test_mode; then
+  for suite in test-scenario-gvisor test-scenario-gvisor-pod; do
+    target="$output_dir/$gvisor_qualification_evidence_name"
+    [[ "$suite" == test-scenario-gvisor ]] || target="$output_dir/$gvisor_pod_qualification_evidence_name"
+    jq -n --arg schemaVersion "$qualification_evidence_schema" --arg sourceCommit "$source_commit" --arg suite "$suite" '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:$suite,backend:"gvisor",passCount:16,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{required:false,present:false},tun:{required:false},workspaceFilesystem:{mount:"/synthetic/qualification xfs",type:"xfs"}},qualifiedAt:"1970-01-01T00:00:00Z"}' >"$target"
+  done
+else
+  install -m 0644 "${SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_qualification_evidence_name"
+  install -m 0644 "${SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-pod-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_pod_qualification_evidence_name"
+fi
+validate_gvisor_qualification_evidence "$output_dir/$gvisor_qualification_evidence_name" test-scenario-gvisor
+validate_gvisor_qualification_evidence "$output_dir/$gvisor_pod_qualification_evidence_name" test-scenario-gvisor-pod
+
+if $test_mode && ! $candidate_mode; then
+  jq -n \
+    --arg schemaVersion "$installer_qualification_evidence_schema" \
+    --arg sourceCommit "$source_commit" \
+    --arg releaseManifestDigest "sha256:$(printf '%s' "$source_commit-installer-qualified" | sha256sum | awk '{print $1}')" \
+    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:24,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
+elif ! $candidate_mode; then
+	install -m 0644 "$installer_qualification_evidence_source" "$output_dir/$installer_qualification_evidence_name"
+fi
+if ! $candidate_mode; then
+	validate_installer_qualification_evidence "$output_dir/$installer_qualification_evidence_name"
+fi
+
+jq --argjson candidate "$candidate_mode" '.candidate = $candidate' "$temporary/candidate-input.json" >"$temporary/bound-input.json"
+mv "$temporary/bound-input.json" "$temporary/candidate-input.json"
+openapi_name="secondbox-${version}-openapi.json"
+typescript_name="secondstack-ai-secondbox-${version}.tgz"
 go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
 artifact_manifest="$output_dir/secondbox-${version}-artifact-manifest.json"
 installer_qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$artifact_manifest")"

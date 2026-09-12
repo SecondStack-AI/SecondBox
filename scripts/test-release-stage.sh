@@ -80,6 +80,28 @@ LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_two" >/
 LC_ALL="$dictionary_locale" "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_dictionary_locale" >/dev/null
 LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.7.0 "$stage_installer_candidate" >/dev/null
 
+# An unbound build must bind to exactly the same candidate/final bytes, without
+# rebuilding; corruption, undeclared entries and another version are rejected.
+stage_build="$work_dir/stage-build"
+"$repo_root/scripts/release-stage.sh" --test-mode --build-only 0.7.0 "$stage_build" >/dev/null
+[[ ! -e "$stage_build/secondbox-0.7.0-artifact-manifest.json" ]]
+"$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.0 "$work_dir/bound-candidate" >/dev/null
+"$repo_root/scripts/release-stage.sh" --test-mode --from-build "$stage_build" 0.7.0 "$work_dir/bound-final" >/dev/null
+diff -r "$stage_installer_candidate" "$work_dir/bound-candidate"
+diff -r "$stage_one" "$work_dir/bound-final"
+if "$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.1 "$work_dir/wrong-build-version" >/dev/null 2>&1; then
+  echo 'release binding accepted another version' >&2; exit 1
+fi
+printf undeclared >"$stage_build/extra"
+if "$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.0 "$work_dir/extra-build-file" >/dev/null 2>&1; then
+  echo 'release binding accepted an undeclared file' >&2; exit 1
+fi
+rm -- "$stage_build/extra"
+printf corrupt >>"$stage_build/secondbox-0.7.0-openapi.json"
+if "$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.0 "$work_dir/corrupt-build" >/dev/null 2>&1; then
+  echo 'release binding accepted corrupt bytes' >&2; exit 1
+fi
+
 jq -e '.candidate == true and .installerQualificationEvidence == {location:"",digest:""}' "$stage_installer_candidate/secondbox-0.7.0-artifact-manifest.json" >/dev/null
 [[ ! -e "$stage_installer_candidate/secondbox-0.7.0-installer-qualification-evidence.json" ]] || { echo "installer candidate claimed final qualification evidence" >&2; exit 1; }
 candidate_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$stage_installer_candidate/secondbox-0.7.0-artifact-manifest.json")"

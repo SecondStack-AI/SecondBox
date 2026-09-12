@@ -36,7 +36,67 @@ v0.3.0 rotated the anchor and the bundle: snapshot-resume needs a guest agent th
 
 v0.7.0 through v0.10.1 carry the v0.6.0 Firecracker microVM bundle and trust anchor forward unchanged. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact previously published signed bundle; do not rebuild it from other guest sources. A different runtime or toolchain component-manifest digest makes the v1 guided updater reject these releases because existing Sandboxes remain pinned to their immutable Profile revisions. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
 
-## Release
+## Automated release
+
+Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` for PR
+qualification, and `deploy/release.env.example` to
+`~/.config/secondbox/release.env` for releases. Review every path and digest and
+supply `SECONDBOX_TEST_DATABASE_URL` for a disposable test PostgreSQL database.
+The release file includes every qualification key and is the sole configuration
+used by `just release`; it does not recover inputs from an older release directory.
+Run `npm ci --ignore-scripts` once in the checkout. Create the configured
+`RELEASE_OUTPUT_ROOT` and `SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT` parents;
+the latter must be on Btrfs or XFS and traversable by the system libvirt account.
+The checked-in examples describe the reviewed release host using public paths.
+
+```sh
+just qualify                  # PR gates and four independent Firecracker shards
+just qualify --tier release   # gates, full Firecracker, and no-KVM gVisor host + pod
+# After merging, from clean main:
+just release 0.11.0
+```
+
+Release preflight checks source, tag identity, inputs, the pinned Go/protoc and
+`/usr/bin/just` toolchain, libvirt availability, absence of `sbq-` domains, and
+headroom (200 GiB free in each output/workspace filesystem and enough available
+memory for a guest plus 16 GiB). It creates a local tag only when absent and
+never pushes it. Existing tags must identify HEAD. All three versioned output
+directories must be absent; failed output is retained for diagnosis, so archive
+or remove only your own failed run's directories before retrying.
+
+Qualification and the unbound artifact build run concurrently. Once both pass,
+staging binds commit-exact Firecracker and gVisor evidence into the candidate.
+The installer tests all three existing modes, including their reboot and cleanup
+assertions, using separate libvirt guests, MACs, and loopback SSH forwards.
+`QUALIFY_GUEST_MEMORY_MIB` defaults to 16384; concurrency is at most three and is
+capped by available memory after an 8 GiB host reserve. The final stage reuses
+the checksummed build and requires installer evidence for exactly those release
+bytes. Unbound builds cannot be published.
+
+Each release stage writes a log under `.tmp/release/RUN/`; `timing.md` records
+its result and wall clock. Qualification has its own `.tmp/qualify/RUN/` logs and
+supports `just qualify --wait RUN`. On hosts that terminate commands when their
+terminal disappears, launch the release in a user service:
+
+```sh
+systemd-run --user --unit="secondbox-suite-release-$(date +%s)" --collect \
+  --property="WorkingDirectory=$PWD" \
+  --property="StandardOutput=file:$PWD/.tmp/release-console.log" \
+  --property=StandardError=inherit --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
+  --setenv="SECONDBOX_TEST_DATABASE_URL=$SECONDBOX_TEST_DATABASE_URL" \
+  /usr/bin/just release 0.11.0
+```
+
+Reserve the KVM host and the dedicated no-KVM VM before starting. Do not stop
+another operator's units, domains, Compose stacks, or live deployment to make
+room. The automation leaves the no-KVM VM running. Candidate and final outputs
+are `RELEASE_OUTPUT_ROOT/VERSION-candidate` and `RELEASE_OUTPUT_ROOT/VERSION`;
+`VERSION-build` retains the checksummed intermediate build. The successful
+command prints the exact tag-push and `release-upload` commands for explicit
+publication. Neither command is run automatically.
+
+## Appendix: manual release on hosts without automation
+
 
 Tag the clean commit. On the qualified host, run the unfiltered scenario suite, stage the same commit, then upload the draft:
 

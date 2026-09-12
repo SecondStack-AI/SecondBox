@@ -194,34 +194,34 @@ untested because the existing VM is running and belongs to the operator.
 
 ## Task 3: `just release VERSION`
 
-- [ ] `scripts/release.sh VERSION` reading `~/.config/secondbox/release.env`
+- [x] `scripts/release.sh VERSION` reading `~/.config/secondbox/release.env`
   (`deploy/release.env.example` checked in; a superset of qualify.env with the
   release source dir, release public key, Postgres image, candidate and
   installer directories, qualification image and digest).
-- [ ] Preconditions up front: clean tree, `HEAD` is on `main`, no existing
+- [x] Preconditions up front: clean tree, `HEAD` is on `main`, no existing
   `v<VERSION>` tag or one that already identifies `HEAD`, output directories
   absent, libvirt reachable with no `sbq-` domains, disk and memory headroom.
   Create the local tag when absent. Never push anything.
-- [ ] Run `qualify --tier release` and the artifact build concurrently; bind
+- [x] Run `qualify --tier release` and the artifact build concurrently; bind
   evidence into the candidate as soon as both finish
   (`release-stage.sh --candidate` already separates building from binding;
   split it if it does not).
-- [ ] Installer qualification with the three guests in parallel:
+- [x] Installer qualification with the three guests in parallel:
   `scripts/installer-qualification-driver` runs `run_guest` for each mode as a
   background job with its own SSH port and MAC, waits for all, and merges the
   three evidence files exactly as today. Guest memory is `QUALIFY_GUEST_MEMORY_MIB`
   (default 16384) and parallelism is capped by available host memory.
-- [ ] Final `release-stage`, then print the exact publish commands (tag push,
+- [x] Final `release-stage`, then print the exact publish commands (tag push,
   upload) without running them. End with a timing table.
 - [ ] Prove it end to end on this host against a throwaway version and record
   the timing table in the plan; delete the local tag afterwards.
 
 ## Task 4: Documentation
 
-- [ ] Rewrite the operator sequence in `docs/operations/release-operator-setup.md`
+- [x] Rewrite the operator sequence in `docs/operations/release-operator-setup.md`
   and `docs/operations/scenario-qualification.md` around the two commands;
   keep the manual recipes as an appendix for hosts without the automation.
-- [ ] CHANGELOG entry under Unreleased.
+- [x] CHANGELOG entry under Unreleased.
 
 ## Deferred
 

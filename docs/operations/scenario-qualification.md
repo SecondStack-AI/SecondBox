@@ -4,6 +4,47 @@
 
 The suite never skips. It exits non-zero unless qualification is explicitly required and every host and artifact prerequisite is present. A passing `just test-compose` is not evidence for this gate: the Compose suite has no real runner or guest, while the scenario suite proves that public operations reach real compute.
 
+## Automated qualification
+
+Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` and review
+all paths, signing-key fingerprints, component digests, and dedicated VM inputs.
+Supply `SECONDBOX_TEST_DATABASE_URL` for a disposable PostgreSQL database and
+run `npm ci --ignore-scripts` in the checkout. The example documents every key.
+
+```sh
+just qualify
+just qualify --tier release
+just qualify --only gates
+just qualify --only firecracker
+just qualify --tier release --only gvisor
+just qualify --wait RUN
+```
+
+The PR tier runs the ten non-KVM gates concurrently with Firecracker shards
+(`QUALIFY_FIRECRACKER_SHARDS`, default four). Shards publish no release evidence.
+The release tier requires a clean tree and runs gates, unsharded Firecracker,
+and the no-KVM VM chain concurrently. The VM receives a git bundle of HEAD,
+checks it out detached, rebuilds the guest agent, and runs gVisor host and pod
+suites serially. Both evidence files return to `.tmp` with their exact commit
+identity intact. Missing prerequisites fail before any stage starts; no suite
+may skip. The VM is booted without virtualization extensions when needed and
+is left running after qualification. Reserve it exclusively for the run.
+
+Logs and a stage/result/wall-clock table are under `.tmp/qualify/RUN/`; the run
+ID is printed at launch. Stages survive terminal loss through a user systemd
+service (or `setsid` where user services are unavailable). Reattach with `--wait`.
+`--only` is diagnostic selection, not a full release qualification. The internal
+`--preflight` option validates inputs without starting stages; `QUALIFY_ENV_FILE`
+selects another explicit Bash configuration, which `just release` uses for its
+superset `release.env`.
+
+After merging to clean `main`, use `just release VERSION` to qualify, build,
+run the installer guests and stage the release. See [release operator setup](release-operator-setup.md)
+for configuration, memory limits and publication. The manual prerequisites and
+recipes below remain available for hosts without this automation.
+
+## Appendix: manual qualification
+
 ## Qualified host
 
 Use a dedicated Linux x86-64 host with:
