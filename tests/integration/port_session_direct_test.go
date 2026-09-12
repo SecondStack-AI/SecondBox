@@ -394,8 +394,7 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 	t.Cleanup(dataPlaneStore.Close)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		DefaultSubjectQuota: generousQuota(),
-		Now:                 func() time.Time { return *now }, NewID: service.NewOpaqueID,
+		Now: func() time.Time { return *now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: time.Millisecond,
 		PortSessionStore: dataPlaneStore, PublicBaseURL: "https://secondbox.example",

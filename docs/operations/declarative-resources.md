@@ -23,7 +23,7 @@ The bundle resolver takes runtime/toolchain identity from the verified release a
 
 ## Deployment selection
 
-`secondbox.toml` requires an explicit `[standard_resources]` section with the verified artifact-manifest path, selected bundle names, apply readiness bound, and one typed RunnerPool inventory binding per selected bundle. Production uses the same shape and accepts no generated development authority.
+`secondbox.toml` requires an explicit `[standard_resources]` section with the verified artifact-manifest path, selected bundle names, apply readiness bound, and typed RunnerPool inventory declared once by name. All three standard bundles use `standard-amd64`, so any combination of them shares one `[[standard_resources.runner_pools]]` declaration. Duplicate pool names are rejected. Production uses the same shape and accepts no generated development authority.
 
 Logical gateway addresses remain Runner-local deployment configuration. Every declared Runner in a selected pool that should admit a network-enabled standard Profile must advertise one or more contexts and map that Profile's logical name inside each applicable context, for example:
 

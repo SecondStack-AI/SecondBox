@@ -45,13 +45,13 @@ The command prints the two one-time bearer tokens in one JSON response. Capture 
 
 [`deploy/secondbox.example.toml`](../../deploy/secondbox.example.toml) documents `schema_version = 1` and every accepted field. The manifest has seven decision groups:
 
-1. `deployment`: mode, public ingress, TLS termination, process bind addresses, and image references;
+1. `deployment`: mode, public ingress, TLS termination, host publication, and image references;
 2. `database`: bundled or external PostgreSQL and the authority required by that choice;
 3. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
 4. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
 5. `applications`: the platform-token secret reference;
 6. `standard_resources`: verified release manifest, explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
-7. `policy` and `overrides`: subject quota limits, data-plane retention, contested recovery/rollout settings, and intentionally selected tuning overrides.
+7. `policy` and `overrides`: data-plane retention, contested recovery/rollout settings, and intentionally selected tuning overrides.
 
 Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
 
@@ -62,7 +62,7 @@ secondbox-deploy validate /secure/secondbox/secondbox.toml
 secondbox-deploy inspect /secure/secondbox/secondbox.toml
 ```
 
-`inspect` prints all resolved non-secret values, positive help for the data-plane retention policy, and all 18 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
+`inspect` prints all resolved non-secret values, positive help for the data-plane retention policy, and all 15 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
 
 ### Secret references
 
@@ -72,7 +72,11 @@ Runner host paths are different: they are typed absolute values interpreted on t
 
 ### Authority, policy, tuning, and compiled facts
 
-Required deployment authority has no default. This includes identities, the platform and Runner credentials, endpoints, process and storage paths, signed-asset catalog, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, the seven deployment fallback Subject quota limits, and data-plane retention. Tenant aggregate ceilings and explicit Subject quotas are persisted management resources created after startup; they are not deployment-manifest fields. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
+Required deployment authority has no default. This includes identities, the platform and Runner credentials, public endpoints, host paths, signed-asset catalog source, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, and data-plane retention. Tenant aggregate ceilings and Subject quotas are explicit persisted management resources created after startup; they are the sole quota source for admission. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
+
+The deployment compiler supplies the packaged container listeners (`0.0.0.0:8080` for the API and `0.0.0.0:9443` for Runners) and mounted catalog path (`/etc/secondbox/signed-assets.json`). Operators choose the host bind addresses, published ports, and catalog source. Generated process configuration still states every value explicitly.
+
+Existing manifests must remove the retired `policy.default_subject_max_*`, `deployment.listen_address`, `deployment.runner_listen_address`, and `deployment.signed_asset_catalog_path` keys. Standard bundles now share one RunnerPool inventory declaration by name: remove its `bundle` key and consolidate identical `[[standard_resources.runner_pools]]` entries into one. Conflicting inventory declarations require an explicit operator choice; the compiler rejects duplicate names. The strict decoder identifies retired keys without disclosing their values.
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
@@ -147,7 +151,6 @@ An incomplete production initialization is intentionally unusable and reports ev
 - zero or more explicit immutable Runner declarations and their placement;
 - an operator-supplied signed-asset catalog, verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
 - independent platform and Runner enrollment authorities;
-- all seven subject quota limits;
 - retention, contested recovery/rollout policy, and any intentional tuning overrides.
 
 Automation can materialize a complete create-only target non-interactively after generating and reviewing the same typed input:

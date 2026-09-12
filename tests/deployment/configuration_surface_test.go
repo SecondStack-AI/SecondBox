@@ -236,6 +236,15 @@ func TestComposeArtifactPreservesAbsentAndSelectedOverrides(t *testing.T) {
 		return model.Services["control-plane"].Environment
 	}
 	environment := readEnvironment()
+	for name, want := range map[string]string{
+		"SECONDBOX_LISTEN_ADDR":               "0.0.0.0:8080",
+		"SECONDBOX_RUNNER_LISTEN_ADDR":        "0.0.0.0:9443",
+		"SECONDBOX_SIGNED_ASSET_CATALOG_PATH": "/etc/secondbox/signed-assets.json",
+	} {
+		if got := environment[name]; got != want {
+			t.Errorf("packaged setting %s = %#v, want %q", name, got, want)
+		}
+	}
 	for _, name := range []string{"SECONDBOX_HTTP_TIMEOUT_SECONDS", "SECONDBOX_ASSIGNMENT_RETRY_LIMIT", "SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES"} {
 		value, exists := environment[name]
 		if !exists || value != nil {

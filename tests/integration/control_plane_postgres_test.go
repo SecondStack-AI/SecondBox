@@ -884,6 +884,20 @@ func TestConcurrentSubjectQuotaAdmissionNeverOvercommits(t *testing.T) {
 		usage.Limits.MaxSandboxes != 1 || usage.Usage.Sandboxes != 1 {
 		t.Fatalf("subject usage = %#v", usage)
 	}
+
+	// A new service has no deployment quota input. Admission must still use
+	// the Subject quota stored by the management API before the restart.
+	reopenedStore, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reopenedStore.Close)
+	restarted := newControlPlaneService(t, reopenedStore, generousQuota())
+	if _, _, err := restarted.CreateSandbox(t.Context(), principal, "quota-after-restart", contracts.CreateSandboxRequest{
+		Profile: profile.Name, Metadata: map[string]string{},
+	}); !errors.Is(err, ports.ErrQuotaExceeded) {
+		t.Fatalf("admission after restart = %v, want persisted Subject quota refusal", err)
+	}
 }
 
 func TestPostgresRestartRecoversCredentialIdempotencyAndSandboxState(t *testing.T) {

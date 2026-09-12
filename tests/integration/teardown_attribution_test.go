@@ -323,7 +323,6 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:                 databaseStore,
 		PlatformToken:         testPlatformToken,
-		DefaultSubjectQuota:   generousQuota(),
 		Now:                   service.SystemClock,
 		NewID:                 newFixtureID,
 		NewCredentialMaterial: func() string { return fmt.Sprintf("credential-material-%032d", integrationIdentitySequence.Add(1)) },

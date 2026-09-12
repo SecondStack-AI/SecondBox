@@ -140,12 +140,86 @@ func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
 	}
 }
 
+func TestDeploymentRejectsRetiredSettings(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	content, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := []struct{ table, name, key string }{
+		{"[deployment]", "listen_address", "deployment.listen_address"},
+		{"[deployment]", "runner_listen_address", "deployment.runner_listen_address"},
+		{"[deployment]", "signed_asset_catalog_path", "deployment.signed_asset_catalog_path"},
+		{"[[standard_resources.runner_pools]]", "bundle", "standard_resources.runner_pools.bundle"},
+	}
+	for _, suffix := range []string{
+		"sandboxes", "active_instances", "vcpu_count", "memory_bytes",
+		"snapshots", "port_sessions", "concurrent_operations",
+	} {
+		name := "default_subject_max_" + suffix
+		fields = append(fields, struct{ table, name, key string }{"[policy]", name, "policy." + name})
+	}
+	for _, field := range fields {
+		t.Run(field.key, func(t *testing.T) {
+			const value = "do-not-disclose-invalid-field-value"
+			modified := strings.Replace(string(content), field.table+"\n", field.table+"\n"+field.name+" = '"+value+"'\n", 1)
+			if err := os.WriteFile(manifestPath, []byte(modified), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Resolve(manifestPath)
+			if err == nil || !strings.Contains(err.Error(), field.key) {
+				t.Fatalf("retired setting error = %v, want rejected key %s", err, field.key)
+			}
+			if strings.Contains(err.Error(), value) {
+				t.Fatalf("invalid field value was disclosed: %v", err)
+			}
+		})
+	}
+}
+
+func TestSelectedStandardBundlesShareOnePool(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.StandardResources.RunnerPools) != 1 {
+		t.Fatalf("initialized pool declarations = %d, want one", len(manifest.StandardResources.RunnerPools))
+	}
+	bundles := standardresources.BundleNames()
+	for selection := 1; selection < 1<<len(bundles); selection++ {
+		manifest.StandardResources.Bundles = nil
+		for index, bundle := range bundles {
+			if selection&(1<<index) != 0 {
+				manifest.StandardResources.Bundles = append(manifest.StandardResources.Bundles, bundle)
+			}
+		}
+		t.Run(strings.Join(manifest.StandardResources.Bundles, "+"), func(t *testing.T) {
+			resolved, err := resolveManifest(manifest, filepath.Dir(manifestPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := resolved.ResourceDocument
+			if len(document.RunnerPools) != 1 || document.RunnerPools[0].Name != standardresources.PoolAMD64 || len(document.Profiles) != len(manifest.StandardResources.Bundles) {
+				t.Fatalf("resolved standard resource selection = %#v", document)
+			}
+			for _, profile := range document.Profiles {
+				if !slices.Contains(manifest.StandardResources.Bundles, profile.Name) {
+					t.Fatalf("unselected Profile %s was materialized", profile.Name)
+				}
+				for _, revision := range profile.Revisions {
+					if revision.Spec.Pool != standardresources.PoolAMD64 {
+						t.Fatalf("Profile %s revision %d binds unexpected pool %s", profile.Name, revision.Number, revision.Spec.Pool)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestIsolatedStandardBundleCanBeSelectedWithoutGatewayMapping(t *testing.T) {
 	manifest := developmentManifest("secrets/postgres-password", "secrets/platform-token", "secrets/runner-enrollment-credential")
 	manifest.StandardResources.Bundles = []string{standardresources.AgentCompartmentIsolated}
-	manifest.StandardResources.RunnerPools = slices.DeleteFunc(manifest.StandardResources.RunnerPools, func(pool StandardRunnerPool) bool {
-		return pool.Bundle != standardresources.AgentCompartmentIsolated
-	})
 	runner := validTestRunner("runner-isolated", "remote")
 	runner.PoolID = standardresources.PoolAMD64
 	runner.EgressContexts = nil
@@ -444,11 +518,6 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "control plane published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Deployment.APIBindIP = "0.0.0.0" }},
 		{name: "Runner endpoint published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerBindIP = "0.0.0.0" }},
 		{name: "database published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Database.BindIP = "0.0.0.0" }},
-		{name: "control plane listener mismatches container", want: "listen_address must be 0.0.0.0:8080", mutate: func(manifest *ManifestV1) { manifest.Deployment.ListenAddress = "0.0.0.0:9999" }},
-		{name: "Runner listener mismatches container", want: "runner_listen_address must be 0.0.0.0:9443", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerListenAddress = "0.0.0.0:9999" }},
-		{name: "asset catalog path mismatches container", want: "signed_asset_catalog_path must be /etc/secondbox/signed-assets.json", mutate: func(manifest *ManifestV1) {
-			manifest.Deployment.AssetCatalogPath = "/different/signed-assets.json"
-		}},
 		{name: "Compose project name carries uppercase", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "SecondBox" }},
 		{name: "Compose project name starts with a hyphen", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "-secondbox" }},
 		{name: "Compose project name carries a forbidden byte", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "secondbox/test" }},
@@ -481,10 +550,11 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "standard bundle duplicate", want: "unique release-owned bundle names", mutate: func(manifest *ManifestV1) {
 			manifest.StandardResources.Bundles = []string{"agent-compartment", "agent-compartment"}
 		}},
-		{name: "standard bundle has no pool", want: "must bind selected bundle durable-coding", mutate: func(manifest *ManifestV1) {
-			manifest.StandardResources.RunnerPools = slices.DeleteFunc(manifest.StandardResources.RunnerPools, func(pool StandardRunnerPool) bool {
-				return pool.Bundle == standardresources.DurableCoding
-			})
+		{name: "standard bundle has no pool", want: "must declare pool standard-amd64", mutate: func(manifest *ManifestV1) {
+			manifest.StandardResources.RunnerPools = nil
+		}},
+		{name: "standard pool declared twice", want: "declare each pool once", mutate: func(manifest *ManifestV1) {
+			manifest.StandardResources.RunnerPools = append(manifest.StandardResources.RunnerPools, manifest.StandardResources.RunnerPools[0])
 		}},
 		{name: "standard pool capacity absent", want: "max_sandboxes must be positive", mutate: func(manifest *ManifestV1) { manifest.StandardResources.RunnerPools[0].MaxSandboxes = nil }},
 		{name: "standard gateway unresolved", want: "must resolve agent-gateway.secondbox.internal", mutate: func(manifest *ManifestV1) {

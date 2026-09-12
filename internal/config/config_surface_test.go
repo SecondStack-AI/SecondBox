@@ -20,13 +20,6 @@ var requiredControlPlaneEnvironment = map[string]string{
 	"SECONDBOX_RUNNER_CA_CERTIFICATE":                     "/tmp/ca.crt",
 	"SECONDBOX_SIGNED_ASSET_CATALOG_PATH":                 "/tmp/assets.json",
 	"SECONDBOX_DATA_PLANE_RETENTION_SECONDS":              "86400",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES":             "100",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES":      "20",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_VCPU_COUNT":            "80000",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES":          "171798691840",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS":             "500",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS":         "100",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": "20",
 	"SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS":     "250",
 	"SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": "250",
 	"SECONDBOX_RUNNER_ENABLED_FEATURES":                   "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy",
@@ -47,8 +40,8 @@ func setRequiredControlPlaneEnvironment(t *testing.T) {
 }
 
 func TestFromEnvironmentRequiresExactlyDeploymentAuthorityAndContestedSettings(t *testing.T) {
-	if got := len(requiredControlPlaneEnvironment); got != 22 {
-		t.Fatalf("required environment count = %d, want 22", got)
+	if got := len(requiredControlPlaneEnvironment); got != 15 {
+		t.Fatalf("required environment count = %d, want 15", got)
 	}
 	for absent := range requiredControlPlaneEnvironment {
 		t.Run(absent, func(t *testing.T) {
@@ -84,8 +77,8 @@ func TestEnvironmentSurfaceHasAnExplicitFinalCategory(t *testing.T) {
 		}
 		seen[name] = "removed compiled fact"
 	}
-	if got := len(seen); got != 39 {
-		t.Fatalf("classified environment surface = %d names, want 39", got)
+	if got := len(seen); got != 32 {
+		t.Fatalf("classified environment surface = %d names, want 32", got)
 	}
 }
 

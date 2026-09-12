@@ -38,6 +38,15 @@ import (
 // deployment.compose_project_name deploys under.
 const DefaultComposeProjectName = "secondbox"
 
+// The packaged Compose services bind these listeners and mount the catalog at
+// this path. Operators choose host publication and the catalog source; the
+// compiler supplies the matching explicit process configuration.
+const (
+	packagedControlPlaneListenAddress = "0.0.0.0:8080"
+	packagedRunnerListenAddress       = "0.0.0.0:9443"
+	packagedAssetCatalogPath          = "/etc/secondbox/signed-assets.json"
+)
+
 const (
 	linuxUnixSocketPathLimit      = 108
 	maxFirecrackerInstanceIDBytes = 42
@@ -75,6 +84,15 @@ func ReadManifest(path string) (ManifestV1, error) {
 	decoder.DisallowUnknownFields()
 	var manifest ManifestV1
 	if err := decoder.Decode(&manifest); err != nil {
+		var unknown *toml.StrictMissingError
+		if errors.As(err, &unknown) {
+			keys := make([]string, 0, len(unknown.Errors))
+			for _, field := range unknown.Errors {
+				keys = append(keys, fmt.Sprintf("%q", strings.Join(field.Key(), ".")))
+			}
+			// Name invalid fields without printing their potentially secret values.
+			return ManifestV1{}, manifestError("strict decode: unknown fields "+strings.Join(keys, ", "), err)
+		}
 		return ManifestV1{}, manifestError("strict decode", err)
 	}
 	if manifest.SchemaVersion != 1 {
@@ -146,10 +164,10 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	put("SECONDBOX_RUNNER_IMAGE", deployment.RunnerImage)
 	put("SECONDBOX_API_BIND_IP", deployment.APIBindIP)
 	putInt("SECONDBOX_API_PUBLISHED_PORT", deployment.APIPublishedPort)
-	put("SECONDBOX_LISTEN_ADDR", deployment.ListenAddress)
+	put("SECONDBOX_LISTEN_ADDR", packagedControlPlaneListenAddress)
 	put("SECONDBOX_RUNNER_BIND_IP", deployment.RunnerBindIP)
 	putInt("SECONDBOX_RUNNER_PUBLISHED_PORT", deployment.RunnerPublishedPort)
-	put("SECONDBOX_RUNNER_LISTEN_ADDR", deployment.RunnerListenAddress)
+	put("SECONDBOX_RUNNER_LISTEN_ADDR", packagedRunnerListenAddress)
 	put("SECONDBOX_LOG_PATH", deployment.LogPath)
 	if deployment.ComposeBackendCIDR != "" {
 		put("SECONDBOX_COMPOSE_BACKEND_CIDR", deployment.ComposeBackendCIDR)
@@ -166,7 +184,7 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog", err)
 	}
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH", catalog)
-	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", deployment.AssetCatalogPath)
+	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", packagedAssetCatalogPath)
 
 	database := manifest.Database
 	databasePassword := ""
@@ -359,7 +377,7 @@ func validateManifestShape(manifest ManifestV1) error {
 		return manifestError("schema_version must be 1", nil)
 	}
 	d := manifest.Deployment
-	for path, value := range map[string]string{"deployment.mode": d.Mode, "deployment.public_base_url": d.PublicBaseURL, "deployment.tls_termination": d.TLSTermination, "deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage, "deployment.api_bind_ip": d.APIBindIP, "deployment.listen_address": d.ListenAddress, "deployment.runner_bind_ip": d.RunnerBindIP, "deployment.runner_listen_address": d.RunnerListenAddress, "deployment.log_path": d.LogPath, "deployment.signed_asset_catalog": d.AssetCatalog, "deployment.signed_asset_catalog_path": d.AssetCatalogPath} {
+	for path, value := range map[string]string{"deployment.mode": d.Mode, "deployment.public_base_url": d.PublicBaseURL, "deployment.tls_termination": d.TLSTermination, "deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage, "deployment.api_bind_ip": d.APIBindIP, "deployment.runner_bind_ip": d.RunnerBindIP, "deployment.log_path": d.LogPath, "deployment.signed_asset_catalog": d.AssetCatalog} {
 		if err := require(path, value); err != nil {
 			return err
 		}
@@ -387,15 +405,6 @@ func validateManifestShape(manifest ManifestV1) error {
 	if err := requirePort("deployment.runner_published_port", d.RunnerPublishedPort); err != nil {
 		return err
 	}
-	if d.ListenAddress != "0.0.0.0:8080" {
-		return manifestError("deployment.listen_address must be 0.0.0.0:8080 for the packaged container mapping", nil)
-	}
-	if d.RunnerListenAddress != "0.0.0.0:9443" {
-		return manifestError("deployment.runner_listen_address must be 0.0.0.0:9443 for the packaged container mapping", nil)
-	}
-	if d.AssetCatalogPath != "/etc/secondbox/signed-assets.json" {
-		return manifestError("deployment.signed_asset_catalog_path must be /etc/secondbox/signed-assets.json for the packaged container mapping", nil)
-	}
 	if d.DevelopmentWaitSeconds != nil {
 		if err := requireInt("deployment.development_prepare_wait_timeout_seconds", d.DevelopmentWaitSeconds, false); err != nil {
 			return err
@@ -406,8 +415,8 @@ func validateManifestShape(manifest ManifestV1) error {
 	if d.Mode == "development" && (d.APIBindIP != "127.0.0.1" || d.RunnerBindIP != "127.0.0.1" || manifest.Database.BindIP != "127.0.0.1") {
 		return manifestError("development mode must bind every published port to 127.0.0.1", nil)
 	}
-	if !filepath.IsAbs(d.LogPath) || !filepath.IsAbs(d.AssetCatalogPath) {
-		return manifestError("deployment process paths must be absolute", nil)
+	if !filepath.IsAbs(d.LogPath) {
+		return manifestError("deployment.log_path must be absolute", nil)
 	}
 	parsedURL, err := url.Parse(d.PublicBaseURL)
 	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
@@ -566,12 +575,6 @@ func validatePolicy(p Policy) error {
 			return manifestError("policy."+name+" must be positive", nil)
 		}
 	}
-	quotas := map[string]*int64{"default_subject_max_sandboxes": p.DefaultSubjectMaxSandboxes, "default_subject_max_active_instances": p.DefaultSubjectMaxActiveInstances, "default_subject_max_vcpu_count": p.DefaultSubjectMaxVCPUCount, "default_subject_max_memory_bytes": p.DefaultSubjectMaxMemoryBytes, "default_subject_max_snapshots": p.DefaultSubjectMaxSnapshots, "default_subject_max_port_sessions": p.DefaultSubjectMaxPortSessions, "default_subject_max_concurrent_operations": p.DefaultSubjectMaxConcurrentOperations}
-	for name, value := range quotas {
-		if value == nil || *value < 0 {
-			return manifestError("policy."+name+" must be non-negative", nil)
-		}
-	}
 	for name, value := range map[string]string{"runner_enabled_features": p.RunnerEnabledFeatures} {
 		if strings.TrimSpace(value) == "" {
 			return manifestError("policy."+name+" is required", nil)
@@ -613,8 +616,8 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 	bindings := map[string]StandardRunnerPool{}
 	for index, pool := range resources.RunnerPools {
 		prefix := fmt.Sprintf("standard_resources.runner_pools[%d]", index)
-		if !selected[pool.Bundle] || bindings[pool.Bundle].Bundle != "" {
-			return manifestError(prefix+" must bind one selected bundle exactly once", nil)
+		if _, duplicate := bindings[pool.Name]; duplicate {
+			return manifestError(prefix+" repeats pool "+pool.Name+"; declare each pool once", nil)
 		}
 		if pool.Name != standardresources.PoolAMD64 || pool.State == "" || len(pool.Architectures) == 0 || !slices.Contains(pool.Architectures, "amd64") || len(pool.Capabilities) == 0 {
 			return manifestError(prefix+" requires name, ready state, capabilities and amd64 architecture inventory", nil)
@@ -624,17 +627,18 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 				return manifestError(prefix+"."+name+" must be positive", nil)
 			}
 		}
-		gateway := map[string]string{standardresources.AgentCompartment: standardresources.AgentGateway, standardresources.DurableCoding: standardresources.PlatformGateway}[pool.Bundle]
+		bindings[pool.Name] = pool
+	}
+	for _, bundle := range resources.Bundles {
+		pool, exists := bindings[standardresources.PoolAMD64]
+		if !exists {
+			return manifestError("standard_resources.runner_pools must declare pool "+standardresources.PoolAMD64+" for selected bundle "+bundle, nil)
+		}
+		gateway := map[string]string{standardresources.AgentCompartment: standardresources.AgentGateway, standardresources.DurableCoding: standardresources.PlatformGateway}[bundle]
 		for runnerIndex, runner := range runners {
 			if gateway != "" && runner.PoolID == pool.Name && !runnerGatewayNames(runner.EgressContexts)[gateway] {
-				return manifestError(fmt.Sprintf("runners[%d].egress_contexts must resolve %s for selected bundle %s", runnerIndex, gateway, pool.Bundle), nil)
+				return manifestError(fmt.Sprintf("runners[%d].egress_contexts must resolve %s for selected bundle %s", runnerIndex, gateway, bundle), nil)
 			}
-		}
-		bindings[pool.Bundle] = pool
-	}
-	for bundle := range selected {
-		if bindings[bundle].Bundle == "" {
-			return manifestError("standard_resources.runner_pools must bind selected bundle "+bundle, nil)
 		}
 	}
 	return nil
@@ -938,7 +942,7 @@ func validateDataPlaneAddress(path, value string, listen bool) error {
 }
 
 func addPolicyEnvironment(environment map[string]string, p Policy) {
-	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds, "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS": p.DataPlanePollIntervalMilliseconds, "SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": p.RunnerCommandPollIntervalMilliseconds, "SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES": p.DefaultSubjectMaxSandboxes, "SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES": p.DefaultSubjectMaxActiveInstances, "SECONDBOX_DEFAULT_SUBJECT_MAX_VCPU_COUNT": p.DefaultSubjectMaxVCPUCount, "SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES": p.DefaultSubjectMaxMemoryBytes, "SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS": p.DefaultSubjectMaxSnapshots, "SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS": p.DefaultSubjectMaxPortSessions, "SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": p.DefaultSubjectMaxConcurrentOperations}
+	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds, "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS": p.DataPlanePollIntervalMilliseconds, "SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": p.RunnerCommandPollIntervalMilliseconds}
 	for name, value := range values {
 		environment[name] = strconv.FormatInt(*value, 10)
 	}
@@ -980,9 +984,13 @@ func resolveStandardResources(base string, manifest ManifestV1, catalog assetcat
 	}
 	pools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.RunnerPools))
 	for _, configured := range manifest.StandardResources.RunnerPools {
-		pools[configured.Bundle] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State, CapacityPolicy: map[string]int64{"maxSandboxes": *configured.MaxSandboxes, "maxVcpuCount": *configured.MaxVCPUCount, "maxMemoryBytes": *configured.MaxMemoryBytes}}
+		pools[configured.Name] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State, CapacityPolicy: map[string]int64{"maxSandboxes": *configured.MaxSandboxes, "maxVcpuCount": *configured.MaxVCPUCount, "maxMemoryBytes": *configured.MaxMemoryBytes}}
 	}
-	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: pools})
+	selectedPools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.Bundles))
+	for _, bundle := range manifest.StandardResources.Bundles {
+		selectedPools[bundle] = pools[standardresources.PoolAMD64]
+	}
+	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: selectedPools})
 	if err != nil {
 		return resourceapply.Document{}, manifestError("standard_resources", err)
 	}

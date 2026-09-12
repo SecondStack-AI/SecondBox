@@ -25,9 +25,8 @@ type StandardResources struct {
 	ApplyWaitSeconds *int64               `toml:"apply_wait_seconds"`
 }
 
-// StandardRunnerPool binds one standard bundle's fixed selector to deployment inventory.
+// StandardRunnerPool declares inventory once for all bundles using its name.
 type StandardRunnerPool struct {
-	Bundle         string   `toml:"bundle"`
 	Name           string   `toml:"name"`
 	Architectures  []string `toml:"architectures"`
 	Capabilities   []string `toml:"capabilities"`
@@ -48,13 +47,10 @@ type Deployment struct {
 	PostgresImage          string `toml:"postgres_image"`
 	APIBindIP              string `toml:"api_bind_ip"`
 	APIPublishedPort       *int64 `toml:"api_published_port"`
-	ListenAddress          string `toml:"listen_address"`
 	RunnerBindIP           string `toml:"runner_bind_ip"`
 	RunnerPublishedPort    *int64 `toml:"runner_published_port"`
-	RunnerListenAddress    string `toml:"runner_listen_address"`
 	LogPath                string `toml:"log_path"`
 	AssetCatalog           string `toml:"signed_asset_catalog"`
-	AssetCatalogPath       string `toml:"signed_asset_catalog_path"`
 	DevelopmentWaitSeconds *int64 `toml:"development_prepare_wait_timeout_seconds"`
 }
 
@@ -87,13 +83,6 @@ type Policy struct {
 	DataPlanePollIntervalMilliseconds     *int64 `toml:"data_plane_poll_interval_milliseconds"`
 	RunnerCommandPollIntervalMilliseconds *int64 `toml:"runner_command_poll_interval_milliseconds"`
 	RunnerEnabledFeatures                 string `toml:"runner_enabled_features"`
-	DefaultSubjectMaxSandboxes            *int64 `toml:"default_subject_max_sandboxes"`
-	DefaultSubjectMaxActiveInstances      *int64 `toml:"default_subject_max_active_instances"`
-	DefaultSubjectMaxVCPUCount            *int64 `toml:"default_subject_max_vcpu_count"`
-	DefaultSubjectMaxMemoryBytes          *int64 `toml:"default_subject_max_memory_bytes"`
-	DefaultSubjectMaxSnapshots            *int64 `toml:"default_subject_max_snapshots"`
-	DefaultSubjectMaxPortSessions         *int64 `toml:"default_subject_max_port_sessions"`
-	DefaultSubjectMaxConcurrentOperations *int64 `toml:"default_subject_max_concurrent_operations"`
 }
 
 // TuningOverrides owns the public TOML names for all Category C overrides.

@@ -164,7 +164,6 @@ func newControlPlaneService(
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:                 databaseStore,
 		PlatformToken:         testPlatformToken,
-		DefaultSubjectQuota:   projectQuota,
 		Now:                   func() time.Time { return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC) },
 		NewID:                 newFixtureID,
 		NewCredentialMaterial: func() string { return fmt.Sprintf("credential-material-%032d", integrationIdentitySequence.Add(1)) },

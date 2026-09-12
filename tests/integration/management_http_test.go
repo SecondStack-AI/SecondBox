@@ -772,10 +772,6 @@ func newManagementControlPlane(t *testing.T, databaseStore *store.PostgresContro
 	t.Helper()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		DefaultSubjectQuota: contracts.QuotaLimits{
-			MaxSandboxes: 1, MaxActiveInstances: 1, MaxVCPUCount: 1,
-			MaxMemoryBytes: 1 << 30, MaxSnapshots: 1, MaxPortSessions: 1, MaxConcurrentOperations: 1,
-		},
 		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: func() string { return "management-test-credential-material-000000000000" },
 	})
