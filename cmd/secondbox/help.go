@@ -49,7 +49,7 @@ func secondboxHelp() cliui.Help {
 }
 
 func resourceHelp() []cliui.Pair {
-	pairs := []cliui.Pair{{Key: "run/create --size SIZE", Value: "request a preset within the Profile ceiling"}, {Key: "run/create --cpus N --memory SIZE --disk SIZE", Value: "override individual axes; bytes or KiB/MiB/GiB (k/m/g), case-insensitive"}}
+	pairs := []cliui.Pair{{Key: "run/create --size SIZE", Value: "request a preset within the Profile ceiling"}, {Key: "run/create --cpus N --memory SIZE --disk SIZE", Value: "override axes; bytes or KiB/MiB/GiB (k/m/g); disk rounds up to a power of two"}}
 	for _, name := range []string{"small", "medium", "large"} {
 		preset := SandboxSizePresets[name]
 		pairs = append(pairs, cliui.Pair{Key: "--size " + name, Value: fmt.Sprintf("%d vCPU / %d GiB memory / %d GiB Workspace", preset.VCPUCount, preset.MemoryBytes>>30, preset.WorkspaceBytes>>30)})

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"math/bits"
 	"strconv"
 	"strings"
 
@@ -24,7 +25,7 @@ func (options *resourceOptions) register(flags *flag.FlagSet) {
 	flags.StringVar(&options.size, "size", "", "small, medium, or large; explicit axes override the preset")
 	flags.StringVar(&options.cpus, "cpus", "", "whole vCPU count")
 	flags.StringVar(&options.memory, "memory", "", "memory in bytes or KiB/MiB/GiB (k/m/g)")
-	flags.StringVar(&options.disk, "disk", "", "Workspace capacity in bytes or KiB/MiB/GiB (k/m/g)")
+	flags.StringVar(&options.disk, "disk", "", "Workspace capacity in bytes or KiB/MiB/GiB (k/m/g); rounds up to a power of two")
 }
 
 func (options resourceOptions) resolve(flags *flag.FlagSet) (*sb.SandboxResourceRequest, error) {
@@ -109,9 +110,42 @@ func (failure *sandboxCreationError) Unwrap() error { return failure.cause }
 func (failure *commandPresentationError) hint() string {
 	var creation *sandboxCreationError
 	var api *sb.APIError
-	if errors.As(failure.cause, &creation) && errors.As(creation.cause, &api) && api.Problem != nil && api.Problem.Code == sb.ProblemCodeResourcesExceedProfile && api.Problem.Ceiling != nil {
-		ceiling := *api.Problem.Ceiling
-		return fmt.Sprintf("Profile %q ceiling: %s. Retry with these axes or lower: --cpus %d --memory %d --disk %d; inspect policy with secondbox profiles get --path profileName=%s.", creation.profile, sandboxResourceSummary(ceiling), ceiling.VCPUCount, ceiling.MemoryBytes, ceiling.WorkspaceBytes, creation.profile)
+	if errors.As(failure.cause, &creation) && errors.As(creation.cause, &api) && api.Problem != nil && api.Problem.Ceiling != nil {
+		ceiling := api.Problem.Ceiling
+		var axes []string
+		for _, axis := range []struct {
+			flag  string
+			bound *int64
+		}{{"--cpus", ceiling.VCPUCount}, {"--memory", ceiling.MemoryBytes}, {"--disk", ceiling.WorkspaceBytes}} {
+			if axis.bound != nil {
+				value := *axis.bound
+				// Cold-boot disk requests round up. Suggest the largest power of two
+				// within a finite ceiling so the suggested retry can actually succeed.
+				if axis.flag == "--disk" && api.Problem.Code == sb.ProblemCodeResourcesExceedProfile && value > 0 {
+					value = int64(1) << (bits.Len64(uint64(value)) - 1)
+				}
+				axes = append(axes, fmt.Sprintf("%s %d", axis.flag, value))
+			}
+		}
+		switch api.Problem.Code {
+		case sb.ProblemCodeResourcesFixedByProfile:
+			return fmt.Sprintf("Profile %q has a fixed size for snapshot_resume. Retry with %s, or omit resource flags.", creation.profile, strings.Join(axes, " "))
+		case sb.ProblemCodeResourcesExceedProfile:
+			return fmt.Sprintf("Profile %q ceiling: %s. Retry with these bounded axes or lower: %s; inspect policy with secondbox profiles get --path profileName=%s.", creation.profile, sandboxCeilingSummary(*ceiling), strings.Join(axes, " "), creation.profile)
+		}
 	}
 	return "Run the command with --output plain for a stable diagnostic transcript."
+}
+
+func sandboxCeilingSummary(ceiling sb.SandboxResourceRequest) string {
+	var bounds []string
+	for _, axis := range []struct {
+		name  string
+		bound *int64
+	}{{"vCPU", ceiling.VCPUCount}, {"memory bytes", ceiling.MemoryBytes}, {"Workspace bytes", ceiling.WorkspaceBytes}} {
+		if axis.bound != nil {
+			bounds = append(bounds, fmt.Sprintf("%d %s", *axis.bound, axis.name))
+		}
+	}
+	return strings.Join(bounds, ", ")
 }

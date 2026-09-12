@@ -1259,6 +1259,25 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		spec.Resources.ConcurrentOperations < 1 {
 		return invalidRequest(errors.New("SecondBox Profile resource limits must be positive"))
 	}
+	if spec.ResourceCeiling != nil {
+		if spec.Startup.Mode == contracts.StartupModeSnapshotResume {
+			return invalidRequest(errors.New("SecondBox Profile snapshot_resume forbids resourceCeiling"))
+		}
+		if len(spec.ResourceCeiling) != 3 {
+			return invalidRequest(errors.New("SecondBox Profile resourceCeiling must state exactly vcpuCount, memoryBytes, and workspaceBytes"))
+		}
+		for _, axis := range []struct {
+			name    string
+			minimum int64
+		}{
+			{"vcpuCount", spec.Resources.VCPUCount}, {"memoryBytes", spec.Resources.MemoryBytes}, {"workspaceBytes", spec.Resources.WorkspaceBytes},
+		} {
+			bound, present := spec.ResourceCeiling[axis.name]
+			if !present || (bound != nil && *bound < axis.minimum) {
+				return invalidRequest(fmt.Errorf("SecondBox Profile resourceCeiling.%s must be explicit null or at least resources.%s", axis.name, axis.name))
+			}
+		}
+	}
 	if spec.Startup.Mode != contracts.StartupModeColdBoot &&
 		spec.Startup.Mode != contracts.StartupModeSnapshotResume {
 		return invalidRequest(errors.New("SecondBox Profile startup mode must be cold_boot or snapshot_resume"))

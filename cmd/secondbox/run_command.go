@@ -205,7 +205,7 @@ func writeRetainedSandbox(ctx context.Context, fallback io.Writer, sandbox secon
 			renderer := value.renderer
 			renderer.Output = fallback
 			renderer.Capabilities.Output = renderer.Capabilities.Diagnostic
-			return renderer.WritePhases([]cliui.Phase{{Name: "Retained Sandbox", Detail: sandbox.ID + " (" + sandboxResourceSummary(sandbox.Resources) + ")", Status: cliui.StatusComplete}})
+			return renderer.WritePhases([]cliui.Phase{{Name: "Retained Sandbox", Detail: sandbox.ID + " (" + sandboxResourceSummary(sandbox.Resources) + "); requested disk rounds up to a power of two", Status: cliui.StatusComplete}})
 		}
 	}
 	_, err := fmt.Fprintf(fallback, "SecondBox retained Sandbox %s\n", sandbox.ID)

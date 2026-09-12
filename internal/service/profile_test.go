@@ -78,3 +78,40 @@ func validProfileRevisionSpecForValidation() contracts.ProfileRevisionSpec {
 		Ports: []contracts.PortPolicy{},
 	}
 }
+
+func TestValidateProfileResourceCeiling(t *testing.T) {
+	pointer := func(value int64) *int64 { return &value }
+	for _, test := range []struct {
+		name    string
+		ceiling contracts.ProfileResourceCeiling
+		resume  bool
+		valid   bool
+	}{
+		{"absent", nil, false, true},
+		{"null axes", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil}, false, true},
+		{"equal bounds", contracts.ProfileResourceCeiling{"vcpuCount": pointer(1), "memoryBytes": pointer(1), "workspaceBytes": pointer(1)}, false, true},
+		{"higher bounds", contracts.ProfileResourceCeiling{"vcpuCount": pointer(2), "memoryBytes": pointer(2), "workspaceBytes": pointer(2)}, false, true},
+		{"below cpu", contracts.ProfileResourceCeiling{"vcpuCount": pointer(0), "memoryBytes": nil, "workspaceBytes": nil}, false, false},
+		{"below memory", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": pointer(0), "workspaceBytes": nil}, false, false},
+		{"below disk", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": pointer(0)}, false, false},
+		{"empty", contracts.ProfileResourceCeiling{}, false, false},
+		{"missing cpu", contracts.ProfileResourceCeiling{"memoryBytes": nil, "workspaceBytes": nil}, false, false},
+		{"missing memory", contracts.ProfileResourceCeiling{"vcpuCount": nil, "workspaceBytes": nil}, false, false},
+		{"missing disk", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil}, false, false},
+		{"unknown axis", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "disk": nil}, false, false},
+		{"extra axis", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil, "disk": nil}, false, false},
+		{"resume absent", nil, true, true},
+		{"resume ceiling", contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": nil}, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validProfileRevisionSpecForValidation()
+			spec.ResourceCeiling = test.ceiling
+			if test.resume {
+				spec.Startup.Mode = contracts.StartupModeSnapshotResume
+			}
+			if err := validateProfileRevisionSpec(spec); (err == nil) != test.valid {
+				t.Fatalf("validation = %v; valid=%t", err, test.valid)
+			}
+		})
+	}
+}

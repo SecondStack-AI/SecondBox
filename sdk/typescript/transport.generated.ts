@@ -516,7 +516,7 @@ export interface PortSession {
 }
 
 export interface Problem {
-  readonly ceiling?: SandboxResources;
+  readonly ceiling?: SandboxResourceRequest;
   readonly code: ProblemCode;
   readonly details?: readonly ProblemDetail[];
   readonly requestId: CorrelationID;
@@ -528,7 +528,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "snapshot_name_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "resources_exceed_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "snapshot_name_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "resources_exceed_profile" | "resources_fixed_by_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -554,6 +554,13 @@ export interface ProfilePage {
   readonly nextCursor?: string;
 }
 
+/** Optional Profile size bounds. Every axis is explicit: null leaves that axis bounded only by quota and Runner admission. Integer bounds must be at least the matching resources default. Not permitted with snapshot_resume. */
+export interface ProfileResourceCeiling {
+  readonly memoryBytes: number | null;
+  readonly vcpuCount: number | null;
+  readonly workspaceBytes: number | null;
+}
+
 export interface ProfileRevision {
   readonly createdAt: Timestamp;
   readonly id: OpaqueID;
@@ -569,6 +576,7 @@ export interface ProfileRevisionSpec {
   readonly network: NetworkPolicy;
   readonly pool: string;
   readonly ports: readonly PortPolicy[];
+  readonly resourceCeiling?: ProfileResourceCeiling;
   readonly resources: ResourcePolicy;
   readonly retention: RetentionPolicy;
   readonly runtimeBundleDigest: string;
@@ -603,6 +611,7 @@ export interface RenewLeaseRequest {
   readonly durationSeconds: number;
 }
 
+/** Default Sandbox resources and concurrent operation limit. Also the size ceiling when resourceCeiling is absent. */
 export interface ResourcePolicy {
   readonly concurrentOperations: number;
   readonly memoryBytes: number;
@@ -708,6 +717,7 @@ export interface SandboxPage {
   readonly nextCursor?: string;
 }
 
+/** Requested Sandbox size. Omitted axes use Profile defaults unchanged. Requested workspaceBytes rounds up to a power of two before ceiling checks. snapshot_resume accepts only the exact Profile size. */
 export interface SandboxResourceRequest {
   readonly memoryBytes?: number;
   readonly vcpuCount?: number;
