@@ -1,7 +1,7 @@
 ---
 title: Target Sandbox Shape
 date: 2026-09-12
-status: in-progress
+status: implemented
 owner: SecondStack
 provenance: UX audit of the user-facing surface against E2B, Daytona, Modal, and Vercel Sandbox, 2026-09-12
 ---
