@@ -163,14 +163,15 @@ create_qualification_workload() {
   local create_attempt create_error=''
   sandbox_operation=''
   for create_attempt in $(seq 1 30); do
-    if sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create \
+    if ! sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create \
       --body "$root/sandbox.json" --header "Idempotency-Key=qualified-sandbox-$key_suffix-$create_attempt" 2>"$root/create-error.txt")"; then
-      create_error=''
-      break
+      create_error="$(<"$root/create-error.txt")"
+      [[ "$create_error" == *"code=home_runner_unavailable"* ]] || break
+      sleep 2
+      continue
     fi
-    create_error="$(<"$root/create-error.txt")"
-    [[ "$create_error" == *"code=home_runner_unavailable"* ]] || break
-    sleep 2
+    create_error=''
+    break
   done
   if [[ -z "$sandbox_operation" || -n "$create_error" ]]; then
     echo "explicit qualification Sandbox creation failed: $create_error" >&2
