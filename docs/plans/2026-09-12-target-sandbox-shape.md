@@ -297,18 +297,24 @@ schema.
 
 ### Task 5: Golden-snapshot workflow
 
-- [ ] `run` and `create` accept `--from <sandbox>/<name> | snp_…` and send
+- [x] `run` and `create` accept `--from <sandbox>/<name> | snp_…` and send
   `sourceSnapshotId`. Cross-Sandbox creation from a Snapshot already exists
   server-side; verify the Profile compatibility rule (same Profile or same
   workspace capacity ceiling) and surface its typed problem.
-- [ ] Add `examples/resources/durable-coding-registries.json`: an operator
+- [x] Add `examples/resources/durable-coding-registries.json`: an operator
   Profile document derived from `durable-coding` that additionally allows
   `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`,
   `deb.debian.org`, and `proxy.golang.org` over HTTPS, so a user can install a
   toolchain, snapshot, and reuse. This is an example document, not a standard
   bundle.
-- [ ] Document the workflow in `docs/operations/sdk-cli-and-flue.md`.
-- [ ] Run `just test-cli-ui`, `just test-standard-resources`.
+- [x] Document the workflow in `docs/operations/sdk-cli-and-flue.md`.
+- [x] Run `just test-cli-ui`, `just test-standard-resources`.
+
+Task 5 implementation note: the existing clone guard requires exact equality
+between Snapshot capacity and the target Sandbox's resolved disk capacity,
+not Profile identity or ceiling equality. Its public problem is HTTP 409
+`state_conflict`; no contract was changed. The shepherd owns KVM scenario
+validation of this workflow.
 
 ### Task 6: Documentation and README
 

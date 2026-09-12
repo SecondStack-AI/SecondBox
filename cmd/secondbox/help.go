@@ -15,7 +15,7 @@ func secondboxHelp() cliui.Help {
 			{Key: "logout | whoami", Value: "inspect or remove the local authenticated session"},
 			{Key: "tenant", Value: "manage tenants and tenant-controller authorities"},
 			{Key: "subject | application-authority | usage", Value: "manage one authenticated tenant"},
-			{Key: "run", Value: "run a command in a temporary Sandbox"},
+			{Key: "run PROFILE [--from REF] [--keep] -- COMMAND", Value: "create, wait, execute, and delete unless retained; --tty attaches a terminal"},
 			{Key: "exec", Value: "execute in an existing Sandbox"},
 			{Key: "create PROFILE [--name NAME] [--metadata k=v] [--from REF]", Value: "create a Sandbox; return its Operation"},
 			{Key: "start | stop | rm (delete) SANDBOX [--no-wait]", Value: "change lifecycle and wait; rm --force skips TTY confirmation"},

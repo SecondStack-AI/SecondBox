@@ -33,6 +33,7 @@ func runRunCommand(
 	var resourceFlags resourceOptions
 	resourceFlags.register(flags)
 	name := flags.String("name", "", "reserved Sandbox name for later reference")
+	source := flags.String("from", "", "Snapshot identifier or sandbox/name")
 	keep := flags.Bool("keep", false, "retain the Sandbox instead of deleting it")
 	shell := flags.Bool("shell", false, "treat the single operand as one shell command")
 	cwd := flags.String("cwd", "", "workspace-relative working directory")
@@ -114,22 +115,30 @@ func runRunCommand(
 	if err != nil {
 		return err
 	}
+	if *source != "" {
+		*source, err = resolveSnapshotReference(ctx, client, *source)
+		if err != nil {
+			return err
+		}
+	}
 	if *tty {
 		return runInteractiveSandbox(
 			ctx, session, client, interactiveRequest{
-				profile:      profile,
-				resources:    resources,
-				metadata:     metadata,
-				operands:     flags.Args(),
-				cwd:          *cwd,
-				keep:         *keep,
-				readyTimeout: *readyTimeout,
+				profile:          profile,
+				resources:        resources,
+				sourceSnapshotID: *source,
+				metadata:         metadata,
+				operands:         flags.Args(),
+				cwd:              *cwd,
+				keep:             *keep,
+				readyTimeout:     *readyTimeout,
 			}, terminal, environment.stderr,
 		)
 	}
 	request := secondboxclient.RunRequest{
 		Profile:              profile,
 		Resources:            resources,
+		SourceSnapshotID:     *source,
 		Metadata:             metadata,
 		Command:              command,
 		Environment:          secondboxclient.StringMap(values),
@@ -215,13 +224,14 @@ func writeRunCompletion(ctx context.Context, name, detail string) error {
 
 // interactiveRequest is one ephemeral interactive Sandbox request.
 type interactiveRequest struct {
-	profile      string
-	resources    *secondboxclient.SandboxResourceRequest
-	metadata     map[string]string
-	operands     []string
-	cwd          string
-	keep         bool
-	readyTimeout time.Duration
+	profile          string
+	sourceSnapshotID string
+	resources        *secondboxclient.SandboxResourceRequest
+	metadata         map[string]string
+	operands         []string
+	cwd              string
+	keep             bool
+	readyTimeout     time.Duration
 }
 
 // runInteractiveSandbox creates a Sandbox, attaches a Terminal to it, and
@@ -239,7 +249,7 @@ func runInteractiveSandbox(
 	report io.Writer,
 ) (resultErr error) {
 	handle, _, err := client.CreateSandbox(ctx, secondboxclient.CreateSandboxRequest{
-		Profile: request.profile, Metadata: request.metadata, Resources: request.resources,
+		Profile: request.profile, Metadata: request.metadata, Resources: request.resources, SourceSnapshotID: request.sourceSnapshotID,
 	}, "")
 	if err != nil {
 		return &sandboxCreationError{cause: err, profile: request.profile}

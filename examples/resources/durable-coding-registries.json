@@ -1,0 +1,121 @@
+{
+  "schemaVersion": "secondbox.resources/v1",
+  "runnerPools": [
+    {
+      "name": "standard-amd64",
+      "architectures": [
+        "amd64"
+      ],
+      "capabilities": [
+        "cleanup",
+        "compute",
+        "evidence",
+        "exec-streaming",
+        "file-streaming",
+        "local-workspace",
+        "network-policy",
+        "port-proxy",
+        "pty",
+        "storage",
+        "workspace-relocation"
+      ],
+      "capacityPolicy": {
+        "maxMemoryBytes": 34359738368,
+        "maxSandboxes": 4,
+        "maxVcpuCount": 16
+      },
+      "state": "ready",
+      "mutableFields": []
+    }
+  ],
+  "profiles": [
+    {
+      "name": "durable-coding-registries",
+      "revisions": [
+        {
+          "number": 1,
+          "specDigest": "sha256:5bd7bc13b948c77660cc7a0c33f5655fcdefeb84c0cbba84c450d5946dd6871a",
+          "spec": {
+            "pool": "standard-amd64",
+            "architecture": "amd64",
+            "runtimeBundleDigest": "sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335",
+            "toolchainBundleDigest": "sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4",
+            "resources": {
+              "vcpuCount": 4,
+              "memoryBytes": 8589934592,
+              "workspaceBytes": 53687091200,
+              "concurrentOperations": 16
+            },
+            "startup": {
+              "mode": "cold_boot"
+            },
+            "lifecycle": {
+              "initialState": "running",
+              "drainGraceSeconds": 120,
+              "idleSeconds": 28800,
+              "maximumDurationSeconds": 604800,
+              "leaseSeconds": 300
+            },
+            "retention": {
+              "snapshotLimit": 64,
+              "snapshotRetentionSeconds": 2592000
+            },
+            "execution": {
+              "maximumDeadlineMilliseconds": 86400000,
+              "maximumBufferedOutputBytes": 16777216,
+              "streamWindowBytes": 1048576,
+              "maximumTransferBytes": 10737418240,
+              "terminalDetachSeconds": 86400,
+              "dataPlaneTransport": "proxied"
+            },
+            "network": {
+              "mode": "allow_list",
+              "destinations": [
+                {
+                  "protocol": "https",
+                  "domain": "platform-gateway.secondbox.internal",
+                  "port": 443
+                },
+                {
+                  "protocol": "https",
+                  "domain": "registry.npmjs.org",
+                  "port": 443
+                },
+                {
+                  "protocol": "https",
+                  "domain": "pypi.org",
+                  "port": 443
+                },
+                {
+                  "protocol": "https",
+                  "domain": "files.pythonhosted.org",
+                  "port": 443
+                },
+                {
+                  "protocol": "https",
+                  "domain": "deb.debian.org",
+                  "port": 443
+                },
+                {
+                  "protocol": "https",
+                  "domain": "proxy.golang.org",
+                  "port": 443
+                }
+              ],
+              "requiresTenantEgressContext": true
+            },
+            "ports": [
+              {
+                "name": "development-http",
+                "port": 3000,
+                "protocol": "http",
+                "maximumSessions": 8,
+                "maximumSessionSeconds": 86400
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
