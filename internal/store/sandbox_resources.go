@@ -27,6 +27,18 @@ func resolveSandboxResources(spec contracts.ProfileRevisionSpec, request *contra
 	if resolved.VCPUCount < 1 || resolved.MemoryBytes < 67108864 || resolved.WorkspaceBytes < 1048576 {
 		return contracts.SandboxResources{}, fmt.Errorf("%w: SecondBox Sandbox resources are below their minimum", ports.ErrInvalidRequest)
 	}
+	// Validate before rounding as well as allocation: rounding must not hide an
+	// invalid request, including when disk capacity is clamped to the ceiling.
+	for _, axis := range []struct {
+		name  string
+		value int64
+	}{
+		{"memoryBytes", resolved.MemoryBytes}, {"workspaceBytes", resolved.WorkspaceBytes},
+	} {
+		if axis.value%(1<<20) != 0 {
+			return contracts.SandboxResources{}, &ports.ResourceAlignmentError{Field: "resources." + axis.name}
+		}
+	}
 	ceiling := contracts.SandboxResourceRequest{VCPUCount: &policy.VCPUCount, MemoryBytes: &policy.MemoryBytes, WorkspaceBytes: &policy.WorkspaceBytes}
 	// Resume identity is exact, including non-power-of-two Profile defaults. Equal
 	// explicit values are accepted unchanged; rounding cannot alter that identity.
@@ -52,6 +64,11 @@ func resolveSandboxResources(spec contracts.ProfileRevisionSpec, request *contra
 		if ceiling.WorkspaceBytes != nil && requested <= *ceiling.WorkspaceBytes && resolved.WorkspaceBytes > *ceiling.WorkspaceBytes {
 			resolved.WorkspaceBytes = *ceiling.WorkspaceBytes
 		}
+	}
+	// Older published ceilings may predate alignment validation. Never pin an
+	// unaligned allocation after clamping to one of those immutable bounds.
+	if resolved.WorkspaceBytes%(1<<20) != 0 {
+		return contracts.SandboxResources{}, &ports.ResourceAlignmentError{Field: "resources.workspaceBytes"}
 	}
 	if (ceiling.VCPUCount != nil && resolved.VCPUCount > *ceiling.VCPUCount) ||
 		(ceiling.MemoryBytes != nil && resolved.MemoryBytes > *ceiling.MemoryBytes) ||
