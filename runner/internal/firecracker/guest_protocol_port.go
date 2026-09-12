@@ -23,7 +23,6 @@ type guestPortConnection struct {
 	credit        *guestPortCredit
 	reads         chan guestPortRead
 	readMu        sync.Mutex
-	readCredit    uint64
 	readPending   []byte
 	receiveMu     sync.Mutex
 	receiveCredit uint64
@@ -294,19 +293,22 @@ func (connection *guestPortConnection) Read(
 		return nil, err
 	}
 	if len(connection.readPending) == 0 {
-		// Credit includes guest frames queued by receive but not yet consumed here.
-		if uint64(maximum) > connection.readCredit {
-			additional := uint64(maximum) - connection.readCredit
-			connection.receiveMu.Lock()
-			connection.receiveCredit += additional
-			connection.receiveMu.Unlock()
-			if err := connection.send(&guestv1.PortFrame{
-				Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: additional}},
-			}); err != nil {
-				connection.cancel()
-				return nil, err
-			}
-			connection.readCredit += additional
+		// Grant the caller's full read bound for every new frame. A guest agent
+		// built before the short-read credit fix discards the unused part of a
+		// grant after a short read, so credit the adapter believes is still
+		// outstanding may already be gone inside the guest; withholding a new
+		// grant on that belief stalls the connection. The receive side still
+		// bounds every frame by the total granted, and frames never exceed
+		// firecrackerGuestPortFrameBytes, so a guest cannot exceed the window
+		// the Runner has explicitly offered.
+		connection.receiveMu.Lock()
+		connection.receiveCredit += uint64(maximum)
+		connection.receiveMu.Unlock()
+		if err := connection.send(&guestv1.PortFrame{
+			Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: uint64(maximum)}},
+		}); err != nil {
+			connection.cancel()
+			return nil, err
 		}
 		select {
 		case <-ctx.Done():
@@ -315,11 +317,6 @@ func (connection *guestPortConnection) Read(
 			if read.err != nil {
 				return nil, read.err
 			}
-			if uint64(len(read.data)) > connection.readCredit {
-				connection.cancel()
-				return nil, fmt.Errorf("Firecracker guest Port bytes exceed granted credit")
-			}
-			connection.readCredit -= uint64(len(read.data))
 			connection.readPending = read.data
 		}
 	}
