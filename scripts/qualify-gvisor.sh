@@ -31,7 +31,7 @@ if [[ "${1:-}" == --guest ]]; then
   for suite in gvisor gvisor-pod; do
     start=$SECONDS code=0
     name="$suite"; [[ "$suite" != gvisor ]] || name=gvisor-host
-    scripts/test-scenario-$suite.sh >"$remote/$name.log" 2>&1 || code=$?
+    scripts/test-scenario-$suite.sh 2>&1 | tee "$remote/$name.log" || code=$?
     printf '%s\t%s\t%s\n' "$name" "$code" "$((SECONDS-start))" >"$remote/$name.status"
     ((code == 0)) || status=1
   done
@@ -103,6 +103,7 @@ git checkout --detach "$commit"
 sudo systemd-run --unit="secondbox-suite-qualify-$run" --collect \
   --property="WorkingDirectory=$repo" --property="StandardOutput=file:$remote/chain.log" --property=StandardError=inherit \
   /bin/bash "$repo/scripts/qualify-gvisor.sh" --guest "$remote/guest.env"
+sudo tail --pid="$$" -n +1 -F "$remote/chain.log" &
 while [[ ! -f "$remote/result" ]]; do
   state="$(systemctl is-active "secondbox-suite-qualify-$run" || true)"
   if [[ "$state" != active && "$state" != activating ]]; then
