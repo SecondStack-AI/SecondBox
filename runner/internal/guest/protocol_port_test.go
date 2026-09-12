@@ -4,11 +4,52 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 )
+
+func TestGuestPortProxyRejectsInvalidSocketReadCount(t *testing.T) {
+	for _, count := range []int{-1, 9} {
+		stream := &recordingGuestPortStream{}
+		connection := &protocolConnection{stream: stream}
+		state := &protocolPortState{
+			binding: &guestv1.OperationBinding{}, credit: newProtocolPortCredit(),
+			connection: &invalidPortReadConnection{count: count},
+		}
+		if err := state.credit.add(8); err != nil {
+			t.Fatal(err)
+		}
+		connection.wait.Add(1)
+		connection.pumpPortConnection(t.Context(), "invalid-read", state)
+		err := connection.recordedAsyncError()
+		if err == nil || !strings.Contains(err.Error(), "invalid guest Port socket read count") || stream.sent != 0 {
+			t.Fatalf("socket read count %d: error = %v, sent = %d", count, err, stream.sent)
+		}
+	}
+}
+
+type invalidPortReadConnection struct {
+	net.Conn
+	count int
+}
+
+func (connection *invalidPortReadConnection) Read([]byte) (int, error) {
+	return connection.count, io.EOF
+}
+func (*invalidPortReadConnection) Close() error { return nil }
+
+type recordingGuestPortStream struct {
+	guestv1.GuestAgent_ConnectServer
+	sent int
+}
+
+func (stream *recordingGuestPortStream) Send(*guestv1.GuestToRunner) error {
+	stream.sent++
+	return nil
+}
 
 func TestGuestPortProxyPreservesCreditAfterShortSocketReads(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

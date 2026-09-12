@@ -4,12 +4,51 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
+
+func TestRunnerPortProxyRejectsReadBeyondReservedCredit(t *testing.T) {
+	service, err := NewRunnerProtocolService(testRunnerConfig(), &portRelayAssignmentBackend{
+		connection: newTestPortConnection(),
+	}, staticProtocolConnector{stream: &threadSafeRunnerStream{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := relayPortOpen(relayRunnerFence(), "oversized", "oversized-stream")
+	state := &runnerPortOperation{
+		fence: open.Fence, correlation: open.Correlation, operationID: open.OperationId,
+		streamID: open.StreamId, nextOutgoing: 1, credit: newRunnerCreditWindow(),
+		connection: &oversizedPortReadConnection{PortConnection: newTestPortConnection()},
+	}
+	if err := state.credit.add(8); err != nil {
+		t.Fatal(err)
+	}
+	stream := &threadSafeRunnerStream{}
+	asyncErrors := make(chan error, 1)
+	service.pumpPortReads(t.Context(), stream, state, asyncErrors)
+	select {
+	case err := <-asyncErrors:
+		if !strings.Contains(err.Error(), "exceeds reserved credit") {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("oversized Port read did not fail")
+	}
+	if len(stream.messages()) != 0 {
+		t.Fatal("oversized Port read was forwarded")
+	}
+}
+
+type oversizedPortReadConnection struct{ PortConnection }
+
+func (*oversizedPortReadConnection) Read(context.Context, int) ([]byte, error) {
+	return []byte("123456789"), io.EOF
+}
 
 func TestRunnerPortProxyPreservesCreditAfterShortReads(t *testing.T) {
 	connection := newTestPortConnection()

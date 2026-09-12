@@ -94,6 +94,8 @@ The connection multiplexes lifecycle commands, exec, filesystem transfer, PTY, p
 Port read pumps reserve credit before reading a socket or guest stream, then return the unused reservation after a short read.
 Only bytes actually sent consume the window; small interactive packets must not exhaust credit while the receiver still has capacity.
 This rule applies at both the guest and Runner control stream boundaries.
+The shared Firecracker/gVisor guest adapter retains outstanding credit across reads, grants only additional capacity, and splits buffered frames to each caller's read maximum.
+Frames queued inside the adapter still count against that outstanding grant; both read pumps reject invalid lengths before calculating unused credit.
 
 Cancellation is an acknowledged guest-directed operation. Transport disconnect does not imply successful cancellation. On reconnect, the runner reports active operations and terminal results so the control plane can reconcile without replaying a completed mutation.
 
