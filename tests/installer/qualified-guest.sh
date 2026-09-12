@@ -157,9 +157,23 @@ create_qualification_workload() {
   fi
 
   jq -n '{profile:"durable-coding",metadata:{qualification:"installer-qualified-workload"}}' >"$root/sandbox.json"
-  if ! sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create \
-    --body "$root/sandbox.json" --header "Idempotency-Key=qualified-sandbox-$key_suffix")"; then
-    echo 'explicit qualification Sandbox creation failed' >&2
+  # The installer's guest smoke deletes its durable-coding Sandbox moments before
+  # this create, and the Runner's reported reservation for it can lag one
+  # heartbeat; on a minimum host that refuses placement transiently.
+  local create_attempt create_error=''
+  sandbox_operation=''
+  for create_attempt in $(seq 1 30); do
+    if sandbox_operation="$(SECONDBOX_CONFIG="$application_config" "$binary" --output json sandboxes create \
+      --body "$root/sandbox.json" --header "Idempotency-Key=qualified-sandbox-$key_suffix-$create_attempt" 2>"$root/create-error.txt")"; then
+      create_error=''
+      break
+    fi
+    create_error="$(<"$root/create-error.txt")"
+    [[ "$create_error" == *"code=home_runner_unavailable"* ]] || break
+    sleep 2
+  done
+  if [[ -z "$sandbox_operation" || -n "$create_error" ]]; then
+    echo "explicit qualification Sandbox creation failed: $create_error" >&2
     return 1
   fi
   sandbox_id="$(jq -er .sandboxId <<<"$sandbox_operation")"
