@@ -285,15 +285,15 @@ schema.
 
 ### Task 4: `run` and `create` accept sizes
 
-- [ ] Add `--cpus`, `--memory`, `--disk` (byte-size parsing with `GiB`, `MiB`,
+- [x] Add `--cpus`, `--memory`, `--disk` (byte-size parsing with `GiB`, `MiB`,
   `g`, `m` suffixes) and `--size small|medium|large` to `run` and `create`.
   Explicit axes override the preset. The preset table is one exported map in
   `cmd/secondbox` and appears in `--help`.
-- [ ] Render the `resources_exceed_profile` problem on a TTY as a next-command
+- [x] Render the `resources_exceed_profile` problem on a TTY as a next-command
   hint naming the ceiling and the Profile.
-- [ ] Show resolved resources in the `run --keep` summary and in `get`.
-- [ ] Cover parsing, preset override, and the problem rendering.
-- [ ] Run `just test-cli-ui`.
+- [x] Show resolved resources in the `run --keep` summary and in `get`.
+- [x] Cover parsing, preset override, and the problem rendering.
+- [x] Run `just test-cli-ui`.
 
 ### Task 5: Golden-snapshot workflow
 

@@ -59,11 +59,13 @@ func runLifecycleVerb(ctx context.Context, session cliSession, command string, a
 		}
 	}
 	flags := verbFlags(command)
+	var resourceFlags resourceOptions
 	var name, source, cursor string
 	var metadata repeatedValues
 	var noWait, force bool
 	var limit int
 	if command == "create" {
+		resourceFlags.register(flags)
 		flags.StringVar(&name, "name", "", "reserved Sandbox name")
 		flags.StringVar(&source, "from", "", "Snapshot identifier or sandbox/name")
 		flags.Var(&metadata, "metadata", "metadata key=value; repeatable")
@@ -84,6 +86,10 @@ func runLifecycleVerb(ctx context.Context, session cliSession, command string, a
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("SecondBox CLI %s has unexpected arguments", command)
+	}
+	resources, err := resourceFlags.resolve(flags)
+	if err != nil {
+		return err
 	}
 	client, err := verbClient(session, transport)
 	if err != nil {
@@ -121,9 +127,9 @@ func runLifecycleVerb(ctx context.Context, session cliSession, command string, a
 				return err
 			}
 		}
-		_, operation, err := client.CreateSandbox(capture("createSandbox"), sb.CreateSandboxRequest{Profile: operand, Metadata: values, SourceSnapshotID: source}, "")
+		_, operation, err := client.CreateSandbox(capture("createSandbox"), sb.CreateSandboxRequest{Profile: operand, Metadata: values, SourceSnapshotID: source, Resources: resources}, "")
 		if err != nil {
-			return err
+			return &sandboxCreationError{cause: err, profile: operand}
 		}
 		return emitVerb(ctx, output, "getOperation", raw, operation)
 	}

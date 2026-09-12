@@ -30,6 +30,8 @@ func runRunCommand(
 	}
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	var resourceFlags resourceOptions
+	resourceFlags.register(flags)
 	name := flags.String("name", "", "reserved Sandbox name for later reference")
 	keep := flags.Bool("keep", false, "retain the Sandbox instead of deleting it")
 	shell := flags.Bool("shell", false, "treat the single operand as one shell command")
@@ -50,6 +52,10 @@ func runRunCommand(
 	emitJSON := flags.Bool("json", false, "write the raw ExecOutcome JSON instead of the output")
 	if err := flags.Parse(rest); err != nil {
 		return fmt.Errorf("SecondBox CLI parse run options: %w", err)
+	}
+	resources, err := resourceFlags.resolve(flags)
+	if err != nil {
+		return err
 	}
 	if err := requireSessionCredentials("run", session); err != nil {
 		return err
@@ -112,6 +118,7 @@ func runRunCommand(
 		return runInteractiveSandbox(
 			ctx, session, client, interactiveRequest{
 				profile:      profile,
+				resources:    resources,
 				metadata:     metadata,
 				operands:     flags.Args(),
 				cwd:          *cwd,
@@ -122,6 +129,7 @@ func runRunCommand(
 	}
 	request := secondboxclient.RunRequest{
 		Profile:              profile,
+		Resources:            resources,
 		Metadata:             metadata,
 		Command:              command,
 		Environment:          secondboxclient.StringMap(values),
@@ -167,14 +175,14 @@ func runRunCommand(
 		return errors.Join(runErr, err)
 	}
 	if handle != nil && *keep {
-		if err := writeRetainedSandbox(ctx, environment.stderr, handle.Snapshot().ID); err != nil {
+		if err := writeRetainedSandbox(ctx, environment.stderr, handle.Snapshot()); err != nil {
 			return err
 		}
 	}
 	// A transport or lifecycle failure has no outcome to render.
 	var failure *secondboxclient.ExecFailure
 	if runErr != nil && !errors.As(runErr, &failure) {
-		return runErr
+		return &sandboxCreationError{cause: runErr, profile: profile}
 	}
 	if *emitJSON {
 		return writeExecOutcomeJSON(environment.stdout, result.Outcome)
@@ -182,16 +190,16 @@ func runRunCommand(
 	return writeExecOutcome(environment, result.Outcome)
 }
 
-func writeRetainedSandbox(ctx context.Context, fallback io.Writer, sandboxID string) error {
+func writeRetainedSandbox(ctx context.Context, fallback io.Writer, sandbox secondboxclient.Sandbox) error {
 	if value, ok := ctx.Value(presentationContextKey{}).(presentation); ok {
 		if value.renderer.Capabilities.Diagnostic.TTY {
 			renderer := value.renderer
 			renderer.Output = fallback
 			renderer.Capabilities.Output = renderer.Capabilities.Diagnostic
-			return renderer.WritePhases([]cliui.Phase{{Name: "Retained Sandbox", Detail: sandboxID, Status: cliui.StatusComplete}})
+			return renderer.WritePhases([]cliui.Phase{{Name: "Retained Sandbox", Detail: sandbox.ID + " (" + sandboxResourceSummary(sandbox.Resources) + ")", Status: cliui.StatusComplete}})
 		}
 	}
-	_, err := fmt.Fprintf(fallback, "SecondBox retained Sandbox %s\n", sandboxID)
+	_, err := fmt.Fprintf(fallback, "SecondBox retained Sandbox %s\n", sandbox.ID)
 	return err
 }
 
@@ -208,6 +216,7 @@ func writeRunCompletion(ctx context.Context, name, detail string) error {
 // interactiveRequest is one ephemeral interactive Sandbox request.
 type interactiveRequest struct {
 	profile      string
+	resources    *secondboxclient.SandboxResourceRequest
 	metadata     map[string]string
 	operands     []string
 	cwd          string
@@ -230,10 +239,10 @@ func runInteractiveSandbox(
 	report io.Writer,
 ) (resultErr error) {
 	handle, _, err := client.CreateSandbox(ctx, secondboxclient.CreateSandboxRequest{
-		Profile: request.profile, Metadata: request.metadata,
+		Profile: request.profile, Metadata: request.metadata, Resources: request.resources,
 	}, "")
 	if err != nil {
-		return err
+		return &sandboxCreationError{cause: err, profile: request.profile}
 	}
 	if !request.keep {
 		defer func() {
@@ -253,7 +262,7 @@ func runInteractiveSandbox(
 		return err
 	}
 	if request.keep {
-		if err := writeRetainedSandbox(ctx, report, handle.Snapshot().ID); err != nil {
+		if err := writeRetainedSandbox(ctx, report, handle.Snapshot()); err != nil {
 			return err
 		}
 	}
