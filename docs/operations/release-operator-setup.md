@@ -46,7 +46,8 @@ The release file includes every qualification key and is the sole configuration
 used by `just release`; it does not recover inputs from an older release directory.
 Run `npm ci --ignore-scripts` once in the checkout. Provision your own named
 Buildx builder without changing the caller's selected builder, and set
-`BUILDX_BUILDER` in the release file:
+`RELEASE_BUILDX_BUILDER` in the release file. This selection applies only to
+artifact staging; it does not change the scenario harness's local Docker builds:
 
 ```sh
 docker buildx create --name secondbox-suite-release --driver docker-container \
@@ -88,6 +89,7 @@ supports `just qualify --wait RUN`. On hosts that terminate commands when their
 terminal disappears, launch the release in a user service:
 
 ```sh
+mkdir -p .tmp
 systemd-run --user --unit="secondbox-suite-release-$(date +%s)" --collect \
   --property="WorkingDirectory=$PWD" \
   --property="StandardOutput=file:$PWD/.tmp/release-console.log" \

@@ -54,8 +54,8 @@ done
 nested_file=/sys/module/kvm_amd/parameters/nested
 [[ -f "$nested_file" ]] || nested_file=/sys/module/kvm_intel/parameters/nested
 [[ "$(cat "$nested_file")" =~ ^(1|Y)$ ]] || fail 'installer guests require nested KVM'
-: "${BUILDX_BUILDER:?set BUILDX_BUILDER to an operator-owned release builder}"
-docker buildx inspect "$BUILDX_BUILDER" >/dev/null
+: "${RELEASE_BUILDX_BUILDER:?set RELEASE_BUILDX_BUILDER to an operator-owned release builder}"
+docker buildx inspect "$RELEASE_BUILDX_BUILDER" >/dev/null
 virsh -c qemu:///system uri >/dev/null
 domains="$(virsh -c qemu:///system list --all --name)"
 ! grep -q '^sbq-' <<<"$domains" || fail 'libvirt has sbq- domains; wait for their owner'
@@ -108,7 +108,7 @@ finish() {
 }
 trap finish EXIT
 stage qualification /usr/bin/just qualify --tier release & jobs+=("$!")
-stage build scripts/release-stage.sh --build-only "$version" "$build" & jobs+=("$!")
+stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only "$version" "$build" & jobs+=("$!")
 status=0
 for job in "${jobs[@]}"; do wait "$job" || status=1; done
 jobs=()
