@@ -64,6 +64,24 @@ func TestTimeoutDiagnosticsPreservesFailureAndCapturesOnce(t *testing.T) {
 		})
 	}
 }
+
+func TestTimeoutDiagnosticsCapturesCancellationAtDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/readyz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("net/http: request canceled")
+	captures := 0
+	transport := &TimeoutDiagnosticsTransport{
+		Base:    diagnosticRoundTrip(func(*http.Request) (*http.Response, error) { return nil, failure }),
+		Capture: func() { captures++ },
+	}
+	if response, err := transport.RoundTrip(request); response != nil || err != failure || captures != 1 {
+		t.Fatalf("deadline cancellation: response=%v error=%v captures=%d", response, err, captures)
+	}
+}
 func errorLabel(err error) string {
 	if err == nil {
 		return "nil"

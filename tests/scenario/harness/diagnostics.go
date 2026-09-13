@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // TimeoutDiagnosticsTransport captures stack state at the first HTTP timeout,
@@ -19,7 +20,12 @@ type TimeoutDiagnosticsTransport struct {
 func (transport *TimeoutDiagnosticsTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := transport.Base.RoundTrip(request)
 	var timeout net.Error
-	if errors.As(err, &timeout) && timeout.Timeout() {
+	deadline, hasDeadline := request.Context().Deadline()
+	// For a wrapped transport, http.Client can close Request.Cancel before
+	// the context timer fires. The underlying error then says "request
+	// canceled"; Client.Do only classifies it as a timeout after we return.
+	deadlineExpired := hasDeadline && !time.Now().Before(deadline)
+	if err != nil && (deadlineExpired || (errors.As(err, &timeout) && timeout.Timeout())) {
 		transport.once.Do(transport.Capture)
 	}
 	return response, err
