@@ -40,7 +40,7 @@ func (store *PostgresControlPlaneStore) PingGuest(
 		    AND sandbox.id=$3 AND sandbox.generation=$4
 		    AND instance.id=sandbox.current_instance_id AND instance.generation=$4
 		  RETURNING instance.id,instance.sandbox_id,instance.generation,instance.state,
-		            instance.guest_liveness,instance.termination_reason,instance.created_at,
+		            instance.guest_liveness,instance.termination_reason,instance.created_at,instance.guest_features,
 		            instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at
 		), lifecycle_wakeup AS (
 		  UPDATE secondbox.sandboxes AS sandbox
@@ -53,14 +53,14 @@ func (store *PostgresControlPlaneStore) PingGuest(
 		    AND sandbox.current_instance_id=instance.id
 		)
 		SELECT id,sandbox_id,generation,state,guest_liveness,termination_reason,created_at,
-		       updated_at,ready_at,guest_heartbeat_at,stopped_at
+		       updated_at,ready_at,guest_heartbeat_at,stopped_at,guest_features
 		FROM updated_instance`,
 		input.TenantRef, input.SubjectRef, input.SandboxID, input.Generation,
 		liveness, input.Now.UTC(),
 	).Scan(
 		&instance.ID, &instance.SandboxID, &instance.Generation, &instance.State,
 		&instance.GuestLiveness, &instance.TerminationReason, &instance.CreatedAt,
-		&instance.UpdatedAt, &instance.ReadyAt, &instance.GuestHeartbeatAt, &instance.StoppedAt,
+		&instance.UpdatedAt, &instance.ReadyAt, &instance.GuestHeartbeatAt, &instance.StoppedAt, &instance.GuestFeatures,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.Instance{}, ports.ErrGenerationFenced

@@ -45,6 +45,7 @@ func TestProtocolServiceNegotiatesBoundFeatureWindow(t *testing.T) {
 				guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
 				guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM,
 				guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY,
+				guestv1.GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY,
 			},
 			MandatoryFeatures: []guestv1.GuestFeature{
 				guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM,
@@ -73,7 +74,8 @@ func TestProtocolServiceNegotiatesBoundFeatureWindow(t *testing.T) {
 	}
 	if !protocolFeatureEnabled(welcome.EnabledFeatures, guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC) ||
 		!protocolFeatureEnabled(welcome.EnabledFeatures, guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM) ||
-		!protocolFeatureEnabled(welcome.EnabledFeatures, guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY) {
+		!protocolFeatureEnabled(welcome.EnabledFeatures, guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY) ||
+		!protocolFeatureEnabled(welcome.EnabledFeatures, guestv1.GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY) {
 		t.Fatalf("enabled features = %v", welcome.EnabledFeatures)
 	}
 }

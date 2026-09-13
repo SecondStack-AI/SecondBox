@@ -86,6 +86,7 @@ scenario_started_epoch="$(date +%s)"
 scenario_source_commit="$(git -C "$repo_root" rev-parse HEAD)"
 scenario_repository_dirty=false
 scenario_pass_count=0
+scenario_skipped='[]'
 qualification_complete=false
 [[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] ||
   scenario_repository_dirty=true
@@ -933,6 +934,7 @@ cleanup() {
       --arg hostPlatform "$scenario_host_platform" \
       --argjson kvmPresent "$([[ -e /dev/kvm ]] && echo true || echo false)" \
       --argjson passCount "$scenario_pass_count" \
+      --argjson skipped "$scenario_skipped" \
       --argjson wallClockSeconds "$wall_clock_seconds" \
       --arg workspaceMount "$workspace_mount" \
       --arg workspaceFilesystem "$workspace_fstype" \
@@ -943,6 +945,7 @@ cleanup() {
         repositoryDirty: $repositoryDirty,
         suite: $suite,
         passCount: $passCount,
+        skipped: $skipped,
         wallClockSeconds: $wallClockSeconds,
         host: ({workspaceFilesystem: {mount: $workspaceMount, type: $workspaceFilesystem}} +
         if $hostPlatform == "darwin" then {
@@ -1126,12 +1129,14 @@ if [[ "$scenario_mode" == "suite" ]]; then
   go test "${scenario_test_arguments[@]}" ./tests/scenario 2>&1 |
     tee "$scenario_test_output"
   scenario_pass_count="$(awk '/^--- PASS: / { count++ } END { print count + 0 }' "$scenario_test_output")"
+  scenario_skipped="$(jq -Rn '[inputs | capture("^ *--- SKIP: (?<test>[^ ]+) ")? | .test]' <"$scenario_test_output")"
+  echo "SecondBox scenario skipped groups: $scenario_skipped"
   [[ "$scenario_pass_count" -gt 0 ]] ||
     fail "scenario suite reported no passing top-level tests"
   if [[ -n "${SECONDBOX_SCENARIO_SHARD:-}" ]]; then
-    jq -Rn --arg shard "$SECONDBOX_SCENARIO_SHARD" --arg tier "$SECONDBOX_SCENARIO_TIER" --arg pattern "$scenario_shard_pattern" '
+    jq -Rn --argjson skipped "$scenario_skipped" --arg shard "$SECONDBOX_SCENARIO_SHARD" --arg tier "$SECONDBOX_SCENARIO_TIER" --arg pattern "$scenario_shard_pattern" '
       [inputs | capture("^--- (?<result>PASS|SKIP): (?<test>[^ ]+) ")?] |
-      {shard:$shard,tier:$tier,pattern:$pattern,tests:.}
+      {shard:$shard,tier:$tier,pattern:$pattern,tests:.,skipped:$skipped}
     ' <"$scenario_test_output" >"$qualification_evidence.results.json"
   fi
   qualification_complete=true

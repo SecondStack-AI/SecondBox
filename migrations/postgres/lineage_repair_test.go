@@ -44,6 +44,7 @@ var postFenceMigrationFiles = []string{
 	"0023_sandbox_resources.sql",
 	"0024_snapshot_name_index.sql",
 	"0025_remove_runner_pool_capacity_policy.sql",
+	"0026_instance_guest_features.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

@@ -65,6 +65,7 @@ func TestNegotiateGuestProtocolOverFirecrackerVsockTransport(t *testing.T) {
 		ExpectedImageManifestDigest:     "sha256:image",
 		ExpectedToolchainManifestDigest: "sha256:toolchain",
 		RequestedFeatures: []guestv1.GuestFeature{
+			guestv1.GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY,
 			guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
 			guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
 			guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM,
@@ -76,6 +77,9 @@ func TestNegotiateGuestProtocolOverFirecrackerVsockTransport(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("negotiate: %v", err)
+	}
+	if !session.EnabledFeatures[guestv1.GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY] {
+		t.Fatal("current guest did not negotiate exec input recovery")
 	}
 	defer session.Close()
 	cancel()

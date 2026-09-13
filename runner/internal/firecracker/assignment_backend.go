@@ -604,6 +604,7 @@ func (b *AssignmentBackend) StartAssignment(
 			return runnercontrol.BackendInstance{
 				BackendKind:      "firecracker",
 				BackendReference: active.backendReference,
+				GuestFeatures:    b.manager.assignmentGuestFeatures(active.backendReference),
 			}, nil
 		}
 		b.mu.Unlock()
@@ -787,6 +788,7 @@ func (b *AssignmentBackend) StartAssignment(
 	return runnercontrol.BackendInstance{
 		BackendKind:      "firecracker",
 		BackendReference: backendReference,
+		GuestFeatures:    b.manager.assignmentGuestFeatures(backendReference),
 	}, nil
 }
 

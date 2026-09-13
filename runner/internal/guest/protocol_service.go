@@ -147,6 +147,7 @@ func (s *ProtocolService) negotiate(
 		guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM: true,
 		guestv1.GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS:              true,
 		guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY:                   true,
+		guestv1.GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY:          true,
 	}
 	for _, feature := range hello.MandatoryFeatures {
 		if feature == guestv1.GuestFeature_GUEST_FEATURE_UNSPECIFIED || !supported[feature] {

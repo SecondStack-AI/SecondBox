@@ -53,7 +53,7 @@ func TestScenarioShardEvidenceMerge(t *testing.T) {
 					}
 				}
 				file := filepath.Join(dir, fmt.Sprintf("scenario-shard-%d-evidence.json", i))
-				evidence := fmt.Sprintf(`{"schemaVersion":"secondbox.release/qualification-evidence/v2","sourceCommit":%q,"repositoryDirty":%s,"suite":"test-scenario","passCount":%d,"wallClockSeconds":%d,"host":{"platform":"linux-amd64"},"qualifiedAt":"2026-09-13T00:00:00Z"}`, source, dirty, count, i*10)
+				evidence := fmt.Sprintf(`{"schemaVersion":"secondbox.release/qualification-evidence/v2","sourceCommit":%q,"repositoryDirty":%s,"suite":"test-scenario","passCount":%d,"skipped":[%q],"wallClockSeconds":%d,"host":{"platform":"linux-amd64"},"qualifiedAt":"2026-09-13T00:00:00Z"}`, source, dirty, count, test+"/recovery", i*10)
 				if err := os.WriteFile(file, []byte(evidence), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -70,7 +70,7 @@ func TestScenarioShardEvidenceMerge(t *testing.T) {
 				t.Fatalf("merge: %v: %s", err, out)
 			}
 			if problem == "" {
-				run("jq", "-e", ".passCount == 2 and .wallClockSeconds == 20", output)
+				run("jq", "-e", `.passCount == 2 and .wallClockSeconds == 20 and .skipped == ["Test1/recovery", "Test2/recovery"]`, output)
 			} else if _, err := os.Stat(output); !os.IsNotExist(err) {
 				t.Fatal("failed merge left evidence")
 			}
