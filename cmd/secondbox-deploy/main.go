@@ -10,10 +10,8 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/cliui"
@@ -378,30 +376,6 @@ func releaseDigest(data []byte) string {
 
 func runCompose(manifestPath, action string) error {
 	return deployconfig.RunCompose(context.Background(), manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: os.Stdout, Diagnostic: os.Stderr}, http.DefaultClient)
-}
-
-func composeUpArguments(arguments []string, options ...string) []string {
-	result := append(slices.Clone(arguments), "up", "--remove-orphans")
-	return append(result, options...)
-}
-
-func composeDownArguments(arguments []string) []string {
-	return append(slices.Clone(arguments), "down", "--remove-orphans")
-}
-
-func runDockerCompose(arguments []string) error {
-	command := exec.Command("docker", arguments...)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	command.Stdin = os.Stdin
-	allow := map[string]bool{"PATH": true, "HOME": true, "DOCKER_CONFIG": true, "DOCKER_HOST": true, "DOCKER_CONTEXT": true, "DOCKER_TLS_VERIFY": true, "DOCKER_CERT_PATH": true, "DOCKER_API_VERSION": true, "SSH_AUTH_SOCK": true, "XDG_RUNTIME_DIR": true}
-	for _, entry := range os.Environ() {
-		name := strings.SplitN(entry, "=", 2)[0]
-		if allow[name] {
-			command.Env = append(command.Env, entry)
-		}
-	}
-	return command.Run()
 }
 
 func usage(renderer cliui.Renderer) error {

@@ -2,7 +2,6 @@ package install
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -53,17 +52,4 @@ func writeCreateOnly(path string, content []byte) error {
 		return errors.Join(installerError("write "+path, err), os.Remove(path))
 	}
 	return nil
-}
-
-func ReadPlan(path string) (InstallPlan, []byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
-		return InstallPlan{}, nil, installerError("plan must be a mode-0600 non-symbolic-link regular file", err)
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return InstallPlan{}, nil, fmt.Errorf("SecondBox installer read plan: %w", err)
-	}
-	plan, err := DecodePlan(content)
-	return plan, content, err
 }

@@ -459,7 +459,7 @@ func writeManagementResult(ctx context.Context, output io.Writer, result any) er
 		for _, tenant := range value.Items {
 			rows = append(rows, cliui.Row{"ref": tenant.Ref, "state": tenant.State, "revision": strconv.FormatInt(tenant.Revision, 10)})
 		}
-		return view.renderer.WriteTable(cliui.Table{Columns: managementResourceColumns("Tenant"), Rows: rows, Empty: "No tenants.", ContinuationCursor: optionalCursor(value.NextCursor)})
+		return view.renderer.WriteTable(cliui.Table{Columns: managementResourceColumns("Tenant"), Rows: rows, Empty: "No tenants.", ContinuationCursor: pageCursor(value.NextCursor)})
 	case secondboxclient.TenantControllerCredentialResponse:
 		return writeCredentialSummary(view.renderer, "Tenant-controller credential", value.Authority.ID, value.Authority.State, value.Authority.Revision, value.BearerToken)
 	case secondboxclient.TenantControllerAuthority:
@@ -469,7 +469,7 @@ func writeManagementResult(ctx context.Context, output io.Writer, result any) er
 		for _, authority := range value.Items {
 			rows = append(rows, cliui.Row{"ref": authority.ID, "state": authority.State, "revision": strconv.FormatInt(authority.Revision, 10)})
 		}
-		return view.renderer.WriteTable(cliui.Table{Columns: managementResourceColumns("Authority"), Rows: rows, Empty: "No tenant-controller authorities.", ContinuationCursor: optionalCursor(value.NextCursor)})
+		return view.renderer.WriteTable(cliui.Table{Columns: managementResourceColumns("Authority"), Rows: rows, Empty: "No tenant-controller authorities.", ContinuationCursor: pageCursor(value.NextCursor)})
 	case secondboxclient.Subject:
 		return view.renderer.WriteSummary(cliui.Summary{Title: "Subject", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Reference", Value: value.Ref}, {Key: "Tenant", Value: value.TenantRef}, {Key: "State", Value: value.State}, {Key: "Cleanup", Value: value.CleanupState}, {Key: "Revision", Value: strconv.FormatInt(value.Revision, 10)}}})
 	case secondboxclient.SubjectPage:
@@ -477,7 +477,7 @@ func writeManagementResult(ctx context.Context, output io.Writer, result any) er
 		for _, subject := range value.Items {
 			rows = append(rows, cliui.Row{"ref": subject.Ref, "state": subject.State, "revision": strconv.FormatInt(subject.Revision, 10)})
 		}
-		return view.renderer.WriteTable(cliui.Table{Columns: managementResourceColumns("Subject"), Rows: rows, Empty: "No subjects.", ContinuationCursor: optionalCursor(value.NextCursor)})
+		return view.renderer.WriteTable(cliui.Table{Columns: managementResourceColumns("Subject"), Rows: rows, Empty: "No subjects.", ContinuationCursor: pageCursor(value.NextCursor)})
 	case secondboxclient.ApplicationCredentialResponse:
 		return writeCredentialSummary(view.renderer, "Application credential", value.Authority.ID, value.Authority.State, value.Authority.Revision, value.BearerToken)
 	case secondboxclient.ApplicationAuthority:
@@ -487,7 +487,7 @@ func writeManagementResult(ctx context.Context, output io.Writer, result any) er
 		for _, authority := range value.Items {
 			rows = append(rows, cliui.Row{"ref": authority.ID, "state": authority.State, "revision": strconv.FormatInt(authority.Revision, 10)})
 		}
-		return view.renderer.WriteTable(cliui.Table{Columns: managementResourceColumns("Authority"), Rows: rows, Empty: "No application authorities.", ContinuationCursor: optionalCursor(value.NextCursor)})
+		return view.renderer.WriteTable(cliui.Table{Columns: managementResourceColumns("Authority"), Rows: rows, Empty: "No application authorities.", ContinuationCursor: pageCursor(value.NextCursor)})
 	case secondboxclient.Operation:
 		return view.renderer.WriteSummary(cliui.Summary{Title: "Subject cleanup operation", Status: cliui.StatusActive, Pairs: []cliui.Pair{{Key: "Operation", Value: value.ID}, {Key: "State", Value: string(value.State)}}})
 	case secondboxclient.TenantUsage:
@@ -517,13 +517,6 @@ func writeCredentialSummary(renderer cliui.Renderer, title, id, state string, re
 
 func managementResourceColumns(referenceTitle string) []cliui.Column {
 	return []cliui.Column{{Key: "ref", Title: referenceTitle, Priority: 0, MinWidth: 12}, {Key: "state", Title: "State", Priority: 1, MinWidth: 8}, {Key: "revision", Title: "Revision", Priority: 2, MinWidth: 8}}
-}
-
-func optionalCursor(cursor *string) string {
-	if cursor == nil {
-		return ""
-	}
-	return *cursor
 }
 
 func managementContinuation(cursor *string) string {

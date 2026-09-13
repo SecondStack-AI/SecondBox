@@ -4,16 +4,8 @@ package install
 
 import "errors"
 
-func ReadAccepted(string, string, int) (InstallPlan, InstallReceipt, error) {
-	return InstallPlan{}, InstallReceipt{}, installerError("accepted installer operations require Linux openat2 path confinement", errors.ErrUnsupported)
-}
-
 func ReadHostApply(string, string, int) (InstallPlan, InstallReceipt, error) {
 	return InstallPlan{}, InstallReceipt{}, installerError("host apply requires Linux openat2 path confinement", errors.ErrUnsupported)
-}
-
-func ReadOperation(string, int) (InstallPlan, InstallReceipt, error) {
-	return InstallPlan{}, InstallReceipt{}, installerError("installer operations require Linux openat2 path confinement", errors.ErrUnsupported)
 }
 
 func ReadOperationReadOnly(string, int) (InstallPlan, InstallReceipt, error) {

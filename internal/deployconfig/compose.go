@@ -108,19 +108,10 @@ func runCompose(ctx context.Context, manifestPath, action string, executor Compo
 	return nil
 }
 
-// PurgeComposeVolumes removes the exact validated deployment's containers,
-// networks, and named volumes. It is intentionally separate from ordinary
-// Compose down because uninstall preserves the bundled database and object
-// while the typed permanent-purge workflow must remove it.
-func PurgeComposeVolumes(ctx context.Context, manifestPath string, executor ComposeExecutor) error {
-	return purgeComposeVolumes(ctx, manifestPath, executor, true)
-}
-
+// PurgeComposeVolumesForAcceptedInstaller removes the accepted deployment's
+// containers, networks, and named volumes. Ordinary uninstall preserves the
+// bundled database; the typed permanent-purge workflow removes it.
 func PurgeComposeVolumesForAcceptedInstaller(ctx context.Context, manifestPath string, executor ComposeExecutor) error {
-	return purgeComposeVolumes(ctx, manifestPath, executor, false)
-}
-
-func purgeComposeVolumes(ctx context.Context, manifestPath string, executor ComposeExecutor, validateSameHost bool) error {
 	if executor == nil {
 		return manifestError("Compose executor is required", nil)
 	}
@@ -129,12 +120,7 @@ func purgeComposeVolumes(ctx context.Context, manifestPath string, executor Comp
 		return err
 	}
 	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
-	var resolved ResolvedDeployment
-	if validateSameHost {
-		resolved, err = Render(absolute, environmentPath)
-	} else {
-		resolved, err = renderForAcceptedInstaller(absolute, environmentPath)
-	}
+	resolved, err := renderForAcceptedInstaller(absolute, environmentPath)
 	if err != nil {
 		return err
 	}
@@ -148,16 +134,6 @@ func purgeComposeVolumes(ctx context.Context, manifestPath string, executor Comp
 func composeUpArgumentsInternal(arguments []string, options ...string) []string {
 	result := append(slices.Clone(arguments), "up", "--remove-orphans")
 	return append(result, options...)
-}
-
-// ComposeDiagnosticArguments returns the exact existing deployment transport
-// for bounded read-only Docker Compose inspection without rerendering it.
-func ComposeDiagnosticArguments(manifestPath string, command ...string) ([]string, error) {
-	return composeDiagnosticArguments(manifestPath, true, command...)
-}
-
-func ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath string, command ...string) ([]string, error) {
-	return composeDiagnosticArguments(manifestPath, false, command...)
 }
 
 // ComposeDiagnosticArgumentsForRecordedInstaller resolves only the immutable
@@ -273,12 +249,14 @@ func recordedInstallerComposeIdentity(manifestPath string) (string, string, []st
 	return absolute, project, composeFiles, nil
 }
 
-func composeDiagnosticArguments(manifestPath string, validateSameHost bool, command ...string) ([]string, error) {
+// ComposeDiagnosticArgumentsForAcceptedInstaller returns existing deployment
+// transport arguments for read-only inspection without rerendering assets.
+func ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath string, command ...string) ([]string, error) {
 	absolute, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := resolvePath(absolute, validateSameHost)
+	resolved, err := resolvePath(absolute, false)
 	if err != nil {
 		return nil, err
 	}

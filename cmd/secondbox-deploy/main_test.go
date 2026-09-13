@@ -48,18 +48,6 @@ func TestDeployRootHelpIsSuccessfulAndSeparateFromUsageErrors(t *testing.T) {
 	}
 }
 
-func TestComposeUpArgumentsRemoveOrphanedTopology(t *testing.T) {
-	base := []string{"compose", "--project-name", "secondbox"}
-	got := composeUpArguments(base, "--detach")
-	want := []string{"compose", "--project-name", "secondbox", "up", "--remove-orphans", "--detach"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Compose up arguments = %#v", got)
-	}
-	if !reflect.DeepEqual(base, []string{"compose", "--project-name", "secondbox"}) {
-		t.Fatalf("Compose base arguments mutated = %#v", base)
-	}
-}
-
 func TestEveryDeployCommandHasOutputContract(t *testing.T) {
 	for _, command := range []string{"help", "version", "install", "init", "runner-template", "verify", "validate", "render", "runner-init", "inspect", "compose"} {
 		contract, found := deployCommandContracts[command]
@@ -115,18 +103,6 @@ func TestInstallUsageRejectsUnknownForms(t *testing.T) {
 	}
 }
 
-func TestComposeDownArgumentsRemoveOrphanedTopology(t *testing.T) {
-	base := []string{"compose", "--project-name", "secondbox"}
-	got := composeDownArguments(base)
-	want := []string{"compose", "--project-name", "secondbox", "down", "--remove-orphans"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Compose down arguments = %#v", got)
-	}
-	if !reflect.DeepEqual(base, []string{"compose", "--project-name", "secondbox"}) {
-		t.Fatalf("Compose base arguments mutated = %#v", base)
-	}
-}
-
 func TestDockerComposeReceivesOperatorClientConfiguration(t *testing.T) {
 	directory := t.TempDir()
 	outputPath := filepath.Join(directory, "environment")
@@ -137,7 +113,7 @@ func TestDockerComposeReceivesOperatorClientConfiguration(t *testing.T) {
 	t.Setenv("PATH", directory)
 	t.Setenv("DOCKER_CONFIG", "/operator/docker-config")
 	t.Setenv("SSH_AUTH_SOCK", "/operator/ssh-agent.sock")
-	if err := runDockerCompose([]string{"compose", "version"}); err != nil {
+	if err := (deployconfig.SystemComposeExecutor{}).Run(context.Background(), []string{"compose", "version"}); err != nil {
 		t.Fatal(err)
 	}
 	output, err := os.ReadFile(outputPath)
@@ -155,7 +131,7 @@ func TestDockerComposeExitStatusSurvives(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", directory)
-	err := runDockerCompose([]string{"compose", "version"})
+	err := (deployconfig.SystemComposeExecutor{}).Run(context.Background(), []string{"compose", "version"})
 	var exited *exec.ExitError
 	if !errors.As(err, &exited) || exited.ExitCode() != 42 {
 		t.Fatalf("compose error = %v, want exit 42", err)

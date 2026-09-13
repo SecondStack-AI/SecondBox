@@ -255,18 +255,6 @@ func writeSessionFile(path string, stored sessionFile) error {
 	return nil
 }
 
-func runLoginCommand(
-	ctx context.Context,
-	session cliSession,
-	args []string,
-	output io.Writer,
-	httpClient *http.Client,
-) error {
-	return runAuthorityLoginCommand(
-		ctx, session, sessionAuthorityApplication, args, output, httpClient,
-	)
-}
-
 func runAuthorityLoginCommand(
 	ctx context.Context,
 	session cliSession,

@@ -17,8 +17,6 @@ func TestInstallerFormBuildersKeepAuthorityInBoundValues(t *testing.T) {
 		CapacityReviewForm("2 Sandboxes, 8 GiB memory", &accepted),
 		AdvancedSettingsForm([]TextBinding{{Title: "API bind", Value: &advanced, Validate: func(value string) error { return nil }}}),
 		FinalInstallConfirmationForm("review", &accepted),
-		ResumeSelectionForm([]Option{{Label: "operation", Value: "op"}}, &workspace),
-		UninstallConfirmationForm("data preserved", &accepted),
 		PurgeConfirmationForm("PURGE secondbox", &purge),
 	}
 	for index, form := range forms {
@@ -34,7 +32,7 @@ func TestInstallerFormBuildersKeepAuthorityInBoundValues(t *testing.T) {
 	if !confirm.RequireAffirmative || confirm.BoolValue != &accepted {
 		t.Fatal("final confirmation is not explicit")
 	}
-	validator := forms[7].Groups[0].Fields[0].ValidateString
+	validator := forms[5].Groups[0].Fields[0].ValidateString
 	if validator == nil || validator("yes") == nil || validator("PURGE secondbox") != nil {
 		t.Fatal("purge typed confirmation is not exact")
 	}

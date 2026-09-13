@@ -137,7 +137,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	if err := runInstallResumeWith(context.Background(), operation, renderer, dependencies); err != nil {
 		t.Fatalf("resume: %v\n%s", err, diagnostic.String())
 	}
-	_, final, err := install.ReadOperation(operation, os.Getuid())
+	_, final, err := install.ReadOperationReadOnly(operation, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestInstallerLifecycleCommandsAreFencedDuringActiveUpdate(t *testing.T) {
 		t.Fatalf("Compose recovery during update = %v, side effect = %t", err, recoveryCalled)
 	}
 
-	readPlan, readReceipt, err := install.ReadOperation(operation, os.Getuid())
+	readPlan, readReceipt, err := install.ReadOperationReadOnly(operation, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +481,7 @@ func TestOrdinaryUninstallStopsComposeAndPreservesDurableResources(t *testing.T)
 	if output.Len() != 0 {
 		t.Fatalf("failed JSON uninstall emitted partial output: %q", output.String())
 	}
-	_, interrupted, err := install.ReadOperation(operation, os.Getuid())
+	_, interrupted, err := install.ReadOperationReadOnly(operation, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +501,7 @@ func TestOrdinaryUninstallStopsComposeAndPreservesDurableResources(t *testing.T)
 	if content, err := os.ReadFile(preserved); err != nil || string(content) != "durable" {
 		t.Fatalf("ordinary uninstall changed durable evidence: %q, %v", content, err)
 	}
-	_, final, err := install.ReadOperation(operation, os.Getuid())
+	_, final, err := install.ReadOperationReadOnly(operation, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +554,7 @@ func TestFailedComposeNetworkRecoveryValidatesBeforeExactProjectTeardown(t *test
 	if err := json.Unmarshal(output.Bytes(), &summary); err != nil || summary["Project"] != "secondbox-0123456789abcdef" || summary["Operation"] != operation {
 		t.Fatalf("recovery summary = %q, %#v, %v", output.String(), summary, err)
 	}
-	_, receipt, err := install.ReadOperation(operation, os.Getuid())
+	_, receipt, err := install.ReadOperationReadOnly(operation, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,7 +630,7 @@ func TestFailedPostComposeRecoveryRewindsReceiptForFullRetry(t *testing.T) {
 	if !slices.Equal(calls, []string{"host-verify", "validate", "compose-down"}) {
 		t.Fatalf("post-Compose recovery calls = %#v", calls)
 	}
-	_, receipt, err := install.ReadOperation(operation, os.Getuid())
+	_, receipt, err := install.ReadOperationReadOnly(operation, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +799,7 @@ func TestInstallResumeFailureInjectionStopsAtEveryOrchestrationBoundary(t *testi
 			if test.failureStage == install.StageAssetsMaterialized {
 				return // MaterializeRelease owns and tests its own durable failure record.
 			}
-			_, failed, err := install.ReadOperation(operation, os.Getuid())
+			_, failed, err := install.ReadOperationReadOnly(operation, os.Getuid())
 			if err != nil {
 				t.Fatal(err)
 			}
