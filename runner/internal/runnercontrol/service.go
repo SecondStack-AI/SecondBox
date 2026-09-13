@@ -421,18 +421,6 @@ func validateDataPlaneCertificate(
 	return leaf, hex.EncodeToString(digest[:]), nil
 }
 
-// SetEvidenceSink replaces the fixed-shape evidence destination for tests and
-// alternate Runner-local durable sinks.
-func (s *RunnerProtocolService) SetEvidenceSink(sink runnerevidence.Sink) {
-	if sink == nil {
-		return
-	}
-	s.evidence = sink
-	if evidenceBackend, ok := s.backend.(evidenceAwareBackend); ok {
-		evidenceBackend.SetRunnerEvidenceSink(sink, s.config.RunnerID)
-	}
-}
-
 // Run preserves ordinary Instances while reconnecting transient control-plane sessions.
 func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
 	if err := s.fenceDisconnectedAttributedAssignments(ctx); err != nil {

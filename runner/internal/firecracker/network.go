@@ -3,23 +3,10 @@ package firecracker
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"os"
 	"os/exec"
 	"strings"
 )
-
-func ipWithinCIDR(rawIP, rawCIDR string) bool {
-	ip, err := netip.ParseAddr(strings.TrimSpace(rawIP))
-	if err != nil {
-		return false
-	}
-	prefix, err := netip.ParsePrefix(strings.TrimSpace(rawCIDR))
-	if err != nil {
-		return false
-	}
-	return prefix.Contains(ip)
-}
 
 type HostNetworkConfigurer interface {
 	ConfigureTap(context.Context, TapConfig) error

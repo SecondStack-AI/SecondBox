@@ -75,11 +75,6 @@ func parseOOMKillCounter(data []byte) (uint64, error) {
 	return value, nil
 }
 
-func hasExactSuccessfulGuestExitMarker(reader io.Reader) bool {
-	found, err := scanExactSuccessfulGuestExitMarker(reader)
-	return err == nil && found
-}
-
 func scanExactSuccessfulGuestExitMarker(reader io.Reader) (bool, error) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {

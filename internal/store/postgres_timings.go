@@ -345,8 +345,8 @@ func (store *PostgresControlPlaneStore) attachBootTimings(
 			previousObserved[key] = assignmentCreatedAt
 		}
 		previous := previousObserved[key]
-		elapsed := durationMillisecondsFloat(previous, observedAt)
-		cumulative := durationMillisecondsFloat(assignmentCreatedAt, observedAt)
+		elapsed := preciseDurationMilliseconds(previous, observedAt)
+		cumulative := preciseDurationMilliseconds(assignmentCreatedAt, observedAt)
 		boot := &operations[operationIndex].Boots[bootIndex]
 		boot.Stages = append(boot.Stages, contracts.BootStageTiming{
 			Stage: stage, ObservedAt: observedAt, ReceivedAt: receivedAt,
@@ -362,10 +362,6 @@ func (store *PostgresControlPlaneStore) attachBootTimings(
 		return fmt.Errorf("SecondBox boot timing rows failed: %w", err)
 	}
 	return nil
-}
-
-func durationMillisecondsFloat(start, end time.Time) float64 {
-	return max(float64(end.Sub(start))/float64(time.Millisecond), 0)
 }
 
 func (store *PostgresControlPlaneStore) readSandboxExecTimings(

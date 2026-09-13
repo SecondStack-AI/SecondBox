@@ -35,12 +35,3 @@ func TuningDefaults() []TuningDefault {
 		integer("SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT", DefaultSchedulerSerializationRetryLimit),
 	}
 }
-
-func CategoryCEnvironmentNames() []string {
-	defaults := TuningDefaults()
-	names := make([]string, len(defaults))
-	for index := range defaults {
-		names[index] = defaults[index].Environment
-	}
-	return names
-}

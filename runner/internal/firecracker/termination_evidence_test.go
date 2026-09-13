@@ -17,7 +17,6 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
@@ -83,8 +82,8 @@ func TestParseOOMKillCounterRequiresExactKernelKey(t *testing.T) {
 
 func TestFirecrackerSuccessfulGuestExitMarkerIsStructurallyExact(t *testing.T) {
 	const marker = "2026-07-28T12:34:56.123456789 [fc-instance:main] Firecracker exited successfully\n"
-	if !hasExactSuccessfulGuestExitMarker(strings.NewReader(marker)) {
-		t.Fatal("pinned Firecracker 1.16.1 successful-exit marker was not recognized")
+	if found, err := scanExactSuccessfulGuestExitMarker(strings.NewReader(marker)); err != nil || !found {
+		t.Fatalf("pinned Firecracker 1.16.1 successful-exit marker = %t, %v", found, err)
 	}
 	for _, nearMatch := range []string{
 		"Firecracker exited successfully\n",
@@ -92,8 +91,8 @@ func TestFirecrackerSuccessfulGuestExitMarkerIsStructurallyExact(t *testing.T) {
 		"2026-07-28T12:34:56.123456789 [fc-instance:main] prefix Firecracker exited successfully\n",
 		"2026-07-28T12:34:56.123456789 [fc-instance:main Firecracker exited successfully\n",
 	} {
-		if hasExactSuccessfulGuestExitMarker(strings.NewReader(nearMatch)) {
-			t.Fatalf("near-match log line was accepted: %q", nearMatch)
+		if found, err := scanExactSuccessfulGuestExitMarker(strings.NewReader(nearMatch)); err != nil || found {
+			t.Fatalf("near-match log line %q = %t, %v", nearMatch, found, err)
 		}
 	}
 }
@@ -253,7 +252,6 @@ func TestNaturalReapFlowsFromReadyManagerThroughBackendToProtocolFrame(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			service.SetEvidenceSink(runnerevidence.SlogSink{})
 			ctx, cancel := context.WithCancel(t.Context())
 			runDone := make(chan error, 1)
 			go func() { runDone <- service.Run(ctx) }()

@@ -144,20 +144,6 @@ func syncDirectory(path string) error {
 	return dir.Sync()
 }
 
-func verifyArtifactIdentity(label, path string, want *ArtifactIdentity) error {
-	if want == nil {
-		return nil
-	}
-	got, err := fileArtifactIdentity(path)
-	if err != nil {
-		return fmt.Errorf("stat current %s artifact: %w", label, err)
-	}
-	if got.Size != want.Size || got.ModTimeUnixNano != want.ModTimeUnixNano {
-		return fmt.Errorf("%s artifact changed since snapshot", label)
-	}
-	return nil
-}
-
 func writeSnapshotManifest(path string, manifest GoldenSnapshotManifest) error {
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

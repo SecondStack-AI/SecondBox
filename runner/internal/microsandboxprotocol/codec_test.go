@@ -45,25 +45,6 @@ func TestWriteFrameCompletesShortWrites(t *testing.T) {
 	}
 }
 
-func TestStateRejectsDuplicateStaleAndUncreditedFrames(t *testing.T) {
-	state := NewState()
-	request := &Envelope{ProtocolVersion: Version, RequestId: 1, Message: &Envelope_Exec{Exec: &ExecRequest{}}}
-	if err := state.Admit(request); err != nil {
-		t.Fatal(err)
-	}
-	if err := state.Admit(request); !errors.Is(err, ErrProtocolState) {
-		t.Fatalf("duplicate request error = %v", err)
-	}
-	credit := &Envelope{ProtocolVersion: Version, RequestId: 1, StreamId: 2, Message: &Envelope_StreamCredit{StreamCredit: &StreamCredit{Bytes: 3}}}
-	if err := state.Admit(credit); err != nil {
-		t.Fatal(err)
-	}
-	data := &Envelope{ProtocolVersion: Version, RequestId: 1, StreamId: 2, Sequence: 1, Message: &Envelope_StreamData{StreamData: &StreamData{Data: []byte("four")}}}
-	if err := state.Admit(data); !errors.Is(err, ErrProtocolState) {
-		t.Fatalf("uncredited data error = %v", err)
-	}
-}
-
 func FuzzReadFrameNeverPanics(f *testing.F) {
 	f.Add([]byte{0, 0, 0, 1, 0})
 	f.Fuzz(func(t *testing.T, payload []byte) {

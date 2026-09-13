@@ -98,21 +98,6 @@ func stageSharedTemplateFile(destination, source string) error {
 	return nil
 }
 
-// sharesInode reports whether two paths are the same file. The resume path
-// depends on it for the memory backing file, so it is checked rather than
-// assumed.
-func sharesInode(first, second string) (bool, error) {
-	firstIdentity, err := trustedMicroVMArtifactIdentityFor(first)
-	if err != nil {
-		return false, err
-	}
-	secondIdentity, err := trustedMicroVMArtifactIdentityFor(second)
-	if err != nil {
-		return false, err
-	}
-	return firstIdentity.dev == secondIdentity.dev && firstIdentity.ino == secondIdentity.ino, nil
-}
-
 // prepareSnapshotResumeLaunch stages every file a restored Instance opens and
 // returns the process it will run. It does not start the process and it does
 // not touch the Firecracker API.

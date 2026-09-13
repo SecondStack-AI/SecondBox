@@ -446,7 +446,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	sandbox.Resources = resolvedResources
 	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.SubjectRef = input.Principal.SubjectRef
-	sandbox.EgressContext = cloneStoreOptionalString(tenantEgressContext)
+	sandbox.EgressContext = clonePostgresOptionalString(tenantEgressContext)
 	sandbox.ProfileRevisionID = profile.CurrentRevision.ID
 	sandbox.Workspace.TenantRef = input.Principal.TenantRef
 	sandbox.Workspace.SubjectRef = input.Principal.SubjectRef
@@ -1087,14 +1087,6 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		}
 	}
 	return sandbox, nil
-}
-
-func cloneStoreOptionalString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func getSandboxWithQuerier(

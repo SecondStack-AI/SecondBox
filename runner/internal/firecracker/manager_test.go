@@ -1781,8 +1781,8 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "prepare rootfs") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if network.tap.GuestIP != "10.0.0.2" || !ipWithinCIDR(network.tap.GuestIP, network.tap.BridgeCIDR) {
-		t.Fatalf("manager tap config = %+v, want reserved guest IP inside bridge CIDR", network.tap)
+	if network.tap.GuestIP != "10.0.0.2" || network.tap.BridgeCIDR != "10.0.0.1/24" {
+		t.Fatalf("manager tap config = %+v, want reserved guest IP and configured bridge CIDR", network.tap)
 	}
 
 	entries, readErr := os.ReadDir(runDir)

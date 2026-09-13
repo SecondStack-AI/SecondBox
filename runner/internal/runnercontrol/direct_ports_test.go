@@ -258,7 +258,7 @@ func TestDirectPortAdmissionRejectsLocallyWithoutControlPlaneWork(t *testing.T) 
 func TestDirectPortAdmissionSpendsTheCredentialExactlyOnceAndBridgesBytes(t *testing.T) {
 	service, stream, guest := newDirectPortTestService(t)
 	evidence := &recordingEvidenceSink{}
-	service.SetEvidenceSink(evidence)
+	service.evidence = evidence
 	admitDirectPortSession(t, service, directPortTestCredential, time.Minute)
 	stopAdmitting := answerDirectPortAdmissions(
 		service,
@@ -513,7 +513,7 @@ func admitDirectPortSession(
 	); err != nil {
 		t.Fatal(err)
 	}
-	session := service.directPorts.lookup(digest)
+	session := service.directPorts.awaitSession(t.Context(), digest, 0)
 	if session == nil {
 		t.Fatal("direct PortSession was not registered")
 	}
