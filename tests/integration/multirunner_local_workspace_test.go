@@ -48,9 +48,10 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 	profileName := fmt.Sprintf("multirunner-profile-%d", fixtureSequence)
 	spec := testProfileSpec(1)
 	spec.Pool = poolName
-	profile, err := controlPlane.CreateProfile(
+	profile, _, err := controlPlane.CreateProfileIdempotent(
 		t.Context(),
 		admin,
+		"create-"+profileName,
 		contracts.CreateProfileRequest{Name: profileName, Spec: spec},
 	)
 	if err != nil {

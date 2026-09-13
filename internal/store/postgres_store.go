@@ -445,11 +445,9 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	sandbox := input.Sandbox
 	sandbox.Resources = resolvedResources
 	sandbox.TenantRef = input.Principal.TenantRef
-	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.SubjectRef = input.Principal.SubjectRef
 	sandbox.EgressContext = cloneStoreOptionalString(tenantEgressContext)
 	sandbox.ProfileRevisionID = profile.CurrentRevision.ID
-	sandbox.Workspace = input.Workspace
 	sandbox.Workspace.TenantRef = input.Principal.TenantRef
 	sandbox.Workspace.SubjectRef = input.Principal.SubjectRef
 	sandbox.Workspace.Generation = sandbox.Generation

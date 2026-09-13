@@ -24,9 +24,10 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 	requiringSpec := requiringProfile.CurrentRevision.Spec
 	requiresContext := true
 	requiringSpec.Network.RequiresTenantEgressContext = &requiresContext
-	requiringProfile, err := controlPlane.ReviseProfile(
-		t.Context(), admin, requiringProfile.Name,
+	requiringProfile, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(
+		t.Context(), admin, requiringProfile.Name, "require-egress-context",
 		contracts.ReviseProfileRequest{Spec: requiringSpec},
+		requiringProfile.Revision,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -103,7 +103,6 @@ type CreateSandboxInput struct {
 	Resources          *contracts.SandboxResourceRequest
 	Principal          contracts.Principal
 	Sandbox            contracts.Sandbox
-	Workspace          contracts.Workspace
 	Operation          contracts.Operation
 	IdempotencyKey     string
 	RequestHash        string
