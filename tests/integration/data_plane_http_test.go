@@ -76,8 +76,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		DefaultSubjectQuota: generousQuota(),
-		Now:                 time.Now, NewID: service.NewOpaqueID,
+		Now: time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        relay, LiveDataPlane: liveDataPlane,
 		DataPlanePollInterval: time.Millisecond,
@@ -313,8 +312,7 @@ func TestBufferedExecTransportSetupFailureReleasesConcurrentOperationQuota(t *te
 	newDataPlaneService := func(liveDataPlane *runnercontrol.LiveDataPlaneBroker) *service.ControlPlaneService {
 		dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 			Store: databaseStore, PlatformToken: testPlatformToken,
-			DefaultSubjectQuota: quota,
-			Now:                 time.Now, NewID: service.NewOpaqueID,
+			Now: time.Now, NewID: service.NewOpaqueID,
 			NewCredentialMaterial: service.NewCredentialMaterial,
 			DataPlaneStore:        relay, LiveDataPlane: liveDataPlane,
 			DataPlanePollInterval: time.Millisecond,
@@ -427,8 +425,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		DefaultSubjectQuota: generousQuota(),
-		Now:                 time.Now, NewID: service.NewOpaqueID,
+		Now: time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        relay, LiveDataPlane: liveDataPlane,
 		DataPlanePollInterval: time.Millisecond,
@@ -561,8 +558,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	t.Cleanup(relay.Close)
 	isolationService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		DefaultSubjectQuota: generousQuota(),
-		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
 		PublicBaseURL: "http://secondbox.invalid",

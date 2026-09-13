@@ -827,8 +827,8 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
 		Name: "default-pool", State: contracts.RunnerPoolStateReady,
 		Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"},
-		CapacityPolicy: map[string]int64{"maxInstances": 100}, ReadyRunnerCount: 1,
-		Revision: 1, CreatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
+		ReadyRunnerCount: 1,
+		Revision:         1, CreatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatal(err)
@@ -851,11 +851,29 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 func TestConcurrentSubjectQuotaAdmissionNeverOvercommits(t *testing.T) {
 	quota := generousQuota()
 	quota.MaxSandboxes = 1
-	controlPlane, databaseStore := newControlPlaneFixture(t, quota)
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "quota")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "quota-profile")
 	principal := authenticateCredential(t, controlPlane, credential)
+
+	// Leave aggregate Tenant capacity available so only Subject enforcement
+	// can reject the second admission, including after reopening the service.
+	tenant, err := controlPlane.GetTenant(t.Context(), admin, account.TenantRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tenant.AggregateQuota.MaxSandboxes < 2 {
+		t.Fatal("Tenant quota must allow both concurrent admissions")
+	}
+	controller := contracts.Principal{Kind: contracts.AuthorityKindTenantController, ID: "quota-controller", TenantRef: account.TenantRef}
+	subject, err := controlPlane.GetSubject(t.Context(), controller, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := controlPlane.UpdateSubjectQuota(t.Context(), controller, account.ID, "subject-quota-limit", subject.Revision, contracts.UpdateSubjectQuotaRequest{Quota: quota}); err != nil {
+		t.Fatal(err)
+	}
 
 	start := make(chan struct{})
 	results := make(chan error, 2)
@@ -891,6 +909,20 @@ func TestConcurrentSubjectQuotaAdmissionNeverOvercommits(t *testing.T) {
 	if usage.TenantRef != principal.TenantRef || usage.SubjectRef != principal.SubjectRef ||
 		usage.Limits.MaxSandboxes != 1 || usage.Usage.Sandboxes != 1 {
 		t.Fatalf("subject usage = %#v", usage)
+	}
+
+	// A new service has no deployment quota input. Admission must still use
+	// the Subject quota stored by the management API before the restart.
+	reopenedStore, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reopenedStore.Close)
+	restarted := newControlPlaneService(t, reopenedStore, generousQuota())
+	if _, _, err := restarted.CreateSandbox(t.Context(), principal, "quota-after-restart", contracts.CreateSandboxRequest{
+		Profile: profile.Name, Metadata: map[string]string{},
+	}); !errors.Is(err, ports.ErrQuotaExceeded) {
+		t.Fatalf("admission after restart = %v, want persisted Subject quota refusal", err)
 	}
 }
 

@@ -279,22 +279,17 @@ func (store *PostgresControlPlaneStore) RegisterRunnerPool(
 	if err != nil {
 		return fmt.Errorf("SecondBox runner-pool capabilities encoding failed: %w", err)
 	}
-	capacityPolicyJSON, err := json.Marshal(pool.CapacityPolicy)
-	if err != nil {
-		return fmt.Errorf("SecondBox runner-pool capacity policy encoding failed: %w", err)
-	}
 	if _, err := store.pool.Exec(ctx, `
 		INSERT INTO secondbox.runner_pools (
-			name,state,architectures_json,capabilities_json,capacity_policy_json,
+			name,state,architectures_json,capabilities_json,
 			ready_runner_count,revision,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		ON CONFLICT (name) DO UPDATE SET
 			state=EXCLUDED.state,architectures_json=EXCLUDED.architectures_json,
 			capabilities_json=EXCLUDED.capabilities_json,
-			capacity_policy_json=EXCLUDED.capacity_policy_json,
 			ready_runner_count=EXCLUDED.ready_runner_count,
 			revision=secondbox.runner_pools.revision+1,updated_at=EXCLUDED.updated_at`,
-		pool.Name, pool.State, architecturesJSON, capabilitiesJSON, capacityPolicyJSON,
+		pool.Name, pool.State, architecturesJSON, capabilitiesJSON,
 		pool.ReadyRunnerCount, pool.Revision, pool.CreatedAt, pool.UpdatedAt,
 	); err != nil {
 		return fmt.Errorf("SecondBox RunnerPool registration failed: %w", err)

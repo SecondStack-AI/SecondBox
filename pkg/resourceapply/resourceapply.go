@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -31,12 +30,11 @@ type Document struct {
 }
 
 type RunnerPool struct {
-	Name           string                                 `json:"name"`
-	Architectures  secondboxclient.RunnerArchitectureList `json:"architectures"`
-	Capabilities   secondboxclient.RunnerCapabilityList   `json:"capabilities"`
-	CapacityPolicy secondboxclient.RunnerCapacityPolicy   `json:"capacityPolicy"`
-	State          secondboxclient.RunnerPoolState        `json:"state"`
-	MutableFields  []string                               `json:"mutableFields"`
+	Name          string                                 `json:"name"`
+	Architectures secondboxclient.RunnerArchitectureList `json:"architectures"`
+	Capabilities  secondboxclient.RunnerCapabilityList   `json:"capabilities"`
+	State         secondboxclient.RunnerPoolState        `json:"state"`
+	MutableFields []string                               `json:"mutableFields"`
 }
 
 type Profile struct {
@@ -121,7 +119,7 @@ func (document Document) Validate() error {
 	}
 	pools := make(map[string]struct{}, len(document.RunnerPools))
 	for index, pool := range document.RunnerPools {
-		if pool.Name == "" || len(pool.Architectures) == 0 || pool.State == "" || pool.CapacityPolicy == nil {
+		if pool.Name == "" || len(pool.Architectures) == 0 || pool.State == "" {
 			return fmt.Errorf("SecondBox RunnerPool %d is incomplete", index)
 		}
 		if _, duplicate := pools[pool.Name]; duplicate {
@@ -130,7 +128,7 @@ func (document Document) Validate() error {
 		pools[pool.Name] = struct{}{}
 		seenMutable := map[string]bool{}
 		for _, field := range pool.MutableFields {
-			if field != "state" && field != "capacityPolicy" {
+			if field != "state" {
 				return fmt.Errorf("SecondBox RunnerPool %q mutable field %q is unsupported", pool.Name, field)
 			}
 			if seenMutable[field] {
@@ -216,7 +214,7 @@ func convergePool(ctx context.Context, client Client, desired RunnerPool, apply 
 		if !apply {
 			return result, nil
 		}
-		_, err = client.CreateRunnerPool(ctx, secondboxclient.CreateRunnerPoolRequest{Name: desired.Name, Architectures: desired.Architectures, Capabilities: desired.Capabilities, CapacityPolicy: desired.CapacityPolicy, State: desired.State})
+		_, err = client.CreateRunnerPool(ctx, secondboxclient.CreateRunnerPoolRequest{Name: desired.Name, Architectures: desired.Architectures, Capabilities: desired.Capabilities, State: desired.State})
 		return result, err
 	}
 	if err != nil {
@@ -232,13 +230,6 @@ func convergePool(ctx context.Context, client Client, desired RunnerPool, apply 
 			return Result{}, fmt.Errorf("SecondBox RunnerPool %q state drift is not mutable", desired.Name)
 		}
 		update.State = &desired.State
-		changed = true
-	}
-	if !reflect.DeepEqual(current.CapacityPolicy, desired.CapacityPolicy) {
-		if !slices.Contains(desired.MutableFields, "capacityPolicy") {
-			return Result{}, fmt.Errorf("SecondBox RunnerPool %q capacityPolicy drift is not mutable", desired.Name)
-		}
-		update.CapacityPolicy = desired.CapacityPolicy
 		changed = true
 	}
 	if !changed {

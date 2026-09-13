@@ -33,9 +33,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		Name: poolName, State: contracts.RunnerPoolStateReady,
 		Architectures: []string{"amd64"},
 		Capabilities:  []string{"compute", "local-workspace"},
-		CapacityPolicy: map[string]int64{
-			"maxInstances": 100,
-		},
+
 		ReadyRunnerCount: 2,
 		Revision:         1,
 		CreatedAt:        now,

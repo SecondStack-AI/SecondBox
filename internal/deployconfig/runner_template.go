@@ -16,7 +16,7 @@ software_version = ''
 control_plane_address = ''
 # TLS server name for the control-plane Runner endpoint; required.
 control_plane_server_name = ''
-# Runner identity directory; absolute on the Runner, and /run/secondbox-runner-identity for same-host placement.
+# Remote placement requires an absolute Runner identity directory. Leave empty for same-host placement; Compose supplies its identity mount.
 identity_directory = ''
 # Identity directory on the Runner host; absolute when set and required for same-host placement.
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
@@ -24,7 +24,7 @@ identity_host_directory = '<replace-with-absolute-runner-host-path>'
 # Artifact trust
 # Execution-asset directory on the Runner host; absolute when set and required for same-host placement.
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'
-# Provisioned signed-artifact public key; an absolute Runner-host path within /opt/secondbox-artifacts for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/signing.pub.
 artifact_public_key = ''
 # Provisioned signed-artifact key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
 artifact_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
@@ -32,15 +32,13 @@ artifact_public_key_sha256 = '00000000000000000000000000000000000000000000000000
 # Runner storage
 # Dedicated reflink-capable Runner storage root on the host; absolute when set and required for same-host placement. Compose binds this root once at /var/lib/secondbox-runner so its state and workspaces children retain one mount identity.
 state_host_directory = '<replace-with-absolute-runner-host-path>'
-# Runner JSON log path; an absolute Runner-host path within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/logs/runner.jsonl.
 log_path = ''
-# Runner log directory; required and absolute, and within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/logs.
 log_directory = ''
 
 # Workspace persistence
-# Reflink-capable workspace directory on the Runner host; for same-host placement this must be the workspaces child of state_host_directory.
-workspace_host_directory = '<replace-with-absolute-runner-host-path>'
-# Workspace root seen by the Runner; /var/lib/secondbox-runner/workspaces for same-host placement.
+# Remote placement requires an absolute Workspace root. Leave empty for same-host placement; Compose uses the existing workspaces child of state_host_directory.
 workspace_root = ''
 # Storage-pressure recovery threshold; positive and lower than warning and admission-deny thresholds.
 storage_pressure_recovery_percent = 0
@@ -50,11 +48,11 @@ storage_pressure_warning_percent = 0
 storage_pressure_admission_deny_percent = 0
 
 # Firecracker
-# Firecracker executable; an absolute Runner-host path.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/local/bin/firecracker.
 firecracker_path = ''
-# Firecracker jailer executable; an absolute Runner-host path.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/local/bin/jailer.
 firecracker_jailer_path = ''
-# Firecracker jail root; absolute, below the Unix-socket path limit, and within /var/lib/secondbox-runner but outside its workspaces child for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/jail.
 firecracker_jail_root = ''
 # First per-Instance jailer user ID; must be at least 1000 unless the explicit lower-bound acknowledgement is true, and the range must not include UID 0.
 firecracker_jailer_uid_start = 0
@@ -68,25 +66,23 @@ firecracker_jailer_gid = 0
 firecracker_cgroup_version = 0
 # Host cgroup parent used by the jailer; required.
 firecracker_cgroup_parent = ''
-# Guest kernel; absolute and within /opt/secondbox-artifacts for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/kernel.
 firecracker_kernel_path = ''
-# Guest root filesystem; absolute and within /opt/secondbox-artifacts for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/rootfs.ext4.
 firecracker_rootfs_path = ''
-# Shared guest image; absolute and within /opt/secondbox-artifacts for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/shared.img.
 firecracker_shared_image_path = ''
 # Kernel arguments; must include console=ttyS0, reboot=k, panic=1, pci=off, root=/dev/vda, rw, quiet, loglevel=1, i8042.noaux, i8042.nomux, i8042.nopnp, i8042.dumbkbd, and init=/init.
 firecracker_kernel_args = ''
 # Firecracker CPU template; required.
 firecracker_cpu_template = ''
-# Firecracker runtime directory; absolute and within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/run.
 firecracker_run_directory = ''
-# Firecracker log directory; absolute and within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/firecracker-logs.
 firecracker_log_directory = ''
-# Packaged Runner jail policy; must be false.
-firecracker_allow_unjailed = true
 
 # Snapshot-resume startup
-# Runner-local resume template cache; absolute and within /var/lib/secondbox-runner/state for same-host placement. The Runner advertises snapshot-resume capacity only when this cache already holds a template built from the signed bundle the Runner verified, so a Profile whose startup mode is snapshot_resume never places onto a Runner that cannot resume it. Keep it on the same filesystem as firecracker_jail_root: the golden memory file is hard-linked into each jail so every resumed Instance shares one inode and one page cache.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/snapshot-template-cache. Keep this cache on the same filesystem as firecracker_jail_root: golden memory files are hard-linked into each jail. Snapshot-resume capacity requires a template built from the verified signed bundle.
 snapshot_template_cache_root = ''
 
 # Sandbox networking
@@ -100,11 +96,11 @@ sandbox_bridge_cidr = ''
 sandbox_guest_cidr = ''
 # Prefix for per-Sandbox TAP interfaces; required.
 sandbox_tap_prefix = ''
-# Persisted network state; absolute and within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/network.
 sandbox_network_state_directory = ''
 # Bridge cleanup policy; required, so replace this string with an explicit Boolean.
 sandbox_delete_bridge = '<replace-with-boolean>'
-# nft executable; an absolute Runner-host path.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/sbin/nft.
 network_policy_nft_path = ''
 # Maximum pinned DNS answers; must be positive.
 network_policy_max_dns_pins = 0
@@ -114,7 +110,7 @@ network_policy_max_dns_ttl = ''
 network_policy_runner_addresses = ''
 # Management networks; a comma-separated list of CIDRs.
 network_policy_management_cidrs = ''
-# Absolute path from which this Runner loads the generated strict context configuration. Same-host Compose requires /run/secondbox-runner-config/egress-contexts.json.
+# Remote placement requires an absolute egress-context configuration path. Leave empty for same-host placement; Compose supplies its configuration mount.
 egress_context_config_path = ''
 # Context-indexed Runner-local mappings. Replace the empty list with one or more
 # [[runners.egress_contexts]] tables, each containing a unique valid name, and

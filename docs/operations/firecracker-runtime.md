@@ -236,8 +236,8 @@ template evidence makes startup or Workspace creation fail closed.
 
 The same-host Compose profile mounts the explicitly configured
 `SECONDBOX_RUNNER_STATE_HOST_DIR` once at `/var/lib/secondbox-runner`. Its
-`workspaces` child is the exact `SECONDBOX_RUNNER_WORKSPACE_HOST_DIR`, while
-mutable Firecracker state is kept under its `state` child. The deployment
+`workspaces` child is derived by the deployment compiler, while mutable
+Firecracker state is kept under its `state` child. The deployment
 validator requires that storage root to exist on a device distinct from the
 host root and requires artifacts, Workspaces, and Runner state to share that
 device. A separate nested Workspace bind is forbidden because the jailer must

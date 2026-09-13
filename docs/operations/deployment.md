@@ -57,13 +57,13 @@ The command prints the two one-time bearer tokens in one JSON response. Capture 
 
 [`deploy/secondbox.example.toml`](../../deploy/secondbox.example.toml) documents `schema_version = 1` and every accepted field. The manifest has seven decision groups:
 
-1. `deployment`: mode, public ingress, TLS termination, process bind addresses, and image references;
+1. `deployment`: mode, public ingress, TLS termination, host publication, and image references;
 2. `database`: bundled or external PostgreSQL and the authority required by that choice;
 3. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
 4. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
 5. `applications`: the platform-token secret reference;
 6. `standard_resources`: verified release manifest, explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
-7. `policy` and `overrides`: subject quota limits, data-plane retention, contested recovery/rollout settings, and intentionally selected tuning overrides.
+7. `policy` and `overrides`: data-plane retention, enabled Runner features, and intentionally selected tuning overrides.
 
 Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
 
@@ -74,7 +74,7 @@ secondbox-deploy validate /secure/secondbox/secondbox.toml
 secondbox-deploy inspect /secure/secondbox/secondbox.toml
 ```
 
-`inspect` prints all resolved non-secret values, positive help for the data-plane retention policy, and all 18 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
+`inspect` prints all resolved non-secret values, positive help for the data-plane retention policy, and all 17 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
 
 ### Secret references
 
@@ -84,11 +84,17 @@ Runner host paths are different: they are typed absolute values interpreted on t
 
 ### Authority, policy, tuning, and compiled facts
 
-Required deployment authority has no default. This includes identities, the platform and Runner credentials, endpoints, process and storage paths, signed-asset catalog, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, the seven deployment fallback Subject quota limits, and data-plane retention. Tenant aggregate ceilings and explicit Subject quotas are persisted management resources created after startup; they are not deployment-manifest fields. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
+Required deployment authority has no default. This includes identities, the platform and Runner credentials, public endpoints, host paths, signed-asset catalog source, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, and data-plane retention. Tenant aggregate ceilings and Subject quotas are explicit persisted management resources created after startup; they are the sole quota source for admission. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
+
+The deployment compiler supplies the packaged container listeners (`0.0.0.0:8080` for the API and `0.0.0.0:9443` for Runners) and mounted catalog path (`/etc/secondbox/signed-assets.json`). Operators choose the host bind addresses, published ports, and catalog source. Generated process configuration still states every value explicitly.
+
+Existing manifests must remove the retired `policy.default_subject_max_*`, `deployment.listen_address`, `deployment.runner_listen_address`, and `deployment.signed_asset_catalog_path` keys. Standard bundles now share one RunnerPool inventory declaration by name: remove its `bundle` key and consolidate identical `[[standard_resources.runner_pools]]` entries into one. Conflicting inventory declarations require an explicit operator choice; the compiler rejects duplicate names. The strict decoder identifies retired keys without disclosing their values.
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
-The manifest also requires three contested rollout/recovery decisions: data-plane session sweep interval, Runner command poll interval, and enabled Runner features. They remain operator policy until a separate decision reclassifies them.
+Enabled Runner features remain an explicit rollout decision in `policy.runner_enabled_features`.
+
+The data-plane and Runner command polling cadences are optional tuning overrides, each defaulting to 250 milliseconds. The data-plane cadence also drives session/accounting sweeps and polling on proxied streams; it does not set retention deadlines. Runner command polling provides fallback delivery alongside work notifications. To migrate an existing manifest, remove `data_plane_poll_interval_milliseconds` and `runner_command_poll_interval_milliseconds` from `[policy]`. Preserve any intentional non-default values under `[overrides]`; the old policy keys are rejected.
 
 The `[overrides]` table contains code-owned tuning. Every field is optional. When absent, `secondboxd` uses the reviewed value shown by `inspect`; when present, the exact value is rendered and passes the same validation and cross-field checks as before. Invalid overrides fail rather than falling back. Compose uses value-less pass-through mappings so an absent override remains unset instead of becoming an empty string.
 
@@ -114,7 +120,7 @@ Deploy an attribution-aware gateway on the Runner host and mount its socket dire
 
 Runner context configuration is static for one connection. To replace or remove a mapping, drain the Runner, stop every active Sandbox using that context, update the reviewed configuration, and restart. A stopped Sandbox pinned to a removed context remains durable but cannot start until the mapping returns or the Sandbox is retired. There is no dynamic gateway health discovery, live remapping, default context, cross-context retry, or automatic reassignment.
 
-State the mapping in the Runner declaration; never edit the generated JSON or environment transport:
+State the mapping in the Runner declaration; never edit the generated JSON or environment transport. The path below is for remote placement; omit `egress_context_config_path` for same-host placement:
 
 ```toml
 egress_context_config_path = "/etc/secondbox/egress-contexts.json"
@@ -159,8 +165,7 @@ An incomplete production initialization is intentionally unusable and reports ev
 - zero or more explicit immutable Runner declarations and their placement;
 - an operator-supplied signed-asset catalog, verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
 - independent platform and Runner enrollment authorities;
-- all seven subject quota limits;
-- retention, contested recovery/rollout policy, and any intentional tuning overrides.
+- retention, enabled Runner features, and any intentional tuning overrides.
 
 Automation can materialize a complete create-only target non-interactively after generating and reviewing the same typed input:
 
@@ -206,6 +211,10 @@ The control-plane container runs as UID/GID 65532 with a read-only root, dropped
 
 Every `[[runners]]` entry is keyed by immutable `runner_id`. At most one may use `placement = "same-host"`; any number may use `placement = "remote"`.
 
+For same-host placement, set `identity_host_directory`, `artifact_host_directory`, and `state_host_directory` to explicit host paths. The compiler supplies all seventeen fixed container paths: identity and egress configuration, workspace root, Runner logs, Firecracker and jailer executables, jail root, kernel/rootfs/shared assets, runtime and Firecracker logs, snapshot-template cache, signing-key file, network state, and nft executable. Remove `workspace_host_directory` from existing manifests and omit the path fields marked remote-only in the Runner template from same-host declarations. Nonempty values are rejected instead of silently ignored. The signing-key fingerprint stays explicit; only its packaged file location is derived. The existing `state_host_directory/workspaces` directory remains authoritative and must exist on the qualified storage filesystem; resolution never creates or relocates it. Remote declarations still require explicit paths. Existing custom state or asset layouts must be reconciled with the documented packaged paths before adopting this schema; compilation does not move their files.
+
+Packaged deployments always use the Firecracker jailer for both placements. Remove `firecracker_allow_unjailed` from existing Runner declarations; the compiler emits the fixed `false` runtime value.
+
 ### Runner declaration scaffold
 
 Generate the complete inert declaration on stdout, or create one separate file without replacing an existing target:
@@ -215,7 +224,7 @@ secondbox-deploy runner-template
 secondbox-deploy runner-template --output /secure/secondbox/runner-east-1.toml
 ```
 
-Replace `runners = []` in the deployment manifest with the completed block. Every emitted value is an invalid placeholder; validation cannot accept the scaffold before the operator replaces every value.
+Replace `runners = []` in the deployment manifest with the completed block. Required values are invalid placeholders; validation cannot accept the scaffold before the operator supplies them. Leave the three remote-only paths empty for same-host placement.
 
 <!-- runner-template-output:start -->
 ```toml
@@ -233,7 +242,7 @@ software_version = ''
 control_plane_address = ''
 # TLS server name for the control-plane Runner endpoint; required.
 control_plane_server_name = ''
-# Runner identity directory; absolute on the Runner, and /run/secondbox-runner-identity for same-host placement.
+# Remote placement requires an absolute Runner identity directory. Leave empty for same-host placement; Compose supplies its identity mount.
 identity_directory = ''
 # Identity directory on the Runner host; absolute when set and required for same-host placement.
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
@@ -241,7 +250,7 @@ identity_host_directory = '<replace-with-absolute-runner-host-path>'
 # Artifact trust
 # Execution-asset directory on the Runner host; absolute when set and required for same-host placement.
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'
-# Provisioned signed-artifact public key; an absolute Runner-host path within /opt/secondbox-artifacts for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/signing.pub.
 artifact_public_key = ''
 # Provisioned signed-artifact key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
 artifact_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
@@ -249,15 +258,13 @@ artifact_public_key_sha256 = '00000000000000000000000000000000000000000000000000
 # Runner storage
 # Dedicated reflink-capable Runner storage root on the host; absolute when set and required for same-host placement. Compose binds this root once at /var/lib/secondbox-runner so its state and workspaces children retain one mount identity.
 state_host_directory = '<replace-with-absolute-runner-host-path>'
-# Runner JSON log path; an absolute Runner-host path within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/logs/runner.jsonl.
 log_path = ''
-# Runner log directory; required and absolute, and within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/logs.
 log_directory = ''
 
 # Workspace persistence
-# Reflink-capable workspace directory on the Runner host; for same-host placement this must be the workspaces child of state_host_directory.
-workspace_host_directory = '<replace-with-absolute-runner-host-path>'
-# Workspace root seen by the Runner; /var/lib/secondbox-runner/workspaces for same-host placement.
+# Remote placement requires an absolute Workspace root. Leave empty for same-host placement; Compose uses the existing workspaces child of state_host_directory.
 workspace_root = ''
 # Storage-pressure recovery threshold; positive and lower than warning and admission-deny thresholds.
 storage_pressure_recovery_percent = 0
@@ -267,11 +274,11 @@ storage_pressure_warning_percent = 0
 storage_pressure_admission_deny_percent = 0
 
 # Firecracker
-# Firecracker executable; an absolute Runner-host path.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/local/bin/firecracker.
 firecracker_path = ''
-# Firecracker jailer executable; an absolute Runner-host path.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/local/bin/jailer.
 firecracker_jailer_path = ''
-# Firecracker jail root; absolute, below the Unix-socket path limit, and within /var/lib/secondbox-runner but outside its workspaces child for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/jail.
 firecracker_jail_root = ''
 # First per-Instance jailer user ID; must be at least 1000 unless the explicit lower-bound acknowledgement is true, and the range must not include UID 0.
 firecracker_jailer_uid_start = 0
@@ -285,25 +292,23 @@ firecracker_jailer_gid = 0
 firecracker_cgroup_version = 0
 # Host cgroup parent used by the jailer; required.
 firecracker_cgroup_parent = ''
-# Guest kernel; absolute and within /opt/secondbox-artifacts for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/kernel.
 firecracker_kernel_path = ''
-# Guest root filesystem; absolute and within /opt/secondbox-artifacts for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/rootfs.ext4.
 firecracker_rootfs_path = ''
-# Shared guest image; absolute and within /opt/secondbox-artifacts for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/shared.img.
 firecracker_shared_image_path = ''
 # Kernel arguments; must include console=ttyS0, reboot=k, panic=1, pci=off, root=/dev/vda, rw, quiet, loglevel=1, i8042.noaux, i8042.nomux, i8042.nopnp, i8042.dumbkbd, and init=/init.
 firecracker_kernel_args = ''
 # Firecracker CPU template; required.
 firecracker_cpu_template = ''
-# Firecracker runtime directory; absolute and within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/run.
 firecracker_run_directory = ''
-# Firecracker log directory; absolute and within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/firecracker-logs.
 firecracker_log_directory = ''
-# Packaged Runner jail policy; must be false.
-firecracker_allow_unjailed = true
 
 # Snapshot-resume startup
-# Runner-local resume template cache; absolute and within /var/lib/secondbox-runner/state for same-host placement. The Runner advertises snapshot-resume capacity only when this cache already holds a template built from the signed bundle the Runner verified, so a Profile whose startup mode is snapshot_resume never places onto a Runner that cannot resume it. Keep it on the same filesystem as firecracker_jail_root: the golden memory file is hard-linked into each jail so every resumed Instance shares one inode and one page cache.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/snapshot-template-cache. Keep this cache on the same filesystem as firecracker_jail_root: golden memory files are hard-linked into each jail. Snapshot-resume capacity requires a template built from the verified signed bundle.
 snapshot_template_cache_root = ''
 
 # Sandbox networking
@@ -317,11 +322,11 @@ sandbox_bridge_cidr = ''
 sandbox_guest_cidr = ''
 # Prefix for per-Sandbox TAP interfaces; required.
 sandbox_tap_prefix = ''
-# Persisted network state; absolute and within /var/lib/secondbox-runner/state for same-host placement.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/network.
 sandbox_network_state_directory = ''
 # Bridge cleanup policy; required, so replace this string with an explicit Boolean.
 sandbox_delete_bridge = '<replace-with-boolean>'
-# nft executable; an absolute Runner-host path.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/sbin/nft.
 network_policy_nft_path = ''
 # Maximum pinned DNS answers; must be positive.
 network_policy_max_dns_pins = 0
@@ -331,7 +336,7 @@ network_policy_max_dns_ttl = ''
 network_policy_runner_addresses = ''
 # Management networks; a comma-separated list of CIDRs.
 network_policy_management_cidrs = ''
-# Absolute path from which this Runner loads the generated strict context configuration. Same-host Compose requires /run/secondbox-runner-config/egress-contexts.json.
+# Remote placement requires an absolute egress-context configuration path. Leave empty for same-host placement; Compose supplies its configuration mount.
 egress_context_config_path = ''
 # Context-indexed Runner-local mappings. Replace the empty list with one or more
 # [[runners.egress_contexts]] tables, each containing a unique valid name, and
@@ -379,7 +384,7 @@ data_plane_advertised_address = ''
 
 Review these relationships before enrollment:
 
-- Put `state_host_directory` on a dedicated non-root XFS or Btrfs filesystem with reflink support. For same-host placement, `workspace_host_directory` must be its `workspaces` child and `workspace_root` must be `/var/lib/secondbox-runner/workspaces`. Compose binds the common storage root once so Workspace images, jail state, run state, and snapshot templates retain one mount identity.
+- Put `state_host_directory` on a dedicated non-root XFS or Btrfs filesystem with reflink support. For same-host placement, the compiler derives the existing `workspaces` child and its container mount at `/var/lib/secondbox-runner/workspaces`. Compose binds the common storage root once so Workspace images, jail state, run state, and snapshot templates retain one mount identity.
 - Leave the filesystem target named by `identity_host_directory` absent before `runner-init`. The command validates the declaration without the same-host identity preflight, then creates that exact target; create the artifact and Runner storage host directories first, and run full manifest validation after enrollment.
 - Set `pool_id` to the `name` of the selected `[[standard_resources.runner_pools]]` inventory that admits the Runner architecture and capabilities.
 - For v0.7.2 only, `network_policy_runner_gateways` is the legacy single global logical-gateway map. It is not accepted as a generation-4 default or fallback. The tenant-aware deployment replaces it with explicit context-indexed Runner-local mappings; the mapping remains `logical-name=IP` authorization rather than guest-side name resolution. The Runner DNS proxy only forwards to its configured upstream, rejects answers resolving to protected addresses, and does not synthesize logical gateway names. Production qualification must prove each installation's injected gateway address and reachability.
@@ -467,3 +472,5 @@ curl --fail --silent --show-error http://127.0.0.1:8080/metrics
 See [backup and restore](backup-and-restore.md), [Firecracker runtime](firecracker-runtime.md), [multirunner qualification](multirunner-qualification.md), and [observability and diagnostics](observability-and-diagnostics.md).
 
 For public releases, verify the published checksums and artifact manifest, then initialize with `secondbox-deploy init --mode production --input COMPLETE_MANIFEST --artifact-manifest URL DIRECTORY`. The artifact manifest supplies digest-pinned control-plane and Runner images, the Runner software version, and release-owned standard-resource identity. All deployment identity, credentials, storage, topology, host paths, gateways, capacity, retention, and independently held guest trust anchors remain explicit in `COMPLETE_MANIFEST`. See [release distribution](release-distribution.md).
+
+RunnerPools declare placement inventory: name, state, architectures, and capabilities. Remove `capacityPolicy` from resource documents and API requests, remove it from `mutableFields`, and remove `--capacity` from standard-bundle CLI commands. In deployment manifests, remove `max_sandboxes`, `max_vcpu_count`, and `max_memory_bytes` from `[[standard_resources.runner_pools]]`. These pool settings were never enforced. Tenant and Subject quotas, Profile resource ceilings, and reported Runner capacity continue to govern admission. The forward migration drops only the unused pool metadata column; deploy the control plane and clients together because old clients and old control-plane binaries still expect that field.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -236,7 +237,17 @@ func TestComposeArtifactPreservesAbsentAndSelectedOverrides(t *testing.T) {
 		return model.Services["control-plane"].Environment
 	}
 	environment := readEnvironment()
-	for _, name := range []string{"SECONDBOX_HTTP_TIMEOUT_SECONDS", "SECONDBOX_ASSIGNMENT_RETRY_LIMIT", "SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES"} {
+	for name, want := range map[string]string{
+		"SECONDBOX_LISTEN_ADDR":               "0.0.0.0:8080",
+		"SECONDBOX_RUNNER_LISTEN_ADDR":        "0.0.0.0:9443",
+		"SECONDBOX_SIGNED_ASSET_CATALOG_PATH": "/etc/secondbox/signed-assets.json",
+	} {
+		if got := environment[name]; got != want {
+			t.Errorf("packaged setting %s = %#v, want %q", name, got, want)
+		}
+	}
+	for _, definition := range deployconfig.OverrideRegistry() {
+		name := definition.Environment
 		value, exists := environment[name]
 		if !exists || value != nil {
 			t.Errorf("absent override %s = %#v, exists=%t", name, value, exists)
@@ -246,7 +257,23 @@ func TestComposeArtifactPreservesAbsentAndSelectedOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest = []byte(strings.Replace(string(manifest), "[overrides]\n", "[overrides]\nhttp_timeout_seconds = 41\nassignment_retry_limit = 0\n", 1))
+	var overrides strings.Builder
+	overrides.WriteString("[overrides]\n")
+	want := make(map[string]string)
+	for _, definition := range deployconfig.OverrideRegistry() {
+		value, err := strconv.ParseInt(definition.Default, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value++
+		if definition.AllowZero {
+			value = 0
+		}
+		selected := strconv.FormatInt(value, 10)
+		want[definition.Environment] = selected
+		overrides.WriteString(definition.TOMLName + " = " + selected + "\n")
+	}
+	manifest = []byte(strings.Replace(string(manifest), "[overrides]\n", overrides.String(), 1))
 	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +281,10 @@ func TestComposeArtifactPreservesAbsentAndSelectedOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment = readEnvironment()
-	if environment["SECONDBOX_HTTP_TIMEOUT_SECONDS"] != "41" || environment["SECONDBOX_ASSIGNMENT_RETRY_LIMIT"] != "0" {
-		t.Fatalf("selected overrides = %#v", environment)
+	for name, value := range want {
+		if got := environment[name]; got != value {
+			t.Errorf("selected override %s = %#v, want %q", name, got, value)
+		}
 	}
 }
 

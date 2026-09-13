@@ -10,9 +10,8 @@ import (
 )
 
 var (
-	runnerCapabilityPattern   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
-	runnerCapacityNamePattern = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
-	opaqueRunnerIDPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	runnerCapabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+	opaqueRunnerIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
 // CreateRunnerPool creates one explicit operator-owned scheduling boundary.
@@ -26,7 +25,6 @@ func (service *ControlPlaneService) CreateRunnerPool(
 		request.State,
 		request.Architectures,
 		request.Capabilities,
-		request.CapacityPolicy,
 	); err != nil {
 		return contracts.RunnerPool{}, err
 	}
@@ -36,7 +34,6 @@ func (service *ControlPlaneService) CreateRunnerPool(
 		State:            request.State,
 		Architectures:    sortedUnique(request.Architectures),
 		Capabilities:     sortedUnique(request.Capabilities),
-		CapacityPolicy:   cloneRunnerPoolCapacityPolicy(request.CapacityPolicy),
 		ReadyRunnerCount: 0,
 		Revision:         1,
 		CreatedAt:        now,
@@ -68,7 +65,7 @@ func (service *ControlPlaneService) UpdateRunnerPool(
 		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool update requires a positive revision"))
 	}
 	if request.State == nil && request.Architectures == nil &&
-		request.Capabilities == nil && request.CapacityPolicy == nil {
+		request.Capabilities == nil {
 		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool update requires at least one field"))
 	}
 	current, err := service.store.GetRunnerPool(ctx, name)
@@ -78,7 +75,6 @@ func (service *ControlPlaneService) UpdateRunnerPool(
 	state := current.State
 	architectures := current.Architectures
 	capabilities := current.Capabilities
-	capacityPolicy := current.CapacityPolicy
 	if request.State != nil {
 		state = *request.State
 	}
@@ -92,12 +88,7 @@ func (service *ControlPlaneService) UpdateRunnerPool(
 		normalized := sortedUnique(capabilities)
 		request.Capabilities = &normalized
 	}
-	if request.CapacityPolicy != nil {
-		capacityPolicy = *request.CapacityPolicy
-		cloned := cloneRunnerPoolCapacityPolicy(capacityPolicy)
-		request.CapacityPolicy = &cloned
-	}
-	if err := validateRunnerPoolPolicy(name, state, architectures, capabilities, capacityPolicy); err != nil {
+	if err := validateRunnerPoolPolicy(name, state, architectures, capabilities); err != nil {
 		return contracts.RunnerPool{}, err
 	}
 	now := service.now().UTC()
@@ -170,7 +161,6 @@ func validateRunnerPoolPolicy(
 	state string,
 	architectures []string,
 	capabilities []string,
-	capacityPolicy map[string]int64,
 ) error {
 	if !profileNamePattern.MatchString(name) {
 		return invalidRequest(errors.New("SecondBox RunnerPool name is invalid"))
@@ -200,21 +190,5 @@ func validateRunnerPoolPolicy(
 			return invalidRequest(errors.New("SecondBox RunnerPool capability is invalid"))
 		}
 	}
-	if len(capacityPolicy) < 1 || len(capacityPolicy) > 32 {
-		return invalidRequest(errors.New("SecondBox RunnerPool capacity policy must contain between 1 and 32 values"))
-	}
-	for key, value := range capacityPolicy {
-		if !runnerCapacityNamePattern.MatchString(key) || value < 1 {
-			return invalidRequest(errors.New("SecondBox RunnerPool capacity policy entries must have valid names and positive values"))
-		}
-	}
 	return nil
-}
-
-func cloneRunnerPoolCapacityPolicy(source map[string]int64) map[string]int64 {
-	cloned := make(map[string]int64, len(source))
-	for name, value := range source {
-		cloned[name] = value
-	}
-	return cloned
 }

@@ -274,7 +274,7 @@ derives its policy from that Profile and additionally permits HTTPS on port
 is never installed automatically.
 
 Before applying a copy, the operator must review its explicit RunnerPool
-inventory, capacity policy, and runtime/toolchain digests against the deployed
+inventory and runtime/toolchain digests against the deployed
 release. Replace the example inventory with the intended pool's exact values
 and use that release's verified execution-asset digests. After changing a
 Profile spec, recompute `specDigest` with Go's `resourceapply.SpecDigest`;

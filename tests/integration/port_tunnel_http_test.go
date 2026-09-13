@@ -86,8 +86,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	server := httptest.NewUnstartedServer(nil)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		DefaultSubjectQuota: generousQuota(),
-		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: time.Millisecond,
 		LiveDataPlane:    liveDataPlane,
