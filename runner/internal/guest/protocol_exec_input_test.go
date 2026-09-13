@@ -49,6 +49,40 @@ func TestProtocolServiceBufferedExhaustionAcceptsCreditAfterProcessExit(t *testi
 	}
 }
 
+func TestProtocolServiceFullExecCreditQueueUnblocksAfterDeadline(t *testing.T) {
+	stream, binding, cleanup := openNegotiatedProtocolTestStream(t, t.TempDir())
+	defer cleanup()
+	sendProtocolExecRequest(t, stream, protocolTestOperationBinding(binding, "silent-exec", 1), &guestv1.ExecRequest{
+		Command:          &guestv1.ExecRequest_Shell{Shell: "sleep 30"},
+		OutputLimitBytes: 1024, Streaming: true,
+		DeadlineUnixMs: uint64(time.Now().Add(500 * time.Millisecond).UnixMilli()),
+	})
+	if admission := receiveProtocolExec(t, stream).GetAdmission(); admission.GetKind() != guestv1.ExecAdmissionKind_EXEC_ADMISSION_KIND_ACCEPTED {
+		t.Fatalf("silent exec admission = %#v", admission)
+	}
+	// A silent command consumes none of these credits, filling the bounded queue.
+	for sequence := uint64(2); sequence < 66; sequence++ {
+		if err := stream.Send(&guestv1.RunnerToGuest{Message: &guestv1.RunnerToGuest_Exec{Exec: &guestv1.ExecFrame{
+			Binding: protocolTestOperationBinding(binding, "silent-exec", sequence),
+			Payload: &guestv1.ExecFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: 1}},
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sendProtocolExecRequest(t, stream, protocolTestOperationBinding(binding, "after-credit", 1), &guestv1.ExecRequest{
+		Command: &guestv1.ExecRequest_Shell{Shell: "true"}, OutputLimitBytes: 1024,
+	})
+	if terminal := receiveProtocolExec(t, stream).GetTerminal(); terminal.GetKind() != guestv1.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED {
+		t.Fatalf("silent exec terminal = %#v", terminal)
+	}
+	if admission := receiveProtocolExec(t, stream).GetAdmission(); admission.GetKind() != guestv1.ExecAdmissionKind_EXEC_ADMISSION_KIND_ACCEPTED {
+		t.Fatalf("exec after full credit queue admission = %#v", admission)
+	}
+	if terminal := receiveProtocolExec(t, stream).GetTerminal(); terminal.GetKind() != guestv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED || terminal.GetExitCode() != 0 {
+		t.Fatalf("exec after full credit queue terminal = %#v", terminal)
+	}
+}
+
 func TestProtocolServiceExecInputAfterTerminationKeepsConnection(t *testing.T) {
 	for _, scenario := range []struct {
 		name             string
