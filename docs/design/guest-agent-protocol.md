@@ -30,6 +30,16 @@ Generation 1 executes shell requests through `/bin/sh -c` and argv requests dire
 
 PTY requests allocate a real pseudoterminal with the requested initial dimensions and merged stdout/stderr. Binary input, byte credit, and resize controls share the operation's ordered sequence. Cancellation, deadline, output exhaustion, and connection loss kill the PTY process group and wait for process exit before emitting the terminal acknowledgement; a disconnected host stream never silently abandons the guest process. Public detach and reconnect state remains a control-plane concern and does not create a second guest process or guest-side session authority.
 
+For streaming exec, input already in transit when an operation terminates must not invalidate the shared connection.
+Input queue admission stops waiting on cancellation; credit admission stops waiting when the exec finishes, after its terminal is sent.
+These signals are separate because buffered output can still need credit after output exhaustion kills the process.
+Bounded terminal records retain identity, sequence and EOF validation without retaining queued input or process handles.
+Valid trailing input for those known operations is ignored; unknown operations and input after EOF still fail.
+If a process closes stdin before exiting, the guest consumes subsequent input without writing to the closed pipe and preserves the process's exit status.
+A live process that keeps its pipe open without reading can still delay connection controls until its deadline; generation 1 has no stdin byte-credit mechanism.
+Public streaming exec uses the same 30-second completion grace as buffered exec to receive the Runner's terminal and release execution quota.
+The WebSocket uses that fixed deadline for pending output and terminal delivery; the Runner's command deadline does not change.
+
 ## Filesystem messages
 
 All paths are workspace-relative protocol strings. The guest opens and pins the workspace root for each operation, then resolves each component relative to pinned descriptors with no symlink traversal. Operations cover read, write, stat, direct-child list, exists, mkdir, remove, and bounded streaming transfer. Mkdir and remove apply the caller's exact recursive and force flags. Stat and direct-child list results carry path kind, byte size, and modification timestamp for every returned entry. Writes use a temporary sibling, checksum, fsync, and atomic commit where the filesystem supports it.

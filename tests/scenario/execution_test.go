@@ -21,11 +21,14 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)
 	waitForScenarioRunner(t, fixture, 90*time.Second)
+	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
+	// Exceed the combined stdin queues to exercise terminal recovery under backpressure.
+	spec.Execution.MaximumTransferBytes = 128 << 20
 	profile := createScenarioProfile(
 		t,
 		fixture,
 		"scenario-execution",
-		scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning),
+		spec,
 	)
 	handle, _ := createScenarioSandbox(t, fixture, profile, "execution")
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -226,6 +229,68 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 		probe := executeScenarioCommand(t, ctx, handle, "printf ready", 1024, "post-cancel")
 		assertScenarioExited(t, probe, 0, "ready", "")
 	})
+
+	for _, scenario := range []struct {
+		name        string
+		command     string
+		inputFrames int
+	}{
+		{"queued stdin termination preserves guest connection", "printf blocked-reader; sleep 60", 2048},
+		{"output deadline delivers terminal and preserves guest connection", "while true; do printf 'output-before-deadline\\n'; sleep 0.01; done", 0},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			streamContext, stopStream := context.WithTimeout(ctx, 20*time.Second)
+			defer stopStream()
+			session, err := handle.CreateExecStream(streamContext, secondboxclient.StreamingExecRequest{
+				Command: secondboxclient.Command{ShellCommand: &secondboxclient.ShellCommand{
+					Mode: "shell", Command: scenario.command,
+				}},
+				Environment: secondboxclient.StringMap{}, DeadlineMilliseconds: 2000,
+				MaximumOutputBytes: 65536, WindowBytes: 65536,
+			}, uniqueScenarioKey(t, "stream-blocked-input"), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, err := handle.ConnectExecStream(streamContext, session, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			if err := stream.GrantOutput(65536); err != nil {
+				t.Fatal(err)
+			}
+			inputDone := make(chan error, 1)
+			go func() {
+				chunk := make([]byte, 64<<10)
+				for range scenario.inputFrames {
+					if err := stream.SendInputFrame(chunk, false); err != nil {
+						inputDone <- err
+						return
+					}
+				}
+				inputDone <- stream.CloseInput()
+			}()
+			output, outcome := receiveScenarioExec(t, stream)
+			if len(output) == 0 {
+				t.Fatal("SecondBox scenario deadline lost output before its terminal")
+			}
+			if scenario.inputFrames == 0 && len(output) < 2 {
+				t.Fatalf("SecondBox scenario expected continuing output before deadline: %#v", output)
+			}
+			if outcome.ExecDeadlineExceeded == nil {
+				t.Fatalf("SecondBox scenario blocked stdin outcome = %s", describeScenarioExecOutcome(outcome))
+			}
+			stopStream()
+			select {
+			case err := <-inputDone:
+				t.Logf("SecondBox scenario terminated stdin sender: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("SecondBox scenario stdin sender remained blocked after termination")
+			}
+			probe := executeScenarioCommand(t, ctx, handle, "printf recovered", 1024, "post-blocked-input")
+			assertScenarioExited(t, probe, 0, "recovered", "")
+		})
+	}
 
 	t.Run("configured pair of concurrent executions completes", func(t *testing.T) {
 		const executions = 2

@@ -12,9 +12,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Buffered outcomes follow host-confirmed teardown. This interval bounds
-// reception and sweeping without changing the Runner's execution deadline.
-const BufferedExecCompletionGrace = 30 * time.Second
+// Exec outcomes follow host-confirmed teardown. This bounds terminal reception
+// and buffered-session sweeping without changing the Runner's execution deadline.
+const ExecCompletionGrace = 30 * time.Second
 
 func (store *PostgresDataPlaneStore) CancelDataPlaneSession(
 	ctx context.Context,
@@ -86,7 +86,7 @@ func (store *PostgresDataPlaneStore) SweepDataPlane(
 		  )
 		ORDER BY session.deadline_at,session.id
 		LIMIT $2`,
-		now.UTC(), limit, now.UTC().Add(-BufferedExecCompletionGrace),
+		now.UTC(), limit, now.UTC().Add(-ExecCompletionGrace),
 	)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox due data-plane lookup: %w", err)
