@@ -167,3 +167,34 @@ else cat; fi
 		})
 	}
 }
+
+func TestGVisorProfileInventoryHandlesConcurrentContainerRemoval(t *testing.T) {
+	command := exec.Command("bash", "-euc", `
+source ../../scripts/scenario-network.sh
+# Command substitutions run in subshells, so communicate through a file.
+marker="$1/removed"
+docker() {
+ if [[ "$1" == ps ]]; then
+  echo runner
+  if [[ ! -f "$marker" ]]; then echo disappearing-helper; fi
+ elif [[ "$*" == *disappearing-helper* ]]; then
+  touch "$marker"
+  echo 'error: no such object: disappearing-helper' >&2
+  return 1
+ else
+  echo SECONDBOX_GVISOR_NETWORK_PROFILE=3
+ fi
+}
+scenario_reserve_gvisor_profiles "$1/locks"
+[[ "$SECONDBOX_SCENARIO_GVISOR_NETWORK_PROFILE" == 4 ]]
+# A persistent inspect failure is not an empty inventory or a free profile.
+docker() {
+ if [[ "$1" == ps ]]; then echo runner
+ else echo 'permission denied' >&2; return 1; fi
+}
+if scenario_reserve_gvisor_profiles "$1/failure-locks"; then exit 1; fi
+`, "inventory", t.TempDir())
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("profile inventory: %v\n%s", err, output)
+	}
+}
