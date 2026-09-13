@@ -13,7 +13,7 @@ import (
 )
 
 // Exec outcomes follow host-confirmed teardown. This bounds terminal reception
-// and buffered-session sweeping without changing the Runner's execution deadline.
+// and session sweeping without changing the Runner's execution deadline.
 const ExecCompletionGrace = 30 * time.Second
 
 func (store *PostgresDataPlaneStore) CancelDataPlaneSession(
@@ -63,7 +63,7 @@ func (store *PostgresDataPlaneStore) SweepDataPlane(
 		WHERE session.state IN ('pending','running')
 		  AND (
 		    (session.deadline_at<=$1 AND
-		      (session.kind<>'exec' OR session.operation<>'exec' OR session.deadline_at<=$3))
+		      (session.kind<>'exec' OR session.deadline_at<=$3))
 		    OR (
 		      session.kind='terminal'
 		      AND session.attachment_id=''

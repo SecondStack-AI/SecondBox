@@ -152,7 +152,11 @@ func (service *ControlPlaneService) openDirectDataPlaneStream(
 		_ = raw.Close()
 		return nil, fmt.Errorf("SecondBox direct data-plane TLS handshake: %w", err)
 	}
-	if err := connection.SetDeadline(session.DeadlineAt); err != nil {
+	deliveryDeadline := session.DeadlineAt
+	if session.Kind == "exec" {
+		deliveryDeadline = deliveryDeadline.Add(runnercontrol.ExecCompletionGrace)
+	}
+	if err := connection.SetDeadline(deliveryDeadline); err != nil {
 		_ = connection.Close()
 		return nil, err
 	}
