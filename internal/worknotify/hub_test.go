@@ -1,6 +1,7 @@
 package worknotify
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -34,12 +35,26 @@ func TestHubCancellationIsIdempotent(t *testing.T) {
 	hub := NewHub()
 	wakeups, cancel := hub.Subscribe(KindLifecycle, "")
 	cancel()
-	cancel()
+	live, cancelLive := hub.Subscribe(KindLifecycle, "")
+	defer cancelLive()
+	var workers sync.WaitGroup
+	for range 16 {
+		workers.Go(func() {
+			cancel()
+			hub.Publish(KindLifecycle, "")
+		})
+	}
+	workers.Wait()
 	hub.Publish(KindLifecycle, "")
 	select {
 	case <-wakeups:
 		t.Fatal("cancelled subscription received a notification")
 	default:
+	}
+	select {
+	case <-live:
+	default:
+		t.Fatal("repeated cancellation removed a newer subscription")
 	}
 }
 
