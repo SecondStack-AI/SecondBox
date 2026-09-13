@@ -30,6 +30,8 @@ const (
 	GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM GuestFeature = 3
 	GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS              GuestFeature = 4
 	GuestFeature_GUEST_FEATURE_PORT_PROXY                   GuestFeature = 6
+	// Terminal exec input draining preserves the shared guest connection.
+	GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY GuestFeature = 7
 )
 
 // Enum value maps for GuestFeature.
@@ -41,6 +43,7 @@ var (
 		3: "GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM",
 		4: "GUEST_FEATURE_ACTIVITY_EVENTS",
 		6: "GUEST_FEATURE_PORT_PROXY",
+		7: "GUEST_FEATURE_EXEC_INPUT_RECOVERY",
 	}
 	GuestFeature_value = map[string]int32{
 		"GUEST_FEATURE_UNSPECIFIED":                  0,
@@ -49,6 +52,7 @@ var (
 		"GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM": 3,
 		"GUEST_FEATURE_ACTIVITY_EVENTS":              4,
 		"GUEST_FEATURE_PORT_PROXY":                   6,
+		"GUEST_FEATURE_EXEC_INPUT_RECOVERY":          7,
 	}
 )
 
@@ -4238,14 +4242,15 @@ const file_contracts_guest_v1_guest_proto_rawDesc = "" +
 	"\x06freeze\x18\t \x01(\v2 .secondbox.guest.v1.FreezeResultH\x00R\x06freeze\x124\n" +
 	"\x04thaw\x18\n" +
 	" \x01(\v2\x1e.secondbox.guest.v1.ThawResultH\x00R\x04thawB\t\n" +
-	"\amessage*\xe4\x01\n" +
+	"\amessage*\x8b\x02\n" +
 	"\fGuestFeature\x12\x1d\n" +
 	"\x19GUEST_FEATURE_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cGUEST_FEATURE_STREAMING_EXEC\x10\x01\x12\x1c\n" +
 	"\x18GUEST_FEATURE_PTY_RESIZE\x10\x02\x12.\n" +
 	"*GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM\x10\x03\x12!\n" +
 	"\x1dGUEST_FEATURE_ACTIVITY_EVENTS\x10\x04\x12\x1c\n" +
-	"\x18GUEST_FEATURE_PORT_PROXY\x10\x06\"\x04\b\x05\x10\x05*\xdf\x02\n" +
+	"\x18GUEST_FEATURE_PORT_PROXY\x10\x06\x12%\n" +
+	"!GUEST_FEATURE_EXEC_INPUT_RECOVERY\x10\a\"\x04\b\x05\x10\x05*\xdf\x02\n" +
 	"\x16HandshakeRejectionKind\x12(\n" +
 	"$HANDSHAKE_REJECTION_KIND_UNSPECIFIED\x10\x00\x120\n" +
 	",HANDSHAKE_REJECTION_KIND_VERSION_UNSUPPORTED\x10\x01\x120\n" +

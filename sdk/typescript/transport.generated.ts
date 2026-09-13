@@ -382,6 +382,7 @@ export type InfrastructureFailureKind = "transport" | "admission" | "generation_
 export interface Instance {
   readonly createdAt: Timestamp;
   readonly generation: number;
+  readonly guestFeatures?: readonly string[];
   readonly guestHeartbeatAt?: Timestamp;
   readonly guestLiveness: GuestLiveness;
   readonly id: OpaqueID;

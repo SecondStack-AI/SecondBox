@@ -398,6 +398,7 @@ const (
 type Instance struct {
 	CreatedAt         Timestamp                  `json:"createdAt"`
 	Generation        int64                      `json:"generation"`
+	GuestFeatures     []string                   `json:"guestFeatures,omitempty"`
 	GuestHeartbeatAt  *Timestamp                 `json:"guestHeartbeatAt,omitempty"`
 	GuestLiveness     GuestLiveness              `json:"guestLiveness"`
 	ID                OpaqueID                   `json:"id"`

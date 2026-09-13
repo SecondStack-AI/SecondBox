@@ -20,6 +20,7 @@ var requestedGuestProtocolFeatureNames = []string{
 	"descriptor_pinned_filesystem",
 	"activity_events",
 	"port_proxy",
+	"exec_input_recovery",
 }
 
 func requestedGuestProtocolFeatures() ([]guestv1.GuestFeature, error) {
@@ -118,4 +119,14 @@ func (m *Manager) negotiateInstanceGuest(
 	inst.guestProtocolSession = session
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *Manager) assignmentGuestFeatures(backendReference string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst := m.instances[backendReference]
+	if inst == nil || inst.guestProtocolSession == nil {
+		return nil
+	}
+	return inst.guestProtocolSession.NegotiatedFeatureNames()
 }

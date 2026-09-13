@@ -3738,8 +3738,8 @@ func recordAssignmentEvent(
 			if _, err := tx.Exec(ctx, `
 				UPDATE secondbox.instances
 				SET state='ready',guest_liveness='ready',ready_at=$2,
-				    guest_heartbeat_at=$2,updated_at=$2 WHERE id=$1`,
-				result.Fence.InstanceId, now,
+				    guest_heartbeat_at=$2,updated_at=$2,guest_features=$3 WHERE id=$1`,
+				result.Fence.InstanceId, now, append([]string{}, result.GuestFeatures...),
 			); err != nil {
 				return fmt.Errorf("SecondBox runner ready Instance update: %w", err)
 			}

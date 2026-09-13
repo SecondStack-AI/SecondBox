@@ -2724,6 +2724,7 @@
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
           "state": {"$ref": "#/components/schemas/InstanceState"},
           "guestLiveness": {"$ref": "#/components/schemas/GuestLiveness"},
+          "guestFeatures": {"type": "array", "items": {"type": "string"}, "description": "Optional features negotiated with this Instance guest. An absent feature is unsupported."},
           "terminationReason": {"$ref": "#/components/schemas/InstanceTerminationReason"},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "readyAt": {"$ref": "#/components/schemas/Timestamp"},

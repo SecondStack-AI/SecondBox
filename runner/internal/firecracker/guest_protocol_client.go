@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -256,9 +257,23 @@ func guestFeatureFromContractName(name string) (guestv1.GuestFeature, error) {
 		return guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM, nil
 	case "activity_events":
 		return guestv1.GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS, nil
+	case "exec_input_recovery":
+		return guestv1.GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY, nil
 	case "port_proxy":
 		return guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY, nil
 	default:
 		return guestv1.GuestFeature_GUEST_FEATURE_UNSPECIFIED, fmt.Errorf("unknown mandatory guest feature %q", name)
 	}
+}
+
+// NegotiatedFeatureNames returns the immutable welcome features in contract vocabulary.
+func (s *GuestProtocolSession) NegotiatedFeatureNames() []string {
+	names := []string{}
+	for feature, enabled := range s.EnabledFeatures {
+		if enabled {
+			names = append(names, strings.ToLower(strings.TrimPrefix(feature.String(), "GUEST_FEATURE_")))
+		}
+	}
+	sort.Strings(names)
+	return names
 }

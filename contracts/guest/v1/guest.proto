@@ -23,6 +23,8 @@ enum GuestFeature {
   GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM = 3;
   GUEST_FEATURE_ACTIVITY_EVENTS = 4;
   GUEST_FEATURE_PORT_PROXY = 6;
+  // Terminal exec input draining preserves the shared guest connection.
+  GUEST_FEATURE_EXEC_INPUT_RECOVERY = 7;
 }
 
 // ConnectionBinding is immutable after negotiation. Every admitted operation

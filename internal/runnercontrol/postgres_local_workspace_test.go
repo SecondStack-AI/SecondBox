@@ -2231,6 +2231,7 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 					Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
 					BackendKind:      "firecracker",
 					BackendReference: "fc-ready-evidence",
+					GuestFeatures:    []string{"exec_input_recovery"},
 					Correlation: &runnerv1.Correlation{
 						RequestId: "request-start", OperationId: "operation-start",
 						SandboxId: fence.SandboxId, InstanceId: fence.InstanceId,
@@ -2246,6 +2247,13 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 	}
 	if err := tx.Commit(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	var features []string
+	if err := store.pool.QueryRow(t.Context(), "SELECT guest_features FROM secondbox.instances WHERE id=$1", fence.InstanceId).Scan(&features); err != nil {
+		t.Fatal(err)
+	}
+	if len(features) != 1 || features[0] != "exec_input_recovery" {
+		t.Fatalf("negotiated guest features = %v", features)
 	}
 	var (
 		state, liveness, mutationKind, commandState string
