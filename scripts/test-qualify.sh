@@ -48,6 +48,10 @@ expect_failure 'requires a clean tree' scripts/qualify.sh --tier release --only 
 printf 'QUALIFY_FIRECRACKER_SHARDS=0\n' >"$HOME/.config/secondbox/qualify.env"
 expect_failure 'must be 1..64' scripts/qualify.sh --only gates
 printf 'QUALIFY_FIRECRACKER_SHARDS=1\n' >"$HOME/.config/secondbox/qualify.env"
+for budget in 0 01 -1 65 invalid 99999999999999999999999999999999999999999; do
+  expect_failure 'QUALIFY_MAX_STACKS must be' env QUALIFY_MAX_STACKS="$budget" scripts/qualify.sh --only gates
+done
+expect_failure 'QUALIFY_GATES_FIRST must be' env QUALIFY_GATES_FIRST=invalid scripts/qualify.sh --only gates
 expect_failure 'FAIL \(17\)' scripts/qualify.sh --only gates
 run="$(basename "$(find .tmp/qualify -mindepth 1 -maxdepth 1 -type d)")"
 [[ "$(cat ".tmp/qualify/$run/result")" == 1 ]]

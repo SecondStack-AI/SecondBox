@@ -34,7 +34,7 @@ scenario_shards() {
   local -a shard_jobs=() command=(just test-scenario)
   [[ "$backend" != gvisor ]] || command=(scripts/qualify-gvisor.sh --host)
   for ((i=1; i<=count; i++)); do
-    stage "$backend-$i" env SECONDBOX_SCENARIO_SHARD="$i/$count" SECONDBOX_SCENARIO_SHARD_DIRECTORY="$shard_root" SECONDBOX_SCENARIO_COMPUTE_BACKEND="$backend" SECONDBOX_SCENARIO_RUNNER_PLACEMENT=compose SECONDBOX_SCENARIO_MODE=suite "${command[@]}" & shard_jobs+=("$!")
+    stack_stage "$backend-$i" env SECONDBOX_SCENARIO_SHARD="$i/$count" SECONDBOX_SCENARIO_SHARD_DIRECTORY="$shard_root" SECONDBOX_SCENARIO_COMPUTE_BACKEND="$backend" SECONDBOX_SCENARIO_RUNNER_PLACEMENT=compose SECONDBOX_SCENARIO_MODE=suite "${command[@]}" & shard_jobs+=("$!")
   done
   for job in "${shard_jobs[@]}"; do wait "$job" || status=1; done
   for ((i=1; i<=count; i++)); do
@@ -47,6 +47,35 @@ scenario_shards() {
     SECONDBOX_SCENARIO_COMPUTE_BACKEND="$backend" scripts/test-scenario.sh --merge-shards "$count" "$shard_root"
   fi
 }
+
+# Both backend schedulers share this pool. Keep a slot through teardown and
+# serialize admission until the preceding control plane actually serves readyz.
+stack_stage() (
+  local name="$1"; shift
+  local startup slot index job lock_status
+  exec {startup}>"$directory/startup.lock"
+  flock "$startup" || return
+  while :; do
+    for ((index=1; index<=QUALIFY_MAX_STACKS; index++)); do
+      # Gates launch first; test reserves one slot until its status is published.
+      if [[ ( "$only" == all || "$only" == gates ) && ! -f "$directory/test.status" ]]; then
+        [[ "$QUALIFY_GATES_FIRST" == 0 && "$index" != 1 ]] || continue
+      fi
+      exec {slot}>"$directory/stack-$index.lock"
+      if flock -n "$slot"; then break 2
+      else lock_status=$?; fi
+      exec {slot}>&-
+      [[ "$lock_status" == 1 ]] || return "$lock_status"
+    done
+    sleep 0.1
+  done
+  echo "Admitted $name in slot $index"
+  stage "$name" env SECONDBOX_SCENARIO_READY_FILE="$directory/$name.ready" "$@" & job=$!
+  while [[ ! -f "$directory/$name.ready" ]] && kill -0 "$job" 2>/dev/null; do sleep 0.1; done
+  flock -u "$startup"
+  exec {startup}>&-
+  wait "$job"
+)
 
 sdk_packages() {
   # Packaging consumes the declarations produced by verify-generated.
@@ -129,17 +158,21 @@ worker() {
       fi
     done
   fi
+  if [[ "$QUALIFY_GATES_FIRST" == 1 ]]; then
+    for job in "${jobs[@]}"; do wait "$job" || status=1; done
+    jobs=()
+  fi
   if [[ "$only" == all || "$only" == firecracker ]]; then
     if [[ "$tier" == nightly ]]; then
-      stage firecracker env -u SECONDBOX_SCENARIO_SHARD SECONDBOX_SCENARIO_COMPUTE_BACKEND=firecracker just test-scenario & jobs+=("$!")
+      stack_stage firecracker env -u SECONDBOX_SCENARIO_SHARD SECONDBOX_SCENARIO_COMPUTE_BACKEND=firecracker just test-scenario & jobs+=("$!")
     else
       stage firecracker scenario_shards firecracker & jobs+=("$!")
     fi
   fi
   if [[ "$only" == gvisor || ( "$only" == all && "$tier" != pr ) ]]; then
     if [[ "$tier" == nightly ]]; then
-      stage gvisor-host scripts/qualify-gvisor.sh --host & jobs+=("$!")
-      stage gvisor scripts/qualify-gvisor.sh "$directory" "$source_commit" & jobs+=("$!")
+      stack_stage gvisor-host scripts/qualify-gvisor.sh --host & jobs+=("$!")
+      stack_stage gvisor scripts/qualify-gvisor.sh "$directory" "$source_commit" & jobs+=("$!")
     else
       stage gvisor-host scenario_shards gvisor & jobs+=("$!")
     fi
@@ -187,6 +220,10 @@ export SECONDBOX_SCENARIO_MODE=suite SECONDBOX_SCENARIO_RUNNER_PLACEMENT=compose
 export SECONDBOX_SCENARIO_TIER=release
 [[ "$tier" != nightly ]] || export SECONDBOX_SCENARIO_TIER=nightly
 export QUALIFY_FIRECRACKER_SHARDS="${QUALIFY_FIRECRACKER_SHARDS:-4}"
+export QUALIFY_MAX_STACKS="${QUALIFY_MAX_STACKS:-4}"
+export QUALIFY_GATES_FIRST="${QUALIFY_GATES_FIRST:-0}"
+[[ "$QUALIFY_MAX_STACKS" =~ ^([1-9]|[1-5][0-9]|6[0-4])$ ]] || fail 'QUALIFY_MAX_STACKS must be 1..64'
+[[ "$QUALIFY_GATES_FIRST" == 0 || "$QUALIFY_GATES_FIRST" == 1 ]] || fail 'QUALIFY_GATES_FIRST must be 0 or 1'
 [[ "$QUALIFY_FIRECRACKER_SHARDS" =~ ^[1-9][0-9]*$ ]] && ((QUALIFY_FIRECRACKER_SHARDS <= 64)) || fail 'QUALIFY_FIRECRACKER_SHARDS must be 1..64'
 for tool in git just go flock setsid; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
 if [[ "$tier" != pr ]]; then

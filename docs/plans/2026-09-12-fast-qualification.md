@@ -642,3 +642,35 @@ Implementation findings and deviations:
   runs on every PR without a person.
 - A compatibility test that runs the guest protocol against the guest agent
   binary inside the shipped bundle, which would have caught #128 without KVM.
+
+## Task 5 hardening: shared stack budget
+
+The first real lean release overloaded this 32-thread host with eight scenario
+stacks plus the ten gates. `firecracker-1` lost HTTP access to its control plane
+for four minutes. The previous 3m06s qualification was insufficient reliability
+proof for that schedule.
+
+- `QUALIFY_MAX_STACKS` defaults to four and bounds scenario processes through
+  teardown across both backends. The ten gates start first, and `test` reserves
+  one slot until its status is published. A budget of one runs test before stacks.
+- Admission is serialized until the preceding stack's published HTTP listener
+  answers `/readyz`; Compose health alone does not release admission. A failed
+  startup releases admission after teardown, retaining its failing stage status.
+- `QUALIFY_GATES_FIRST=1` permits an explicit all-gates-before-stacks comparison.
+  The default overlaps gates with three stacks, then permits four stacks.
+- The HTTP client captures control-plane and runner container logs at the first
+  request timeout per fixture, before later polling or cleanup. The original
+  response/error and test assertions are preserved. The existing failure
+  teardown still captures application logs and container state.
+- Network selection uses PID-based candidates and persistent lock-file inodes,
+  not second-resolution timestamps. Both guest and Compose subnets use the same
+  lock namespace under the explicit shared workspace root, held through teardown.
+  Eight simultaneous selectors starting at the same candidate reserved 16
+  distinct subnets; reuse succeeded only after owner exit. The existing gVisor
+  pair test also confirms exclusion of occupied and concurrently reserved pairs.
+
+Proof runs must wait for `systemctl --user list-units 'sbx-dxd-*' --state=active`
+(with no active unit rows) and no `secondbox-suite-*` containers, including stopped
+containers. Proof configuration uses separate disposable workspaces and release
+outputs on root Btrfs: the Developer filesystem is already at 90% usage. Original
+operator configuration, other checkouts, and unrelated host resources are preserved.

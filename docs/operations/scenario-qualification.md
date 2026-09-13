@@ -27,7 +27,13 @@ The release tier requires a clean tree and runs gates alongside four-way
 Firecracker and local gVisor host suites. Configure
 `QUALIFY_GVISOR_HOST_BUILD_ROOT` with the pinned `bin/runsc` and `rootfs/`
 inputs; automation rebuilds the guest agent. gVisor uses systrap, so KVM may
-be present on this host. Concurrent Compose stacks reserve distinct gVisor
+be present on this host. `QUALIFY_MAX_STACKS` (default 4, range 1..64) bounds
+simultaneous stacks across both backends, including teardown. Gates start first;
+`test` reserves one slot until it finishes. `QUALIFY_GATES_FIRST=1` instead waits
+for all gates before starting stacks. Each stack must answer `/readyz` before
+the next starts; a failed startup releases admission after its cleanup.
+HTTP request timeouts capture control-plane and runner logs in the shard log.
+Concurrent Compose stacks reserve distinct gVisor
 network profile pairs in 2..15 (at most seven stacks; 0/1 remain for manual
 runners). The harness skips profiles declared by existing containers and holds
 its reservations through teardown. Scenario containers bind host `/dev` so newly

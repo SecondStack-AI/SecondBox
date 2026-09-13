@@ -76,3 +76,42 @@ else cat; fi
 		}
 	}
 }
+
+func TestScenarioNetworkEightSimultaneousStacks(t *testing.T) {
+	command := exec.Command("bash", "-euc", `
+source ../../scripts/scenario-network.sh
+jobs=()
+trap 'touch "$1/release"; for job in "${jobs[@]}"; do wait "$job"; done' EXIT
+for stack in {1..8}; do
+ bash -euc '
+ source ../../scripts/scenario-network.sh
+ while [[ ! -f "$1/start" ]]; do sleep 0.01; done
+ for kind in guest compose; do
+  for index in {100..115}; do
+   if scenario_reserve_network "$1/locks" "$index" "${kind}_lock"; then
+    echo "$index" >>"$1/$2.reserved"
+    break
+   fi
+  done
+ done
+ touch "$1/$2.ready"
+ while [[ ! -f "$1/release" ]]; do sleep 0.01; done
+ ' child "$1" "$stack" & jobs+=("$!")
+done
+touch "$1/start"
+for attempt in {1..500}; do
+ ready=("$1"/*.ready)
+ [[ ${#ready[@]} == 8 ]] && break
+ sleep 0.01
+done
+[[ ${#ready[@]} == 8 ]]
+[[ "$(cat "$1"/*.reserved | wc -l)" == 16 ]]
+[[ "$(cat "$1"/*.reserved | sort -u | wc -l)" == 16 ]]
+touch "$1/release"
+for job in "${jobs[@]}"; do wait "$job"; done
+scenario_reserve_network "$1/locks" 100 reclaimed
+`, "networks", t.TempDir())
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("eight network reservations: %v\n%s", err, output)
+	}
+}

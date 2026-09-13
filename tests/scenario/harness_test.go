@@ -79,6 +79,10 @@ func newScenarioFixture(t *testing.T) scenarioFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	clients.HTTPClient.Transport = &scenarioharness.TimeoutDiagnosticsTransport{
+		Base:    http.DefaultTransport,
+		Capture: func() { scenarioRunnerDiagnostics(t) },
+	}
 	return scenarioFixture{
 		baseURL:       baseURL,
 		platformToken: platformToken,
@@ -671,7 +675,7 @@ func scenarioRunnerDiagnostics(t *testing.T) {
 	defer cancel()
 	for _, args := range [][]string{
 		{"ps", "--all"},
-		{"logs", "--tail", "200", "secondbox-runner"},
+		{"logs", "--no-color", "--timestamps", "--tail", "500", "control-plane", "secondbox-runner"},
 	} {
 		output, err := scenarioComposeCommand(t, ctx, args...)
 		t.Logf("SecondBox scenario runner diagnostics %v: %v\n%s", args, err, output)

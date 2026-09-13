@@ -976,6 +976,16 @@ compose config --quiet
 gvisor_host_firewall apply
 compose run --rm --no-deps egress-context-config-init
 compose up --detach --wait --wait-timeout 240 postgres control-plane
+# Compose health is necessary, but admission of the next qualification stack
+# requires an HTTP response from this control plane's published listener.
+scenario_ready_deadline=$((SECONDS + 60))
+until curl --fail --silent --show-error --max-time 2 "$SECONDBOX_LIVE_BASE_URL/readyz"; do
+  ((SECONDS < scenario_ready_deadline)) || fail 'control plane did not answer /readyz within 60 s'
+  sleep 0.2
+done
+if [[ -n "${SECONDBOX_SCENARIO_READY_FILE:-}" ]]; then
+  touch "$SECONDBOX_SCENARIO_READY_FILE"
+fi
 
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
