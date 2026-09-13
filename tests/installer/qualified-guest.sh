@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+shopt -s inherit_errexit
 
 report_qualified_guest_failure() {
   local status="$?" line="$1" log
@@ -404,10 +405,6 @@ jq -e --arg runnerId "$expected_runner_id" '
   (.evidence.egressContext | length) > 0 and
   .evidence.egressContextPreflight == "ready"
 ' "$receipt" >/dev/null
-workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" "$expected_context")"
-sandbox_id="$(jq -er .sandboxId <<<"$workload")"
-workload_config="$(jq -er .configPath <<<"$workload")"
-
 live_runner_state=''
 for _ in $(seq 1 300); do
   if live_runners="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json runners list 2>/dev/null)"; then
@@ -417,6 +414,11 @@ for _ in $(seq 1 300); do
   sleep 1
 done
 [[ "$live_runner_state" == ready ]] || { echo 'installed Runner did not become ready after reboot' >&2; exit 1; }
+
+workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" "$expected_context")"
+sandbox_id="$(jq -er .sandboxId <<<"$workload")"
+workload_config="$(jq -er .configPath <<<"$workload")"
+
 SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
 # Existing-filesystem modes own uninstall/resume and destructive purge coverage.
 # The fresh Btrfs guest proves install, reboot recovery, and a real microVM;
