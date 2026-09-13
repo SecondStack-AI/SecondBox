@@ -865,14 +865,13 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
 			return
 		}
-		persisted, err := apiHandler.persistedAuthorities.AuthenticateApplicationAuthority(
+		authority, err := apiHandler.persistedAuthorities.AuthenticateApplicationAuthority(
 			request.Context(), credential, time.Now().UTC(),
 		)
 		if err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		authority := resolvedPersistedApplicationAuthority(persisted)
 		if err := authorizeApplicationRequest(authority, request); err != nil {
 			apiHandler.writeError(writer, request, err)
 			return

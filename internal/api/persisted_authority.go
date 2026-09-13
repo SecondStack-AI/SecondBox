@@ -22,12 +22,3 @@ func isTenantControllerBearerToken(credential string) bool {
 func isApplicationBearerToken(credential string) bool {
 	return strings.HasPrefix(credential, ports.ApplicationBearerTokenPrefix)
 }
-
-func resolvedPersistedApplicationAuthority(
-	authority ports.AuthenticatedApplicationAuthority,
-) resolvedApplicationAuthority {
-	return resolvedApplicationAuthority{
-		id: authority.ID, tenantRef: authority.TenantRef, subjectRef: authority.SubjectRef,
-		scopes: authority.Scopes, profileGrants: authority.ProfileGrants,
-	}
-}
