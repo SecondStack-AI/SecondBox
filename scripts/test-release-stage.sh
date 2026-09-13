@@ -80,6 +80,28 @@ LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_two" >/
 LC_ALL="$dictionary_locale" "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_dictionary_locale" >/dev/null
 LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.7.0 "$stage_installer_candidate" >/dev/null
 
+# An unbound build must bind to exactly the same candidate/final bytes, without
+# rebuilding; corruption, undeclared entries and another version are rejected.
+stage_build="$work_dir/stage-build"
+"$repo_root/scripts/release-stage.sh" --test-mode --build-only 0.7.0 "$stage_build" >/dev/null
+[[ ! -e "$stage_build/secondbox-0.7.0-artifact-manifest.json" ]]
+"$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.0 "$work_dir/bound-candidate" >/dev/null
+"$repo_root/scripts/release-stage.sh" --test-mode --from-build "$stage_build" 0.7.0 "$work_dir/bound-final" >/dev/null
+diff -r "$stage_installer_candidate" "$work_dir/bound-candidate"
+diff -r "$stage_one" "$work_dir/bound-final"
+if "$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.1 "$work_dir/wrong-build-version" >/dev/null 2>&1; then
+  echo 'release binding accepted another version' >&2; exit 1
+fi
+printf undeclared >"$stage_build/extra"
+if "$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.0 "$work_dir/extra-build-file" >/dev/null 2>&1; then
+  echo 'release binding accepted an undeclared file' >&2; exit 1
+fi
+rm -- "$stage_build/extra"
+printf corrupt >>"$stage_build/secondbox-0.7.0-openapi.json"
+if "$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.0 "$work_dir/corrupt-build" >/dev/null 2>&1; then
+  echo 'release binding accepted corrupt bytes' >&2; exit 1
+fi
+
 jq -e '.candidate == true and .installerQualificationEvidence == {location:"",digest:""}' "$stage_installer_candidate/secondbox-0.7.0-artifact-manifest.json" >/dev/null
 [[ ! -e "$stage_installer_candidate/secondbox-0.7.0-installer-qualification-evidence.json" ]] || { echo "installer candidate claimed final qualification evidence" >&2; exit 1; }
 candidate_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$stage_installer_candidate/secondbox-0.7.0-artifact-manifest.json")"
@@ -91,7 +113,9 @@ for stage in "$stage_one" "$stage_two" "$stage_dictionary_locale"; do
   source_commit="$(jq -er '.sourceCommit' "$stage/secondbox-0.7.0-artifact-manifest.json")"
   jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v6" and .version == "0.7.0" and .runnerProtocol == {minimum:4,maximum:4} and (.installerTools.reference | startswith("ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:")) and (.installBootstrap.location | endswith("/v0.7.0/install.sh")) and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.7.0-qualification-evidence.json")) and (.installerQualificationEvidence.location | endswith("/secondbox-0.7.0-installer-qualification-evidence.json"))' "$stage/secondbox-0.7.0-artifact-manifest.json" >/dev/null
   jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.standard-bundle/v3" and .profile.revisions[-1].number == 2 and .profile.revisions[-1].spec.runtimeBundleDigest == $runtime and .profile.revisions[-1].spec.toolchainBundleDigest == $toolchain and (.profile.revisions[-1].spec.runtimeBundleDigest != .profile.revisions[-1].spec.toolchainBundleDigest) and .profile.revisions[-1].spec.network.requiresTenantEgressContext == true' "$stage/durable-coding.standard-bundle.json" >/dev/null
-  jq -e '.name == "agent-compartment" and .profile.revisions[-1].number == 3 and .profile.revisions[-1].spec.network.requiresTenantEgressContext == true' "$stage/agent-compartment.standard-bundle.json" >/dev/null
+  # Synthetic component digests rotate the bundle at revision 3; attributed
+  # execution then appends revision 4 without changing the immutable prefix.
+  jq -e '.name == "agent-compartment" and ([.profile.revisions[].number] == [1,2,3,4]) and .profile.revisions[2].spec.attributedExecution == null and .profile.revisions[3].spec.attributedExecution == {gateway:"agent-gateway.secondbox.internal",maximumConnections:2} and .profile.revisions[-1].spec.network.requiresTenantEgressContext == true' "$stage/agent-compartment.standard-bundle.json" >/dev/null
   jq -e '.name == "agent-compartment-isolated" and .logicalGateway == "" and .profile.name == "agent-compartment-isolated" and .profile.revisions[-1].number == 2 and .profile.revisions[-1].spec.network == {mode:"deny_all",destinations:[],requiresTenantEgressContext:false} and .profile.revisions[-1].spec.ports == []' "$stage/agent-compartment-isolated.standard-bundle.json" >/dev/null
   jq -e --arg commit "$source_commit" '.schemaVersion == "secondbox.release/qualification-evidence/v2" and .sourceCommit == $commit and .repositoryDirty == false and .suite == "test-scenario" and .passCount == 16 and .wallClockSeconds == 1 and .qualifiedAt == "1970-01-01T00:00:00Z" and .host.platform == "linux-amd64" and .host.kvm.present and .host.tun.present and .host.workspaceFilesystem.type == "xfs"' "$stage/secondbox-0.7.0-qualification-evidence.json" >/dev/null
 	jq -e --arg commit "$source_commit" '.schemaVersion == "secondbox.release/installer-qualification-evidence/v2" and .sourceCommit == $commit and .repositoryDirty == false and .suite == "test-installer-qualified" and .passCount == 24 and .wallClockSeconds == 1 and .rebootPassed == true and .host.platform == "linux-amd64" and .host.kvm.present and .host.tun.present and .host.workspaceFilesystem.type == "xfs"' "$stage/secondbox-0.7.0-installer-qualification-evidence.json" >/dev/null

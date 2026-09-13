@@ -103,9 +103,10 @@ worker() {
 
 if [[ "${1:-}" == --worker ]]; then worker "$2"; exit; fi
 if [[ "${1:-}" == --wait ]]; then [[ $# == 2 ]] || fail 'usage: --wait RUN'; wait_run "$2"; exit; fi
-tier=pr only=all
+tier=pr only=all preflight=false
 while (($#)); do
   case "$1" in
+    --preflight) preflight=true; shift ;;
     --tier|--only) [[ $# -ge 2 ]] || fail "missing value for $1"; printf -v "${1#--}" '%s' "$2"; shift 2 ;;
     --help) echo 'Usage: just qualify [--tier pr|release] [--only gates|firecracker|gvisor] | --wait RUN'; exit 0 ;;
     *) fail "unknown argument: $1" ;;
@@ -113,7 +114,7 @@ while (($#)); do
 done
 [[ "$tier" == pr || "$tier" == release ]] || fail 'tier must be pr or release'
 [[ "$only" == all || "$only" == gates || "$only" == firecracker || "$only" == gvisor ]] || fail 'only must be gates, firecracker, or gvisor'
-config="${HOME:?}/.config/secondbox/qualify.env"
+config="${QUALIFY_ENV_FILE:-${HOME:?}/.config/secondbox/qualify.env}"
 [[ -f "$config" ]] || fail "copy deploy/qualify.env.example to $config and configure it"
 bash -n "$config" || fail "invalid environment file: $config"
 set -a
@@ -150,6 +151,7 @@ fi
 if [[ "$only" == gvisor || ( "$only" == all && "$tier" == release ) ]]; then
   scripts/qualify-gvisor.sh --preflight
 fi
+if $preflight; then exit 0; fi
 source_commit="$(git rev-parse HEAD)"
 run="$(date -u +%Y%m%dT%H%M%S)-$$"
 directory="$repo_root/.tmp/qualify/$run"

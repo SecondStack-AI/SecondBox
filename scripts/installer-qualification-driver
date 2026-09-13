@@ -66,6 +66,14 @@ done
 virsh -c "$connection" uri >/dev/null
 jq -e '.schemaVersion == "secondbox.install.vm-scenario/v1" and (.requiredAssertions | type == "array" and length > 0)' "$scenario" >/dev/null
 
+guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-16384}"
+[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 8192 && guest_memory <= 1048576)) || { echo 'QUALIFY_GUEST_MEMORY_MIB must be 8192..1048576' >&2; exit 1; }
+available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
+# Leave 8 GiB available for the host and QEMU overhead.
+guest_parallelism=$(((available_mib-8192)/guest_memory))
+((guest_parallelism > 0)) || { echo 'insufficient memory for installer qualification' >&2; exit 1; }
+((guest_parallelism <= 3)) || guest_parallelism=3
+echo "Installer guests: memory=${guest_memory} MiB, parallelism=$guest_parallelism"
 run_id="$(openssl rand -hex 6)"
 resource_root="$(mktemp -d "$existing_workspace_root/secondbox-installer-qualification-${run_id}.XXXXXX")"
 chmod 0700 "$resource_root"
@@ -77,7 +85,8 @@ for account in libvirt-qemu qemu; do
   fi
 done
 [[ "${#qemu_accounts[@]}" -gt 0 ]] || { echo 'qualification could not resolve a system-libvirt QEMU account' >&2; exit 1; }
-domains=()
+domains=("sbq-btrfs-image-$run_id" "sbq-existing-reflink-filesystem-$run_id" "sbq-existing-reflink-recreation-$run_id")
+guest_jobs=()
 active_child=''
 active_ssh_port=''
 
@@ -159,6 +168,8 @@ terminate() {
     wait "$active_child" >/dev/null 2>&1 || true
     active_child=''
   fi
+  for job in "${guest_jobs[@]}"; do kill -TERM "$job" 2>/dev/null || true; done
+  for job in "${guest_jobs[@]}"; do wait "$job" 2>/dev/null || true; done
   cleanup_best_effort || true
   exit "$status"
 }
@@ -289,7 +300,7 @@ run_guest() {
     *) echo "qualification guest mode is unsupported: $mode" >&2; return 1 ;;
   esac
   console_log="$guest_root/console.log"
-  domains+=("$domain")
+
   mkdir -p "$guest_root"
   chmod 0700 "$guest_root"
   for account in "${qemu_accounts[@]}"; do
@@ -355,7 +366,7 @@ EOF
     setfacl -m "u:${account}:r--" "$guest_root/seed.img"
     setfacl -m "u:${account}:rw-" "$console_log"
   done
-  run_interruptible virt-install --connect "$connection" --name "$domain" --memory 24576 --vcpus 8 \
+  run_interruptible virt-install --connect "$connection" --name "$domain" --memory "$guest_memory" --vcpus 8 \
     --cpu host-passthrough --machine q35 --osinfo ubuntu24.04 --import --noautoconsole --graphics none \
     --disk "path=$guest_root/root.qcow2,format=qcow2,bus=virtio" \
     --disk "path=$guest_root/data.qcow2,format=qcow2,bus=virtio" \
@@ -382,9 +393,29 @@ EOF
   rm -f -- "$guest_root/root.qcow2" "$guest_root/data.qcow2" "$guest_root/seed.img" "$qualification_base_image"
 }
 
-run_guest btrfs_image
-run_guest existing_reflink_filesystem
-run_guest existing_reflink_recreation
+# Each subshell owns its SSH forward and interruptible command. The parent
+# owns all three domain names and removes resources only after every job exits.
+launch_guest() {
+  if ((${#guest_jobs[@]} >= guest_parallelism)); then
+    wait "${guest_jobs[0]}" || guest_failed=1
+    guest_jobs=("${guest_jobs[@]:1}")
+  fi
+  (
+    trap - EXIT
+    trap 'if [[ -n "$active_child" ]]; then kill -TERM "$active_child" 2>/dev/null || true; wait "$active_child" 2>/dev/null || true; fi; exit 143' TERM INT
+    start=$SECONDS
+    "$@"
+    printf 'Installer %s: PASS in %ss\n' "$2" "$((SECONDS-start))"
+  ) &
+  guest_jobs+=("$!")
+}
+guest_failed=0
+launch_guest run_guest btrfs_image
+launch_guest run_guest existing_reflink_filesystem
+launch_guest run_guest existing_reflink_recreation
+for job in "${guest_jobs[@]}"; do wait "$job" || guest_failed=1; done
+guest_jobs=()
+((guest_failed == 0)) || { echo 'installer guest qualification failed' >&2; exit 1; }
 
 jq -s --arg schemaVersion 'secondbox.install.qualified-driver-evidence/v1' --arg subject "$release_subject" --slurpfile scenario "$scenario" '
   ([.[].assertions[]] | unique_by(.id)) as $assertions |

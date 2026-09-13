@@ -196,3 +196,6 @@ preship: test-non-kvm
 # Detached qualification; --wait RUN reattaches to a previous run.
 qualify *args:
     scripts/qualify.sh {{args}}
+
+release version:
+    scripts/release.sh "{{version}}"

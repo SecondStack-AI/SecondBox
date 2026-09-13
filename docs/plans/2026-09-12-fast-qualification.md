@@ -1,7 +1,7 @@
 ---
 title: Fast, Automated Qualification and Release
 date: 2026-09-12
-status: in-progress
+status: completed
 owner: SecondStack
 provenance: A full day of hand-driven qualification of PR #126 on the release host, 2026-09-12
 ---
@@ -103,7 +103,7 @@ checks passed. No scenario assertions changed.
   and the Firecracker suite sharded across N stacks (N from
   `QUALIFY_FIRECRACKER_SHARDS`, default 4). Target: under 6 minutes on this
   host.
-- [ ] Release tier runs, concurrently: the gates, the unsharded Firecracker
+- [x] Release tier runs, concurrently: the gates, the unsharded Firecracker
   suite writing `.tmp/scenario-qualification-evidence.json`, and the gVisor
   chain in the VM: boot the QEMU VM if its SSH port is closed (the boot
   command from `docs/operations/gvisor-runtime.md`, CPU `host,-vmx,-svm`),
@@ -121,7 +121,7 @@ checks passed. No scenario assertions changed.
   protoc into `.tmp/protoc` when the system version differs and uses it;
   `Justfile` sets `GOTOOLCHAIN` from `go.mod` so shims cannot change the Go
   version; `just qualify` refuses a dirty tree in release tier.
-- [ ] Prove it: run `just qualify --tier pr` and `just qualify --tier release`
+- [x] Prove it: run `just qualify --tier pr` and `just qualify --tier release`
   on this host and record both timing tables in the plan.
 
 ### Task 2 validation
@@ -180,11 +180,11 @@ subsequently passed with an isolated cache.
 | verify-generated | PASS | 0m 9s |
 | Total | FAIL | 8m 2s |
 
-Full release proof remains blocked on the no-KVM VM. After operator unit
+At Task 2 handoff, full release proof was blocked on the no-KVM VM. After operator unit
 `ux-gvisor-chain11` became inactive, its project `secondbox-suite-628122` still
 had four containers, a network, and a volume. The final assembled source
 `8ce10d194dee5c5074ac6418bf6ba68eaa499412` correctly refused that occupied VM
-before starting any stage. Cleanup requires its owner or an explicit exception
+before starting any stage. Cleanup required its owner or an explicit exception
 to the instruction forbidding changes to resources created by others.
 
 The driver now checks occupancy immediately before checkout and source identity
@@ -192,36 +192,118 @@ throughout the guest chain. Earlier independent release testing also reproduced
 the known pre-Task-1 runner restart failure. The QEMU cold-boot path remains
 untested because the existing VM is running and belongs to the operator.
 
+### Completed release-tier proof
+
+Task 3 completed the release-tier proof on 2026-09-12 (local host date), using
+`/usr/bin/just qualify --tier release` as the qualification stage of
+`just release 0.99.0`. Run `20260913T000100-2896357` qualified clean source
+`e740d0a9b87ee86d7e7b9577789058b796d50e63` in an isolated clone on local `main`.
+All ten gates, unsharded Firecracker, and gVisor host and pod suites passed.
+The **16m13s** total is **13 seconds above the under-16-minute target**, while
+artifact building ran concurrently. No gate or assertion was reduced. The
+existing running no-KVM VM was used; its cold-boot path remains untested.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| firecracker | PASS | 7m 43s |
+| gvisor-host | PASS | 8m 4s |
+| gvisor-pod | PASS | 8m 2s |
+| gvisor | PASS | 16m 13s |
+| lint | PASS | 0m 1s |
+| test-compose | PASS | 0m 19s |
+| test-contract | PASS | 0m 4s |
+| test-deployment | PASS | 0m 3s |
+| test-image-policy | PASS | 0m 3s |
+| test-install-docs | PASS | 0m 1s |
+| test-release-workflow | PASS | 0m 0s |
+| test-sdk-packages | PASS | 0m 10s |
+| test | PASS | 1m 36s |
+| verify-generated | PASS | 0m 5s |
+| Total | PASS | 16m 13s |
+
 ## Task 3: `just release VERSION`
 
-- [ ] `scripts/release.sh VERSION` reading `~/.config/secondbox/release.env`
+- [x] `scripts/release.sh VERSION` reading `~/.config/secondbox/release.env`
   (`deploy/release.env.example` checked in; a superset of qualify.env with the
   release source dir, release public key, Postgres image, candidate and
   installer directories, qualification image and digest).
-- [ ] Preconditions up front: clean tree, `HEAD` is on `main`, no existing
+- [x] Preconditions up front: clean tree, `HEAD` is on `main`, no existing
   `v<VERSION>` tag or one that already identifies `HEAD`, output directories
   absent, libvirt reachable with no `sbq-` domains, disk and memory headroom.
   Create the local tag when absent. Never push anything.
-- [ ] Run `qualify --tier release` and the artifact build concurrently; bind
+- [x] Run `qualify --tier release` and the artifact build concurrently; bind
   evidence into the candidate as soon as both finish
   (`release-stage.sh --candidate` already separates building from binding;
   split it if it does not).
-- [ ] Installer qualification with the three guests in parallel:
+- [x] Installer qualification with the three guests in parallel:
   `scripts/installer-qualification-driver` runs `run_guest` for each mode as a
   background job with its own SSH port and MAC, waits for all, and merges the
   three evidence files exactly as today. Guest memory is `QUALIFY_GUEST_MEMORY_MIB`
   (default 16384) and parallelism is capped by available host memory.
-- [ ] Final `release-stage`, then print the exact publish commands (tag push,
+- [x] Final `release-stage`, then print the exact publish commands (tag push,
   upload) without running them. End with a timing table.
-- [ ] Prove it end to end on this host against a throwaway version and record
+- [x] Prove it end to end on this host against a throwaway version and record
   the timing table in the plan; delete the local tag afterwards.
+
+### Task 3 validation
+
+`just release 0.99.0` passed end to end in **29m42s**, run
+`20260913T000059-2895705`, on source
+`e740d0a9b87ee86d7e7b9577789058b796d50e63`. The proof used an isolated clone
+whose local `main` identified the task commit, leaving the task branch and the
+original repository's `main` untouched. The local throwaway tag was deleted
+afterward. Nothing was pushed or uploaded.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| build | PASS | 5m 14s |
+| candidate | PASS | 0m 6s |
+| installer | PASS | 13m 14s |
+| qualification | PASS | 16m 16s |
+| stage | PASS | 0m 6s |
+| Total | PASS | 29m 42s |
+
+The installer driver selected three concurrent guests at its default 16384 MiB.
+`virsh dominfo` confirmed all three running together with 8 vCPUs and
+16777216 KiB each. Mode timings were 9m07s (`existing_reflink_filesystem`),
+10m39s (`btrfs_image`), and 13m13s (`existing_reflink_recreation`). All 25 merged
+assertions and reboot checks passed. All three domains and their workspace
+files were removed; the unrelated `secondstack-preview-k8s` domain was left
+alone. The final manifest and installer evidence bind the candidate's exact
+qualification subject. Final files remain in
+`/home/sasha/Developer/tries/secondbox-fq-release/releases/0.99.0`.
+
+Additional validation passed: Bash syntax for all 81 Bash scripts under
+`scripts`, `runner/scripts`, and `tests`; `just lint`; `just test-install-docs`;
+`just test-deployment`; `just test-release-stage`; and `git diff --check`.
+The release-stage suite proves build/bind byte equivalence, corruption and
+extra-file rejection, and version binding. Scheduler coverage proves three-way
+overlap, a one-guest cap, and waiting for surviving guests after one fails.
+
+Implementation findings and deviations:
+
+- `release-stage --candidate` required evidence before building, so staging was
+  split with `--build-only` and `--from-build`. Candidate and final binding reuse
+  a checksummed intermediate build; the ordinary manual staging path remains.
+- A dedicated, pinned Buildx builder was provisioned to avoid modifying the
+  host's existing builder container. The initial integration run accidentally
+  applied that builder to scenario Docker builds, which did not load their
+  runner image. That attempt correctly failed qualification in 14m30s while
+  its other gates and both gVisor suites passed. `RELEASE_BUILDX_BUILDER` is now
+  scoped to artifact staging only; the entire proof was rerun from the fix.
+  The dedicated builder is stopped, with its configuration and cache retained.
+- The release-stage regression suite exposed a pre-existing stale assertion:
+  synthetic component rotation plus attributed execution produces four
+  `agent-compartment` revisions, not three. The test now requires the exact
+  four-revision lineage and attributed policy. No assertion was removed or
+  generalized to accept multiple outcomes.
 
 ## Task 4: Documentation
 
-- [ ] Rewrite the operator sequence in `docs/operations/release-operator-setup.md`
+- [x] Rewrite the operator sequence in `docs/operations/release-operator-setup.md`
   and `docs/operations/scenario-qualification.md` around the two commands;
   keep the manual recipes as an appendix for hosts without the automation.
-- [ ] CHANGELOG entry under Unreleased.
+- [x] CHANGELOG entry under Unreleased.
 
 ## Deferred
 
