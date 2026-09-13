@@ -26,10 +26,10 @@ func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error 
 		}
 	}
 	for name, path := range map[string]string{
-		"identity_host_directory":  runner.IdentityHostDirectory,
-		"artifact_host_directory":  runner.ArtifactHostDirectory,
-		"state_host_directory":     runner.StateHostDirectory,
-		"workspace_host_directory": runner.WorkspaceHostDirectory,
+		"identity_host_directory":         runner.IdentityHostDirectory,
+		"artifact_host_directory":         runner.ArtifactHostDirectory,
+		"state_host_directory":            runner.StateHostDirectory,
+		"state_host_directory/workspaces": runner.workspaceHostDirectory(),
 	} {
 		info, err := os.Lstat(path)
 		if err != nil {
@@ -47,7 +47,7 @@ func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error 
 	if err != nil {
 		return fmt.Errorf("inspect Runner storage host filesystem: %w", err)
 	}
-	workspaceDevice, err := filesystemDevice(runner.WorkspaceHostDirectory)
+	workspaceDevice, err := filesystemDevice(runner.workspaceHostDirectory())
 	if err != nil {
 		return fmt.Errorf("inspect workspace host filesystem: %w", err)
 	}
@@ -59,7 +59,7 @@ func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error 
 		return fmt.Errorf("state_host_directory must use a dedicated non-root filesystem")
 	}
 	if workspaceDevice != storageDevice || artifactDevice != storageDevice {
-		return fmt.Errorf("artifact_host_directory, state_host_directory, and workspace_host_directory must use one filesystem")
+		return fmt.Errorf("artifact_host_directory, state_host_directory, and its workspaces child must use one filesystem")
 	}
 
 	identityCAPath, err := resolveRegularReference("", filepath.Join(runner.IdentityHostDirectory, "runner-ca.crt"))

@@ -16,7 +16,7 @@ software_version = ''
 control_plane_address = ''
 # TLS server name for the control-plane Runner endpoint; required.
 control_plane_server_name = ''
-# Runner identity directory; absolute on the Runner, and /run/secondbox-runner-identity for same-host placement.
+# Remote placement requires an absolute Runner identity directory. Leave empty for same-host placement; Compose supplies its identity mount.
 identity_directory = ''
 # Identity directory on the Runner host; absolute when set and required for same-host placement.
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
@@ -38,9 +38,7 @@ log_path = ''
 log_directory = ''
 
 # Workspace persistence
-# Reflink-capable workspace directory on the Runner host; for same-host placement this must be the workspaces child of state_host_directory.
-workspace_host_directory = '<replace-with-absolute-runner-host-path>'
-# Workspace root seen by the Runner; /var/lib/secondbox-runner/workspaces for same-host placement.
+# Remote placement requires an absolute Workspace root. Leave empty for same-host placement; Compose uses the existing workspaces child of state_host_directory.
 workspace_root = ''
 # Storage-pressure recovery threshold; positive and lower than warning and admission-deny thresholds.
 storage_pressure_recovery_percent = 0
@@ -114,7 +112,7 @@ network_policy_max_dns_ttl = ''
 network_policy_runner_addresses = ''
 # Management networks; a comma-separated list of CIDRs.
 network_policy_management_cidrs = ''
-# Absolute path from which this Runner loads the generated strict context configuration. Same-host Compose requires /run/secondbox-runner-config/egress-contexts.json.
+# Remote placement requires an absolute egress-context configuration path. Leave empty for same-host placement; Compose supplies its configuration mount.
 egress_context_config_path = ''
 # Context-indexed Runner-local mappings. Replace the empty list with one or more
 # [[runners.egress_contexts]] tables, each containing a unique valid name, and

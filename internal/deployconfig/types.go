@@ -113,11 +113,10 @@ type Runner struct {
 	SoftwareVersion               string                `toml:"software_version"`
 	ControlPlaneAddress           string                `toml:"control_plane_address"`
 	ControlPlaneServerName        string                `toml:"control_plane_server_name"`
-	IdentityDirectory             string                `toml:"identity_directory"`
+	IdentityDirectory             string                `toml:"identity_directory,omitempty"`
 	IdentityHostDirectory         string                `toml:"identity_host_directory"`
 	ArtifactHostDirectory         string                `toml:"artifact_host_directory"`
 	StateHostDirectory            string                `toml:"state_host_directory"`
-	WorkspaceHostDirectory        string                `toml:"workspace_host_directory"`
 	LogPath                       string                `toml:"log_path"`
 	LogDirectory                  string                `toml:"log_directory"`
 	FirecrackerPath               string                `toml:"firecracker_path"`
@@ -140,7 +139,7 @@ type Runner struct {
 	SnapshotTemplateCacheRoot     string                `toml:"snapshot_template_cache_root"`
 	ArtifactPublicKey             string                `toml:"artifact_public_key"`
 	ArtifactPublicKeySHA256       string                `toml:"artifact_public_key_sha256"`
-	WorkspaceRoot                 string                `toml:"workspace_root"`
+	WorkspaceRoot                 string                `toml:"workspace_root,omitempty"`
 	StorageRecoveryPercent        *int64                `toml:"storage_pressure_recovery_percent"`
 	StorageWarningPercent         *int64                `toml:"storage_pressure_warning_percent"`
 	StorageAdmissionDenyPercent   *int64                `toml:"storage_pressure_admission_deny_percent"`
@@ -160,7 +159,7 @@ type Runner struct {
 	NetworkPolicyMaxDNSTTL        string                `toml:"network_policy_max_dns_ttl"`
 	NetworkPolicyRunnerAddresses  string                `toml:"network_policy_runner_addresses"`
 	NetworkPolicyManagementCIDRs  string                `toml:"network_policy_management_cidrs"`
-	EgressContextConfigPath       string                `toml:"egress_context_config_path"`
+	EgressContextConfigPath       string                `toml:"egress_context_config_path,omitempty"`
 	EgressContexts                []RunnerEgressContext `toml:"egress_contexts"`
 	NetworkPolicyDNSUpstream      string                `toml:"network_policy_dns_upstream"`
 	MaxConcurrentPerSandbox       *int64                `toml:"max_concurrent_per_sandbox"`

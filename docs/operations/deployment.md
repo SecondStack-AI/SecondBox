@@ -106,7 +106,7 @@ Deploy an attribution-aware gateway on the Runner host and mount its socket dire
 
 Runner context configuration is static for one connection. To replace or remove a mapping, drain the Runner, stop every active Sandbox using that context, update the reviewed configuration, and restart. A stopped Sandbox pinned to a removed context remains durable but cannot start until the mapping returns or the Sandbox is retired. There is no dynamic gateway health discovery, live remapping, default context, cross-context retry, or automatic reassignment.
 
-State the mapping in the Runner declaration; never edit the generated JSON or environment transport:
+State the mapping in the Runner declaration; never edit the generated JSON or environment transport. The path below is for remote placement; omit `egress_context_config_path` for same-host placement:
 
 ```toml
 egress_context_config_path = "/etc/secondbox/egress-contexts.json"
@@ -197,6 +197,8 @@ The control-plane container runs as UID/GID 65532 with a read-only root, dropped
 
 Every `[[runners]]` entry is keyed by immutable `runner_id`. At most one may use `placement = "same-host"`; any number may use `placement = "remote"`.
 
+For same-host placement, set `identity_host_directory`, `artifact_host_directory`, and `state_host_directory` to explicit host paths. The compiler supplies the fixed container identity, workspace, and egress-config paths. Remove `workspace_host_directory` from existing manifests and omit `identity_directory`, `workspace_root`, and `egress_context_config_path` from same-host declarations. The existing `state_host_directory/workspaces` directory remains authoritative and must exist on the qualified storage filesystem; resolution never creates or relocates it. Remote declarations still require their explicit `identity_directory`, `workspace_root`, and `egress_context_config_path`.
+
 ### Runner declaration scaffold
 
 Generate the complete inert declaration on stdout, or create one separate file without replacing an existing target:
@@ -206,7 +208,7 @@ secondbox-deploy runner-template
 secondbox-deploy runner-template --output /secure/secondbox/runner-east-1.toml
 ```
 
-Replace `runners = []` in the deployment manifest with the completed block. Every emitted value is an invalid placeholder; validation cannot accept the scaffold before the operator replaces every value.
+Replace `runners = []` in the deployment manifest with the completed block. Required values are invalid placeholders; validation cannot accept the scaffold before the operator supplies them. Leave the three remote-only paths empty for same-host placement.
 
 <!-- runner-template-output:start -->
 ```toml
@@ -224,7 +226,7 @@ software_version = ''
 control_plane_address = ''
 # TLS server name for the control-plane Runner endpoint; required.
 control_plane_server_name = ''
-# Runner identity directory; absolute on the Runner, and /run/secondbox-runner-identity for same-host placement.
+# Remote placement requires an absolute Runner identity directory. Leave empty for same-host placement; Compose supplies its identity mount.
 identity_directory = ''
 # Identity directory on the Runner host; absolute when set and required for same-host placement.
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
@@ -246,9 +248,7 @@ log_path = ''
 log_directory = ''
 
 # Workspace persistence
-# Reflink-capable workspace directory on the Runner host; for same-host placement this must be the workspaces child of state_host_directory.
-workspace_host_directory = '<replace-with-absolute-runner-host-path>'
-# Workspace root seen by the Runner; /var/lib/secondbox-runner/workspaces for same-host placement.
+# Remote placement requires an absolute Workspace root. Leave empty for same-host placement; Compose uses the existing workspaces child of state_host_directory.
 workspace_root = ''
 # Storage-pressure recovery threshold; positive and lower than warning and admission-deny thresholds.
 storage_pressure_recovery_percent = 0
@@ -322,7 +322,7 @@ network_policy_max_dns_ttl = ''
 network_policy_runner_addresses = ''
 # Management networks; a comma-separated list of CIDRs.
 network_policy_management_cidrs = ''
-# Absolute path from which this Runner loads the generated strict context configuration. Same-host Compose requires /run/secondbox-runner-config/egress-contexts.json.
+# Remote placement requires an absolute egress-context configuration path. Leave empty for same-host placement; Compose supplies its configuration mount.
 egress_context_config_path = ''
 # Context-indexed Runner-local mappings. Replace the empty list with one or more
 # [[runners.egress_contexts]] tables, each containing a unique valid name, and
@@ -370,7 +370,7 @@ data_plane_advertised_address = ''
 
 Review these relationships before enrollment:
 
-- Put `state_host_directory` on a dedicated non-root XFS or Btrfs filesystem with reflink support. For same-host placement, `workspace_host_directory` must be its `workspaces` child and `workspace_root` must be `/var/lib/secondbox-runner/workspaces`. Compose binds the common storage root once so Workspace images, jail state, run state, and snapshot templates retain one mount identity.
+- Put `state_host_directory` on a dedicated non-root XFS or Btrfs filesystem with reflink support. For same-host placement, the compiler derives the existing `workspaces` child and its container mount at `/var/lib/secondbox-runner/workspaces`. Compose binds the common storage root once so Workspace images, jail state, run state, and snapshot templates retain one mount identity.
 - Leave the filesystem target named by `identity_host_directory` absent before `runner-init`. The command validates the declaration without the same-host identity preflight, then creates that exact target; create the artifact and Runner storage host directories first, and run full manifest validation after enrollment.
 - Set `pool_id` to the `name` of the selected `[[standard_resources.runner_pools]]` inventory that admits the Runner architecture and capabilities.
 - For v0.7.2 only, `network_policy_runner_gateways` is the legacy single global logical-gateway map. It is not accepted as a generation-4 default or fallback. The tenant-aware deployment replaces it with explicit context-indexed Runner-local mappings; the mapping remains `logical-name=IP` authorization rather than guest-side name resolution. The Runner DNS proxy only forwards to its configured upstream, rejects answers resolving to protected addresses, and does not synthesize logical gateway names. Production qualification must prove each installation's injected gateway address and reachability.

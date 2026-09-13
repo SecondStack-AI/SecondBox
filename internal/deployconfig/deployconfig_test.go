@@ -575,7 +575,7 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 			runner.IdentityDirectory = "relative/identity"
 			manifest.Runners = []Runner{runner}
 		}},
-		{name: "same-host identity path misses fixed mount", want: "identity_directory must be /run/secondbox-runner-identity", mutate: func(manifest *ManifestV1) {
+		{name: "same-host identity path misses fixed mount", want: "identity_directory is derived for same-host placement", mutate: func(manifest *ManifestV1) {
 			runner := validSameHostTestRunner("runner-local")
 			runner.IdentityDirectory = "/different/identity"
 			manifest.Runners = []Runner{runner}
@@ -1319,9 +1319,8 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = os.RemoveAll(rootBackedStorage) })
 		manifest.Runners[0].StateHostDirectory = rootBackedStorage
-		manifest.Runners[0].WorkspaceHostDirectory = filepath.Join(rootBackedStorage, "workspaces")
 		manifest.Runners[0].ArtifactHostDirectory = filepath.Join(rootBackedStorage, "release", "artifacts")
-		for _, directory := range []string{manifest.Runners[0].WorkspaceHostDirectory, manifest.Runners[0].ArtifactHostDirectory} {
+		for _, directory := range []string{manifest.Runners[0].workspaceHostDirectory(), manifest.Runners[0].ArtifactHostDirectory} {
 			if err := os.MkdirAll(directory, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -1359,15 +1358,14 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 }
 
 func validTestRunner(id, placement string) Runner {
-	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", WorkspaceHostDirectory: "/var/lib/secondbox/workspace", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUIDStart: integer(10001), FirecrackerJailerUIDCount: integer(16), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", FirecrackerAllowUnjailed: boolean(false), SnapshotTemplateCacheRoot: "/var/lib/secondbox/snapshot-templates", ArtifactPublicKey: "/opt/secondbox/manifest-public.pem", ArtifactPublicKeySHA256: strings.Repeat("a", 64), WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", EgressContextConfigPath: "/etc/secondbox/egress-contexts.json", EgressContexts: []RunnerEgressContext{{Name: "secondstack-staging", Gateways: []RunnerLogicalGateway{{LogicalName: "agent-gateway.secondbox.internal", Address: "172.30.0.1"}, {LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.1"}}}}, NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
+	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUIDStart: integer(10001), FirecrackerJailerUIDCount: integer(16), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", FirecrackerAllowUnjailed: boolean(false), SnapshotTemplateCacheRoot: "/var/lib/secondbox/snapshot-templates", ArtifactPublicKey: "/opt/secondbox/manifest-public.pem", ArtifactPublicKeySHA256: strings.Repeat("a", 64), WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", EgressContextConfigPath: "/etc/secondbox/egress-contexts.json", EgressContexts: []RunnerEgressContext{{Name: "secondstack-staging", Gateways: []RunnerLogicalGateway{{LogicalName: "agent-gateway.secondbox.internal", Address: "172.30.0.1"}, {LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.1"}}}}, NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
 }
 
 func validSameHostTestRunner(id string) Runner {
 	runner := validTestRunner(id, "same-host")
-	runner.IdentityDirectory = "/run/secondbox-runner-identity"
-	runner.EgressContextConfigPath = "/run/secondbox-runner-config/egress-contexts.json"
+	runner.IdentityDirectory = ""
+	runner.EgressContextConfigPath = ""
 	runner.StateHostDirectory = "/var/lib/secondbox-runner-storage"
-	runner.WorkspaceHostDirectory = "/var/lib/secondbox-runner-storage/workspaces"
 	runner.LogPath = "/var/lib/secondbox-runner/state/logs/runner.jsonl"
 	runner.LogDirectory = "/var/lib/secondbox-runner/state/logs"
 	runner.FirecrackerJailRoot = "/var/lib/secondbox-runner/jail"
@@ -1378,7 +1376,7 @@ func validSameHostTestRunner(id string) Runner {
 	runner.FirecrackerLogDirectory = "/var/lib/secondbox-runner/state/firecracker-log"
 	runner.SnapshotTemplateCacheRoot = "/var/lib/secondbox-runner/state/snapshot-templates"
 	runner.ArtifactPublicKey = "/opt/secondbox-artifacts/manifest-public.pem"
-	runner.WorkspaceRoot = "/var/lib/secondbox-runner/workspaces"
+	runner.WorkspaceRoot = ""
 	runner.SandboxNetworkStateDir = "/var/lib/secondbox-runner/state/network"
 	return runner
 }
@@ -1395,8 +1393,7 @@ func provisionSameHostTestRunner(t *testing.T, manifestPath, id string) Runner {
 	runner.IdentityHostDirectory = filepath.Join(hostRoot, "identity")
 	runner.ArtifactHostDirectory = filepath.Join(storageDirectory, "release", "artifacts")
 	runner.StateHostDirectory = storageDirectory
-	runner.WorkspaceHostDirectory = filepath.Join(storageDirectory, "workspaces")
-	for _, directory := range []string{runner.ArtifactHostDirectory, runner.WorkspaceHostDirectory} {
+	for _, directory := range []string{runner.ArtifactHostDirectory, runner.workspaceHostDirectory()} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
