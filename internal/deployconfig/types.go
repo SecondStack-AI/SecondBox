@@ -79,14 +79,14 @@ type Applications struct {
 }
 
 type Policy struct {
-	DataPlaneRetentionSeconds             *int64 `toml:"data_plane_retention_seconds"`
-	DataPlanePollIntervalMilliseconds     *int64 `toml:"data_plane_poll_interval_milliseconds"`
-	RunnerCommandPollIntervalMilliseconds *int64 `toml:"runner_command_poll_interval_milliseconds"`
-	RunnerEnabledFeatures                 string `toml:"runner_enabled_features"`
+	DataPlaneRetentionSeconds *int64 `toml:"data_plane_retention_seconds"`
+	RunnerEnabledFeatures     string `toml:"runner_enabled_features"`
 }
 
 // TuningOverrides owns the public TOML names for all Category C overrides.
 type TuningOverrides struct {
+	DataPlanePollIntervalMilliseconds           *int64 `toml:"data_plane_poll_interval_milliseconds"`
+	RunnerCommandPollIntervalMilliseconds       *int64 `toml:"runner_command_poll_interval_milliseconds"`
 	HTTPTimeoutSeconds                          *int64 `toml:"http_timeout_seconds"`
 	RunnerHeartbeatIntervalMilliseconds         *int64 `toml:"runner_heartbeat_interval_milliseconds"`
 	RunnerHeartbeatTimeoutMilliseconds          *int64 `toml:"runner_heartbeat_timeout_milliseconds"`

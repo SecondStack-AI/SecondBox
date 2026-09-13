@@ -51,7 +51,7 @@ The command prints the two one-time bearer tokens in one JSON response. Capture 
 4. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
 5. `applications`: the platform-token secret reference;
 6. `standard_resources`: verified release manifest, explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
-7. `policy` and `overrides`: data-plane retention, contested recovery/rollout settings, and intentionally selected tuning overrides.
+7. `policy` and `overrides`: data-plane retention, enabled Runner features, and intentionally selected tuning overrides.
 
 Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
 
@@ -62,7 +62,7 @@ secondbox-deploy validate /secure/secondbox/secondbox.toml
 secondbox-deploy inspect /secure/secondbox/secondbox.toml
 ```
 
-`inspect` prints all resolved non-secret values, positive help for the data-plane retention policy, and all 15 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
+`inspect` prints all resolved non-secret values, positive help for the data-plane retention policy, and all 17 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
 
 ### Secret references
 
@@ -80,7 +80,9 @@ Existing manifests must remove the retired `policy.default_subject_max_*`, `depl
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
-The manifest also requires three contested rollout/recovery decisions: data-plane session sweep interval, Runner command poll interval, and enabled Runner features. They remain operator policy until a separate decision reclassifies them.
+Enabled Runner features remain an explicit rollout decision in `policy.runner_enabled_features`.
+
+The data-plane and Runner command polling cadences are optional tuning overrides, each defaulting to 250 milliseconds. The data-plane cadence also drives session/accounting sweeps and polling on proxied streams; it does not set retention deadlines. Runner command polling provides fallback delivery alongside work notifications. To migrate an existing manifest, remove `data_plane_poll_interval_milliseconds` and `runner_command_poll_interval_milliseconds` from `[policy]`. Preserve any intentional non-default values under `[overrides]`; the old policy keys are rejected.
 
 The `[overrides]` table contains code-owned tuning. Every field is optional. When absent, `secondboxd` uses the reviewed value shown by `inspect`; when present, the exact value is rendered and passes the same validation and cross-field checks as before. Invalid overrides fail rather than falling back. Compose uses value-less pass-through mappings so an absent override remains unset instead of becoming an empty string.
 
@@ -151,7 +153,7 @@ An incomplete production initialization is intentionally unusable and reports ev
 - zero or more explicit immutable Runner declarations and their placement;
 - an operator-supplied signed-asset catalog, verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
 - independent platform and Runner enrollment authorities;
-- retention, contested recovery/rollout policy, and any intentional tuning overrides.
+- retention, enabled Runner features, and any intentional tuning overrides.
 
 Automation can materialize a complete create-only target non-interactively after generating and reviewing the same typed input:
 

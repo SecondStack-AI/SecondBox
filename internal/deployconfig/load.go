@@ -569,7 +569,7 @@ func validateExternalDatabaseURL(value string, requireVerifiedTLS bool) error {
 }
 
 func validatePolicy(p Policy) error {
-	positive := map[string]*int64{"data_plane_retention_seconds": p.DataPlaneRetentionSeconds, "data_plane_poll_interval_milliseconds": p.DataPlanePollIntervalMilliseconds, "runner_command_poll_interval_milliseconds": p.RunnerCommandPollIntervalMilliseconds}
+	positive := map[string]*int64{"data_plane_retention_seconds": p.DataPlaneRetentionSeconds}
 	for name, value := range positive {
 		if value == nil || *value < 1 {
 			return manifestError("policy."+name+" must be positive", nil)
@@ -937,7 +937,7 @@ func validateDataPlaneAddress(path, value string, listen bool) error {
 }
 
 func addPolicyEnvironment(environment map[string]string, p Policy) {
-	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds, "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS": p.DataPlanePollIntervalMilliseconds, "SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": p.RunnerCommandPollIntervalMilliseconds}
+	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds}
 	for name, value := range values {
 		environment[name] = strconv.FormatInt(*value, 10)
 	}

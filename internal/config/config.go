@@ -17,10 +17,12 @@ const (
 	DefaultHTTPTimeoutSeconds                          int64 = 30
 	DefaultRunnerHeartbeatIntervalMilliseconds         int64 = 5000
 	DefaultRunnerHeartbeatTimeoutMilliseconds          int64 = 30000
+	DefaultRunnerCommandPollIntervalMilliseconds       int64 = 250
 	DefaultRunnerCommandDeliveryBatchSize              int64 = 16
 	DefaultRunnerEventPersistenceBatchSize             int64 = 16
 	DefaultRunnerEventPersistenceBatchWaitMilliseconds int64 = 2
 	DefaultDataPlaneMaximumSessionBytes                int64 = 67108864
+	DefaultDataPlanePollIntervalMilliseconds           int64 = 250
 	DefaultIdempotencyRetentionSeconds                 int64 = 86400
 	DefaultLifecycleReconcileBatchSize                 int64 = 8
 	DefaultLifecycleReconcilePollIntervalMilliseconds  int64 = 250
@@ -118,7 +120,7 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	runnerCommandPollMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS")
+	runnerCommandPollMilliseconds, err := optionalPositiveInt64("SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS", DefaultRunnerCommandPollIntervalMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
@@ -138,7 +140,7 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	dataPlanePollMilliseconds, err := requiredPositiveInt64("SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS")
+	dataPlanePollMilliseconds, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS", DefaultDataPlanePollIntervalMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
