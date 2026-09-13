@@ -77,6 +77,44 @@ else cat; fi
 	}
 }
 
+func TestScenarioNetworkEightSimultaneousStacks(t *testing.T) {
+	command := exec.Command("bash", "-euc", `
+source ../../scripts/scenario-network.sh
+jobs=()
+trap 'touch "$1/release"; for job in "${jobs[@]}"; do wait "$job"; done' EXIT
+for stack in {1..8}; do
+ bash -euc '
+ source ../../scripts/scenario-network.sh
+ while [[ ! -f "$1/start" ]]; do sleep 0.01; done
+ for kind in guest compose; do
+  for index in {100..115}; do
+   if scenario_reserve_network "$1/locks" "$index" "${kind}_lock"; then
+    echo "$index" >>"$1/$2.reserved"
+    break
+   fi
+  done
+ done
+ touch "$1/$2.ready"
+ while [[ ! -f "$1/release" ]]; do sleep 0.01; done
+ ' child "$1" "$stack" & jobs+=("$!")
+done
+touch "$1/start"
+for attempt in {1..500}; do
+ ready=("$1"/*.ready)
+ [[ ${#ready[@]} == 8 ]] && break
+ sleep 0.01
+done
+[[ ${#ready[@]} == 8 ]]
+[[ "$(cat "$1"/*.reserved | wc -l)" == 16 ]]
+[[ "$(cat "$1"/*.reserved | sort -u | wc -l)" == 16 ]]
+touch "$1/release"
+for job in "${jobs[@]}"; do wait "$job"; done
+scenario_reserve_network "$1/locks" 100 reclaimed
+`, "networks", t.TempDir())
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("eight network reservations: %v\n%s", err, output)
+	}
+}
 func TestDirectScenarioHostFirewallScopesAdmissionAndCleanup(t *testing.T) {
 	script, err := filepath.Abs("../../scripts/scenario-direct-host-firewall.sh")
 	if err != nil {
@@ -127,5 +165,36 @@ else cat; fi
 				t.Fatalf("firewall result = %q, %v; want %q, invalid=%v", output, err, test.want, test.invalid)
 			}
 		})
+	}
+}
+
+func TestGVisorProfileInventoryHandlesConcurrentContainerRemoval(t *testing.T) {
+	command := exec.Command("bash", "-euc", `
+source ../../scripts/scenario-network.sh
+# Command substitutions run in subshells, so communicate through a file.
+marker="$1/removed"
+docker() {
+ if [[ "$1" == ps ]]; then
+  echo runner
+  if [[ ! -f "$marker" ]]; then echo disappearing-helper; fi
+ elif [[ "$*" == *disappearing-helper* ]]; then
+  touch "$marker"
+  echo 'error: no such object: disappearing-helper' >&2
+  return 1
+ else
+  echo SECONDBOX_GVISOR_NETWORK_PROFILE=3
+ fi
+}
+scenario_reserve_gvisor_profiles "$1/locks"
+[[ "$SECONDBOX_SCENARIO_GVISOR_NETWORK_PROFILE" == 4 ]]
+# A persistent inspect failure is not an empty inventory or a free profile.
+docker() {
+ if [[ "$1" == ps ]]; then echo runner
+ else echo 'permission denied' >&2; return 1; fi
+}
+if scenario_reserve_gvisor_profiles "$1/failure-locks"; then exit 1; fi
+`, "inventory", t.TempDir())
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("profile inventory: %v\n%s", err, output)
 	}
 }

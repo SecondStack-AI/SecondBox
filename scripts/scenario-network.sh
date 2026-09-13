@@ -26,12 +26,32 @@ scenario_reserve_network() {
 # available to manually configured runners; scenario pairs use 2..15. Hold the
 # locks through teardown, and reject profiles declared even by stopped runners.
 scenario_reserve_gvisor_profiles() {
-  local directory="$1" primary occupied containers
+  local directory="$1" primary occupied containers snapshot current remaining container
   containers="$(docker ps -aq)" || return
   occupied=''
-  if [[ -n "$containers" ]]; then
-    occupied="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $containers | sed -n 's/^SECONDBOX_GVISOR_NETWORK_PROFILE=//p')" || return
-  fi
+  while [[ -n "$containers" ]]; do
+    # Inspect only profile declarations: failure diagnostics must never contain
+    # unrelated containers' credentials from the rest of Config.Env.
+    if snapshot="$(docker inspect --format '{{range .Config.Env}}{{if eq (index (split . "=") 0) "SECONDBOX_GVISOR_NETWORK_PROFILE"}}{{println .}}{{end}}{{end}}' $containers 2>&1)"; then
+      occupied="$(sed -n 's/^SECONDBOX_GVISOR_NETWORK_PROFILE=//p' <<<"$snapshot")"
+      break
+    fi
+    # Concurrent suite teardown can remove a container between ps and inspect.
+    # Retry only after confirming disappearance, with a strictly shrinking
+    # inventory. Preserve failures for containers that still exist (and daemon
+    # failures); do not misreport a transient helper as an occupied profile.
+    current="$(docker ps -aq)" || return
+    remaining=''
+    for container in $containers; do
+      if grep -qxF "$container" <<<"$current"; then remaining+="$container"$'\n'; fi
+    done
+    remaining="${remaining%$'\n'}"
+    if [[ "$remaining" == "$containers" ]]; then
+      printf '%s\n' "$snapshot" >&2
+      return 1
+    fi
+    containers="$remaining"
+  done
   for ((primary=2; primary<16; primary+=2)); do
     if grep -qxE "$primary|$((primary+1))" <<<"$occupied"; then continue; fi
     if scenario_reserve_network "$directory" "$primary" scenario_gvisor_profile_lock; then

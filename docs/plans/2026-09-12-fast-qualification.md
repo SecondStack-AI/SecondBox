@@ -642,3 +642,177 @@ Implementation findings and deviations:
   runs on every PR without a person.
 - A compatibility test that runs the guest protocol against the guest agent
   binary inside the shipped bundle, which would have caught #128 without KVM.
+
+## Task 5 hardening: shared stack budget
+
+The first real lean release overloaded this 32-thread host with eight scenario
+stacks plus the ten gates. `firecracker-1` lost HTTP access to its control plane
+for four minutes. The previous 3m06s qualification was insufficient reliability
+proof for that schedule.
+
+- `QUALIFY_MAX_STACKS` defaults to four and bounds scenario processes through
+  teardown across both backends. The ten gates start first, and `test` reserves
+  one slot until its status is published. A budget of one runs test before stacks.
+- Admission is serialized until the preceding stack's published HTTP listener
+  answers `/readyz`; Compose health alone does not release admission. A failed
+  startup releases admission after teardown, retaining its failing stage status.
+- `QUALIFY_GATES_FIRST=1` permits an explicit all-gates-before-stacks comparison.
+  The default overlaps gates with three stacks, then permits four stacks.
+- The HTTP client captures control-plane and runner container logs at the first
+  request timeout per fixture, before later polling or cleanup. The original
+  response/error and test assertions are preserved. The existing failure
+  teardown still captures application logs and container state.
+- Network selection uses PID-based candidates and persistent lock-file inodes,
+  not second-resolution timestamps. Both guest and Compose subnets use the same
+  lock namespace under the explicit shared workspace root, held through teardown.
+  Eight simultaneous selectors starting at the same candidate reserved 16
+  distinct subnets; reuse succeeded only after owner exit. The existing gVisor
+  pair test also confirms exclusion of occupied and concurrently reserved pairs.
+
+Proof runs must wait for `systemctl --user list-units 'sbx-dxd-*' --state=active`
+(with no active unit rows) and no `secondbox-suite-*` containers, including stopped
+containers. Proof configuration uses separate disposable workspaces and release
+outputs on root Btrfs: the Developer filesystem is already at 90% usage. Original
+operator configuration, other checkouts, and unrelated host resources are preserved.
+
+### Initial hardening attempt and prerequisites
+
+Run `20260913T172551-227951` on `dfce353` failed in **5m26s**. It is not
+counted as successful qualification. It exposed failures in diagnostics,
+host networking, and guest inputs:
+
+- Go's `http.Client` can cancel a wrapped transport through `Request.Cancel`
+  before the context timer fires, then classify the returned cancellation as a
+  timeout outside the wrapper. Diagnostics now also recognize an elapsed request
+  deadline. The unchanged real-HTTP assertion and a cancellation-at-deadline
+  regression passed 100 repetitions.
+- Direct Exec failed with WebSocket 1006 because the host firewall rejected the
+  control-plane bridge's connection to the host-network runner. Included the
+  other implementor's completed `d2447ee` as prerequisite commit `e5d063a`, with
+  its scoped admission/cleanup assertions preserved. No execution assertion or
+  timeout was relaxed.
+- `gvisor-2` failed in one second: a temporary container disappeared between
+  Docker's inventory and inspection (`no such object: dcc87cc7d8cd`). Profile
+  inventory now retries only after confirming disappearance, with a strictly
+  shrinking set of container IDs. A persistent inspect error still fails. Docker
+  returns only network-profile declarations, keeping other environment values
+  out of inventory diagnostics. Regression coverage reproduces both cases.
+
+Firecracker's queued-input recovery test also failed with the old signed guest.
+The old artifact manifest was
+`sha256:ced70a4475c251d297cabe77331f0680b23e162d318d94841d308ed7ec554332`;
+`go version -m` identified its guest binary as clean commit `b98a415` from
+2026-08-07, before #134's input-recovery changes. The proof therefore uses a
+separate, freshly signed bundle, built through the repository's image pipeline.
+It reuses the verified kernel and prepared package rootfs, injects the current
+guest/entrypoints, and passes the complete artifact verifier. An initial bundle
+recorded clean guest source `da58077` but used the host's Go 1.26.6. Preliminary
+qualification passed with gates first (5m50s, `20260913T175837-1455030`) and with
+overlap (4m57s, `20260913T180444-1738351`; 5m01s,
+`20260913T180944-1991491`). Another implementor launched focused scenarios after
+the overlapping runs' clean occupancy checks, so those timings include some
+unrelated load. They are retained as preliminary results.
+
+The final sequence uses a fresh bundle compiled with the repository-pinned
+Go 1.25.12 and matching GOROOT, recording clean guest source `1918e4a`. The
+comparison, consecutive qualifications, and release use that same immutable
+bundle and an independently generated proof trust anchor. The prepared rootfs
+provenance and standard-tools contract match the operator's original release
+bundle; package content was not reduced. Operator bundles and keys were not
+modified by this task.
+
+The proof checkout is `/var/tmp/secondbox-ltc-proof/repo` on its own local `main`.
+Its private environment file is `/var/tmp/secondbox-ltc-proof/release.env`; all
+scenario/installer workspaces and release outputs are under that task-owned
+root. Occupancy checks and two-second stack-count samples are retained beside
+run logs. Additional `SecondBox-gvg` and bundle-build containers appeared while
+preparing the corrected run; the proof waited for their owners to clean up too.
+Following the mid-run overlap, the final guard also waits for `sbx-bundle-*` and
+`sbx-gvg-*` to become inactive. Final samples distinguish this checkout's stacks
+from all host stacks; earlier samples counted all host Compose projects.
+
+### Final qualification comparison and consecutive proof
+
+All four runs use clean executable source `1918e4a`, the pinned Go 1.25.12
+bundle, four Firecracker shards, four gVisor host shards, and budget four.
+The final three default runs are consecutive and all pass. Every run passed
+all 20 recorded stages. Timing includes queueing in backend aggregates.
+
+| Schedule | Run | Result | Total |
+|---|---|---|---|
+| Gates first | `20260913T182310-2526395` | PASS | 5m 44s |
+| Overlap 1 | `20260913T182856-2796860` | PASS | 4m 22s |
+| Overlap 2 | `20260913T183321-3017398` | PASS | 5m 3s |
+| Overlap 3 | `20260913T183827-3261692` | PASS | 4m 58s |
+
+| Stage | Gates first | Overlap 1 | Overlap 2 | Overlap 3 |
+|---|---|---|---|---|
+| firecracker-1 | 1m 21s | 1m 18s | 1m 29s | 1m 23s |
+| firecracker-2 | 1m 15s | 1m 21s | 1m 31s | 1m 26s |
+| firecracker-3 | 1m 37s | 1m 40s | 1m 54s | 1m 40s |
+| firecracker-4 | 1m 54s | 1m 43s | 1m 54s | 1m 53s |
+| firecracker | 4m 22s | 4m 22s | 4m 2s | 3m 59s |
+| gvisor-1 | 0m 56s | 1m 2s | 1m 14s | 1m 7s |
+| gvisor-2 | 1m 30s | 1m 27s | 1m 46s | 1m 36s |
+| gvisor-3 | 1m 11s | 1m 12s | 1m 25s | 1m 23s |
+| gvisor-4 | 1m 45s | 1m 32s | 1m 54s | 1m 52s |
+| gvisor-host | 3m 23s | 3m 50s | 5m 3s | 4m 58s |
+| lint | 0m 9s | 0m 2s | 0m 2s | 0m 1s |
+| test-compose | 0m 12s | 0m 19s | 0m 16s | 0m 22s |
+| test-contract | 0m 5s | 0m 5s | 0m 5s | 0m 4s |
+| test-deployment | 0m 11s | 0m 11s | 0m 11s | 0m 11s |
+| test-image-policy | 0m 3s | 0m 3s | 0m 3s | 0m 2s |
+| test-install-docs | 0m 1s | 0m 2s | 0m 1s | 0m 1s |
+| test-release-workflow | 0m 0s | 0m 1s | 0m 0s | 0m 0s |
+| test-sdk-packages | 0m 11s | 0m 10s | 0m 10s | 0m 9s |
+| test | 1m 22s | 1m 26s | 1m 51s | 1m 44s |
+| verify-generated | 0m 7s | 0m 5s | 0m 5s | 0m 5s |
+
+Retain overlapping gates as the default: median **4m58s**, **46 seconds**
+faster than gates first (individual savings 41–82 seconds). This trades the
+original single 3m06s best-case result for repeatable qualification with headroom.
+Two-second occupancy samples never exceeded four occupied slots (owned stacks
+plus the test reservation), and recorded no foreign stacks in these four runs.
+Each run also verified all seven admission barriers against the preceding
+stack’s `/readyz` marker. These samples supplement the scheduler’s locking
+regressions; they are not a claim of continuous host telemetry.
+
+Full stage logs, status files, readiness markers, and timing tables are under
+`/var/tmp/secondbox-ltc-proof/repo/.tmp/qualify/<run>/`. Occupancy logs, samples,
+and `final-*-audit.json` are under `/var/tmp/secondbox-ltc-proof/`.
+
+### Lean release proof and handoff
+
+`just release 0.99.5` passed on the same clean executable source and bundle.
+Run `20260913T184712-3623921` started after the occupancy guard passed.
+Build and qualification overlapped; the nested qualification run was
+`20260913T184712-3624924`.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| build | PASS | 4m 34s |
+| candidate | PASS | 0m 6s |
+| installer | PASS | 3m 46s |
+| qualification | PASS | 5m 26s |
+| stage | PASS | 0m 5s |
+| Total | PASS | 9m 23s |
+
+The final manifest contains amd64 control-plane, runner, installer-tools and
+guest images, with all four host-binary targets. The single Btrfs installer guest
+passed all 11 assertions, including reboot; evidence records clean source
+`1918e4a`. Final staged artifacts are retained at
+`/var/tmp/secondbox-ltc-proof/releases/0.99.5`; logs and evidence remain under
+the proof checkout’s `.tmp/release/20260913T184712-3623921/` and
+`.tmp/installer-qualification-evidence.json`. Nothing was uploaded or pushed.
+
+Deleted the disposable clone’s local `v0.99.5` tag. No scenario containers or
+installer guest remained. Stopped and removed only this run’s libvirt storage-pool
+registration and stopped the dedicated `secondbox-ltc-release` builder, retaining
+its cache and the proof artifacts. Unrelated host resources were preserved.
+
+Validation passed: Bash syntax checks, `just lint`, `just test-deployment`,
+`go test ./tests/deployment ./tests/scenario/harness`, orchestration tests,
+`just verify-generated`, `just test`, and `git diff --check`. Final qualification
+runs exercised all ten gates and both real compute backends; timeout diagnostics
+also passed 100 focused repetitions with pinned Go 1.25.12. No assertion was
+weakened. Nightly-only remote-VM coverage was not rerun for this release-tier task.
