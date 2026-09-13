@@ -2,8 +2,6 @@
 package runtimemanager
 
 import (
-	"time"
-
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
@@ -77,19 +75,4 @@ type WorkspaceEntry struct {
 	Type  string `json:"type"`
 	Size  int64  `json:"size,omitempty"`
 	MTime string `json:"mtime,omitempty"`
-}
-
-type RuntimeMetricsSnapshot struct {
-	ConcurrentVMsBySandbox  map[string]int
-	ConcurrentVMsTotal      int
-	PendingVMsBySandbox     map[string]int
-	PendingVMsTotal         int
-	MaxConcurrentPerSandbox int
-	MaxConcurrentGlobal     int
-	MemoryReservedMiB       int
-	MemoryBudgetMiB         int
-	GuestIPsInUse           int
-	GuestIPCapacity         int
-	ColdStartCount          int
-	ColdStartP95            time.Duration
 }

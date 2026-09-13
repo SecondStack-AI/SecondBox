@@ -2,21 +2,14 @@ package firecracker
 
 import (
 	"fmt"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
-	"net"
-	"sort"
+	"slices"
 	"strings"
 	"time"
+
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
-type RuntimeMetricsSnapshot = runtimemanager.RuntimeMetricsSnapshot
-
-func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
-	return m.admitCompartmentSpawnWithMemoryLocked(key, m.defaultMemoryMiB())
-}
-
-func (m *Manager) admitCompartmentSpawnWithMemoryLocked(
+func (m *Manager) admitCompartmentSpawnLocked(
 	key runtimeInstanceKey,
 	requestedMemoryMiB int,
 ) error {
@@ -91,12 +84,8 @@ func (m *Manager) admitCompartmentSpawnWithMemoryLocked(
 	return nil
 }
 
-func (m *Manager) reserveCompartmentSpawnLocked(key runtimeInstanceKey, requested ...int) error {
-	requestedMemoryMiB := m.defaultMemoryMiB()
-	if len(requested) > 0 {
-		requestedMemoryMiB = requested[0]
-	}
-	if err := m.admitCompartmentSpawnWithMemoryLocked(key, requestedMemoryMiB); err != nil {
+func (m *Manager) reserveCompartmentSpawnLocked(key runtimeInstanceKey, requestedMemoryMiB int) error {
+	if err := m.admitCompartmentSpawnLocked(key, requestedMemoryMiB); err != nil {
 		return err
 	}
 	if m.pendingSpawns == nil {
@@ -110,11 +99,7 @@ func (m *Manager) reserveCompartmentSpawnLocked(key runtimeInstanceKey, requeste
 	return nil
 }
 
-func (m *Manager) releaseCompartmentSpawnLocked(key runtimeInstanceKey, requested ...int) {
-	requestedMemoryMiB := m.defaultMemoryMiB()
-	if len(requested) > 0 {
-		requestedMemoryMiB = requested[0]
-	}
+func (m *Manager) releaseCompartmentSpawnLocked(key runtimeInstanceKey, requestedMemoryMiB int) {
 	if m.pendingSpawns[key] <= 1 {
 		delete(m.pendingSpawns, key)
 		delete(m.pendingMemoryMiB, key)
@@ -139,61 +124,20 @@ func (m *Manager) requestedMemoryMiB(opts runtimemanager.StartOpts) int {
 	return memoryMiB
 }
 
-func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
-	out := RuntimeMetricsSnapshot{
-		ConcurrentVMsBySandbox: map[string]int{},
-		PendingVMsBySandbox:    map[string]int{},
-	}
+// StartupTiming reports the sample count and nearest-rank p95 of recent starts.
+func (m *Manager) StartupTiming() (uint64, time.Duration) {
 	if m == nil {
-		return out
+		return 0, 0
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, inst := range m.instances {
-		if inst == nil || strings.TrimSpace(inst.sandboxID) == "" {
-			continue
-		}
-		out.ConcurrentVMsBySandbox[inst.sandboxID]++
-		out.ConcurrentVMsTotal++
-		instanceMemoryMiB := inst.memoryMiB
-		if instanceMemoryMiB <= 0 {
-			instanceMemoryMiB = m.defaultMemoryMiB()
-		}
-		out.MemoryReservedMiB += instanceMemoryMiB
+	if len(m.startDurations) == 0 {
+		return 0, 0
 	}
-	for key, count := range m.pendingSpawns {
-		if count <= 0 || strings.TrimSpace(key.sandboxID) == "" {
-			continue
-		}
-		out.PendingVMsBySandbox[key.sandboxID] += count
-		out.PendingVMsTotal += count
-		pendingMemoryMiB := m.pendingMemoryMiB[key]
-		if pendingMemoryMiB <= 0 {
-			pendingMemoryMiB = count * m.defaultMemoryMiB()
-		}
-		out.MemoryReservedMiB += pendingMemoryMiB
-	}
-	out.GuestIPsInUse = len(m.guestIPs)
-	if m.cfg != nil {
-		out.GuestIPCapacity = microVMGuestIPCapacity(m.cfg)
-		out.MaxConcurrentPerSandbox = m.cfg.MicroVMMaxConcurrentPerSandbox
-		out.MaxConcurrentGlobal = m.cfg.MicroVMMaxConcurrentGlobal
-		out.MemoryBudgetMiB = m.cfg.MicroVMMemoryBudgetMiB
-	}
-	out.ColdStartCount = len(m.startDurations)
-	if len(m.startDurations) > 0 {
-		durations := append([]time.Duration(nil), m.startDurations...)
-		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-		idx := int(float64(len(durations))*0.95+0.999999) - 1
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= len(durations) {
-			idx = len(durations) - 1
-		}
-		out.ColdStartP95 = durations[idx]
-	}
-	return out
+	durations := slices.Clone(m.startDurations)
+	slices.Sort(durations)
+	index := (len(durations)*95 + 99) / 100
+	return uint64(len(durations)), durations[index-1]
 }
 
 func (m *Manager) recordStartDuration(duration time.Duration) {
@@ -208,31 +152,4 @@ func (m *Manager) recordStartDuration(duration time.Duration) {
 		copy(m.startDurations, m.startDurations[len(m.startDurations)-maxStartDurationSamples:])
 		m.startDurations = m.startDurations[:maxStartDurationSamples]
 	}
-}
-
-func microVMGuestIPCapacity(cfg *config.Config) int {
-	if cfg == nil {
-		return 0
-	}
-	if cidr := strings.TrimSpace(cfg.MicroVMBridgeCIDR); cidr != "" {
-		ip, ipnet, err := net.ParseCIDR(cidr)
-		if err != nil || ip.To4() == nil {
-			return 0
-		}
-		ones, bits := ipnet.Mask.Size()
-		if bits != 32 || ones > 30 {
-			return 0
-		}
-		total := 1 << (bits - ones)
-		// Network + broadcast are unusable, and the bridge gateway itself is
-		// reserved for the host. reserveGuestIP starts allocating after it.
-		if total <= 3 {
-			return 0
-		}
-		return total - 3
-	}
-	if strings.TrimSpace(cfg.MicroVMGuestIP) != "" {
-		return 1
-	}
-	return 0
 }

@@ -1345,40 +1345,37 @@ func TestReserveGuestIPExhaustionReturnsCleanError(t *testing.T) {
 	}
 }
 
-func TestRuntimeMetricsSnapshotReportsCountsCapacityAndP95(t *testing.T) {
-	m := &Manager{
-		cfg: &config.Config{
-			MicroVMBridgeCIDR:          "10.0.0.1/29",
-			MicroVMMaxConcurrentGlobal: 32,
-			MicroVMMemoryMiB:           512,
-			MicroVMMemoryBudgetMiB:     65536,
-		},
-		instances: map[string]*instance{
-			"fc-a-1": {id: "fc-a-1", sandboxID: "agent-a", compartmentID: "cmp_a"},
-			"fc-a-2": {id: "fc-a-2", sandboxID: "agent-a", compartmentID: "cmp_b"},
-			"fc-b-1": {id: "fc-b-1", sandboxID: "agent-b", compartmentID: "cmp_c"},
-		},
-		guestIPs: map[string]string{
-			"fc-a-1": "10.0.0.2",
-			"fc-a-2": "10.0.0.3",
-		},
+func TestStartupTiming(t *testing.T) {
+	var absent *Manager
+	if count, p95 := absent.StartupTiming(); count != 0 || p95 != 0 {
+		t.Fatalf("absent timing = %d, %s", count, p95)
 	}
-	m.recordStartDuration(10 * time.Millisecond)
-	m.recordStartDuration(40 * time.Millisecond)
-	m.recordStartDuration(20 * time.Millisecond)
+	m := &Manager{}
+	m.recordStartDuration(-time.Second)
+	if count, p95 := m.StartupTiming(); count != 0 || p95 != 0 {
+		t.Fatalf("empty timing = %d, %s", count, p95)
+	}
+	for _, duration := range []time.Duration{10, 40, 20} {
+		m.recordStartDuration(duration * time.Millisecond)
+	}
+	if count, p95 := m.StartupTiming(); count != 3 || p95 != 40*time.Millisecond {
+		t.Fatalf("timing = %d, %s, want 3, 40ms", count, p95)
+	}
+}
 
-	got := m.RuntimeMetricsSnapshot()
-	if got.ConcurrentVMsBySandbox["agent-a"] != 2 || got.ConcurrentVMsBySandbox["agent-b"] != 1 {
-		t.Fatalf("concurrent counts = %+v", got.ConcurrentVMsBySandbox)
+func TestStartupTimingRetainsRecentSamplesInRecordOrder(t *testing.T) {
+	m := &Manager{}
+	for i := 0; i < 44; i++ {
+		m.recordStartDuration(10 * time.Second)
 	}
-	if got.GuestIPsInUse != 2 || got.GuestIPCapacity != 5 {
-		t.Fatalf("guest IP metrics = used %d capacity %d", got.GuestIPsInUse, got.GuestIPCapacity)
+	for i := 256; i > 0; i-- {
+		m.recordStartDuration(time.Duration(i) * time.Millisecond)
 	}
-	if got.ConcurrentVMsTotal != 3 || got.MaxConcurrentGlobal != 32 || got.MemoryReservedMiB != 1536 || got.MemoryBudgetMiB != 65536 {
-		t.Fatalf("global metrics = total %d cap %d reserved %d budget %d", got.ConcurrentVMsTotal, got.MaxConcurrentGlobal, got.MemoryReservedMiB, got.MemoryBudgetMiB)
+	if count, p95 := m.StartupTiming(); count != 256 || p95 != 244*time.Millisecond {
+		t.Fatalf("bounded timing = %d, %s, want 256, 244ms", count, p95)
 	}
-	if got.ColdStartCount != 3 || got.ColdStartP95 != 40*time.Millisecond {
-		t.Fatalf("cold start metrics = count %d p95 %s", got.ColdStartCount, got.ColdStartP95)
+	if m.startDurations[0] != 256*time.Millisecond || m.startDurations[255] != time.Millisecond {
+		t.Fatal("timing query reordered recorded samples")
 	}
 }
 
@@ -1436,7 +1433,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &Manager{cfg: &tt.cfg, instances: tt.instances}
-			err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-1", compartmentID: "cmp-new"})
+			err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-1", compartmentID: "cmp-new"}, tt.cfg.MicroVMMemoryMiB)
 			if tt.wantErr == "" && err != nil {
 				t.Fatalf("admit: %v", err)
 			}
@@ -1465,13 +1462,13 @@ func TestAdmitCompartmentSpawnUsesRequestedProfileMemory(t *testing.T) {
 			},
 		},
 	}
-	if err := m.admitCompartmentSpawnWithMemoryLocked(
+	if err := m.admitCompartmentSpawnLocked(
 		runtimeInstanceKey{sandboxID: "agent-c", compartmentID: "cmp-c"},
 		2048,
 	); err != nil {
 		t.Fatalf("profile-sized admission failed: %v", err)
 	}
-	if err := m.admitCompartmentSpawnWithMemoryLocked(
+	if err := m.admitCompartmentSpawnLocked(
 		runtimeInstanceKey{sandboxID: "agent-c", compartmentID: "cmp-c"},
 		13000,
 	); err == nil || !strings.Contains(
@@ -1488,12 +1485,30 @@ func TestAdmitCompartmentSpawnLockedCountsPendingReservations(t *testing.T) {
 		instances:     map[string]*instance{},
 		pendingSpawns: map[runtimeInstanceKey]int{{sandboxID: "agent-1", compartmentID: "cmp-a"}: 2},
 	}
-	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"}); err == nil || !strings.Contains(err.Error(), "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL") {
+	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"}, m.cfg.MicroVMMemoryMiB); err == nil || !strings.Contains(err.Error(), "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL") {
 		t.Fatalf("admit with pending reservations = %v, want runner concurrency cap", err)
 	}
-	got := m.RuntimeMetricsSnapshot()
-	if got.PendingVMsTotal != 2 || got.PendingVMsBySandbox["agent-1"] != 2 || got.MemoryReservedMiB != 2048 {
-		t.Fatalf("pending metrics = %+v", got)
+	m.cfg.MicroVMMaxConcurrentGlobal = 0
+	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"}, 1024); err == nil || !strings.Contains(err.Error(), "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB") {
+		t.Fatalf("admit with pending memory = %v, want memory budget denial", err)
+	}
+}
+
+func TestReserveCompartmentSpawnTracksRequestedMemory(t *testing.T) {
+	m := &Manager{cfg: &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMemoryMiB: 8192}}
+	key := runtimeInstanceKey{sandboxID: "agent-1", compartmentID: "cmp-a"}
+	for _, memory := range []int{1024, 2048} {
+		if err := m.reserveCompartmentSpawnLocked(key, memory); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.releaseCompartmentSpawnLocked(key, 1024)
+	if m.pendingSpawns[key] != 1 || m.pendingMemoryMiB[key] != 2048 {
+		t.Fatalf("remaining reservation: count=%d memory=%d", m.pendingSpawns[key], m.pendingMemoryMiB[key])
+	}
+	m.releaseCompartmentSpawnLocked(key, 2048)
+	if len(m.pendingSpawns) != 0 || len(m.pendingMemoryMiB) != 0 {
+		t.Fatal("completed reservations retained capacity")
 	}
 }
 
@@ -1504,12 +1519,13 @@ func TestRegisterStartingInstanceTransfersPendingCapacityToLive(t *testing.T) {
 		instances:     map[string]*instance{},
 		pendingSpawns: map[runtimeInstanceKey]int{key: 1},
 	}
-	m.registerStartingInstance(&instance{id: "fc-1", sandboxID: key.sandboxID, compartmentID: key.compartmentID}, func() {
-		m.releaseCompartmentSpawnLocked(key)
+	m.pendingMemoryMiB = map[runtimeInstanceKey]int{key: 1024}
+	inst := &instance{id: "fc-1", sandboxID: key.sandboxID, compartmentID: key.compartmentID, memoryMiB: 1024}
+	m.registerStartingInstance(inst, func() {
+		m.releaseCompartmentSpawnLocked(key, inst.memoryMiB)
 	})
-	got := m.RuntimeMetricsSnapshot()
-	if got.ConcurrentVMsTotal != 1 || got.PendingVMsTotal != 0 || got.MemoryReservedMiB != 1024 {
-		t.Fatalf("capacity after registration = %+v", got)
+	if len(m.instances) != 1 || m.instances[inst.id] != inst || len(m.pendingSpawns) != 0 || len(m.pendingMemoryMiB) != 0 {
+		t.Fatalf("capacity after registration: live=%v pending=%v memory=%v", m.instances, m.pendingSpawns, m.pendingMemoryMiB)
 	}
 }
 
@@ -1525,7 +1541,7 @@ func TestRegisterStartingInstanceTransfersCapacityAtomically(t *testing.T) {
 	registered := make(chan struct{})
 	go func() {
 		m.registerStartingInstance(&instance{id: "fc-1", sandboxID: key.sandboxID, compartmentID: key.compartmentID}, func() {
-			m.releaseCompartmentSpawnLocked(key)
+			m.releaseCompartmentSpawnLocked(key, m.cfg.MicroVMMemoryMiB)
 			close(transferEntered)
 			<-allowTransfer
 		})
@@ -1537,7 +1553,7 @@ func TestRegisterStartingInstanceTransfersCapacityAtomically(t *testing.T) {
 	go func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		admitted <- m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"})
+		admitted <- m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"}, m.cfg.MicroVMMemoryMiB)
 	}()
 	select {
 	case err := <-admitted:
@@ -1602,9 +1618,14 @@ func TestCreateAndStartAtomicAdmissionBurst(t *testing.T) {
 	if got := launched.Load(); got != cap {
 		t.Fatalf("launches reached blocked start = %d, want exactly %d", got, cap)
 	}
-	metrics := m.RuntimeMetricsSnapshot()
-	if metrics.PendingVMsTotal != cap {
-		t.Fatalf("pending reservations = %d, want %d", metrics.PendingVMsTotal, cap)
+	m.mu.Lock()
+	pending := 0
+	for _, count := range m.pendingSpawns {
+		pending += count
+	}
+	m.mu.Unlock()
+	if pending != cap {
+		t.Fatalf("pending reservations = %d, want %d", pending, cap)
 	}
 	close(releaseLaunches)
 	for i := 0; i < cap; i++ {
@@ -1615,7 +1636,7 @@ func TestCreateAndStartAtomicAdmissionBurst(t *testing.T) {
 	if denied != attempts-cap {
 		t.Fatalf("denied starts = %d, want %d", denied, attempts-cap)
 	}
-	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+	if got := len(m.pendingSpawns) + len(m.pendingMemoryMiB); got != 0 {
 		t.Fatalf("pending reservations after completion = %d, want 0", got)
 	}
 }
@@ -1632,7 +1653,7 @@ func TestCreateAndStartReleasesAdmissionReservationOnFailureAndCancellation(t *t
 	if _, err := m.createAndStart(context.Background(), "agent-failure", runtimemanager.StartOpts{CompartmentID: "cmp-failure"}); err == nil {
 		t.Fatal("expected launch failure")
 	}
-	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+	if got := len(m.pendingSpawns) + len(m.pendingMemoryMiB); got != 0 {
 		t.Fatalf("pending after failure = %d", got)
 	}
 
@@ -1644,14 +1665,8 @@ func TestCreateAndStartReleasesAdmissionReservationOnFailureAndCancellation(t *t
 	if _, err := m.createAndStart(ctx, "agent-cancel", runtimemanager.StartOpts{CompartmentID: "cmp-cancel"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled launch = %v", err)
 	}
-	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+	if got := len(m.pendingSpawns) + len(m.pendingMemoryMiB); got != 0 {
 		t.Fatalf("pending after cancellation = %d", got)
-	}
-}
-
-func TestMicroVMGuestIPCapacitySingleFallback(t *testing.T) {
-	if got := microVMGuestIPCapacity(&config.Config{MicroVMGuestIP: "172.30.0.10"}); got != 1 {
-		t.Fatalf("capacity = %d, want 1", got)
 	}
 }
 
