@@ -360,6 +360,8 @@ enum AssignmentTerminalKind {
 }
 
 message AssignmentResult {
+  // Features negotiated with this Instance guest, using guest contract names.
+  repeated string guest_features = 9;
   string message_id = 1;
   uint64 sequence = 2;
   AssignmentFence fence = 3;

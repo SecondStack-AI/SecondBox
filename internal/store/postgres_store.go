@@ -1035,7 +1035,7 @@ const sandboxSelect = `
 	       workspace.generation,workspace.state,workspace.logical_capacity_bytes,
 	       workspace.created_at,workspace.updated_at,
 	       instance.id,instance.state,COALESCE(instance.guest_liveness,''),instance.termination_reason,
-	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at
+	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at,instance.guest_features
 	FROM secondbox.sandboxes AS sandbox
 	JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 	LEFT JOIN secondbox.instances AS instance ON instance.id=sandbox.current_instance_id`
@@ -1044,6 +1044,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	var sandbox contracts.Sandbox
 	var metadataJSON []byte
 	var instanceID, instanceState, guestLiveness, terminationReason sql.NullString
+	var guestFeatures []string
 	var instanceCreatedAt, instanceUpdatedAt sql.NullTime
 	var readyAt, guestHeartbeatAt, stoppedAt sql.NullTime
 	if err := row.Scan(
@@ -1057,7 +1058,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		&sandbox.Workspace.Generation, &sandbox.Workspace.State, &sandbox.Workspace.SizeBytes,
 		&sandbox.Workspace.CreatedAt, &sandbox.Workspace.UpdatedAt,
 		&instanceID, &instanceState, &guestLiveness, &terminationReason,
-		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt,
+		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt, &guestFeatures,
 	); err != nil {
 		return contracts.Sandbox{}, err
 	}
@@ -1072,7 +1073,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	if instanceID.Valid {
 		sandbox.Instance = &contracts.Instance{
 			ID: instanceID.String, SandboxID: sandbox.ID, Generation: sandbox.Generation,
-			State: instanceState.String, GuestLiveness: guestLiveness.String,
+			State: instanceState.String, GuestLiveness: guestLiveness.String, GuestFeatures: guestFeatures,
 			TerminationReason: terminationReason.String, CreatedAt: instanceCreatedAt.Time,
 			UpdatedAt: instanceUpdatedAt.Time,
 		}

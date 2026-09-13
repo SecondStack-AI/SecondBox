@@ -442,6 +442,7 @@
       "updatedAt"
     ],
     "optional": [
+      "guestFeatures",
       "guestHeartbeatAt",
       "readyAt",
       "stoppedAt",

@@ -499,6 +499,10 @@ func (backend *AssignmentBackend) StartAssignment(
 		}
 		pendingLaunch := existing.launched
 		reference := existing.backendRef
+		var guestFeatures []string
+		if existing.session != nil {
+			guestFeatures = existing.session.NegotiatedFeatureNames()
+		}
 		backend.mu.Unlock()
 		if pendingLaunch != nil {
 			select {
@@ -511,11 +515,12 @@ func (backend *AssignmentBackend) StartAssignment(
 			if current, still := backend.assignments[assignmentID]; still && current != nil &&
 				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, current.executionBinding, assignment) && !current.fenced {
 				reference = current.backendRef
+				guestFeatures = current.session.NegotiatedFeatureNames()
 			}
 			backend.mu.Unlock()
 		}
 		if reference != "" {
-			return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: reference}, nil
+			return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: reference, GuestFeatures: guestFeatures}, nil
 		}
 		return result, infrastructureAssignment(fmt.Errorf("SecondBox gVisor replayed start observed a failed launch"))
 	}
@@ -689,7 +694,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	active.launched = nil
 	backend.mu.Unlock()
 	cleanup.clear()
-	return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: active.backendRef}, nil
+	return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: active.backendRef, GuestFeatures: session.NegotiatedFeatureNames()}, nil
 }
 
 // launchInstance builds the per-Instance runtime area and starts the mount
@@ -891,6 +896,7 @@ func (backend *AssignmentBackend) negotiateSession(
 		ExpectedImageManifestDigest:     manifest.Key.RuntimeManifestDigest,
 		ExpectedToolchainManifestDigest: manifest.Key.ToolchainManifestDigest,
 		RequestedFeatures: []guestv1.GuestFeature{
+			guestv1.GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY,
 			guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
 			guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
 			guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM,

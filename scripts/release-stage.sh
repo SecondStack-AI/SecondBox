@@ -87,6 +87,7 @@ validate_qualification_evidence() {
     echo "release qualification evidence does not describe a complete qualified scenario run; rerun just test-scenario on a clean checkout" >&2
     exit 1
   }
+  jq -r '"release qualification skipped groups: " + ((.skipped // []) | tojson)' "$evidence"
 }
 
 # gVisor host evidence is mandatory; full releases also bind no-KVM pod evidence.
@@ -112,6 +113,7 @@ validate_gvisor_qualification_evidence() {
     echo "release gVisor qualification evidence at $evidence does not describe a complete $suite run at $source_commit with the required host facts" >&2
     exit 1
   }
+  jq -r '"release \(.suite) skipped groups: " + ((.skipped // []) | tojson)' "$evidence"
 }
 
 validate_installer_qualification_evidence() {

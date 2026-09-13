@@ -3,6 +3,7 @@ package conformance
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
@@ -65,7 +66,7 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 			fixture.Assignment,
 			func(runnerprotocol.AssignmentProgressStage) error { return nil },
 		)
-		if err != nil || second != first {
+		if err != nil || second.BackendKind != first.BackendKind || second.BackendReference != first.BackendReference || !slices.Equal(second.GuestFeatures, first.GuestFeatures) {
 			t.Fatalf("idempotent start = %+v, %v; want %+v", second, err, first)
 		}
 		mismatchedContext := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)

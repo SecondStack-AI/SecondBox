@@ -26,7 +26,7 @@ trap 'rm -f -- "$temporary"' EXIT
 jq -se --arg commit "$commit" '
   if all(.[]; .schemaVersion == "secondbox.release/qualification-evidence/v2" and .sourceCommit == $commit and .repositoryDirty == false and (.passCount > 0) and (.wallClockSeconds >= 0)) and
     (map({schemaVersion,sourceCommit,repositoryDirty,suite,backend,host}) | unique | length == 1)
-  then .[0] + {passCount:(map(.passCount)|add),wallClockSeconds:(map(.wallClockSeconds)|max),qualifiedAt:(map(.qualifiedAt)|max)}
+  then .[0] + {skipped:([.[] | (.skipped // [])[]] | unique),passCount:(map(.passCount)|add),wallClockSeconds:(map(.wallClockSeconds)|max),qualifiedAt:(map(.qualifiedAt)|max)}
   else error("inconsistent shard evidence or source identity") end
 ' "${files[@]}" >"$temporary" || fail 'shards do not qualify the same clean commit and host'
 mv -- "$temporary" "$output"

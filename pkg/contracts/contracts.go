@@ -488,6 +488,7 @@ type Workspace struct {
 
 // Instance is replaceable compute evidence without runner or backend authority.
 type Instance struct {
+	GuestFeatures     []string   `json:"guestFeatures,omitempty"`
 	ID                string     `json:"id"`
 	SandboxID         string     `json:"sandboxId"`
 	Generation        int64      `json:"generation"`

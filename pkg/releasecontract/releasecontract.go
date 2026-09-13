@@ -96,6 +96,7 @@ type QualificationHostEvidence struct {
 }
 
 type QualificationEvidence struct {
+	Skipped          []string                  `json:"skipped,omitempty"`
 	SchemaVersion    string                    `json:"schemaVersion"`
 	SourceCommit     string                    `json:"sourceCommit"`
 	RepositoryDirty  bool                      `json:"repositoryDirty"`
@@ -314,6 +315,7 @@ func (artifact GVisorArtifact) VerifyGVisorMaterialization(data []byte) error {
 // pod run: the same schema as the Firecracker evidence, on a host without
 // KVM and naming its backend.
 type GVisorQualificationEvidence struct {
+	Skipped          []string                        `json:"skipped,omitempty"`
 	SchemaVersion    string                          `json:"schemaVersion"`
 	SourceCommit     string                          `json:"sourceCommit"`
 	RepositoryDirty  bool                            `json:"repositoryDirty"`
