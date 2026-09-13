@@ -213,9 +213,6 @@ func ensureScenarioRunnerPool(t *testing.T, fixture scenarioFixture) contracts.R
 		State:         contracts.RunnerPoolStateReady,
 		Architectures: []string{requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_ARCHITECTURE")},
 		Capabilities:  capabilities,
-		CapacityPolicy: map[string]int64{
-			"maximumInstances": 8,
-		},
 	}
 	var created contracts.RunnerPool
 	err := fixture.admin.RequestJSON(ctx, "createRunnerPool", secondboxclient.CallOptions{

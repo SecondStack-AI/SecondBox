@@ -23,9 +23,9 @@ The bundle resolver takes runtime/toolchain identity from the verified release a
 
 ## Deployment selection
 
-`secondbox.toml` requires an explicit `[standard_resources]` section with the verified artifact-manifest path, selected bundle names, apply readiness bound, and one typed RunnerPool inventory binding per selected bundle. Production uses the same shape and accepts no generated development authority.
+`secondbox.toml` requires an explicit `[standard_resources]` section with the verified artifact-manifest path, selected bundle names, apply readiness bound, and typed RunnerPool inventory declared once by name. All three standard bundles use `standard-amd64`, so any combination of them shares one `[[standard_resources.runner_pools]]` declaration. Duplicate pool names are rejected. Production uses the same shape and accepts no generated development authority.
 
-Logical gateway addresses remain Runner-local deployment configuration. Every declared Runner in a selected pool that should admit a network-enabled standard Profile must advertise one or more contexts and map that Profile's logical name inside each applicable context, for example:
+Logical gateway addresses remain Runner-local deployment configuration. Every declared Runner in a selected pool that should admit a network-enabled standard Profile must advertise one or more contexts and map that Profile's logical name inside each applicable context. This example declares a remote configuration path; omit `egress_context_config_path` for same-host placement:
 
 ```toml
 egress_context_config_path = "/etc/secondbox/egress-contexts.json"
@@ -47,3 +47,5 @@ A logical gateway mapping binds the Profile's exact destination name and port to
 `agent-compartment-isolated` does not add a gateway mapping and explicitly declines a Tenant context. `agent-compartment` and `durable-coding` explicitly require one. The release documents and artifact manifest bind the new immutable standard Profile heads and exact revision numbers; operators consume those documents rather than reconstructing revision identities. The Runner configuration contains only context names, logical names, and Runner-local IP addresses; gateway certificates, interception authority, proxy endpoints, policy databases, and credentials stay outside SecondBox.
 
 `secondbox-deploy inspect` shows selected bundles, each standard Profile's release identity, and each Runner's advertised context names without exposing mapping addresses or host paths. `secondbox-deploy compose ... up` waits for `/readyz` and applies the selected document using the same library as `secondbox resources apply`.
+
+RunnerPools declare placement inventory: name, state, architectures, and capabilities. Remove `capacityPolicy` from resource documents and API requests, remove it from `mutableFields`, and remove `--capacity` from standard-bundle CLI commands. In deployment manifests, remove `max_sandboxes`, `max_vcpu_count`, and `max_memory_bytes` from `[[standard_resources.runner_pools]]`. These pool settings were never enforced. Tenant and Subject quotas, Profile resource ceilings, and reported Runner capacity continue to govern admission. The forward migration drops only the unused pool metadata column; deploy the control plane and clients together because old clients and old control-plane binaries still expect that field.

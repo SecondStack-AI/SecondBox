@@ -102,7 +102,6 @@ type AdminIdempotencyResult struct {
 type CreateSandboxInput struct {
 	Resources          *contracts.SandboxResourceRequest
 	Principal          contracts.Principal
-	SubjectQuota       contracts.QuotaLimits
 	Sandbox            contracts.Sandbox
 	Workspace          contracts.Workspace
 	Operation          contracts.Operation

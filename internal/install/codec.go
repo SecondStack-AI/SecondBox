@@ -338,8 +338,8 @@ func (plan InstallPlan) Validate() error {
 	if !standardBundleSelectionComplete(plan.StandardBundles) {
 		return installerError("all standard bundles must be selected explicitly", nil)
 	}
-	if len(plan.Capacity.SubjectQuotas) != 7 {
-		return installerError("all seven subject quotas are required", nil)
+	if plan.Capacity.LegacySubjectQuotas != nil && len(plan.Capacity.LegacySubjectQuotas) != 7 {
+		return installerError("recorded legacy subject quotas must contain all seven entries", nil)
 	}
 	if plan.Capacity.MaxVCPUCount != 0 && plan.Capacity.LegacyMaxCPUMillis != 0 {
 		return installerError("capacity plan must state its CPU ceiling in exactly one representation", nil)
@@ -350,9 +350,9 @@ func (plan InstallPlan) Validate() error {
 	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
 		return installerError("single-host compute plan requires the explicit vendor-neutral Firecracker CPU template", nil)
 	}
-	for name, value := range plan.Capacity.SubjectQuotas {
+	for name, value := range plan.Capacity.LegacySubjectQuotas {
 		if name == "" || value <= 0 {
-			return installerError("subject quota is invalid", nil)
+			return installerError("recorded legacy subject quota is invalid", nil)
 		}
 	}
 	if plan.Network.APIAddress == "" || plan.Network.RunnerAddress == "" || plan.Network.DataPlaneAddress == "" || plan.Network.DatabaseAddress == "" || plan.Network.GuestBridgeCIDR == "" || plan.Network.DNSUpstream == "" || len(plan.Network.Gateways) != 2 {

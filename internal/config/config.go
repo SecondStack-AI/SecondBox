@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 // Code-owned tuning defaults. Each corresponding environment variable is an
@@ -19,10 +17,12 @@ const (
 	DefaultHTTPTimeoutSeconds                          int64 = 30
 	DefaultRunnerHeartbeatIntervalMilliseconds         int64 = 5000
 	DefaultRunnerHeartbeatTimeoutMilliseconds          int64 = 30000
+	DefaultRunnerCommandPollIntervalMilliseconds       int64 = 250
 	DefaultRunnerCommandDeliveryBatchSize              int64 = 16
 	DefaultRunnerEventPersistenceBatchSize             int64 = 16
 	DefaultRunnerEventPersistenceBatchWaitMilliseconds int64 = 2
 	DefaultDataPlaneMaximumSessionBytes                int64 = 67108864
+	DefaultDataPlanePollIntervalMilliseconds           int64 = 250
 	DefaultIdempotencyRetentionSeconds                 int64 = 86400
 	DefaultLifecycleReconcileBatchSize                 int64 = 8
 	DefaultLifecycleReconcilePollIntervalMilliseconds  int64 = 250
@@ -65,7 +65,6 @@ type Config struct {
 	SchedulerSerializationRetryLimit int
 	AssetCatalogPath                 string
 	RunnerEnabledFeatures            []string
-	DefaultSubjectQuota              contracts.QuotaLimits
 }
 
 // FromEnvironment fails when any required setting is absent or invalid.
@@ -121,7 +120,7 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	runnerCommandPollMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS")
+	runnerCommandPollMilliseconds, err := optionalPositiveInt64("SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS", DefaultRunnerCommandPollIntervalMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
@@ -141,7 +140,7 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	dataPlanePollMilliseconds, err := requiredPositiveInt64("SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS")
+	dataPlanePollMilliseconds, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS", DefaultDataPlanePollIntervalMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
@@ -205,10 +204,6 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	subjectQuota, err := requiredQuota("SECONDBOX_DEFAULT_SUBJECT")
-	if err != nil {
-		return Config{}, err
-	}
 	return Config{
 		ListenAddress: listenAddress, PublicBaseURL: publicBaseURL, RunnerListenAddress: runnerListenAddress,
 		DatabaseURL: databaseURL, LogPath: logPath,
@@ -237,7 +232,6 @@ func FromEnvironment() (Config, error) {
 		SchedulerSerializationRetryLimit: schedulerSerializationRetryLimitInt,
 		AssetCatalogPath:                 signedAssetCatalogPath,
 		RunnerEnabledFeatures:            runnerEnabledFeatures,
-		DefaultSubjectQuota:              subjectQuota,
 	}, nil
 }
 
@@ -282,27 +276,6 @@ func requiredCSV(name string) ([]string, error) {
 		values = append(values, value)
 	}
 	return values, nil
-}
-
-func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
-	names := []string{
-		"MAX_SANDBOXES", "MAX_ACTIVE_INSTANCES", "MAX_VCPU_COUNT", "MAX_MEMORY_BYTES",
-		"MAX_SNAPSHOTS", "MAX_PORT_SESSIONS",
-		"MAX_CONCURRENT_OPERATIONS",
-	}
-	values := make([]int64, len(names))
-	for index, suffix := range names {
-		value, err := requiredNonNegativeInt64(prefix + "_" + suffix)
-		if err != nil {
-			return contracts.QuotaLimits{}, err
-		}
-		values[index] = value
-	}
-	return contracts.QuotaLimits{
-		MaxSandboxes: values[0], MaxActiveInstances: values[1], MaxVCPUCount: values[2],
-		MaxMemoryBytes: values[3], MaxSnapshots: values[4], MaxPortSessions: values[5],
-		MaxConcurrentOperations: values[6],
-	}, nil
 }
 
 func requiredString(name string) (string, error) {

@@ -203,15 +203,17 @@ type StoragePlan struct {
 // round-trips it untouched and VCPUCount is the single read path that
 // normalizes either spelling to whole vCPUs. Exactly one spelling may be set.
 type CapacityPlan struct {
-	MaxSandboxes           int64            `json:"maxSandboxes"`
-	MaxVCPUCount           int64            `json:"maxVcpuCount,omitempty"`
-	LegacyMaxCPUMillis     int64            `json:"maxCpuMillis,omitempty"`
-	MaxMemoryBytes         int64            `json:"maxMemoryBytes"`
-	MaxWorkspaceBytes      int64            `json:"maxWorkspaceBytes"`
-	ConcurrentStarts       int64            `json:"concurrentStarts"`
-	ConcurrentOperations   int64            `json:"concurrentOperations"`
-	StoragePressurePercent int64            `json:"storagePressurePercent"`
-	SubjectQuotas          map[string]int64 `json:"subjectQuotas"`
+	MaxSandboxes           int64 `json:"maxSandboxes"`
+	MaxVCPUCount           int64 `json:"maxVcpuCount,omitempty"`
+	LegacyMaxCPUMillis     int64 `json:"maxCpuMillis,omitempty"`
+	MaxMemoryBytes         int64 `json:"maxMemoryBytes"`
+	MaxWorkspaceBytes      int64 `json:"maxWorkspaceBytes"`
+	ConcurrentStarts       int64 `json:"concurrentStarts"`
+	ConcurrentOperations   int64 `json:"concurrentOperations"`
+	StoragePressurePercent int64 `json:"storagePressurePercent"`
+	// LegacySubjectQuotas preserves accepted plan bytes and receipt digests.
+	// New plans omit this field; Tenant and Subject resources own quotas.
+	LegacySubjectQuotas map[string]int64 `json:"subjectQuotas,omitempty"`
 }
 
 // VCPUCount reports the planned compute ceiling in whole vCPUs regardless of
@@ -222,15 +224,6 @@ func (capacity CapacityPlan) VCPUCount() int64 {
 		return capacity.MaxVCPUCount
 	}
 	return ceilingVCPUs(capacity.LegacyMaxCPUMillis)
-}
-
-// SubjectQuotaVCPUCount reports the planned per-subject CPU quota in whole
-// vCPUs from either recorded spelling.
-func (capacity CapacityPlan) SubjectQuotaVCPUCount() int64 {
-	if value, recorded := capacity.SubjectQuotas["maxVcpuCount"]; recorded {
-		return value
-	}
-	return ceilingVCPUs(capacity.SubjectQuotas["maxCpuMillis"])
 }
 
 func ceilingVCPUs(milliUnits int64) int64 {

@@ -107,10 +107,9 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	workWakeups := worknotify.NewHub()
 	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store:               controlPlaneStore,
-		PlatformToken:       processConfig.PlatformToken,
-		DefaultSubjectQuota: processConfig.DefaultSubjectQuota,
-		Now:                 service.SystemClock, NewID: service.NewOpaqueID,
+		Store:         controlPlaneStore,
+		PlatformToken: processConfig.PlatformToken,
+		Now:           service.SystemClock, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: processConfig.DataPlanePollInterval,
 		IdempotencyRetention: processConfig.IdempotencyRetention,

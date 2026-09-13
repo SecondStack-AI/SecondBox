@@ -89,8 +89,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	publicBaseURL := "http://" + server.Listener.Addr().String()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		DefaultSubjectQuota: generousQuota(),
-		Now:                 func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
+		Now: func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
 		LiveDataPlane: liveDataPlane,

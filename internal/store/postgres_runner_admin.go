@@ -13,7 +13,7 @@ import (
 )
 
 const runnerPoolSelect = `
-	SELECT name,state,architectures_json,capabilities_json,capacity_policy_json,
+	SELECT name,state,architectures_json,capabilities_json,
 	       ready_runner_count,revision,created_at,updated_at
 	FROM secondbox.runner_pools`
 
@@ -31,7 +31,7 @@ func (store *PostgresControlPlaneStore) CreateRunnerPool(
 	ctx context.Context,
 	pool contracts.RunnerPool,
 ) (contracts.RunnerPool, error) {
-	architecturesJSON, capabilitiesJSON, capacityPolicyJSON, err := encodeRunnerPoolPolicy(pool)
+	architecturesJSON, capabilitiesJSON, err := encodeRunnerPoolPolicy(pool)
 	if err != nil {
 		return contracts.RunnerPool{}, err
 	}
@@ -60,11 +60,11 @@ func (store *PostgresControlPlaneStore) CreateRunnerPool(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.runner_pools (
-			name,state,architectures_json,capabilities_json,capacity_policy_json,
+			name,state,architectures_json,capabilities_json,
 			ready_runner_count,revision,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		pool.Name, pool.State, architecturesJSON, capabilitiesJSON,
-		capacityPolicyJSON, pool.ReadyRunnerCount, pool.Revision,
+		pool.ReadyRunnerCount, pool.Revision,
 		pool.CreatedAt, pool.UpdatedAt,
 	); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool insert failed: %w", err)
@@ -104,10 +104,7 @@ func (store *PostgresControlPlaneStore) UpdateRunnerPool(
 	if update.Capabilities != nil {
 		pool.Capabilities = append([]string(nil), (*update.Capabilities)...)
 	}
-	if update.CapacityPolicy != nil {
-		pool.CapacityPolicy = cloneRunnerCapacityPolicy(*update.CapacityPolicy)
-	}
-	architecturesJSON, capabilitiesJSON, capacityPolicyJSON, err := encodeRunnerPoolPolicy(pool)
+	architecturesJSON, capabilitiesJSON, err := encodeRunnerPoolPolicy(pool)
 	if err != nil {
 		return contracts.RunnerPool{}, err
 	}
@@ -116,10 +113,10 @@ func (store *PostgresControlPlaneStore) UpdateRunnerPool(
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_pools
 		SET state=$2,architectures_json=$3,capabilities_json=$4,
-		    capacity_policy_json=$5,revision=$6,updated_at=$7
+		    revision=$5,updated_at=$6
 		WHERE name=$1`,
 		pool.Name, pool.State, architecturesJSON, capabilitiesJSON,
-		capacityPolicyJSON, pool.Revision, pool.UpdatedAt,
+		pool.Revision, pool.UpdatedAt,
 	); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool update failed: %w", err)
 	}
@@ -250,20 +247,16 @@ func (store *PostgresControlPlaneStore) ListRunners(
 	return page, nil
 }
 
-func encodeRunnerPoolPolicy(pool contracts.RunnerPool) ([]byte, []byte, []byte, error) {
+func encodeRunnerPoolPolicy(pool contracts.RunnerPool) ([]byte, []byte, error) {
 	architecturesJSON, err := json.Marshal(pool.Architectures)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("SecondBox RunnerPool architectures encoding failed: %w", err)
+		return nil, nil, fmt.Errorf("SecondBox RunnerPool architectures encoding failed: %w", err)
 	}
 	capabilitiesJSON, err := json.Marshal(pool.Capabilities)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("SecondBox RunnerPool capabilities encoding failed: %w", err)
+		return nil, nil, fmt.Errorf("SecondBox RunnerPool capabilities encoding failed: %w", err)
 	}
-	capacityPolicyJSON, err := json.Marshal(pool.CapacityPolicy)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("SecondBox RunnerPool capacity policy encoding failed: %w", err)
-	}
-	return architecturesJSON, capabilitiesJSON, capacityPolicyJSON, nil
+	return architecturesJSON, capabilitiesJSON, nil
 }
 
 type runnerPoolRow interface {
@@ -272,10 +265,10 @@ type runnerPoolRow interface {
 
 func scanRunnerPool(row runnerPoolRow) (contracts.RunnerPool, error) {
 	var pool contracts.RunnerPool
-	var architecturesJSON, capabilitiesJSON, capacityPolicyJSON []byte
+	var architecturesJSON, capabilitiesJSON []byte
 	if err := row.Scan(
 		&pool.Name, &pool.State, &architecturesJSON, &capabilitiesJSON,
-		&capacityPolicyJSON, &pool.ReadyRunnerCount, &pool.Revision,
+		&pool.ReadyRunnerCount, &pool.Revision,
 		&pool.CreatedAt, &pool.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -288,9 +281,6 @@ func scanRunnerPool(row runnerPoolRow) (contracts.RunnerPool, error) {
 	}
 	if err := json.Unmarshal(capabilitiesJSON, &pool.Capabilities); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool capabilities decoding failed: %w", err)
-	}
-	if err := json.Unmarshal(capacityPolicyJSON, &pool.CapacityPolicy); err != nil {
-		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool capacity policy decoding failed: %w", err)
 	}
 	return pool, nil
 }
@@ -326,12 +316,4 @@ func scanRunnerAdmin(row runnerPoolRow) (contracts.Runner, error) {
 		return contracts.Runner{}, fmt.Errorf("SecondBox Runner egress contexts decoding failed: %w", err)
 	}
 	return runner, nil
-}
-
-func cloneRunnerCapacityPolicy(source map[string]int64) map[string]int64 {
-	cloned := make(map[string]int64, len(source))
-	for name, value := range source {
-		cloned[name] = value
-	}
-	return cloned
 }

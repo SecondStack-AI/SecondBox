@@ -11,13 +11,10 @@ runner_image = 'secondbox-runner:development'
 postgres_image = 'docker.io/library/postgres:18.4-bookworm'
 api_bind_ip = '127.0.0.1'
 api_published_port = 8080
-listen_address = '0.0.0.0:8080'
 runner_bind_ip = '127.0.0.1'
 runner_published_port = 9443
-runner_listen_address = '0.0.0.0:9443'
 log_path = '/var/log/secondbox/control-plane.jsonl'
 signed_asset_catalog = 'secrets/development-signed-assets.json'
-signed_asset_catalog_path = '/etc/secondbox/signed-assets.json'
 development_prepare_wait_timeout_seconds = 180
 
 [database]
@@ -44,16 +41,7 @@ platform_token_file = 'secrets/platform-token'
 [policy]
 # Data-plane session, result, and idempotency retention deadline.
 data_plane_retention_seconds = 86400
-data_plane_poll_interval_milliseconds = 250
-runner_command_poll_interval_milliseconds = 250
 runner_enabled_features = 'exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy'
-default_subject_max_sandboxes = 100
-default_subject_max_active_instances = 20
-default_subject_max_vcpu_count = 80
-default_subject_max_memory_bytes = 171798691840
-default_subject_max_snapshots = 500
-default_subject_max_port_sessions = 100
-default_subject_max_concurrent_operations = 20
 
 [standard_resources]
 artifact_manifest = 'development-artifact-manifest.json'
@@ -61,34 +49,10 @@ bundles = ['agent-compartment', 'durable-coding', 'agent-compartment-isolated']
 apply_wait_seconds = 180
 
 [[standard_resources.runner_pools]]
-bundle = 'agent-compartment'
 name = 'standard-amd64'
 architectures = ['amd64']
 capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
 state = 'ready'
-max_sandboxes = 20
-max_vcpu_count = 80
-max_memory_bytes = 171798691840
-
-[[standard_resources.runner_pools]]
-bundle = 'durable-coding'
-name = 'standard-amd64'
-architectures = ['amd64']
-capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
-state = 'ready'
-max_sandboxes = 20
-max_vcpu_count = 80
-max_memory_bytes = 171798691840
-
-[[standard_resources.runner_pools]]
-bundle = 'agent-compartment-isolated'
-name = 'standard-amd64'
-architectures = ['amd64']
-capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
-state = 'ready'
-max_sandboxes = 20
-max_vcpu_count = 80
-max_memory_bytes = 171798691840
 
 [overrides]
 
@@ -97,10 +61,12 @@ max_memory_bytes = 171798691840
 # http_timeout_seconds = 30 # default; HTTP request-read, response-write, keep-alive, and shutdown timeout.
 # runner_heartbeat_interval_milliseconds = 5000 # default; Runner heartbeat cadence.
 # runner_heartbeat_timeout_milliseconds = 30000 # default; Runner liveness timeout.
+# runner_command_poll_interval_milliseconds = 250 # default; Runner command fallback polling cadence.
 # runner_command_delivery_batch_size = 16 # default; Commands delivered per claim.
 # runner_event_persistence_batch_size = 16 # default; Runner events persisted per batch.
 # runner_event_persistence_batch_wait_milliseconds = 2 # default; Maximum runner-event batch wait.
 # data_plane_maximum_session_bytes = 67108864 # default; Maximum data-plane session payload.
+# data_plane_poll_interval_milliseconds = 250 # default; Data-plane polling, accounting, and session sweep cadence.
 # idempotency_retention_seconds = 86400 # default; Retention for expired idempotency and activity-touch records.
 # lifecycle_reconcile_batch_size = 8 # default; Lifecycle rows reconciled per batch.
 # lifecycle_reconcile_poll_interval_milliseconds = 250 # default; Lifecycle fallback polling cadence.

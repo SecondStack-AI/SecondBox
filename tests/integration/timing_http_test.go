@@ -27,7 +27,6 @@ func TestTimingHTTPReadsPersistedStageEvidenceAndCurrentAPILatency(t *testing.T)
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:                 databaseStore,
 		PlatformToken:         testPlatformToken,
-		DefaultSubjectQuota:   generousQuota(),
 		Now:                   service.SystemClock,
 		NewID:                 service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,

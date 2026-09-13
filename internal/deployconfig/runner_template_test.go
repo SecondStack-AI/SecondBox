@@ -42,8 +42,7 @@ func TestRunnerTemplateSubstitutionValidatesAsSameHostTopology(t *testing.T) {
 	runner.IdentityHostDirectory = filepath.Join(hostRoot, "identity")
 	runner.ArtifactHostDirectory = filepath.Join(storageDirectory, "release", "artifacts")
 	runner.StateHostDirectory = storageDirectory
-	runner.WorkspaceHostDirectory = filepath.Join(storageDirectory, "workspaces")
-	for _, directory := range []string{runner.ArtifactHostDirectory, runner.WorkspaceHostDirectory} {
+	for _, directory := range []string{runner.ArtifactHostDirectory, runner.workspaceHostDirectory()} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -58,9 +57,16 @@ func TestRunnerTemplateSubstitutionValidatesAsSameHostTopology(t *testing.T) {
 	if bytes.Equal(withoutEmptyRunners, manifestBytes) {
 		t.Fatal("initialized manifest did not contain the empty Runner declaration")
 	}
+	derived := make(map[string]bool)
+	for _, path := range runner.packagedPaths() {
+		derived[path.name] = true
+	}
 	runnerType := reflect.TypeOf(runner)
 	for index := 0; index < runnerType.NumField(); index++ {
-		name := runnerType.Field(index).Tag.Get("toml")
+		name, _, _ := strings.Cut(runnerType.Field(index).Tag.Get("toml"), ",")
+		if derived[name] {
+			continue // These remote-only fields are intentionally empty for same-host placement.
+		}
 		placeholder := runnerTemplateAssignmentForTest(t, string(template), name)
 		candidate := replaceRunnerTemplateAssignmentForTest(t, string(populated), name, placeholder)
 		candidateManifest := append(bytes.Clone(withoutEmptyRunners), candidate...)
@@ -124,7 +130,7 @@ func TestRunnerTemplateCoversSchemaAndWritesCreateOnly(t *testing.T) {
 		t.Fatalf("template field count = %d, Runner field count = %d", len(assignments), runnerType.NumField())
 	}
 	for index := 0; index < runnerType.NumField(); index++ {
-		name := runnerType.Field(index).Tag.Get("toml")
+		name, _, _ := strings.Cut(runnerType.Field(index).Tag.Get("toml"), ",")
 		if assignments[name] != 1 {
 			t.Errorf("template field %s count = %d", name, assignments[name])
 		}
@@ -159,7 +165,7 @@ func populateRunnerTemplateForTest(t *testing.T, template string, runner Runner)
 	runnerType := reflect.TypeOf(runner)
 	runnerValue := reflect.ValueOf(runner)
 	for index := 0; index < runnerType.NumField(); index++ {
-		name := runnerType.Field(index).Tag.Get("toml")
+		name, _, _ := strings.Cut(runnerType.Field(index).Tag.Get("toml"), ",")
 		value := runnerValue.Field(index).Interface()
 		encoded, err := toml.Marshal(map[string]any{name: value})
 		if err != nil {

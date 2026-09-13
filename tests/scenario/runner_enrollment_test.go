@@ -34,8 +34,7 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 		pool.State != contracts.RunnerPoolStateReady ||
 		pool.ReadyRunnerCount > 1 ||
 		!slices.Equal(pool.Architectures, []string{architecture}) ||
-		!slices.Equal(pool.Capabilities, wantPoolCapabilities) ||
-		pool.CapacityPolicy["maximumInstances"] != 8 {
+		!slices.Equal(pool.Capabilities, wantPoolCapabilities) {
 		t.Fatalf("SecondBox scenario created RunnerPool = %#v", pool)
 	}
 

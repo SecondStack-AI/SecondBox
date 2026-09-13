@@ -38,6 +38,15 @@ import (
 // deployment.compose_project_name deploys under.
 const DefaultComposeProjectName = "secondbox"
 
+// The packaged Compose services bind these listeners and mount the catalog at
+// this path. Operators choose host publication and the catalog source; the
+// compiler supplies the matching explicit process configuration.
+const (
+	packagedControlPlaneListenAddress = "0.0.0.0:8080"
+	packagedRunnerListenAddress       = "0.0.0.0:9443"
+	packagedAssetCatalogPath          = "/etc/secondbox/signed-assets.json"
+)
+
 const (
 	linuxUnixSocketPathLimit      = 108
 	maxFirecrackerInstanceIDBytes = 42
@@ -75,6 +84,15 @@ func ReadManifest(path string) (ManifestV1, error) {
 	decoder.DisallowUnknownFields()
 	var manifest ManifestV1
 	if err := decoder.Decode(&manifest); err != nil {
+		var unknown *toml.StrictMissingError
+		if errors.As(err, &unknown) {
+			keys := make([]string, 0, len(unknown.Errors))
+			for _, field := range unknown.Errors {
+				keys = append(keys, fmt.Sprintf("%q", strings.Join(field.Key(), ".")))
+			}
+			// Name invalid fields without printing their potentially secret values.
+			return ManifestV1{}, manifestError("strict decode: unknown fields "+strings.Join(keys, ", "), err)
+		}
 		return ManifestV1{}, manifestError("strict decode", err)
 	}
 	if manifest.SchemaVersion != 1 {
@@ -146,10 +164,10 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	put("SECONDBOX_RUNNER_IMAGE", deployment.RunnerImage)
 	put("SECONDBOX_API_BIND_IP", deployment.APIBindIP)
 	putInt("SECONDBOX_API_PUBLISHED_PORT", deployment.APIPublishedPort)
-	put("SECONDBOX_LISTEN_ADDR", deployment.ListenAddress)
+	put("SECONDBOX_LISTEN_ADDR", packagedControlPlaneListenAddress)
 	put("SECONDBOX_RUNNER_BIND_IP", deployment.RunnerBindIP)
 	putInt("SECONDBOX_RUNNER_PUBLISHED_PORT", deployment.RunnerPublishedPort)
-	put("SECONDBOX_RUNNER_LISTEN_ADDR", deployment.RunnerListenAddress)
+	put("SECONDBOX_RUNNER_LISTEN_ADDR", packagedRunnerListenAddress)
 	put("SECONDBOX_LOG_PATH", deployment.LogPath)
 	if deployment.ComposeBackendCIDR != "" {
 		put("SECONDBOX_COMPOSE_BACKEND_CIDR", deployment.ComposeBackendCIDR)
@@ -166,7 +184,7 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog", err)
 	}
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH", catalog)
-	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", deployment.AssetCatalogPath)
+	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", packagedAssetCatalogPath)
 
 	database := manifest.Database
 	databasePassword := ""
@@ -359,7 +377,7 @@ func validateManifestShape(manifest ManifestV1) error {
 		return manifestError("schema_version must be 1", nil)
 	}
 	d := manifest.Deployment
-	for path, value := range map[string]string{"deployment.mode": d.Mode, "deployment.public_base_url": d.PublicBaseURL, "deployment.tls_termination": d.TLSTermination, "deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage, "deployment.api_bind_ip": d.APIBindIP, "deployment.listen_address": d.ListenAddress, "deployment.runner_bind_ip": d.RunnerBindIP, "deployment.runner_listen_address": d.RunnerListenAddress, "deployment.log_path": d.LogPath, "deployment.signed_asset_catalog": d.AssetCatalog, "deployment.signed_asset_catalog_path": d.AssetCatalogPath} {
+	for path, value := range map[string]string{"deployment.mode": d.Mode, "deployment.public_base_url": d.PublicBaseURL, "deployment.tls_termination": d.TLSTermination, "deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage, "deployment.api_bind_ip": d.APIBindIP, "deployment.runner_bind_ip": d.RunnerBindIP, "deployment.log_path": d.LogPath, "deployment.signed_asset_catalog": d.AssetCatalog} {
 		if err := require(path, value); err != nil {
 			return err
 		}
@@ -387,15 +405,6 @@ func validateManifestShape(manifest ManifestV1) error {
 	if err := requirePort("deployment.runner_published_port", d.RunnerPublishedPort); err != nil {
 		return err
 	}
-	if d.ListenAddress != "0.0.0.0:8080" {
-		return manifestError("deployment.listen_address must be 0.0.0.0:8080 for the packaged container mapping", nil)
-	}
-	if d.RunnerListenAddress != "0.0.0.0:9443" {
-		return manifestError("deployment.runner_listen_address must be 0.0.0.0:9443 for the packaged container mapping", nil)
-	}
-	if d.AssetCatalogPath != "/etc/secondbox/signed-assets.json" {
-		return manifestError("deployment.signed_asset_catalog_path must be /etc/secondbox/signed-assets.json for the packaged container mapping", nil)
-	}
 	if d.DevelopmentWaitSeconds != nil {
 		if err := requireInt("deployment.development_prepare_wait_timeout_seconds", d.DevelopmentWaitSeconds, false); err != nil {
 			return err
@@ -406,8 +415,8 @@ func validateManifestShape(manifest ManifestV1) error {
 	if d.Mode == "development" && (d.APIBindIP != "127.0.0.1" || d.RunnerBindIP != "127.0.0.1" || manifest.Database.BindIP != "127.0.0.1") {
 		return manifestError("development mode must bind every published port to 127.0.0.1", nil)
 	}
-	if !filepath.IsAbs(d.LogPath) || !filepath.IsAbs(d.AssetCatalogPath) {
-		return manifestError("deployment process paths must be absolute", nil)
+	if !filepath.IsAbs(d.LogPath) {
+		return manifestError("deployment.log_path must be absolute", nil)
 	}
 	parsedURL, err := url.Parse(d.PublicBaseURL)
 	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
@@ -560,16 +569,10 @@ func validateExternalDatabaseURL(value string, requireVerifiedTLS bool) error {
 }
 
 func validatePolicy(p Policy) error {
-	positive := map[string]*int64{"data_plane_retention_seconds": p.DataPlaneRetentionSeconds, "data_plane_poll_interval_milliseconds": p.DataPlanePollIntervalMilliseconds, "runner_command_poll_interval_milliseconds": p.RunnerCommandPollIntervalMilliseconds}
+	positive := map[string]*int64{"data_plane_retention_seconds": p.DataPlaneRetentionSeconds}
 	for name, value := range positive {
 		if value == nil || *value < 1 {
 			return manifestError("policy."+name+" must be positive", nil)
-		}
-	}
-	quotas := map[string]*int64{"default_subject_max_sandboxes": p.DefaultSubjectMaxSandboxes, "default_subject_max_active_instances": p.DefaultSubjectMaxActiveInstances, "default_subject_max_vcpu_count": p.DefaultSubjectMaxVCPUCount, "default_subject_max_memory_bytes": p.DefaultSubjectMaxMemoryBytes, "default_subject_max_snapshots": p.DefaultSubjectMaxSnapshots, "default_subject_max_port_sessions": p.DefaultSubjectMaxPortSessions, "default_subject_max_concurrent_operations": p.DefaultSubjectMaxConcurrentOperations}
-	for name, value := range quotas {
-		if value == nil || *value < 0 {
-			return manifestError("policy."+name+" must be non-negative", nil)
 		}
 	}
 	for name, value := range map[string]string{"runner_enabled_features": p.RunnerEnabledFeatures} {
@@ -613,28 +616,24 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 	bindings := map[string]StandardRunnerPool{}
 	for index, pool := range resources.RunnerPools {
 		prefix := fmt.Sprintf("standard_resources.runner_pools[%d]", index)
-		if !selected[pool.Bundle] || bindings[pool.Bundle].Bundle != "" {
-			return manifestError(prefix+" must bind one selected bundle exactly once", nil)
+		if _, duplicate := bindings[pool.Name]; duplicate {
+			return manifestError(prefix+" repeats pool "+pool.Name+"; declare each pool once", nil)
 		}
 		if pool.Name != standardresources.PoolAMD64 || pool.State == "" || len(pool.Architectures) == 0 || !slices.Contains(pool.Architectures, "amd64") || len(pool.Capabilities) == 0 {
 			return manifestError(prefix+" requires name, ready state, capabilities and amd64 architecture inventory", nil)
 		}
-		for name, value := range map[string]*int64{"max_sandboxes": pool.MaxSandboxes, "max_vcpu_count": pool.MaxVCPUCount, "max_memory_bytes": pool.MaxMemoryBytes} {
-			if value == nil || *value < 1 {
-				return manifestError(prefix+"."+name+" must be positive", nil)
-			}
+		bindings[pool.Name] = pool
+	}
+	for _, bundle := range resources.Bundles {
+		pool, exists := bindings[standardresources.PoolAMD64]
+		if !exists {
+			return manifestError("standard_resources.runner_pools must declare pool "+standardresources.PoolAMD64+" for selected bundle "+bundle, nil)
 		}
-		gateway := map[string]string{standardresources.AgentCompartment: standardresources.AgentGateway, standardresources.DurableCoding: standardresources.PlatformGateway}[pool.Bundle]
+		gateway := map[string]string{standardresources.AgentCompartment: standardresources.AgentGateway, standardresources.DurableCoding: standardresources.PlatformGateway}[bundle]
 		for runnerIndex, runner := range runners {
 			if gateway != "" && runner.PoolID == pool.Name && !runnerGatewayNames(runner.EgressContexts)[gateway] {
-				return manifestError(fmt.Sprintf("runners[%d].egress_contexts must resolve %s for selected bundle %s", runnerIndex, gateway, pool.Bundle), nil)
+				return manifestError(fmt.Sprintf("runners[%d].egress_contexts must resolve %s for selected bundle %s", runnerIndex, gateway, bundle), nil)
 			}
-		}
-		bindings[pool.Bundle] = pool
-	}
-	for bundle := range selected {
-		if bindings[bundle].Bundle == "" {
-			return manifestError("standard_resources.runner_pools must bind selected bundle "+bundle, nil)
 		}
 	}
 	return nil
@@ -653,6 +652,15 @@ func runnerGatewayNames(contexts []RunnerEgressContext) map[string]bool {
 }
 
 func validateRunner(prefix string, r Runner) error {
+	if r.Placement == "same-host" {
+		for _, path := range r.packagedPaths() {
+			if *path.field != "" {
+				return manifestError(prefix+"."+path.name+" is derived for same-host placement; remove it from the manifest", nil)
+			}
+		}
+	}
+
+	r = r.withPackagedPaths()
 	required := map[string]string{"pool_id": r.PoolID, "software_version": r.SoftwareVersion, "control_plane_address": r.ControlPlaneAddress, "control_plane_server_name": r.ControlPlaneServerName, "identity_directory": r.IdentityDirectory, "log_path": r.LogPath, "firecracker_path": r.FirecrackerPath, "firecracker_jailer_path": r.FirecrackerJailerPath, "firecracker_jail_root": r.FirecrackerJailRoot, "firecracker_cgroup_parent": r.FirecrackerCgroupParent, "firecracker_kernel_path": r.FirecrackerKernelPath, "firecracker_rootfs_path": r.FirecrackerRootFSPath, "firecracker_shared_image_path": r.FirecrackerSharedImagePath, "firecracker_kernel_args": r.FirecrackerKernelArgs, "firecracker_cpu_template": r.FirecrackerCPUTemplate, "firecracker_run_directory": r.FirecrackerRunDirectory, "firecracker_log_directory": r.FirecrackerLogDirectory, "snapshot_template_cache_root": r.SnapshotTemplateCacheRoot, "artifact_public_key": r.ArtifactPublicKey, "artifact_public_key_sha256": r.ArtifactPublicKeySHA256, "workspace_root": r.WorkspaceRoot, "sandbox_guest_ip": r.SandboxGuestIP, "sandbox_bridge_name": r.SandboxBridgeName, "sandbox_bridge_cidr": r.SandboxBridgeCIDR, "sandbox_guest_cidr": r.SandboxGuestCIDR, "sandbox_tap_prefix": r.SandboxTapPrefix, "sandbox_network_state_directory": r.SandboxNetworkStateDir, "network_policy_nft_path": r.NetworkPolicyNFTPath, "network_policy_max_dns_ttl": r.NetworkPolicyMaxDNSTTL, "network_policy_runner_addresses": r.NetworkPolicyRunnerAddresses, "network_policy_management_cidrs": r.NetworkPolicyManagementCIDRs, "egress_context_config_path": r.EgressContextConfigPath, "network_policy_dns_upstream": r.NetworkPolicyDNSUpstream, "guest_heartbeat_interval": r.GuestHeartbeatInterval, "data_plane_listen_address": r.DataPlaneListenAddress, "data_plane_advertised_address": r.DataPlaneAdvertisedAddress}
 	required["log_directory"] = r.LogDirectory
 	for name, value := range required {
@@ -689,57 +697,19 @@ func validateRunner(prefix string, r Runner) error {
 		return manifestError(fmt.Sprintf("%s.firecracker_jail_root must keep the maximum Firecracker API socket path below %d bytes; got %d", prefix, linuxUnixSocketPathLimit, len(maximumSocketPath)), nil)
 	}
 	for name, value := range map[string]string{
-		"identity_host_directory":  r.IdentityHostDirectory,
-		"artifact_host_directory":  r.ArtifactHostDirectory,
-		"state_host_directory":     r.StateHostDirectory,
-		"workspace_host_directory": r.WorkspaceHostDirectory,
+		"identity_host_directory": r.IdentityHostDirectory,
+		"artifact_host_directory": r.ArtifactHostDirectory,
+		"state_host_directory":    r.StateHostDirectory,
 	} {
 		if value != "" && !filepath.IsAbs(value) {
 			return manifestError(prefix+"."+name+" must be an absolute Runner-host path", nil)
 		}
 	}
 	if r.Placement == "same-host" {
-		for name, value := range map[string]string{"identity_host_directory": r.IdentityHostDirectory, "artifact_host_directory": r.ArtifactHostDirectory, "state_host_directory": r.StateHostDirectory, "workspace_host_directory": r.WorkspaceHostDirectory, "log_directory": r.LogDirectory} {
+		for name, value := range map[string]string{"identity_host_directory": r.IdentityHostDirectory, "artifact_host_directory": r.ArtifactHostDirectory, "state_host_directory": r.StateHostDirectory} {
 			if !filepath.IsAbs(value) {
 				return manifestError(prefix+"."+name+" must be absolute", nil)
 			}
-		}
-		if r.IdentityDirectory != "/run/secondbox-runner-identity" {
-			return manifestError(prefix+".identity_directory must be /run/secondbox-runner-identity for same-host Compose placement", nil)
-		}
-		if r.EgressContextConfigPath != "/run/secondbox-runner-config/egress-contexts.json" {
-			return manifestError(prefix+".egress_context_config_path must be /run/secondbox-runner-config/egress-contexts.json for same-host Compose placement", nil)
-		}
-		if r.WorkspaceHostDirectory != filepath.Join(r.StateHostDirectory, "workspaces") {
-			return manifestError(prefix+".workspace_host_directory must be the workspaces child of state_host_directory for same-host Compose placement", nil)
-		}
-		if r.WorkspaceRoot != "/var/lib/secondbox-runner/workspaces" {
-			return manifestError(prefix+".workspace_root must be /var/lib/secondbox-runner/workspaces for same-host Compose placement", nil)
-		}
-		for name, value := range map[string]string{
-			"firecracker_kernel_path":       r.FirecrackerKernelPath,
-			"firecracker_rootfs_path":       r.FirecrackerRootFSPath,
-			"firecracker_shared_image_path": r.FirecrackerSharedImagePath,
-			"artifact_public_key":           r.ArtifactPublicKey,
-		} {
-			if !pathWithin("/opt/secondbox-artifacts", value) {
-				return manifestError(prefix+"."+name+" must be within /opt/secondbox-artifacts for same-host Compose placement", nil)
-			}
-		}
-		for name, value := range map[string]string{
-			"log_path":                        r.LogPath,
-			"log_directory":                   r.LogDirectory,
-			"firecracker_run_directory":       r.FirecrackerRunDirectory,
-			"firecracker_log_directory":       r.FirecrackerLogDirectory,
-			"snapshot_template_cache_root":    r.SnapshotTemplateCacheRoot,
-			"sandbox_network_state_directory": r.SandboxNetworkStateDir,
-		} {
-			if !pathWithin("/var/lib/secondbox-runner/state", value) {
-				return manifestError(prefix+"."+name+" must be within /var/lib/secondbox-runner/state for same-host Compose placement", nil)
-			}
-		}
-		if !pathWithin("/var/lib/secondbox-runner", r.FirecrackerJailRoot) || pathWithin(r.WorkspaceRoot, r.FirecrackerJailRoot) {
-			return manifestError(prefix+".firecracker_jail_root must be within /var/lib/secondbox-runner and outside its workspaces child for same-host Compose placement", nil)
 		}
 	}
 	for name, value := range map[string]*int64{"firecracker_jailer_uid_start": r.FirecrackerJailerUIDStart, "firecracker_jailer_uid_count": r.FirecrackerJailerUIDCount, "firecracker_jailer_gid": r.FirecrackerJailerGID, "firecracker_cgroup_version": r.FirecrackerCgroupVersion, "storage_pressure_recovery_percent": r.StorageRecoveryPercent, "storage_pressure_warning_percent": r.StorageWarningPercent, "storage_pressure_admission_deny_percent": r.StorageAdmissionDenyPercent, "sandbox_max_vcpus": r.SandboxMaxVCPUs, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB, "network_policy_max_dns_pins": r.NetworkPolicyMaxDNSPins, "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox, "max_concurrent_global": r.MaxConcurrentGlobal, "max_concurrent_starts": r.MaxConcurrentStarts, "max_concurrent_workspace_creates": r.MaxConcurrentWorkspaceCreates, "max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal, "file_transfer_max_bytes": r.FileTransferMaxBytes, "guest_control_vsock_port": r.GuestControlVSockPort, "guest_protocol_vsock_port": r.GuestProtocolVSockPort} {
@@ -747,7 +717,7 @@ func validateRunner(prefix string, r Runner) error {
 			return manifestError(prefix+"."+name+" must be positive", nil)
 		}
 	}
-	for name, value := range map[string]*bool{"firecracker_jailer_uid_allow_below_1000": r.FirecrackerJailerUIDAllowLow, "firecracker_allow_unjailed": r.FirecrackerAllowUnjailed, "sandbox_delete_bridge": r.SandboxDeleteBridge} {
+	for name, value := range map[string]*bool{"firecracker_jailer_uid_allow_below_1000": r.FirecrackerJailerUIDAllowLow, "sandbox_delete_bridge": r.SandboxDeleteBridge} {
 		if value == nil {
 			return manifestError(prefix+"."+name+" is required", nil)
 		}
@@ -776,9 +746,6 @@ func validateRunner(prefix string, r Runner) error {
 		if *r.GuestControlVSockPort > 65535 || *r.GuestProtocolVSockPort > 65535 || *r.GuestControlVSockPort == *r.GuestProtocolVSockPort {
 			return manifestError(prefix+" guest control and protocol vsock ports must be distinct integers from 1 through 65535", nil)
 		}
-	}
-	if r.FirecrackerAllowUnjailed != nil && *r.FirecrackerAllowUnjailed {
-		return manifestError(prefix+".firecracker_allow_unjailed must be false for the packaged Runner", nil)
 	}
 	if !artifactKeyPattern.MatchString(r.ArtifactPublicKeySHA256) || r.ArtifactPublicKeySHA256 == strings.Repeat("0", 64) {
 		return manifestError(prefix+".artifact_public_key_sha256 must identify a provisioned signed artifact key", nil)
@@ -870,11 +837,6 @@ func validateRunnerEgressContexts(path string, contexts []RunnerEgressContext) e
 	return nil
 }
 
-func pathWithin(root, path string) bool {
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
 func validateRunnerDuration(path, value string, minimum, maximum time.Duration) error {
 	duration, err := time.ParseDuration(value)
 	if err != nil || duration < minimum || (maximum != 0 && duration > maximum) {
@@ -938,7 +900,7 @@ func validateDataPlaneAddress(path, value string, listen bool) error {
 }
 
 func addPolicyEnvironment(environment map[string]string, p Policy) {
-	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds, "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS": p.DataPlanePollIntervalMilliseconds, "SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": p.RunnerCommandPollIntervalMilliseconds, "SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES": p.DefaultSubjectMaxSandboxes, "SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES": p.DefaultSubjectMaxActiveInstances, "SECONDBOX_DEFAULT_SUBJECT_MAX_VCPU_COUNT": p.DefaultSubjectMaxVCPUCount, "SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES": p.DefaultSubjectMaxMemoryBytes, "SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS": p.DefaultSubjectMaxSnapshots, "SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS": p.DefaultSubjectMaxPortSessions, "SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": p.DefaultSubjectMaxConcurrentOperations}
+	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds}
 	for name, value := range values {
 		environment[name] = strconv.FormatInt(*value, 10)
 	}
@@ -980,9 +942,13 @@ func resolveStandardResources(base string, manifest ManifestV1, catalog assetcat
 	}
 	pools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.RunnerPools))
 	for _, configured := range manifest.StandardResources.RunnerPools {
-		pools[configured.Bundle] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State, CapacityPolicy: map[string]int64{"maxSandboxes": *configured.MaxSandboxes, "maxVcpuCount": *configured.MaxVCPUCount, "maxMemoryBytes": *configured.MaxMemoryBytes}}
+		pools[configured.Name] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State}
 	}
-	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: pools})
+	selectedPools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.Bundles))
+	for _, bundle := range manifest.StandardResources.Bundles {
+		selectedPools[bundle] = pools[standardresources.PoolAMD64]
+	}
+	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: selectedPools})
 	if err != nil {
 		return resourceapply.Document{}, manifestError("standard_resources", err)
 	}
@@ -1116,6 +1082,7 @@ func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
 }
 
 func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
+	r = r.withPackagedPaths()
 	env := map[string]string{"SECONDBOX_RUNNER_ID": r.RunnerID, "SECONDBOX_RUNNER_POOL_ID": r.PoolID, "SECONDBOX_RUNNER_SOFTWARE_VERSION": r.SoftwareVersion, "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": r.ControlPlaneAddress, "SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": r.ControlPlaneServerName, "SECONDBOX_RUNNER_CREDENTIAL": credential, "SECONDBOX_RUNNER_LOG_PATH": r.LogPath, "SECONDBOX_RUNNER_FIRECRACKER_PATH": r.FirecrackerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH": r.FirecrackerJailerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT": r.FirecrackerJailRoot, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT": r.FirecrackerCgroupParent, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH": r.FirecrackerKernelPath, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH": r.FirecrackerRootFSPath, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH": r.FirecrackerSharedImagePath, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS": r.FirecrackerKernelArgs, "SECONDBOX_RUNNER_FIRECRACKER_CPU_TEMPLATE": r.FirecrackerCPUTemplate, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR": r.FirecrackerRunDirectory, "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR": r.FirecrackerLogDirectory, "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT": r.SnapshotTemplateCacheRoot, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY": r.ArtifactPublicKey, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256": r.ArtifactPublicKeySHA256, "SECONDBOX_RUNNER_WORKSPACE_ROOT": r.WorkspaceRoot, "SECONDBOX_RUNNER_SANDBOX_GUEST_IP": r.SandboxGuestIP, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME": r.SandboxBridgeName, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR": r.SandboxBridgeCIDR, "SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR": r.SandboxGuestCIDR, "SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX": r.SandboxTapPrefix, "SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR": r.SandboxNetworkStateDir, "SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH": r.NetworkPolicyNFTPath, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL": r.NetworkPolicyMaxDNSTTL, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": r.NetworkPolicyRunnerAddresses, "SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS": r.NetworkPolicyManagementCIDRs, "SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG": r.EgressContextConfigPath, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM": r.NetworkPolicyDNSUpstream, "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL": r.GuestHeartbeatInterval, "SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS": r.DataPlaneListenAddress, "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS": r.DataPlaneAdvertisedAddress}
 	env["SECONDBOX_COMPUTE_BACKEND"] = "firecracker"
 	env["SECONDBOX_RUNNER_LOG_DIR"] = r.LogDirectory
@@ -1126,14 +1093,13 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	for name, value := range ints {
 		env[name] = strconv.FormatInt(*value, 10)
 	}
-	env["SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED"] = strconv.FormatBool(*r.FirecrackerAllowUnjailed)
+	env["SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED"] = "false"
 	env["SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000"] = strconv.FormatBool(*r.FirecrackerJailerUIDAllowLow)
 	env["SECONDBOX_RUNNER_SANDBOX_DELETE_BRIDGE"] = strconv.FormatBool(*r.SandboxDeleteBridge)
 	if r.Placement == "same-host" {
 		env["SECONDBOX_RUNNER_IDENTITY_HOST_DIR"] = r.IdentityHostDirectory
 		env["SECONDBOX_RUNNER_ARTIFACT_HOST_DIR"] = r.ArtifactHostDirectory
 		env["SECONDBOX_RUNNER_STATE_HOST_DIR"] = r.StateHostDirectory
-		env["SECONDBOX_RUNNER_WORKSPACE_HOST_DIR"] = r.WorkspaceHostDirectory
 	}
 	return env
 }

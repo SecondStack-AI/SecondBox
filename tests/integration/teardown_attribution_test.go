@@ -323,7 +323,6 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:                 databaseStore,
 		PlatformToken:         testPlatformToken,
-		DefaultSubjectQuota:   generousQuota(),
 		Now:                   service.SystemClock,
 		NewID:                 newFixtureID,
 		NewCredentialMaterial: func() string { return fmt.Sprintf("credential-material-%032d", integrationIdentitySequence.Add(1)) },
@@ -340,9 +339,9 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 	seededAt := time.Now().UTC()
 	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
 		Name: poolName, State: contracts.RunnerPoolStateReady,
-		Architectures:    []string{"amd64"},
-		Capabilities:     []string{"compute", "local-workspace"},
-		CapacityPolicy:   map[string]int64{"maxInstances": 100},
+		Architectures: []string{"amd64"},
+		Capabilities:  []string{"compute", "local-workspace"},
+
 		ReadyRunnerCount: 1,
 		Revision:         1,
 		CreatedAt:        seededAt,

@@ -138,11 +138,10 @@ type ControlPlaneStore interface {
 	ManagementStore
 }
 
-// ControlPlaneConfig contains explicit authority, quota, time, and identity dependencies.
+// ControlPlaneConfig contains explicit authority, time, and identity dependencies.
 type ControlPlaneConfig struct {
 	Store                 ControlPlaneStore
 	PlatformToken         string
-	DefaultSubjectQuota   contracts.QuotaLimits
 	Now                   func() time.Time
 	NewID                 func(string) string
 	NewCredentialMaterial func() string
@@ -158,7 +157,6 @@ type ControlPlaneConfig struct {
 type ControlPlaneService struct {
 	store                 ControlPlaneStore
 	credentialSealSecret  []byte
-	defaultSubjectQuota   contracts.QuotaLimits
 	now                   func() time.Time
 	newID                 func(string) string
 	newCredentialMaterial func() string
@@ -183,16 +181,12 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 	if len(config.PlatformToken) < 24 {
 		return nil, errors.New("SecondBox platform token must contain at least 24 bytes")
 	}
-	if err := validateQuotaLimits("default subject", config.DefaultSubjectQuota); err != nil {
-		return nil, err
-	}
 	if config.Now == nil || config.NewID == nil || config.NewCredentialMaterial == nil {
 		return nil, errors.New("SecondBox clock, identifier, and credential generators are required")
 	}
 	controlPlane := &ControlPlaneService{
 		store:                config.Store,
 		credentialSealSecret: []byte(config.PlatformToken),
-		defaultSubjectQuota:  config.DefaultSubjectQuota,
 		now:                  config.Now, newID: config.NewID, newCredentialMaterial: config.NewCredentialMaterial,
 		dataPlaneStore: config.DataPlaneStore, dataPlanePollInterval: config.DataPlanePollInterval,
 		idempotencyRetention: config.IdempotencyRetention,
@@ -511,8 +505,8 @@ func (service *ControlPlaneService) createSandboxOperation(
 	}
 	audit := service.newAudit(ctx, principal, "sandbox.created", "sandbox", sandboxID, principal.TenantRef, now)
 	storedSandbox, storedOperation, created, err := service.store.CreateSandbox(ctx, ports.CreateSandboxInput{
-		Principal: principal, SubjectQuota: service.defaultSubjectQuota,
-		Sandbox: sandbox, Workspace: sandbox.Workspace, Operation: operation,
+		Principal: principal,
+		Sandbox:   sandbox, Workspace: sandbox.Workspace, Operation: operation,
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
 		IdempotencyEnds:   service.idempotencyExpiration(now),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
@@ -1419,23 +1413,6 @@ func validSandboxState(state string) bool {
 	default:
 		return false
 	}
-}
-
-func validateQuotaLimits(name string, quota contracts.QuotaLimits) error {
-	if quota.MaxSandboxes < 1 {
-		return fmt.Errorf("SecondBox %s Sandbox quota must be positive", name)
-	}
-	values := []int64{
-		quota.MaxActiveInstances, quota.MaxVCPUCount,
-		quota.MaxMemoryBytes, quota.MaxSnapshots, quota.MaxPortSessions,
-		quota.MaxConcurrentOperations,
-	}
-	for _, value := range values {
-		if value < 0 {
-			return fmt.Errorf("SecondBox %s quota limits must be non-negative", name)
-		}
-	}
-	return nil
 }
 
 func boundedLimit(limit int) int {

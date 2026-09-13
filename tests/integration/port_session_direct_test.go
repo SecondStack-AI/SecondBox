@@ -394,8 +394,7 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 	t.Cleanup(dataPlaneStore.Close)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		DefaultSubjectQuota: generousQuota(),
-		Now:                 func() time.Time { return *now }, NewID: service.NewOpaqueID,
+		Now: func() time.Time { return *now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: time.Millisecond,
 		PortSessionStore: dataPlaneStore, PublicBaseURL: "https://secondbox.example",
@@ -422,9 +421,9 @@ func seedAdvertisedDataPlaneRunner(
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.runner_pools (
-			name,state,architectures_json,capabilities_json,capacity_policy_json,
+			name,state,architectures_json,capabilities_json,
 			ready_runner_count,revision,created_at,updated_at
-		) VALUES ('direct-port-pool','ready','["amd64"]','["compute"]','{}',1,1,$1,$1)
+		) VALUES ('direct-port-pool','ready','["amd64"]','["compute"]',1,1,$1,$1)
 		ON CONFLICT (name) DO NOTHING`,
 		now,
 	); err != nil {

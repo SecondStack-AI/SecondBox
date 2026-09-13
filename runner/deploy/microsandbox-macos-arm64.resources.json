@@ -5,13 +5,8 @@
       "name": "experimental-microsandbox-arm64",
       "architectures": ["arm64"],
       "capabilities": ["cleanup", "compute", "evidence", "exec-streaming", "file-streaming", "local-workspace", "network-policy", "port-proxy", "pty", "storage", "workspace-relocation"],
-      "capacityPolicy": {
-        "maxMemoryBytes": 8589934592,
-        "maxSandboxes": 4,
-        "maxVcpuCount": 8
-      },
       "state": "ready",
-      "mutableFields": ["capacityPolicy", "state"]
+      "mutableFields": ["state"]
     }
   ],
   "profiles": [

@@ -38,7 +38,7 @@ func (fake *fakeClient) CreateRunnerPool(_ context.Context, request secondboxcli
 	if _, ok := fake.pools[request.Name]; ok {
 		return secondboxclient.RunnerPool{}, errors.New("race")
 	}
-	pool := secondboxclient.RunnerPool{Name: request.Name, Architectures: request.Architectures, Capabilities: request.Capabilities, CapacityPolicy: request.CapacityPolicy, State: request.State, Revision: 1}
+	pool := secondboxclient.RunnerPool{Name: request.Name, Architectures: request.Architectures, Capabilities: request.Capabilities, State: request.State, Revision: 1}
 	fake.pools[request.Name] = pool
 	return pool, nil
 }
@@ -50,9 +50,6 @@ func (fake *fakeClient) UpdateRunnerPool(_ context.Context, name string, expecte
 	fake.events = append(fake.events, "update-pool:"+name)
 	if request.State != nil {
 		pool.State = *request.State
-	}
-	if request.CapacityPolicy != nil {
-		pool.CapacityPolicy = request.CapacityPolicy
 	}
 	pool.Revision++
 	fake.pools[name] = pool
@@ -112,7 +109,7 @@ func desiredDocument(t *testing.T, revisions int) Document {
 		}
 		lineage = append(lineage, ProfileRevision{Number: int64(number), SpecDigest: digest, Spec: spec})
 	}
-	return Document{SchemaVersion: SchemaVersion, RunnerPools: []RunnerPool{{Name: "pool", Architectures: []string{"amd64"}, Capabilities: []string{"local-workspace"}, CapacityPolicy: map[string]int64{"maxSandboxes": 2}, State: "ready", MutableFields: []string{"capacityPolicy", "state"}}}, Profiles: []Profile{{Name: "profile", Revisions: lineage}}}
+	return Document{SchemaVersion: SchemaVersion, RunnerPools: []RunnerPool{{Name: "pool", Architectures: []string{"amd64"}, Capabilities: []string{"local-workspace"}, State: "ready", MutableFields: []string{"state"}}}, Profiles: []Profile{{Name: "profile", Revisions: lineage}}}
 }
 
 func TestApplyCreatesPoolsBeforeSequentialProfileLineageAndReplaysExactly(t *testing.T) {
@@ -142,7 +139,7 @@ func TestApplyCreatesPoolsBeforeSequentialProfileLineageAndReplaysExactly(t *tes
 func TestCheckReportsWithoutMutationAndApplyUpdatesOnlyDeclaredPoolFields(t *testing.T) {
 	fake := newFakeClient()
 	document := desiredDocument(t, 1)
-	fake.pools["pool"] = secondboxclient.RunnerPool{Name: "pool", Architectures: []string{"amd64"}, Capabilities: []string{"local-workspace"}, CapacityPolicy: map[string]int64{"maxSandboxes": 1}, State: "draining", Revision: 7}
+	fake.pools["pool"] = secondboxclient.RunnerPool{Name: "pool", Architectures: []string{"amd64"}, Capabilities: []string{"local-workspace"}, State: "draining", Revision: 7}
 	report, err := Check(t.Context(), fake, document)
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +219,7 @@ func TestApplyRejectsHistoricalDriftFutureHeadsGapsAndRevisionRaces(t *testing.T
 		t.Fatal(err)
 	}
 	pool := fake.pools["pool"]
-	pool.CapacityPolicy = map[string]int64{"maxSandboxes": 1}
+	pool.State = secondboxclient.RunnerPoolStateDraining
 	pool.Revision = 4
 	fake.pools["pool"] = pool
 	racing := &raceClient{fakeClient: fake}
@@ -279,5 +276,14 @@ func TestDocumentValidationRejectsUnknownFieldsGapsBadDigestsAndOmissionDoesNotD
 	}
 	if _, ok := fake.pools["unmanaged"]; !ok {
 		t.Fatal("omitted resource was deleted")
+	}
+}
+
+func TestResourceDocumentRejectsRetiredPoolCapacity(t *testing.T) {
+	for _, field := range []string{`"capacityPolicy":{"maxSandboxes":1},`, `"mutableFields":["capacityPolicy"],`} {
+		content := []byte(`{"schemaVersion":"secondbox.resources/v1","runnerPools":[{` + field + `"name":"pool","architectures":["amd64"],"capabilities":["compute"],"state":"ready"}],"profiles":[]}`)
+		if _, err := Decode(content); err == nil {
+			t.Fatal("retired pool capacity accepted")
+		}
 	}
 }

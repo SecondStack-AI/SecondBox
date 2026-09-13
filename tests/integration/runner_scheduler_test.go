@@ -1108,9 +1108,9 @@ func task4InsertRunnerPool(t *testing.T, poolName string, now time.Time) {
 	t.Cleanup(pool.Close)
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.runner_pools (
-			name,state,architectures_json,capabilities_json,capacity_policy_json,
+			name,state,architectures_json,capabilities_json,
 			ready_runner_count,revision,created_at,updated_at
-		) VALUES ($1,'ready','["amd64"]','["compute","local-workspace","network-policy"]','{}',1,1,$2,$2)`,
+		) VALUES ($1,'ready','["amd64"]','["compute","local-workspace","network-policy"]',1,1,$2,$2)`,
 		poolName, now,
 	); err != nil {
 		t.Fatal(err)
