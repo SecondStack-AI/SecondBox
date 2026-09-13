@@ -57,10 +57,14 @@ func TestRunnerTemplateSubstitutionValidatesAsSameHostTopology(t *testing.T) {
 	if bytes.Equal(withoutEmptyRunners, manifestBytes) {
 		t.Fatal("initialized manifest did not contain the empty Runner declaration")
 	}
+	derived := make(map[string]bool)
+	for _, path := range runner.packagedPaths() {
+		derived[path.name] = true
+	}
 	runnerType := reflect.TypeOf(runner)
 	for index := 0; index < runnerType.NumField(); index++ {
 		name, _, _ := strings.Cut(runnerType.Field(index).Tag.Get("toml"), ",")
-		if name == "identity_directory" || name == "workspace_root" || name == "egress_context_config_path" {
+		if derived[name] {
 			continue // These remote-only fields are intentionally empty for same-host placement.
 		}
 		placeholder := runnerTemplateAssignmentForTest(t, string(template), name)

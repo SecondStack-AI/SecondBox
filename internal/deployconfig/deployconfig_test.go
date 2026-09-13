@@ -582,12 +582,12 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 			runner.IdentityDirectory = "/different/identity"
 			manifest.Runners = []Runner{runner}
 		}},
-		{name: "same-host artifact path misses fixed mount", want: "firecracker_kernel_path must be within /opt/secondbox-artifacts", mutate: func(manifest *ManifestV1) {
+		{name: "same-host artifact path misses fixed mount", want: "firecracker_kernel_path is derived for same-host placement", mutate: func(manifest *ManifestV1) {
 			runner := validSameHostTestRunner("runner-local")
 			runner.FirecrackerKernelPath = "/different/kernel"
 			manifest.Runners = []Runner{runner}
 		}},
-		{name: "same-host state path misses fixed mount", want: "firecracker_run_directory must be within /var/lib/secondbox-runner", mutate: func(manifest *ManifestV1) {
+		{name: "same-host state path misses fixed mount", want: "firecracker_run_directory is derived for same-host placement", mutate: func(manifest *ManifestV1) {
 			runner := validSameHostTestRunner("runner-local")
 			runner.FirecrackerRunDirectory = "/different/run"
 			manifest.Runners = []Runner{runner}
@@ -1365,21 +1365,10 @@ func validTestRunner(id, placement string) Runner {
 
 func validSameHostTestRunner(id string) Runner {
 	runner := validTestRunner(id, "same-host")
-	runner.IdentityDirectory = ""
-	runner.EgressContextConfigPath = ""
+	for _, path := range runner.packagedPaths() {
+		*path.field = ""
+	}
 	runner.StateHostDirectory = "/var/lib/secondbox-runner-storage"
-	runner.LogPath = "/var/lib/secondbox-runner/state/logs/runner.jsonl"
-	runner.LogDirectory = "/var/lib/secondbox-runner/state/logs"
-	runner.FirecrackerJailRoot = "/var/lib/secondbox-runner/jail"
-	runner.FirecrackerKernelPath = "/opt/secondbox-artifacts/kernel"
-	runner.FirecrackerRootFSPath = "/opt/secondbox-artifacts/rootfs.ext4"
-	runner.FirecrackerSharedImagePath = "/opt/secondbox-artifacts/shared.img"
-	runner.FirecrackerRunDirectory = "/var/lib/secondbox-runner/state/run"
-	runner.FirecrackerLogDirectory = "/var/lib/secondbox-runner/state/firecracker-log"
-	runner.SnapshotTemplateCacheRoot = "/var/lib/secondbox-runner/state/snapshot-templates"
-	runner.ArtifactPublicKey = "/opt/secondbox-artifacts/manifest-public.pem"
-	runner.WorkspaceRoot = ""
-	runner.SandboxNetworkStateDir = "/var/lib/secondbox-runner/state/network"
 	return runner
 }
 
