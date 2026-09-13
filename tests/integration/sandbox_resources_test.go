@@ -203,7 +203,7 @@ func TestSandboxRequestedResourcesFitSmallerHomeRunner(t *testing.T) {
 	const poolName = "resources-placement-pool"
 	const runnerID = "resources-placement-runner"
 	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
-		Name: poolName, State: contracts.RunnerPoolStateReady, Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"}, CapacityPolicy: map[string]int64{"maxInstances": 10}, ReadyRunnerCount: 1, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		Name: poolName, State: contracts.RunnerPoolStateReady, Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"}, ReadyRunnerCount: 1, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}

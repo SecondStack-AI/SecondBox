@@ -19,11 +19,6 @@
         "storage",
         "workspace-relocation"
       ],
-      "capacityPolicy": {
-        "maxMemoryBytes": 34359738368,
-        "maxSandboxes": 4,
-        "maxVcpuCount": 16
-      },
       "state": "ready",
       "mutableFields": []
     }

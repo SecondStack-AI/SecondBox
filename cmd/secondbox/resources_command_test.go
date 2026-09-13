@@ -19,7 +19,7 @@ func TestResourcesCheckLoadsStrictDocumentAndDoesNotMutate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document := resourceapply.Document{SchemaVersion: resourceapply.SchemaVersion, RunnerPools: []resourceapply.RunnerPool{{Name: "pool", Architectures: []string{"amd64"}, Capabilities: []string{"local-workspace"}, CapacityPolicy: map[string]int64{"maxSandboxes": 1}, State: "ready", MutableFields: []string{}}}, Profiles: []resourceapply.Profile{{Name: "profile", Revisions: []resourceapply.ProfileRevision{{Number: 1, SpecDigest: digest, Spec: spec}}}}}
+	document := resourceapply.Document{SchemaVersion: resourceapply.SchemaVersion, RunnerPools: []resourceapply.RunnerPool{{Name: "pool", Architectures: []string{"amd64"}, Capabilities: []string{"local-workspace"}, State: "ready", MutableFields: []string{}}}, Profiles: []resourceapply.Profile{{Name: "profile", Revisions: []resourceapply.ProfileRevision{{Number: 1, SpecDigest: digest, Spec: spec}}}}}
 	data, err := resourceapply.Encode(document)
 	if err != nil {
 		t.Fatal(err)

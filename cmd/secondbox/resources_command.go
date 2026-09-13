@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
@@ -27,7 +26,6 @@ func runResourcesCommand(ctx context.Context, session cliSession, action string,
 	pool := flags.String("pool", "", "deployment RunnerPool name")
 	architectures := flags.String("architectures", "amd64", "comma-separated architecture inventory")
 	capabilities := flags.String("capabilities", "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy", "comma-separated RunnerPool capabilities")
-	capacity := flags.String("capacity", "maxSandboxes=20,maxVcpuCount=80,maxMemoryBytes=171798691840", "comma-separated RunnerPool capacity key=value entries")
 	state := flags.String("state", secondboxclient.RunnerPoolStateReady, "desired RunnerPool state")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("SecondBox resources %s options: %w", action, err)
@@ -38,7 +36,7 @@ func runResourcesCommand(ctx context.Context, session cliSession, action string,
 	if session.url == "" || session.token == "" {
 		return errors.New("SecondBox resources requires --url and --token" + sessionSourceHint)
 	}
-	document, err := loadResourceDocument(*file, *bundle, *manifestPath, *pool, *architectures, *capabilities, *capacity, *state)
+	document, err := loadResourceDocument(*file, *bundle, *manifestPath, *pool, *architectures, *capabilities, *state)
 	if err != nil {
 		return err
 	}
@@ -60,7 +58,7 @@ func runResourcesCommand(ctx context.Context, session cliSession, action string,
 	return encoder.Encode(report)
 }
 
-func loadResourceDocument(file, bundle, manifestPath, pool, architectureCSV, capabilityCSV, capacityCSV, state string) (resourceapply.Document, error) {
+func loadResourceDocument(file, bundle, manifestPath, pool, architectureCSV, capabilityCSV, state string) (resourceapply.Document, error) {
 	if file != "" {
 		data, err := os.ReadFile(file)
 		if err != nil {
@@ -79,11 +77,7 @@ func loadResourceDocument(file, bundle, manifestPath, pool, architectureCSV, cap
 	if err != nil {
 		return resourceapply.Document{}, err
 	}
-	capacityPolicy, err := parseCapacity(capacityCSV)
-	if err != nil {
-		return resourceapply.Document{}, err
-	}
-	binding := standardresources.PoolBinding{Name: pool, Architectures: splitCSV(architectureCSV), Capabilities: splitCSV(capabilityCSV), CapacityPolicy: capacityPolicy, State: state}
+	binding := standardresources.PoolBinding{Name: pool, Architectures: splitCSV(architectureCSV), Capabilities: splitCSV(capabilityCSV), State: state}
 	return standardresources.Build(manifest, standardresources.Selection{Bundles: []string{bundle}, Pools: map[string]standardresources.PoolBinding{bundle: binding}})
 }
 
@@ -96,23 +90,4 @@ func splitCSV(value string) []string {
 		}
 	}
 	return result
-}
-
-func parseCapacity(value string) (map[string]int64, error) {
-	result := map[string]int64{}
-	for _, entry := range splitCSV(value) {
-		key, raw, found := strings.Cut(entry, "=")
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if !found || key == "" || err != nil || parsed < 0 {
-			return nil, fmt.Errorf("SecondBox RunnerPool capacity entry %q must be key=non-negative-integer", entry)
-		}
-		if _, duplicate := result[key]; duplicate {
-			return nil, fmt.Errorf("SecondBox RunnerPool capacity key %q is duplicated", key)
-		}
-		result[key] = parsed
-	}
-	if len(result) == 0 {
-		return nil, errors.New("SecondBox RunnerPool capacity is required")
-	}
-	return result, nil
 }

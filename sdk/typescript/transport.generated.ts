@@ -150,7 +150,6 @@ export interface CreateProfileRequest {
 export interface CreateRunnerPoolRequest {
   readonly architectures: RunnerArchitectureList;
   readonly capabilities: RunnerCapabilityList;
-  readonly capacityPolicy: RunnerCapacityPolicy;
   readonly name: ProfileName;
   readonly state: RunnerPoolState;
 }
@@ -655,8 +654,6 @@ export type RunnerArchitectureList = readonly ("amd64" | "arm64")[];
 
 export type RunnerCapabilityList = readonly ("compute" | "network-policy" | "storage" | "cleanup" | "local-workspace" | "snapshot-resume" | "workspace-relocation" | "exec-streaming" | "file-streaming" | "pty" | "port-proxy" | "evidence")[];
 
-export type RunnerCapacityPolicy = Readonly<Record<string, number>>;
-
 export type RunnerID = string;
 
 export interface RunnerPage {
@@ -667,7 +664,6 @@ export interface RunnerPage {
 export interface RunnerPool {
   readonly architectures: RunnerArchitectureList;
   readonly capabilities: RunnerCapabilityList;
-  readonly capacityPolicy: RunnerCapacityPolicy;
   readonly createdAt: Timestamp;
   readonly name: ProfileName;
   readonly readyRunnerCount: number;
@@ -1011,7 +1007,6 @@ export interface TouchResult {
 export interface UpdateRunnerPoolRequest {
   readonly architectures?: RunnerArchitectureList;
   readonly capabilities?: RunnerCapabilityList;
-  readonly capacityPolicy?: RunnerCapacityPolicy;
   readonly state?: RunnerPoolState;
 }
 

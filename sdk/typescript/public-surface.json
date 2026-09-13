@@ -149,7 +149,6 @@
     "required": [
       "architectures",
       "capabilities",
-      "capacityPolicy",
       "name",
       "state"
     ],
@@ -754,7 +753,6 @@
     "required": [
       "architectures",
       "capabilities",
-      "capacityPolicy",
       "createdAt",
       "name",
       "readyRunnerCount",
@@ -1167,7 +1165,6 @@
     "optional": [
       "architectures",
       "capabilities",
-      "capacityPolicy",
       "state"
     ]
   },

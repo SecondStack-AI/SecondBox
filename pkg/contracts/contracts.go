@@ -264,15 +264,14 @@ type ReviseProfileRequest struct {
 
 // RunnerPool is the operator-owned placement and trust boundary.
 type RunnerPool struct {
-	Name             string           `json:"name"`
-	State            string           `json:"state"`
-	Architectures    []string         `json:"architectures"`
-	Capabilities     []string         `json:"capabilities"`
-	CapacityPolicy   map[string]int64 `json:"capacityPolicy"`
-	ReadyRunnerCount int64            `json:"readyRunnerCount"`
-	Revision         int64            `json:"revision"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
+	Name             string    `json:"name"`
+	State            string    `json:"state"`
+	Architectures    []string  `json:"architectures"`
+	Capabilities     []string  `json:"capabilities"`
+	ReadyRunnerCount int64     `json:"readyRunnerCount"`
+	Revision         int64     `json:"revision"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 // RunnerPoolPage is one bounded stable administrative placement traversal page.
@@ -283,19 +282,17 @@ type RunnerPoolPage struct {
 
 // CreateRunnerPoolRequest declares one operator-owned runner placement boundary.
 type CreateRunnerPoolRequest struct {
-	Name           string           `json:"name"`
-	State          string           `json:"state"`
-	Architectures  []string         `json:"architectures"`
-	Capabilities   []string         `json:"capabilities"`
-	CapacityPolicy map[string]int64 `json:"capacityPolicy"`
+	Name          string   `json:"name"`
+	State         string   `json:"state"`
+	Architectures []string `json:"architectures"`
+	Capabilities  []string `json:"capabilities"`
 }
 
 // UpdateRunnerPoolRequest changes explicit runner admission policy under revision control.
 type UpdateRunnerPoolRequest struct {
-	State          *string           `json:"state,omitempty"`
-	Architectures  *[]string         `json:"architectures,omitempty"`
-	Capabilities   *[]string         `json:"capabilities,omitempty"`
-	CapacityPolicy *map[string]int64 `json:"capacityPolicy,omitempty"`
+	State         *string   `json:"state,omitempty"`
+	Architectures *[]string `json:"architectures,omitempty"`
+	Capabilities  *[]string `json:"capabilities,omitempty"`
 }
 
 // Runner is enrolled execution identity and fixed-capacity evidence.

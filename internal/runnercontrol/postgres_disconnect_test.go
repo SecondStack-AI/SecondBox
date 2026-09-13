@@ -551,9 +551,9 @@ func seedRunnerConnectionForDataPlaneDisconnect(
 	t.Helper()
 	if _, err := store.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.runner_pools (
-			name,state,architectures_json,capabilities_json,capacity_policy_json,
+			name,state,architectures_json,capabilities_json,
 			ready_runner_count,revision,created_at,updated_at
-		) VALUES ('pool','active','[]','[]','{}',1,1,$1,$1);
+		) VALUES ('pool','active','[]','[]',1,1,$1,$1);
 		INSERT INTO secondbox.runners (
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,

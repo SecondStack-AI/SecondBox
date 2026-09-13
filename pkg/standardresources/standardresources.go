@@ -35,11 +35,10 @@ const (
 )
 
 type PoolBinding struct {
-	Name           string
-	Architectures  []string
-	Capabilities   []string
-	CapacityPolicy map[string]int64
-	State          string
+	Name          string
+	Architectures []string
+	Capabilities  []string
+	State         string
 }
 
 type Selection struct {
@@ -186,13 +185,13 @@ func validateManifestIdentity(manifest releasecontract.ArtifactManifest, profile
 func appendOrValidatePool(pools []resourceapply.RunnerPool, binding PoolBinding) ([]resourceapply.RunnerPool, error) {
 	for _, pool := range pools {
 		if pool.Name == binding.Name {
-			if !reflect.DeepEqual(pool.Architectures, binding.Architectures) || !reflect.DeepEqual(pool.Capabilities, binding.Capabilities) || !reflect.DeepEqual(pool.CapacityPolicy, binding.CapacityPolicy) || pool.State != binding.State {
+			if !reflect.DeepEqual(pool.Architectures, binding.Architectures) || !reflect.DeepEqual(pool.Capabilities, binding.Capabilities) || pool.State != binding.State {
 				return nil, fmt.Errorf("SecondBox standard bundles bind RunnerPool %q inconsistently", binding.Name)
 			}
 			return pools, nil
 		}
 	}
-	return append(pools, resourceapply.RunnerPool{Name: binding.Name, Architectures: binding.Architectures, Capabilities: binding.Capabilities, CapacityPolicy: binding.CapacityPolicy, State: binding.State, MutableFields: []string{"capacityPolicy", "state"}}), nil
+	return append(pools, resourceapply.RunnerPool{Name: binding.Name, Architectures: binding.Architectures, Capabilities: binding.Capabilities, State: binding.State, MutableFields: []string{"state"}}), nil
 }
 
 func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilliseconds int64) secondboxclient.ProfileRevisionSpec {

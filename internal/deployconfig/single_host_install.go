@@ -385,7 +385,7 @@ func singleHostManifest(plan install.InstallPlan, release releasecontract.Artifa
 	bridge := prefix.Addr().Next()
 	guest := bridge.Next()
 	features := []string{"compute", "evidence", "exec-streaming", "file-streaming", "local-workspace", "port-proxy", "pty"}
-	pools := []StandardRunnerPool{{Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: slices.Clone(features), State: "ready", MaxSandboxes: integer(plan.Capacity.MaxSandboxes), MaxVCPUCount: integer(plan.Capacity.VCPUCount()), MaxMemoryBytes: integer(plan.Capacity.MaxMemoryBytes)}}
+	pools := []StandardRunnerPool{{Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: slices.Clone(features), State: "ready"}}
 	runnerRoot := installPath(plan, "runner-root")
 	state := installPath(plan, "state")
 	runnerStorage := installPath(plan, "runner-storage")

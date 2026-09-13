@@ -290,8 +290,8 @@ func createGrantedProfileWithDataPlaneTransport(
 	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
 		Name: "default-pool", State: contracts.RunnerPoolStateReady,
 		Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"},
-		CapacityPolicy: map[string]int64{"maxInstances": 100}, ReadyRunnerCount: 1,
-		Revision: 1, CreatedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+		ReadyRunnerCount: 1,
+		Revision:         1, CreatedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatal(err)

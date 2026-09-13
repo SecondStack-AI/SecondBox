@@ -339,9 +339,9 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 	seededAt := time.Now().UTC()
 	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
 		Name: poolName, State: contracts.RunnerPoolStateReady,
-		Architectures:    []string{"amd64"},
-		Capabilities:     []string{"compute", "local-workspace"},
-		CapacityPolicy:   map[string]int64{"maxInstances": 100},
+		Architectures: []string{"amd64"},
+		Capabilities:  []string{"compute", "local-workspace"},
+
 		ReadyRunnerCount: 1,
 		Revision:         1,
 		CreatedAt:        seededAt,

@@ -202,7 +202,7 @@ func (document BundleDocument) Validate() error {
 }
 
 func poolParameterSchema() json.RawMessage {
-	return json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["architectures","capabilities","capacityPolicy","state"],"properties":{"architectures":{"type":"array","contains":{"const":"amd64"}},"capabilities":{"type":"array","minItems":1,"items":{"type":"string"}},"capacityPolicy":{"type":"object","additionalProperties":{"type":"integer","minimum":0}},"state":{"const":"ready"}}}`)
+	return json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["architectures","capabilities","state"],"properties":{"architectures":{"type":"array","contains":{"const":"amd64"}},"capabilities":{"type":"array","minItems":1,"items":{"type":"string"}},"state":{"const":"ready"}}}`)
 }
 
 func logicalGateway(name string) string {

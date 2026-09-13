@@ -306,7 +306,6 @@ func TestAuditTenantAttribution(t *testing.T) {
 		contracts.CreateRunnerPoolRequest{
 			Name: "audit-attribution-pool", State: contracts.RunnerPoolStateReady,
 			Architectures: []string{"amd64"}, Capabilities: []string{"compute"},
-			CapacityPolicy: map[string]int64{"maxInstances": 4},
 		},
 	)
 	if err != nil {

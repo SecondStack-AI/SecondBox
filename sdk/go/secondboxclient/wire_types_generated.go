@@ -643,8 +643,6 @@ type RunnerArchitectureList = []string
 
 type RunnerCapabilityList = []string
 
-type RunnerCapacityPolicy = map[string]int64
-
 type RunnerID = string
 
 type RunnerPage = contracts.RunnerPage
@@ -1012,10 +1010,9 @@ type TouchResult struct {
 }
 
 type UpdateRunnerPoolRequest struct {
-	Architectures  RunnerArchitectureList `json:"architectures,omitempty"`
-	Capabilities   RunnerCapabilityList   `json:"capabilities,omitempty"`
-	CapacityPolicy RunnerCapacityPolicy   `json:"capacityPolicy,omitempty"`
-	State          *RunnerPoolState       `json:"state,omitempty"`
+	Architectures RunnerArchitectureList `json:"architectures,omitempty"`
+	Capabilities  RunnerCapabilityList   `json:"capabilities,omitempty"`
+	State         *RunnerPoolState       `json:"state,omitempty"`
 }
 
 type UpdateSandboxMetadataRequest struct {

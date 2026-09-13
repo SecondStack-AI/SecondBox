@@ -36,9 +36,6 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 				Capabilities: []string{
 					"cleanup", "compute", "local-workspace", "network-policy", "storage",
 				},
-				CapacityPolicy: map[string]int64{
-					"maxInstances": int64(driver.config.Runner.MaxConcurrentGlobal),
-				},
 			}),
 		},
 	)

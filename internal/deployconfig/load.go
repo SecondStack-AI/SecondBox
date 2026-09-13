@@ -622,11 +622,6 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 		if pool.Name != standardresources.PoolAMD64 || pool.State == "" || len(pool.Architectures) == 0 || !slices.Contains(pool.Architectures, "amd64") || len(pool.Capabilities) == 0 {
 			return manifestError(prefix+" requires name, ready state, capabilities and amd64 architecture inventory", nil)
 		}
-		for name, value := range map[string]*int64{"max_sandboxes": pool.MaxSandboxes, "max_vcpu_count": pool.MaxVCPUCount, "max_memory_bytes": pool.MaxMemoryBytes} {
-			if value == nil || *value < 1 {
-				return manifestError(prefix+"."+name+" must be positive", nil)
-			}
-		}
 		bindings[pool.Name] = pool
 	}
 	for _, bundle := range resources.Bundles {
@@ -947,7 +942,7 @@ func resolveStandardResources(base string, manifest ManifestV1, catalog assetcat
 	}
 	pools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.RunnerPools))
 	for _, configured := range manifest.StandardResources.RunnerPools {
-		pools[configured.Name] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State, CapacityPolicy: map[string]int64{"maxSandboxes": *configured.MaxSandboxes, "maxVcpuCount": *configured.MaxVCPUCount, "maxMemoryBytes": *configured.MaxMemoryBytes}}
+		pools[configured.Name] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State}
 	}
 	selectedPools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.Bundles))
 	for _, bundle := range manifest.StandardResources.Bundles {

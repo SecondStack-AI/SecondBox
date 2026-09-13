@@ -99,11 +99,10 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 			t.Context(),
 			admin,
 			contracts.CreateRunnerPoolRequest{
-				Name:           poolName,
-				State:          contracts.RunnerPoolStateReady,
-				Architectures:  []string{"amd64"},
-				Capabilities:   []string{"compute"},
-				CapacityPolicy: map[string]int64{"maximumInstances": 4},
+				Name:          poolName,
+				State:         contracts.RunnerPoolStateReady,
+				Architectures: []string{"amd64"},
+				Capabilities:  []string{"compute"},
 			},
 		)
 		if err != nil {
@@ -117,11 +116,10 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		t.Context(),
 		admin,
 		contracts.CreateRunnerPoolRequest{
-			Name:           runnerPoolName,
-			State:          contracts.RunnerPoolStateReady,
-			Architectures:  []string{"amd64"},
-			Capabilities:   []string{"compute"},
-			CapacityPolicy: map[string]int64{"maximumInstances": 4},
+			Name:          runnerPoolName,
+			State:         contracts.RunnerPoolStateReady,
+			Architectures: []string{"amd64"},
+			Capabilities:  []string{"compute"},
 		},
 	); err != nil {
 		t.Fatal(err)

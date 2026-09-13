@@ -27,13 +27,10 @@ type StandardResources struct {
 
 // StandardRunnerPool declares inventory once for all bundles using its name.
 type StandardRunnerPool struct {
-	Name           string   `toml:"name"`
-	Architectures  []string `toml:"architectures"`
-	Capabilities   []string `toml:"capabilities"`
-	State          string   `toml:"state"`
-	MaxSandboxes   *int64   `toml:"max_sandboxes"`
-	MaxVCPUCount   *int64   `toml:"max_vcpu_count"`
-	MaxMemoryBytes *int64   `toml:"max_memory_bytes"`
+	Name          string   `toml:"name"`
+	Architectures []string `toml:"architectures"`
+	Capabilities  []string `toml:"capabilities"`
+	State         string   `toml:"state"`
 }
 
 type Deployment struct {

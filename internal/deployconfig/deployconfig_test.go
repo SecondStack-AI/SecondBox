@@ -147,6 +147,9 @@ func TestDeploymentRejectsRetiredSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := []struct{ table, name, key string }{
+		{"[[standard_resources.runner_pools]]", "max_sandboxes", "standard_resources.runner_pools.max_sandboxes"},
+		{"[[standard_resources.runner_pools]]", "max_vcpu_count", "standard_resources.runner_pools.max_vcpu_count"},
+		{"[[standard_resources.runner_pools]]", "max_memory_bytes", "standard_resources.runner_pools.max_memory_bytes"},
 		{"[policy]", "data_plane_poll_interval_milliseconds", "policy.data_plane_poll_interval_milliseconds"},
 		{"[policy]", "runner_command_poll_interval_milliseconds", "policy.runner_command_poll_interval_milliseconds"},
 		{"[deployment]", "listen_address", "deployment.listen_address"},
@@ -558,7 +561,6 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "standard pool declared twice", want: "declare each pool once", mutate: func(manifest *ManifestV1) {
 			manifest.StandardResources.RunnerPools = append(manifest.StandardResources.RunnerPools, manifest.StandardResources.RunnerPools[0])
 		}},
-		{name: "standard pool capacity absent", want: "max_sandboxes must be positive", mutate: func(manifest *ManifestV1) { manifest.StandardResources.RunnerPools[0].MaxSandboxes = nil }},
 		{name: "standard gateway unresolved", want: "must resolve agent-gateway.secondbox.internal", mutate: func(manifest *ManifestV1) {
 			runner := validTestRunner("runner-a", "remote")
 			runner.PoolID = "standard-amd64"

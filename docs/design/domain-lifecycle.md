@@ -16,7 +16,7 @@ All identifiers are server-generated opaque strings. Timestamps are UTC RFC 3339
 | `Lease` | Subject-scoped, bounded authority for useful activity against one Sandbox generation. It expires, is released, or is fenced; it never outlives its generation. |
 | `Workspace` | Belongs to one Sandbox and has one authoritative home Runner. It records logical capacity, current generation, readiness/deletion state, one durable mutation slot, and opaque local receipt evidence without a host path. Its home changes only through an operator-initiated stopped-Sandbox relocation. |
 | `Snapshot` | Subject-owned immutable local reflink of one stopped Sandbox Workspace. It records logical size, lifecycle state, creation time, optional expiration, and bounded metadata without an image digest or storage reference. |
-| `RunnerPool` | Operator-owned placement and trust boundary. It declares allowed architectures, capabilities, capacity policy, and enrolled Runners. |
+| `RunnerPool` | Operator-owned placement and trust boundary. It declares allowed architectures, capabilities, and enrolled Runners. |
 | `Runner` | Operator-provisioned execution identity. It belongs to one pool and records pre-shared credential state, advertised/verified capabilities, capacity, protocol versions, health, and drain state. |
 
 An `Operation` is the public asynchronous observation record for lifecycle mutations. It identifies the requested action, target Sandbox, status, request correlation, timestamps, and typed terminal result. It does not grant data-plane access.

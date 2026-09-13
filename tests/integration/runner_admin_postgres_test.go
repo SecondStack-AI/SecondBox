@@ -28,9 +28,6 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 			State:         contracts.RunnerPoolStateReady,
 			Architectures: []string{"amd64"},
 			Capabilities:  []string{"compute", "local-workspace"},
-			CapacityPolicy: map[string]int64{
-				"maximumInstances": 32,
-			},
 		},
 	)
 	if err != nil {
@@ -132,10 +129,10 @@ func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testin
 	t.Cleanup(pool.Close)
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.runner_pools (
-			name,state,architectures_json,capabilities_json,capacity_policy_json,
+			name,state,architectures_json,capabilities_json,
 			ready_runner_count,revision,created_at,updated_at
 		) VALUES ('runner-admin-pool','ready','["amd64"]','["compute"]',
-		          '{"maxInstances":4}',1,1,$1,$1)`,
+		          1,1,$1,$1)`,
 		now,
 	); err != nil {
 		t.Fatal(err)
@@ -196,11 +193,10 @@ func TestRunnerPoolAdministrationIsAvailableThroughPublicHTTPContract(t *testing
 		"bootstrap-administrator-secret",
 		"runner-pool-http-create",
 		contracts.CreateRunnerPoolRequest{
-			Name:           "http-runner-pool",
-			State:          contracts.RunnerPoolStateReady,
-			Architectures:  []string{"amd64"},
-			Capabilities:   []string{"compute"},
-			CapacityPolicy: map[string]int64{"maxInstances": 4},
+			Name:          "http-runner-pool",
+			State:         contracts.RunnerPoolStateReady,
+			Architectures: []string{"amd64"},
+			Capabilities:  []string{"compute"},
 		},
 	)
 	if createdResponse.StatusCode != http.StatusCreated {

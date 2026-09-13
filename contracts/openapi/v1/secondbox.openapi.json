@@ -2481,23 +2481,15 @@
           "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "snapshot-resume", "workspace-relocation", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]
         }
       },
-      "RunnerCapacityPolicy": {
-        "type": "object",
-        "minProperties": 1,
-        "maxProperties": 32,
-        "propertyNames": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]{0,63}$"},
-        "additionalProperties": {"type": "integer", "format": "int64", "minimum": 1}
-      },
       "RunnerPool": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "state", "architectures", "capabilities", "capacityPolicy", "readyRunnerCount", "revision", "createdAt", "updatedAt"],
+        "required": ["name", "state", "architectures", "capabilities", "readyRunnerCount", "revision", "createdAt", "updatedAt"],
         "properties": {
           "name": {"$ref": "#/components/schemas/ProfileName"},
           "state": {"$ref": "#/components/schemas/RunnerPoolState"},
           "architectures": {"$ref": "#/components/schemas/RunnerArchitectureList"},
           "capabilities": {"$ref": "#/components/schemas/RunnerCapabilityList"},
-          "capacityPolicy": {"$ref": "#/components/schemas/RunnerCapacityPolicy"},
           "readyRunnerCount": {"type": "integer", "format": "int64", "minimum": 0},
           "revision": {"type": "integer", "format": "int64", "minimum": 1},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
@@ -2507,13 +2499,12 @@
       "CreateRunnerPoolRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "state", "architectures", "capabilities", "capacityPolicy"],
+        "required": ["name", "state", "architectures", "capabilities"],
         "properties": {
           "name": {"$ref": "#/components/schemas/ProfileName"},
           "state": {"$ref": "#/components/schemas/RunnerPoolState"},
           "architectures": {"$ref": "#/components/schemas/RunnerArchitectureList"},
-          "capabilities": {"$ref": "#/components/schemas/RunnerCapabilityList"},
-          "capacityPolicy": {"$ref": "#/components/schemas/RunnerCapacityPolicy"}
+          "capabilities": {"$ref": "#/components/schemas/RunnerCapabilityList"}
         }
       },
       "UpdateRunnerPoolRequest": {
@@ -2523,8 +2514,7 @@
         "properties": {
           "state": {"$ref": "#/components/schemas/RunnerPoolState"},
           "architectures": {"$ref": "#/components/schemas/RunnerArchitectureList"},
-          "capabilities": {"$ref": "#/components/schemas/RunnerCapabilityList"},
-          "capacityPolicy": {"$ref": "#/components/schemas/RunnerCapacityPolicy"}
+          "capabilities": {"$ref": "#/components/schemas/RunnerCapabilityList"}
         }
       },
       "RunnerPoolPage": {
