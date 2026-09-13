@@ -70,7 +70,7 @@ services:
       timeout: 5s
       retries: 90
     volumes:
-      - ../.tmp/scenario/secondboxd:/opt/secondbox/secondboxd:ro
+      - ${SECONDBOX_SCENARIO_BUILD_DIR:?SECONDBOX_SCENARIO_BUILD_DIR is required}/secondboxd:/opt/secondbox/secondboxd:ro
       - ${SECONDBOX_SCENARIO_PKI_DIR:?SECONDBOX_SCENARIO_PKI_DIR is required}:/opt/secondbox/pki:ro
       - ${SECONDBOX_SCENARIO_ASSET_CATALOG:?SECONDBOX_SCENARIO_ASSET_CATALOG is required}:/opt/secondbox/signed-assets.json:ro
 
@@ -240,7 +240,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     volumes:
       - ./scenario-publish-snapshot-template.sh:/usr/local/bin/secondbox-scenario-publish-snapshot-template:ro
-      - ../.tmp/scenario/snapshot-template-publish.test:/opt/secondbox-snapshot-template-publish.test:ro
+      - ${SECONDBOX_SCENARIO_BUILD_DIR:?SECONDBOX_SCENARIO_BUILD_DIR is required}/snapshot-template-publish.test:/opt/secondbox-snapshot-template-publish.test:ro
       - ${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR is required}:/opt/secondbox-artifacts:ro
       - ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is required}:/opt/secondbox-artifact-public-key.pem:ro
       - scenario-egress-context-config:/etc/secondbox-runner:ro

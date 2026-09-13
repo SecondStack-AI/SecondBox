@@ -143,6 +143,8 @@ func TestScenarioHarnessReleasesAndProvesItsPerRunHostResources(t *testing.T) {
 }
 
 type orphanSweepHarness struct {
+	scopeBridge                 string
+	scopeParent                 string
 	binDirectory                string
 	cgroupRoot                  string
 	bridgeTable                 string
@@ -247,6 +249,8 @@ func (harness *orphanSweepHarness) run(t *testing.T) string {
 		filepath.Join(repositoryRootForDeploymentPolicy(t), "scripts", "scenario-sweep-host-orphans.sh"),
 	)
 	command.Env = []string{
+		"SECONDBOX_SCENARIO_SWEEP_BRIDGE=" + harness.scopeBridge,
+		"SECONDBOX_SCENARIO_SWEEP_CGROUP_PARENT=" + harness.scopeParent,
 		"PATH=" + harness.binDirectory + ":" + os.Getenv("PATH"),
 		"FAKE_IP_BRIDGES=" + harness.bridgeTable,
 		"FAKE_IP_ENSLAVED=" + harness.enslavedPath,
@@ -276,5 +280,25 @@ func writeSweepExecutable(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestScenarioOrphanSweepScopePreservesOtherStoppedSuites(t *testing.T) {
+	sweep := newOrphanSweepHarness(t)
+	sweep.scopeBridge = "sbxq10"
+	sweep.scopeParent = "secondbox-scenario-10"
+	sweep.bridges = []string{
+		"1: sbxq10: <BROADCAST,MULTICAST,UP> mtu 1500",
+		"2: sbxq20: <BROADCAST,MULTICAST,UP> mtu 1500",
+	}
+	sweep.cgroups = []string{"secondbox-scenario-10", "secondbox-scenario-20"}
+	sweep.cgroupVerdicts = "removed secondbox-scenario-10\n"
+	sweep.run(t)
+	log := sweep.dockerLog(t)
+	if !strings.Contains(log, "sbxq10") || !strings.Contains(log, "secondbox-scenario-10") {
+		t.Fatalf("own resources not reclaimed: %s", log)
+	}
+	if strings.Contains(log, "sbxq20") || strings.Contains(log, "secondbox-scenario-20") {
+		t.Fatalf("other stopped suite touched: %s", log)
 	}
 }

@@ -83,7 +83,7 @@ func TestScenarioNoReadyRunnerFailsAdmissionImmediately(t *testing.T) {
 
 	scenarioCompose(t, "stop", "--timeout", "30", "secondbox-runner")
 	t.Cleanup(func() {
-		scenarioCompose(t, "start", "secondbox-runner")
+		scenarioStartService(t, "secondbox-runner")
 		waitForScenarioRunner(t, fixture, 90*time.Second)
 	})
 	waitForRunnerPoolReadyCount(t, fixture, 0, 30*time.Second)
@@ -121,6 +121,7 @@ func waitForScenarioRunner(
 	timeout time.Duration,
 ) contracts.Runner {
 	t.Helper()
+	failIfScenarioRunnerLost(t)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	query := make(url.Values)
@@ -150,6 +151,9 @@ func waitForScenarioRunner(
 		}
 		select {
 		case <-ctx.Done():
+			markScenarioRunnerLost(t)
+			t.Logf("SecondBox scenario last Runner page: %+v; error: %v", page, err)
+			scenarioRunnerDiagnostics(t)
 			t.Fatalf("SecondBox scenario Runner did not enroll: %v", errors.Join(err, ctx.Err()))
 		case <-time.After(250 * time.Millisecond):
 		}

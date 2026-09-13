@@ -37,6 +37,20 @@ const (
 )
 
 var scenarioKeySequence atomic.Uint64
+var scenarioRunnerLost atomic.Pointer[string]
+
+func failIfScenarioRunnerLost(t *testing.T) {
+	t.Helper()
+	if reason := scenarioRunnerLost.Load(); reason != nil {
+		t.Fatal(*reason)
+	}
+}
+
+func markScenarioRunnerLost(t *testing.T) {
+	t.Helper()
+	reason := "SecondBox scenario runner lost since " + t.Name()
+	scenarioRunnerLost.CompareAndSwap(nil, &reason)
+}
 
 type scenarioFixture struct {
 	baseURL       string
@@ -48,6 +62,7 @@ type scenarioFixture struct {
 
 func newScenarioFixture(t *testing.T) scenarioFixture {
 	t.Helper()
+	failIfScenarioRunnerLost(t)
 	baseURL := requireScenarioEnvironment(t, "SECONDBOX_LIVE_BASE_URL")
 	platformToken := requireScenarioEnvironment(t, "SECONDBOX_PLATFORM_TOKEN")
 	applicationToken := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_APPLICATION_TOKEN")
@@ -359,6 +374,12 @@ func cleanupScenarioSandbox(
 	handle *secondboxclient.SandboxHandle,
 ) {
 	t.Helper()
+	if reason := scenarioRunnerLost.Load(); reason != nil {
+		// API deletion cannot finish without the home runner. The suite's EXIT
+		// trap owns removal of this failed stack and its workspace directories.
+		t.Errorf("SecondBox scenario Sandbox cleanup requires suite teardown: %s", *reason)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	sandbox, err := handle.Refresh(ctx)
@@ -550,16 +571,37 @@ func scenarioCompose(t *testing.T, arguments ...string) {
 
 func scenarioComposeOutput(t *testing.T, arguments ...string) []byte {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	output, err := scenarioComposeCommand(t, ctx, arguments...)
+	if err != nil {
+		t.Fatalf("SecondBox scenario Compose %v: %v\n%s", arguments, err, output)
+	}
+	return output
+}
+
+// Keep successful command output too: a no-op start may return success and only
+// become a test failure later. Cleanup logs it before the suite tears down.
+func scenarioCommand(t *testing.T, ctx context.Context, name string, arguments ...string) ([]byte, error) {
+	t.Helper()
+	command := exec.CommandContext(ctx, name, arguments...)
+	command.WaitDelay = 100 * time.Millisecond
+	output, err := command.CombinedOutput()
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("SecondBox scenario command %s %v: %v\n%s", name, arguments, err, output)
+		}
+	})
+	return output, err
+}
+
+func scenarioComposeCommand(t *testing.T, ctx context.Context, arguments ...string) ([]byte, error) {
+	t.Helper()
 	if controller := strings.TrimSpace(os.Getenv("SECONDBOX_SCENARIO_SERVICE_CONTROL")); controller != "" {
 		if !filepath.IsAbs(controller) || filepath.Clean(controller) != controller {
 			t.Fatalf("SECONDBOX_SCENARIO_SERVICE_CONTROL must be a clean absolute path: %q", controller)
 		}
-		command := exec.CommandContext(context.Background(), controller, arguments...)
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("SecondBox scenario service control %v: %v\n%s", arguments, err, output)
-		}
-		return output
+		return scenarioCommand(t, ctx, controller, arguments...)
 	}
 	commandArguments := []string{
 		"compose",
@@ -569,11 +611,73 @@ func scenarioComposeOutput(t *testing.T, arguments ...string) []byte {
 	if override := strings.TrimSpace(os.Getenv("SECONDBOX_SCENARIO_COMPOSE_OVERRIDE_FILE")); override != "" {
 		commandArguments = append(commandArguments, "--file", override)
 	}
-	commandArguments = append(commandArguments, arguments...)
-	command := exec.CommandContext(context.Background(), "docker", commandArguments...)
-	output, err := command.CombinedOutput()
+	return scenarioCommand(t, ctx, "docker", append(commandArguments, arguments...)...)
+}
+
+func scenarioInspectService(t *testing.T, ctx context.Context, service string) ([]byte, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	ids, err := scenarioComposeCommand(t, ctx, "ps", "--all", "--quiet", service)
 	if err != nil {
-		t.Fatalf("SecondBox scenario Compose %v: %v\n%s", arguments, err, output)
+		return ids, err
 	}
-	return output
+	containers := strings.Fields(string(ids))
+	if len(containers) != 1 {
+		return ids, fmt.Errorf("SecondBox scenario expected one container for %s, got %q", service, ids)
+	}
+	return scenarioCommand(t, ctx, "docker", "inspect", "--format", "{{json .State}}", containers[0])
+}
+
+func scenarioStartService(t *testing.T, service string) {
+	t.Helper()
+	// Reserve a second for command pipe cleanup inside the 30-second limit.
+	if strings.TrimSpace(os.Getenv("SECONDBOX_SCENARIO_SERVICE_CONTROL")) != "" {
+		// Native and pod controllers own their own readiness checks.
+		scenarioCompose(t, "start", service)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 29*time.Second)
+	defer cancel()
+	// Retain state even if both start commands later hang before polling.
+	initial, initialErr := scenarioInspectService(t, ctx, service)
+	t.Logf("SecondBox scenario state before starting %s: %v\n%s", service, initialErr, initial)
+	err := scenarioharness.RestartService(ctx, func(ctx context.Context) error {
+		_, err := scenarioComposeCommand(t, ctx, "up", "-d", "--no-deps", service)
+		return err
+	}, func(ctx context.Context) (bool, error) {
+		output, err := scenarioInspectService(t, ctx, service)
+		if err != nil {
+			return false, err
+		}
+		var state struct {
+			Running    bool
+			Restarting bool
+		}
+		if err := json.Unmarshal(output, &state); err != nil {
+			return false, err
+		}
+		return state.Running && !state.Restarting, nil
+	})
+	if err != nil {
+		markScenarioRunnerLost(t)
+		t.Fatal(err)
+	}
+}
+
+func scenarioRunnerDiagnostics(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, args := range [][]string{
+		{"ps", "--all"},
+		{"logs", "--tail", "200", "secondbox-runner"},
+	} {
+		output, err := scenarioComposeCommand(t, ctx, args...)
+		t.Logf("SecondBox scenario runner diagnostics %v: %v\n%s", args, err, output)
+	}
+	if strings.TrimSpace(os.Getenv("SECONDBOX_SCENARIO_SERVICE_CONTROL")) == "" {
+		output, err := scenarioInspectService(t, ctx, "secondbox-runner")
+		t.Logf("SecondBox scenario runner inspect: %v\n%s", err, output)
+	}
 }

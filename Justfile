@@ -1,5 +1,6 @@
 # SecondBox build and validation tasks.
 
+export GOTOOLCHAIN := `awk '$1 == "go" { print "go" $2; exit }' go.mod`
 default:
     @just --list
 
@@ -191,3 +192,10 @@ deploy-development-up directory:
     echo "SecondBox development control plane is ready at $public_base_url"
 
 preship: test-non-kvm
+
+# Detached qualification; --wait RUN reattaches to a previous run.
+qualify *args:
+    scripts/qualify.sh {{args}}
+
+release version:
+    scripts/release.sh "{{version}}"
