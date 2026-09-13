@@ -78,28 +78,23 @@ func (probe fakeNetwork) Head(context.Context, string) (int, error) {
 	return probe.status, probe.headErr
 }
 
-type fakeClock struct{ now time.Time }
-
-func (clock fakeClock) Now() time.Time { return clock.now }
-
 type fakeUsers struct {
 	assigned map[int64]bool
 	err      error
+	ranges   []UIDRange
+	rangeErr error
 }
 
 func (users fakeUsers) AssignedUIDs() (map[int64]bool, error) { return users.assigned, users.err }
 
-type fakeUsersWithRanges struct {
-	fakeUsers
-	ranges []UIDRange
+func (users fakeUsers) ReservedIDRanges() ([]UIDRange, error) {
+	return users.ranges, users.rangeErr
 }
-
-func (users fakeUsersWithRanges) ReservedIDRanges() ([]UIDRange, error) { return users.ranges, nil }
 
 func qualifiedProbes() PreflightProbes {
 	files := map[string]string{"/etc/machine-id": "host-1\n", "/sys/fs/cgroup/cgroup.controllers": "cpu memory pids io\n", "/proc/filesystems": "nodev\tbtrfs\n\txfs\n", "/proc/cpuinfo": "processor: 0\nflags : fpu vmx sse\n", "/proc/meminfo": "MemTotal:       33554432 kB\n", "/proc/self/mountinfo": "22 1 8:1 / / rw - ext4 /dev/root rw\n23 1 8:2 / /srv/workspace rw - xfs /dev/sdb rw\n", "/etc/resolv.conf": "nameserver 192.0.2.53\n"}
 	process := &fakeProcess{results: map[string]CommandResult{"uname -r": {Stdout: "6.12.0"}, "systemctl --version": {Stdout: "systemd 257"}, "systemctl is-system-running": {Stdout: "running"}, "docker version --format {{.Server.Version}}": {Stdout: "27.5.1"}, "docker compose version --short": {Stdout: "2.32.4"}, "docker compose ls --format json": {Stdout: "[]"}, "ip -j -4 route show table all": {Stdout: `[{"dst":"default","gateway":"192.0.2.1","dev":"eth0"},{"dst":"192.0.2.0/24","dev":"eth0"}]`}, "ss -H -lntu": {Stdout: "tcp LISTEN 0 128 127.0.0.1:22"}}, errors: map[string]error{}, missing: map[string]bool{}}
-	return PreflightProbes{Filesystem: &fakeFilesystem{files: files, lstatErrors: map[string]error{}, openErrors: map[string]error{}, stats: map[string][2]int64{"/srv/workspace": {200 << 30, 250 << 30}}}, Process: process, Network: fakeNetwork{status: 200}, Clock: fakeClock{now: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)}, Users: fakeUsers{assigned: map[int64]bool{0: true, 1000: true}}, LookupEnv: func(string) (string, bool) { return "", false }, OS: "linux", Architecture: "amd64", CPUCount: 8, InvokingUID: 1000, InvokingGID: 1000}
+	return PreflightProbes{Filesystem: &fakeFilesystem{files: files, lstatErrors: map[string]error{}, openErrors: map[string]error{}, stats: map[string][2]int64{"/srv/workspace": {200 << 30, 250 << 30}}}, Process: process, Network: fakeNetwork{status: 200}, Now: func() time.Time { return time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC) }, Users: fakeUsers{assigned: map[int64]bool{0: true, 1000: true}}, LookupEnv: func(string) (string, bool) { return "", false }, OS: "linux", Architecture: "amd64", CPUCount: 8, InvokingUID: 1000, InvokingGID: 1000}
 }
 
 func findingByID(t *testing.T, facts HostFacts, id string) Finding {
@@ -272,7 +267,7 @@ func TestPreflightResolvesStubDNSAndAvoidsSubordinateIDs(t *testing.T) {
 	filesystem.files["/etc/resolv.conf"] = "nameserver 127.0.0.53\n"
 	process := probes.Process.(*fakeProcess)
 	process.results["resolvectl dns"] = CommandResult{Stdout: "Global: 192.0.2.54\nLink 2 (eth0): 2001:db8::53"}
-	probes.Users = fakeUsersWithRanges{fakeUsers: fakeUsers{assigned: map[int64]bool{0: true, 1000: true}}, ranges: []UIDRange{{Start: 200000, Count: 64}}}
+	probes.Users = fakeUsers{assigned: map[int64]bool{0: true, 1000: true}, ranges: []UIDRange{{Start: 200000, Count: 64}}}
 	facts, err := Preflight(context.Background(), probes)
 	if err != nil {
 		t.Fatal(err)
@@ -282,6 +277,21 @@ func TestPreflightResolvesStubDNSAndAvoidsSubordinateIDs(t *testing.T) {
 	}
 	if len(facts.CandidateUIDRanges) == 0 || rangesOverlap(facts.CandidateUIDRanges[0], UIDRange{Start: 200000, Count: 64}) {
 		t.Fatalf("candidate ranges overlap subordinate allocation: %#v", facts.CandidateUIDRanges)
+	}
+}
+
+func TestPreflightRequiresSubordinateIDInspection(t *testing.T) {
+	probes := qualifiedProbes()
+	probes.Users = fakeUsers{rangeErr: errors.New("subuid access denied")}
+	facts, err := Preflight(context.Background(), probes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := findingByID(t, facts, "uids"); finding.Class != FindingNeedsAction || finding.Detail != "subuid access denied" {
+		t.Fatalf("UID finding = %#v", finding)
+	}
+	if len(facts.CandidateUIDRanges) != 0 {
+		t.Fatalf("offered unchecked UID ranges: %#v", facts.CandidateUIDRanges)
 	}
 }
 

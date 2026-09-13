@@ -38,18 +38,15 @@ type NetworkProbe interface {
 	LookupHost(context.Context, string) ([]string, error)
 	Head(context.Context, string) (int, error)
 }
-type ClockProbe interface{ Now() time.Time }
 type UserProbe interface {
 	AssignedUIDs() (map[int64]bool, error)
-}
-type UserRangeProbe interface {
 	ReservedIDRanges() ([]UIDRange, error)
 }
 type PreflightProbes struct {
 	Filesystem   FilesystemProbe
 	Process      ProcessProbe
 	Network      NetworkProbe
-	Clock        ClockProbe
+	Now          func() time.Time
 	Users        UserProbe
 	LookupEnv    func(string) (string, bool)
 	OS           string
@@ -114,10 +111,6 @@ func (probe systemNetworkProbe) Head(ctx context.Context, location string) (int,
 	return response.StatusCode, closeErr
 }
 
-type systemClockProbe struct{}
-
-func (systemClockProbe) Now() time.Time { return time.Now() }
-
 type systemUserProbe struct{ filesystem FilesystemProbe }
 
 func (probe systemUserProbe) AssignedUIDs() (map[int64]bool, error) {
@@ -180,14 +173,14 @@ func (probe systemUserProbe) ReservedIDRanges() ([]UIDRange, error) {
 
 func SystemPreflightProbes() PreflightProbes {
 	filesystem := systemFilesystemProbe{}
-	return PreflightProbes{Filesystem: filesystem, Process: systemProcessProbe{}, Network: systemNetworkProbe{client: &http.Client{Timeout: 5 * time.Second}}, Clock: systemClockProbe{}, Users: systemUserProbe{filesystem: filesystem}, LookupEnv: os.LookupEnv, OS: runtime.GOOS, Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), InvokingUID: int64(os.Getuid()), InvokingGID: int64(os.Getgid())}
+	return PreflightProbes{Filesystem: filesystem, Process: systemProcessProbe{}, Network: systemNetworkProbe{client: &http.Client{Timeout: 5 * time.Second}}, Now: time.Now, Users: systemUserProbe{filesystem: filesystem}, LookupEnv: os.LookupEnv, OS: runtime.GOOS, Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), InvokingUID: int64(os.Getuid()), InvokingGID: int64(os.Getgid())}
 }
 
 func Preflight(ctx context.Context, probes PreflightProbes) (HostFacts, error) {
-	if probes.Filesystem == nil || probes.Process == nil || probes.Network == nil || probes.Clock == nil || probes.Users == nil || probes.LookupEnv == nil {
+	if probes.Filesystem == nil || probes.Process == nil || probes.Network == nil || probes.Now == nil || probes.Users == nil || probes.LookupEnv == nil {
 		return HostFacts{}, installerError("preflight requires filesystem, process, network, clock, and user probes", nil)
 	}
-	facts := HostFacts{SchemaVersion: HostFactsSchema, ObservedAt: probes.Clock.Now().UTC(), OS: probes.OS, Architecture: probes.Architecture, InvokingUID: probes.InvokingUID, InvokingGID: probes.InvokingGID, CPUCount: probes.CPUCount, Devices: []DeviceFact{}, ListeningPorts: []PortFact{}, Routes: []RouteFact{}, DockerNetworkSubnets: []string{}, DNSUpstreams: []string{}, AssignedUIDs: []int64{}, ReservedIDRanges: []UIDRange{}, CandidateUIDRanges: []UIDRange{}, Utilities: map[string]string{}, Findings: []Finding{}}
+	facts := HostFacts{SchemaVersion: HostFactsSchema, ObservedAt: probes.Now().UTC(), OS: probes.OS, Architecture: probes.Architecture, InvokingUID: probes.InvokingUID, InvokingGID: probes.InvokingGID, CPUCount: probes.CPUCount, Devices: []DeviceFact{}, ListeningPorts: []PortFact{}, Routes: []RouteFact{}, DockerNetworkSubnets: []string{}, DNSUpstreams: []string{}, AssignedUIDs: []int64{}, ReservedIDRanges: []UIDRange{}, CandidateUIDRanges: []UIDRange{}, Utilities: map[string]string{}, Findings: []Finding{}}
 	add := func(id string, class FindingClass, summary, detail, remedy string) {
 		facts.Findings = append(facts.Findings, Finding{ID: id, Class: class, Summary: summary, Detail: detail, Remedy: remedy})
 	}
@@ -644,14 +637,12 @@ func preflightUsers(p PreflightProbes, f *HostFacts, add func(string, FindingCla
 		f.AssignedUIDs = append(f.AssignedUIDs, uid)
 	}
 	slices.Sort(f.AssignedUIDs)
-	if rangeProbe, ok := p.Users.(UserRangeProbe); ok {
-		reserved, err := rangeProbe.ReservedIDRanges()
-		if err != nil {
-			add("uids", FindingNeedsAction, "Subordinate host ID ranges could not be inspected", err.Error(), "Repair /etc/subuid and /etc/subgid access.")
-			return
-		}
-		f.ReservedIDRanges = reserved
+	reserved, err := p.Users.ReservedIDRanges()
+	if err != nil {
+		add("uids", FindingNeedsAction, "Subordinate host ID ranges could not be inspected", err.Error(), "Repair /etc/subuid and /etc/subgid access.")
+		return
 	}
+	f.ReservedIDRanges = reserved
 	for start := int64(200000); start < 400000 && len(f.CandidateUIDRanges) < 3; start += 64 {
 		free := true
 		for uid := start; uid < start+64; uid++ {
