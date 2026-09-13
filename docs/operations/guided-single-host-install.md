@@ -286,3 +286,5 @@ secondbox-deploy uninstall --purge /absolute/path/to/operation
 ```
 
 Purge requires an interactive typed `PURGE <operation-id>` confirmation. It first removes the exact Compose project's bundled PostgreSQL volume, verifies and journals removal of the execution assets while the accepted release manifest remains available, and only then removes the privileged Runner storage root. All deletion remains constrained to exact plan-and-receipt-matched resources through symlink- and mount-confined operations. It refuses broad paths, globs, physical or foreign mounts, altered ownership evidence, and changed targets. The plan and receipt remain as a bounded tombstone.
+
+New install plans describe host capacity and omit Subject quotas. Tenant and Subject resources own their admission limits. Previously accepted plans retain their recorded `subjectQuotas` data solely to preserve plan bytes and receipt digests; the installer does not apply those values.

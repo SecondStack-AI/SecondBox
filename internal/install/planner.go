@@ -235,11 +235,8 @@ func proposeCapacity(facts HostFacts, workspaceBytes int64) (CapacityPlan, error
 	vcpuCount := int64(facts.CPUCount) - HostVCPUReserveCount
 	memory := facts.MemoryBytes - HostMemoryReserveBytes
 	sandboxes := min(vcpuCount/DurableCodingVCPUCount, memory/DurableCodingMemoryBytes, workspaceBytes/MinimumWorkspaceBytes)
-	active := min(sandboxes, int64(4))
 	runnerOperations := sandboxes * DurableCodingConcurrentOperations
-	subjectOperations := active * DurableCodingConcurrentOperations
-	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxVcpuCount": vcpuCount, "maxMemoryBytes": memory, "maxSnapshots": sandboxes * 10, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": subjectOperations}
-	return CapacityPlan{MaxSandboxes: sandboxes, MaxVCPUCount: vcpuCount, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
+	return CapacityPlan{MaxSandboxes: sandboxes, MaxVCPUCount: vcpuCount, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), sandboxes), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85}, nil
 }
 
 func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, error) {

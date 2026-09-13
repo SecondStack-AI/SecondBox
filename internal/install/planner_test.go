@@ -101,7 +101,7 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if plan.Storage.ExistingDeviceIdentity != "8:16" || plan.Storage.WorkspacePath != "/srv/secondbox-workspace/secondbox-install_0123456789abcdef/storage/workspaces" || plan.Capacity.MaxWorkspaceBytes != 225<<30 {
 		t.Fatalf("storage = %#v", plan.Storage)
 	}
-	if len(plan.Capacity.SubjectQuotas) != 7 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" || plan.Network.ComposeBackendCIDR != "172.16.0.0/24" {
+	if len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" || plan.Network.ComposeBackendCIDR != "172.16.0.0/24" {
 		t.Fatalf("capacity/network incomplete: %#v %#v", plan.Capacity, plan.Network)
 	}
 	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
@@ -181,7 +181,7 @@ func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T)
 	if !strings.Contains(RenderPlanReview(plan), "Compute: Firecracker CPU template None") || !strings.Contains(RenderPlanReview(plan), "Existing SecondBox CLIs and CLI configuration") || !strings.Contains(RenderPlanReview(plan), "Ordinary uninstall preserves") || !strings.Contains(RenderPlanReview(plan), "Paths requiring sudo") {
 		t.Fatalf("review omitted durable or privilege boundary:\n%s", RenderPlanReview(plan))
 	}
-	if plan.Capacity.MaxVCPUCount < DurableCodingVCPUCount || plan.Capacity.MaxMemoryBytes < DurableCodingMemoryBytes || plan.Capacity.MaxWorkspaceBytes < MinimumWorkspaceBytes || plan.Capacity.ConcurrentOperations < plan.Capacity.MaxSandboxes*DurableCodingConcurrentOperations || plan.Capacity.SubjectQuotas["maxConcurrentOperations"] < plan.Capacity.SubjectQuotas["maxActiveInstances"]*DurableCodingConcurrentOperations {
+	if plan.Capacity.MaxVCPUCount < DurableCodingVCPUCount || plan.Capacity.MaxMemoryBytes < DurableCodingMemoryBytes || plan.Capacity.MaxWorkspaceBytes < MinimumWorkspaceBytes || plan.Capacity.ConcurrentOperations < plan.Capacity.MaxSandboxes*DurableCodingConcurrentOperations {
 		t.Fatalf("proposal cannot run durable-coding: %#v", plan.Capacity)
 	}
 }
@@ -317,5 +317,30 @@ func TestOperationIDsAreRandomAndValid(t *testing.T) {
 	}
 	if one == two || !operationPattern.MatchString(one) || !operationPattern.MatchString(two) {
 		t.Fatalf("operation IDs = %q, %q", one, two)
+	}
+}
+
+func TestNewPlansOmitSubjectQuotasAndPreserveIdentity(t *testing.T) {
+	plan, err := ProposePlan(plannerFacts(t), plannerInput(t, StorageExistingMount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := Canonical(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "subjectQuotas") {
+		t.Fatal("new plan retains unused Subject quotas")
+	}
+	decoded, err := DecodePlan(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reencoded, err := Canonical(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != string(reencoded) {
+		t.Fatal("new plan identity changed after decoding")
 	}
 }
