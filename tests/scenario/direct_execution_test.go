@@ -30,7 +30,7 @@ func TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota(t *testing.T
 			Mode: "shell", Command: "printf direct-output; sleep 60",
 		}},
 		Environment: secondboxclient.StringMap{}, DeadlineMilliseconds: 2000,
-		MaximumOutputBytes: 1024, WindowBytes: 1024,
+		MaximumOutputBytes: 4096, WindowBytes: 4096,
 	}, uniqueScenarioKey(t, "direct-exec-deadline"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota(t *testing.T
 		t.Fatal(err)
 	}
 	defer stream.Close()
-	if err := stream.GrantOutput(1024); err != nil {
+	if err := stream.GrantOutput(4096); err != nil {
 		t.Fatal(err)
 	}
 	if err := stream.CloseInput(); err != nil {
