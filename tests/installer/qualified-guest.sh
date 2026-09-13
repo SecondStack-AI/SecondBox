@@ -296,6 +296,11 @@ if [[ "$phase" == install ]]; then
     done < <(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print | sort)
     [[ -n "$operation" ]] || { echo 'clean candidate recreation operation is absent' >&2; exit 1; }
     update_attempt='refused_then_recreated'
+  elif [[ "$mode" == btrfs_image ]]; then
+    setup_candidate_registry
+    install_log="$qualification_root/install-${mode}.log"
+    printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
+    operation="$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)"
   else
     setup_candidate_registry
     install_log="$qualification_root/install-${mode}.log"
@@ -413,6 +418,10 @@ for _ in $(seq 1 300); do
 done
 [[ "$live_runner_state" == ready ]] || { echo 'installed Runner did not become ready after reboot' >&2; exit 1; }
 SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
+# Existing-filesystem modes own uninstall/resume and destructive purge coverage.
+# The fresh Btrfs guest proves install, reboot recovery, and a real microVM;
+# the driver then removes its entire disposable guest.
+if [[ "$mode" != btrfs_image ]]; then
 sandbox_before_document="$(SECONDBOX_CONFIG="$workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
 sandbox_before="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_before_document")"
 generation_before="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
@@ -454,10 +463,11 @@ done
 [[ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$compose_project")" ]]
 [[ -z "$(docker network ls -q --filter "label=com.docker.compose.project=$compose_project")" ]]
 [[ -f "$operation/install-plan.json" && -f "$receipt" ]]
+fi
 
-common=(clean_host read_only_preflight bootstrap_checksum guided_install reboot_recovery mount_recovery compose_ready runner_ready cli_login clean_install_delegated_workflow hello_microvm stage_interrupt_resume verified_bundle_not_reextracted uninstall_workspace_preserved resume_same_sandbox_lineage purge_exact_resources purge_neighbor_preserved purge_foreign_mount_refused)
+common=(clean_host read_only_preflight bootstrap_checksum guided_install reboot_recovery mount_recovery compose_ready runner_ready cli_login clean_install_delegated_workflow hello_microvm)
 if [[ "$mode" == existing_reflink_filesystem ]]; then
-  common+=(existing_reflink_isolation unsafe_filesystem_refusals fresh_existing_reflink_install)
+  common+=(stage_interrupt_resume verified_bundle_not_reextracted uninstall_workspace_preserved resume_same_sandbox_lineage purge_exact_resources purge_neighbor_preserved purge_foreign_mount_refused existing_reflink_isolation unsafe_filesystem_refusals fresh_existing_reflink_install)
 elif [[ "$mode" == existing_reflink_recreation ]]; then
   common=(v072_update_refused v072_sandbox_retired v072_source_purged candidate_clean_recreation)
 fi

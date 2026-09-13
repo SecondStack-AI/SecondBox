@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export RELEASE_IMAGE_PLATFORMS=linux/amd64,linux/arm64
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
@@ -198,3 +199,8 @@ if "$repo_root/scripts/release-upload.sh" >/dev/null 2>&1; then
   echo "release upload accepted missing arguments" >&2
   exit 1
 fi
+
+RELEASE_IMAGE_PLATFORMS=linux/amd64 "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.7.0 "$work_dir/lean"
+go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$work_dir/lean"
+jq -e '.platforms.controlPlane == ["linux/amd64"] and (.platforms.hostBinaries | length == 4) and .gvisor.podQualificationEvidence == {location:"",digest:""}' "$work_dir/lean/secondbox-0.7.0-artifact-manifest.json" >/dev/null
+[[ ! -e "$work_dir/lean/secondbox-0.7.0-gvisor-pod-qualification-evidence.json" ]]

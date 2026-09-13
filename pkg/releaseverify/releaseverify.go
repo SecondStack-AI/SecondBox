@@ -163,7 +163,10 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 	verifiedObjects := map[string][]byte{}
 	references := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}
 	if manifest.GVisor != nil {
-		references = append(references, manifest.GVisor.Materialization, manifest.GVisor.QualificationEvidence, manifest.GVisor.PodQualificationEvidence)
+		references = append(references, manifest.GVisor.Materialization, manifest.GVisor.QualificationEvidence)
+		if manifest.GVisor.PodQualificationEvidence != (releasecontract.Reference{}) {
+			references = append(references, manifest.GVisor.PodQualificationEvidence)
+		}
 	}
 	if manifest.SourceFreeSuite != (releasecontract.Reference{}) {
 		references = append(references, manifest.SourceFreeSuite)
@@ -202,6 +205,9 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 			return err
 		}
 		for pod, reference := range map[bool]releasecontract.Reference{false: manifest.GVisor.QualificationEvidence, true: manifest.GVisor.PodQualificationEvidence} {
+			if pod && reference == (releasecontract.Reference{}) {
+				continue
+			}
 			gvisorEvidence, err := releasecontract.DecodeGVisorQualificationEvidence(verifiedObjects[reference.Location], pod)
 			if err != nil {
 				return err

@@ -3,15 +3,30 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 fail() { echo "SecondBox release: $*" >&2; exit 1; }
-[[ $# == 1 ]] || fail 'usage: just release VERSION'
-version="$1"
+full=false
+version=''
+for argument; do
+  case "$argument" in
+    --full) full=true ;;
+    *) [[ -z "$version" ]] || fail 'usage: just release VERSION [--full]'; version="$argument" ;;
+  esac
+done
+[[ -n "$version" ]] || fail 'usage: just release VERSION [--full]'
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || fail 'VERSION must be SemVer without v or build metadata'
-config="${HOME:?}/.config/secondbox/release.env"
+config="${RELEASE_ENV_FILE:-${HOME:?}/.config/secondbox/release.env}"
 [[ -f "$config" ]] || fail "copy deploy/release.env.example to $config and configure it"
 bash -n "$config"
 set -a
 source "$config"
 set +a
+tier=release
+installer_flags=()
+export RELEASE_IMAGE_PLATFORMS=linux/amd64
+if $full; then
+  tier=nightly
+  installer_flags=(--full)
+  export RELEASE_IMAGE_PLATFORMS=linux/amd64,linux/arm64
+fi
 # Pin the reviewed release toolchain even when invoked through a mise shim.
 : "${RELEASE_GOROOT:?set RELEASE_GOROOT}"
 : "${RELEASE_PROTOC_BIN:?set RELEASE_PROTOC_BIN}"
@@ -72,7 +87,7 @@ done
 export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE="$repo_root/.tmp/gvisor-linux-scenario-qualification-evidence.json"
 export SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE="$repo_root/.tmp/gvisor-pod-linux-scenario-qualification-evidence.json"
 export QUALIFY_ENV_FILE="$config"
-scripts/qualify.sh --tier release --preflight
+scripts/qualify.sh --tier "$tier" --preflight
 mkdir -p .tmp/release
 exec 8>.tmp/release/checkout.lock
 flock -n 8 || fail 'another release owns this checkout'
@@ -107,7 +122,7 @@ finish() {
   exit "$status"
 }
 trap finish EXIT
-stage qualification /usr/bin/just qualify --tier release & jobs+=("$!")
+stage qualification /usr/bin/just qualify --tier "$tier" & jobs+=("$!")
 stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only "$version" "$build" & jobs+=("$!")
 status=0
 for job in "${jobs[@]}"; do wait "$job" || status=1; done
@@ -116,7 +131,7 @@ jobs=()
 stage candidate scripts/release-stage.sh --candidate --from-build "$build" "$version" "$candidate"
 export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
 export SECONDBOX_INSTALLER_RELEASE_DIRECTORY="$candidate"
-stage installer /usr/bin/just test-installer-qualified
+stage installer /usr/bin/just test-installer-qualified "${installer_flags[@]}"
 stage stage scripts/release-stage.sh --from-build "$build" "$version" "$output"
 [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'source changed during release'
 printf 'Staged release: %s\nPublish explicitly:\n' "$output"

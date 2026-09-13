@@ -8,10 +8,6 @@ if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
   echo "SecondBox gVisor scenario requires Linux x86_64" >&2
   exit 1
 fi
-[[ ! -e /dev/kvm ]] || {
-  echo "SecondBox gVisor scenario qualifies hosts without /dev/kvm" >&2
-  exit 1
-}
 : "${SECONDBOX_GVISOR_LINUX_BUILD:?set SECONDBOX_GVISOR_LINUX_BUILD to an exact local build directory}"
 build_root="$(realpath -e "$SECONDBOX_GVISOR_LINUX_BUILD")"
 [[ "$build_root" == "$SECONDBOX_GVISOR_LINUX_BUILD" && ! -L "$build_root" && -d "$build_root" ]] || {
@@ -72,7 +68,7 @@ runsc_release="$(sed -n 's/^readonly RUNSC_RELEASE="\([0-9.]*\)"$/\1/p' "$repo_r
 runtime_digest="$(digest_text "secondbox-gvisor-runtime-release-$runsc_release-linux-amd64")"
 toolchain_digest="$(digest_text "secondbox-gvisor-toolchain-release-$runsc_release-linux-amd64")"
 source_oci_digest="$(digest_text 'alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce')"
-(cd "$repo_root/runner" && go run ./cmd/secondbox-prepare-gvisor-flat-root "$flat_root")
+(flock 9; cd "$repo_root/runner" && go run ./cmd/secondbox-prepare-gvisor-flat-root "$flat_root") 9>"$build_root/prepare.lock"
 flat_root_digest="$(cd "$repo_root/runner" && go run ./cmd/secondbox-flat-root-digest "$flat_root")"
 materialization="$temporary/materialization.json"
 jq -cn \

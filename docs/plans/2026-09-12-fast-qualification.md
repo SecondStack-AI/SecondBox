@@ -10,6 +10,9 @@ provenance: A full day of hand-driven qualification of PR #126 on the release ho
 
 ## Outcome
 
+Tasks 1–4 below record the original full-matrix pipeline. Task 5 supersedes
+its tier selection, evidence placement, and installer scheduling defaults.
+
 One command qualifies a commit on this host in about 15 minutes with no
 manual step, and one command takes a tagged commit to a staged release in
 about 30 minutes. Both run every suite the release process requires today and
@@ -345,29 +348,29 @@ Decisions:
 - Artifact manifest and release verification accept an amd64-only image set
   when the release tier built it; the manifest records the platforms built.
 
-- [ ] Harness: `SECONDBOX_SCENARIO_TIER` and the skip list; the 5-second idle
+- [x] Harness: `SECONDBOX_SCENARIO_TIER` and the skip list; the 5-second idle
   Profile for the touch test; shard evidence merge in `scripts/test-scenario.sh`
   (each shard writes `.tmp/scenario-shard-<i>-evidence.json`; the merge writes
   the ordinary evidence file and refuses shards from different commits).
-- [ ] `scripts/qualify.sh`: release tier runs Firecracker and gVisor host
+- [x] `scripts/qualify.sh`: release tier runs Firecracker and gVisor host
   sharded on this host and merges evidence; `--tier nightly` adds the
   dropped scenarios unsharded, the pod suite in the VM, and keeps the
   no-KVM evidence for it. `scripts/qualify-gvisor.sh` gains a `--host` mode
   that runs the gVisor suite locally with the same build root inputs the VM
   uses (`QUALIFY_GVISOR_HOST_BUILD_ROOT` in the env example).
-- [ ] `scripts/release-stage.sh`: accept gVisor evidence from a KVM host;
+- [x] `scripts/release-stage.sh`: accept gVisor evidence from a KVM host;
   `RELEASE_IMAGE_PLATFORMS` (default `linux/amd64` in the lean tier,
   `linux/amd64,linux/arm64` with `--full`); the manifest records the platform
   list and `pkg/releaseverify` accepts it; cross-compiled CLI and deploy
   binaries stay for all four host platforms (they are seconds).
-- [ ] `scripts/installer-qualification-driver`: `--modes` list; per-mode
+- [x] `scripts/installer-qualification-driver`: `--modes` list; per-mode
   required assertions in `tests/installer/vm-scenario.json`;
   `scripts/test-installer-qualified.sh` passes the release tier's single mode
   by default and all three with `--full`.
-- [ ] `scripts/release.sh`: `--full` flag; default lean. `Justfile`: `release
+- [x] `scripts/release.sh`: `--full` flag; default lean. `Justfile`: `release
   version *flags`, `qualify` unchanged, a `nightly` recipe that runs
   `qualify --tier nightly` and is safe to put on a systemd timer.
-- [ ] Docs: `docs/operations/release-operator-setup.md` and
+- [x] Docs: `docs/operations/release-operator-setup.md` and
   `scenario-qualification.md` describe the two tiers; CHANGELOG entry.
 - [ ] Prove on this host: `just qualify` (PR tier), `just qualify --tier
   release`, `just release 0.99.0` (lean) with timing tables in this plan;

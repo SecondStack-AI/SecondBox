@@ -366,8 +366,8 @@ func (evidence GVisorQualificationEvidence) Validate(pod bool) error {
 	if evidence.Suite != GVisorQualificationSuite(pod) || evidence.Backend != "gvisor" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 {
 		return contractError("gVisor qualification evidence must describe a complete %s run", GVisorQualificationSuite(pod))
 	}
-	if evidence.Host.Platform != "linux-amd64" || evidence.Host.KVM.Present || evidence.Host.KVM.Required {
-		return contractError("gVisor qualification evidence must come from a linux-amd64 host without KVM")
+	if evidence.Host.Platform != "linux-amd64" || (pod && evidence.Host.KVM.Present) || evidence.Host.KVM.Required {
+		return contractError("gVisor qualification evidence requires linux-amd64 with KVM unused (and absent for pods)")
 	}
 	if strings.TrimSpace(evidence.Host.WorkspaceFilesystem.Mount) == "" ||
 		(evidence.Host.WorkspaceFilesystem.Type != "xfs" && evidence.Host.WorkspaceFilesystem.Type != "btrfs") {
@@ -788,6 +788,9 @@ func (manifest ArtifactManifest) Validate() error {
 			"gVisor qualification evidence":     {manifest.GVisor.QualificationEvidence, GVisorQualificationEvidenceLocation(manifest.Version, false)},
 			"gVisor pod qualification evidence": {manifest.GVisor.PodQualificationEvidence, GVisorQualificationEvidenceLocation(manifest.Version, true)},
 		} {
+			if name == "gVisor pod qualification evidence" && evidence.reference == (Reference{}) && !slices.Contains(manifest.Platforms.ControlPlane, "linux/arm64") {
+				continue
+			}
 			if err := validateReference(name, evidence.reference); err != nil {
 				return err
 			}
@@ -904,6 +907,9 @@ func validateWindow(name string, window ProtocolWindow) error {
 }
 
 func validatePlatforms(platforms PlatformMatrix) error {
+	if !slices.Equal(platforms.ControlPlane, []string{"linux/amd64"}) && !slices.Equal(platforms.ControlPlane, []string{"linux/amd64", "linux/arm64"}) {
+		return contractError("control-plane platforms must be linux/amd64 or linux/amd64,linux/arm64")
+	}
 	sets := map[string][]string{
 		"host binary": platforms.HostBinaries, "control-plane": platforms.ControlPlane,
 		"Runner": platforms.Runner, "installer tools": platforms.InstallerTools, "guest": platforms.Guest,

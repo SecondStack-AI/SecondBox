@@ -4,6 +4,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 evidence="$repo_root/.tmp/installer-qualification-evidence.json"
 driver="$repo_root/scripts/installer-qualification-driver"
+modes=btrfs_image
+if [[ "${1:-}" == --full && $# == 1 ]]; then
+  modes=btrfs_image,existing_reflink_filesystem,existing_reflink_recreation
+elif (($#)); then
+  echo 'usage: test-installer-qualified.sh [--full]' >&2; exit 2
+fi
 rm -f -- "$evidence"
 
 [[ "${SECONDBOX_REQUIRE_QUALIFIED_INSTALLER:-}" == 1 ]] || {
@@ -30,7 +36,7 @@ started="$(date +%s)"
 mapfile -t release_manifests < <(find "$SECONDBOX_INSTALLER_RELEASE_DIRECTORY" -maxdepth 1 -type f -name 'secondbox-*-artifact-manifest.json' -print)
 [[ "${#release_manifests[@]}" == 1 ]] || { echo 'installer qualification release directory must contain exactly one artifact manifest' >&2; exit 1; }
 qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "${release_manifests[0]}")"
-"$driver" run \
+"$driver" run --modes "$modes" \
   --release-directory "$SECONDBOX_INSTALLER_RELEASE_DIRECTORY" \
   --existing-workspace-root "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT" \
   --scenario "$repo_root/tests/installer/vm-scenario.json" \
@@ -39,12 +45,12 @@ qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool ins
   --output "$temporary/driver-evidence.json"
 finished="$(date +%s)"
 
-jq -e --arg subject "$qualification_subject" --slurpfile scenario "$repo_root/tests/installer/vm-scenario.json" '
+jq -e --arg modes "$modes" --arg subject "$qualification_subject" --slurpfile scenario "$repo_root/tests/installer/vm-scenario.json" '
   .schemaVersion == "secondbox.install.qualified-driver-evidence/v1" and
   .passed == true and .rebootPassed == true and
   .releaseManifestDigest == $subject and
   (.filesystemIdentity | type == "string") and (.filesystemIdentity | length) > 0 and
-  (($scenario[0].requiredAssertions - [.assertions[] | select(.passed == true) | .id]) | length) == 0 and
+  (([($modes|split(","))[] as $mode | $scenario[0].requiredAssertionsByMode[$mode][]] - [.assertions[] | select(.passed == true) | .id]) | length) == 0 and
   all(.assertions[]; .passed == true)
 ' "$temporary/driver-evidence.json" >/dev/null
 pass_count="$(jq -er '.assertions | length' "$temporary/driver-evidence.json")"

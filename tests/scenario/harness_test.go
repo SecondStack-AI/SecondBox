@@ -202,7 +202,7 @@ func ensureScenarioRunnerPool(t *testing.T, fixture scenarioFixture) contracts.R
 		"cleanup",
 		"local-workspace",
 	}
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "firecracker" {
+	if os.Getenv("SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ID") != "" {
 		// Firecracker's qualified template cache makes snapshot-resume an
 		// operator-declared pool capability. Microsandbox is cold-boot-only and
 		// must remain a standing incompatibility rather than a capacity wait.

@@ -368,3 +368,36 @@ func TestGVisorMaterializationVerification(t *testing.T) {
 		}
 	}
 }
+
+func TestLeanReleasePlatformsAndPodEvidence(t *testing.T) {
+	manifest := validManifest()
+	manifest.Platforms.ControlPlane = []string{"linux/amd64"}
+	manifest.GVisor.PodQualificationEvidence = Reference{}
+	if err := manifest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Platforms.ControlPlane = []string{"linux/amd64", "linux/arm64"}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("full image matrix accepted missing pod evidence")
+	}
+}
+
+func TestGVisorHostMayHaveKVMButPodMustNot(t *testing.T) {
+	evidence := GVisorQualificationEvidence{
+		SchemaVersion: QualificationEvidenceSchema, SourceCommit: strings.Repeat("a", 40),
+		Suite: GVisorQualificationSuite(false), Backend: "gvisor", PassCount: 1,
+		Host:        GVisorQualificationHostEvidence{Platform: "linux-amd64", KVM: GVisorQualificationDeviceEvidence{Present: true}, WorkspaceFilesystem: QualificationFilesystemEvidence{Mount: "/workspaces", Type: "btrfs"}},
+		QualifiedAt: "2026-09-13T00:00:00Z",
+	}
+	if err := evidence.Validate(false); err != nil {
+		t.Fatal(err)
+	}
+	evidence.Suite = GVisorQualificationSuite(true)
+	if err := evidence.Validate(true); err == nil {
+		t.Fatal("pod accepted KVM host")
+	}
+	evidence.Host.KVM.Present = false
+	if err := evidence.Validate(true); err != nil {
+		t.Fatal(err)
+	}
+}
