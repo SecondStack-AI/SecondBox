@@ -5,9 +5,8 @@ x-gvisor-environment: &gvisor-environment
   SECONDBOX_GVISOR_MATERIALIZATION_PATH: /opt/secondbox-gvisor-materialization.json
   SECONDBOX_GVISOR_MATERIALIZATION_DIGEST: ${SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST:?SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST is required}
   SECONDBOX_GVISOR_RUNTIME_DIR: /run/secondbox-gvisor
-  # Explicit by contract: the primary runner is profile 0 and the relocation
-  # target overrides to 1 so both can share the host network namespace.
-  SECONDBOX_GVISOR_NETWORK_PROFILE: "0"
+  # The suite holds an exclusive reservation for this primary/relocation pair.
+  SECONDBOX_GVISOR_NETWORK_PROFILE: ${SECONDBOX_SCENARIO_GVISOR_NETWORK_PROFILE:?gVisor primary network profile is required}
   SECONDBOX_GVISOR_MAXIMUM_VCPUS: ${SECONDBOX_SCENARIO_GVISOR_MAXIMUM_VCPUS:?SECONDBOX_SCENARIO_GVISOR_MAXIMUM_VCPUS is required}
   SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES: ${SECONDBOX_SCENARIO_GVISOR_MAXIMUM_MEMORY_BYTES:?SECONDBOX_SCENARIO_GVISOR_MAXIMUM_MEMORY_BYTES is required}
   SECONDBOX_GVISOR_MAXIMUM_DISK_BYTES: ${SECONDBOX_SCENARIO_GVISOR_MAXIMUM_DISK_BYTES:?SECONDBOX_SCENARIO_GVISOR_MAXIMUM_DISK_BYTES is required}
@@ -23,6 +22,9 @@ services:
     # bindings would fail on the no-KVM hosts this backend qualifies.
     devices: !reset []
     volumes:
+      # Privileged Docker's initial device snapshot misses newly allocated loops.
+      # The image execs secondbox-runner as PID 1; it never boots a private init.
+      - /dev:/dev
       - ${SECONDBOX_SCENARIO_GVISOR_BUILD:?SECONDBOX_SCENARIO_GVISOR_BUILD is required}:/opt/secondbox-gvisor:ro
       - ${SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION:?SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION is required}:/opt/secondbox-gvisor-materialization.json:ro
 
@@ -40,11 +42,14 @@ services:
       # Both runner containers share the host network namespace; a distinct
       # profile gives this one its own DNS proxy address, slot space, and
       # link names.
-      SECONDBOX_GVISOR_NETWORK_PROFILE: "1"
+      SECONDBOX_GVISOR_NETWORK_PROFILE: ${SECONDBOX_SCENARIO_GVISOR_RELOCATION_NETWORK_PROFILE:?gVisor relocation network profile is required}
       SECONDBOX_RUNNER_ID: ${SECONDBOX_SCENARIO_RELOCATION_RUNNER_ID:?SECONDBOX_SCENARIO_RELOCATION_RUNNER_ID is required}
       SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS: 0.0.0.0:${SECONDBOX_SCENARIO_RELOCATION_RUNNER_DATA_PLANE_PORT:?SECONDBOX_SCENARIO_RELOCATION_RUNNER_DATA_PLANE_PORT is required}
       SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS: 127.0.0.1:${SECONDBOX_SCENARIO_RELOCATION_RUNNER_DATA_PLANE_PORT:?SECONDBOX_SCENARIO_RELOCATION_RUNNER_DATA_PLANE_PORT is required}
     volumes:
+      # Privileged Docker's initial device snapshot misses newly allocated loops.
+      # The image execs secondbox-runner as PID 1; it never boots a private init.
+      - /dev:/dev
       - ${SECONDBOX_SCENARIO_RELOCATION_IDENTITY_DIR:?SECONDBOX_SCENARIO_RELOCATION_IDENTITY_DIR is required}:/opt/secondbox-runner-identity:ro
       - ${SECONDBOX_SCENARIO_RELOCATION_STATE_DIR:?SECONDBOX_SCENARIO_RELOCATION_STATE_DIR is required}:/var/lib/secondbox-runner:rshared
       - ${SECONDBOX_SCENARIO_RELOCATION_WORKSPACE_DIR:?SECONDBOX_SCENARIO_RELOCATION_WORKSPACE_DIR is required}:/w:rshared

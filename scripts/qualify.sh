@@ -223,6 +223,9 @@ if [[ "$only" == all || "$only" == firecracker ]]; then
   docker info >/dev/null || fail 'Docker unavailable'
 fi
 if [[ "$only" == gvisor || ( "$only" == all && "$tier" != pr ) ]]; then
+  if [[ "$tier" != nightly ]]; then
+    ((QUALIFY_FIRECRACKER_SHARDS <= 7)) || fail 'local gVisor sharding supports at most seven network profile pairs'
+  fi
   scripts/qualify-gvisor.sh --host --preflight
   if [[ "$tier" == nightly ]]; then scripts/qualify-gvisor.sh --preflight; fi
 fi

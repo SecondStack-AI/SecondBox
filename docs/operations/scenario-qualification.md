@@ -27,7 +27,14 @@ The release tier requires a clean tree and runs gates alongside four-way
 Firecracker and local gVisor host suites. Configure
 `QUALIFY_GVISOR_HOST_BUILD_ROOT` with the pinned `bin/runsc` and `rootfs/`
 inputs; automation rebuilds the guest agent. gVisor uses systrap, so KVM may
-be present on this host. Each backend has a separate shard directory under
+be present on this host. Concurrent Compose stacks reserve distinct gVisor
+network profile pairs in 2..15 (at most seven stacks; 0/1 remain for manual
+runners). The harness skips profiles declared by existing containers and holds
+its reservations through teardown. Scenario containers bind host `/dev` so newly
+allocated loop devices remain visible. On an iptables-compatible host INPUT
+chain, temporary rules admit only already-policy-marked traffic on the run's
+reserved gVisor interfaces; teardown removes only rules bearing its project ID.
+Each backend has a separate shard directory under
 `.tmp/qualify/RUN/`. The merge verifies source/host identity, disjoint results,
 and pass counts, then writes the ordinary v2 evidence (summed passes and
 maximum shard wall clock).

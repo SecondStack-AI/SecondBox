@@ -311,6 +311,10 @@ for directory in "$artifacts_dir" "$workspace_root"; do
 done
 [[ "$public_key" = /* && "$(realpath "$public_key")" == "$public_key" && ! -L "$public_key" && -f "$public_key" ]] ||
   fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY must be an existing clean absolute non-symlink file"
+if [[ "$scenario_backend" == gvisor && "$runner_placement" == compose ]]; then
+  source "$repo_root/scripts/scenario-network.sh"
+  scenario_reserve_gvisor_profiles "$workspace_root/.scenario-gvisor-profile-locks" || fail "gVisor profiles are occupied"
+fi
 diagnostics_dir="${SECONDBOX_SCENARIO_DIAGNOSTICS_DIR:-}"
 if [[ -n "$diagnostics_dir" ]]; then
   diagnostics_parent="$(dirname "$diagnostics_dir")"
@@ -741,6 +745,12 @@ remove_propagated_mounts() {
   done
 }
 
+gvisor_host_firewall() {
+  [[ "$scenario_backend" == gvisor && "$runner_placement" == compose ]] || return 0
+  "$repo_root/scripts/scenario-gvisor-host-firewall.sh" "$1" "$runner_image" "$project_name" \
+    "$SECONDBOX_SCENARIO_GVISOR_NETWORK_PROFILE" "$SECONDBOX_SCENARIO_GVISOR_RELOCATION_NETWORK_PROFILE"
+}
+
 collect_diagnostics() {
   [[ -n "$diagnostics_dir" ]] || return 0
   mkdir -m 0700 -- "$diagnostics_dir" ||
@@ -807,6 +817,10 @@ cleanup() {
   fi
   if ! "${runner_stop_command[@]}" >/dev/null 2>&1; then
     echo "SecondBox scenario runner stop failed for $project_name" >&2
+    status=1
+  fi
+  if ! gvisor_host_firewall remove; then
+    echo "SecondBox scenario gVisor host firewall cleanup failed" >&2
     status=1
   fi
   if ! remove_host_network; then
@@ -958,6 +972,7 @@ echo "SecondBox scenario Compose network: $SECONDBOX_SCENARIO_COMPOSE_CIDR"
 sweep_host_orphans
 
 compose config --quiet
+gvisor_host_firewall apply
 compose run --rm --no-deps egress-context-config-init
 compose up --detach --wait --wait-timeout 240 postgres control-plane
 
