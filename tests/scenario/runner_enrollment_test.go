@@ -26,7 +26,7 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 		"compute", "network-policy", "storage", "cleanup", "local-workspace",
 	}
 	architecture := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_ARCHITECTURE")
-	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "firecracker" {
+	if os.Getenv("SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ID") != "" {
 		wantPoolCapabilities = append(wantPoolCapabilities[:4], "snapshot-resume", "storage")
 		wantRunnerCapabilities = append(wantRunnerCapabilities, "snapshot-resume")
 	}

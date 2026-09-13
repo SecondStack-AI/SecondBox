@@ -14,7 +14,7 @@ func TestInstallerGuestSchedulingWaitsForAllModes(t *testing.T) {
 	if start < 0 {
 		t.Fatal("installer scheduler is absent")
 	}
-	end := strings.Index(driver[start:], "\njq -s ")
+	end := strings.Index(driver[start:], "\nevidence_files=()")
 	if end < 0 {
 		t.Fatal("installer scheduler is absent")
 	}
@@ -22,9 +22,10 @@ func TestInstallerGuestSchedulingWaitsForAllModes(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		parallelism string
+		modes       string
 		fail        bool
 	}{
-		{"parallel", "3", false}, {"serial", "1", false}, {"failed_guest", "3", true},
+		{"parallel", "3", "btrfs_image existing_reflink_filesystem existing_reflink_recreation", false}, {"serial", "1", "btrfs_image existing_reflink_filesystem existing_reflink_recreation", false}, {"failed_guest", "3", "btrfs_image existing_reflink_filesystem existing_reflink_recreation", true}, {"lean", "1", "btrfs_image", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			directory := t.TempDir()
@@ -32,6 +33,7 @@ func TestInstallerGuestSchedulingWaitsForAllModes(t *testing.T) {
 cd "$1"
 guest_parallelism="$2"
 guest_jobs=()
+read -ra selected_modes <<<"$3"
 active_child=''
 run_guest() {
   touch "started-$1"
@@ -57,12 +59,15 @@ run_guest() {
 				script += "false\n"
 			}
 			script += schedule + "\ntouch merged\n"
-			command := exec.Command("bash", "-c", script, "scheduler-test", directory, tc.parallelism)
+			command := exec.Command("bash", "-c", script, "scheduler-test", directory, tc.parallelism, tc.modes)
 			output, err := command.CombinedOutput()
 			if (err != nil) != tc.fail {
 				t.Fatalf("scheduler result: %v\n%s", err, output)
 			}
-			for _, mode := range []string{"existing_reflink_filesystem", "existing_reflink_recreation"} {
+			for _, mode := range strings.Fields(tc.modes) {
+				if tc.fail && mode == "btrfs_image" {
+					continue
+				}
 				if _, err := os.Stat(filepath.Join(directory, "finished-"+mode)); err != nil {
 					t.Fatalf("did not wait for %s: %v\n%s", mode, err, output)
 				}

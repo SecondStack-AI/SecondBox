@@ -21,3 +21,25 @@ scenario_reserve_network() {
     return 1
   fi
 }
+
+# Reserve a primary/relocation pair on the shared host. Profiles 0/1 remain
+# available to manually configured runners; scenario pairs use 2..15. Hold the
+# locks through teardown, and reject profiles declared even by stopped runners.
+scenario_reserve_gvisor_profiles() {
+  local directory="$1" primary occupied containers
+  containers="$(docker ps -aq)" || return
+  occupied=''
+  if [[ -n "$containers" ]]; then
+    occupied="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $containers | sed -n 's/^SECONDBOX_GVISOR_NETWORK_PROFILE=//p')" || return
+  fi
+  for ((primary=2; primary<16; primary+=2)); do
+    if grep -qxE "$primary|$((primary+1))" <<<"$occupied"; then continue; fi
+    if scenario_reserve_network "$directory" "$primary" scenario_gvisor_profile_lock; then
+      export SECONDBOX_SCENARIO_GVISOR_NETWORK_PROFILE="$primary"
+      export SECONDBOX_SCENARIO_GVISOR_RELOCATION_NETWORK_PROFILE="$((primary+1))"
+      return 0
+    fi
+  done
+  echo 'SecondBox scenario has no free gVisor network profile pair (2..15)' >&2
+  return 1
+}

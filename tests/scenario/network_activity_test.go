@@ -590,7 +590,7 @@ func TestScenarioTouchExtendsIdleExpiry(t *testing.T) {
 	waitForScenarioRunner(t, fixture, 90*time.Second)
 
 	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
-	spec.Lifecycle.IdleSeconds = 15
+	spec.Lifecycle.IdleSeconds = 5
 	spec.Lifecycle.DrainGraceSeconds = 1
 	spec.Lifecycle.MaximumDurationSeconds = 120
 	profile := createScenarioProfile(t, fixture, "scenario-touch-idle", spec)
@@ -604,7 +604,7 @@ func TestScenarioTouchExtendsIdleExpiry(t *testing.T) {
 	}
 	initialActivity := ready.LastActivityAt.UTC()
 	originalExpiry := initialActivity.Add(time.Duration(spec.Lifecycle.IdleSeconds) * time.Second)
-	waitForScenarioTime(t, ctx, initialActivity.Add(8*time.Second))
+	waitForScenarioTime(t, ctx, initialActivity.Add(2*time.Second))
 
 	touchHeaders := handle.GenerationHeaders("")
 	touchHeaders.Set("Idempotency-Key", uniqueScenarioKey(t, "touch-idle-extend"))

@@ -22,9 +22,10 @@ scenario=''
 output=''
 base_image=''
 base_image_sha256=''
+modes='btrfs_image,existing_reflink_filesystem,existing_reflink_recreation'
 
 usage() {
-  echo 'usage: scripts/installer-qualification-driver run --release-directory DIR --existing-workspace-root DIR --scenario FILE --output FILE --base-image FILE --base-image-sha256 SHA256' >&2
+  echo 'usage: scripts/installer-qualification-driver run --release-directory DIR --existing-workspace-root DIR --scenario FILE --output FILE --base-image FILE --base-image-sha256 SHA256 [--modes btrfs_image,existing_reflink_filesystem,existing_reflink_recreation]' >&2
   exit 2
 }
 
@@ -39,11 +40,14 @@ while [[ "$#" -gt 0 ]]; do
     --output) output="$2" ;;
     --base-image) base_image="$2" ;;
     --base-image-sha256) base_image_sha256="$2" ;;
+    --modes) modes="$2" ;;
     *) usage ;;
   esac
   shift 2
 done
 
+modes_json="$(jq -cen --arg modes "$modes" '$modes|split(",")|select(length > 0 and length == (unique|length) and all(.[]; . == "btrfs_image" or . == "existing_reflink_filesystem" or . == "existing_reflink_recreation"))')" || usage
+IFS=, read -ra selected_modes <<<"$modes"
 for value in "$release_directory" "$existing_workspace_root" "$scenario" "$output" "$base_image" "$base_image_sha256"; do
   [[ -n "$value" ]] || usage
 done
@@ -410,16 +414,24 @@ launch_guest() {
   guest_jobs+=("$!")
 }
 guest_failed=0
-launch_guest run_guest btrfs_image
-launch_guest run_guest existing_reflink_filesystem
-launch_guest run_guest existing_reflink_recreation
+for selected_mode in "${selected_modes[@]}"; do launch_guest run_guest "$selected_mode"; done
 for job in "${guest_jobs[@]}"; do wait "$job" || guest_failed=1; done
 guest_jobs=()
 ((guest_failed == 0)) || { echo 'installer guest qualification failed' >&2; exit 1; }
 
-jq -s --arg schemaVersion 'secondbox.install.qualified-driver-evidence/v1' --arg subject "$release_subject" --slurpfile scenario "$scenario" '
+evidence_files=()
+for selected_mode in "${selected_modes[@]}"; do
+  guest_evidence="$resource_root/$selected_mode/evidence.json"
+  jq -e --arg mode "$selected_mode" --slurpfile scenario "$scenario" '
+    .mode == $mode and .passed == true and .rebootPassed == true and
+    (($scenario[0].requiredAssertionsByMode[$mode] - [.assertions[] | select(.passed == true) | .id]) | length == 0) and
+    all(.assertions[]; .passed == true)
+  ' "$guest_evidence" >/dev/null
+  evidence_files+=("$guest_evidence")
+done
+jq -s --argjson modes "$modes_json" --arg schemaVersion 'secondbox.install.qualified-driver-evidence/v1' --arg subject "$release_subject" --slurpfile scenario "$scenario" '
   ([.[].assertions[]] | unique_by(.id)) as $assertions |
-  ($scenario[0].requiredAssertions | sort) as $required |
+  ([$modes[] as $mode | $scenario[0].requiredAssertionsByMode[$mode][]] | unique) as $required |
   ([ $assertions[] | select(.passed == true) | .id ] | sort) as $passed |
   {
     schemaVersion: $schemaVersion,
@@ -429,7 +441,7 @@ jq -s --arg schemaVersion 'secondbox.install.qualified-driver-evidence/v1' --arg
     filesystemIdentity: ([.[].filesystemIdentity] | join(",")),
     assertions: $assertions
   }
-' "$resource_root/btrfs_image/evidence.json" "$resource_root/existing_reflink_filesystem/evidence.json" "$resource_root/existing_reflink_recreation/evidence.json" >"$output"
+' "${evidence_files[@]}" >"$output"
 jq -e '.passed == true and .rebootPassed == true' "$output" >/dev/null
 cleanup_success
 trap - EXIT INT TERM

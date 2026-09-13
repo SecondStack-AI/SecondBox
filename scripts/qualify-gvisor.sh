@@ -3,6 +3,34 @@ set -Eeuo pipefail
 umask 077
 fail() { echo "SecondBox gVisor qualification: $*" >&2; exit 1; }
 
+if [[ "${1:-}" == --host ]]; then
+  : "${QUALIFY_GVISOR_HOST_BUILD_ROOT:?set QUALIFY_GVISOR_HOST_BUILD_ROOT}"
+  [[ "$QUALIFY_GVISOR_HOST_BUILD_ROOT" == /* && -d "$QUALIFY_GVISOR_HOST_BUILD_ROOT/rootfs" && -x "$QUALIFY_GVISOR_HOST_BUILD_ROOT/bin/runsc" && ! -L "$QUALIFY_GVISOR_HOST_BUILD_ROOT" ]] || fail 'invalid local gVisor build root'
+  [[ "${SECONDBOX_RUNNER_WORKSPACE_ROOT:-}" == /* && -d "$SECONDBOX_RUNNER_WORKSPACE_ROOT" ]] || fail 'local gVisor workspace root must exist'
+  for tool in docker go jq sha512sum findmnt flock; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
+  pinned="$(sed -n 's/^readonly RUNSC_SHA512="\([a-f0-9]\{128\}\)"$/\1/p' runner/scripts/fetch-runsc.sh)"
+  [[ -n "$pinned" && "$(sha512sum "$QUALIFY_GVISOR_HOST_BUILD_ROOT/bin/runsc" | cut -d' ' -f1)" == "$pinned" ]] || fail 'local runsc differs from the reviewed pin'
+  filesystem="$(findmnt -n -o FSTYPE --target "$SECONDBOX_RUNNER_WORKSPACE_ROOT")"
+  [[ "$filesystem" == xfs || "$filesystem" == btrfs ]] || fail 'local gVisor workspace must be XFS or Btrfs'
+  docker info >/dev/null || fail 'Docker unavailable'
+  if [[ "${2:-}" == --preflight ]]; then exit; fi
+  # All shards share immutable inputs. Serialize preparation before readers start.
+  exec 7>"$QUALIFY_GVISOR_HOST_BUILD_ROOT/qualify.lock"
+  flock 7
+  build_id="${QUALIFY_GVISOR_BUILD_ID:-$(git rev-parse HEAD)-$$}"
+  if [[ ! -f "$QUALIFY_GVISOR_HOST_BUILD_ROOT/qualify-build" || "$(cat "$QUALIFY_GVISOR_HOST_BUILD_ROOT/qualify-build")" != "$build_id" ]]; then
+    agent="$(mktemp "$QUALIFY_GVISOR_HOST_BUILD_ROOT/bin/guest-agent.XXXXXX")"
+    (cd runner && CGO_ENABLED=0 go build -trimpath -o "$agent" ./cmd/secondbox-guest-agent)
+    chmod 0755 "$agent"
+    mv "$agent" "$QUALIFY_GVISOR_HOST_BUILD_ROOT/bin/secondbox-guest-agent"
+    (cd runner && go run ./cmd/secondbox-prepare-gvisor-flat-root "$QUALIFY_GVISOR_HOST_BUILD_ROOT/rootfs")
+    echo "$build_id" >"$QUALIFY_GVISOR_HOST_BUILD_ROOT/qualify-build"
+  fi
+  flock -u 7
+  export SECONDBOX_GVISOR_LINUX_BUILD="$QUALIFY_GVISOR_HOST_BUILD_ROOT"
+  exec scripts/test-scenario-gvisor.sh
+fi
+
 vm_idle() {
   local projects processes
   projects="$(sudo -n docker ps -a --format '{{.Label "com.docker.compose.project"}}')" || return
@@ -20,6 +48,7 @@ if [[ "${1:-}" == --guest ]]; then
   export HOME=/root GOPATH=/root/go KUBECACHEDIR=/root/.kube/cache
   export PATH=/usr/local/bin/go/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
   export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
+  export SECONDBOX_SCENARIO_TIER=nightly
   export SECONDBOX_GVISOR_LINUX_BUILD="$QUALIFY_GVISOR_BUILD_ROOT"
   export SECONDBOX_RUNNER_WORKSPACE_ROOT="$QUALIFY_GVISOR_REFLINK_MOUNT/qualify-$run"
   cd "$QUALIFY_GVISOR_REPO"
@@ -41,7 +70,7 @@ if [[ "${1:-}" == --guest ]]; then
   rm -- "$agent"
   mountpoint -q "$QUALIFY_GVISOR_REFLINK_MOUNT" || mount -o loop "$QUALIFY_GVISOR_REFLINK_IMAGE" "$QUALIFY_GVISOR_REFLINK_MOUNT"
   mkdir -p "$SECONDBOX_RUNNER_WORKSPACE_ROOT"
-  for suite in gvisor gvisor-pod; do
+  for suite in gvisor-pod; do
     [[ "$(git rev-parse HEAD)" == "$source_commit" ]] || fail 'VM source changed between suites'
     start=$SECONDS code=0
     name="$suite"; [[ "$suite" != gvisor ]] || name=gvisor-host
@@ -137,7 +166,7 @@ scp "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$QUALIFY_GVISOR_SSH_USER@
 # Keep the guest result separate from the supervisor result.
 ssh_vm "cat $remote/result" >"$directory/gvisor-result"
 [[ "$(cat "$directory/gvisor-result")" == 0 ]] || fail 'VM chain failed; see gvisor and gvisor-pod logs'
-for suite in gvisor gvisor-pod; do
+for suite in gvisor-pod; do
   evidence="$suite-linux-scenario-qualification-evidence.json"
   ssh_vm "sudo cat $QUALIFY_GVISOR_REPO/.tmp/$evidence" >"$directory/$evidence"
   jq -e --arg commit "$source_commit" '.sourceCommit == $commit and .repositoryDirty == false' "$directory/$evidence" >/dev/null || fail "invalid $suite evidence identity"

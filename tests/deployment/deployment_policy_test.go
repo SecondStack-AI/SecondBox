@@ -182,9 +182,9 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 	for _, required := range []string{
 		"qemu:///system",
 		"--cpu host-passthrough",
-		"run_guest btrfs_image",
-		"run_guest existing_reflink_filesystem",
-		"run_guest existing_reflink_recreation",
+		"--modes)",
+		"requiredAssertionsByMode[$mode]",
+		`launch_guest run_guest "$selected_mode"`,
 		`destroy "$domain"`,
 		`undefine "$domain"`,
 		"cleanup_success",

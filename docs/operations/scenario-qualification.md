@@ -21,14 +21,35 @@ just qualify --wait RUN
 ```
 
 The PR tier runs the ten non-KVM gates concurrently with Firecracker shards
-(`QUALIFY_FIRECRACKER_SHARDS`, default four). Shards publish no release evidence.
-The release tier requires a clean tree and runs gates, unsharded Firecracker,
-and the no-KVM VM chain concurrently. The VM receives a git bundle of HEAD,
-checks it out detached, rebuilds the guest agent, and runs gVisor host and pod
-suites serially. Both evidence files return to `.tmp` with their exact commit
-identity intact. Missing prerequisites fail before any stage starts; no suite
-may skip. The VM is booted without virtualization extensions when needed and
-is left running after qualification. Reserve it exclusively for the run.
+(`QUALIFY_FIRECRACKER_SHARDS`, default four). Each shard records test results;
+PR runs do not merge release evidence and may use a dirty working tree.
+The release tier requires a clean tree and runs gates alongside four-way
+Firecracker and local gVisor host suites. Configure
+`QUALIFY_GVISOR_HOST_BUILD_ROOT` with the pinned `bin/runsc` and `rootfs/`
+inputs; automation rebuilds the guest agent. gVisor uses systrap, so KVM may
+be present on this host. Concurrent Compose stacks reserve distinct gVisor
+network profile pairs in 2..15 (at most seven stacks; 0/1 remain for manual
+runners). The harness skips profiles declared by existing containers and holds
+its reservations through teardown. Scenario containers bind host `/dev` so newly
+allocated loop devices remain visible. On an iptables-compatible host INPUT
+chain, temporary rules admit only already-policy-marked traffic on the run's
+reserved gVisor interfaces; teardown removes only rules bearing its project ID.
+Each backend has a separate shard directory under
+`.tmp/qualify/RUN/`. The merge verifies source/host identity, disjoint results,
+and pass counts, then writes the ordinary v2 evidence (summed passes and
+maximum shard wall clock).
+
+`SECONDBOX_SCENARIO_TIER=release` is the harness default. Its skip list excludes
+customer-shared tenancy and snapshot-resume; no tests are deleted.
+`just qualify --tier nightly` (or `just nightly`, suitable for a systemd timer)
+runs all scenarios unsharded, including template-publish smoke, plus the gVisor
+pod suite in the no-KVM VM. The VM receives HEAD by git bundle, checks it out
+detached, and rebuilds the guest agent. Pod evidence retains the absent-KVM
+requirement. Missing prerequisites fail before stages start. The VM is left
+running; reserve it exclusively for nightly qualification.
+
+Qualification covers gates and scenarios. `just release VERSION --full` adds
+the arm64 image build and all three installer modes to that nightly matrix.
 
 Logs and a stage/result/wall-clock table are under `.tmp/qualify/RUN/`; the run
 ID is printed at launch. Stages survive terminal loss through a user systemd
@@ -157,7 +178,7 @@ Archive failure output as well: the harness prints Compose state plus bounded co
 
 `just test-installer-vm` drives disposable systemd guests when an explicit VM controller configuration is present. `just test-installer-qualified` is the non-skipping real-host gate for the published-style bootstrap, fresh Btrfs-image and existing-filesystem installs, the exact v0.7.2 clean-recreation boundary, reboot recovery, retained-workspace uninstall/resume, purge confinement, and a real hello-world microVM. The boundary guest installs the immutable public v0.7.2 release, retires its Sandbox, proves that the candidate refuses an in-place update without modifying the recorded operation, purges the old deployment, and installs the candidate from the source-less staged release. The harness independently derives a qualification-subject digest from the tested release manifest and requires the driver to report that exact identity. Its evidence is separate from the scenario evidence described above because installer qualification proves host mutation and reboot behavior while `test-scenario` proves the public runtime contract.
 
-The repository-owned qualification driver uses `qemu:///system` and creates three sequential, uniquely named Ubuntu guests. Each guest receives its own QEMU user network, deterministic MAC address, explicit NoCloud DHCP configuration, and verified localhost-only SSH forward; no host bridge, libvirt network, or firewall exception is required. The driver stores the pinned base-image copy and guest overlays beneath the explicit qualification workspace root, with traversal permissions for system libvirt; use a dedicated, capacious XFS or Btrfs mount that libvirt can traverse. Cleanup targets only that run's domains and disks and never uses the libvirt default network or an existing domain. Each guest receives nested KVM, a fresh root disk, and a separate data disk. One guest exercises the bounded Btrfs image, one performs a fresh candidate install on the explicit existing Btrfs filesystem, and one performs the public v0.7.2 refusal-and-clean-recreation procedure on that filesystem. The v0.7.2 bootstrap and deploy binary are downloaded from the public release and checked against repository-pinned SHA-256 values; no qualification adapter or source checkout participates.
+The repository-owned qualification driver uses `qemu:///system` and creates the selected uniquely named Ubuntu guests (one Btrfs-image guest by default, all three concurrently with `--full`). Each guest receives its own QEMU user network, deterministic MAC address, explicit NoCloud DHCP configuration, and verified localhost-only SSH forward; no host bridge, libvirt network, or firewall exception is required. The driver stores the pinned base-image copy and guest overlays beneath the explicit qualification workspace root, with traversal permissions for system libvirt; use a dedicated, capacious XFS or Btrfs mount that libvirt can traverse. Cleanup targets only that run's domains and disks and never uses the libvirt default network or an existing domain. Each guest receives nested KVM, a fresh root disk, and a separate data disk. One guest exercises the bounded Btrfs image, one performs a fresh candidate install on the explicit existing Btrfs filesystem, and one performs the public v0.7.2 refusal-and-clean-recreation procedure on that filesystem. The v0.7.2 bootstrap and deploy binary are downloaded from the public release and checked against repository-pinned SHA-256 values; no qualification adapter or source checkout participates.
 
 Download the dated qualification image once. The preparation command refuses a different image digest:
 
