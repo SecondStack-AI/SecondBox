@@ -30,7 +30,9 @@ scenario_reserve_gvisor_profiles() {
   containers="$(docker ps -aq)" || return
   occupied=''
   while [[ -n "$containers" ]]; do
-    if snapshot="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $containers 2>&1)"; then
+    # Inspect only profile declarations: failure diagnostics must never contain
+    # unrelated containers' credentials from the rest of Config.Env.
+    if snapshot="$(docker inspect --format '{{range .Config.Env}}{{if eq (index (split . "=") 0) "SECONDBOX_GVISOR_NETWORK_PROFILE"}}{{println .}}{{end}}{{end}}' $containers 2>&1)"; then
       occupied="$(sed -n 's/^SECONDBOX_GVISOR_NETWORK_PROFILE=//p' <<<"$snapshot")"
       break
     fi
