@@ -160,9 +160,6 @@ func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
 			instanceMemoryMiB = m.defaultMemoryMiB()
 		}
 		out.MemoryReservedMiB += instanceMemoryMiB
-		if inst.warmToolVM {
-			out.WarmToolVMs++
-		}
 	}
 	for key, count := range m.pendingSpawns {
 		if count <= 0 || strings.TrimSpace(key.sandboxID) == "" {

@@ -747,41 +747,6 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	if isolationResp.Error == "" {
 		t.Fatalf("second compartment read first compartment workspace file: resp=%+v", isolationResp)
 	}
-	if err := restartedManager.Remove(ctx, otherID); err != nil {
-		t.Fatalf("remove isolated second-compartment executor before warm-reuse check: %v\n%s", err, smokeLogPath(t, otherLogPath))
-	}
-	restartedManager.cfg.MicroVMToolVMIdleTTL = 100 * time.Millisecond
-	warmOpts := runtimemanager.StartOpts{Timezone: "UTC"}
-	warmID, warmWrite, err := restartedManager.ExecuteToolLeased(ctx, "0123456789abcdef", "cmp_smoke_warm_reuse", warmOpts, ToolExecRequest{
-		Operation: ToolOpWriteFile,
-		Path:      "warm-ready.txt",
-		Content:   "warm-ready",
-	})
-	if err != nil || warmWrite.Error != "" {
-		t.Fatalf("write through warm tool executor: resp=%+v err=%v\n%s", warmWrite, err, latestSmokeLog(t, workDir))
-	}
-	reusedID, warmRead, err := restartedManager.ExecuteToolLeased(ctx, "0123456789abcdef", "cmp_smoke_warm_reuse", warmOpts, ToolExecRequest{
-		Operation: ToolOpReadFile,
-		Path:      "warm-ready.txt",
-	})
-	if err != nil || warmRead.Error != "" || warmRead.Content != "warm-ready" || reusedID != warmID {
-		t.Fatalf("warm executor was not reused: first=%s second=%s resp=%+v err=%v\n%s", warmID, reusedID, warmRead, err, latestSmokeLog(t, workDir))
-	}
-	if reaped := restartedManager.sweepIdleToolVMs(time.Now().Add(time.Second)); reaped != 1 {
-		t.Fatalf("idle warm executor reap count = %d, want 1", reaped)
-	}
-	waitForSmoke(t, 30*time.Second, func() bool {
-		return restartedManager.lookup(warmID) == nil
-	}, func() string {
-		return "idle warm executor remained active\n" + latestSmokeLog(t, workDir)
-	})
-	remountedID, remountedRead, err := restartedManager.ExecuteToolLeased(ctx, "0123456789abcdef", "cmp_smoke_warm_reuse", warmOpts, ToolExecRequest{
-		Operation: ToolOpReadFile,
-		Path:      "warm-ready.txt",
-	})
-	if err != nil || remountedRead.Error != "" || remountedRead.Content != "warm-ready" || remountedID == warmID {
-		t.Fatalf("idle-stop workspace remount failed: first=%s remounted=%s resp=%+v err=%v\n%s", warmID, remountedID, remountedRead, err, latestSmokeLog(t, workDir))
-	}
 }
 
 func TestSmokeRunnerLocalSnapshotRestore(t *testing.T) {

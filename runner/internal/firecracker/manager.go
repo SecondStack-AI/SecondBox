@@ -57,13 +57,8 @@ type Manager struct {
 	cfg                  *config.Config
 	mu                   sync.Mutex
 	instances            map[string]*instance
-	instancesByKey       map[runtimeInstanceKey]string
-	provisioning         map[runtimeInstanceKey]chan struct{}
 	pendingSpawns        map[runtimeInstanceKey]int
 	pendingMemoryMiB     map[runtimeInstanceKey]int
-	shuttingDown         bool
-	sweepCancel          context.CancelFunc
-	sweepDone            chan struct{}
 	guestIPs             map[string]string // instanceID -> reserved guest IP
 	jailerUIDs           map[int]string    // jailer UID -> instanceID
 	network              HostNetworkConfigurer
@@ -72,12 +67,10 @@ type Manager struct {
 	trustedArtifacts     *trustedMicroVMArtifacts
 	snapshotTemplates    *SnapshotTemplateCache
 	startCompartment     func(context.Context, string, string, runtimemanager.StartOpts) (string, error)
-	executeTool          func(context.Context, string, ToolExecRequest) (ToolExecResponse, error)
 	freezeWorkspace      func(context.Context, string) (BackupResponse, error)
 	removeInstance       func(context.Context, string) error
 	signalInstance       func(string, syscall.Signal) error
 	startDurations       []time.Duration
-	mountLocks           map[runtimeInstanceKey]*sync.Mutex
 	cleanupFailure       error
 	evidence             runnerevidence.Sink
 	runnerID             string
@@ -92,7 +85,7 @@ func (m *Manager) SetWorkspaceStore(store workspacestore.WorkspaceStore) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.instances) != 0 || len(m.provisioning) != 0 || m.sweepCancel != nil {
+	if len(m.instances) != 0 || len(m.pendingSpawns) != 0 {
 		return fmt.Errorf("SecondBox Firecracker WorkspaceStore must be bound before startup")
 	}
 	m.workspaceStore = store
@@ -128,13 +121,8 @@ type instance struct {
 	workspaceAttachment    workspacestore.ComputeAttachment
 	sharedImagePath        string
 	guestIP                string
-	startupFingerprint     string
 	cmd                    *exec.Cmd
 	startedAt              time.Time
-	lastUsedAt             time.Time
-	inflight               int
-	warmToolVM             bool
-	draining               bool
 	reaping                bool
 	done                   chan struct{} // closed after the VM exits and cleanup runs
 	doneOnce               sync.Once
@@ -199,11 +187,7 @@ type trustedMicroVMArtifactIdentity struct {
 	ctimeUnixNano   int64
 }
 
-var (
-	toolExecutorFingerprintContractVersion = ToolExecutorContractVersion
-	toolExecutorFingerprintCapabilities    = []string{"workspace-session-env"}
-	hardLinkFile                           = os.Link
-)
+var hardLinkFile = os.Link
 
 type coldStartStageTimer struct {
 	start time.Time
@@ -315,8 +299,6 @@ func New(cfg *config.Config) (*Manager, error) {
 	m := &Manager{
 		cfg:               cfg,
 		instances:         map[string]*instance{},
-		instancesByKey:    map[runtimeInstanceKey]string{},
-		provisioning:      map[runtimeInstanceKey]chan struct{}{},
 		pendingSpawns:     map[runtimeInstanceKey]int{},
 		guestIPs:          map[string]string{},
 		jailerUIDs:        map[int]string{},
@@ -373,110 +355,13 @@ func (m *Manager) Start(ctx context.Context) error {
 	} else if deleted > 0 {
 		slog.Info("pruned stale microVM logs", "count", deleted)
 	}
-	if startupErr != nil {
-		return startupErr
-	}
-	if m.cfg == nil || !m.cfg.ToolVMReuseEffective() {
-		return nil
-	}
-	m.mu.Lock()
-	if m.sweepCancel != nil {
-		m.mu.Unlock()
-		return nil
-	}
-	ttl := m.cfg.MicroVMToolVMIdleTTL
-	if ttl <= 0 {
-		ttl = 90 * time.Second
-	}
-	interval := ttl
-	if interval > 30*time.Second {
-		interval = 30 * time.Second
-	}
-	sweepCtx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	m.sweepCancel = cancel
-	m.sweepDone = done
-	m.mu.Unlock()
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-sweepCtx.Done():
-				return
-			case now := <-ticker.C:
-				m.sweepIdleToolVMs(now)
-			}
-		}
-	}()
-	return nil
+	return startupErr
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {
 	if m == nil {
 		return nil
 	}
-	m.mu.Lock()
-	m.shuttingDown = true
-	cancel := m.sweepCancel
-	done := m.sweepDone
-	m.sweepCancel = nil
-	m.sweepDone = nil
-	m.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if done != nil {
-		select {
-		case <-done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	waitCtx, cancelWait := context.WithTimeout(ctx, 3*time.Second)
-	defer cancelWait()
-	var shutdownErr error
-	provisioningTimedOut := false
-	for {
-		m.mu.Lock()
-		provisioning := len(m.provisioning)
-		m.mu.Unlock()
-		if provisioning == 0 {
-			break
-		}
-		select {
-		case <-waitCtx.Done():
-			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("wait for provisioning tool VMs: %w", waitCtx.Err()))
-			provisioningTimedOut = true
-		case <-time.After(25 * time.Millisecond):
-		}
-		if provisioningTimedOut {
-			break
-		}
-	}
-	if !provisioningTimedOut {
-		inflightCtx, cancelInflight := context.WithTimeout(ctx, 30*time.Second)
-		defer cancelInflight()
-		for {
-			m.mu.Lock()
-			inflight := m.warmToolInflightLocked()
-			m.mu.Unlock()
-			if inflight == 0 {
-				break
-			}
-			select {
-			case <-inflightCtx.Done():
-				shutdownErr = errors.Join(shutdownErr, fmt.Errorf("wait for %d in-flight tool VM operations: %w", inflight, inflightCtx.Err()))
-				inflight = 0
-			case <-time.After(25 * time.Millisecond):
-			}
-			if inflight == 0 {
-				break
-			}
-		}
-	}
-
 	var victims []*instance
 	m.mu.Lock()
 	for _, inst := range m.instances {
@@ -507,8 +392,9 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	select {
 	case <-doneTeardown:
 	case <-ctx.Done():
-		return errors.Join(shutdownErr, ctx.Err())
+		return ctx.Err()
 	}
+	var shutdownErr error
 	for err := range teardownErrors {
 		shutdownErr = errors.Join(shutdownErr, err)
 	}
@@ -748,9 +634,6 @@ func (m *Manager) createAndStart(ctx context.Context, sandboxID string, opts run
 	return m.startCompartmentInstance(ctx, sandboxID, compartmentID, opts, releasePendingLocked)
 }
 
-// ExecuteEphemeralTool starts a fresh Firecracker tool VM for one dangerous
-// operation, executes the request, then tears the VM down. Every sandbox hand
-// gets its own ephemeral VM; there is no warm-VM reuse.
 func (m *Manager) cleanupUntrackedSandboxOrphans(ctx context.Context, sandboxID string) error {
 	sandboxID = strings.TrimSpace(sandboxID)
 	if sandboxID == "" {
@@ -1124,7 +1007,7 @@ type launchedInstanceFiles struct {
 }
 
 // registerLaunchedInstance takes ownership of a started VMM process. It builds
-// the Instance record, registers it under the provisioning lock, starts the
+// the Instance record, registers it under the manager lock, starts the
 // reaper before any teardown can run so the process is always waited on, and
 // reports the compute-started stage. Both start paths use it, so both get the
 // same registration ordering, the same reaper, and the same teardown
@@ -1136,7 +1019,6 @@ func (m *Manager) registerLaunchedInstance(
 	compartmentID string,
 	opts runtimemanager.StartOpts,
 	files launchedInstanceFiles,
-	startupFingerprint string,
 	cmd *exec.Cmd,
 	onRegisteredLocked func(),
 ) (*instance, error) {
@@ -1161,7 +1043,6 @@ func (m *Manager) registerLaunchedInstance(
 		workspaceAttachment: opts.WorkspaceAttachment,
 		sharedImagePath:     files.sharedImagePath,
 		guestIP:             host.guestIP,
-		startupFingerprint:  startupFingerprint,
 		cmd:                 cmd,
 		startedAt:           time.Now().UTC(),
 		done:                make(chan struct{}),
@@ -1283,10 +1164,6 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	if err := m.writeIdentityFile(dir, id, sandboxID, opts); err != nil {
 		return "", host.joinNetworkCleanup(setupCtx, err)
 	}
-	startupFingerprint, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-	if err != nil {
-		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("build startup fingerprint: %w", err))
-	}
 	timer.mark("launch_config_ready")
 
 	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspace.attachment, sharedImagePath, host.tapName, host.guestIP, host.jailerUID, opts.TemplateMode, opts.SandboxPolicy)
@@ -1344,7 +1221,6 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 			workspacePath:   launch.workspacePath,
 			sharedImagePath: launchImage.SharedImagePath,
 		},
-		startupFingerprint,
 		cmd,
 		onRegisteredLocked,
 	)
@@ -2112,12 +1988,6 @@ func (m *Manager) removeInstanceLocked(inst *instance) {
 	if inst == nil {
 		return
 	}
-	if m.instancesByKey != nil && inst.warmToolVM {
-		key := runtimeInstanceKey{sandboxID: strings.TrimSpace(inst.sandboxID), compartmentID: normalizeRuntimeCompartmentID(inst.compartmentID)}
-		if m.instancesByKey[key] == inst.id {
-			delete(m.instancesByKey, key)
-		}
-	}
 	delete(m.instances, inst.id)
 }
 
@@ -2192,4 +2062,38 @@ func (t *tailReadCloser) Close() error {
 		return t.close()
 	}
 	return nil
+}
+
+func (m *Manager) teardownManagedVMContext(ctx context.Context, inst *instance) error {
+	if inst == nil {
+		return nil
+	}
+	var teardownErr error
+	freezeCtx, cancelFreeze := context.WithTimeout(ctx, 10*time.Second)
+	freezeWorkspace := m.FreezeWorkspace
+	if m.freezeWorkspace != nil {
+		freezeWorkspace = m.freezeWorkspace
+	}
+	if _, err := freezeWorkspace(freezeCtx, inst.id); err != nil {
+		teardownErr = errors.Join(teardownErr, fmt.Errorf("freeze microVM workspace %q: %w", inst.id, err))
+	}
+	cancelFreeze()
+	removeCtx, cancelRemove := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelRemove()
+	removeInstance := m.Remove
+	if m.removeInstance != nil {
+		removeInstance = m.removeInstance
+	}
+	if err := removeInstance(removeCtx, inst.id); err != nil {
+		teardownErr = errors.Join(teardownErr, fmt.Errorf("remove microVM %q: %w", inst.id, err))
+		signalInstance := signalFirecrackerByID
+		if m.signalInstance != nil {
+			signalInstance = m.signalInstance
+		}
+		killErr := signalInstance(inst.id, syscall.SIGKILL)
+		if killErr != nil {
+			teardownErr = errors.Join(teardownErr, fmt.Errorf("escalate microVM %q teardown: %w", inst.id, killErr))
+		}
+	}
+	return teardownErr
 }

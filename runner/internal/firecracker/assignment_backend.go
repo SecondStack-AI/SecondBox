@@ -706,7 +706,6 @@ func (b *AssignmentBackend) StartAssignment(
 		ExecutionNetwork:        executionNetwork,
 		CompartmentID:           assignment.Fence.InstanceId,
 		WorkspaceAttachment:     workspaceAttachment,
-		ShapeFingerprint:        assignment.ProfileRevisionId,
 		SandboxGeneration:       assignment.Fence.SandboxGeneration,
 		GuestBuildID:            guestStart.GuestBuildID,
 		ImageManifestDigest:     guestStart.ImageManifestDigest,

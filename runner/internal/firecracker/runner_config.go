@@ -281,8 +281,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMMaxConcurrentGlobal:                 maxGlobal,
 		MicroVMMaxConcurrentOperationsGlobal:       maxOperationsGlobal,
 		MicroVMMemoryBudgetMiB:                     memoryBudgetMiB,
-		MicroVMToolVMReuseEnabled:                  false,
-		MicroVMToolVMIdleTTL:                       time.Duration(0),
 		FileTransferMaxBytes:                       int64(fileTransferMaxBytes),
 		NetworkPolicyNFTPath:                       networkPolicyNFTPath,
 		NetworkPolicyMaximumDNSPins:                networkPolicyConfig.CompileOptions.MaximumPins,

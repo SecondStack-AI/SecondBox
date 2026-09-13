@@ -39,14 +39,12 @@ type StartOpts struct {
 	Timezone                string
 	CompartmentID           string
 	WorkspaceAttachment     workspacestore.ComputeAttachment
-	ShapeFingerprint        string
 	SandboxGeneration       uint64
 	GuestBuildID            string
 	ImageManifestDigest     string
 	ToolchainManifestDigest string
 	MandatoryGuestFeatures  []string
 	RuntimeClass            RuntimeClass
-	Ephemeral               bool
 	SandboxPolicy           *SandboxRuntimePolicy
 	NetworkPolicy           *networkpolicy.CompiledPolicy
 	RequestID               string
@@ -61,8 +59,8 @@ type StartOpts struct {
 	TemplateMode bool
 	// StartupMode selects the start path. An assignment always states it,
 	// because the control plane refuses a Profile revision that does not. It is
-	// empty only for runner-internal launches that are not Profile-driven — the
-	// tool VM and the template build — and those are cold by construction.
+	// empty only for runner-internal launches such as template builds, which
+	// are cold by construction.
 	StartupMode StartupMode
 }
 
@@ -92,7 +90,6 @@ type RuntimeMetricsSnapshot struct {
 	MemoryBudgetMiB         int
 	GuestIPsInUse           int
 	GuestIPCapacity         int
-	WarmToolVMs             int
 	ColdStartCount          int
 	ColdStartP95            time.Duration
 }

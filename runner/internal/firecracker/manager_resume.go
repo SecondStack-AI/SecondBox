@@ -523,10 +523,6 @@ func (m *Manager) createAndStartResume(
 	}
 	timer.mark("snapshot_template_resolved", "template", template.TemplateID)
 
-	startupFingerprint, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-	if err != nil {
-		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("build startup fingerprint: %w", err))
-	}
 	if err := m.writeIdentityFile(dir, id, sandboxID, opts); err != nil {
 		return "", host.joinNetworkCleanup(setupCtx, err)
 	}
@@ -578,7 +574,6 @@ func (m *Manager) createAndStartResume(
 			workspacePath:   filepath.Join(launch.jailRoot, workspaceName),
 			sharedImagePath: sharedImagePath,
 		},
-		startupFingerprint,
 		cmd,
 		onRegisteredLocked,
 	)

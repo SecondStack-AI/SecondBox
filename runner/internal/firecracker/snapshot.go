@@ -39,7 +39,6 @@ type GoldenSnapshotManifest struct {
 	GuestIP            string            `json:"guestIp,omitempty"`
 	OriginalRunDir     string            `json:"originalRunDir,omitempty"`
 	Jailed             bool              `json:"jailed,omitempty"`
-	StartupFingerprint string            `json:"startupFingerprint,omitempty"`
 	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
@@ -102,7 +101,6 @@ func (m *Manager) CreateGoldenSnapshot(ctx context.Context, instanceID, outDir s
 		GuestIP:            firstNonEmpty(inst.guestIP, m.guestIP(inst.id)),
 		OriginalRunDir:     inst.dir,
 		Jailed:             inst.jailRoot != "",
-		StartupFingerprint: inst.startupFingerprint,
 		Metadata:           copyStringMap(metadata),
 	}
 	manifest.KernelSHA256, _ = fileSHA256(manifest.KernelPath)

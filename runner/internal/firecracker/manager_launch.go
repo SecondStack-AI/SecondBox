@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -975,91 +974,12 @@ func (m *Manager) buildStartupSecretBundle(sandboxID, instanceID string, opts ru
 	return bundle, nil
 }
 
-func (m *Manager) startupFingerprint(sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-	return m.startupFingerprintWithEffectiveProfileHash(sandboxID, compartmentID, opts, strings.TrimSpace(opts.ShapeFingerprint))
-}
-
-func (m *Manager) startupFingerprintWithEffectiveProfileHash(sandboxID, compartmentID string, opts runtimemanager.StartOpts, effectiveProfileHash string) (string, error) {
-	bundle, err := m.buildStartupSecretBundle(sandboxID, "", opts)
-	if err != nil {
-		return "", err
-	}
-	image, err := m.microVMImageForStart(opts)
-	if err != nil {
-		return "", err
-	}
-	rootfsIdentity, err := fileArtifactIdentity(image.RootfsPath)
-	if err != nil {
-		return "", fmt.Errorf("stat startup rootfs image: %w", err)
-	}
-	sharedIdentity, err := fileArtifactIdentity(image.SharedImagePath)
-	if err != nil {
-		return "", fmt.Errorf("stat startup shared image: %w", err)
-	}
-	workspaceID := ""
-	if opts.WorkspaceAttachment != nil {
-		workspaceID = strings.TrimSpace(opts.WorkspaceAttachment.WorkspaceID())
-	}
-	fingerprintInput := struct {
-		SecretBundle            SecretBundle                `json:"secretBundle"`
-		RuntimeClass            runtimemanager.RuntimeClass `json:"runtimeClass"`
-		RootfsPath              string                      `json:"rootfsPath"`
-		RootfsIdentity          *ArtifactIdentity           `json:"rootfsIdentity,omitempty"`
-		SharedPath              string                      `json:"sharedPath,omitempty"`
-		SharedIdentity          *ArtifactIdentity           `json:"sharedIdentity,omitempty"`
-		WorkspaceID             string                      `json:"workspaceId,omitempty"`
-		EffectiveProfileHash    string                      `json:"effectiveProfileHash,omitempty"`
-		ExecutorContractVersion int                         `json:"executorContractVersion,omitempty"`
-		ExecutorCapabilities    []string                    `json:"executorCapabilities,omitempty"`
-	}{
-		SecretBundle:            bundle,
-		RuntimeClass:            image.RuntimeClass,
-		RootfsPath:              image.RootfsPath,
-		RootfsIdentity:          rootfsIdentity,
-		SharedPath:              image.SharedImagePath,
-		SharedIdentity:          sharedIdentity,
-		WorkspaceID:             workspaceID,
-		EffectiveProfileHash:    effectiveProfileHash,
-		ExecutorContractVersion: executorContractVersionForFingerprint(image.RuntimeClass),
-		ExecutorCapabilities:    executorCapabilitiesForFingerprint(image.RuntimeClass),
-	}
-	data, err := json.Marshal(fingerprintInput)
-	if err != nil {
-		return "", fmt.Errorf("marshal startup fingerprint bundle: %w", err)
-	}
-	sum := sha256.New()
-	sum.Write(data)
-	return hex.EncodeToString(sum.Sum(nil)), nil
-}
-
 func normalizeTimezone(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "UTC"
 	}
 	return value
-}
-
-func executorContractVersionForFingerprint(runtimeClass runtimemanager.RuntimeClass) int {
-	if runtimeClass == "" {
-		runtimeClass = runtimemanager.RuntimeClassToolExecutor
-	}
-	if runtimeClass != runtimemanager.RuntimeClassToolExecutor {
-		return 0
-	}
-	return toolExecutorFingerprintContractVersion
-}
-
-func executorCapabilitiesForFingerprint(runtimeClass runtimemanager.RuntimeClass) []string {
-	if runtimeClass == "" {
-		runtimeClass = runtimemanager.RuntimeClassToolExecutor
-	}
-	if runtimeClass != runtimemanager.RuntimeClassToolExecutor {
-		return nil
-	}
-	caps := append([]string(nil), toolExecutorFingerprintCapabilities...)
-	sort.Strings(caps)
-	return caps
 }
 
 // waitForControlPlane blocks until the in-guest control service answers a heartbeat over
