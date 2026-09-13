@@ -1,7 +1,7 @@
 ---
 title: Fast, Automated Qualification and Release
 date: 2026-09-12
-status: completed
+status: in-progress
 owner: SecondStack
 provenance: A full day of hand-driven qualification of PR #126 on the release host, 2026-09-12
 ---
@@ -304,6 +304,75 @@ Implementation findings and deviations:
   and `docs/operations/scenario-qualification.md` around the two commands;
   keep the manual recipes as an appendix for hosts without the automation.
 - [x] CHANGELOG entry under Unreleased.
+
+## Task 5: Lean release tier (pre-release)
+
+Measured on 2026-09-13 for v0.11.0 on this host: build 7m26s, qualification
+16m24s (Firecracker 8m20s, gVisor host 8m43s + pod 7m32s in the VM),
+installer 14m56s, total 31m32s. The project is pre-release; the release
+pipeline should prove what a user can hit today and nothing else. The full
+matrix moves to a nightly tier and stays available on demand.
+
+Decisions:
+
+- **Release tier** = gates ∥ amd64-only artifact build ∥ Firecracker suite
+  sharded 4-way ∥ gVisor host suite sharded 4-way on this host, then bind,
+  then one installer guest (fresh Btrfs-image install through the wizard,
+  reboot recovery, and the hello-world microVM), then stage. Target: about
+  10 minutes end to end.
+- **Nightly tier** = everything the release tier drops: linux/arm64 images,
+  the customer-shared-tenancy and snapshot-resume scenarios (with the
+  template publish smoke), the gVisor pod suite in the VM, and the two other
+  installer guests (existing-filesystem uninstall/resume, and the v0.7.2
+  refuse-and-recreate boundary). `just qualify --tier nightly` runs it;
+  `just release --full VERSION` runs a release with it.
+- gVisor is a supported backend, so its host suite stays in the release tier.
+  It runs on this host, which has KVM; the evidence rule that gVisor evidence
+  must come from a host without KVM is dropped, because runsc does not use
+  KVM in this deployment and the rule only existed to force the VM. The VM
+  remains the nightly pod-suite host.
+- Sharded runs may produce release evidence: the shards' per-test results are
+  merged into one evidence document (sum of passes, maximum wall clock, the
+  same commit and dirty checks) with the existing schema, so `release-stage`
+  needs no new evidence kind.
+- Scenario tiers are selected in one place: a `SECONDBOX_SCENARIO_TIER`
+  (`release` default, `nightly`) that the harness maps to a `-skip` list;
+  no test is deleted. `TestScenarioTouchExtendsIdleExpiry` uses a 5-second
+  idle Profile so it no longer sleeps 25 s.
+- The installer driver takes a mode list; `vm-scenario.json` lists required
+  assertions per mode so the release tier's single guest is judged on the
+  assertions that guest can make.
+- Artifact manifest and release verification accept an amd64-only image set
+  when the release tier built it; the manifest records the platforms built.
+
+- [ ] Harness: `SECONDBOX_SCENARIO_TIER` and the skip list; the 5-second idle
+  Profile for the touch test; shard evidence merge in `scripts/test-scenario.sh`
+  (each shard writes `.tmp/scenario-shard-<i>-evidence.json`; the merge writes
+  the ordinary evidence file and refuses shards from different commits).
+- [ ] `scripts/qualify.sh`: release tier runs Firecracker and gVisor host
+  sharded on this host and merges evidence; `--tier nightly` adds the
+  dropped scenarios unsharded, the pod suite in the VM, and keeps the
+  no-KVM evidence for it. `scripts/qualify-gvisor.sh` gains a `--host` mode
+  that runs the gVisor suite locally with the same build root inputs the VM
+  uses (`QUALIFY_GVISOR_HOST_BUILD_ROOT` in the env example).
+- [ ] `scripts/release-stage.sh`: accept gVisor evidence from a KVM host;
+  `RELEASE_IMAGE_PLATFORMS` (default `linux/amd64` in the lean tier,
+  `linux/amd64,linux/arm64` with `--full`); the manifest records the platform
+  list and `pkg/releaseverify` accepts it; cross-compiled CLI and deploy
+  binaries stay for all four host platforms (they are seconds).
+- [ ] `scripts/installer-qualification-driver`: `--modes` list; per-mode
+  required assertions in `tests/installer/vm-scenario.json`;
+  `scripts/test-installer-qualified.sh` passes the release tier's single mode
+  by default and all three with `--full`.
+- [ ] `scripts/release.sh`: `--full` flag; default lean. `Justfile`: `release
+  version *flags`, `qualify` unchanged, a `nightly` recipe that runs
+  `qualify --tier nightly` and is safe to put on a systemd timer.
+- [ ] Docs: `docs/operations/release-operator-setup.md` and
+  `scenario-qualification.md` describe the two tiers; CHANGELOG entry.
+- [ ] Prove on this host: `just qualify` (PR tier), `just qualify --tier
+  release`, `just release 0.99.0` (lean) with timing tables in this plan;
+  delete the throwaway tag. Run the nightly tier once to prove it still
+  passes end to end and record its table too.
 
 ## Deferred
 
