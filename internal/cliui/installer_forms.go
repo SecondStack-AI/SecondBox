@@ -26,6 +26,10 @@ func StandardBundleSelectionForm(accepted *bool) HuhForm {
 	return HuhForm{Groups: []GroupSpec{{Title: "Release-owned standard Profiles", Fields: []FieldSpec{{Kind: FieldConfirm, Title: "Install all three standard Profiles?", Description: "Explicitly select agent-compartment, durable-coding, and agent-compartment-isolated for the guided topology.", BoolValue: accepted, RequireAffirmative: true}}}}}
 }
 
+func TenancyBootstrapForm(accepted *bool) HuhForm {
+	return HuhForm{Groups: []GroupSpec{{Title: "Local development tenancy", Fields: []FieldSpec{{Kind: FieldConfirm, Title: "Create a local tenant and subject so `secondbox run` works", BoolValue: accepted}}}}}
+}
+
 func CapacityReviewForm(summary string, accepted *bool) HuhForm {
 	return HuhForm{Groups: []GroupSpec{{Title: "Capacity review", Fields: []FieldSpec{{Kind: FieldConfirm, Title: "Accept this capacity?", Description: Sanitize(summary), BoolValue: accepted, RequireAffirmative: true}}}}}
 }

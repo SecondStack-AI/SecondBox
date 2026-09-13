@@ -1164,3 +1164,51 @@ func mustStat(t *testing.T, path string) os.FileInfo {
 	}
 	return info
 }
+
+func TestWorkspaceTemplatePrewarmAllCapacities(t *testing.T) {
+	for _, maximum := range []int64{minimumExt4Bytes, 8 * minimumExt4Bytes, 10 * minimumExt4Bytes} {
+		t.Run(strconv.FormatInt(maximum, 10), func(t *testing.T) {
+			formatter := &fakeFormatter{}
+			config := Config{Root: t.TempDir(), TemplateCapacityBytes: maximum}
+			store, err := newStore(config, &fakeCloner{}, formatter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.initialize(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			capacities := []int64{maximum}
+			for capacity := int64(minimumExt4Bytes); capacity < maximum; capacity *= 2 {
+				capacities = append(capacities, capacity)
+			}
+			if len(formatter.uuids) != len(capacities) {
+				t.Fatalf("formatted=%d want=%d", len(formatter.uuids), len(capacities))
+			}
+			for index, capacity := range capacities {
+				if err := validateExt4Template(store.ext4TemplatePath(capacity), capacity, deterministicTemplateUUID(capacity)); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.Create(t.Context(), CreateWorkspaceRequest{Mutation: testMutation("operation-prewarm-"+strconv.Itoa(index), "workspace-prewarm-"+strconv.Itoa(index)), CapacityBytes: capacity}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(formatter.uuids) != len(capacities) {
+				t.Fatal("create formatted an already prewarmed capacity")
+			}
+			if err := store.initialize(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(formatter.uuids) != len(capacities) {
+				t.Fatal("reopen reformatted existing templates")
+			}
+			// Validation must apply to intermediate templates, not only the maximum.
+			template := store.ext4TemplatePath(minimumExt4Bytes)
+			if err := os.Chmod(template, writableImageMode); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.initialize(t.Context()); err == nil {
+				t.Fatal("open accepted a writable intermediate template")
+			}
+		})
+	}
+}

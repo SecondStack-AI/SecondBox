@@ -12,7 +12,7 @@ SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, l
 - **Durable workspaces.** A Sandbox keeps its disk across stops, restarts, and generations. Snapshot it and restore in place.
 - **Real terminals.** A genuine PTY with raw mode, resize forwarding, and bounded reconnect — not a line-buffered exec loop.
 - **Multi-tenant by construction.** Every row is scoped to an opaque tenant and subject reference. Application tokens carry fixed scopes and explicit Profile grants.
-- **Immutable Profiles.** Operators fix image, resources, lifecycle, network, and port policy. Each Sandbox pins the revision resolved at creation.
+- **Immutable Profiles.** Operators fix image, resource defaults and optional ceilings, lifecycle, network, and port policy. Each Sandbox pins the revision resolved at creation.
 - **Self-hosted.** One unprivileged control plane, PostgreSQL, and one or more privileged runners you place yourself.
 
 > [!NOTE]
@@ -28,7 +28,7 @@ A **Sandbox** is the durable public resource; the **Instance** running it is rep
 
 ### Guided single-host install
 
-The guided installer turns one qualified Linux amd64 systemd host into a loopback-only development deployment with PostgreSQL, the control plane, and one same-host Firecracker Runner. It verifies a published release, records every accepted path and authority decision, and finishes by running a hello-world command inside a microVM.
+The guided installer turns one qualified Linux amd64 systemd host into a loopback-only development deployment with PostgreSQL, the control plane, and one same-host Firecracker Runner. It verifies a published release and records every accepted path and authority decision. With local tenancy selected (the guided default), it creates a Tenant and Subject, configures the platform CLI session for `secondbox run`, and verifies hello-world guest execution. Declining tenancy leaves a platform session and record-only readiness checks.
 
 The host needs Docker Engine with Compose v2, cgroup v2, accessible KVM and TUN devices, hardware virtualization, at least 6 logical CPUs and 12 GiB of memory. Runner storage needs at least 65 GiB: 50 GiB for the `durable-coding` Workspace, approximately 11 GiB for verified execution assets, and a 4 GiB margin. Use a dedicated non-root XFS/Btrfs filesystem with that capacity, or let the installer create a fully allocated Btrfs image of at least 65 GiB; the image choice additionally needs its full allocation plus the reviewed control-service, download, and backing reserves on `/var/lib`. Check the host without changing it:
 
@@ -96,7 +96,7 @@ go build -o ./dist/secondbox ./cmd/secondbox
 ### Log in once
 
 ```sh
-secondbox login \
+secondbox platform login \
   --url https://secondbox.example.com \
   --token "$SECONDBOX_PLATFORM_TOKEN" \
   --tenant-ref acme \
@@ -113,92 +113,148 @@ secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
 
 ## Using the CLI
 
+### Run with the resources you need
+
+`run` creates a Sandbox, waits for readiness, executes a command, and deletes
+it. Add `--keep` to retain its Workspace and report its identifier:
+
+```sh
+secondbox run durable-coding --name mybox --keep -- true
+secondbox run durable-coding --cpus 2 --memory 4GiB --disk 20GiB -- python3 -c 'print("hello")'
+secondbox get mybox
+```
+
+| Size | vCPUs | Memory | Workspace |
+|---|---:|---:|---:|
+| `small` | 1 | 1 GiB | 4 GiB |
+| `medium` | 2 | 4 GiB | 16 GiB |
+| `large` | 4 | 8 GiB | 50 GiB |
+
+Explicit `--cpus`, `--memory`, and `--disk` override individual preset axes.
+Byte sizes accept `GiB`, `MiB`, `KiB`, `g`, `m`, `k` (case-insensitive binary
+units), or plain bytes. Without a preset, omitted axes use the Profile values.
+Requested disk capacity rounds up to the next power of two before admission,
+so 20 GiB becomes 32 GiB, except that a request within the Profile's disk
+ceiling never fails because of rounding: it resolves to the ceiling itself
+when the rounded value would exceed it, which is why `--size large` still
+fits standard `durable-coding` at 50 GiB. Omitted disk uses the Profile
+default unchanged.
+
+Without `resourceCeiling`, Profile resource defaults are also ceilings.
+Operators may publish explicit bounds for all three axes, using `null` to
+leave an axis bounded only by Tenant/Subject quota and Runner admission.
+The [flexible Profile example](examples/resources/durable-coding-flexible.json)
+permits unbounded CPU/memory and up to 256 GiB of Workspace capacity. Requests
+above a finite bound fail with `resources_exceed_profile`, never shrink.
+`snapshot_resume` Profiles require their exact default size and reject changes
+with `resources_fixed_by_profile`. `get` and the TTY retained Sandbox summary
+show the resolved resources.
+
+For creation without an initial command, use `create`. It returns the admitted
+Operation immediately; the Profile chooses the initial state. Inspect readiness
+before executing in it, or use `run --keep -- true` to create and wait:
+
+```sh
+secondbox create durable-coding --size small --name worker
+secondbox get worker
+secondbox ls
+```
+
+### Work with files, commands, and ports
+
+A new Workspace starts empty. Copy your files explicitly; your local checkout
+is never mounted or copied implicitly. These examples assume `./src` exists:
+
+```sh
+secondbox cp -r ./src mybox:/workspace/src
+secondbox exec mybox --shell -- 'printf "hello\n" > /workspace/out.txt'
+secondbox cp mybox:/workspace/out.txt ./out.txt
+secondbox ls-files mybox /workspace
+secondbox shell mybox
+secondbox ports forward mybox 3000
+```
+
+The port forward listens on `127.0.0.1:3000` until interrupted; run a server on
+Sandbox port 3000 in another terminal first. Use `8080:3000` for different local
+and remote ports, or `--bind` to select the local address. The Profile must
+permit the remote port. Files use `sandbox:/workspace/path` operands, and
+`cp -r` recursively copies directories.
+
+Friendly verbs taking a Sandbox accept its name or `sbx_…` identifier. Names
+use the reserved `secondbox.dev/name` metadata key, unique per Tenant and
+Subject until deletion, and resolve through the API from any machine.
+`run` and `create` take a Profile instead.
+
+Guest stdout and stderr stay separate, and the guest's exit status becomes the
+CLI exit status. `run` deletes its Sandbox even after a failed command unless
+`--keep` is set. `--shell` accepts one shell command; `--stdin` forwards buffered
+input. `run PROFILE --tty` creates an interactive session, and `--keep` retains
+it after disconnection. `shell` attaches to an existing Sandbox and manages
+its generation and Lease.
+
+### Stop, snapshot, and reuse
+
+Snapshots capture a stopped Sandbox's durable Workspace. Keep the source's
+disk capacity when cloning; CPU and memory may differ within the target
+Profile's ceilings:
+
+```sh
+secondbox stop mybox
+secondbox snapshot mybox --name with-deps
+secondbox snapshots mybox
+secondbox run durable-coding --from mybox/with-deps -- cat /workspace/out.txt
+secondbox start mybox
+secondbox stop mybox
+secondbox rm mybox
+```
+
+`start`, `stop`, and `rm` wait for their terminal state; `--no-wait` returns the
+admitted Operation instead. `rm` asks for confirmation only on a TTY, and
+`--force` skips it. `list` aliases `ls`; `delete` aliases `rm`. `ls` includes
+all states returned by the API and accepts `--name` for an exact name filter.
+
+`run` and `create` accept `--from sandbox/snapshot-name` or an opaque `snp_…`
+identifier. `restore SANDBOX REF` restores into a stopped Sandbox, while
+`snapshot rm REF` deletes a Snapshot; both return an admitted Operation.
+Snapshot names are unique among ready Snapshots in the source Sandbox.
+
+To install dependencies under `/workspace` and reuse them, follow the
+[golden-snapshot workflow](docs/operations/sdk-cli-and-flue.md#golden-snapshot-workflow).
+It includes a reviewed operator Profile example with registry HTTPS access;
+the standard `durable-coding` bundle allows only the platform gateway.
+
 ### Terminal presentation and scripts
 
-Interactive terminals receive compact summaries, width-aware tables, and
-lifecycle status on stderr. Pipes and redirects retain the existing machine
-bytes. Global presentation flags precede the command:
+Global presentation flags precede the command:
 
 ```sh
-secondbox --output plain --color never sandboxes list
-secondbox --output json sandboxes list | jq '.items[] | .id'
-secondbox --accessible login
+secondbox --output plain --color never ls
+secondbox --output json get mybox
 ```
 
-`--output auto|json|plain` chooses automatic TTY presentation, original JSON,
-or an unstyled human view. `--color auto|always|never` controls ANSI color;
-`NO_COLOR` disables automatic color, and `SECONDBOX_ACCESSIBLE=1` is equivalent
-to `--accessible`. Raw file/log responses, generic `operation` output,
-Docker Compose output, and all guest streams ignore human rendering. See the
-[complete CLI output contract](docs/operations/cli-output-contract.md) before
-using a command in automation.
-
-### One-off commands
-
-`run` creates a Sandbox, waits for it, runs one command, and deletes it:
-
-```sh
-secondbox run durable-coding -- python3 -c 'print("hello")'
-secondbox run durable-coding --shell -- 'ls -la /workspace && whoami'
-echo 'piped in' | secondbox run durable-coding --stdin -- cat
-```
-
-The guest's stdout and stderr land on your two streams, unmerged, and **its exit status becomes the CLI's exit status** — so `secondbox run … -- false` exits 1 and prints nothing of its own, exactly like a local command.
-
-### Named Sandboxes
-
-```sh
-# Create one and keep it
-secondbox run durable-coding --name my-box --keep -- true
-
-# Address it by name from any machine
-secondbox exec my-box --shell -- 'printf "hello from my-box\n" > /workspace/hello.txt'
-secondbox exec my-box -- cat /workspace/hello.txt
-secondbox shell my-box
-```
-
-Names are the reserved metadata key `secondbox.dev/name`, unique per tenant and subject and resolved **server-side** — so the same name works from anywhere, with nothing cached locally. A deleted Sandbox releases its name.
-
-A Sandbox created without a source Snapshot starts with its own empty durable Workspace. Populate `/workspace` through the File API or guest commands; SecondBox never mounts or copies the caller's host checkout implicitly.
-
-`run`, `exec`, and `shell` accept a name or an opaque `sbx_…` identifier, telling them apart by the identifier prefix. The transport-level commands below take the identifier only; `secondbox sandboxes list` shows both.
-
-### Interactive shell
-
-```sh
-secondbox run durable-coding --tty              # throwaway shell, deleted on exit
-secondbox run durable-coding --tty -- /bin/bash # choose the shell
-secondbox shell my-box                              # attach to one that already exists
-secondbox shell my-box --command /bin/bash --detachable
-```
-
-`run --tty` is the `docker run -it --rm` shape: it creates a Sandbox, waits for it, drops you into a terminal, and deletes it when you disconnect — including on a dropped connection, since the Sandbox exists only for that session. Add `--keep` to retain it and reconnect later with `secondbox shell`.
-
-`shell` resolves the name, applies the Sandbox's current generation, acquires and renews a Lease for the session, and releases it on exit. You get a real PTY: raw mode, local dimensions, `SIGWINCH` forwarding, byte-exact binary I/O, and your terminal restored on exit, cancellation, or transport failure.
-
-Every value it supplies is an overridable default — pass `--lease`, `--generation`, or `--session` and yours wins.
+Eligible terminals receive compact summaries and bounded tables; pipes retain
+API JSON. `--output plain` selects an unstyled human view, and `--output json`
+preserves API response bytes. For lifecycle mutations, JSON is the admitted
+Operation even when the human view waits and shows the resulting resource.
+Guest streams remain raw; `run --json` and `exec --json` explicitly request the
+ExecOutcome. `NO_COLOR` disables automatic color; `--accessible` selects
+accessible prompts. See the [CLI output contract](docs/operations/cli-output-contract.md)
+for every classification.
 
 ### Everything else
 
-The remaining commands are thin transport over the published API — repeatable `--path`, `--query`, and `--header` pairs, and `--body` taking a file or `-`:
+Generic aliases remain thin transport over the API. Use repeatable `--path`,
+`--query`, and `--header` pairs, and `--body` with a file or `-` for stdin:
 
 ```sh
-secondbox sandboxes list
-
-secondbox files read --path sandboxId=sbx_123 --query path=/workspace/out.txt \
-  --header SecondBox-Generation=4
-
-secondbox snapshots create --path sandboxId=sbx_123 \
-  --header 'If-Match="revision-5"' --header Idempotency-Key=$(uuidgen) \
-  --body ./snapshot.json
-
-secondbox exec stream --sandbox sbx_123 --generation 4 \
-  --idempotency-key $(uuidgen) --request ./stream.json
+secondbox profiles list
+secondbox profiles get --path profileName=durable-coding
+secondbox operation listSandboxes --query limit=20
 ```
 
-Routes that mutate a Sandbox require both `Idempotency-Key` and an `If-Match` revision validator; `secondbox sandboxes get` reports the current revision.
-
-`secondbox operation <operationId>` reaches any route in the table directly. Local operator commands — `logs tail`, `logs follow`, `diagnostics bundle`, `timings summary` — need no API credentials for the log routes.
+`operation OPERATION_ID` reaches any published route directly. Generic mutations
+require the headers specified by that operation; friendly verbs and SDK helpers
+compute their own idempotency, revision, and generation values.
 
 Full reference: [SDK, CLI, and Flue quick starts](docs/operations/sdk-cli-and-flue.md).
 

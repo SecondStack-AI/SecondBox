@@ -18,6 +18,8 @@ import (
 const maximumCLIConfigurationBytes = 1 << 20
 
 type cliConfiguration struct {
+	TenantRef     string `json:"tenantRef,omitempty"`
+	SubjectRef    string `json:"subjectRef,omitempty"`
 	URL           string `json:"url"`
 	Token         string `json:"token"`
 	AuthorityKind string `json:"authorityKind"`
@@ -115,7 +117,7 @@ func ValidateCLIConfig(plan InstallPlan) error {
 }
 
 func cliConfigurationBytes(plan InstallPlan, token string) ([]byte, error) {
-	configuration := cliConfiguration{URL: "http://" + plan.Network.APIAddress, Token: token, AuthorityKind: "platform"}
+	configuration := cliConfiguration{URL: "http://" + plan.Network.APIAddress, Token: token, AuthorityKind: "platform", TenantRef: plan.CLI.TenantRef, SubjectRef: plan.CLI.SubjectRef}
 	content, err := json.MarshalIndent(configuration, "", "  ")
 	if err != nil {
 		return nil, err

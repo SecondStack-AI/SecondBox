@@ -43,7 +43,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		RuntimeBundleDigest:   runtimeDigest,
 		ToolchainBundleDigest: toolchainDigest,
 		Resources: contracts.ResourcePolicy{
-			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
+			VCPUCount: 4, MemoryBytes: 4 << 30, WorkspaceBytes: 8 << 30,
 			ConcurrentOperations: 1,
 		},
 		Execution: contracts.ExecutionPolicy{
@@ -78,13 +78,13 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			local_receipt_json,created_at,updated_at
 		) VALUES (
 			'workspace-automatic-start','tenant','subject','sandbox-automatic-start',
-			'runner-home','ready',8589934592,2,'','','','',NULL,NULL,'','{}',$2,$2
+			'runner-home','ready',4294967296,2,'','','','',NULL,NULL,'','{}',$2,$2
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-automatic-start'),
 			'sandbox-automatic-start','tenant','subject','profile-automatic-start',
 			'revision-automatic-start','stopped','running',2,
 			'workspace-automatic-start','','{}','{}','worker-automatic-start',$3,5,$2,$2
@@ -152,6 +152,13 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 	command := recordingScheduler.request.AssignmentCommand
 	if command == nil ||
 		command.Correlation == nil ||
+		command.Requirements.VcpuCount != 1 ||
+		command.Requirements.MemoryBytes != 1<<30 ||
+		command.Requirements.DiskBytes != 4<<30 ||
+		recordingScheduler.request.Requirements.Capacity.VCPUCount != 1 ||
+		recordingScheduler.request.Requirements.Capacity.MemoryBytes != 1<<30 ||
+		recordingScheduler.request.Requirements.Capacity.DiskBytes != 4<<30 ||
+		recordingScheduler.request.Requirements.Capacity.Operations != 1 ||
 		command.EgressContext != "" ||
 		command.Requirements.RequiresTenantEgressContext ||
 		recordingScheduler.request.Requirements.EgressContext != nil ||
@@ -317,11 +324,11 @@ func TestOrdinaryStopAndSnapshotDeleteSerializeAcrossControlPlaneReplicas(t *tes
 			'workspace-stop-race','tenant','subject','sandbox-stop-race','runner-home',
 			'ready',8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-stop-race'),
 			'sandbox-stop-race','tenant','subject','profile','revision','draining','stopped',
 			3,'workspace-stop-race','instance-stop-race','{}','{}','worker-stop-race',
 			$2,7,$1,$1
@@ -459,11 +466,11 @@ func TestSandboxDeleteQueuesHomeWorkspaceRemovalWhileRunnerIsOffline(t *testing.
 			'workspace-delete-offline','tenant','subject','sandbox-delete-offline',
 			'runner-offline','ready',8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-delete-offline'),
 			'sandbox-delete-offline','tenant','subject','profile','revision','stopped','deleted',
 			3,'workspace-delete-offline','','{}','{}','delete-worker',$2,4,$1,$1
 		);

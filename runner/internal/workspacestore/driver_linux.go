@@ -22,6 +22,7 @@ type linuxDriver struct {
 	formatExecutable  string
 	helperExecutable  string
 	setUUIDExecutable string
+	checkExecutable   string
 }
 
 func newPlatformDriver(formatterKind FormatterKind, helperExecutable string) (platformDriver, error) {
@@ -33,7 +34,11 @@ func newLinuxDriver(formatterKind FormatterKind, helperExecutable string) (platf
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox WorkspaceStore tune2fs is required: %w", err)
 	}
-	driver := linuxDriver{formatterKind: formatterKind, setUUIDExecutable: setUUIDExecutable}
+	checkExecutable, err := exec.LookPath("e2fsck")
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox WorkspaceStore e2fsck is required: %w", err)
+	}
+	driver := linuxDriver{formatterKind: formatterKind, setUUIDExecutable: setUUIDExecutable, checkExecutable: checkExecutable}
 	switch formatterKind {
 	case FormatterMke2fs:
 		driver.formatExecutable, err = exec.LookPath("mke2fs")
@@ -141,13 +146,7 @@ func (driver linuxDriver) Format(ctx context.Context, workspace *os.File, capaci
 }
 
 func (driver linuxDriver) SetUUID(ctx context.Context, workspace *os.File, uuid string) error {
-	command := exec.CommandContext(ctx, driver.setUUIDExecutable, "-U", uuid, "/proc/self/fd/3")
-	command.ExtraFiles = []*os.File{workspace}
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("SecondBox WorkspaceStore ext4 UUID rewrite failed: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
+	return rewriteExt4UUID(ctx, driver.setUUIDExecutable, driver.checkExecutable, "/proc/self/fd/3", workspace, uuid)
 }
 
 func (linuxDriver) OpenAttachment(path string) (*os.File, error) {

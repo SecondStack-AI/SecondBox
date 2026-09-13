@@ -516,7 +516,7 @@ func (service *ControlPlaneService) createSandboxOperation(
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
 		IdempotencyEnds:   service.idempotencyExpiration(now),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
-		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID,
+		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID, Resources: request.Resources,
 	})
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
@@ -1258,6 +1258,38 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	if spec.Resources.VCPUCount < 1 || spec.Resources.MemoryBytes < 1 || spec.Resources.WorkspaceBytes < 1 ||
 		spec.Resources.ConcurrentOperations < 1 {
 		return invalidRequest(errors.New("SecondBox Profile resource limits must be positive"))
+	}
+	for _, axis := range []struct {
+		name  string
+		value int64
+	}{
+		{"memoryBytes", spec.Resources.MemoryBytes}, {"workspaceBytes", spec.Resources.WorkspaceBytes},
+	} {
+		if axis.value%(1<<20) != 0 {
+			return &ports.ResourceAlignmentError{Field: "resources." + axis.name}
+		}
+	}
+	if spec.ResourceCeiling != nil {
+		if spec.Startup.Mode == contracts.StartupModeSnapshotResume {
+			return invalidRequest(errors.New("SecondBox Profile snapshot_resume forbids resourceCeiling"))
+		}
+		if len(spec.ResourceCeiling) != 3 {
+			return invalidRequest(errors.New("SecondBox Profile resourceCeiling must state exactly vcpuCount, memoryBytes, and workspaceBytes"))
+		}
+		for _, axis := range []struct {
+			name    string
+			minimum int64
+		}{
+			{"vcpuCount", spec.Resources.VCPUCount}, {"memoryBytes", spec.Resources.MemoryBytes}, {"workspaceBytes", spec.Resources.WorkspaceBytes},
+		} {
+			bound, present := spec.ResourceCeiling[axis.name]
+			if bound != nil && axis.name != "vcpuCount" && *bound%(1<<20) != 0 {
+				return &ports.ResourceAlignmentError{Field: "resourceCeiling." + axis.name}
+			}
+			if !present || (bound != nil && *bound < axis.minimum) {
+				return invalidRequest(fmt.Errorf("SecondBox Profile resourceCeiling.%s must be explicit null or at least resources.%s", axis.name, axis.name))
+			}
+		}
 	}
 	if spec.Startup.Mode != contracts.StartupModeColdBoot &&
 		spec.Startup.Mode != contracts.StartupModeSnapshotResume {

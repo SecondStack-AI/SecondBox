@@ -522,6 +522,11 @@ func privilegedActions(storage StoragePlan) []string {
 
 func RenderPlanReview(plan InstallPlan) string {
 	var result strings.Builder
+	if plan.CLI.TenantRef != "" {
+		fmt.Fprintf(&result, "Post-start tenancy: Tenant %s, Subject %s; guest hello-world smoke\n", plan.CLI.TenantRef, plan.CLI.SubjectRef)
+	} else {
+		result.WriteString("Post-start tenancy: not selected; record-only smoke\n")
+	}
 	fmt.Fprintf(&result, "Release %s\nArtifact manifest: %s\nManifest digest: %s\nSigning key: %s\nExpected downloads: %s\n", plan.Release.Version, plan.Release.ArtifactManifestURL, plan.Release.ArtifactManifestDigest, plan.Release.SigningKeyFingerprint, formatBytes(plan.Release.ExpectedDownloadBytes))
 	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, guests %s, Compose backend %s, DNS %s\nCLI platform authority: %s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, time.Duration(plan.RetentionSeconds)*time.Second)
 	result.WriteString("Generated authority: " + strings.Join(plan.GeneratedAuthorityCategories, ", ") + "\nPersistent services: PostgreSQL, control plane, same-host Runner\nExisting SecondBox CLIs and CLI configuration at the reviewed paths are upgraded atomically; unrelated files are refused.\nOrdinary uninstall preserves workspaces, authority, manifests, execution assets, and service data.\nPaths requiring sudo:\n")

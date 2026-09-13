@@ -539,6 +539,7 @@ const (
 	ProblemCodeIdempotencyConflict                  ProblemCode = "idempotency_conflict"
 	ProblemCodePreconditionFailed                   ProblemCode = "precondition_failed"
 	ProblemCodeStateConflict                        ProblemCode = "state_conflict"
+	ProblemCodeSnapshotNameConflict                 ProblemCode = "snapshot_name_conflict"
 	ProblemCodeInvalidLifecycleTransition           ProblemCode = "invalid_lifecycle_transition"
 	ProblemCodeResourceExpired                      ProblemCode = "resource_expired"
 	ProblemCodeTenantSuspended                      ProblemCode = "tenant_suspended"
@@ -556,6 +557,8 @@ const (
 	ProblemCodeWorkspaceRelocationSnapshotsPresent  ProblemCode = "workspace_relocation_snapshots_present"
 	ProblemCodeWorkspaceRelocationTargetUnavailable ProblemCode = "workspace_relocation_target_unavailable"
 	ProblemCodeQuotaExceeded                        ProblemCode = "quota_exceeded"
+	ProblemCodeResourcesExceedProfile               ProblemCode = "resources_exceed_profile"
+	ProblemCodeResourcesFixedByProfile              ProblemCode = "resources_fixed_by_profile"
 	ProblemCodeLimitExceeded                        ProblemCode = "limit_exceeded"
 	ProblemCodeGuestUnavailable                     ProblemCode = "guest_unavailable"
 	ProblemCodeExecutionNodeUnavailable             ProblemCode = "execution_node_unavailable"
@@ -580,6 +583,9 @@ type ProfilePage struct {
 	Items      []Profile `json:"items"`
 	NextCursor *string   `json:"nextCursor,omitempty"`
 }
+
+// ProfileResourceCeiling Optional Profile size bounds. Every axis is explicit: null leaves that axis bounded only by quota and Runner admission. Integer bounds must be at least the matching resources default. Finite memoryBytes and workspaceBytes bounds must use whole MiB (multiples of 1048576 bytes). Not permitted with snapshot_resume.
+type ProfileResourceCeiling = contracts.ProfileResourceCeiling
 
 type ProfileRevision struct {
 	CreatedAt Timestamp           `json:"createdAt"`
@@ -620,6 +626,7 @@ type RemovePathRequest struct {
 
 type RenewLeaseRequest = contracts.RenewLeaseRequest
 
+// ResourcePolicy Default Sandbox resources and concurrent operation limit. Also the size ceiling when resourceCeiling is absent. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes).
 type ResourcePolicy = contracts.ResourcePolicy
 
 type RestoreSnapshotRequest = contracts.RestoreSnapshotRequest
@@ -673,6 +680,11 @@ type SandboxInspection struct {
 }
 
 type SandboxPage = contracts.SandboxPage
+
+// SandboxResourceRequest Requested Sandbox size. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes), validated before disk rounding; otherwise invalid_request identifies the field. Omitted axes use Profile defaults unchanged. Requested workspaceBytes rounds up to a power of two before ceiling checks; when a request fits a finite ceiling but rounding would exceed it, the ceiling is used. snapshot_resume accepts only the exact Profile size.
+type SandboxResourceRequest = contracts.SandboxResourceRequest
+
+type SandboxResources = contracts.SandboxResources
 
 type SandboxState = string
 

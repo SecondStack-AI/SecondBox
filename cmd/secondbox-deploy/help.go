@@ -11,6 +11,7 @@ func secondboxDeployHelp() cliui.Help {
 			{Key: "version", Value: "show CLI version information"},
 			{Key: "install", Value: "guide an install; use --check, --resume DIRECTORY, --recover-compose-network DIRECTORY, or --support DIRECTORY --output ARCHIVE; qualification only: --candidate-directory DIRECTORY"},
 			{Key: "uninstall", Value: "stop a deployment while preserving data; use --purge for deletion"},
+			{Key: "bootstrap-tenancy DIRECTORY", Value: "create local tenancy; --tenant-ref, --subject-ref, --application, --check"},
 			{Key: "update", Value: "update a completed guided deployment; use --check or --resume"},
 			{Key: "init", Value: "create an explicit deployment manifest"},
 			{Key: "validate", Value: "validate a deployment manifest"},

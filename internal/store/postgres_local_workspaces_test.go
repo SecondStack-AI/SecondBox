@@ -202,11 +202,11 @@ func TestSandboxDeleteIntentDominatesPendingWorkspaceCreationWithoutReplacingIts
 			'runner-home','creating',8589934592,1,'create','effect-create-pending',
 			'effect-create-pending','operation-create-pending',1,1,'queued','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-delete-create'),
 			'sandbox-delete-create','tenant-local','subject-local','profile','revision',
 			'creating','running',1,'workspace-delete-create','','{}','{}',1,$1,$1
 		)`,
@@ -1522,11 +1522,11 @@ func seedLocalWorkspace(
 		t.Fatal(err)
 	}
 	if _, err := store.pool.Exec(t.Context(), `
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$2),
 			$1,'tenant-local','subject-local','profile-local','revision-local','stopped','stopped',
 			3,$2,'','{}','{}',1,$3,$3
 		)`,

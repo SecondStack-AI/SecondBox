@@ -68,6 +68,19 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	if revision != input.ExpectedRevision {
 		return contracts.Operation{}, ports.ErrRevisionConflict
 	}
+	// The Sandbox/Workspace lock serializes admission and completion. Check
+	// after idempotency replay so a retry of the winning request still succeeds.
+	var nameHeld bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM secondbox.snapshots
+		WHERE sandbox_id=$1 AND name=$2 AND state='ready')`,
+		input.Snapshot.SandboxID, input.Snapshot.Name,
+	).Scan(&nameHeld); err != nil {
+		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot name lookup failed: %w", err)
+	}
+	if nameHeld {
+		return contracts.Operation{}, ports.ErrSnapshotNameConflict
+	}
 	if sandboxState != contracts.SandboxStateStopped {
 		return contracts.Operation{}, ports.ErrSnapshotUnavailable
 	}

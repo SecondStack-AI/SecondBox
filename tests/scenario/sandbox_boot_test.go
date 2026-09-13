@@ -111,7 +111,7 @@ func TestScenarioSandboxRejectsRequirementsAboveRunnerCapacity(t *testing.T) {
 	ensureScenarioRunnerPool(t, fixture)
 	runner := waitForScenarioRunner(t, fixture, 90*time.Second)
 	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
-	spec.Resources.MemoryBytes = runner.Capacity["MemoryBytes"] + 1
+	spec.Resources.MemoryBytes = runner.Capacity["MemoryBytes"] + 1<<20 // whole-MiB, still above capacity
 	profile := createScenarioProfile(
 		t,
 		fixture,
