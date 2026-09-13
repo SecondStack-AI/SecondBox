@@ -5,9 +5,13 @@ package scenario_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -33,7 +37,10 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 	handle, _ := createScenarioSandbox(t, fixture, profile, "execution")
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
+	ready := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
+	if ready.Instance == nil {
+		t.Fatal("SecondBox ready Sandbox has no Instance")
+	}
 
 	t.Run("buffered output and exit status", func(t *testing.T) {
 		outcome := executeScenarioCommand(
@@ -239,6 +246,9 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 		{"output deadline delivers terminal and preserves guest connection", "while true; do printf 'output-before-deadline\\n'; sleep 0.01; done", 0},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
+			if scenario.inputFrames > 0 {
+				requireScenarioGuestFeature(t, ready.Instance.GuestFeatures, "exec_input_recovery")
+			}
 			streamContext, stopStream := context.WithTimeout(ctx, 20*time.Second)
 			defer stopStream()
 			session, err := handle.CreateExecStream(streamContext, secondboxclient.StreamingExecRequest{
@@ -476,4 +486,28 @@ func receiveScenarioExec(
 		}
 		t.Fatalf("SecondBox scenario unsupported Exec frame = %#v", frame)
 	}
+}
+
+// Gate on negotiated evidence, never on backend identity or bundle age.
+func requireScenarioGuestFeature(t *testing.T, features []string, feature string) {
+	t.Helper()
+	if slices.Contains(features, feature) {
+		return
+	}
+	path := filepath.Join(os.Getenv("SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR"), "manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("SecondBox scenario read guest bundle manifest: %v", err)
+	}
+	var manifest struct {
+		ArtifactVersion string `json:"artifactVersion"`
+		CreatedAt       string `json:"createdAt"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("SecondBox scenario decode guest bundle manifest: %v", err)
+	}
+	if manifest.ArtifactVersion == "" || manifest.CreatedAt == "" {
+		t.Fatal("SecondBox scenario guest bundle manifest lacks artifactVersion/createdAt")
+	}
+	t.Skipf("missing guest feature %s (bundle artifactVersion=%s createdAt=%s)", feature, manifest.ArtifactVersion, manifest.CreatedAt)
 }

@@ -3783,7 +3783,9 @@ func (x *AssignmentProgress) GetObservedAtUnixNs() uint64 {
 }
 
 type AssignmentResult struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Features negotiated with this Instance guest, using guest contract names.
+	GuestFeatures    []string               `protobuf:"bytes,9,rep,name=guest_features,json=guestFeatures,proto3" json:"guest_features,omitempty"`
 	MessageId        string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
 	Sequence         uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	Fence            *AssignmentFence       `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
@@ -3824,6 +3826,13 @@ func (x *AssignmentResult) ProtoReflect() protoreflect.Message {
 // Deprecated: Use AssignmentResult.ProtoReflect.Descriptor instead.
 func (*AssignmentResult) Descriptor() ([]byte, []int) {
 	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *AssignmentResult) GetGuestFeatures() []string {
+	if x != nil {
+		return x.GuestFeatures
+	}
+	return nil
 }
 
 func (x *AssignmentResult) GetMessageId() string {
@@ -9070,8 +9079,9 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x05stage\x18\x04 \x01(\x0e2,.secondbox.runner.v1.AssignmentProgressStageR\x05stage\x12-\n" +
 	"\x13observed_at_unix_ms\x18\x05 \x01(\x04R\x10observedAtUnixMs\x12B\n" +
 	"\vcorrelation\x18\x06 \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\x12-\n" +
-	"\x13observed_at_unix_ns\x18\a \x01(\x04R\x10observedAtUnixNs\"\x87\x03\n" +
-	"\x10AssignmentResult\x12\x1d\n" +
+	"\x13observed_at_unix_ns\x18\a \x01(\x04R\x10observedAtUnixNs\"\xae\x03\n" +
+	"\x10AssignmentResult\x12%\n" +
+	"\x0eguest_features\x18\t \x03(\tR\rguestFeatures\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
 	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12:\n" +

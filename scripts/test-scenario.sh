@@ -86,6 +86,7 @@ scenario_started_epoch="$(date +%s)"
 scenario_source_commit="$(git -C "$repo_root" rev-parse HEAD)"
 scenario_repository_dirty=false
 scenario_pass_count=0
+scenario_skipped='[]'
 qualification_complete=false
 [[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] ||
   scenario_repository_dirty=true
@@ -752,6 +753,13 @@ gvisor_host_firewall() {
     "$SECONDBOX_SCENARIO_GVISOR_NETWORK_PROFILE" "$SECONDBOX_SCENARIO_GVISOR_RELOCATION_NETWORK_PROFILE"
 }
 
+direct_host_firewall() {
+  [[ "$runner_external" == "false" ]] || return 0
+  "$repo_root/scripts/scenario-direct-host-firewall.sh" "$1" "$runner_image" "$project_name" \
+    "$SECONDBOX_SCENARIO_COMPOSE_CIDR" "$SECONDBOX_SCENARIO_COMPOSE_GATEWAY" \
+    "$SECONDBOX_SCENARIO_RUNNER_DATA_PLANE_PORT" "$SECONDBOX_SCENARIO_RELOCATION_RUNNER_DATA_PLANE_PORT"
+}
+
 collect_diagnostics() {
   [[ -n "$diagnostics_dir" ]] || return 0
   mkdir -m 0700 -- "$diagnostics_dir" ||
@@ -822,6 +830,10 @@ cleanup() {
   fi
   if ! gvisor_host_firewall remove; then
     echo "SecondBox scenario gVisor host firewall cleanup failed" >&2
+    status=1
+  fi
+  if ! direct_host_firewall remove; then
+    echo "SecondBox scenario direct data-plane host firewall cleanup failed" >&2
     status=1
   fi
   if ! remove_host_network; then
@@ -922,6 +934,7 @@ cleanup() {
       --arg hostPlatform "$scenario_host_platform" \
       --argjson kvmPresent "$([[ -e /dev/kvm ]] && echo true || echo false)" \
       --argjson passCount "$scenario_pass_count" \
+      --argjson skipped "$scenario_skipped" \
       --argjson wallClockSeconds "$wall_clock_seconds" \
       --arg workspaceMount "$workspace_mount" \
       --arg workspaceFilesystem "$workspace_fstype" \
@@ -932,6 +945,7 @@ cleanup() {
         repositoryDirty: $repositoryDirty,
         suite: $suite,
         passCount: $passCount,
+        skipped: $skipped,
         wallClockSeconds: $wallClockSeconds,
         host: ({workspaceFilesystem: {mount: $workspaceMount, type: $workspaceFilesystem}} +
         if $hostPlatform == "darwin" then {
@@ -976,6 +990,7 @@ compose config --quiet
 gvisor_host_firewall apply
 compose run --rm --no-deps egress-context-config-init
 compose up --detach --wait --wait-timeout 240 postgres control-plane
+direct_host_firewall apply
 
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
@@ -1104,12 +1119,14 @@ if [[ "$scenario_mode" == "suite" ]]; then
   go test "${scenario_test_arguments[@]}" ./tests/scenario 2>&1 |
     tee "$scenario_test_output"
   scenario_pass_count="$(awk '/^--- PASS: / { count++ } END { print count + 0 }' "$scenario_test_output")"
+  scenario_skipped="$(jq -Rn '[inputs | capture("^ *--- SKIP: (?<test>[^ ]+) ")? | .test]' <"$scenario_test_output")"
+  echo "SecondBox scenario skipped groups: $scenario_skipped"
   [[ "$scenario_pass_count" -gt 0 ]] ||
     fail "scenario suite reported no passing top-level tests"
   if [[ -n "${SECONDBOX_SCENARIO_SHARD:-}" ]]; then
-    jq -Rn --arg shard "$SECONDBOX_SCENARIO_SHARD" --arg tier "$SECONDBOX_SCENARIO_TIER" --arg pattern "$scenario_shard_pattern" '
+    jq -Rn --argjson skipped "$scenario_skipped" --arg shard "$SECONDBOX_SCENARIO_SHARD" --arg tier "$SECONDBOX_SCENARIO_TIER" --arg pattern "$scenario_shard_pattern" '
       [inputs | capture("^--- (?<result>PASS|SKIP): (?<test>[^ ]+) ")?] |
-      {shard:$shard,tier:$tier,pattern:$pattern,tests:.}
+      {shard:$shard,tier:$tier,pattern:$pattern,tests:.,skipped:$skipped}
     ' <"$scenario_test_output" >"$qualification_evidence.results.json"
   fi
   qualification_complete=true

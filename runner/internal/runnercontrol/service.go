@@ -73,6 +73,7 @@ type BackendReadiness struct {
 
 // BackendInstance is the provider-private identity of a ready compute instance.
 type BackendInstance struct {
+	GuestFeatures    []string
 	BackendKind      string
 	BackendReference string
 }
@@ -1246,6 +1247,7 @@ func (s *RunnerProtocolService) handleAssignment(
 						Terminal:         terminal,
 						BackendKind:      instance.BackendKind,
 						BackendReference: instance.BackendReference,
+						GuestFeatures:    append([]string(nil), instance.GuestFeatures...),
 						SafeDetail:       safeDetail,
 						Correlation:      s.assignmentCorrelation(assignment),
 					},

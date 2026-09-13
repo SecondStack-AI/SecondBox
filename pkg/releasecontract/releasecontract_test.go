@@ -136,6 +136,7 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 	evidence := QualificationEvidence{
 		SchemaVersion: QualificationEvidenceSchema, SourceCommit: testCommit,
 		Suite: "test-scenario", PassCount: 16, WallClockSeconds: 600,
+		Skipped: []string{"TestExec/queued_stdin_recovery"},
 		Host: QualificationHostEvidence{
 			Platform:            "linux-amd64",
 			KVM:                 QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
@@ -150,6 +151,9 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 	}
 	if err := decoded.ValidateForRelease(testCommit); err != nil {
 		t.Fatal(err)
+	}
+	if decoded.PassCount != 16 || len(decoded.Skipped) != 1 || decoded.Skipped[0] != evidence.Skipped[0] {
+		t.Fatalf("skipped qualification groups were lost: %#v", decoded)
 	}
 	decoded.Host.Platform = ""
 	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "host platform") {
@@ -388,6 +392,11 @@ func TestGVisorHostMayHaveKVMButPodMustNot(t *testing.T) {
 		Suite: GVisorQualificationSuite(false), Backend: "gvisor", PassCount: 1,
 		Host:        GVisorQualificationHostEvidence{Platform: "linux-amd64", KVM: GVisorQualificationDeviceEvidence{Present: true}, WorkspaceFilesystem: QualificationFilesystemEvidence{Mount: "/workspaces", Type: "btrfs"}},
 		QualifiedAt: "2026-09-13T00:00:00Z",
+	}
+	evidence.Skipped = []string{"TestExec/queued_stdin_recovery"}
+	decoded, err := DecodeGVisorQualificationEvidence(mustJSON(t, evidence), false)
+	if err != nil || len(decoded.Skipped) != 1 || decoded.PassCount != 1 {
+		t.Fatalf("gVisor skipped qualification groups: %#v, %v", decoded, err)
 	}
 	if err := evidence.Validate(false); err != nil {
 		t.Fatal(err)
