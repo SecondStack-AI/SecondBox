@@ -38,7 +38,7 @@ Valid trailing input for those known operations is ignored; unknown operations a
 If a process closes stdin before exiting, the guest consumes subsequent input without writing to the closed pipe and preserves the process's exit status.
 A live process that keeps its pipe open without reading can still delay connection controls until its deadline; generation 1 has no stdin byte-credit mechanism.
 Public streaming exec uses the same 30-second completion grace as buffered exec to receive the Runner's terminal and release execution quota.
-The WebSocket uses that fixed deadline for pending output and terminal delivery; the Runner's command deadline does not change.
+The WebSocket, direct Exec sockets and deadline cleanup use that fixed completion deadline; the Runner's command deadline does not change.
 
 ## Filesystem messages
 
