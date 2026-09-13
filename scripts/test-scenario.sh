@@ -752,6 +752,13 @@ gvisor_host_firewall() {
     "$SECONDBOX_SCENARIO_GVISOR_NETWORK_PROFILE" "$SECONDBOX_SCENARIO_GVISOR_RELOCATION_NETWORK_PROFILE"
 }
 
+direct_host_firewall() {
+  [[ "$runner_external" == "false" ]] || return 0
+  "$repo_root/scripts/scenario-direct-host-firewall.sh" "$1" "$runner_image" "$project_name" \
+    "$SECONDBOX_SCENARIO_COMPOSE_CIDR" "$SECONDBOX_SCENARIO_COMPOSE_GATEWAY" \
+    "$SECONDBOX_SCENARIO_RUNNER_DATA_PLANE_PORT" "$SECONDBOX_SCENARIO_RELOCATION_RUNNER_DATA_PLANE_PORT"
+}
+
 collect_diagnostics() {
   [[ -n "$diagnostics_dir" ]] || return 0
   mkdir -m 0700 -- "$diagnostics_dir" ||
@@ -822,6 +829,10 @@ cleanup() {
   fi
   if ! gvisor_host_firewall remove; then
     echo "SecondBox scenario gVisor host firewall cleanup failed" >&2
+    status=1
+  fi
+  if ! direct_host_firewall remove; then
+    echo "SecondBox scenario direct data-plane host firewall cleanup failed" >&2
     status=1
   fi
   if ! remove_host_network; then
@@ -986,6 +997,7 @@ done
 if [[ -n "${SECONDBOX_SCENARIO_READY_FILE:-}" ]]; then
   touch "$SECONDBOX_SCENARIO_READY_FILE"
 fi
+direct_host_firewall apply
 
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
