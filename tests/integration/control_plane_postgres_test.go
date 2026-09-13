@@ -851,11 +851,29 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 func TestConcurrentSubjectQuotaAdmissionNeverOvercommits(t *testing.T) {
 	quota := generousQuota()
 	quota.MaxSandboxes = 1
-	controlPlane, databaseStore := newControlPlaneFixture(t, quota)
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "quota")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "quota-profile")
 	principal := authenticateCredential(t, controlPlane, credential)
+
+	// Leave aggregate Tenant capacity available so only Subject enforcement
+	// can reject the second admission, including after reopening the service.
+	tenant, err := controlPlane.GetTenant(t.Context(), admin, account.TenantRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tenant.AggregateQuota.MaxSandboxes < 2 {
+		t.Fatal("Tenant quota must allow both concurrent admissions")
+	}
+	controller := contracts.Principal{Kind: contracts.AuthorityKindTenantController, ID: "quota-controller", TenantRef: account.TenantRef}
+	subject, err := controlPlane.GetSubject(t.Context(), controller, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := controlPlane.UpdateSubjectQuota(t.Context(), controller, account.ID, "subject-quota-limit", subject.Revision, contracts.UpdateSubjectQuotaRequest{Quota: quota}); err != nil {
+		t.Fatal(err)
+	}
 
 	start := make(chan struct{})
 	results := make(chan error, 2)
