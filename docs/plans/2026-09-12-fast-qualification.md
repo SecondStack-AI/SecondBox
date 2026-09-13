@@ -1,7 +1,7 @@
 ---
 title: Fast, Automated Qualification and Release
 date: 2026-09-12
-status: in-progress
+status: completed
 owner: SecondStack
 provenance: A full day of hand-driven qualification of PR #126 on the release host, 2026-09-12
 ---
@@ -372,10 +372,269 @@ Decisions:
   `qualify --tier nightly` and is safe to put on a systemd timer.
 - [x] Docs: `docs/operations/release-operator-setup.md` and
   `scenario-qualification.md` describe the two tiers; CHANGELOG entry.
-- [ ] Prove on this host: `just qualify` (PR tier), `just qualify --tier
+- [x] Prove on this host: `just qualify` (PR tier), `just qualify --tier
   release`, `just release 0.99.0` (lean) with timing tables in this plan;
   delete the throwaway tag. Run the nightly tier once to prove it still
   passes end to end and record its table too.
+
+### Task 5 qualification proof — 2026-09-13
+
+The first four successful runs below used clean source commit
+`f095a352867d154f00748c8818b5e27dd95fe5ff` on this KVM host.
+The release proof used an isolated local clone and private copies of the
+operator environment files, a dedicated Buildx builder, and separate installer
+workspace paths. The original operator files and production stacks were not
+modified. Releases were staged locally; nothing was pushed or uploaded.
+
+#### PR qualification: `just qualify`
+
+Run `20260913T135334-1129191`.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| firecracker-1 | PASS | 2m 12s |
+| firecracker-2 | PASS | 1m 40s |
+| firecracker-3 | PASS | 3m 13s |
+| firecracker-4 | PASS | 2m 8s |
+| firecracker | PASS | 3m 13s |
+| lint | PASS | 0m 2s |
+| test-compose | PASS | 0m 29s |
+| test-contract | PASS | 0m 4s |
+| test-deployment | PASS | 0m 4s |
+| test-image-policy | PASS | 0m 3s |
+| test-install-docs | PASS | 0m 1s |
+| test-release-workflow | PASS | 0m 0s |
+| test-sdk-packages | PASS | 0m 10s |
+| test | PASS | 3m 16s |
+| verify-generated | PASS | 0m 6s |
+| Total | PASS | 3m 39s |
+
+#### Release qualification: `just qualify --tier release`
+
+Run `20260913T133028-53235`.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| firecracker-1 | PASS | 1m 57s |
+| firecracker-2 | PASS | 1m 25s |
+| firecracker-3 | PASS | 2m 53s |
+| firecracker-4 | PASS | 1m 46s |
+| firecracker | PASS | 2m 53s |
+| gvisor-1 | PASS | 1m 29s |
+| gvisor-2 | PASS | 2m 11s |
+| gvisor-3 | PASS | 2m 56s |
+| gvisor-4 | PASS | 1m 43s |
+| gvisor-host | PASS | 2m 57s |
+| lint | PASS | 0m 2s |
+| test-compose | PASS | 0m 22s |
+| test-contract | PASS | 0m 4s |
+| test-deployment | PASS | 0m 4s |
+| test-image-policy | PASS | 0m 4s |
+| test-install-docs | PASS | 0m 2s |
+| test-release-workflow | PASS | 0m 1s |
+| test-sdk-packages | PASS | 0m 11s |
+| test | PASS | 1m 46s |
+| verify-generated | PASS | 0m 7s |
+| Total | PASS | 3m 6s |
+
+#### Lean release: `just release 0.99.0`
+
+Run `20260913T133338-243118`.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| build | PASS | 5m 4s |
+| candidate | PASS | 0m 6s |
+| installer | PASS | 4m 20s |
+| qualification | PASS | 3m 44s |
+| stage | PASS | 0m 5s |
+| Total | PASS | 9m 35s |
+
+#### Nightly qualification (inside `just release 0.99.1 --full`)
+
+Run `20260913T134352-698392`.
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| firecracker | PASS | 8m 20s |
+| gvisor-host | PASS | 7m 50s |
+| gvisor-pod | PASS | 9m 24s |
+| gvisor | PASS | 9m 30s |
+| lint | PASS | 0m 2s |
+| test-compose | PASS | 0m 16s |
+| test-contract | PASS | 0m 4s |
+| test-deployment | PASS | 0m 4s |
+| test-image-policy | PASS | 0m 3s |
+| test-install-docs | PASS | 0m 1s |
+| test-release-workflow | PASS | 0m 0s |
+| test-sdk-packages | PASS | 0m 11s |
+| test | PASS | 1m 41s |
+| verify-generated | PASS | 0m 6s |
+| Total | PASS | 9m 41s |
+
+The lean release built amd64 control-plane images and all four CLI/deploy
+host platforms. Its single Btrfs-image guest passed all 11 fresh-install,
+reboot, and hello-world assertions. The throwaway `v0.99.0` tag was deleted.
+The merged release evidence recorded 27 Firecracker and 25 gVisor passes;
+both documents retain the existing v2 schema, clean source identity, summed
+passes, and maximum shard duration. Local gVisor evidence records KVM present;
+nightly pod evidence retains the no-KVM requirement.
+
+Validation passed: `bash -n` on all 92 repository shell scripts;
+`just verify-generated`, `just lint`, `just test`, `just test-deployment`,
+`just test-release-workflow`, `just test-install-docs`, `just test-release-stage`,
+`scripts/test-qualify.sh`, and
+`go test ./pkg/releaseverify ./cmd/secondbox-release-tool ./pkg/releasecontract`.
+The real qualification runs also passed Compose, contract, image-policy, and
+SDK gates. Targeted deployment regressions cover invalid shard merges,
+installer mode scheduling, and local gVisor resource isolation.
+
+#### Reboot-readiness proof and interrupted full-release continuations
+
+The reboot-readiness installer implementation is
+`97e2f123a173e500ba69f4ba53fea29ff2f277bc`. Its root-filesystem nightly run
+`20260913T141853-2092623` passed with the following table:
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| firecracker | PASS | 8m 2s |
+| gvisor-host | PASS | 6m 42s |
+| gvisor-pod | PASS | 8m 55s |
+| gvisor | PASS | 9m 2s |
+| lint | PASS | 0m 16s |
+| test-compose | PASS | 0m 20s |
+| test-contract | PASS | 0m 11s |
+| test-deployment | PASS | 0m 7s |
+| test-image-policy | PASS | 0m 5s |
+| test-install-docs | PASS | 0m 2s |
+| test-release-workflow | PASS | 0m 0s |
+| test-sdk-packages | PASS | 0m 15s |
+| test | PASS | 1m 43s |
+| verify-generated | PASS | 0m 9s |
+| Total | PASS | 9m 16s |
+
+The corresponding `just release 0.99.3 --full` run
+`20260913T141852-2091779` passed build (5m54s), qualification (9m18s), and
+candidate binding (6s), but guest launch failed in 3s because the newly created
+proof parent directories lacked libvirt traversal permission. This was proof
+setup, not a guest assertion failure. After granting `libvirt-qemu` traversal
+on those two task-owned directories, manual continuations reran
+`just test-installer-qualified --full` against the same clean source, candidate,
+and immutable build. Their later failures are recorded below. Following the
+registry-switch fixture fix, a fresh full release regenerated artifacts and
+evidence for the new source commit; no failed run is labeled PASS.
+
+#### Final-source full-release proof
+
+Source `299376d22dc3f58c3ff1b5d4ded87a83b49094bd`, clean isolated checkout
+on root Btrfs. `just release 0.99.4 --full` uses 32 GiB installer guests;
+actual available-memory scheduling selects one guest at a time.
+
+Nightly qualification run `20260913T150010-3576631`:
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| firecracker | PASS | 7m 43s |
+| gvisor-host | PASS | 6m 30s |
+| gvisor-pod | PASS | 8m 41s |
+| gvisor | PASS | 8m 48s |
+| lint | PASS | 0m 2s |
+| test-compose | PASS | 0m 15s |
+| test-contract | PASS | 0m 4s |
+| test-deployment | PASS | 0m 3s |
+| test-image-policy | PASS | 0m 3s |
+| test-install-docs | PASS | 0m 1s |
+| test-release-workflow | PASS | 0m 0s |
+| test-sdk-packages | PASS | 0m 10s |
+| test | PASS | 1m 27s |
+| verify-generated | PASS | 0m 5s |
+| Total | PASS | 8m 58s |
+
+Full release run `20260913T150010-3575009`:
+
+| Stage | Result | Wall clock |
+|---|---|---|
+| build | PASS | 5m 38s |
+| candidate | PASS | 0m 6s |
+| installer | PASS | 15m 49s |
+| qualification | PASS | 8m 59s |
+| stage | PASS | 0m 6s |
+| Total | PASS | 25m 0s |
+
+All three installer modes passed: Btrfs image 3m43s, existing filesystem
+4m51s, and v0.7.2 refusal/recreation 7m14s. Final installer evidence records
+25 passes, reboot recovery, and the exact clean source commit. The final
+manifest records both control-plane platforms, four host-binary platforms,
+and the no-KVM pod evidence reference. The complete `just release --full`
+command passed; `v0.99.4` was deleted and nothing was pushed or uploaded.
+
+Final artifacts are retained at `/var/tmp/secondbox-task5-proof/releases/0.99.4`.
+All disposable installer guests and their 19 task-owned directory-pool records
+were cleaned up. The dedicated Buildx builder is stopped with its cache retained.
+The final proof-record commit changes only this plan; executable source was
+qualified at `299376d22dc3f58c3ff1b5d4ded87a83b49094bd`.
+
+Implementation findings and deviations:
+
+- Concurrent local gVisor suites exposed previously shared network profile
+  slots. Each suite now locks its own pair, avoiding profiles declared by
+  existing containers. The supported local shard maximum is seven; four is
+  the default. Backend-specific shard directories prevent evidence collisions.
+- Docker's privileged-device snapshot omitted loop nodes created after the
+  container started. The gVisor scenario runners now bind host `/dev`, with
+  the existing direct runner PID 1 and no console/seat services.
+- Host UFW blocked marked gVisor DNS and attribution traffic. Scenario setup
+  temporarily permits only the suite's reserved interfaces and backend mark;
+  cleanup removes only rules carrying that exact suite owner. Production
+  containers, networks, volumes, and services were left untouched.
+- Moving template publication to nightly required capability expectations to
+  follow the explicit snapshot-resume template input. All scenarios remain in
+  the tree; tiers select them centrally.
+- The lean Btrfs guest completes a fresh wizard installation before reboot.
+  Interruption, uninstall/resume, purge, and refuse/recreate coverage remains
+  in the full installer modes. Evidence schemas remain unchanged.
+- `RELEASE_ENV_FILE` enables isolated proof inputs without modifying the
+  operator's working configuration. Artifact builds used a dedicated builder;
+  its retained cache makes subsequent timing comparisons dependent on cache
+  state. The final PR proof overlapped the full installer guests.
+- The first full-release attempt (`20260913T134351-697268`) passed nightly
+  qualification and the Btrfs/existing-filesystem guests, but recreation raced
+  the control-plane restart after reboot. Its first login received a connection
+  reset; command substitution then continued into misleading credential errors.
+  The existing runner-readiness wait now precedes workload login, and Bash
+  command substitutions inherit `errexit`. The already-failed guest SSH command
+  was terminated so the driver could clean up; its tag was deleted. The next full
+  proof used `97e2f123a173e500ba69f4ba53fea29ff2f277bc`.
+- The next attempt (`20260913T140656-1593573`) passed the build and both
+  gVisor suites but hit Firecracker's 90% storage admission threshold on the
+  development filesystem during artifact building. The failed scenario was
+  terminated and cleaned up; `v0.99.2` was deleted. No threshold was relaxed.
+  Subsequent full proof uses `/var/tmp/secondbox-task5-proof`: an isolated
+  checkout, copied signed immutable assets, and its own scenario/installer
+  workspaces and release outputs on the root Btrfs filesystem. Earlier local
+  artifacts were moved into its `prior-releases` directory. Original operator
+  inputs and unrelated storage remain untouched.
+- During the first installer continuation the host was no longer idle:
+  approximately 106 GiB RAM and 57 GiB swap were in use, with load average 33.
+  The existing-filesystem guest timed out waiting for verified materialization.
+  Its sibling guests were terminated and all three cleaned up. A retry with
+  `QUALIFY_GUEST_MEMORY_MIB=8192` was accepted by the driver but rejected by
+  the installer’s 12 GiB host preflight. The next continuation uses 32 GiB
+  guests, which available-memory scheduling runs one at a time. No timeout,
+  preflight, or assertion changed, and unrelated workloads were not stopped.
+- The serial continuation passed Btrfs (3m41s) and existing-filesystem (5m08s),
+  then recreation failed while switching from real GHCR to its local candidate
+  registry. Skopeo verified the local digest, but Docker returned “not found”
+  for that same digest. This points to cached daemon registry routing after
+  the hosts-file switch. The disposable guest now restarts Docker at that
+  switch, before loading/pulling candidate images. No host Docker service is
+  restarted. The passing full release from `299376d` regenerated all build and
+  qualification evidence after this fixture fix.
+- Initial failing attempts exposed the capability, network profile, loop-device,
+  and firewall issues above; their timings are not counted as successful proof.
+  The gVisor VM was already running, so this proves its nightly pod path but
+  does not re-prove cold boot. An unrelated concurrent scenario project was
+  observed and left untouched.
 
 ## Deferred
 
