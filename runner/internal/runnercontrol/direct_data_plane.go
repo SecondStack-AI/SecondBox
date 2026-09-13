@@ -369,7 +369,12 @@ func (s *RunnerProtocolService) serveDirectTypedConnection(
 		_ = connection.Close()
 	}
 	session.mu.Unlock()
-	if err := connection.SetDeadline(session.deadline); err != nil {
+	deliveryDeadline := session.deadline
+	if session.kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC {
+		// Match the control plane's bounded Exec terminal-delivery grace.
+		deliveryDeadline = deliveryDeadline.Add(30 * time.Second)
+	}
+	if err := connection.SetDeadline(deliveryDeadline); err != nil {
 		return err
 	}
 	if err := portdirect.WriteVerdict(connection, portdirect.VerdictAdmitted, ""); err != nil {

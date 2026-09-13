@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -323,6 +325,65 @@ func TestDirectDataPlaneCarriesTypedExecFileAndPTYMessages(t *testing.T) {
 	}
 	if _, err := portdirect.ReadTypedMessage(cancelConnection); err == nil {
 		t.Fatal("cancelled direct session remained connected before Open")
+	}
+}
+
+func TestDirectExecDeliversTerminalAfterExecutionDeadline(t *testing.T) {
+	deadline := time.Now().Add(250 * time.Millisecond).Truncate(time.Millisecond)
+	backend := &relayAssignmentBackend{exec: func(
+		_ context.Context, _ *runnerprotocol.AssignmentFence, open *runnerprotocol.ExecOpen,
+	) (BufferedExecResult, error) {
+		if open.DeadlineUnixMs != uint64(deadline.UnixMilli()) {
+			return BufferedExecResult{}, fmt.Errorf("direct Exec changed execution deadline: %d", open.DeadlineUnixMs)
+		}
+		// Host-confirmed teardown completes after the execution deadline.
+		time.Sleep(time.Until(deadline.Add(25 * time.Millisecond)))
+		return BufferedExecResult{Terminal: &runnerprotocol.ExecTerminal{
+			Kind:     runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED,
+			ExitCode: -1,
+		}}, nil
+	}}
+	service, err := NewRunnerProtocolService(testRunnerConfig(), backend, staticProtocolConnector{stream: &threadSafeRunnerStream{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	credential := "direct-exec-deadline-credential-0000000"
+	session := registerDirectDataPlaneTestSession(t, service, fence, "direct-deadline", "direct-deadline-stream",
+		runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC, credential)
+	session.deadline, session.consumed = deadline, true
+	client, runner := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = runner.Close() })
+	if err := client.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() {
+		served <- service.serveDirectTypedConnection(t.Context(), runner, portdirect.Credential{
+			SessionKind: portdirect.SessionKindExec, Value: credential,
+		})
+		_ = runner.Close()
+	}()
+	if verdict, detail, err := portdirect.ReadVerdict(client); err != nil || verdict != portdirect.VerdictAdmitted {
+		t.Fatalf("direct Exec admission = %d/%q: %v", verdict, detail, err)
+	}
+	writeDirectDataPlaneTestMessage(t, client, &runnerprotocol.ControlPlaneToRunner{
+		Message: &runnerprotocol.ControlPlaneToRunner_Exec{Exec: &runnerprotocol.ExecFrame{
+			Fence: cloneRunnerFence(fence), OperationId: session.operationID, StreamId: session.streamID,
+			Sequence: 1, Correlation: session.correlation,
+			Payload: &runnerprotocol.ExecFrame_Open{Open: &runnerprotocol.ExecOpen{
+				Command: &runnerprotocol.ExecOpen_Shell{Shell: "sleep 30"}, OutputLimitBytes: 1024,
+				Streaming: true, DeadlineUnixMs: uint64(deadline.UnixMilli()),
+			}},
+		}},
+	})
+	terminal := readDirectDataPlaneTestMessage(t, client).GetExec().GetBufferedResult().GetTerminal()
+	if terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED {
+		t.Fatalf("direct Exec deadline terminal = %#v", terminal)
+	}
+	if err := <-served; err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatal(err)
 	}
 }
 

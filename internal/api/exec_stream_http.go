@@ -190,7 +190,8 @@ func (apiHandler *handler) serveSandboxExecStream(
 				return err
 			}
 		}
-		if err := connection.SetWriteDeadline(session.DeadlineAt); err != nil {
+		// In-flight output and the terminal outcome share a bounded delivery grace.
+		if err := connection.SetWriteDeadline(session.DeadlineAt.Add(runnercontrol.ExecCompletionGrace)); err != nil {
 			return fmt.Errorf("SecondBox Exec WebSocket write deadline: %w", err)
 		}
 		switch {

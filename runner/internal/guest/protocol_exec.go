@@ -49,12 +49,15 @@ type protocolExecState struct {
 	binding      *guestv1.OperationBinding
 	nextIncoming uint64
 	cancel       context.CancelCauseFunc
+	done         <-chan struct{}
+	inputStopped <-chan struct{}
 	credit       chan uint64
 	creditUnused uint64
 	input        chan protocolExecInput
 	inputClosed  bool
 	streaming    bool
 	completed    bool
+	isPTY        bool
 	pty          *protocolPTYProcess
 }
 
@@ -215,13 +218,18 @@ func (c *protocolConnection) handleExecFrame(frame *guestv1.ExecFrame) error {
 			return fmt.Errorf("guest protocol exec operation is already active")
 		}
 		execCtx, cancel := context.WithCancelCause(c.stream.Context())
+		// Cancellation can precede buffered output delivery, which still needs credit.
+		done := make(chan struct{})
 		state := &protocolExecState{
 			binding:      cloneOperationBinding(frame.Binding),
 			nextIncoming: 2,
 			cancel:       cancel,
+			done:         done,
+			inputStopped: execCtx.Done(),
 			credit:       make(chan uint64, 16),
 			input:        make(chan protocolExecInput, 256),
 			streaming:    request.Streaming,
+			isPTY:        request.Pty != nil,
 		}
 		c.execs[key] = state
 		c.wait.Add(1)
@@ -229,6 +237,8 @@ func (c *protocolConnection) handleExecFrame(frame *guestv1.ExecFrame) error {
 		go func() {
 			defer c.wait.Done()
 			defer c.completeExec(key, state)
+			defer close(done)
+			defer cancel(nil)
 			c.runExec(execCtx, state, request)
 		}()
 		return nil
@@ -245,7 +255,7 @@ func (c *protocolConnection) handleExecFrame(frame *guestv1.ExecFrame) error {
 	}
 	input := frame.GetInput()
 	if input != nil {
-		if state.pty != nil {
+		if state.isPTY {
 			c.mu.Unlock()
 			return fmt.Errorf("guest protocol PTY input requires a PTY frame")
 		}
@@ -269,10 +279,10 @@ func (c *protocolConnection) handleExecFrame(frame *guestv1.ExecFrame) error {
 	completed := state.completed
 	c.mu.Unlock()
 	if completed {
-		if frame.GetCredit() != nil || frame.GetCancel() != nil {
+		if frame.GetCredit() != nil || frame.GetCancel() != nil || input != nil {
 			return nil
 		}
-		return fmt.Errorf("guest protocol completed exec accepts only trailing credit or cancel")
+		return fmt.Errorf("guest protocol completed exec accepts only trailing input, credit or cancel")
 	}
 	switch {
 	case frame.GetCredit() != nil:
@@ -282,11 +292,15 @@ func (c *protocolConnection) handleExecFrame(frame *guestv1.ExecFrame) error {
 		select {
 		case state.credit <- frame.GetCredit().ByteCount:
 			return nil
+		case <-state.done:
+			return nil
 		case <-c.stream.Context().Done():
 			return c.stream.Context().Err()
 		}
 	case input != nil:
 		select {
+		case <-state.inputStopped:
+			return nil
 		case state.input <- protocolExecInput{
 			data: bytes.Clone(input.Data), endOfInput: input.EndOfInput,
 		}:
@@ -629,11 +643,17 @@ func (c *protocolConnection) forwardExecInput(
 	closeStdin func(),
 	initial []byte,
 ) {
+	reading := true
 	write := func(value []byte) bool {
-		if len(value) == 0 {
+		if !reading || len(value) == 0 {
 			return true
 		}
 		if _, err := stdin.Write(value); err != nil {
+			// Programs may finish reading before the sender closes stdin.
+			if errors.Is(err, syscall.EPIPE) || errors.Is(err, os.ErrClosed) {
+				reading = false
+				return true
+			}
 			if ctx.Err() == nil {
 				state.cancel(err)
 			}
@@ -774,6 +794,17 @@ func (c *protocolConnection) completeExec(key string, state *protocolExecState) 
 		return
 	}
 	state.completed = true
+	// Retain sequence validation without keeping queued stdin buffers alive.
+	c.execs[key] = &protocolExecState{
+		binding:      state.binding,
+		nextIncoming: state.nextIncoming,
+		cancel:       state.cancel,
+		done:         state.done,
+		inputClosed:  state.inputClosed,
+		streaming:    state.streaming,
+		completed:    true,
+		isPTY:        state.isPTY,
+	}
 	c.execTerminalOrder = append(c.execTerminalOrder, key)
 	for len(c.execTerminalOrder) > maxProtocolExecTerminalTombstones {
 		oldest := c.execTerminalOrder[0]

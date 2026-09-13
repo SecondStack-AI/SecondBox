@@ -152,7 +152,11 @@ func (service *ControlPlaneService) openDirectDataPlaneStream(
 		_ = raw.Close()
 		return nil, fmt.Errorf("SecondBox direct data-plane TLS handshake: %w", err)
 	}
-	if err := connection.SetDeadline(session.DeadlineAt); err != nil {
+	deliveryDeadline := session.DeadlineAt
+	if session.Kind == "exec" {
+		deliveryDeadline = deliveryDeadline.Add(runnercontrol.ExecCompletionGrace)
+	}
+	if err := connection.SetDeadline(deliveryDeadline); err != nil {
 		_ = connection.Close()
 		return nil, err
 	}
@@ -266,7 +270,7 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 	session runnercontrol.DataPlaneSession,
 	open *runnerv1.ExecOpen,
 ) (runnercontrol.DataPlaneSession, error) {
-	operationCtx, cancel := context.WithDeadline(ctx, session.DeadlineAt.Add(runnercontrol.BufferedExecCompletionGrace))
+	operationCtx, cancel := context.WithDeadline(ctx, session.DeadlineAt.Add(runnercontrol.ExecCompletionGrace))
 	defer cancel()
 	stream, err := service.openDataPlaneStream(operationCtx, session)
 	if err != nil {
@@ -475,7 +479,7 @@ func (stream *SandboxExecStream) recordCancellation(ctx context.Context, reason 
 func (stream *SandboxExecStream) Receive(
 	ctx context.Context,
 ) (runnercontrol.ExecServerFrame, runnercontrol.DataPlaneSession, error) {
-	operationCtx, cancel := dataPlaneDeadlineContext(ctx, stream.session)
+	operationCtx, cancel := context.WithDeadline(ctx, stream.session.DeadlineAt.Add(runnercontrol.ExecCompletionGrace))
 	defer cancel()
 	message, err := stream.stream.Receive(operationCtx)
 	if err != nil {

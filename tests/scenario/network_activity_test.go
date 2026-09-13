@@ -509,7 +509,7 @@ func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	isolatedProfile := createScenarioProfile(t, fixture, standardresources.AgentCompartmentIsolated, isolatedLineage.Revisions[0].Spec)
+	isolatedProfile := createScenarioProfile(t, fixture, standardresources.AgentCompartmentIsolated, isolatedLineage.Revisions[len(isolatedLineage.Revisions)-1].Spec)
 
 	networkLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartment, runtimeDigest, toolchainDigest)
 	if err != nil {

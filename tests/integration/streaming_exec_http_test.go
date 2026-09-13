@@ -81,7 +81,7 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 	publicBaseURL := "http://" + server.Listener.Addr().String()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
-		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Now: time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
 		LiveDataPlane: liveDataPlane,
@@ -104,6 +104,10 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 		t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo,
 	)
 	defer detachFake()
+	fake.beforeDelayedCompletion = func(ctx context.Context) error {
+		_, err := relay.SweepDataPlane(ctx, time.Now().UTC(), 100)
+		return err
+	}
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
 	fakeErrors := make(chan error, 1)
@@ -317,6 +321,44 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 	assertHTTPStatus(t, sandboxResponse, http.StatusOK)
 	sandboxResponse.Body.Close()
 
+	t.Run("successful terminal survives deadline sweep and releases quota", func(t *testing.T) {
+		response := dataPlaneJSONRequest(t,
+			server.URL+"/v1/sandboxes/"+sandbox.ID+"/exec-streams", key.Credential, sandbox.Generation,
+			"stream-delayed-success", map[string]any{
+				"command":     map[string]any{"mode": "shell", "command": "success-before-delayed-teardown"},
+				"environment": map[string]string{}, "deadlineMilliseconds": 500,
+				"maximumOutputBytes": 16, "windowBytes": 4096,
+			})
+		assertHTTPStatus(t, response, http.StatusCreated)
+		var session contracts.ExecStreamSession
+		decodeHTTPJSON(t, response, &session)
+		connection := dialStreamingExec(t, session, key.Credential, sandbox.Generation)
+		defer connection.Close()
+		if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		usage, err := dataPlaneService.GetSubjectUsage(t.Context(), principal)
+		if err != nil || usage.Usage.ConcurrentOperations != 1 {
+			t.Fatalf("concurrent usage before delayed terminal = %#v: %v", usage, err)
+		}
+		if err := connection.WriteJSON(map[string]any{"type": "credit", "sequence": 0, "bytes": 16}); err != nil {
+			t.Fatal(err)
+		}
+		assertStreamingOutput(t, connection, 0, "stdout", []byte("completed"))
+		outcome := readStreamingOutcome(t, connection, 1)
+		if time.Now().Before(session.ExpiresAt) {
+			t.Fatal("delayed terminal arrived before the execution deadline")
+		}
+		if outcome.Kind != "exited" || outcome.ExitCode != 0 ||
+			decodeStreamingOutput(t, outcome.Output.StdoutBase64) != "completed" {
+			t.Fatalf("deadline sweep replaced successful streaming outcome: %#v", outcome)
+		}
+		usage, err = dataPlaneService.GetSubjectUsage(t.Context(), principal)
+		if err != nil || usage.Usage.ConcurrentOperations != 0 {
+			t.Fatalf("concurrent usage after delayed terminal = %#v: %v", usage, err)
+		}
+	})
+
 	stopFake()
 	select {
 	case err := <-fakeErrors:
@@ -337,6 +379,8 @@ type streamingExecFakeRunner struct {
 	events       chan string
 	mu           sync.Mutex
 	operations   map[string]*streamingFakeOperation
+
+	beforeDelayedCompletion func(context.Context) error
 }
 
 type streamingFakeOperation struct {
@@ -471,6 +515,21 @@ func (fake *streamingExecFakeRunner) handle(
 				return err
 			}
 			return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED)
+		case "success-before-delayed-teardown":
+			if err := fake.output(ctx, operation, runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT, []byte("completed")); err != nil {
+				return err
+			}
+			timer := time.NewTimer(time.Until(time.UnixMilli(int64(operation.open.GetOpen().DeadlineUnixMs))) + 100*time.Millisecond)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			if err := fake.beforeDelayedCompletion(ctx); err != nil {
+				return err
+			}
+			return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED)
 		}
 	case frame.GetCancel() != nil:
 		fake.events <- "cancel:" + operation.command
@@ -683,8 +742,9 @@ func readStreamingOutcome(
 }
 
 type streamingExecOutcome struct {
-	Kind   string               `json:"kind"`
-	Output contracts.ExecOutput `json:"output"`
+	Kind     string               `json:"kind"`
+	ExitCode int32                `json:"exitCode"`
+	Output   contracts.ExecOutput `json:"output"`
 }
 
 func decodeStreamingOutput(t *testing.T, encoded string) string {

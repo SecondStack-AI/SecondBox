@@ -18,6 +18,9 @@ import (
 
 const execStreamSubprotocol = "secondbox.exec.v1"
 
+// Credit can still be needed while the server delivers a completed command.
+const execStreamCompletionGrace = 30 * time.Second
+
 // ExecStream owns one negotiated, sequenced streaming-exec WebSocket.
 type ExecStream struct {
 	connection    *websocket.Conn
@@ -82,7 +85,7 @@ func (handle *SandboxHandle) ConnectExecStream(
 		_ = connection.Close()
 		return nil, errors.New("SecondBox Exec stream subprotocol was not negotiated")
 	}
-	return &ExecStream{connection: connection, writeDeadline: expiresAt}, nil
+	return &ExecStream{connection: connection, writeDeadline: expiresAt.Add(execStreamCompletionGrace)}, nil
 }
 
 // SendInput sends the next binary-safe standard-input frame.
