@@ -201,6 +201,8 @@ Every `[[runners]]` entry is keyed by immutable `runner_id`. At most one may use
 
 For same-host placement, set `identity_host_directory`, `artifact_host_directory`, and `state_host_directory` to explicit host paths. The compiler supplies all seventeen fixed container paths: identity and egress configuration, workspace root, Runner logs, Firecracker and jailer executables, jail root, kernel/rootfs/shared assets, runtime and Firecracker logs, snapshot-template cache, signing-key file, network state, and nft executable. Remove `workspace_host_directory` from existing manifests and omit the path fields marked remote-only in the Runner template from same-host declarations. Nonempty values are rejected instead of silently ignored. The signing-key fingerprint stays explicit; only its packaged file location is derived. The existing `state_host_directory/workspaces` directory remains authoritative and must exist on the qualified storage filesystem; resolution never creates or relocates it. Remote declarations still require explicit paths. Existing custom state or asset layouts must be reconciled with the documented packaged paths before adopting this schema; compilation does not move their files.
 
+Packaged deployments always use the Firecracker jailer for both placements. Remove `firecracker_allow_unjailed` from existing Runner declarations; the compiler emits the fixed `false` runtime value.
+
 ### Runner declaration scaffold
 
 Generate the complete inert declaration on stdout, or create one separate file without replacing an existing target:
@@ -292,8 +294,6 @@ firecracker_cpu_template = ''
 firecracker_run_directory = ''
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/firecracker-logs.
 firecracker_log_directory = ''
-# Packaged Runner jail policy; must be false.
-firecracker_allow_unjailed = true
 
 # Snapshot-resume startup
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/snapshot-template-cache. Keep this cache on the same filesystem as firecracker_jail_root: golden memory files are hard-linked into each jail. Snapshot-resume capacity requires a template built from the verified signed bundle.

@@ -722,7 +722,7 @@ func validateRunner(prefix string, r Runner) error {
 			return manifestError(prefix+"."+name+" must be positive", nil)
 		}
 	}
-	for name, value := range map[string]*bool{"firecracker_jailer_uid_allow_below_1000": r.FirecrackerJailerUIDAllowLow, "firecracker_allow_unjailed": r.FirecrackerAllowUnjailed, "sandbox_delete_bridge": r.SandboxDeleteBridge} {
+	for name, value := range map[string]*bool{"firecracker_jailer_uid_allow_below_1000": r.FirecrackerJailerUIDAllowLow, "sandbox_delete_bridge": r.SandboxDeleteBridge} {
 		if value == nil {
 			return manifestError(prefix+"."+name+" is required", nil)
 		}
@@ -751,9 +751,6 @@ func validateRunner(prefix string, r Runner) error {
 		if *r.GuestControlVSockPort > 65535 || *r.GuestProtocolVSockPort > 65535 || *r.GuestControlVSockPort == *r.GuestProtocolVSockPort {
 			return manifestError(prefix+" guest control and protocol vsock ports must be distinct integers from 1 through 65535", nil)
 		}
-	}
-	if r.FirecrackerAllowUnjailed != nil && *r.FirecrackerAllowUnjailed {
-		return manifestError(prefix+".firecracker_allow_unjailed must be false for the packaged Runner", nil)
 	}
 	if !artifactKeyPattern.MatchString(r.ArtifactPublicKeySHA256) || r.ArtifactPublicKeySHA256 == strings.Repeat("0", 64) {
 		return manifestError(prefix+".artifact_public_key_sha256 must identify a provisioned signed artifact key", nil)
@@ -1101,7 +1098,7 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	for name, value := range ints {
 		env[name] = strconv.FormatInt(*value, 10)
 	}
-	env["SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED"] = strconv.FormatBool(*r.FirecrackerAllowUnjailed)
+	env["SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED"] = "false"
 	env["SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000"] = strconv.FormatBool(*r.FirecrackerJailerUIDAllowLow)
 	env["SECONDBOX_RUNNER_SANDBOX_DELETE_BRIDGE"] = strconv.FormatBool(*r.SandboxDeleteBridge)
 	if r.Placement == "same-host" {

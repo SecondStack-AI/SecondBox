@@ -70,6 +70,7 @@ func TestSameHostDerivedPathsMatchComposeMounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
+		"SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED":    "false",
 		"SECONDBOX_RUNNER_LOG_PATH":                      "/var/lib/secondbox-runner/state/logs/runner.jsonl",
 		"SECONDBOX_RUNNER_LOG_DIR":                       "/var/lib/secondbox-runner/state/logs",
 		"SECONDBOX_RUNNER_FIRECRACKER_PATH":              "/usr/local/bin/firecracker",
@@ -184,6 +185,7 @@ func TestRemoteRunnerPathsSurviveEnvironmentRendering(t *testing.T) {
 	runner.NetworkPolicyNFTPath = "/remote/13"
 	env := resolveRunnerEnvironment(runner, "runner-credential")
 	want := map[string]string{
+		"SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED":    "false",
 		"SECONDBOX_RUNNER_LOG_PATH":                      "/remote/0",
 		"SECONDBOX_RUNNER_LOG_DIR":                       "/remote/1",
 		"SECONDBOX_RUNNER_FIRECRACKER_PATH":              "/remote/2",

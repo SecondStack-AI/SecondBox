@@ -135,7 +135,6 @@ type Runner struct {
 	FirecrackerCPUTemplate        string                `toml:"firecracker_cpu_template"`
 	FirecrackerRunDirectory       string                `toml:"firecracker_run_directory,omitempty"`
 	FirecrackerLogDirectory       string                `toml:"firecracker_log_directory,omitempty"`
-	FirecrackerAllowUnjailed      *bool                 `toml:"firecracker_allow_unjailed"`
 	SnapshotTemplateCacheRoot     string                `toml:"snapshot_template_cache_root,omitempty"`
 	ArtifactPublicKey             string                `toml:"artifact_public_key,omitempty"`
 	ArtifactPublicKeySHA256       string                `toml:"artifact_public_key_sha256"`

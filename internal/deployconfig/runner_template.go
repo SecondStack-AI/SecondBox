@@ -80,8 +80,6 @@ firecracker_cpu_template = ''
 firecracker_run_directory = ''
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/firecracker-logs.
 firecracker_log_directory = ''
-# Packaged Runner jail policy; must be false.
-firecracker_allow_unjailed = true
 
 # Snapshot-resume startup
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/snapshot-template-cache. Keep this cache on the same filesystem as firecracker_jail_root: golden memory files are hard-linked into each jail. Snapshot-resume capacity requires a template built from the verified signed bundle.
