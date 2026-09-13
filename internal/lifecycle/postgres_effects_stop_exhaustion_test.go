@@ -113,11 +113,11 @@ func TestStopRetryExhaustionToleratesExpiredCommandAndReleasesMutation(t *testin
 			8589934592,3,'stop','effect-exhaust','effect-exhaust','effect-exhaust',
 			3,4,'stopping','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			reconcile_owner,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-exhaust'),
 			'sandbox-exhaust','tenant','subject','profile','revision','stopping','stopped',
 			3,'workspace-exhaust','instance-exhaust','{}','{}','worker-exhaust',5,$1,$1
 		);

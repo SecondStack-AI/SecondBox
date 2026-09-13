@@ -62,6 +62,7 @@ var (
 	ErrActivitySessionNotFound = errors.New("SecondBox activity session not found")
 	ErrSnapshotNotFound        = errors.New("SecondBox Snapshot not found")
 	ErrSnapshotUnavailable     = errors.New("SecondBox Snapshot requires stopped committed disk state")
+	ErrSnapshotNameConflict    = errors.New("SecondBox Snapshot name is held by a ready Snapshot in this Sandbox")
 	ErrPortSessionNotFound     = errors.New("SecondBox PortSession not found")
 	ErrPortPolicyDenied        = errors.New("SecondBox exposed port is not approved by the pinned Profile")
 	ErrPortTokenInvalid        = errors.New("SecondBox port tunnel token is invalid")
@@ -99,6 +100,7 @@ type AdminIdempotencyResult struct {
 
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
+	Resources          *contracts.SandboxResourceRequest
 	Principal          contracts.Principal
 	Sandbox            contracts.Sandbox
 	Workspace          contracts.Workspace

@@ -278,12 +278,14 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		account,
 		"snapshot-clone",
 	)
+	workspaceBytes := int64(2 << 30)
+	resources := &contracts.SandboxResourceRequest{WorkspaceBytes: &workspaceBytes}
 	principal := authenticateCredential(t, controlPlane, credential)
 	source, _, err := controlPlane.CreateSandbox(
 		t.Context(),
 		principal,
 		"snapshot-clone-source",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}, Resources: resources},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +377,7 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		contracts.CreateSandboxRequest{
 			Profile:          profile.Name,
 			Metadata:         map[string]string{"fork": "target"},
-			SourceSnapshotID: snapshotID,
+			SourceSnapshotID: snapshotID, Resources: resources,
 		},
 	)
 	if !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
@@ -389,6 +391,12 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	_, _, err = controlPlane.CreateSandbox(t.Context(), principal, "snapshot-clone-wrong-capacity", contracts.CreateSandboxRequest{
+		Profile: profile.Name, Metadata: map[string]string{}, SourceSnapshotID: snapshotID,
+	})
+	if !errors.Is(err, ports.ErrSnapshotUnavailable) {
+		t.Fatalf("clone with Profile-default disk error = %v", err)
+	}
 	target, _, err := controlPlane.CreateSandbox(
 		t.Context(),
 		principal,
@@ -396,7 +404,7 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		contracts.CreateSandboxRequest{
 			Profile:          profile.Name,
 			Metadata:         map[string]string{"fork": "target"},
-			SourceSnapshotID: snapshotID,
+			SourceSnapshotID: snapshotID, Resources: resources,
 		},
 	)
 	if err != nil {
@@ -438,7 +446,7 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		command == nil ||
 		command.Kind !=
 			runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT ||
-		command.SnapshotId != snapshotID {
+		command.SnapshotId != snapshotID || command.LogicalCapacityBytes != uint64(workspaceBytes) || target.Resources.WorkspaceBytes != workspaceBytes {
 		t.Fatalf(
 			"Snapshot clone authority = source runner %q target runner %q mutation %q effect %q object %q command %#v",
 			persistedSourceRunnerID,

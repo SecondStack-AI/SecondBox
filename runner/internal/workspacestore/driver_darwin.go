@@ -21,6 +21,7 @@ import (
 type darwinDriver struct {
 	helperExecutable  string
 	setUUIDExecutable string
+	checkExecutable   string
 }
 
 const darwinDescriptorPathBufferBytes = 4096
@@ -67,9 +68,14 @@ func newPlatformDriver(formatterKind FormatterKind, helperExecutable string) (pl
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox WorkspaceStore tune2fs is required: %w", err)
 	}
+	checkExecutable, err := exec.LookPath("e2fsck")
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox WorkspaceStore e2fsck is required: %w", err)
+	}
 	return darwinDriver{
 		helperExecutable:  helperExecutable,
 		setUUIDExecutable: setUUIDExecutable,
+		checkExecutable:   checkExecutable,
 	}, nil
 }
 
@@ -221,17 +227,7 @@ func compactDarwinSparseFile(file *os.File, capacity int64) error {
 }
 
 func (driver darwinDriver) SetUUID(ctx context.Context, workspace *os.File, uuid string) error {
-	command := exec.CommandContext(ctx, driver.setUUIDExecutable, "-U", uuid, "/dev/fd/3")
-	command.ExtraFiles = []*os.File{workspace}
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf(
-			"SecondBox WorkspaceStore ext4 UUID rewrite failed: %w: %s",
-			err,
-			strings.TrimSpace(string(output)),
-		)
-	}
-	return nil
+	return rewriteExt4UUID(ctx, driver.setUUIDExecutable, driver.checkExecutable, "/dev/fd/3", workspace, uuid)
 }
 
 func (darwinDriver) OpenAttachment(path string) (*os.File, error) {

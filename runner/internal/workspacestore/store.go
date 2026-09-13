@@ -158,6 +158,16 @@ func (store *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	if store.templateCapacityBytes > 0 {
+		for capacity := int64(minimumExt4Bytes); capacity < store.templateCapacityBytes; {
+			if _, err := store.ensureTemplate(ctx, capacity); err != nil {
+				return err
+			}
+			// Division before multiplication keeps even the largest configured maximum safe.
+			if capacity > store.templateCapacityBytes/2 {
+				break
+			}
+			capacity *= 2
+		}
 		if _, err := store.ensureTemplate(ctx, store.templateCapacityBytes); err != nil {
 			return err
 		}

@@ -23,6 +23,7 @@ import (
 )
 
 type guidedInstallDependencies struct {
+	Unattended     bool
 	Input          io.Reader
 	Now            func() time.Time
 	HomeDirectory  func() (string, error)
@@ -125,7 +126,7 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 	if renderer.OutputMode == cliui.OutputJSON {
 		return &deployExitError{code: 3, err: errors.New("SecondBox installer: guided installation does not accept --output json; use install --check for JSON host facts")}
 	}
-	if !renderer.Capabilities.Input.TTY && !renderer.Capabilities.Accessible {
+	if !renderer.Capabilities.Input.TTY && !renderer.Capabilities.Accessible && !dependencies.Unattended {
 		return &deployExitError{code: 3, err: errors.New("SecondBox installer: guided installation requires a terminal or --accessible; use install --check for unattended preflight")}
 	}
 	if buildinfo.Version == "0.0.0-development" || buildinfo.SourceCommit == "development" {
@@ -188,6 +189,10 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 	if !standardBundlesAccepted {
 		return errors.New("SecondBox installer: standard Profile bundles were not explicitly selected")
 	}
+	tenancyAccepted := true
+	if err := dependencies.RunForm(ctx, cliui.TenancyBootstrapForm(&tenancyAccepted), handles); err != nil {
+		return installerFormError(err)
+	}
 	retention := "86400"
 	if err := dependencies.RunForm(ctx, cliui.RetentionChoiceForm(&retention), handles); err != nil {
 		return installerFormError(err)
@@ -207,6 +212,9 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 		}
 	}
 	capacityAccepted := false
+	if tenancyAccepted {
+		plan.CLI.TenantRef, plan.CLI.SubjectRef = "local", "local-operator"
+	}
 	capacitySummary := fmt.Sprintf("%d Sandboxes; %d concurrent starts; %s workspace; %s Runner memory", plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, humanBytes(plan.Capacity.MaxWorkspaceBytes), humanBytes(plan.Capacity.MaxMemoryBytes))
 	if err := dependencies.RunForm(ctx, cliui.CapacityReviewForm(capacitySummary, &capacityAccepted), handles); err != nil {
 		return installerFormError(err)

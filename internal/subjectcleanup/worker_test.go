@@ -172,13 +172,13 @@ func TestCleanupCancelsActiveWorkAndContinuesPartialSandboxDeletion(t *testing.T
 		) VALUES
 			($5,$1,$2,$6,'runner-active','ready',1024,3,'','','','',3,3,'','{}',$4,$4),
 			($7,$1,$2,$8,'runner-deleted','deleted',1024,1,'','','','',1,1,'','{}',$4,$4);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,egress_context,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
 		) VALUES
-			($6,$1,$2,'profile','revision','ready','running',3,$5,'','secondstack-staging','{}','{}',1,$4,$4),
-			($8,$1,$2,'profile','revision','deleted','deleted',1,$7,'',NULL,'{}','{}',1,$4,$4);
+			(1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$5),$6,$1,$2,'profile','revision','ready','running',3,$5,'','secondstack-staging','{}','{}',1,$4,$4),
+			(1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$7),$8,$1,$2,'profile','revision','deleted','deleted',1,$7,'',NULL,'{}','{}',1,$4,$4);
 		INSERT INTO secondbox.operations (
 			id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,
 			request_metadata_json,error_code,error_message,retryable,created_at,started_at,updated_at
@@ -288,11 +288,11 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 			mutation_effect_id,mutation_operation_id,mutation_expected_generation,
 			mutation_target_generation,mutation_state,local_receipt_json,created_at,updated_at
 		) VALUES ($6,$1,$5,$7,$4,'ready',1073741824,1,'','','','',NULL,NULL,'','{}',$2,$2);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES ($7,$1,$5,'contention-profile-' || $8,$3,'ready','running',1,$6,$11,'{}','{}',1,$2,$2);
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$6),$7,$1,$5,'contention-profile-' || $8,$3,'ready','running',1,$6,$11,'{}','{}',1,$2,$2);
 		INSERT INTO secondbox.instances (
 			id,sandbox_id,generation,state,guest_liveness,termination_reason,
 			created_at,updated_at,ready_at,guest_heartbeat_at,maximum_duration_at,stopped_at
@@ -615,11 +615,11 @@ func TestCleanupWaitsForWorkspaceAcknowledgementAndSurfacesTerminalLoss(t *testi
 			mutation_target_generation,mutation_state,local_receipt_json,created_at,updated_at
 		) VALUES ($5,$1,$2,$6,'runner-disconnected','ready',1024,1,
 			'workspace_delete','effect','','',1,1,'deleting','{}',$4,$4);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES ($6,$1,$2,'profile','revision','deleting','deleted',1,$5,'','{}','{}',1,$4,$4)`,
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$5),$6,$1,$2,'profile','revision','deleting','deleted',1,$5,'','{}','{}',1,$4,$4)`,
 		pgx.QueryExecModeSimpleProtocol, tenantRef, subjectRef, operationID, now, workspaceID, sandboxID,
 	); err != nil {
 		t.Fatal(err)
@@ -697,11 +697,11 @@ func TestCleanupWaitsForWorkspaceAcknowledgementAndSurfacesTerminalLoss(t *testi
 			mutation_target_generation,mutation_state,local_receipt_json,created_at,updated_at
 		) VALUES ($5,$1,$2,$6,'runner-lost','failed',1024,1,
 			'workspace_delete','effect','','',1,1,'failed','{}',$4,$4);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			revision,created_at,updated_at
-		) VALUES ($6,$1,$2,'profile','revision','deleting','deleted',1,$5,'','{}','{}',1,$4,$4)`,
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$5),$6,$1,$2,'profile','revision','deleting','deleted',1,$5,'','{}','{}',1,$4,$4)`,
 		pgx.QueryExecModeSimpleProtocol, tenantRef, lostSubject, lostOperation, now.Add(3*time.Second), lostWorkspace, lostSandbox,
 	); err != nil {
 		t.Fatal(err)

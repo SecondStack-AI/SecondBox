@@ -192,7 +192,7 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		if err != nil {
 			return contracts.Operation{}, err
 		}
-		delta := quotaUsage{activeInstances: 1, vcpuCount: spec.Resources.VCPUCount, memoryBytes: spec.Resources.MemoryBytes}
+		delta := quotaUsage{activeInstances: 1, vcpuCount: locked.Resources.VCPUCount, memoryBytes: locked.Resources.MemoryBytes}
 		if subjectUsage.activeInstances+1 > subjectQuota.MaxActiveInstances ||
 			subjectUsage.vcpuCount+delta.vcpuCount > subjectQuota.MaxVCPUCount ||
 			subjectUsage.memoryBytes+delta.memoryBytes > subjectQuota.MaxMemoryBytes ||

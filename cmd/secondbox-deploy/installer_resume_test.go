@@ -36,6 +36,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	if err := os.Mkdir(operation, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	plan.CLI.TenantRef, plan.CLI.SubjectRef = "local", "local-operator"
 	receipt, err := install.NewReceipt(plan, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +52,10 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	calls := []string{}
 	now := time.Now()
 	dependencies := installResumeDependencies{
+		Tenancy: func(_ context.Context, plan install.InstallPlan) (map[string]string, error) {
+			calls = append(calls, "tenancy")
+			return map[string]string{"tenantRef": plan.CLI.TenantRef, "subjectRef": plan.CLI.SubjectRef}, nil
+		},
 		OwnerUID: os.Getuid(), Now: func() time.Time { now = now.Add(time.Second); return now },
 		HostApply:  func(context.Context, string, string) error { calls = append(calls, "host-apply"); return nil },
 		Revalidate: func(install.InstallPlan) error { calls = append(calls, "revalidate"); return nil },
@@ -144,7 +149,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 		smokeEvidence["runnerId"] != "runner-0123456789abcdef" {
 		t.Fatalf("installation qualification receipt evidence = %#v", smokeEvidence)
 	}
-	wantCalls := []string{"host-apply", "revalidate", "verify-release", "postconditions", "materialize", "initialize", "enroll", "compose-prepare", "compose-up", "login", "readiness", "smoke"}
+	wantCalls := []string{"host-apply", "revalidate", "verify-release", "postconditions", "materialize", "initialize", "enroll", "compose-prepare", "compose-up", "login", "readiness", "tenancy", "smoke"}
 	if strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("calls = %#v", calls)
 	}

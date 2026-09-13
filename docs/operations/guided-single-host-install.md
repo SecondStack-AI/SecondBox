@@ -1,6 +1,6 @@
 # Guided single-host installation
 
-`secondbox-deploy install` installs one loopback-only development deployment and one same-host Firecracker Runner on Linux amd64. It consumes one verified public release and writes every selected identity, path, capacity, network, retention, trust anchor, and immutable image reference into a durable install plan and `secondbox.toml`. It creates the platform authority and stores a typed platform CLI session, but no implicit Tenant, Subject, controller, or application authority. It does not create production authority, a remote Runner topology, an alternate compute backend, or automatic background updates.
+`secondbox-deploy install` installs one loopback-only development deployment and one same-host Firecracker Runner on Linux amd64. It consumes one verified public release and writes every selected identity, path, capacity, network, retention, trust anchor, and immutable image reference into a durable install plan and `secondbox.toml`. It creates the platform authority and stores a typed platform CLI session. The local-tenancy confirmation defaults to yes and records the `local` Tenant and `local-operator` Subject references. It does not create production authority, a remote Runner topology, an alternate compute backend, or automatic background updates.
 
 ## Before starting
 
@@ -70,15 +70,72 @@ The plan records the exact operation directory, manifest, secrets, Runner identi
 
 It then pulls exactly the control-plane, Runner, microVM-artifact, installer-tools, and PostgreSQL images by digest; verifies every release object and the fixed microVM bundle allowlist; publishes the artifact directory atomically on Runner storage; generates the explicit manifest; enrolls the Runner; starts Compose; logs in the local CLI; waits for advertised cold-boot capacity; and uses the authenticated platform session to read the exact release-owned RunnerPool and installed Runner. Qualification succeeds only when the pool is ready and the Runner is ready with its pre-shared credential, required capabilities, architecture, and advertised cold-boot and concurrent-operation capacity. Those identities and states are recorded in the receipt.
 
-The installer does not create a Tenant, Subject, application authority, or
-Sandbox. After installation, bootstrap those resources explicitly through the
-management API before qualifying a workload. This preserves platform-only
-production initialization while still proving the authenticated Runner control
-boundary and capacity required for later Sandbox admission.
+When local tenancy is selected, the recorded `tenancy_bootstrap` stage runs
+after readiness and before `smoke_execution`. It creates a Tenant with the
+generated Runner egress context, all three standard Profile grants, all six
+application scopes, and explicit development quotas. A transient controller
+creates the Subject and is revoked before the stage completes. Existing refs
+are recorded as unchanged. The Tenant and Subject do not expire; their delegated
+lifetime ceilings use the contract maximum of 31,536,000 seconds.
+
+The platform CLI session includes those refs and can both apply resources and
+run Sandboxes. Smoke executes `secondbox run agent-compartment-isolated --
+/bin/echo hello`, then the same command with `durable-coding` when the Runner
+advertises the generated context. Each temporary Sandbox is deleted by `run`.
+The receipt records stdout and exit status. Without tenancy, the receipt states
+that smoke checked records only and did not execute a guest command.
+
+For automation, a published installer accepts `install --unattended`, explicitly
+accepting its generated development topology and the first offered storage
+selection. `install --unattended --tenancy=no` omits local tenancy. Unattended
+installation still requires qualified host prerequisites and usable sudo;
+it does not support advanced form overrides.
+
+To bootstrap later from a recorded operation:
+
+```sh
+secondbox-deploy bootstrap-tenancy "$operation" --check
+secondbox-deploy bootstrap-tenancy "$operation" --tenant-ref local --subject-ref local-operator
+```
+
+`--check` verifies the recorded credential and completed readiness without
+creating resources. `--application` additionally issues a new application
+authority and prints its bearer token once as JSON; redirect that output to a
+protected secret store. Tokens never enter the operation record or receipt.
+The command reads the platform-token path from the operation, with no credential
+flags or environment fallback. When opting into tenancy after installation,
+use `secondbox platform login --tenant-ref local --subject-ref local-operator`
+to bind the existing platform session to those refs.
 
 ## Update a completed installation
 
 Updates are explicit and operator-initiated; there is no automatic background updater. Use the target release's bootstrap so the temporary, checksum-verified `secondbox-deploy` binary understands that release's update contract even when the installed binary is older.
+
+Before upgrading across migration `0024_snapshot_name_index.sql`, inspect every
+Sandbox's ready Snapshots on the **source release**. Migration 0024 refuses
+control-plane startup if two ready Snapshots on one Sandbox share a name.
+List them with `secondbox snapshots <sandbox>` or the source-compatible alias:
+
+```sh
+secondbox snapshots list --path sandboxId=sbx_SOURCE
+```
+
+Follow any `nextCursor` with `--query cursor=<cursor>` to inspect every page.
+Compare names among `ready` entries within each Sandbox, choose the Snapshot
+to retain, and delete each unwanted duplicate **by identifier** while the
+source control plane is still running:
+
+```sh
+secondbox snapshots delete --path snapshotId=snp_UNWANTED \
+  --header Idempotency-Key=cleanup-snp_UNWANTED
+```
+
+Repeat the listing until each ready name is unique, then take the pre-upgrade
+backup and activate the target release. Snapshot deletion discards that retained
+restore point; preserve the intended one. If migration 0024 already refused
+startup, complete this cleanup using the source deployment before retrying the
+upgrade; follow the backup/restore requirements below if other forward-only
+migrations have already changed the database.
 
 First stop every live Sandbox. The updater refuses to change desired state, leases, or workload lifecycle on the operator's behalf.
 

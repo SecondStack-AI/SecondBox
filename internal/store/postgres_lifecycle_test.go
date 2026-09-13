@@ -28,12 +28,12 @@ func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *tes
 			'workspace-terminal-failure','tenant','subject','sandbox-terminal-failure',
 			'runner-home','failed',1048576,1,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,
 			compatibility_summary_json,lifecycle_failure_class,lifecycle_failure_message,
 			next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-terminal-failure'),
 			'sandbox-terminal-failure','tenant','subject','profile-terminal-failure',
 			'revision-terminal-failure','failed','running',1,
 			'workspace-terminal-failure','','{}','{}','home_workspace_conflict',
@@ -86,14 +86,14 @@ func TestPostgresLifecycleBatchClaimsOrderedCohortAndClosesExpiredActivity(t *te
 			 'ready',1048576,1,'','','','',NULL,NULL,'','{}',$1,$1),
 			('workspace-batch-b','tenant','subject','sandbox-batch-b','runner-home',
 			 'ready',1048576,1,'','','','',NULL,NULL,'','{}',$1,$1);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,
 			compatibility_summary_json,next_reconcile_at,revision,created_at,updated_at
 		) VALUES
-			('sandbox-batch-a','tenant','subject','profile-batch','revision-batch','creating','stopped',
+			(1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-batch-a'),'sandbox-batch-a','tenant','subject','profile-batch','revision-batch','creating','stopped',
 			 1,'workspace-batch-a','','{}','{}',$1,1,$1,$1),
-			('sandbox-batch-b','tenant','subject','profile-batch','revision-batch','creating','stopped',
+			(1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-batch-b'),'sandbox-batch-b','tenant','subject','profile-batch','revision-batch','creating','stopped',
 			 1,'workspace-batch-b','','{}','{}',$1,1,$1,$1);
 		INSERT INTO secondbox.leases (
 			id,tenant_ref,subject_ref,sandbox_id,generation,state,
@@ -196,11 +196,11 @@ func TestPostgresLifecycleClaimSkipsLockedExpiredLeaseWithoutCountingItsSession(
 			'workspace-locked-expiry','tenant','subject','sandbox-locked-expiry',
 			'runner-home','ready',1048576,1,'','','','',NULL,NULL,'','{}',$1,$1
 		);
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,
 			compatibility_summary_json,next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-locked-expiry'),
 			'sandbox-locked-expiry','tenant','subject','profile-locked-expiry',
 			'revision-locked-expiry','creating','stopped',1,
 			'workspace-locked-expiry','','{}','{}',$2,1,$1,$1
@@ -278,12 +278,12 @@ func TestPostgresAutomaticRetirementStopsDesiredCompute(t *testing.T) {
 					$3,'runner-home','ready',1048576,1,
 					'','','','',NULL,NULL,'','{}',$1,$1
 				);
-				INSERT INTO secondbox.sandboxes (
+				INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 					id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 					generation,workspace_id,current_instance_id,metadata_json,
 					compatibility_summary_json,reconcile_owner,reconcile_claim_expires_at,
 					revision,created_at,updated_at
-				) VALUES (
+				) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id=$2),
 					$3,'tenant','subject','profile','revision',
 					'ready','running',1,$2,'instance',
 					'{}','{}','lifecycle-worker',$4,7,$1,$1
@@ -364,11 +364,11 @@ func TestPostgresFinishStopAdvancesGenerationAndFencesActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
-		INSERT INTO secondbox.sandboxes (
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='wrk_store_stop'),
 			'sbx_store_stop','tenant','subject','profile','revision','stopping','stopped',
 			3,'wrk_store_stop','ins_store_stop','{}','{}','store-worker',$2,7,$1,$1
 		)`,

@@ -3,9 +3,7 @@ package secondboxclient
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -44,24 +42,7 @@ func (handle *SandboxHandle) ReadFile(ctx context.Context, path WorkspacePath, m
 }
 
 func (handle *SandboxHandle) WriteFile(ctx context.Context, path WorkspacePath, content []byte, idempotencyKey, leaseID string) (FileWriteResult, error) {
-	if path == "" {
-		return FileWriteResult{}, errors.New("SecondBox file path is required")
-	}
-	idempotencyKey, err := resolveIdempotencyKey(idempotencyKey)
-	if err != nil {
-		return FileWriteResult{}, err
-	}
-	sum := sha256.Sum256(content)
-	headers := handle.GenerationHeaders(leaseID)
-	headers.Set("Idempotency-Key", idempotencyKey)
-	headers.Set("Digest", "sha-256=:"+base64.StdEncoding.EncodeToString(sum[:])+":")
-	var result FileWriteResult
-	err = handle.client.RequestJSON(ctx, "writeSandboxFile", CallOptions{
-		PathParameters:  map[string]string{"sandboxId": handle.Snapshot().ID},
-		QueryParameters: url.Values{"path": []string{path}}, Headers: headers,
-		Body: bytes.NewReader(content), ContentType: "application/octet-stream",
-	}, &result)
-	return result, err
+	return handle.WriteFileFrom(ctx, path, bytes.NewReader(content), idempotencyKey, leaseID)
 }
 
 func (handle *SandboxHandle) StatFile(ctx context.Context, path WorkspacePath, leaseID string) (FileStat, error) {

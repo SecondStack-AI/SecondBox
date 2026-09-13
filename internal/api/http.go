@@ -1010,6 +1010,21 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		Type: "https://secondbox.dev/problems/" + code, Title: title, Status: status,
 		Code: code, RequestID: writer.Header().Get("X-Request-ID"), Retryable: retryable,
 	}
+	var alignment *ports.ResourceAlignmentError
+	if errors.As(err, &alignment) {
+		problem.Title = alignment.Error()
+		problem.Details = []contracts.ProblemDetail{{Field: alignment.Field, Reason: "must use whole MiB (multiples of 1048576 bytes)"}}
+	}
+	var resourcesError *ports.ResourcesExceedProfileError
+	if errors.As(err, &resourcesError) {
+		problem.Ceiling = &resourcesError.Ceiling
+		problem.Requested = &resourcesError.Requested
+	}
+	var fixedResources *ports.ResourcesFixedByProfileError
+	if errors.As(err, &fixedResources) {
+		problem.Ceiling = &fixedResources.Fixed
+		problem.Requested = &fixedResources.Requested
+	}
 	if errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		retryAfterMilliseconds := int64(time.Second / time.Millisecond)
 		problem.RetryAfterMilliseconds = &retryAfterMilliseconds
@@ -1062,6 +1077,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "profile_unavailable", "Profile is unavailable", false
 	case errors.Is(err, ports.ErrSnapshotUnavailable):
 		return http.StatusConflict, "state_conflict", "Snapshot requires stopped committed disk state", false
+	case errors.Is(err, ports.ErrSnapshotNameConflict):
+		return http.StatusConflict, "snapshot_name_conflict", "Snapshot name is already held by a ready Snapshot in this Sandbox", false
 	case errors.Is(err, ports.ErrWorkspaceMutation):
 		return http.StatusConflict, "workspace_mutation_conflict", "Workspace has a conflicting mutation", false
 	case errors.Is(err, ports.ErrSandboxNotStopped):
@@ -1096,6 +1113,10 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusBadRequest, "invalid_request", "Requested output limit exceeds the Profile execution policy", false
 	case errors.Is(err, runnercontrol.ErrDataPlaneStreamWindow):
 		return http.StatusBadRequest, "invalid_request", "Requested stream window exceeds the Profile execution policy", false
+	case errors.Is(err, ports.ErrResourcesFixedByProfile):
+		return http.StatusBadRequest, "resources_fixed_by_profile", "Requested resources differ from the fixed Profile size", false
+	case errors.Is(err, ports.ErrResourcesExceedProfile):
+		return http.StatusBadRequest, "resources_exceed_profile", "Requested resources exceed the Profile ceiling", false
 	case errors.Is(err, ports.ErrQuotaExceeded):
 		return http.StatusTooManyRequests, "quota_exceeded", "Quota exceeded", false
 	case errors.Is(err, ports.ErrPortBackpressure):

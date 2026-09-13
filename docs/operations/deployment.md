@@ -29,7 +29,19 @@ just deploy-config .tmp/secondbox-development/secondbox.toml
 
 The reviewed development topology intentionally starts no privileged Runner. Runner enrollment and host qualification remain separate operations on a qualified Linux host.
 
-Create development tenancy only as an observable post-start step. The repository helper follows the same platform login, Tenant and controller creation, controller login, Subject and application-authority creation, application login, and authenticated Sandbox-list sequence as the qualified scenario harness:
+Create development tenancy only as an observable post-start step. For a recorded
+guided installation, `secondbox-deploy bootstrap-tenancy <operation-directory>`
+is the maintained form. It accepts `--tenant-ref` and `--subject-ref` (defaults
+`local` and `local-operator`), `--check` for prerequisite verification, and
+`--application` to return one new application bearer token. It reads only the
+recorded platform-token path, journals non-secret evidence, and revokes its
+transient controller. Existing Tenant and Subject refs remain unchanged.
+Guided installation offers this stage by default; production initialization
+and `deploy-development-up` do not bootstrap tenancy.
+
+The shell helper remains for the non-guided path. It follows the platform login,
+Tenant and controller creation, controller login, Subject and application-authority
+creation, application login, and authenticated Sandbox-list sequence:
 
 ```sh
 scripts/bootstrap-development-tenancy.sh \
@@ -391,6 +403,36 @@ The command signs a client certificate carrying `spiffe://secondbox/runner/<runn
 Selected RunnerPools and standard Profile lineages are checked and applied after the control plane becomes ready. A repeated deployment is a no-op; an interrupted application resumes from the verified installed prefix. In the tenant-aware release, every Runner in a selected pool maps each required standard Profile logical gateway inside every advertised context that should accept that Profile. No mapping adds a DNS record. See [declarative resources](declarative-resources.md).
 
 ## Recovery and replacement
+
+### Upgrade prerequisite: unique ready Snapshot names
+
+Before upgrading across migration `0024_snapshot_name_index.sql`, inspect every
+Sandbox's ready Snapshots on the **source release**. Migration 0024 refuses
+control-plane startup if two ready Snapshots on one Sandbox share a name.
+List them with `secondbox snapshots <sandbox>` or the source-compatible alias:
+
+```sh
+secondbox snapshots list --path sandboxId=sbx_SOURCE
+```
+
+Follow any `nextCursor` with `--query cursor=<cursor>` to inspect every page.
+Compare names among `ready` entries within each Sandbox, choose the Snapshot
+to retain, and delete each unwanted duplicate **by identifier** while the
+source control plane is still running:
+
+```sh
+secondbox snapshots delete --path snapshotId=snp_UNWANTED \
+  --header Idempotency-Key=cleanup-snp_UNWANTED
+```
+
+Repeat the listing until each ready name is unique, then take the pre-upgrade
+backup and activate the target release. Snapshot deletion discards that retained
+restore point; preserve the intended one. If migration 0024 already refused
+startup, complete this cleanup using the source deployment before retrying the
+upgrade; follow the backup/restore requirements below if other forward-only
+migrations have already changed the database.
+
+### Release boundaries and recovery
 
 Replacing v0.7.2 with the tenant-aware release in place is unsupported. Quiesce every consuming application, retire every pre-v0.8.0 Sandbox, stop the old deployment, and remove its database, Runner state, and Workspaces through the documented recreation procedure before initializing the new release. Recreate Tenants, authorities, Profiles, Runner context mappings, and Sandboxes from the new contract. There is no historical Profile decoder for the required context policy, legacy assignment support, Workspace import path, or Sandbox migration operation.
 
