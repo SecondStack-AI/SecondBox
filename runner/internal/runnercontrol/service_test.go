@@ -840,7 +840,7 @@ func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testi
 		t.Fatal(err)
 	}
 	evidenceSink := &recordingEvidenceSink{}
-	service.SetEvidenceSink(evidenceSink)
+	service.evidence = evidenceSink
 
 	_, err = service.runProtocolSession(t.Context())
 	if !errors.Is(err, io.EOF) {

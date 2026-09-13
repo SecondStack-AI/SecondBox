@@ -32,7 +32,7 @@ func TestSandboxRequestedResourcesHTTPAndQuota(t *testing.T) {
 			spec := profile.CurrentRevision.Spec
 			spec.Resources.VCPUCount = 4
 			spec.Lifecycle.InitialState = initialState
-			profile, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{Spec: spec})
+			profile, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(t.Context(), admin, profile.Name, "revise-resources", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -164,7 +164,7 @@ func TestSandboxPartialResourcesPinRevisionAndIdempotency(t *testing.T) {
 	}
 	spec := profile.CurrentRevision.Spec
 	spec.Resources = contracts.ResourcePolicy{VCPUCount: 4, MemoryBytes: 4 << 30, WorkspaceBytes: 50 << 30, ConcurrentOperations: 4}
-	if _, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{Spec: spec}); err != nil {
+	if _, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(t.Context(), admin, profile.Name, "revise-resource-defaults", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision); err != nil {
 		t.Fatal(err)
 	}
 	replay, created, err := controlPlane.CreateSandbox(t.Context(), principal, "resources-partial", request)
@@ -219,7 +219,7 @@ func TestSandboxRequestedResourcesFitSmallerHomeRunner(t *testing.T) {
 	spec := profile.CurrentRevision.Spec
 	spec.Pool = poolName
 	spec.Resources = contracts.ResourcePolicy{VCPUCount: 4, MemoryBytes: 4 << 30, WorkspaceBytes: 8 << 30, ConcurrentOperations: 4}
-	if _, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{Spec: spec}); err != nil {
+	if _, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(t.Context(), admin, profile.Name, "revise-resource-placement", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision); err != nil {
 		t.Fatal(err)
 	}
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -256,7 +256,8 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 	spec.Lifecycle.InitialState = contracts.SandboxDesiredStateRunning
 	diskCeiling := int64(8 << 30)
 	spec.ResourceCeiling = contracts.ProfileResourceCeiling{"vcpuCount": nil, "memoryBytes": nil, "workspaceBytes": &diskCeiling}
-	if _, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{Spec: spec}); err != nil {
+	profile, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(t.Context(), admin, profile.Name, "revise-resource-ceiling", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision)
+	if err != nil {
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), MaximumDataPlaneBodyBytes: 4 << 20})
@@ -315,7 +316,7 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 	}
 	spec.ResourceCeiling = nil
 	spec.Startup.Mode = contracts.StartupModeSnapshotResume
-	if _, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{Spec: spec}); err != nil {
+	if _, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(t.Context(), admin, profile.Name, "revise-snapshot-resume", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision); err != nil {
 		t.Fatal(err)
 	}
 	response = authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resume-refused", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"memoryBytes": 128 << 20}})

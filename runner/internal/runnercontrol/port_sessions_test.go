@@ -97,7 +97,7 @@ func TestRunnerPortProxyIsFencedBackpressuredAndCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	evidenceSink := &recordingEvidenceSink{}
-	service.SetEvidenceSink(evidenceSink)
+	service.evidence = evidenceSink
 	stream := &threadSafeRunnerStream{}
 	fence := relayRunnerFence()
 	service.recordActiveAssignment(fence, "fc-instance-1")

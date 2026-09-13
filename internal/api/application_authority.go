@@ -23,69 +23,61 @@ const (
 
 type applicationAuthorityContextKey struct{}
 
-type resolvedApplicationAuthority struct {
-	id            string
-	tenantRef     string
-	subjectRef    string
-	scopes        []string
-	profileGrants []string
-}
-
 func authorizeApplicationRequest(
-	authority resolvedApplicationAuthority,
+	authority ports.AuthenticatedApplicationAuthority,
 	request *http.Request,
 ) error {
-	if request.Header.Get("X-SecondBox-Tenant-Ref") != authority.tenantRef ||
-		request.Header.Get("X-SecondBox-Subject-Ref") != authority.subjectRef {
+	if request.Header.Get("X-SecondBox-Tenant-Ref") != authority.TenantRef ||
+		request.Header.Get("X-SecondBox-Subject-Ref") != authority.SubjectRef {
 		return ports.ErrAuthorizationDenied
 	}
-	requiredScope, administrative := applicationRequestScope(request.Method, request.Pattern)
-	if administrative || requiredScope == "" || !slices.Contains(authority.scopes, requiredScope) {
+	requiredScope := applicationRequestScope(request.Pattern)
+	if requiredScope == "" || !slices.Contains(authority.Scopes, requiredScope) {
 		return ports.ErrAuthorizationDenied
 	}
 	if request.Pattern == "GET /v1/profiles/{profileName}" &&
-		!slices.Contains(authority.profileGrants, request.PathValue("profileName")) {
+		!slices.Contains(authority.ProfileGrants, request.PathValue("profileName")) {
 		return ports.ErrAuthorizationDenied
 	}
 	return nil
 }
 
 func authorizeApplicationProfile(request *http.Request, profile string) error {
-	authority, ok := request.Context().Value(applicationAuthorityContextKey{}).(resolvedApplicationAuthority)
+	authority, ok := request.Context().Value(applicationAuthorityContextKey{}).(ports.AuthenticatedApplicationAuthority)
 	if !ok {
 		return nil
 	}
-	if !slices.Contains(authority.profileGrants, profile) {
+	if !slices.Contains(authority.ProfileGrants, profile) {
 		return ports.ErrAuthorizationDenied
 	}
 	return nil
 }
 
-func applicationPrincipal(authority resolvedApplicationAuthority) contracts.Principal {
+func applicationPrincipal(authority ports.AuthenticatedApplicationAuthority) contracts.Principal {
 	return contracts.Principal{
-		Kind: "service_account", ID: authority.id,
-		TenantRef: authority.tenantRef, SubjectRef: authority.subjectRef,
+		Kind: "service_account", ID: authority.ID,
+		TenantRef: authority.TenantRef, SubjectRef: authority.SubjectRef,
 	}
 }
 
-func applicationRequestScope(method string, pattern string) (string, bool) {
+func applicationRequestScope(pattern string) string {
 	switch {
 	case pattern == "GET /v1/profiles/{profileName}":
-		return applicationScopeSandboxRead, false
+		return applicationScopeSandboxRead
 	case strings.HasPrefix(pattern, "GET /v1/profiles"),
 		strings.HasPrefix(pattern, "POST /v1/profiles"),
 		strings.HasPrefix(pattern, "GET /v1/runner"),
 		strings.HasPrefix(pattern, "POST /v1/runner"),
 		strings.HasPrefix(pattern, "PATCH /v1/runner"),
 		pattern == "GET /v1/timings":
-		return "", true
+		return ""
 	case pattern == "GET /v1/sandboxes",
 		pattern == "GET /v1/sandboxes/{sandboxID}",
 		pattern == "GET /v1/sandboxes/{sandboxID}/timings",
 		pattern == "GET /v1/leases/{leaseID}",
 		pattern == "GET /v1/operations/{operationID}",
 		pattern == "GET /v1/operations/{operationID}/timings":
-		return applicationScopeSandboxRead, false
+		return applicationScopeSandboxRead
 	case pattern == "POST /v1/sandboxes",
 		pattern == "PUT /v1/sandboxes/{sandboxID}/metadata",
 		pattern == "DELETE /v1/sandboxes/{sandboxID}",
@@ -94,18 +86,17 @@ func applicationRequestScope(method string, pattern string) (string, bool) {
 		pattern == "DELETE /v1/leases/{leaseID}",
 		pattern == "POST /v1/leases/{leaseAction}",
 		strings.Contains(pattern, "/snapshots"):
-		return applicationScopeSandboxLifecycle, false
+		return applicationScopeSandboxLifecycle
 	case strings.Contains(pattern, "/exec"),
 		strings.Contains(pattern, "/terminals"):
-		return applicationScopeSandboxExec, false
+		return applicationScopeSandboxExec
 	case strings.Contains(pattern, "/files"),
 		strings.Contains(pattern, "/directories"):
-		return applicationScopeSandboxFiles, false
+		return applicationScopeSandboxFiles
 	case strings.Contains(pattern, "/port-sessions"):
-		return applicationScopeSandboxPorts, false
+		return applicationScopeSandboxPorts
 	default:
-		_ = method
-		return "", false
+		return ""
 	}
 }
 
@@ -114,11 +105,11 @@ func applicationRequestScope(method string, pattern string) (string, bool) {
 // authority, or an authority without the exact scope, receives the proxied
 // endpoint and never observes a Runner address.
 func portTransportForRequest(request *http.Request) string {
-	authority, ok := request.Context().Value(applicationAuthorityContextKey{}).(resolvedApplicationAuthority)
+	authority, ok := request.Context().Value(applicationAuthorityContextKey{}).(ports.AuthenticatedApplicationAuthority)
 	if !ok {
 		return contracts.PortTransportProxied
 	}
-	if !slices.Contains(authority.scopes, applicationScopeSandboxPortsDirect) {
+	if !slices.Contains(authority.Scopes, applicationScopeSandboxPortsDirect) {
 		return contracts.PortTransportProxied
 	}
 	return contracts.PortTransportDirect

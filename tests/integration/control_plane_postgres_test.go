@@ -138,11 +138,14 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 		t.Fatalf("idempotency payload mismatch error = %v, want ErrIdempotencyConflict", err)
 	}
 
-	revised, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{
+	revised, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(t.Context(), admin, profile.Name, "revise-profile", contracts.ReviseProfileRequest{
 		Spec: testProfileSpec(2),
-	})
+	}, profile.Revision)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if revised.Revision != profile.Revision+1 || revised.CurrentRevision.Number != profile.CurrentRevision.Number+1 {
+		t.Fatalf("revised Profile = %+v, want head and immutable revision advanced once", revised)
 	}
 	existing, err := controlPlane.GetSandbox(t.Context(), principal, sandboxID)
 	if err != nil {
@@ -791,14 +794,19 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 		t.Fatalf("absent Profile admission error = %v, want ErrProfileNotFound", err)
 	}
 
-	disabled, err := controlPlane.CreateProfile(t.Context(), admin, contracts.CreateProfileRequest{
+	disabled, _, err := controlPlane.CreateProfileIdempotent(t.Context(), admin, "create-disabled-profile", contracts.CreateProfileRequest{
 		Name: "disabled-profile", Spec: testProfileSpec(1),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controlPlane.DisableProfile(t.Context(), admin, disabled.Name); err != nil {
+	disabledRevision := disabled.Revision
+	disabled, _, err = controlPlane.DisableProfileAtRevisionIdempotent(t.Context(), admin, disabled.Name, "disable-profile", disabledRevision)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if disabled.State != contracts.ProfileStateDisabled || disabled.Revision != disabledRevision+1 {
+		t.Fatalf("disabled Profile = %+v, want disabled with head revision advanced once", disabled)
 	}
 	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "disabled-profile", contracts.CreateSandboxRequest{
 		Profile: disabled.Name, Metadata: map[string]string{},
@@ -808,7 +816,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 
 	incompatibleSpec := testProfileSpec(1)
 	incompatibleSpec.Pool = "unavailable-pool"
-	incompatible, err := controlPlane.CreateProfile(t.Context(), admin, contracts.CreateProfileRequest{
+	incompatible, _, err := controlPlane.CreateProfileIdempotent(t.Context(), admin, "create-incompatible-profile", contracts.CreateProfileRequest{
 		Name: "incompatible-profile", Spec: incompatibleSpec,
 	})
 	if err != nil {
@@ -835,7 +843,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 	}
 	resumeSpec := testProfileSpec(1)
 	resumeSpec.Startup = contracts.StartupPolicy{Mode: contracts.StartupModeSnapshotResume}
-	resumeProfile, err := controlPlane.CreateProfile(t.Context(), admin, contracts.CreateProfileRequest{
+	resumeProfile, _, err := controlPlane.CreateProfileIdempotent(t.Context(), admin, "create-resume-profile", contracts.CreateProfileRequest{
 		Name: "snapshot-resume-profile", Spec: resumeSpec,
 	})
 	if err != nil {

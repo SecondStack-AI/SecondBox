@@ -299,9 +299,10 @@ func createGrantedProfileWithDataPlaneTransport(
 	seedFixtureHomeRunner(t, "default-pool", "runner-fixture-"+name)
 	spec := testProfileSpec(1)
 	spec.Execution.DataPlaneTransport = transport
-	profile, err := controlPlane.CreateProfile(
+	profile, _, err := controlPlane.CreateProfileIdempotent(
 		t.Context(),
 		admin,
+		"create-"+name,
 		contracts.CreateProfileRequest{Name: name, Spec: spec},
 	)
 	if err != nil {

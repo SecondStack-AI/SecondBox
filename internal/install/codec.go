@@ -49,16 +49,6 @@ func HostFactsDigest(facts HostFacts) (string, error) {
 	return Digest(encoded), nil
 }
 
-func DecodeHostFacts(content []byte) (HostFacts, error) {
-	var value HostFacts
-	if err := decodeStrict(content, &value); err != nil {
-		return HostFacts{}, installerError("decode host facts", err)
-	}
-	if err := value.Validate(); err != nil {
-		return HostFacts{}, err
-	}
-	return value, nil
-}
 func DecodePlan(content []byte) (InstallPlan, error) {
 	var value InstallPlan
 	if err := decodeStrict(content, &value); err != nil {

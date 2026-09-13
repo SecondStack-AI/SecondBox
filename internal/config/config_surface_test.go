@@ -28,7 +28,8 @@ func setRequiredControlPlaneEnvironment(t *testing.T) {
 	for name, value := range requiredControlPlaneEnvironment {
 		t.Setenv(name, value)
 	}
-	for _, name := range CategoryCEnvironmentNames() {
+	for _, tuning := range TuningDefaults() {
+		name := tuning.Environment
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatal(err)
 		}
@@ -63,7 +64,8 @@ func TestEnvironmentSurfaceHasAnExplicitFinalCategory(t *testing.T) {
 	for name := range requiredControlPlaneEnvironment {
 		seen[name] = "required authority or policy"
 	}
-	for _, name := range CategoryCEnvironmentNames() {
+	for _, tuning := range TuningDefaults() {
+		name := tuning.Environment
 		if previous := seen[name]; previous != "" {
 			t.Fatalf("%s appears in both %s and tuning", name, previous)
 		}
@@ -85,7 +87,8 @@ func TestEnvironmentSurfaceDoesNotAcceptRetiredStaticAuthorityInput(t *testing.T
 	if _, accepted := requiredControlPlaneEnvironment[retired]; accepted {
 		t.Fatalf("retired static authority input %s remains required", retired)
 	}
-	for _, name := range CategoryCEnvironmentNames() {
+	for _, tuning := range TuningDefaults() {
+		name := tuning.Environment
 		if name == retired {
 			t.Fatalf("retired static authority input %s remains an override", retired)
 		}

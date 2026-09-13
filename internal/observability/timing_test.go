@@ -7,9 +7,10 @@ import (
 
 func TestTimingRecorderUsesBoundedRouteAndStatusSeries(t *testing.T) {
 	recorder := NewTimingRecorder()
-	recorder.ObserveHTTP("", "4xx", 6*time.Millisecond)
-	recorder.ObserveHTTP("GET /v1/sandboxes/{sandboxID}", "2xx", 250*time.Millisecond)
-	recorder.ObserveHTTP("GET /v1/sandboxes/{sandboxID}", "2xx", time.Second)
+	now := time.Date(2026, 7, 29, 12, 30, 0, 0, time.UTC)
+	recorder.ObserveHTTPAt("", "4xx", 6*time.Millisecond, now)
+	recorder.ObserveHTTPAt("GET /v1/sandboxes/{sandboxID}", "2xx", 250*time.Millisecond, now)
+	recorder.ObserveHTTPAt("GET /v1/sandboxes/{sandboxID}", "2xx", time.Second, now)
 
 	snapshot := recorder.HTTPSnapshot()
 	if len(snapshot) != 2 {

@@ -216,7 +216,7 @@ func TestLoginVerifiesAndStoresCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	err = runLoginCommand(context.Background(), session, []string{
+	err = runAuthorityLoginCommand(context.Background(), session, sessionAuthorityApplication, []string{
 		"--url", server.URL, "--token", "good-token",
 		"--tenant-ref", "tenant-1", "--subject-ref", "subject-1",
 	}, &output, server.Client())
@@ -278,7 +278,7 @@ func TestLoginRejectedCredentialsAreNotStored(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	err = runLoginCommand(context.Background(), session, []string{
+	err = runAuthorityLoginCommand(context.Background(), session, sessionAuthorityApplication, []string{
 		"--url", server.URL, "--token", "wrong-token",
 		"--tenant-ref", "tenant-1", "--subject-ref", "subject-1",
 	}, &output, server.Client())
@@ -353,7 +353,7 @@ func TestLoginReplacesExistingConfigurationAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	err = runLoginCommand(context.Background(), session, []string{
+	err = runAuthorityLoginCommand(context.Background(), session, sessionAuthorityApplication, []string{
 		"--url", server.URL, "--token", "good-token",
 		"--tenant-ref", "tenant-2", "--subject-ref", "subject-2",
 	}, &output, server.Client())
@@ -389,7 +389,7 @@ func TestLoginInheritsResolvedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := runLoginCommand(context.Background(), session, nil, &output, server.Client()); err != nil {
+	if err := runAuthorityLoginCommand(context.Background(), session, sessionAuthorityApplication, nil, &output, server.Client()); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := readSessionFile(path)
@@ -408,7 +408,7 @@ func TestLoginRequiresEveryCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	err = runLoginCommand(context.Background(), session, []string{
+	err = runAuthorityLoginCommand(context.Background(), session, sessionAuthorityApplication, []string{
 		"--url", "https://a.example.com", "--token", "token-1",
 	}, &output, http.DefaultClient)
 	if err == nil || !strings.Contains(err.Error(), "login requires") {
@@ -437,7 +437,7 @@ func TestLoginAccessibleFormPromptsOnlyForMissingValues(t *testing.T) {
 	writeDone := make(chan error, 1)
 	go func() { _, err := io.WriteString(master, "good-token\ntenant-form\nsubject-form\n"); writeDone <- err }()
 	ctx := withPresentation(context.Background(), presentation{renderer: cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: capabilities, OutputMode: cliui.OutputAuto, ColorMode: cliui.ColorNever}, accessible: true, input: input})
-	if err := runLoginCommand(ctx, session, []string{"--url", server.URL}, &output, server.Client()); err != nil {
+	if err := runAuthorityLoginCommand(ctx, session, sessionAuthorityApplication, []string{"--url", server.URL}, &output, server.Client()); err != nil {
 		t.Fatalf("%v; transcript %q", err, output.String())
 	}
 	if err := <-writeDone; err != nil {
@@ -471,7 +471,7 @@ func TestLoginRejectsUnexpectedArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	err = runLoginCommand(context.Background(), session, []string{"extra"}, &output, http.DefaultClient)
+	err = runAuthorityLoginCommand(context.Background(), session, sessionAuthorityApplication, []string{"extra"}, &output, http.DefaultClient)
 	if err == nil || !strings.Contains(err.Error(), "unexpected login arguments") {
 		t.Fatalf("login error = %v; want an unexpected-argument rejection", err)
 	}

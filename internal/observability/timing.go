@@ -62,15 +62,6 @@ func NewTimingRecorder() *TimingRecorder {
 	}
 }
 
-// ObserveHTTP records one completed request using only bounded dimensions.
-func (recorder *TimingRecorder) ObserveHTTP(
-	route string,
-	statusClass string,
-	duration time.Duration,
-) {
-	recorder.ObserveHTTPAt(route, statusClass, duration, time.Now().UTC())
-}
-
 // ObserveHTTPAt records one completed request in the cumulative and rolling views.
 func (recorder *TimingRecorder) ObserveHTTPAt(
 	route string,

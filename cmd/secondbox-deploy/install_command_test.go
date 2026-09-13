@@ -62,7 +62,11 @@ func TestGuidedInstallAccessibleAcceptsAndPersistsCanonicalPlan(t *testing.T) {
 		t.Fatalf("%v\ndiagnostic:\n%s", err, diagnostic.String())
 	}
 	operationDirectory := filepath.Join(home, "secondbox-install_0123456789abcdef")
-	plan, _, err := install.ReadPlan(filepath.Join(operationDirectory, "install-plan.json"))
+	planBytes, err := os.ReadFile(filepath.Join(operationDirectory, "install-plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := install.DecodePlan(planBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +110,11 @@ func TestGuidedInstallOffersAndPersistsExistingReflinkFilesystem(t *testing.T) {
 	if err := runGuidedInstallWith(context.Background(), renderer, facts, false, dependencies); err != nil {
 		t.Fatal(err)
 	}
-	plan, _, err := install.ReadPlan(filepath.Join(home, "secondbox-install_0123456789abcdef", "install-plan.json"))
+	planBytes, err := os.ReadFile(filepath.Join(home, "secondbox-install_0123456789abcdef", "install-plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := install.DecodePlan(planBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +238,11 @@ func TestGuidedInstallAdvancedReviewUsesSharedFormsAndPersistsOverrides(t *testi
 	if formCalls != 7 {
 		t.Fatalf("advanced installer form calls = %d, want workspace, standard bundles, tenancy, retention, advanced, capacity, final", formCalls)
 	}
-	plan, _, err := install.ReadPlan(filepath.Join(home, "secondbox-install_0123456789abcdef", "install-plan.json"))
+	planBytes, err := os.ReadFile(filepath.Join(home, "secondbox-install_0123456789abcdef", "install-plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := install.DecodePlan(planBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

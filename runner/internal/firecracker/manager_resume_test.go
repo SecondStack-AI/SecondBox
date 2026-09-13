@@ -645,3 +645,16 @@ func TestAssignmentStartupModeAdmitsOnlyWhatThisRunnerCanHonour(t *testing.T) {
 		}
 	}
 }
+
+// sharesInode checks that snapshot staging preserves the shared memory inode.
+func sharesInode(first, second string) (bool, error) {
+	firstIdentity, err := trustedMicroVMArtifactIdentityFor(first)
+	if err != nil {
+		return false, err
+	}
+	secondIdentity, err := trustedMicroVMArtifactIdentityFor(second)
+	if err != nil {
+		return false, err
+	}
+	return firstIdentity.dev == secondIdentity.dev && firstIdentity.ino == secondIdentity.ino, nil
+}

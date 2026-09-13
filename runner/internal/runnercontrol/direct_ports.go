@@ -126,21 +126,6 @@ func (registry *directPortRegistry) remove(session *directPortSession) {
 	registry.mu.Unlock()
 }
 
-// lookup resolves a presented credential by the full SHA-256 digest of the
-// credential itself, so a hit is a whole-digest match and a near miss is
-// indistinguishable from an unknown credential. The comparison that has to be
-// constant time is the one against the durable digest, and the control plane
-// performs it while spending the credential.
-func (registry *directPortRegistry) lookup(digest [sha256.Size]byte) *directPortSession {
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	return registry.lookupLocked(digest)
-}
-
-func (registry *directPortRegistry) lookupLocked(digest [sha256.Size]byte) *directPortSession {
-	return registry.sessions[hex.EncodeToString(digest[:])]
-}
-
 // awaitSession resolves a presented credential, waiting a bounded time for the
 // admitting frame to arrive.
 //
@@ -159,7 +144,9 @@ func (registry *directPortRegistry) awaitSession(
 	deadline := time.Now().Add(within)
 	for {
 		registry.mu.Lock()
-		session := registry.lookupLocked(digest)
+		// Match the whole credential digest. The control plane performs the
+		// constant-time comparison against the durable digest when spending it.
+		session := registry.sessions[hex.EncodeToString(digest[:])]
 		admitted := registry.admitted
 		registry.mu.Unlock()
 		if session != nil {

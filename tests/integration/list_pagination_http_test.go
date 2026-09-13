@@ -81,9 +81,10 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	profileNames := make([]string, 0, 3)
 	for index := 0; index < 3; index++ {
 		profileName := fmt.Sprintf("%s-profile-%d", suffix, index)
-		profile, err := controlPlane.CreateProfile(
+		profile, _, err := controlPlane.CreateProfileIdempotent(
 			t.Context(),
 			admin,
+			"create-"+profileName,
 			contracts.CreateProfileRequest{Name: profileName, Spec: testProfileSpec(1)},
 		)
 		if err != nil {

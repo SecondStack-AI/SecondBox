@@ -190,13 +190,11 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			NetworkPolicyMaximumDNSPins:                4,
 			NetworkPolicyMaximumDNSTTL:                 time.Minute,
 		},
-		instances:      map[string]*instance{},
-		instancesByKey: map[runtimeInstanceKey]string{},
-		provisioning:   map[runtimeInstanceKey]chan struct{}{},
-		pendingSpawns:  map[runtimeInstanceKey]int{},
-		guestIPs:       map[string]string{},
-		networkPolicy:  &recordingHostNetworkPolicyEnforcer{},
-		runnerID:       "runner-1",
+		instances:     map[string]*instance{},
+		pendingSpawns: map[runtimeInstanceKey]int{},
+		guestIPs:      map[string]string{},
+		networkPolicy: &recordingHostNetworkPolicyEnforcer{},
+		runnerID:      "runner-1",
 	}
 	workspacePath := filepath.Join(t.TempDir(), "workspace.raw")
 	if err := os.WriteFile(workspacePath, make([]byte, 4096), 0o600); err != nil {

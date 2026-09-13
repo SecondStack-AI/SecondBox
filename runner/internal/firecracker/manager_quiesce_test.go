@@ -14,7 +14,7 @@ import (
 // exit on SIGTERM, so the escalation grace period previously expired on every
 // stop and dominated stop latency.
 func TestStopTerminatesImmediatelyWhenWorkspaceIsQuiesced(t *testing.T) {
-	manager := newWarmToolTestManager(t)
+	manager := newLifecycleTestManager(t)
 	var frozen bool
 	manager.freezeWorkspace = func(context.Context, string) (BackupResponse, error) {
 		frozen = true
@@ -55,7 +55,7 @@ func TestStopTerminatesImmediatelyWhenWorkspaceIsQuiesced(t *testing.T) {
 // When the guest cannot be reached the filesystem may still hold dirty pages,
 // so the slower escalation that asks the VMM to exit first is retained.
 func TestStopAsksTheVMMToExitWhenTheWorkspaceCannotBeQuiesced(t *testing.T) {
-	manager := newWarmToolTestManager(t)
+	manager := newLifecycleTestManager(t)
 	manager.freezeWorkspace = func(context.Context, string) (BackupResponse, error) {
 		return BackupResponse{}, errors.New("guest unreachable")
 	}
@@ -89,7 +89,7 @@ func TestStopAsksTheVMMToExitWhenTheWorkspaceCannotBeQuiesced(t *testing.T) {
 }
 
 func TestTerminationGraceDependsOnQuiescedWorkspace(t *testing.T) {
-	manager := newWarmToolTestManager(t)
+	manager := newLifecycleTestManager(t)
 	if got := manager.terminationGrace(true); got != quiescedGrace {
 		t.Fatalf("quiesced grace = %s, want %s", got, quiescedGrace)
 	}
@@ -103,7 +103,7 @@ func TestTerminationGraceDependsOnQuiescedWorkspace(t *testing.T) {
 
 // The freeze attempt must not itself become a new stall when the guest is gone.
 func TestWorkspaceQuiesceIsBounded(t *testing.T) {
-	manager := newWarmToolTestManager(t)
+	manager := newLifecycleTestManager(t)
 	manager.freezeWorkspace = func(ctx context.Context, _ string) (BackupResponse, error) {
 		<-ctx.Done()
 		return BackupResponse{}, ctx.Err()

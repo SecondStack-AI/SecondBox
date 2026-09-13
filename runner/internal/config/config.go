@@ -65,8 +65,6 @@ type Config struct {
 	MicroVMMaxConcurrentGlobal           int
 	MicroVMMaxConcurrentOperationsGlobal int
 	MicroVMMemoryBudgetMiB               int
-	MicroVMToolVMReuseEnabled            bool
-	MicroVMToolVMIdleTTL                 time.Duration
 	FileTransferMaxBytes                 int64
 	NetworkPolicyNFTPath                 string
 	NetworkPolicyMaximumDNSPins          int
@@ -75,10 +73,6 @@ type Config struct {
 	NetworkPolicyManagementCIDRs         []netip.Prefix
 	NetworkPolicyEgressContexts          networkpolicy.EgressContextConfig
 	NetworkPolicyDNSUpstream             netip.AddrPort
-}
-
-func (c *Config) ToolVMReuseEffective() bool {
-	return c != nil && c.MicroVMToolVMReuseEnabled && strings.TrimSpace(c.MicroVMBridgeCIDR) != ""
 }
 
 func (c *Config) ValidateMicroVMTrustAnchor() error {

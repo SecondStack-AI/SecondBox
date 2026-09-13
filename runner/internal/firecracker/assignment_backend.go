@@ -206,8 +206,7 @@ func runnercontrolValidObservedTerminationReason(
 
 // StartupTiming reports bounded process-lifetime Sandbox startup observations.
 func (b *AssignmentBackend) StartupTiming() (uint64, time.Duration) {
-	snapshot := b.manager.RuntimeMetricsSnapshot()
-	return uint64(snapshot.ColdStartCount), snapshot.ColdStartP95
+	return b.manager.StartupTiming()
 }
 
 // Readiness verifies signed artifacts and host prerequisites before capacity advertisement.
@@ -706,7 +705,6 @@ func (b *AssignmentBackend) StartAssignment(
 		ExecutionNetwork:        executionNetwork,
 		CompartmentID:           assignment.Fence.InstanceId,
 		WorkspaceAttachment:     workspaceAttachment,
-		ShapeFingerprint:        assignment.ProfileRevisionId,
 		SandboxGeneration:       assignment.Fence.SandboxGeneration,
 		GuestBuildID:            guestStart.GuestBuildID,
 		ImageManifestDigest:     guestStart.ImageManifestDigest,

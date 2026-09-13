@@ -336,14 +336,14 @@ func TestHostTeardownUsesOnlyNarrowPrivilegedVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 	executor := &fakeHostApplyExecutor{euid: 0, nonempty: map[ResourceKind]bool{}}
-	if err := VerifyHostTeardown(context.Background(), plan, receipt, executor); err != nil {
+	if err := verifyHostResources(context.Background(), plan, receipt, executor, "teardown"); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(executor.calls, []string{"revalidate-host-resources"}) {
 		t.Fatalf("host teardown verification calls = %#v", executor.calls)
 	}
 	executor = &fakeHostApplyExecutor{euid: 0, teardown: errors.New("recorded host resource changed"), nonempty: map[ResourceKind]bool{}}
-	if err := VerifyHostTeardown(context.Background(), plan, receipt, executor); err == nil || !strings.Contains(err.Error(), "recorded host resource changed") {
+	if err := verifyHostResources(context.Background(), plan, receipt, executor, "teardown"); err == nil || !strings.Contains(err.Error(), "recorded host resource changed") {
 		t.Fatalf("host teardown verification failure = %v", err)
 	}
 }
@@ -355,14 +355,14 @@ func TestHostUpdateUsesOnlyNarrowPrivilegedVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 	executor := &fakeHostApplyExecutor{euid: 0, nonempty: map[ResourceKind]bool{}}
-	if err := VerifyHostUpdate(context.Background(), plan, receipt, executor); err != nil {
+	if err := verifyHostResources(context.Background(), plan, receipt, executor, "update"); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(executor.calls, []string{"revalidate-host-resources"}) {
 		t.Fatalf("host update verification calls = %#v", executor.calls)
 	}
 	executor = &fakeHostApplyExecutor{euid: 0, teardown: errors.New("recorded Workspace identity changed"), nonempty: map[ResourceKind]bool{}}
-	if err := VerifyHostUpdate(context.Background(), plan, receipt, executor); err == nil || !strings.Contains(err.Error(), "root update prerequisite revalidation") {
+	if err := verifyHostResources(context.Background(), plan, receipt, executor, "update"); err == nil || !strings.Contains(err.Error(), "root update prerequisite revalidation") {
 		t.Fatalf("host update verification failure = %v", err)
 	}
 }

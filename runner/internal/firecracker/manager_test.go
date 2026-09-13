@@ -378,7 +378,7 @@ func TestManagerExecuteToolRejectsUnknownInstance(t *testing.T) {
 	}
 }
 
-func newWarmToolTestManager(t *testing.T) *Manager {
+func newLifecycleTestManager(t *testing.T) *Manager {
 	t.Helper()
 	dir := t.TempDir()
 	rootfs := filepath.Join(dir, "rootfs.ext4")
@@ -391,8 +391,6 @@ func newWarmToolTestManager(t *testing.T) *Manager {
 	cfg := &config.Config{
 		MicroVMRootfsPath:              rootfs,
 		MicroVMSharedImagePath:         shared,
-		MicroVMToolVMReuseEnabled:      true,
-		MicroVMToolVMIdleTTL:           time.Minute,
 		MicroVMBridgeCIDR:              "172.30.0.1/24",
 		MicroVMRunDir:                  filepath.Join(dir, "run"),
 		MicroVMLogDir:                  filepath.Join(dir, "logs"),
@@ -404,870 +402,18 @@ func newWarmToolTestManager(t *testing.T) *Manager {
 		MicroVMMemoryBudgetMiB:         0,
 	}
 	return &Manager{
-		cfg:            cfg,
-		runnerID:       "runner-test",
-		instances:      map[string]*instance{},
-		instancesByKey: map[runtimeInstanceKey]string{},
-		provisioning:   map[runtimeInstanceKey]chan struct{}{},
-		guestIPs:       map[string]string{},
+		cfg:       cfg,
+		runnerID:  "runner-test",
+		instances: map[string]*instance{},
+		guestIPs:  map[string]string{},
 		freezeWorkspace: func(context.Context, string) (BackupResponse, error) {
 			return BackupResponse{}, nil
 		},
 	}
 }
 
-func testOperationStartOpts() runtimemanager.StartOpts {
-	return runtimemanager.StartOpts{
-		SandboxGeneration: 1,
-		RequestID:         "request-test",
-		OperationID:       "operation-test",
-		LeaseID:           "lease-test",
-		AssignmentID:      "assignment-test",
-	}
-}
-
-func TestExecuteToolLeasedReusesSequentialOps(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	var boots atomic.Int32
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		n := boots.Add(1)
-		id := fmt.Sprintf("fc-%s-%s-%d", sandboxID, compartmentID, n)
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	var idsMu sync.Mutex
-	var ids []string
-	m.executeTool = func(_ context.Context, id string, _ ToolExecRequest) (ToolExecResponse, error) {
-		idsMu.Lock()
-		ids = append(ids, id)
-		idsMu.Unlock()
-		return ToolExecResponse{ExitCode: 0}, nil
-	}
-	for i := 0; i < 2; i++ {
-		if _, _, err := m.ExecuteToolLeased(context.Background(), "agent", "cmp_a", runtimemanager.StartOpts{}, ToolExecRequest{Operation: ToolOpExec}); err != nil {
-			t.Fatalf("leased exec %d: %v", i, err)
-		}
-	}
-	if boots.Load() != 1 {
-		t.Fatalf("boots = %d, want 1", boots.Load())
-	}
-	if len(ids) != 2 || ids[0] == "" || ids[0] != ids[1] {
-		t.Fatalf("exec ids = %#v, want same non-empty id", ids)
-	}
-	m.mu.Lock()
-	inst := m.instances[ids[0]]
-	inflight := inst.inflight
-	m.mu.Unlock()
-	if inflight != 0 {
-		t.Fatalf("inflight after releases = %d, want 0", inflight)
-	}
-}
-
-func TestWithToolVMFileUsesWarmLeaseAndReleases(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	var boots atomic.Int32
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		n := boots.Add(1)
-		id := fmt.Sprintf("fc-%s-%s-%d", sandboxID, compartmentID, n)
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	var leasedID string
-	err := m.WithToolVMFile(context.Background(), "agent", "cmp_a", runtimemanager.StartOpts{}, func(instanceID string) error {
-		leasedID = instanceID
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		if got := m.instances[instanceID].inflight; got != 1 {
-			t.Fatalf("inflight during file lease = %d, want 1", got)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("file lease: %v", err)
-	}
-	if boots.Load() != 1 || leasedID == "" {
-		t.Fatalf("boots=%d leasedID=%q", boots.Load(), leasedID)
-	}
-	m.mu.Lock()
-	inflight := m.instances[leasedID].inflight
-	m.mu.Unlock()
-	if inflight != 0 {
-		t.Fatalf("inflight after file lease = %d, want 0", inflight)
-	}
-}
-
-func TestWithToolVMFileSharesWarmLeaseWithToolExecutions(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	var boots atomic.Int32
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		n := boots.Add(1)
-		id := fmt.Sprintf("fc-%s-%s-%d", sandboxID, compartmentID, n)
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	var ids []string
-	m.executeTool = func(_ context.Context, id string, _ ToolExecRequest) (ToolExecResponse, error) {
-		ids = append(ids, id)
-		return ToolExecResponse{ExitCode: 0}, nil
-	}
-	opts := runtimemanager.StartOpts{
-		Timezone:         "UTC",
-		CompartmentID:    "cmp_a",
-		ShapeFingerprint: "shape-a",
-		RuntimeClass:     runtimemanager.RuntimeClassToolExecutor,
-	}
-	firstID, _, err := m.ExecuteToolLeased(context.Background(), "agent", "cmp_a", opts, ToolExecRequest{Operation: ToolOpExec})
-	if err != nil {
-		t.Fatalf("first leased exec: %v", err)
-	}
-	var fileID string
-	if err := m.WithToolVMFile(context.Background(), "agent", "cmp_a", opts, func(instanceID string) error {
-		fileID = instanceID
-		return nil
-	}); err != nil {
-		t.Fatalf("file lease: %v", err)
-	}
-	secondID, _, err := m.ExecuteToolLeased(context.Background(), "agent", "cmp_a", opts, ToolExecRequest{Operation: ToolOpExec})
-	if err != nil {
-		t.Fatalf("second leased exec: %v", err)
-	}
-	if boots.Load() != 1 {
-		t.Fatalf("boots = %d, want 1", boots.Load())
-	}
-	if firstID == "" || fileID != firstID || secondID != firstID {
-		t.Fatalf("instance ids first=%q file=%q second=%q, want all same", firstID, fileID, secondID)
-	}
-	if len(ids) != 2 || ids[0] != firstID || ids[1] != firstID {
-		t.Fatalf("execute ids = %#v, want both %q", ids, firstID)
-	}
-	m.mu.Lock()
-	inflight := m.instances[firstID].inflight
-	m.mu.Unlock()
-	if inflight != 0 {
-		t.Fatalf("inflight after interleaved operations = %d, want 0", inflight)
-	}
-}
-
-func TestWithToolVMFileUsesEphemeralFallbackWhenReuseDisabled(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	m.cfg.MicroVMBridgeCIDR = ""
-	socketPath := shortUnixSocketPath(t, "control.sock")
-	handshakes := make(chan string, 4)
-	closeServer := startFakeControlServer(t, socketPath, handshakes)
-	defer closeServer()
-	var boots atomic.Int32
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		boots.Add(1)
-		if opts.RuntimeClass != runtimemanager.RuntimeClassToolExecutor || !opts.Ephemeral {
-			t.Fatalf("start opts = %+v, want ephemeral tool executor", opts)
-		}
-		id := fmt.Sprintf("fc-%s-%s-ephemeral", sandboxID, compartmentID)
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{
-			id: id, sandboxID: sandboxID, sandboxGeneration: opts.SandboxGeneration,
-			compartmentID: compartmentID, startupFingerprint: fp, vsockUDS: socketPath,
-			guestControlPort: 1024, requestID: opts.RequestID, operationID: opts.OperationID,
-			leaseID: opts.LeaseID, assignmentID: opts.AssignmentID, done: make(chan struct{}),
-		})
-		m.mu.Unlock()
-		return id, nil
-	}
-	var leasedID string
-	err := m.WithToolVMFile(context.Background(), "agent", "cmp_a", testOperationStartOpts(), func(instanceID string) error {
-		leasedID = instanceID
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("ephemeral file transfer: %v", err)
-	}
-	if boots.Load() != 1 || leasedID != "fc-agent-cmp_a-ephemeral" {
-		t.Fatalf("boots=%d leasedID=%q", boots.Load(), leasedID)
-	}
-	select {
-	case <-handshakes:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for ephemeral workspace freeze")
-	}
-	m.mu.Lock()
-	_, stillPresent := m.instances[leasedID]
-	m.mu.Unlock()
-	if stillPresent {
-		t.Fatalf("ephemeral instance %q still tracked after file transfer", leasedID)
-	}
-}
-
-func TestEphemeralToolAndFileTransferShareCompartmentMountLock(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	m.cfg.MicroVMBridgeCIDR = ""
-	socketPath := shortUnixSocketPath(t, "control.sock")
-	handshakes := make(chan string, 8)
-	closeServer := startFakeControlServer(t, socketPath, handshakes)
-	defer closeServer()
-
-	firstStartEntered := make(chan struct{})
-	releaseFirstStart := make(chan struct{})
-	var startCount atomic.Int32
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		n := startCount.Add(1)
-		if n == 1 {
-			close(firstStartEntered)
-			<-releaseFirstStart
-		}
-		id := fmt.Sprintf("fc-%s-%s-%d", sandboxID, compartmentID, n)
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{
-			id: id, sandboxID: sandboxID, sandboxGeneration: opts.SandboxGeneration,
-			compartmentID: compartmentID, startupFingerprint: fp, vsockUDS: socketPath,
-			guestControlPort: 1024, requestID: opts.RequestID, operationID: opts.OperationID,
-			leaseID: opts.LeaseID, assignmentID: opts.AssignmentID, done: make(chan struct{}),
-		})
-		m.mu.Unlock()
-		return id, nil
-	}
-
-	toolDone := make(chan error, 1)
-	go func() {
-		_, _, err := m.ExecuteEphemeralTool(context.Background(), "agent", "cmp_a", testOperationStartOpts(), ToolExecRequest{
-			Operation:     ToolOpExec,
-			Command:       "sh",
-			Args:          []string{"-c", "printf ok"},
-			Cwd:           ".",
-			Env:           map[string]string{"A": "B"},
-			TimeoutMillis: 1000,
-		})
-		toolDone <- err
-	}()
-	select {
-	case <-firstStartEntered:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for first ephemeral tool boot")
-	}
-
-	fileDone := make(chan error, 1)
-	go func() {
-		fileDone <- m.WithToolVMFile(context.Background(), "agent", "cmp_a", testOperationStartOpts(), func(string) error {
-			return nil
-		})
-	}()
-	time.Sleep(50 * time.Millisecond)
-	if got := startCount.Load(); got != 1 {
-		t.Fatalf("file transfer started another VM while tool VM held mount lock; starts=%d", got)
-	}
-	close(releaseFirstStart)
-	if err := <-toolDone; err != nil {
-		t.Fatalf("ephemeral tool: %v", err)
-	}
-	if err := <-fileDone; err != nil {
-		t.Fatalf("file transfer: %v", err)
-	}
-	if got := startCount.Load(); got != 2 {
-		t.Fatalf("start count = %d, want 2 serialized starts", got)
-	}
-}
-
-func TestExecuteToolLeasedConcurrentOpsShareOneInstance(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	var boots atomic.Int32
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		n := boots.Add(1)
-		time.Sleep(20 * time.Millisecond)
-		id := fmt.Sprintf("fc-%s-%s-%d", sandboxID, compartmentID, n)
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	var execs atomic.Int32
-	m.executeTool = func(_ context.Context, _ string, _ ToolExecRequest) (ToolExecResponse, error) {
-		execs.Add(1)
-		time.Sleep(10 * time.Millisecond)
-		return ToolExecResponse{ExitCode: 0}, nil
-	}
-	var wg sync.WaitGroup
-	errs := make(chan error, 8)
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, _, err := m.ExecuteToolLeased(context.Background(), "agent", "cmp_a", runtimemanager.StartOpts{}, ToolExecRequest{Operation: ToolOpExec})
-			errs <- err
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("leased exec: %v", err)
-		}
-	}
-	if boots.Load() != 1 {
-		t.Fatalf("boots = %d, want 1", boots.Load())
-	}
-	if execs.Load() != 8 {
-		t.Fatalf("execs = %d, want 8", execs.Load())
-	}
-}
-
-func TestExecuteToolLeasedFailureStillReleases(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		id := "fc-agent-cmp-a"
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	m.executeTool = func(context.Context, string, ToolExecRequest) (ToolExecResponse, error) {
-		return ToolExecResponse{}, errors.New("boom")
-	}
-	id, _, err := m.ExecuteToolLeased(context.Background(), "agent", "cmp_a", runtimemanager.StartOpts{}, ToolExecRequest{Operation: ToolOpExec})
-	if err == nil {
-		t.Fatal("expected exec error")
-	}
-	m.mu.Lock()
-	inflight := m.instances[id].inflight
-	m.mu.Unlock()
-	if inflight != 0 {
-		t.Fatalf("inflight = %d, want 0", inflight)
-	}
-}
-
-func TestWarmToolVMDistinctCompartmentsBootDistinctInstances(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	var boots atomic.Int32
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		n := boots.Add(1)
-		id := fmt.Sprintf("fc-%s-%s-%d", sandboxID, compartmentID, n)
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	a, err := m.acquireWarmToolVM(context.Background(), "agent", "cmp_a", runtimemanager.StartOpts{})
-	if err != nil {
-		t.Fatalf("acquire a: %v", err)
-	}
-	defer m.releaseWarmToolVM(a.instanceID)
-	b, err := m.acquireWarmToolVM(context.Background(), "agent", "cmp_b", runtimemanager.StartOpts{})
-	if err != nil {
-		t.Fatalf("acquire b: %v", err)
-	}
-	defer m.releaseWarmToolVM(b.instanceID)
-	if a.instanceID == b.instanceID || boots.Load() != 2 {
-		t.Fatalf("leases a=%+v b=%+v boots=%d, want distinct two boots", a, b, boots.Load())
-	}
-}
-
-func TestWarmToolVMWinnerBootFailureLetsWaiterRecover(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	var boots atomic.Int32
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		n := boots.Add(1)
-		if n == 1 {
-			time.Sleep(20 * time.Millisecond)
-			return "", errors.New("boot failed")
-		}
-		id := fmt.Sprintf("fc-%s-%s-%d", sandboxID, compartmentID, n)
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	errs := make(chan error, 2)
-	for i := 0; i < 2; i++ {
-		go func() {
-			lease, err := m.acquireWarmToolVM(context.Background(), "agent", "cmp_a", runtimemanager.StartOpts{})
-			if err == nil {
-				m.releaseWarmToolVM(lease.instanceID)
-			}
-			errs <- err
-		}()
-	}
-	var successes, failures int
-	for i := 0; i < 2; i++ {
-		if err := <-errs; err != nil {
-			failures++
-		} else {
-			successes++
-		}
-	}
-	if successes != 1 || failures != 1 || boots.Load() != 2 {
-		t.Fatalf("successes=%d failures=%d boots=%d, want 1/1/2", successes, failures, boots.Load())
-	}
-	m.mu.Lock()
-	provisioning := len(m.provisioning)
-	m.mu.Unlock()
-	if provisioning != 0 {
-		t.Fatalf("provisioning entries leaked: %d", provisioning)
-	}
-}
-
-func TestWarmToolVMBootPanicClearsProvisioning(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	m.startCompartment = func(context.Context, string, string, runtimemanager.StartOpts) (string, error) {
-		panic("kaboom")
-	}
-	if _, err := m.acquireWarmToolVM(context.Background(), "agent", "cmp_a", runtimemanager.StartOpts{}); err == nil || !strings.Contains(err.Error(), "panic") {
-		t.Fatalf("expected panic error, got %v", err)
-	}
-	m.mu.Lock()
-	provisioning := len(m.provisioning)
-	m.mu.Unlock()
-	if provisioning != 0 {
-		t.Fatalf("provisioning entries leaked: %d", provisioning)
-	}
-}
-
-func TestWarmToolVMTagMissClearsProvisioning(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	m.startCompartment = func(context.Context, string, string, runtimemanager.StartOpts) (string, error) {
-		return "fc-vanished", nil
-	}
-	if _, err := m.acquireWarmToolVM(context.Background(), "agent", "cmp_a", runtimemanager.StartOpts{}); err == nil || !strings.Contains(err.Error(), "exited before lease registration") {
-		t.Fatalf("expected tag-miss error, got %v", err)
-	}
-	m.mu.Lock()
-	provisioning := len(m.provisioning)
-	m.mu.Unlock()
-	if provisioning != 0 {
-		t.Fatalf("provisioning entries leaked: %d", provisioning)
-	}
-}
-
-func TestWarmToolVMFingerprintMismatchDrainsBeforeFreshBoot(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_a"}
-	old := &instance{
-		id:                 "fc-old",
-		sandboxID:          key.sandboxID,
-		compartmentID:      key.compartmentID,
-		startupFingerprint: "stale",
-		warmToolVM:         true,
-		lastUsedAt:         time.Now(),
-		done:               make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(old)
-	m.instancesByKey[key] = old.id
-	m.mu.Unlock()
-	var bootedAfterOldDone atomic.Bool
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		select {
-		case <-old.done:
-			bootedAfterOldDone.Store(true)
-		default:
-		}
-		id := "fc-fresh"
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	lease, err := m.acquireWarmToolVM(context.Background(), key.sandboxID, key.compartmentID, runtimemanager.StartOpts{})
-	if err != nil {
-		t.Fatalf("acquire after mismatch: %v", err)
-	}
-	defer m.releaseWarmToolVM(lease.instanceID)
-	if lease.instanceID != "fc-fresh" || !bootedAfterOldDone.Load() {
-		t.Fatalf("lease=%+v bootedAfterOldDone=%v, want fresh after old done", lease, bootedAfterOldDone.Load())
-	}
-}
-
-func TestWarmToolVMDrainRequesterCancelStillPromotesOnRelease(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_a"}
-	old := &instance{
-		id:                 "fc-old-cancel",
-		sandboxID:          key.sandboxID,
-		compartmentID:      key.compartmentID,
-		startupFingerprint: "stale",
-		warmToolVM:         true,
-		inflight:           1,
-		lastUsedAt:         time.Now(),
-		done:               make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(old)
-	m.instancesByKey[key] = old.id
-	m.mu.Unlock()
-
-	removed := make(chan struct{})
-	m.removeInstance = func(_ context.Context, id string) error {
-		if id != old.id {
-			t.Fatalf("remove id = %q, want %q", id, old.id)
-		}
-		m.finishInstance(old)
-		close(removed)
-		return nil
-	}
-	m.startCompartment = func(context.Context, string, string, runtimemanager.StartOpts) (string, error) {
-		t.Fatal("acquire should cancel while waiting for the draining instance")
-		return "", nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	defer cancel()
-	if _, err := m.acquireWarmToolVM(ctx, key.sandboxID, key.compartmentID, runtimemanager.StartOpts{}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("acquire err = %v, want deadline", err)
-	}
-	m.mu.Lock()
-	draining := old.draining
-	reapingBeforeRelease := old.reaping
-	m.mu.Unlock()
-	if !draining || reapingBeforeRelease {
-		t.Fatalf("draining=%v reapingBeforeRelease=%v, want draining only", draining, reapingBeforeRelease)
-	}
-
-	m.releaseWarmToolVM(old.id)
-	select {
-	case <-removed:
-	case <-time.After(time.Second):
-		t.Fatal("release did not promote canceled drain to teardown")
-	}
-}
-
-func TestWarmToolVMAcquireWaitsForReapingInstanceBeforeBoot(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_a"}
-	old := &instance{
-		id:            "fc-old-reaping",
-		sandboxID:     key.sandboxID,
-		compartmentID: key.compartmentID,
-		warmToolVM:    true,
-		reaping:       true,
-		lastUsedAt:    time.Now().Add(-2 * time.Minute),
-		done:          make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(old)
-	m.instancesByKey[key] = old.id
-	m.mu.Unlock()
-
-	var boots atomic.Int32
-	var bootedAfterDone atomic.Bool
-	m.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		boots.Add(1)
-		select {
-		case <-old.done:
-			bootedAfterDone.Store(true)
-		default:
-		}
-		id := "fc-fresh-after-reap"
-		fp, err := m.startupFingerprint(sandboxID, compartmentID, opts)
-		if err != nil {
-			return "", err
-		}
-		m.mu.Lock()
-		m.addInstanceLocked(&instance{id: id, sandboxID: sandboxID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
-		m.mu.Unlock()
-		return id, nil
-	}
-	leaseCh := make(chan warmToolLease, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		lease, err := m.acquireWarmToolVM(context.Background(), key.sandboxID, key.compartmentID, runtimemanager.StartOpts{})
-		if err != nil {
-			errCh <- err
-			return
-		}
-		leaseCh <- lease
-	}()
-	time.Sleep(50 * time.Millisecond)
-	if boots.Load() != 0 {
-		t.Fatalf("booted before reaping instance exited")
-	}
-	m.finishInstance(old)
-	select {
-	case err := <-errCh:
-		t.Fatalf("acquire: %v", err)
-	case lease := <-leaseCh:
-		defer m.releaseWarmToolVM(lease.instanceID)
-		if lease.instanceID != "fc-fresh-after-reap" || !bootedAfterDone.Load() {
-			t.Fatalf("lease=%+v bootedAfterDone=%v", lease, bootedAfterDone.Load())
-		}
-	case <-time.After(time.Second):
-		t.Fatal("acquire did not boot after reaping instance exited")
-	}
-}
-
-func TestRemoveInstanceLockedWarmStaleKeyGuard(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_a"}
-	old := &instance{id: "old", sandboxID: key.sandboxID, compartmentID: key.compartmentID, warmToolVM: true, done: make(chan struct{})}
-	fresh := &instance{id: "fresh", sandboxID: key.sandboxID, compartmentID: key.compartmentID, warmToolVM: true, done: make(chan struct{})}
-	m.mu.Lock()
-	m.addInstanceLocked(old)
-	m.addInstanceLocked(fresh)
-	m.instancesByKey[key] = fresh.id
-	m.removeInstanceLocked(old)
-	got := m.instancesByKey[key]
-	m.mu.Unlock()
-	if got != fresh.id {
-		t.Fatalf("instancesByKey[%+v] = %q, want %q", key, got, fresh.id)
-	}
-}
-
-func TestSweepIdleToolVMsReapsIdleWarmInstance(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_a"}
-	inst := &instance{
-		id:            "fc-agent-cmp-a-idle",
-		sandboxID:     key.sandboxID,
-		compartmentID: key.compartmentID,
-		warmToolVM:    true,
-		lastUsedAt:    time.Now().Add(-2 * time.Minute),
-		done:          make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(inst)
-	m.instancesByKey[key] = inst.id
-	m.mu.Unlock()
-
-	if got := m.sweepIdleToolVMs(time.Now()); got != 1 {
-		t.Fatalf("sweep count = %d, want 1", got)
-	}
-	select {
-	case <-inst.done:
-	case <-time.After(time.Second):
-		t.Fatal("idle warm instance was not reaped")
-	}
-	m.mu.Lock()
-	_, stillIndexed := m.instancesByKey[key]
-	_, stillPresent := m.instances[inst.id]
-	m.mu.Unlock()
-	if stillIndexed || stillPresent {
-		t.Fatalf("instance still tracked after reap: indexed=%v present=%v", stillIndexed, stillPresent)
-	}
-}
-
-func TestSweepIdleToolVMsFreezesBeforeRemove(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_order"}
-	inst := &instance{
-		id:            "fc-agent-cmp-order",
-		sandboxID:     key.sandboxID,
-		compartmentID: key.compartmentID,
-		warmToolVM:    true,
-		lastUsedAt:    time.Now().Add(-2 * time.Minute),
-		done:          make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(inst)
-	m.instancesByKey[key] = inst.id
-	m.mu.Unlock()
-
-	var mu sync.Mutex
-	var calls []string
-	m.freezeWorkspace = func(context.Context, string) (BackupResponse, error) {
-		mu.Lock()
-		calls = append(calls, "freeze")
-		mu.Unlock()
-		return BackupResponse{}, nil
-	}
-	m.removeInstance = func(context.Context, string) error {
-		mu.Lock()
-		calls = append(calls, "remove")
-		mu.Unlock()
-		m.finishInstance(inst)
-		return nil
-	}
-	if got := m.sweepIdleToolVMs(time.Now()); got != 1 {
-		t.Fatalf("sweep count = %d, want 1", got)
-	}
-	select {
-	case <-inst.done:
-	case <-time.After(time.Second):
-		t.Fatal("idle warm instance was not reaped")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if strings.Join(calls, ",") != "freeze,remove" {
-		t.Fatalf("teardown calls = %#v, want freeze then remove", calls)
-	}
-}
-
-func TestSweepIdleToolVMsSkipsBusyWarmInstance(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_busy"}
-	inst := &instance{
-		id:            "fc-agent-cmp-busy",
-		sandboxID:     key.sandboxID,
-		compartmentID: key.compartmentID,
-		warmToolVM:    true,
-		inflight:      1,
-		lastUsedAt:    time.Now().Add(-2 * time.Minute),
-		done:          make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(inst)
-	m.instancesByKey[key] = inst.id
-	m.mu.Unlock()
-	if got := m.sweepIdleToolVMs(time.Now()); got != 0 {
-		t.Fatalf("sweep count = %d, want 0", got)
-	}
-	select {
-	case <-inst.done:
-		t.Fatal("busy warm instance was reaped")
-	default:
-	}
-}
-
-func TestSweepIdleToolVMsSkipsDrainingAndRecentlyUsed(t *testing.T) {
-	now := time.Now()
-	for _, tc := range []struct {
-		name string
-		inst *instance
-	}{
-		{
-			name: "draining",
-			inst: &instance{id: "fc-agent-cmp-draining", sandboxID: "agent", compartmentID: "cmp_draining", warmToolVM: true, draining: true, lastUsedAt: now.Add(-2 * time.Minute), done: make(chan struct{})},
-		},
-		{
-			name: "recent",
-			inst: &instance{id: "fc-agent-cmp-recent", sandboxID: "agent", compartmentID: "cmp_recent", warmToolVM: true, lastUsedAt: now, done: make(chan struct{})},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newWarmToolTestManager(t)
-			key := runtimeInstanceKey{sandboxID: tc.inst.sandboxID, compartmentID: tc.inst.compartmentID}
-			m.mu.Lock()
-			m.addInstanceLocked(tc.inst)
-			m.instancesByKey[key] = tc.inst.id
-			m.mu.Unlock()
-			if got := m.sweepIdleToolVMs(now); got != 0 {
-				t.Fatalf("sweep count = %d, want 0", got)
-			}
-			select {
-			case <-tc.inst.done:
-				t.Fatal("instance was reaped")
-			default:
-			}
-		})
-	}
-}
-
-func TestSweepIdleToolVMsToleratesRemoveErrorWithoutDoubleTeardown(t *testing.T) {
-	escalated := make(chan syscall.Signal, 1)
-	m := newWarmToolTestManager(t)
-	m.signalInstance = func(_ string, signal syscall.Signal) error {
-		escalated <- signal
-		return nil
-	}
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_error"}
-	inst := &instance{
-		id:            "fc-agent-cmp-error",
-		sandboxID:     key.sandboxID,
-		compartmentID: key.compartmentID,
-		warmToolVM:    true,
-		lastUsedAt:    time.Now().Add(-2 * time.Minute),
-		done:          make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(inst)
-	m.instancesByKey[key] = inst.id
-	m.mu.Unlock()
-	var removes atomic.Int32
-	m.removeInstance = func(context.Context, string) error {
-		removes.Add(1)
-		return errors.New("still shutting down")
-	}
-	if got := m.sweepIdleToolVMs(time.Now()); got != 1 {
-		t.Fatalf("first sweep count = %d, want 1", got)
-	}
-	select {
-	case signal := <-escalated:
-		if signal != syscall.SIGKILL {
-			t.Fatalf("escalation signal = %v, want SIGKILL", signal)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for teardown escalation")
-	}
-	m.mu.Lock()
-	_, stillIndexed := m.instancesByKey[key]
-	_, stillPresent := m.instances[inst.id]
-	reaping := inst.reaping
-	m.mu.Unlock()
-	if !stillIndexed || !stillPresent || !reaping {
-		t.Fatalf("remove error tracking: indexed=%v present=%v reaping=%v", stillIndexed, stillPresent, reaping)
-	}
-	if got := m.sweepIdleToolVMs(time.Now()); got != 0 {
-		t.Fatalf("second sweep count = %d, want 0", got)
-	}
-	if removes.Load() != 1 {
-		t.Fatalf("remove calls = %d, want 1", removes.Load())
-	}
-}
-
-func TestShutdownReapsWarmToolVMs(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	inst := &instance{
-		id: "fc-agent-cmp-a-shutdown", sandboxID: "agent", sandboxGeneration: 1,
-		compartmentID: "cmp_a", requestID: "request-test", operationID: "operation-test",
-		leaseID: "lease-test", assignmentID: "assignment-test", warmToolVM: true,
-		done: make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(inst)
-	m.instancesByKey[runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_a"}] = inst.id
-	m.mu.Unlock()
-	if err := m.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown: %v", err)
-	}
-	select {
-	case <-inst.done:
-	default:
-		t.Fatal("shutdown did not reap warm instance")
-	}
-}
-
-func TestShutdownReapsNonWarmRuntimeVMs(t *testing.T) {
-	m := newWarmToolTestManager(t)
+func TestShutdownReapsRuntimeVMs(t *testing.T) {
+	m := newLifecycleTestManager(t)
 	inst := &instance{
 		id: "fc-agent-cmp-session-shutdown", sandboxID: "agent", sandboxGeneration: 1,
 		compartmentID: "cmp_session", requestID: "request-test", operationID: "operation-test",
@@ -1282,91 +428,12 @@ func TestShutdownReapsNonWarmRuntimeVMs(t *testing.T) {
 	select {
 	case <-inst.done:
 	default:
-		t.Fatal("shutdown did not reap non-warm runtime instance")
-	}
-}
-
-func TestShutdownWaitsForInflightWarmToolVMWork(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	inst := &instance{
-		id: "fc-agent-cmp-a-inflight-shutdown", sandboxID: "agent", sandboxGeneration: 1,
-		compartmentID: "cmp_a", requestID: "request-test", operationID: "operation-test",
-		leaseID: "lease-test", assignmentID: "assignment-test", warmToolVM: true,
-		inflight: 1, done: make(chan struct{}),
-	}
-	m.mu.Lock()
-	m.addInstanceLocked(inst)
-	m.instancesByKey[runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_a"}] = inst.id
-	m.mu.Unlock()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- m.Shutdown(context.Background())
-	}()
-	select {
-	case err := <-done:
-		t.Fatalf("shutdown returned before in-flight work drained: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	select {
-	case <-inst.done:
-		t.Fatal("shutdown reaped warm instance before in-flight work drained")
-	default:
-	}
-	m.mu.Lock()
-	inst.inflight = 0
-	m.mu.Unlock()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("shutdown: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("shutdown did not finish after in-flight work drained")
-	}
-	select {
-	case <-inst.done:
-	default:
-		t.Fatal("shutdown did not reap warm instance after drain")
-	}
-}
-
-func TestShutdownWaitsForProvisioningAndRejectsAcquire(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	key := runtimeInstanceKey{sandboxID: "agent", compartmentID: "cmp_a"}
-	ch := make(chan struct{})
-	m.mu.Lock()
-	m.provisioning[key] = ch
-	m.mu.Unlock()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- m.Shutdown(context.Background())
-	}()
-	select {
-	case err := <-done:
-		t.Fatalf("shutdown returned before provisioning cleared: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	m.mu.Lock()
-	delete(m.provisioning, key)
-	close(ch)
-	m.mu.Unlock()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("shutdown: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("shutdown did not finish after provisioning cleared")
-	}
-	if _, err := m.acquireWarmToolVM(context.Background(), key.sandboxID, key.compartmentID, runtimemanager.StartOpts{}); err == nil || !strings.Contains(err.Error(), "shutting down") {
-		t.Fatalf("acquire during shutdown err = %v", err)
+		t.Fatal("shutdown did not reap runtime instance")
 	}
 }
 
 func TestStartSweepsStartupOrphanRunDir(t *testing.T) {
-	m := newWarmToolTestManager(t)
+	m := newLifecycleTestManager(t)
 	runDir := filepath.Join(m.cfg.MicroVMRunDir, "fc-agent-cmp-a-orphan")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -1388,7 +455,7 @@ func TestStartSweepsStartupOrphanRunDir(t *testing.T) {
 }
 
 func TestStartFailsWhenStartupOrphansCannotBeInspected(t *testing.T) {
-	m := newWarmToolTestManager(t)
+	m := newLifecycleTestManager(t)
 	runDir := filepath.Join(m.cfg.MicroVMRunDir, "fc-agent-cmp-a-orphan-error")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -1403,7 +470,7 @@ func TestStartFailsWhenStartupOrphansCannotBeInspected(t *testing.T) {
 }
 
 func TestStartBoundsRunningStartupOrphanStop(t *testing.T) {
-	m := newWarmToolTestManager(t)
+	m := newLifecycleTestManager(t)
 	runDir := filepath.Join(m.cfg.MicroVMRunDir, "fc-agent-cmp-a-unkillable")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -1444,28 +511,58 @@ func TestStartBoundsRunningStartupOrphanStop(t *testing.T) {
 	}
 }
 
-func TestShutdownReturnsTeardownFailure(t *testing.T) {
-	m := newWarmToolTestManager(t)
-	m.signalInstance = func(string, syscall.Signal) error { return nil }
-	inst := &instance{
-		id:            "fc-sandbox-cmp-shutdown-error",
-		sandboxID:     "sandbox",
-		compartmentID: "cmp_error",
-		done:          make(chan struct{}),
-	}
-	m.mu.Lock()
+func TestShutdownFreezesBeforeRemove(t *testing.T) {
+	m := newLifecycleTestManager(t)
+	inst := &instance{id: "fc-agent-cmp-order", sandboxID: "agent", compartmentID: "cmp_order", done: make(chan struct{})}
 	m.addInstanceLocked(inst)
-	m.mu.Unlock()
+	var calls []string
+	m.freezeWorkspace = func(context.Context, string) (BackupResponse, error) {
+		calls = append(calls, "freeze")
+		return BackupResponse{}, nil
+	}
 	m.removeInstance = func(context.Context, string) error {
+		calls = append(calls, "remove")
+		m.finishInstance(inst)
+		return nil
+	}
+	if err := m.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(calls, ",") != "freeze,remove" {
+		t.Fatalf("teardown calls = %#v, want freeze then remove", calls)
+	}
+}
+
+func TestShutdownReturnsTeardownFailureWithoutDoubleTeardown(t *testing.T) {
+	m := newLifecycleTestManager(t)
+	inst := &instance{id: "fc-sandbox-cmp-shutdown-error", sandboxID: "sandbox", compartmentID: "cmp_error", done: make(chan struct{})}
+	m.addInstanceLocked(inst)
+	var signal syscall.Signal
+	m.signalInstance = func(_ string, got syscall.Signal) error { signal = got; return nil }
+	removes := 0
+	m.removeInstance = func(context.Context, string) error {
+		removes++
 		return errors.New("teardown evidence failure")
 	}
 	if err := m.Shutdown(context.Background()); err == nil || !strings.Contains(err.Error(), "teardown evidence failure") {
 		t.Fatalf("shutdown error = %v, want teardown failure", err)
 	}
+	if signal != syscall.SIGKILL {
+		t.Fatalf("escalation signal = %v, want SIGKILL", signal)
+	}
+	if m.lookup(inst.id) != inst || !inst.reaping {
+		t.Fatal("failed teardown must retain the reaping instance")
+	}
+	if err := m.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if removes != 1 {
+		t.Fatalf("remove calls = %d, want 1", removes)
+	}
 }
 
 func TestStopJailedInstanceWaitsForSupervisorReaper(t *testing.T) {
-	m := newWarmToolTestManager(t)
+	m := newLifecycleTestManager(t)
 	inst := &instance{
 		id: "fc-agent-cmp-a-stop", sandboxID: "agent", sandboxGeneration: 1,
 		compartmentID: "cmp_a", requestID: "request-test", operationID: "operation-test",
@@ -1634,124 +731,6 @@ func TestPrepareLaunchImageResolvesFallbackBeforeSettingDestination(t *testing.T
 	}
 	if !strings.Contains(err.Error(), sourceRootfs) {
 		t.Fatalf("prepare error = %q, want resolved source %q", err, sourceRootfs)
-	}
-}
-
-func TestStartupFingerprintIncludesRuntimeClassAndSelectedImage(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, text string) string {
-		t.Helper()
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	agentRootfs := write("agent-rootfs.ext4", "agent-rootfs")
-	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
-	m := &Manager{cfg: &config.Config{
-		MicroVMRootfsPath:     agentRootfs,
-		MicroVMToolRootfsPath: toolRootfs,
-	}}
-	toolOpts := runtimemanager.StartOpts{CompartmentID: "cmp_a", RuntimeClass: runtimemanager.RuntimeClassToolExecutor}
-	toolFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", toolOpts)
-	if err != nil {
-		t.Fatalf("tool fingerprint: %v", err)
-	}
-	nextTime := time.Now().Add(time.Second)
-	if err := os.WriteFile(toolRootfs, []byte("changed-tool-rootfs"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(toolRootfs, nextTime, nextTime); err != nil {
-		t.Fatal(err)
-	}
-	changedToolFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", toolOpts)
-	if err != nil {
-		t.Fatalf("changed tool fingerprint: %v", err)
-	}
-	if changedToolFingerprint == toolFingerprint {
-		t.Fatal("tool image identity change should change startup fingerprint")
-	}
-}
-
-func TestStartupFingerprintIncludesToolExecutorContractAndCapabilities(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, text string) string {
-		t.Helper()
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
-	m := &Manager{cfg: &config.Config{
-		MicroVMRootfsPath:     toolRootfs,
-		MicroVMToolRootfsPath: toolRootfs,
-	}}
-	toolOpts := runtimemanager.StartOpts{CompartmentID: "cmp_a", RuntimeClass: runtimemanager.RuntimeClassToolExecutor}
-	baseFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", toolOpts)
-	if err != nil {
-		t.Fatalf("base fingerprint: %v", err)
-	}
-
-	origContractVersion := toolExecutorFingerprintContractVersion
-	origCapabilities := append([]string(nil), toolExecutorFingerprintCapabilities...)
-	t.Cleanup(func() {
-		toolExecutorFingerprintContractVersion = origContractVersion
-		toolExecutorFingerprintCapabilities = origCapabilities
-	})
-
-	toolExecutorFingerprintContractVersion++
-	contractFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", toolOpts)
-	if err != nil {
-		t.Fatalf("contract fingerprint: %v", err)
-	}
-	if contractFingerprint == baseFingerprint {
-		t.Fatal("tool executor contract version change should change startup fingerprint")
-	}
-
-	toolExecutorFingerprintContractVersion = origContractVersion
-	toolExecutorFingerprintCapabilities = append(append([]string(nil), origCapabilities...), "new-tool-mount-capability")
-	capabilityFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", toolOpts)
-	if err != nil {
-		t.Fatalf("capability fingerprint: %v", err)
-	}
-	if capabilityFingerprint == baseFingerprint {
-		t.Fatal("tool executor capability change should change startup fingerprint")
-	}
-}
-
-func TestStartupFingerprintUsesEffectiveProfileHash(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, text string) string {
-		t.Helper()
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
-	shared := write("shared.img", "shared")
-	m := &Manager{cfg: &config.Config{
-		MicroVMRootfsPath:          toolRootfs,
-		MicroVMToolRootfsPath:      toolRootfs,
-		MicroVMSharedImagePath:     shared,
-		MicroVMToolSharedImagePath: shared,
-	}}
-	opts := runtimemanager.StartOpts{CompartmentID: "cmp_a", RuntimeClass: runtimemanager.RuntimeClassToolExecutor, ShapeFingerprint: "profile-a"}
-	firstFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", opts)
-	if err != nil {
-		t.Fatalf("first fingerprint: %v", err)
-	}
-	opts.ShapeFingerprint = "profile-b"
-	secondFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", opts)
-	if err != nil {
-		t.Fatalf("second fingerprint: %v", err)
-	}
-	if firstFingerprint == secondFingerprint {
-		t.Fatal("fingerprint did not change after effective profile hash changed")
 	}
 }
 
@@ -2366,40 +1345,37 @@ func TestReserveGuestIPExhaustionReturnsCleanError(t *testing.T) {
 	}
 }
 
-func TestRuntimeMetricsSnapshotReportsCountsCapacityAndP95(t *testing.T) {
-	m := &Manager{
-		cfg: &config.Config{
-			MicroVMBridgeCIDR:          "10.0.0.1/29",
-			MicroVMMaxConcurrentGlobal: 32,
-			MicroVMMemoryMiB:           512,
-			MicroVMMemoryBudgetMiB:     65536,
-		},
-		instances: map[string]*instance{
-			"fc-a-1": {id: "fc-a-1", sandboxID: "agent-a", compartmentID: "cmp_a"},
-			"fc-a-2": {id: "fc-a-2", sandboxID: "agent-a", compartmentID: "cmp_b"},
-			"fc-b-1": {id: "fc-b-1", sandboxID: "agent-b", compartmentID: "cmp_c"},
-		},
-		guestIPs: map[string]string{
-			"fc-a-1": "10.0.0.2",
-			"fc-a-2": "10.0.0.3",
-		},
+func TestStartupTiming(t *testing.T) {
+	var absent *Manager
+	if count, p95 := absent.StartupTiming(); count != 0 || p95 != 0 {
+		t.Fatalf("absent timing = %d, %s", count, p95)
 	}
-	m.recordStartDuration(10 * time.Millisecond)
-	m.recordStartDuration(40 * time.Millisecond)
-	m.recordStartDuration(20 * time.Millisecond)
+	m := &Manager{}
+	m.recordStartDuration(-time.Second)
+	if count, p95 := m.StartupTiming(); count != 0 || p95 != 0 {
+		t.Fatalf("empty timing = %d, %s", count, p95)
+	}
+	for _, duration := range []time.Duration{10, 40, 20} {
+		m.recordStartDuration(duration * time.Millisecond)
+	}
+	if count, p95 := m.StartupTiming(); count != 3 || p95 != 40*time.Millisecond {
+		t.Fatalf("timing = %d, %s, want 3, 40ms", count, p95)
+	}
+}
 
-	got := m.RuntimeMetricsSnapshot()
-	if got.ConcurrentVMsBySandbox["agent-a"] != 2 || got.ConcurrentVMsBySandbox["agent-b"] != 1 {
-		t.Fatalf("concurrent counts = %+v", got.ConcurrentVMsBySandbox)
+func TestStartupTimingRetainsRecentSamplesInRecordOrder(t *testing.T) {
+	m := &Manager{}
+	for i := 0; i < 44; i++ {
+		m.recordStartDuration(10 * time.Second)
 	}
-	if got.GuestIPsInUse != 2 || got.GuestIPCapacity != 5 {
-		t.Fatalf("guest IP metrics = used %d capacity %d", got.GuestIPsInUse, got.GuestIPCapacity)
+	for i := 256; i > 0; i-- {
+		m.recordStartDuration(time.Duration(i) * time.Millisecond)
 	}
-	if got.ConcurrentVMsTotal != 3 || got.MaxConcurrentGlobal != 32 || got.MemoryReservedMiB != 1536 || got.MemoryBudgetMiB != 65536 {
-		t.Fatalf("global metrics = total %d cap %d reserved %d budget %d", got.ConcurrentVMsTotal, got.MaxConcurrentGlobal, got.MemoryReservedMiB, got.MemoryBudgetMiB)
+	if count, p95 := m.StartupTiming(); count != 256 || p95 != 244*time.Millisecond {
+		t.Fatalf("bounded timing = %d, %s, want 256, 244ms", count, p95)
 	}
-	if got.ColdStartCount != 3 || got.ColdStartP95 != 40*time.Millisecond {
-		t.Fatalf("cold start metrics = count %d p95 %s", got.ColdStartCount, got.ColdStartP95)
+	if m.startDurations[0] != 256*time.Millisecond || m.startDurations[255] != time.Millisecond {
+		t.Fatal("timing query reordered recorded samples")
 	}
 }
 
@@ -2457,7 +1433,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &Manager{cfg: &tt.cfg, instances: tt.instances}
-			err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-1", compartmentID: "cmp-new"})
+			err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-1", compartmentID: "cmp-new"}, tt.cfg.MicroVMMemoryMiB)
 			if tt.wantErr == "" && err != nil {
 				t.Fatalf("admit: %v", err)
 			}
@@ -2486,13 +1462,13 @@ func TestAdmitCompartmentSpawnUsesRequestedProfileMemory(t *testing.T) {
 			},
 		},
 	}
-	if err := m.admitCompartmentSpawnWithMemoryLocked(
+	if err := m.admitCompartmentSpawnLocked(
 		runtimeInstanceKey{sandboxID: "agent-c", compartmentID: "cmp-c"},
 		2048,
 	); err != nil {
 		t.Fatalf("profile-sized admission failed: %v", err)
 	}
-	if err := m.admitCompartmentSpawnWithMemoryLocked(
+	if err := m.admitCompartmentSpawnLocked(
 		runtimeInstanceKey{sandboxID: "agent-c", compartmentID: "cmp-c"},
 		13000,
 	); err == nil || !strings.Contains(
@@ -2509,12 +1485,30 @@ func TestAdmitCompartmentSpawnLockedCountsPendingReservations(t *testing.T) {
 		instances:     map[string]*instance{},
 		pendingSpawns: map[runtimeInstanceKey]int{{sandboxID: "agent-1", compartmentID: "cmp-a"}: 2},
 	}
-	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"}); err == nil || !strings.Contains(err.Error(), "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL") {
+	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"}, m.cfg.MicroVMMemoryMiB); err == nil || !strings.Contains(err.Error(), "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL") {
 		t.Fatalf("admit with pending reservations = %v, want runner concurrency cap", err)
 	}
-	got := m.RuntimeMetricsSnapshot()
-	if got.PendingVMsTotal != 2 || got.PendingVMsBySandbox["agent-1"] != 2 || got.MemoryReservedMiB != 2048 {
-		t.Fatalf("pending metrics = %+v", got)
+	m.cfg.MicroVMMaxConcurrentGlobal = 0
+	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"}, 1024); err == nil || !strings.Contains(err.Error(), "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB") {
+		t.Fatalf("admit with pending memory = %v, want memory budget denial", err)
+	}
+}
+
+func TestReserveCompartmentSpawnTracksRequestedMemory(t *testing.T) {
+	m := &Manager{cfg: &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMemoryMiB: 8192}}
+	key := runtimeInstanceKey{sandboxID: "agent-1", compartmentID: "cmp-a"}
+	for _, memory := range []int{1024, 2048} {
+		if err := m.reserveCompartmentSpawnLocked(key, memory); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.releaseCompartmentSpawnLocked(key, 1024)
+	if m.pendingSpawns[key] != 1 || m.pendingMemoryMiB[key] != 2048 {
+		t.Fatalf("remaining reservation: count=%d memory=%d", m.pendingSpawns[key], m.pendingMemoryMiB[key])
+	}
+	m.releaseCompartmentSpawnLocked(key, 2048)
+	if len(m.pendingSpawns) != 0 || len(m.pendingMemoryMiB) != 0 {
+		t.Fatal("completed reservations retained capacity")
 	}
 }
 
@@ -2525,12 +1519,13 @@ func TestRegisterStartingInstanceTransfersPendingCapacityToLive(t *testing.T) {
 		instances:     map[string]*instance{},
 		pendingSpawns: map[runtimeInstanceKey]int{key: 1},
 	}
-	m.registerStartingInstance(&instance{id: "fc-1", sandboxID: key.sandboxID, compartmentID: key.compartmentID}, func() {
-		m.releaseCompartmentSpawnLocked(key)
+	m.pendingMemoryMiB = map[runtimeInstanceKey]int{key: 1024}
+	inst := &instance{id: "fc-1", sandboxID: key.sandboxID, compartmentID: key.compartmentID, memoryMiB: 1024}
+	m.registerStartingInstance(inst, func() {
+		m.releaseCompartmentSpawnLocked(key, inst.memoryMiB)
 	})
-	got := m.RuntimeMetricsSnapshot()
-	if got.ConcurrentVMsTotal != 1 || got.PendingVMsTotal != 0 || got.MemoryReservedMiB != 1024 {
-		t.Fatalf("capacity after registration = %+v", got)
+	if len(m.instances) != 1 || m.instances[inst.id] != inst || len(m.pendingSpawns) != 0 || len(m.pendingMemoryMiB) != 0 {
+		t.Fatalf("capacity after registration: live=%v pending=%v memory=%v", m.instances, m.pendingSpawns, m.pendingMemoryMiB)
 	}
 }
 
@@ -2546,7 +1541,7 @@ func TestRegisterStartingInstanceTransfersCapacityAtomically(t *testing.T) {
 	registered := make(chan struct{})
 	go func() {
 		m.registerStartingInstance(&instance{id: "fc-1", sandboxID: key.sandboxID, compartmentID: key.compartmentID}, func() {
-			m.releaseCompartmentSpawnLocked(key)
+			m.releaseCompartmentSpawnLocked(key, m.cfg.MicroVMMemoryMiB)
 			close(transferEntered)
 			<-allowTransfer
 		})
@@ -2558,7 +1553,7 @@ func TestRegisterStartingInstanceTransfersCapacityAtomically(t *testing.T) {
 	go func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		admitted <- m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"})
+		admitted <- m.admitCompartmentSpawnLocked(runtimeInstanceKey{sandboxID: "agent-2", compartmentID: "cmp-b"}, m.cfg.MicroVMMemoryMiB)
 	}()
 	select {
 	case err := <-admitted:
@@ -2623,9 +1618,14 @@ func TestCreateAndStartAtomicAdmissionBurst(t *testing.T) {
 	if got := launched.Load(); got != cap {
 		t.Fatalf("launches reached blocked start = %d, want exactly %d", got, cap)
 	}
-	metrics := m.RuntimeMetricsSnapshot()
-	if metrics.PendingVMsTotal != cap {
-		t.Fatalf("pending reservations = %d, want %d", metrics.PendingVMsTotal, cap)
+	m.mu.Lock()
+	pending := 0
+	for _, count := range m.pendingSpawns {
+		pending += count
+	}
+	m.mu.Unlock()
+	if pending != cap {
+		t.Fatalf("pending reservations = %d, want %d", pending, cap)
 	}
 	close(releaseLaunches)
 	for i := 0; i < cap; i++ {
@@ -2636,7 +1636,7 @@ func TestCreateAndStartAtomicAdmissionBurst(t *testing.T) {
 	if denied != attempts-cap {
 		t.Fatalf("denied starts = %d, want %d", denied, attempts-cap)
 	}
-	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+	if got := len(m.pendingSpawns) + len(m.pendingMemoryMiB); got != 0 {
 		t.Fatalf("pending reservations after completion = %d, want 0", got)
 	}
 }
@@ -2653,7 +1653,7 @@ func TestCreateAndStartReleasesAdmissionReservationOnFailureAndCancellation(t *t
 	if _, err := m.createAndStart(context.Background(), "agent-failure", runtimemanager.StartOpts{CompartmentID: "cmp-failure"}); err == nil {
 		t.Fatal("expected launch failure")
 	}
-	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+	if got := len(m.pendingSpawns) + len(m.pendingMemoryMiB); got != 0 {
 		t.Fatalf("pending after failure = %d", got)
 	}
 
@@ -2665,14 +1665,8 @@ func TestCreateAndStartReleasesAdmissionReservationOnFailureAndCancellation(t *t
 	if _, err := m.createAndStart(ctx, "agent-cancel", runtimemanager.StartOpts{CompartmentID: "cmp-cancel"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled launch = %v", err)
 	}
-	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+	if got := len(m.pendingSpawns) + len(m.pendingMemoryMiB); got != 0 {
 		t.Fatalf("pending after cancellation = %d", got)
-	}
-}
-
-func TestMicroVMGuestIPCapacitySingleFallback(t *testing.T) {
-	if got := microVMGuestIPCapacity(&config.Config{MicroVMGuestIP: "172.30.0.10"}); got != 1 {
-		t.Fatalf("capacity = %d, want 1", got)
 	}
 }
 
@@ -2787,8 +1781,8 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "prepare rootfs") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if network.tap.GuestIP != "10.0.0.2" || !ipWithinCIDR(network.tap.GuestIP, network.tap.BridgeCIDR) {
-		t.Fatalf("manager tap config = %+v, want reserved guest IP inside bridge CIDR", network.tap)
+	if network.tap.GuestIP != "10.0.0.2" || network.tap.BridgeCIDR != "10.0.0.1/24" {
+		t.Fatalf("manager tap config = %+v, want reserved guest IP and configured bridge CIDR", network.tap)
 	}
 
 	entries, readErr := os.ReadDir(runDir)

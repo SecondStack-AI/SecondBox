@@ -93,7 +93,7 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 		if !slices.Contains(receipt.PendingResourceIDs, artifactTarget.Name) {
 			return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, installerError("refusing to adopt pre-existing artifact directory "+artifactTarget.Path, nil))
 		}
-		if err := validateMaterializedPath(artifactTarget); err != nil {
+		if err := ValidatePlannedPath(artifactTarget); err != nil {
 			return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, err)
 		}
 		artifact, err = VerifyArtifactDirectory(artifactTarget.Path, verified.Manifest)
@@ -191,7 +191,7 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 		}
 		if resource, recorded := receiptResource(receipt, target.Name); recorded {
 			actual, digestErr := fileSHA256(target.Path)
-			validateErr := validateMaterializedPath(target)
+			validateErr := ValidatePlannedPath(target)
 			if digestErr != nil || validateErr != nil || actual != binary.SHA256 || resource.Digest != "sha256:"+binary.SHA256 {
 				return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, installerError("recorded binary postcondition differs for "+name, errors.Join(digestErr, validateErr)))
 			}
@@ -225,10 +225,6 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 		return receipt, VerifiedArtifact{}, err
 	}
 	return receipt, artifact, nil
-}
-
-func validateMaterializedPath(target PlannedPath) error {
-	return ValidatePlannedPath(target)
 }
 
 func receiptResource(receipt InstallReceipt, id string) (CreatedResource, bool) {
@@ -311,7 +307,7 @@ func inspectReleaseBinaryTarget(target PlannedPath, name, expectedSHA256 string,
 	} else if err != nil {
 		return 0, installerError("inspect verified binary "+target.Path, err)
 	}
-	if err := validateMaterializedPath(target); err != nil {
+	if err := ValidatePlannedPath(target); err != nil {
 		return 0, err
 	}
 	actual, err := fileSHA256(target.Path)

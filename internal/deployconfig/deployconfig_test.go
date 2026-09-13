@@ -18,11 +18,40 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
-type recordingComposeExecutor struct{ calls [][]string }
+type recordingComposeExecutor struct {
+	calls [][]string
+	err   error
+}
 
 func (executor *recordingComposeExecutor) Run(_ context.Context, arguments []string) error {
 	executor.calls = append(executor.calls, slices.Clone(arguments))
-	return nil
+	return executor.err
+}
+
+func TestComposeActionsRemoveOrphanedTopology(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	for _, test := range []struct {
+		action string
+		want   []string
+	}{
+		{"up", []string{"up", "--remove-orphans", "--detach"}},
+		{"down", []string{"down", "--remove-orphans"}},
+	} {
+		t.Run(test.action, func(t *testing.T) {
+			commandErr := errors.New("Compose command failed")
+			executor := &recordingComposeExecutor{err: commandErr}
+			if err := RunCompose(context.Background(), manifestPath, test.action, executor, nil); !errors.Is(err, commandErr) {
+				t.Fatalf("Compose command error = %v, want %v", err, commandErr)
+			}
+			if len(executor.calls) != 1 {
+				t.Fatalf("Compose calls = %#v", executor.calls)
+			}
+			arguments := executor.calls[0]
+			if len(arguments) < len(test.want) || !slices.Equal(arguments[len(arguments)-len(test.want):], test.want) {
+				t.Fatalf("Compose %s arguments = %#v", test.action, arguments)
+			}
+		})
+	}
 }
 
 func initializedDevelopment(t *testing.T) string {
@@ -200,7 +229,7 @@ func TestSelectedStandardBundlesShareOnePool(t *testing.T) {
 			}
 		}
 		t.Run(strings.Join(manifest.StandardResources.Bundles, "+"), func(t *testing.T) {
-			resolved, err := resolveManifest(manifest, filepath.Dir(manifestPath))
+			resolved, err := resolveManifestWithOptions(manifest, filepath.Dir(manifestPath), true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -291,7 +320,7 @@ func TestExplicitComposeBackendCIDRSelectsIPAMOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest.Deployment.ComposeBackendCIDR = "10.42.0.0/24"
-	resolved, err := resolveManifest(manifest, filepath.Dir(manifestPath))
+	resolved, err := resolveManifestWithOptions(manifest, filepath.Dir(manifestPath), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +332,7 @@ func TestExplicitComposeBackendCIDRSelectsIPAMOverlay(t *testing.T) {
 func TestPermanentComposePurgeRemovesExactProjectVolumes(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	executor := &recordingComposeExecutor{}
-	if err := PurgeComposeVolumes(context.Background(), manifestPath, executor); err != nil {
+	if err := PurgeComposeVolumesForAcceptedInstaller(context.Background(), manifestPath, executor); err != nil {
 		t.Fatal(err)
 	}
 	if len(executor.calls) != 1 {
@@ -338,7 +367,7 @@ func TestComposeDiagnosticsUseInstalledMaterializedAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(t.TempDir())
-	arguments, err := ComposeDiagnosticArguments(manifestPath, "ps")
+	arguments, err := ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath, "ps")
 	if err != nil {
 		t.Fatal(err)
 	}

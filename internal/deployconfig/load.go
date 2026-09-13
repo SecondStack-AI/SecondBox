@@ -143,10 +143,6 @@ func resolvePath(path string, validateSameHost bool) (ResolvedDeployment, error)
 	return resolveManifestWithOptions(manifest, base, validateSameHost)
 }
 
-func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, error) {
-	return resolveManifestWithOptions(manifest, base, true)
-}
-
 func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHost bool) (ResolvedDeployment, error) {
 	if err := validateManifestShape(manifest); err != nil {
 		return ResolvedDeployment{}, err

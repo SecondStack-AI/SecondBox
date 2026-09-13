@@ -233,16 +233,6 @@ func NewCredentialMaterial() string {
 	return base64.RawURLEncoding.EncodeToString(random)
 }
 
-// CreateProfile creates one explicit Profile and immutable revision.
-func (service *ControlPlaneService) CreateProfile(
-	ctx context.Context,
-	principal contracts.Principal,
-	request contracts.CreateProfileRequest,
-) (contracts.Profile, error) {
-	profile, _, err := service.createProfile(ctx, principal, "", request)
-	return profile, err
-}
-
 // CreateProfileIdempotent creates or replays one exact Profile response.
 func (service *ControlPlaneService) CreateProfileIdempotent(
 	ctx context.Context,
@@ -253,15 +243,6 @@ func (service *ControlPlaneService) CreateProfileIdempotent(
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.Profile{}, false, err
 	}
-	return service.createProfile(ctx, principal, idempotencyKey, request)
-}
-
-func (service *ControlPlaneService) createProfile(
-	ctx context.Context,
-	principal contracts.Principal,
-	idempotencyKey string,
-	request contracts.CreateProfileRequest,
-) (contracts.Profile, bool, error) {
 	if !profileNamePattern.MatchString(request.Name) {
 		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox Profile name must match ^[a-z][a-z0-9-]{0,79}$"))
 	}
@@ -269,7 +250,7 @@ func (service *ControlPlaneService) createProfile(
 		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
-	idempotency, err := service.optionalAdminIdempotency(
+	idempotency, err := service.adminIdempotency(
 		principal, "profile.create", principal.ID, idempotencyKey, request, now,
 	)
 	if err != nil {
@@ -294,18 +275,8 @@ func (service *ControlPlaneService) createProfile(
 	return profile, result.Replayed, nil
 }
 
-// ReviseProfile appends immutable policy without mutating pinned Sandboxes.
-func (service *ControlPlaneService) ReviseProfile(
-	ctx context.Context,
-	principal contracts.Principal,
-	name string,
-	request contracts.ReviseProfileRequest,
-) (contracts.Profile, error) {
-	profile, _, err := service.reviseProfileAtRevision(ctx, principal, name, "", request, 0)
-	return profile, err
-}
-
 // ReviseProfileAtRevisionIdempotent appends or replays one exact immutable Profile revision.
+// Existing Sandboxes retain their pinned revisions.
 func (service *ControlPlaneService) ReviseProfileAtRevisionIdempotent(
 	ctx context.Context,
 	principal contracts.Principal,
@@ -317,24 +288,11 @@ func (service *ControlPlaneService) ReviseProfileAtRevisionIdempotent(
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.Profile{}, false, err
 	}
-	return service.reviseProfileAtRevision(
-		ctx, principal, name, idempotencyKey, request, expectedRevision,
-	)
-}
-
-func (service *ControlPlaneService) reviseProfileAtRevision(
-	ctx context.Context,
-	principal contracts.Principal,
-	name string,
-	idempotencyKey string,
-	request contracts.ReviseProfileRequest,
-	expectedRevision int64,
-) (contracts.Profile, bool, error) {
 	if err := validateProfileRevisionSpec(request.Spec); err != nil {
 		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
-	idempotency, err := service.optionalAdminIdempotency(
+	idempotency, err := service.adminIdempotency(
 		principal, "profile.revise", name, idempotencyKey,
 		struct {
 			Request          contracts.ReviseProfileRequest `json:"request"`
@@ -359,17 +317,8 @@ func (service *ControlPlaneService) reviseProfileAtRevision(
 	return profile, result.Replayed, nil
 }
 
-// DisableProfile blocks future creation without rewriting pinned Sandboxes.
-func (service *ControlPlaneService) DisableProfile(
-	ctx context.Context,
-	principal contracts.Principal,
-	name string,
-) (contracts.Profile, error) {
-	profile, _, err := service.disableProfileAtRevision(ctx, principal, name, "", 0)
-	return profile, err
-}
-
 // DisableProfileAtRevisionIdempotent disables or replays one exact fenced Profile response.
+// Disabling blocks future creation without rewriting pinned Sandboxes.
 func (service *ControlPlaneService) DisableProfileAtRevisionIdempotent(
 	ctx context.Context,
 	principal contracts.Principal,
@@ -380,20 +329,8 @@ func (service *ControlPlaneService) DisableProfileAtRevisionIdempotent(
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.Profile{}, false, err
 	}
-	return service.disableProfileAtRevision(
-		ctx, principal, name, idempotencyKey, expectedRevision,
-	)
-}
-
-func (service *ControlPlaneService) disableProfileAtRevision(
-	ctx context.Context,
-	principal contracts.Principal,
-	name string,
-	idempotencyKey string,
-	expectedRevision int64,
-) (contracts.Profile, bool, error) {
 	now := service.now().UTC()
-	idempotency, err := service.optionalAdminIdempotency(
+	idempotency, err := service.adminIdempotency(
 		principal, "profile.disable", name, idempotencyKey,
 		struct {
 			ExpectedRevision int64 `json:"expectedRevision"`
@@ -506,7 +443,7 @@ func (service *ControlPlaneService) createSandboxOperation(
 	audit := service.newAudit(ctx, principal, "sandbox.created", "sandbox", sandboxID, principal.TenantRef, now)
 	storedSandbox, storedOperation, created, err := service.store.CreateSandbox(ctx, ports.CreateSandboxInput{
 		Principal: principal,
-		Sandbox:   sandbox, Workspace: sandbox.Workspace, Operation: operation,
+		Sandbox:   sandbox, Operation: operation,
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
 		IdempotencyEnds:   service.idempotencyExpiration(now),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
@@ -1188,20 +1125,6 @@ func (service *ControlPlaneService) adminIdempotency(
 		Key: idempotencyKey, RequestHash: requestHash,
 		Now: now.UTC(), Ends: service.idempotencyExpiration(now),
 	}, nil
-}
-
-func (service *ControlPlaneService) optionalAdminIdempotency(
-	principal contracts.Principal,
-	operation string,
-	targetID string,
-	idempotencyKey string,
-	request any,
-	now time.Time,
-) (ports.AdminIdempotencyInput, error) {
-	if idempotencyKey == "" {
-		return ports.AdminIdempotencyInput{}, nil
-	}
-	return service.adminIdempotency(principal, operation, targetID, idempotencyKey, request, now)
 }
 
 func (service *ControlPlaneService) newAudit(

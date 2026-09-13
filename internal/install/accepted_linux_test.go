@@ -35,19 +35,19 @@ func acceptedFixture(t *testing.T) (string, InstallPlan, string) {
 	return directory, plan, digest
 }
 
-func TestReadAcceptedUsesNoFollowOwnershipModeAndDigestFence(t *testing.T) {
+func TestReadHostApplyUsesNoFollowOwnershipModeAndDigestFence(t *testing.T) {
 	directory, plan, digest := acceptedFixture(t)
-	got, receipt, err := ReadAccepted(directory, digest, os.Getuid())
+	got, receipt, err := ReadHostApply(directory, digest, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.OperationID != plan.OperationID || receipt.CompletedStages[1].Stage != StagePlanAccepted {
 		t.Fatalf("accepted operation changed: %#v %#v", got, receipt)
 	}
-	if _, _, err := ReadAccepted(directory, "sha256:"+strings.Repeat("0", 64), os.Getuid()); err == nil {
+	if _, _, err := ReadHostApply(directory, "sha256:"+strings.Repeat("0", 64), os.Getuid()); err == nil {
 		t.Fatal("wrong digest succeeded")
 	}
-	if _, _, err := ReadAccepted(directory, digest, os.Getuid()+1); err == nil {
+	if _, _, err := ReadHostApply(directory, digest, os.Getuid()+1); err == nil {
 		t.Fatal("wrong owner succeeded")
 	}
 }
@@ -67,26 +67,26 @@ func TestInspectOperationReleaseVersionRoutesLegacyPlanWithoutDecodingIt(t *test
 	}
 }
 
-func TestReadAcceptedRejectsSymlinkedPathComponentsAndHardlinks(t *testing.T) {
+func TestReadHostApplyRejectsSymlinkedPathComponentsAndHardlinks(t *testing.T) {
 	directory, _, digest := acceptedFixture(t)
 	linkParent := t.TempDir()
 	link := filepath.Join(linkParent, "operation")
 	if err := os.Symlink(directory, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ReadAccepted(link, digest, os.Getuid()); err == nil {
+	if _, _, err := ReadHostApply(link, digest, os.Getuid()); err == nil {
 		t.Fatal("symlinked operation directory succeeded")
 	}
 	planPath := filepath.Join(directory, "install-plan.json")
 	if err := os.Link(planPath, filepath.Join(directory, "plan-hardlink")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ReadAccepted(directory, digest, os.Getuid()); err == nil {
+	if _, _, err := ReadHostApply(directory, digest, os.Getuid()); err == nil {
 		t.Fatal("multiply-linked plan succeeded")
 	}
 }
 
-func TestReadAcceptedRejectsChangedReceiptBoundary(t *testing.T) {
+func TestReadHostApplyAllowsCompletedReplay(t *testing.T) {
 	directory, plan, digest := acceptedFixture(t)
 	receiptBytes, err := os.ReadFile(filepath.Join(directory, "install-receipt.json"))
 	if err != nil {
@@ -105,9 +105,6 @@ func TestReadAcceptedRejectsChangedReceiptBoundary(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(directory, "install-receipt.json"), append(encoded, '\n'), 0o600); err != nil {
 		t.Fatal(err)
-	}
-	if _, _, err := ReadAccepted(directory, digest, os.Getuid()); err == nil {
-		t.Fatal("post-acceptance receipt succeeded at private apply boundary")
 	}
 	if _, completed, err := ReadHostApply(directory, digest, os.Getuid()); err != nil || completed.CompletedStages[len(completed.CompletedStages)-1].Stage != StageHostApply {
 		t.Fatalf("completed host apply was unavailable for privileged replay: %#v, %v", completed.CompletedStages, err)
@@ -157,7 +154,7 @@ func TestSaveOperationCommitsActivatedReleaseAndReadRecoversIt(t *testing.T) {
 	if err := SaveOperation(directory, plan, receipt, os.Getuid()); err != nil {
 		t.Fatal(err)
 	}
-	readPlan, readReceipt, err := ReadOperation(directory, os.Getuid())
+	readPlan, readReceipt, err := ReadOperationReadOnly(directory, os.Getuid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +207,7 @@ func TestRecoverOperationDiscardsSafeMarkerlessStagedDocuments(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, operationPlanStageName), append(planBytes, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ReadOperation(directory, os.Getuid()); err == nil || !strings.Contains(err.Error(), "update --resume") {
+	if _, _, err := ReadOperationReadOnly(directory, os.Getuid()); err == nil || !strings.Contains(err.Error(), "update --resume") {
 		t.Fatalf("markerless stage did not fence read-only operation: %v", err)
 	}
 	lock, err := AcquireLock(directory)

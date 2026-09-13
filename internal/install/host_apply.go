@@ -81,14 +81,6 @@ func verifyAcceptedHostResources(ctx context.Context, directory, expectedDigest 
 	return verifyHostResources(ctx, plan, receipt, verifier, boundary)
 }
 
-func VerifyHostTeardown(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verifier HostResourceVerifier) error {
-	return verifyHostResources(ctx, plan, receipt, verifier, "teardown")
-}
-
-func VerifyHostUpdate(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verifier HostResourceVerifier) error {
-	return verifyHostResources(ctx, plan, receipt, verifier, "update")
-}
-
 func verifyHostResources(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verifier HostResourceVerifier, boundary string) error {
 	if verifier == nil {
 		return installerError("host "+boundary+" verifier is absent", nil)
