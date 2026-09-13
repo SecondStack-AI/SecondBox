@@ -4,8 +4,10 @@
 
 ### Changed
 
+- Added a lean release tier with sharded Firecracker and local gVisor qualification, amd64 images, and one installer guest. `just nightly` retains the full scenario matrix; `just release VERSION --full` also builds arm64 images and runs all installer modes. Manifests record built platforms and evidence remains commit-exact.
+
 - Required removal of duplicate ready Snapshot names per Sandbox before upgrading across migration `0024_snapshot_name_index.sql`. On the source release, list Snapshots with `snapshots list --path sandboxId=...` and delete unwanted duplicates by Snapshot identifier; duplicates block control-plane startup. See the deployment and guided-update procedures.
-- The gVisor backend is a supported backend for Linux amd64 hosts without KVM, Kubernetes nodes included. Every release now publishes `ghcr.io/secondstack-ai/secondbox/runner-gvisor` and `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts` (the prepared flat root, `runsc`, the guest agent, and the backend materialization, built from the repository and digest-pinned bases) plus the `secondbox-VERSION-gvisor-materialization.json` release file; the artifact manifest schema is `secondbox.release/artifact-manifest/v6` with a `gvisor` section recording both image digests, the materialization digest, the flat-root digest, and the `runsc` release, and the gVisor host and pod scenario evidence every release now carries.
+- The gVisor backend is a supported backend for Linux amd64 hosts without KVM, Kubernetes nodes included. Every release now publishes `ghcr.io/secondstack-ai/secondbox/runner-gvisor` and `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts` (the prepared flat root, `runsc`, the guest agent, and the backend materialization, built from the repository and digest-pinned bases) plus the `secondbox-VERSION-gvisor-materialization.json` release file; the artifact manifest schema is `secondbox.release/artifact-manifest/v6` with a `gvisor` section recording both image digests, the materialization digest, the flat-root digest, and the `runsc` release, and gVisor host scenario evidence (full releases also carry pod evidence).
 
 ### Added
 

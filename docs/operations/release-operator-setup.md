@@ -62,9 +62,11 @@ The checked-in examples describe the reviewed release host using public paths.
 
 ```sh
 just qualify                  # PR gates and four independent Firecracker shards
-just qualify --tier release   # gates, full Firecracker, and no-KVM gVisor host + pod
+just qualify --tier release   # gates, sharded Firecracker and local gVisor host
+just nightly                  # full scenarios and no-KVM gVisor pod suite
 # After merging, from clean main:
-just release 0.11.0
+just release 0.11.0            # lean amd64 release
+just release 0.11.0 --full     # alternative: nightly matrix and arm64 images
 ```
 
 Release preflight checks source, tag identity, inputs, the pinned Go/protoc and
@@ -77,8 +79,16 @@ or remove only your own failed run's directories before retrying.
 
 Qualification and the unbound artifact build run concurrently. Once both pass,
 staging binds commit-exact Firecracker and gVisor evidence into the candidate.
-The installer tests all three existing modes, including their reboot and cleanup
-assertions, using separate libvirt guests, MACs, and loopback SSH forwards.
+The default lean release builds amd64 images and tests one `btrfs_image` guest:
+the wizard, reboot recovery, and hello-world microVM. The driver removes the
+disposable guest afterwards. `--full` uses nightly qualification, adds the arm64 control-plane
+image, and runs all three installer modes, including existing-filesystem
+uninstall/resume and the v0.7.2 refusal/recreation boundary. Each selected mode
+must satisfy its own required assertions in `tests/installer/vm-scenario.json`.
+Guests have separate MACs and loopback SSH forwards. The manifest records the
+built image platforms; CLI and deploy binaries retain all four host platforms.
+Local gVisor host inputs use `QUALIFY_GVISOR_HOST_BUILD_ROOT`; KVM presence is
+allowed for host evidence. Pod evidence is required only by full releases.
 `QUALIFY_GUEST_MEMORY_MIB` defaults to 16384; concurrency is at most three and is
 capped by available memory after an 8 GiB host reserve. The final stage reuses
 the checksummed build and requires installer evidence for exactly those release
@@ -96,10 +106,11 @@ systemd-run --user --unit="secondbox-suite-release-$(date +%s)" --collect \
   --property="StandardOutput=file:$PWD/.tmp/release-console.log" \
   --property=StandardError=inherit --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
   --setenv="SECONDBOX_TEST_DATABASE_URL=$SECONDBOX_TEST_DATABASE_URL" \
-  /usr/bin/just release 0.11.0
+  /usr/bin/just release 0.11.0            # lean amd64 release
+just release 0.11.0 --full     # alternative: nightly matrix and arm64 images
 ```
 
-Reserve the KVM host and the dedicated no-KVM VM before starting. Do not stop
+Reserve the KVM host before starting, and the dedicated no-KVM VM for `--full`. Do not stop
 another operator's units, domains, Compose stacks, or live deployment to make
 room. The automation leaves the no-KVM VM running. Candidate and final outputs
 are `RELEASE_OUTPUT_ROOT/VERSION-candidate` and `RELEASE_OUTPUT_ROOT/VERSION`;

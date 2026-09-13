@@ -52,6 +52,10 @@ elif [[ "$scenario_backend" == "gvisor" ]]; then
     qualification_evidence="$repo_root/.tmp/gvisor-pod-$scenario_host_platform-scenario-qualification-evidence.json"
   fi
 fi
+if [[ "${1:-}" == --merge-shards ]]; then
+  [[ $# == 3 ]] || { echo 'usage: test-scenario.sh --merge-shards COUNT DIRECTORY' >&2; exit 2; }
+  exec bash "$repo_root/scripts/scenario-merge-evidence.sh" "$2" "$3" "$qualification_evidence"
+fi
 snapshot_resume_evidence="$repo_root/.tmp/2026-08-07-snapshot-resume-end-to-end.json"
 microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-13-microsandbox-$scenario_host_platform-cold-starts.json"
 if [[ "$scenario_backend" == "gvisor" ]]; then
@@ -114,7 +118,13 @@ if [[ -n "${SECONDBOX_SCENARIO_SHARD:-}" ]]; then
     fail "could not list scenario tests"
   scenario_shard_pattern="$(bash "$repo_root/scripts/scenario-shard.sh" "$SECONDBOX_SCENARIO_SHARD" <<<"$scenario_test_list")" ||
     fail "invalid scenario shard"
+  shard_directory="${SECONDBOX_SCENARIO_SHARD_DIRECTORY:-$repo_root/.tmp}"
+  [[ "$shard_directory" == /* && -d "$shard_directory" ]] || fail "shard directory must exist and be absolute"
+  qualification_evidence="$shard_directory/scenario-shard-${SECONDBOX_SCENARIO_SHARD%/*}-evidence.json"
+  rm -f -- "$qualification_evidence" "$qualification_evidence.results.json"
 fi
+export SECONDBOX_SCENARIO_TIER="${SECONDBOX_SCENARIO_TIER:-release}"
+[[ "$SECONDBOX_SCENARIO_TIER" == release || "$SECONDBOX_SCENARIO_TIER" == nightly ]] || fail "scenario tier must be release or nightly"
 
 if [[ "${SECONDBOX_REQUIRE_QUALIFIED_SCENARIO:-}" != "1" ]]; then
   cat >&2 <<'PREREQUISITES'
@@ -246,8 +256,8 @@ if [[ "$native_macos" == "true" ]]; then
     fail "Hypervisor.framework support is required"
 else
   if [[ "$scenario_backend" == "gvisor" ]]; then
-    [[ ! -e /dev/kvm ]] ||
-      fail "the gVisor scenario qualifies hosts without /dev/kvm"
+    [[ "$runner_placement" != pod || ! -e /dev/kvm ]] ||
+      fail "the gVisor pod scenario requires a host without /dev/kvm"
   else
     required_devices=(/dev/kvm)
     if [[ "$scenario_backend" == "firecracker" ]]; then
@@ -301,6 +311,10 @@ for directory in "$artifacts_dir" "$workspace_root"; do
 done
 [[ "$public_key" = /* && "$(realpath "$public_key")" == "$public_key" && ! -L "$public_key" && -f "$public_key" ]] ||
   fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY must be an existing clean absolute non-symlink file"
+if [[ "$scenario_backend" == gvisor && "$runner_placement" == compose ]]; then
+  source "$repo_root/scripts/scenario-network.sh"
+  scenario_reserve_gvisor_profiles "$workspace_root/.scenario-gvisor-profile-locks" || fail "gVisor profiles are occupied"
+fi
 diagnostics_dir="${SECONDBOX_SCENARIO_DIAGNOSTICS_DIR:-}"
 if [[ -n "$diagnostics_dir" ]]; then
   diagnostics_parent="$(dirname "$diagnostics_dir")"
@@ -448,7 +462,7 @@ if [[ "$scenario_backend" != "firecracker" && "$native_macos" != "true" ]]; then
     runner_dockerfile="$repo_root/runner/Dockerfile.gvisor-scenario"
   fi
 fi
-if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; then
+if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" && "$SECONDBOX_SCENARIO_TIER" == nightly ]]; then
   # The snapshot-resume template publisher is compiled on the host, where the
   # module cache lives, and executed inside the privileged runner image. CGO is
   # disabled so the binary runs on the Debian-based image regardless of the
@@ -731,6 +745,12 @@ remove_propagated_mounts() {
   done
 }
 
+gvisor_host_firewall() {
+  [[ "$scenario_backend" == gvisor && "$runner_placement" == compose ]] || return 0
+  "$repo_root/scripts/scenario-gvisor-host-firewall.sh" "$1" "$runner_image" "$project_name" \
+    "$SECONDBOX_SCENARIO_GVISOR_NETWORK_PROFILE" "$SECONDBOX_SCENARIO_GVISOR_RELOCATION_NETWORK_PROFILE"
+}
+
 collect_diagnostics() {
   [[ -n "$diagnostics_dir" ]] || return 0
   mkdir -m 0700 -- "$diagnostics_dir" ||
@@ -797,6 +817,10 @@ cleanup() {
   fi
   if ! "${runner_stop_command[@]}" >/dev/null 2>&1; then
     echo "SecondBox scenario runner stop failed for $project_name" >&2
+    status=1
+  fi
+  if ! gvisor_host_firewall remove; then
+    echo "SecondBox scenario gVisor host firewall cleanup failed" >&2
     status=1
   fi
   if ! remove_host_network; then
@@ -870,8 +894,11 @@ cleanup() {
     status=1
   fi
   if [[ "$status" -eq 0 && "$qualification_complete" == "true" &&
-        "$scenario_mode" == "suite" && -z "${SECONDBOX_SCENARIO_SHARD:-}" &&
+        "$scenario_mode" == "suite" &&
         -z "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
+    if [[ "$(git -C "$repo_root" rev-parse HEAD)" != "$scenario_source_commit" || -n "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]]; then
+      scenario_repository_dirty=true
+    fi
     qualification_evidence_temporary="$qualification_evidence.tmp.$$"
     qualified_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     wall_clock_seconds="$(( $(date +%s) - scenario_started_epoch ))"
@@ -892,6 +919,7 @@ cleanup() {
       --arg suite "$evidence_suite" \
       --arg backend "$scenario_backend" \
       --arg hostPlatform "$scenario_host_platform" \
+      --argjson kvmPresent "$([[ -e /dev/kvm ]] && echo true || echo false)" \
       --argjson passCount "$scenario_pass_count" \
       --argjson wallClockSeconds "$wall_clock_seconds" \
       --arg workspaceMount "$workspace_mount" \
@@ -912,7 +940,7 @@ cleanup() {
           tun: {required: false}
         } else {
           platform: "linux-amd64",
-          kvm: (if $backend == "gvisor" then {required: false, present: false}
+          kvm: (if $backend == "gvisor" then {required: false, present: $kvmPresent}
             else {path: "/dev/kvm", present: true, readable: true, writable: true} end),
           tun: (if $backend == "firecracker" then
             {path: "/dev/net/tun", present: true, readable: true, writable: true}
@@ -944,6 +972,7 @@ echo "SecondBox scenario Compose network: $SECONDBOX_SCENARIO_COMPOSE_CIDR"
 sweep_host_orphans
 
 compose config --quiet
+gvisor_host_firewall apply
 compose run --rm --no-deps egress-context-config-init
 compose up --detach --wait --wait-timeout 240 postgres control-plane
 
@@ -1029,7 +1058,7 @@ elif [[ "$scenario_mode" == "lifecycle" ]]; then
     --config "$SECONDBOX_STRESS_CONFIG"
 fi
 
-if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; then
+if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" && "$SECONDBOX_SCENARIO_TIER" == nightly ]]; then
   # Publish a snapshot-resume template into the Runner's cache before the Runner
   # starts. Until a Runner builds its own, this is what makes it advertise the
   # snapshot-resume capability at all; without it every snapshot_resume Profile
@@ -1076,6 +1105,12 @@ if [[ "$scenario_mode" == "suite" ]]; then
   scenario_pass_count="$(awk '/^--- PASS: / { count++ } END { print count + 0 }' "$scenario_test_output")"
   [[ "$scenario_pass_count" -gt 0 ]] ||
     fail "scenario suite reported no passing top-level tests"
+  if [[ -n "${SECONDBOX_SCENARIO_SHARD:-}" ]]; then
+    jq -Rn --arg shard "$SECONDBOX_SCENARIO_SHARD" --arg tier "$SECONDBOX_SCENARIO_TIER" --arg pattern "$scenario_shard_pattern" '
+      [inputs | capture("^--- (?<result>PASS|SKIP): (?<test>[^ ]+) ")?] |
+      {shard:$shard,tier:$tier,pattern:$pattern,tests:.}
+    ' <"$scenario_test_output" >"$qualification_evidence.results.json"
+  fi
   qualification_complete=true
 elif [[ "$scenario_mode" == "lifecycle" ]]; then
   go run ./tests/scenario/lifecycle \

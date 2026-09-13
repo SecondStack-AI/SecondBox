@@ -86,8 +86,8 @@ test-installer:
 test-installer-vm:
     scripts/test-installer-vm.sh
 
-test-installer-qualified:
-    scripts/test-installer-qualified.sh
+test-installer-qualified *flags:
+    scripts/test-installer-qualified.sh {{flags}}
 
 test-standard-resources:
     scripts/test-standard-resources.sh
@@ -197,5 +197,9 @@ preship: test-non-kvm
 qualify *args:
     scripts/qualify.sh {{args}}
 
-release version:
-    scripts/release.sh "{{version}}"
+release version *flags:
+    scripts/release.sh "{{version}}" {{flags}}
+
+# Detached qualification workers survive timer/session exits; failures propagate.
+nightly:
+    scripts/qualify.sh --tier nightly

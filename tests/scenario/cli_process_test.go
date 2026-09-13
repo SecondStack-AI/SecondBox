@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,23 @@ var scenarioCLIBuild struct {
 }
 
 func TestMain(m *testing.M) {
+	flag.Parse()
+	tier := os.Getenv("SECONDBOX_SCENARIO_TIER")
+	switch tier {
+	case "", "release":
+		skip := "^(TestScenarioCustomerSharedTenancyEndToEnd|TestScenarioSnapshotResumeStartsStopsAndMeasures)$"
+		if existing := flag.Lookup("test.skip").Value.String(); existing != "" {
+			skip += "|" + existing
+		}
+		if err := flag.Set("test.skip", skip); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case "nightly":
+	default:
+		fmt.Fprintln(os.Stderr, "SecondBox scenario tier must be release or nightly")
+		os.Exit(1)
+	}
 	code := m.Run()
 	if scenarioCLIBuild.directory != "" {
 		if err := os.RemoveAll(scenarioCLIBuild.directory); err != nil {
