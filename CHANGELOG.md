@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Rotated the Firecracker microVM bundle to `secondbox-0.12.0` with a new RSA-4096 trust anchor, shipping the guest port-credit and streaming-exec fixes from #127, #128, and #134. Existing deployments require reinstallation and resource recreation because the guided updater refuses bundle digest changes. See [v0.12.0 release notes](docs/releases/v0.12.0.md) for the fingerprint and bundle identity.
+
 - Added a lean release tier with sharded Firecracker and local gVisor qualification, amd64 images, and one installer guest. `just nightly` retains the full scenario matrix; `just release VERSION --full` also builds arm64 images and runs all installer modes. Manifests record built platforms and evidence remains commit-exact.
 
 - Required removal of duplicate ready Snapshot names per Sandbox before upgrading across migration `0024_snapshot_name_index.sql`. On the source release, list Snapshots with `snapshots list --path sandboxId=...` and delete unwanted duplicates by Snapshot identifier; duplicates block control-plane startup. See the deployment and guided-update procedures.
