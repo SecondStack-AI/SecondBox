@@ -93,7 +93,7 @@ validate_qualification_evidence() {
 validate_gvisor_qualification_evidence() {
   local evidence="$1" suite="$2"
   [[ -f "$evidence" && ! -L "$evidence" ]] || {
-    echo "release staging requires gVisor qualification evidence at $evidence; run just $suite on the no-KVM qualification host and copy the evidence here" >&2
+    echo "release staging requires gVisor qualification evidence at $evidence; run just $suite on its qualified host and copy the evidence here" >&2
     exit 1
   }
   jq -e --arg schema "$qualification_evidence_schema" --arg commit "$source_commit" --arg suite "$suite" '

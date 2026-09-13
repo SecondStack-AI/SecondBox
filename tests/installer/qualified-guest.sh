@@ -67,6 +67,9 @@ setup_candidate_registry() {
   sudo install -m 0644 "$certificate_dir/tls.crt" /etc/docker/certs.d/ghcr.io/ca.crt
   sudo update-ca-certificates >/dev/null
   grep -qE '^[[:space:]]*127\.0\.0\.1[[:space:]]+ghcr\.io([[:space:]]|$)' /etc/hosts || printf '127.0.0.1 ghcr.io\n' | sudo tee -a /etc/hosts >/dev/null
+  # The recreation guest previously used real GHCR. Restart the daemon so
+  # registry connections and host lookups use the new local fixture mapping.
+  sudo systemctl restart docker
   docker rm -f secondbox-qualification-registry >/dev/null 2>&1 || true
   docker run -d --name secondbox-qualification-registry --restart unless-stopped -p 443:5000 \
     -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/tls.crt -e REGISTRY_HTTP_TLS_KEY=/certs/tls.key \
