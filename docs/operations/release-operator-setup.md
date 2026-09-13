@@ -40,8 +40,9 @@ v0.7.0 through v0.10.1 carry the v0.6.0 Firecracker microVM bundle and trust anc
 
 Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` for PR
 qualification, and `deploy/release.env.example` to
-`~/.config/secondbox/release.env` for releases. Review every path and digest and
-supply `SECONDBOX_TEST_DATABASE_URL` for a disposable test PostgreSQL database.
+`~/.config/secondbox/release.env` for releases. Review every path and digest. The Go
+suite gate provisions its own disposable PostgreSQL container unless
+`SECONDBOX_TEST_DATABASE_URL` names a database you manage.
 The release file includes every qualification key and is the sole configuration
 used by `just release`; it does not recover inputs from an older release directory.
 Run `npm ci --ignore-scripts` once in the checkout. Provision your own named
