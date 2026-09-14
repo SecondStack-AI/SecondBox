@@ -1,5 +1,24 @@
 # Customer-shared tenancy
 
+## Retained capacity visibility and growth
+
+An application with `sandbox:read` can read `GET /v1/subject-usage` for its bound
+Subject. The response separates durable Sandbox count from active compute and
+reports admission headroom capped by both Subject and shared tenant limits. It
+does not expose tenant totals or other Subjects. Headroom is an observation;
+other applications can consume it before the next admission.
+
+The platform operator can replace a Tenant's aggregate quota through
+`PUT /v1/tenants/{tenantRef}/quota`, using `If-Match` and `Idempotency-Key` and a
+complete `aggregateQuota` object. The transaction uses the existing tenant quota
+lock, updates both the Tenant projection and admission ledger, and refuses any
+ceiling below committed usage. It never deletes Sandboxes or rewrites Subject
+quotas. To expand an existing installation, raise the Tenant ceiling first,
+then use the existing Subject quota update. Lowering a Tenant ceiling can make
+it the effective constraint for existing larger Subject ceilings. Workspace
+retention remains an application ownership decision, independent of compute
+idleness and quota visibility.
+
 ## Purpose
 
 One SecondBox deployment serves multiple SecondStack installations inside one customer-operated trust domain.

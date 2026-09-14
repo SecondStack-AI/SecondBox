@@ -25,7 +25,7 @@ func (store *PostgresControlPlaneStore) GetSandboxLifecyclePolicy(
 ) (contracts.LifecyclePolicy, contracts.RetentionPolicy, error) {
 	var specJSON []byte
 	if err := store.pool.QueryRow(ctx, `
-		SELECT revision.spec_json
+		SELECT jsonb_set(revision.spec_json,'{lifecycle}',COALESCE(sandbox.lifecycle_policy_json,revision.spec_json->'lifecycle'))
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$3`,
@@ -169,8 +169,7 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			}
 			remaining := attributed.ExpiresAt.Sub(input.Now)
 			maximum := spec.Execution.MaximumDeadlineMilliseconds
-			if remaining <= 0 || remaining.Milliseconds() > maximum ||
-				remaining.Milliseconds() == maximum && remaining%time.Millisecond != 0 {
+			if remaining <= 0 || !maximum.IsUnlimited() && remaining > time.Duration(maximum)*time.Millisecond {
 				return contracts.Operation{}, fmt.Errorf("%w: SecondBox attributed start expiry exceeds its execution deadline", ports.ErrInvalidRequest)
 			}
 			var supported bool
@@ -183,7 +182,7 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			}
 		}
 		subjectUsage, err := readSubjectQuotaUsage(
-			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef,
+			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Now,
 		)
 		if err != nil {
 			return contracts.Operation{}, err
@@ -193,9 +192,9 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			return contracts.Operation{}, err
 		}
 		delta := quotaUsage{activeInstances: 1, vcpuCount: locked.Resources.VCPUCount, memoryBytes: locked.Resources.MemoryBytes}
-		if subjectUsage.activeInstances+1 > subjectQuota.MaxActiveInstances ||
-			subjectUsage.vcpuCount+delta.vcpuCount > subjectQuota.MaxVCPUCount ||
-			subjectUsage.memoryBytes+delta.memoryBytes > subjectQuota.MaxMemoryBytes ||
+		if !subjectQuota.MaxActiveInstances.Allows(subjectUsage.activeInstances+1) ||
+			!subjectQuota.MaxVCPUCount.Allows(subjectUsage.vcpuCount+delta.vcpuCount) ||
+			!subjectQuota.MaxMemoryBytes.Allows(subjectUsage.memoryBytes+delta.memoryBytes) ||
 			tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, delta) {
 			return contracts.Operation{}, ports.ErrQuotaExceeded
 		}
@@ -423,7 +422,7 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 	}
 	rows, err = tx.Query(ctx, `
 		SELECT sandbox.id,sandbox.state,sandbox.desired_state,sandbox.revision,
-		       revision.spec_json,sandbox.lifecycle_intent_kind,
+		       jsonb_set(revision.spec_json,'{lifecycle}',COALESCE(sandbox.lifecycle_policy_json,revision.spec_json->'lifecycle')),sandbox.lifecycle_intent_kind,
 		       COALESCE(sandbox.lifecycle_termination_reason,''),
 		       instance.ready_at,sandbox.last_activity_at,sandbox.drain_started_at,
 		       instance.id IS NOT NULL,
@@ -483,8 +482,8 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		claim.WorkerID = workerID
 		claim.IntentKind = intentKind.String
 		claim.DrainGraceSeconds = spec.Lifecycle.DrainGraceSeconds
-		claim.IdleSeconds = spec.Lifecycle.IdleSeconds
-		claim.MaximumDurationSeconds = spec.Lifecycle.MaximumDurationSeconds
+		claim.IdleSeconds = int64(spec.Lifecycle.IdleSeconds)
+		claim.MaximumDurationSeconds = int64(spec.Lifecycle.MaximumDurationSeconds)
 		if readyAt.Valid {
 			claim.ReadyAt = &readyAt.Time
 		}

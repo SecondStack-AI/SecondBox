@@ -656,8 +656,33 @@
     ],
     "optional": [
       "attributedExecution",
+      "lifecycleCeiling",
       "resourceCeiling"
     ]
+  },
+  "QuotaConstrainingScopes": {
+    "required": [
+      "activeInstances",
+      "concurrentOperations",
+      "memoryBytes",
+      "portSessions",
+      "sandboxes",
+      "snapshots",
+      "vcpuCount"
+    ],
+    "optional": []
+  },
+  "QuotaHeadroom": {
+    "required": [
+      "activeInstances",
+      "concurrentOperations",
+      "memoryBytes",
+      "portSessions",
+      "sandboxes",
+      "snapshots",
+      "vcpuCount"
+    ],
+    "optional": []
   },
   "QuotaUsage": {
     "required": [
@@ -778,6 +803,7 @@
       "egressContext",
       "generation",
       "id",
+      "lifecycle",
       "metadata",
       "profile",
       "profileRevisionId",
@@ -800,6 +826,13 @@
       "guestHealthy",
       "observedAt",
       "sandboxId"
+    ],
+    "optional": []
+  },
+  "SandboxLifecycleLimits": {
+    "required": [
+      "idleSeconds",
+      "maximumDurationSeconds"
     ],
     "optional": []
   },
@@ -876,6 +909,14 @@
       "mode"
     ],
     "optional": []
+  },
+  "StoragePressureObservation": {
+    "required": [
+      "status"
+    ],
+    "optional": [
+      "observedAt"
+    ]
   },
   "StreamCancelFrame": {
     "required": [
@@ -954,6 +995,17 @@
       "expiresAt"
     ]
   },
+  "SubjectCapacity": {
+    "required": [
+      "available",
+      "constrainingScopes",
+      "limits",
+      "observedAt",
+      "subjectRef",
+      "usage"
+    ],
+    "optional": []
+  },
   "SubjectPage": {
     "required": [
       "items"
@@ -973,6 +1025,33 @@
       "maxVcpuCount"
     ],
     "optional": []
+  },
+  "SubjectSandboxPolicy": {
+    "required": [
+      "lifecycle",
+      "profile"
+    ],
+    "optional": []
+  },
+  "SubjectSandboxPolicyObservation": {
+    "required": [
+      "ceiling",
+      "desired",
+      "effective",
+      "execution",
+      "observedAt",
+      "profile",
+      "profileRevisionId",
+      "quota",
+      "resources",
+      "retention",
+      "revision",
+      "subjectRef",
+      "tenantQuota"
+    ],
+    "optional": [
+      "resourceCeiling"
+    ]
   },
   "SubjectUsage": {
     "required": [
@@ -1187,6 +1266,12 @@
     ],
     "optional": []
   },
+  "UpdateTenantQuotaRequest": {
+    "required": [
+      "aggregateQuota"
+    ],
+    "optional": []
+  },
   "WaitSandboxRequest": {
     "required": [
       "deadlineMilliseconds",
@@ -1201,8 +1286,20 @@
       "id",
       "sizeBytes",
       "state",
+      "storageObservation",
       "updatedAt"
     ],
     "optional": []
+  },
+  "WorkspaceStorageObservation": {
+    "required": [
+      "pressure",
+      "status"
+    ],
+    "optional": [
+      "allocatedBytes",
+      "observedAt",
+      "reason"
+    ]
   }
 }

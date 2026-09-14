@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
@@ -33,6 +34,17 @@ func runManagementCommand(ctx context.Context, session cliSession, args []string
 	case "controller-authority", "controller-authorities":
 		return true, runTenantControllerAuthorityCommand(ctx, session, args[1:], output, httpClient)
 	case "subject", "subjects":
+		if len(args) == 2 && args[1] == "usage" {
+			client, err := clientForSession(session, httpClient)
+			if err != nil {
+				return true, err
+			}
+			capacity, err := client.GetSubjectCapacity(ctx)
+			if err != nil {
+				return true, err
+			}
+			return true, writeManagementResult(ctx, output, capacity)
+		}
 		return true, runSubjectCommand(ctx, session, args[1:], output, httpClient)
 	case "application-authority", "application-authorities":
 		return true, runApplicationAuthorityCommand(ctx, session, args[1:], output, httpClient)
@@ -491,7 +503,28 @@ func writeManagementResult(ctx context.Context, output io.Writer, result any) er
 	case secondboxclient.Operation:
 		return view.renderer.WriteSummary(cliui.Summary{Title: "Subject cleanup operation", Status: cliui.StatusActive, Pairs: []cliui.Pair{{Key: "Operation", Value: value.ID}, {Key: "State", Value: string(value.State)}}})
 	case secondboxclient.TenantUsage:
-		return view.renderer.WriteSummary(cliui.Summary{Title: "Tenant usage", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Tenant", Value: value.TenantRef}, {Key: "Sandboxes", Value: strconv.FormatInt(value.Usage.Sandboxes, 10) + " / " + strconv.FormatInt(value.Limits.MaxSandboxes, 10)}, {Key: "Active subjects", Value: strconv.FormatInt(value.Usage.ActiveSubjects, 10) + " / " + strconv.FormatInt(value.Limits.MaxActiveSubjects, 10)}, {Key: "Application authorities", Value: strconv.FormatInt(value.Usage.ApplicationAuthorities, 10) + " / " + strconv.FormatInt(value.Limits.MaxApplicationAuthorities, 10)}, {Key: "Observed", Value: value.ObservedAt.Format("2006-01-02T15:04:05Z07:00")}}})
+		return view.renderer.WriteSummary(cliui.Summary{Title: "Tenant usage", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Tenant", Value: value.TenantRef}, {Key: "Sandboxes", Value: strconv.FormatInt(value.Usage.Sandboxes, 10) + " / " + formatPolicyLimit(value.Limits.MaxSandboxes)}, {Key: "Active subjects", Value: strconv.FormatInt(value.Usage.ActiveSubjects, 10) + " / " + formatPolicyLimit(value.Limits.MaxActiveSubjects)}, {Key: "Application authorities", Value: strconv.FormatInt(value.Usage.ApplicationAuthorities, 10) + " / " + formatPolicyLimit(value.Limits.MaxApplicationAuthorities)}, {Key: "Observed", Value: value.ObservedAt.Format("2006-01-02T15:04:05Z07:00")}}})
+	case secondboxclient.SubjectCapacity:
+		if err := view.renderer.WriteSummary(cliui.Summary{Title: "Subject capacity", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Subject", Value: value.SubjectRef}, {Key: "Observed", Value: value.ObservedAt.Format(time.RFC3339)}}}); err != nil {
+			return err
+		}
+		rows := make([]cliui.Row, 0, 7)
+		for _, dimension := range []struct {
+			name             string
+			used             int64
+			limit, available secondboxclient.PolicyLimit
+		}{
+			{"Sandboxes", value.Usage.Sandboxes, value.Limits.MaxSandboxes, value.Available.Sandboxes},
+			{"Active Instances", value.Usage.ActiveInstances, value.Limits.MaxActiveInstances, value.Available.ActiveInstances},
+			{"vCPU", value.Usage.VcpuCount, value.Limits.MaxVcpuCount, value.Available.VcpuCount},
+			{"Memory bytes", value.Usage.MemoryBytes, value.Limits.MaxMemoryBytes, value.Available.MemoryBytes},
+			{"Snapshots", value.Usage.Snapshots, value.Limits.MaxSnapshots, value.Available.Snapshots},
+			{"Port sessions", value.Usage.PortSessions, value.Limits.MaxPortSessions, value.Available.PortSessions},
+			{"Concurrent operations", value.Usage.ConcurrentOperations, value.Limits.MaxConcurrentOperations, value.Available.ConcurrentOperations},
+		} {
+			rows = append(rows, cliui.Row{"resource": dimension.name, "used": strconv.FormatInt(dimension.used, 10), "limit": formatPolicyLimit(dimension.limit), "available": formatPolicyLimit(dimension.available)})
+		}
+		return view.renderer.WriteTable(cliui.Table{Columns: []cliui.Column{{Key: "resource", Title: "Resource"}, {Key: "used", Title: "Reserved"}, {Key: "limit", Title: "Subject limit"}, {Key: "available", Title: "Available"}}, Rows: rows})
 	case secondboxclient.DeploymentUsage:
 		return view.renderer.WriteSummary(cliui.Summary{Title: "Deployment usage", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Tenants in page", Value: strconv.Itoa(len(value.Tenants))}, {Key: "Sandboxes", Value: strconv.FormatInt(value.Usage.Sandboxes, 10)}, {Key: "Observed", Value: value.ObservedAt.Format("2006-01-02T15:04:05Z07:00")}}, Next: managementContinuation(value.NextCursor)})
 	default:
@@ -524,4 +557,11 @@ func managementContinuation(cursor *string) string {
 		return ""
 	}
 	return "Continue with --cursor " + *cursor
+}
+
+func formatPolicyLimit(limit secondboxclient.PolicyLimit) string {
+	if limit.IsUnlimited() {
+		return "Unlimited"
+	}
+	return strconv.FormatInt(int64(limit), 10)
 }

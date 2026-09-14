@@ -26,6 +26,7 @@ export class SecondBoxClient {
   readonly #fetch: typeof fetch;
   readonly #tenantRef: string;
   readonly #subjectRef: string;
+  readonly #authority: "application" | "tenant_controller" | "platform";
 
   public constructor(
     rawURL: string,
@@ -33,6 +34,7 @@ export class SecondBoxClient {
     fetcher: typeof fetch,
     tenantRef = "secondbox",
     subjectRef = "secondbox-admin",
+    authority: "application" | "tenant_controller" | "platform" = "application",
   ) {
     const baseURL = new URL(rawURL);
     if (!["http:", "https:"].includes(baseURL.protocol) || baseURL.search !== "" || baseURL.hash !== "") {
@@ -46,6 +48,7 @@ export class SecondBoxClient {
     this.#fetch = fetcher;
     this.#tenantRef = tenantRef;
     this.#subjectRef = subjectRef;
+    this.#authority = authority;
   }
 
   public async send(route: Route, options: TransportRequestOptions = {}): Promise<Response> {
@@ -67,8 +70,13 @@ export class SecondBoxClient {
     }
     const headers = new Headers(options.headers);
     headers.set("Authorization", `Bearer ${this.#token}`);
-    headers.set("X-SecondBox-Tenant-Ref", this.#tenantRef);
-    headers.set("X-SecondBox-Subject-Ref", this.#subjectRef);
+    if (this.#authority === "application") {
+      headers.set("X-SecondBox-Tenant-Ref", this.#tenantRef);
+      headers.set("X-SecondBox-Subject-Ref", this.#subjectRef);
+    } else {
+      headers.delete("X-SecondBox-Tenant-Ref");
+      headers.delete("X-SecondBox-Subject-Ref");
+    }
     const contentType = options.contentType === null
       ? undefined
       : options.contentType ?? (options.body === undefined ? undefined : route.contentType);

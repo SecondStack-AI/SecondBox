@@ -33,6 +33,12 @@ func insertSandboxFixture(
 		t.Fatal(err)
 	}
 	workspaceID := "wsp_" + id
+	if _, err := controlPlaneStore.pool.Exec(t.Context(), `INSERT INTO secondbox.profile_revisions
+		(id,profile_name,revision_number,spec_json,created_at) VALUES
+		('prv_1','profile-1',1,'{"lifecycle":{"initialState":"running","idleSeconds":60,"maximumDurationSeconds":null,"drainGraceSeconds":10,"leaseSeconds":60}}',$1)
+		ON CONFLICT (id) DO NOTHING`, createdAt); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,

@@ -622,6 +622,9 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	if command.RowsAffected() != 1 {
 		return false, errors.New("SecondBox runner Heartbeat connection is no longer active")
 	}
+	if err := persistWorkspaceStorageObservations(ctx, tx, heartbeat, now); err != nil {
+		return false, err
+	}
 	var poolName string
 	if err := tx.QueryRow(
 		ctx,

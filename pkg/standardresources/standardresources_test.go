@@ -96,7 +96,10 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 		}
 		wantRevisions := 1
 		if profile.Name == AgentCompartment {
-			wantRevisions = 3
+			wantRevisions = 4
+		}
+		if profile.Name == AgentCompartmentIsolated {
+			wantRevisions = 2
 		}
 		if len(profile.Revisions) != wantRevisions {
 			t.Fatalf("lineage = %#v", profile.Revisions)
@@ -132,8 +135,10 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 	}
 	previousAgent = agent.Revisions[1].Spec
 	previousAgent.AttributedExecution = wantAttributed
+	previousAgent.Lifecycle.MaximumDurationSeconds = secondboxclient.Unlimited
+	previousAgent.LifecycleCeiling = &secondboxclient.SandboxLifecycleLimits{IdleSeconds: secondboxclient.Unlimited, MaximumDurationSeconds: secondboxclient.Unlimited}
 	if !reflect.DeepEqual(previousAgent, currentAgent) {
-		t.Fatalf("agent-compartment revision 3 changed more than attributed permission: %#v", agent.Revisions)
+		t.Fatalf("agent-compartment current revision changed more than attributed permission and lifecycle policy: %#v", agent.Revisions)
 	}
 	if currentAgent.Network.RequiresTenantEgressContext == nil || !*currentAgent.Network.RequiresTenantEgressContext || currentAgent.Network.Mode != "allow_list" || len(currentAgent.Network.Destinations) != 1 || currentAgent.Network.Destinations[0].Domain != AgentGateway || len(currentAgent.Ports) != 0 || currentAgent.Retention.SnapshotLimit != 0 {
 		t.Fatalf("agent-compartment is over-capable: %#v", currentAgent)
@@ -141,7 +146,7 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 	if coding.Revisions[0].Spec.Network.RequiresTenantEgressContext == nil || !*coding.Revisions[0].Spec.Network.RequiresTenantEgressContext || coding.Revisions[0].Spec.Network.Mode != "allow_list" || len(coding.Revisions[0].Spec.Network.Destinations) != 1 || coding.Revisions[0].Spec.Network.Destinations[0].Domain != PlatformGateway || len(coding.Revisions[0].Spec.Ports) == 0 || coding.Revisions[0].Spec.Retention.SnapshotLimit == 0 {
 		t.Fatalf("durable-coding lacks durable capabilities: %#v", coding.Revisions[0].Spec)
 	}
-	isolatedSpec := isolated.Revisions[0].Spec
+	isolatedSpec := isolated.Revisions[len(isolated.Revisions)-1].Spec
 	if isolatedSpec.Network.RequiresTenantEgressContext == nil || *isolatedSpec.Network.RequiresTenantEgressContext || isolatedSpec.Network.Mode != "deny_all" || len(isolatedSpec.Network.Destinations) != 0 || len(isolatedSpec.Ports) != 0 || isolatedSpec.Retention.SnapshotLimit != 0 || isolatedSpec.Execution.MaximumDeadlineMilliseconds != 900000 || isolatedSpec.Resources.WorkspaceBytes == 0 || isolatedSpec.Lifecycle.MaximumDurationSeconds == 0 {
 		t.Fatalf("agent-compartment-isolated capability bounds = %#v", isolatedSpec)
 	}
@@ -194,7 +199,7 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agent.Revisions) != 4 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 2 {
+	if len(agent.Revisions) != 5 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 3 {
 		t.Fatalf("changed-bundle lineage = agent %#v coding %#v isolated %#v", agent.Revisions, coding.Revisions, isolated.Revisions)
 	}
 	priorAssetRevision := agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000)
@@ -225,6 +230,9 @@ func TestDevelopmentProfileLineageUsesOnlySyntheticAssets(t *testing.T) {
 		}
 		wantRevisions := 1
 		if name == AgentCompartment {
+			wantRevisions = 3
+		}
+		if name == AgentCompartmentIsolated {
 			wantRevisions = 2
 		}
 		if len(profile.Revisions) != wantRevisions || profile.Revisions[0].Number != 1 {

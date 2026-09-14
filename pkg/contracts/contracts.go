@@ -149,6 +149,7 @@ type ProfileRevisionSpec struct {
 	Resources             ResourcePolicy             `json:"resources"`
 	ResourceCeiling       ProfileResourceCeiling     `json:"resourceCeiling,omitzero"`
 	Startup               StartupPolicy              `json:"startup"`
+	LifecycleCeiling      *SandboxLifecycleLimits    `json:"lifecycleCeiling,omitempty"`
 	Lifecycle             LifecyclePolicy            `json:"lifecycle"`
 	Retention             RetentionPolicy            `json:"retention"`
 	Execution             ExecutionPolicy            `json:"execution"`
@@ -201,27 +202,27 @@ type SandboxResourceRequest struct {
 
 // LifecyclePolicy contains explicit Instance timing and initial-state policy.
 type LifecyclePolicy struct {
-	InitialState           string `json:"initialState"`
-	DrainGraceSeconds      int64  `json:"drainGraceSeconds"`
-	IdleSeconds            int64  `json:"idleSeconds"`
-	MaximumDurationSeconds int64  `json:"maximumDurationSeconds"`
-	LeaseSeconds           int64  `json:"leaseSeconds"`
+	InitialState           string      `json:"initialState"`
+	DrainGraceSeconds      int64       `json:"drainGraceSeconds"`
+	IdleSeconds            PolicyLimit `json:"idleSeconds"`
+	MaximumDurationSeconds PolicyLimit `json:"maximumDurationSeconds"`
+	LeaseSeconds           int64       `json:"leaseSeconds"`
 }
 
 // RetentionPolicy bounds local Snapshot count and lifetime.
 type RetentionPolicy struct {
-	SnapshotLimit            int64 `json:"snapshotLimit"`
-	SnapshotRetentionSeconds int64 `json:"snapshotRetentionSeconds"`
+	SnapshotLimit            PolicyLimit `json:"snapshotLimit"`
+	SnapshotRetentionSeconds PolicyLimit `json:"snapshotRetentionSeconds"`
 }
 
 // ExecutionPolicy bounds exec, transfer, terminal, and port-session resources.
 type ExecutionPolicy struct {
-	MaximumDeadlineMilliseconds int64  `json:"maximumDeadlineMilliseconds"`
-	MaximumBufferedOutputBytes  int64  `json:"maximumBufferedOutputBytes"`
-	StreamWindowBytes           int64  `json:"streamWindowBytes"`
-	MaximumTransferBytes        int64  `json:"maximumTransferBytes"`
-	TerminalDetachSeconds       int64  `json:"terminalDetachSeconds"`
-	DataPlaneTransport          string `json:"dataPlaneTransport"`
+	MaximumDeadlineMilliseconds PolicyLimit `json:"maximumDeadlineMilliseconds"`
+	MaximumBufferedOutputBytes  int64       `json:"maximumBufferedOutputBytes"`
+	StreamWindowBytes           int64       `json:"streamWindowBytes"`
+	MaximumTransferBytes        int64       `json:"maximumTransferBytes"`
+	TerminalDetachSeconds       int64       `json:"terminalDetachSeconds"`
+	DataPlaneTransport          string      `json:"dataPlaneTransport"`
 }
 
 // NetworkPolicy is an explicit deny-all or destination allow-list and states
@@ -244,11 +245,11 @@ type NetworkDestination struct {
 
 // PortPolicy is one profile-approved guest port and session bound.
 type PortPolicy struct {
-	Name                  string `json:"name"`
-	Port                  int64  `json:"port"`
-	Protocol              string `json:"protocol"`
-	MaximumSessions       int64  `json:"maximumSessions"`
-	MaximumSessionSeconds int64  `json:"maximumSessionSeconds"`
+	Name                  string      `json:"name"`
+	Port                  int64       `json:"port"`
+	Protocol              string      `json:"protocol"`
+	MaximumSessions       PolicyLimit `json:"maximumSessions"`
+	MaximumSessionSeconds int64       `json:"maximumSessionSeconds"`
 }
 
 // CreateProfileRequest creates a stable Profile and its first immutable revision.
@@ -446,13 +447,13 @@ type PortSession struct {
 
 // QuotaLimits bounds one subject's aggregate reservations.
 type QuotaLimits struct {
-	MaxSandboxes            int64 `json:"maxSandboxes"`
-	MaxActiveInstances      int64 `json:"maxActiveInstances"`
-	MaxVCPUCount            int64 `json:"maxVcpuCount"`
-	MaxMemoryBytes          int64 `json:"maxMemoryBytes"`
-	MaxSnapshots            int64 `json:"maxSnapshots"`
-	MaxPortSessions         int64 `json:"maxPortSessions"`
-	MaxConcurrentOperations int64 `json:"maxConcurrentOperations"`
+	MaxSandboxes            PolicyLimit `json:"maxSandboxes"`
+	MaxActiveInstances      PolicyLimit `json:"maxActiveInstances"`
+	MaxVCPUCount            PolicyLimit `json:"maxVcpuCount"`
+	MaxMemoryBytes          PolicyLimit `json:"maxMemoryBytes"`
+	MaxSnapshots            PolicyLimit `json:"maxSnapshots"`
+	MaxPortSessions         PolicyLimit `json:"maxPortSessions"`
+	MaxConcurrentOperations PolicyLimit `json:"maxConcurrentOperations"`
 }
 
 // QuotaUsage projects one subject's aggregate persisted reservations.
@@ -476,14 +477,15 @@ type SubjectUsage struct {
 
 // Workspace is public retained-workspace evidence without a provider location.
 type Workspace struct {
-	ID         string    `json:"id"`
-	TenantRef  string    `json:"-"`
-	SubjectRef string    `json:"-"`
-	Generation int64     `json:"generation"`
-	State      string    `json:"state"`
-	SizeBytes  int64     `json:"sizeBytes"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	StorageObservation WorkspaceStorageObservation `json:"storageObservation"`
+	ID                 string                      `json:"id"`
+	TenantRef          string                      `json:"-"`
+	SubjectRef         string                      `json:"-"`
+	Generation         int64                       `json:"generation"`
+	State              string                      `json:"state"`
+	SizeBytes          int64                       `json:"sizeBytes"`
+	CreatedAt          time.Time                   `json:"createdAt"`
+	UpdatedAt          time.Time                   `json:"updatedAt"`
 }
 
 // Instance is replaceable compute evidence without runner or backend authority.
@@ -519,6 +521,7 @@ type ActivitySession struct {
 
 // Sandbox is durable Project intent pinned to one immutable ProfileRevision.
 type Sandbox struct {
+	Lifecycle         LifecyclePolicy   `json:"lifecycle"`
 	Resources         SandboxResources  `json:"resources"`
 	ID                string            `json:"id"`
 	TenantRef         string            `json:"-"`

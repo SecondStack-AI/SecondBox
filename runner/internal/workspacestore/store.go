@@ -75,6 +75,8 @@ type Store struct {
 
 	templateCapacityBytes int64
 	templateMu            sync.Mutex
+	observationMu         sync.Mutex
+	observationDirectory  *os.File
 }
 
 // New validates the absolute root, creates the deterministic layout, and proves

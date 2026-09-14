@@ -72,6 +72,8 @@ func applicationRequestScope(pattern string) string {
 		pattern == "GET /v1/timings":
 		return ""
 	case pattern == "GET /v1/sandboxes",
+		pattern == "GET /v1/subject-usage",
+		pattern == "GET /v1/subject-policy",
 		pattern == "GET /v1/sandboxes/{sandboxID}",
 		pattern == "GET /v1/sandboxes/{sandboxID}/timings",
 		pattern == "GET /v1/leases/{leaseID}",

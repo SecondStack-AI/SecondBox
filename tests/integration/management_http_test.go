@@ -475,7 +475,7 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 		t.Fatal(err)
 	}
 	for _, usage := range postRaceUsage.Subjects {
-		if usage.SubjectRef == subjectA.Ref && usage.Usage.Sandboxes > postRaceSubject.Quota.MaxSandboxes {
+		if usage.SubjectRef == subjectA.Ref && !postRaceSubject.Quota.MaxSandboxes.Allows(usage.Usage.Sandboxes) {
 			t.Fatalf("quota race committed usage=%d limit=%d", usage.Usage.Sandboxes, postRaceSubject.Quota.MaxSandboxes)
 		}
 	}

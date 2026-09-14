@@ -509,6 +509,9 @@ type PingResult struct {
 	SandboxID  OpaqueID  `json:"sandboxId"`
 }
 
+// PolicyLimit A finite nonnegative policy ceiling, or explicit null for no ceiling at this scope. Zero is a finite limit. Ancestor limits and physical capacity still apply.
+type PolicyLimit = contracts.PolicyLimit
+
 type PortPolicy = contracts.PortPolicy
 
 type PortSession struct {
@@ -524,6 +527,9 @@ type PortSession struct {
 	State                 string    `json:"state"`
 	Transport             string    `json:"transport"`
 }
+
+// PositivePolicyLimit A finite positive policy ceiling, or explicit null for no ceiling at this scope.
+type PositivePolicyLimit = contracts.PositivePolicyLimit
 
 type Problem = contracts.Problem
 
@@ -604,6 +610,26 @@ const (
 	ProfileStateDisabled ProfileState = "disabled"
 )
 
+type QuotaConstrainingScopes struct {
+	ActiveInstances      string `json:"activeInstances"`
+	ConcurrentOperations string `json:"concurrentOperations"`
+	MemoryBytes          string `json:"memoryBytes"`
+	PortSessions         string `json:"portSessions"`
+	Sandboxes            string `json:"sandboxes"`
+	Snapshots            string `json:"snapshots"`
+	VcpuCount            string `json:"vcpuCount"`
+}
+
+type QuotaHeadroom struct {
+	ActiveInstances      PolicyLimit `json:"activeInstances"`
+	ConcurrentOperations PolicyLimit `json:"concurrentOperations"`
+	MemoryBytes          PolicyLimit `json:"memoryBytes"`
+	PortSessions         PolicyLimit `json:"portSessions"`
+	Sandboxes            PolicyLimit `json:"sandboxes"`
+	Snapshots            PolicyLimit `json:"snapshots"`
+	VcpuCount            PolicyLimit `json:"vcpuCount"`
+}
+
 type QuotaUsage struct {
 	ActiveInstances      int64 `json:"activeInstances"`
 	ConcurrentOperations int64 `json:"concurrentOperations"`
@@ -678,6 +704,8 @@ type SandboxInspection struct {
 	SandboxID      OpaqueID  `json:"sandboxId"`
 }
 
+type SandboxLifecycleLimits = contracts.SandboxLifecycleLimits
+
 type SandboxPage = contracts.SandboxPage
 
 // SandboxResourceRequest Requested Sandbox size. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes), validated before disk rounding; otherwise invalid_request identifies the field. Omitted axes use Profile defaults unchanged. Requested workspaceBytes rounds up to a power of two before ceiling checks; when a request fits a finite ceiling but rounding would exceed it, the ceiling is used. snapshot_resume accepts only the exact Profile size.
@@ -741,6 +769,12 @@ const (
 // StartupPolicy How every Instance of this Profile revision reaches ready. There is no default; an operator states the mode on every Profile revision and the immutable revision pins it.
 type StartupPolicy = contracts.StartupPolicy
 
+// StoragePressureObservation Storage admission pressure relevant to this Workspace, without host identity or raw filesystem capacity. Healthy is an observation, not a promise that an allocation will fit.
+type StoragePressureObservation struct {
+	ObservedAt *Timestamp `json:"observedAt,omitempty"`
+	Status     string     `json:"status"`
+}
+
 type StreamCancelFrame struct {
 	Sequence int64  `json:"sequence"`
 	Type     string `json:"type"`
@@ -802,6 +836,15 @@ type Subject struct {
 	UpdatedAt    Timestamp           `json:"updatedAt"`
 }
 
+type SubjectCapacity struct {
+	Available          QuotaHeadroom           `json:"available"`
+	ConstrainingScopes QuotaConstrainingScopes `json:"constrainingScopes"`
+	Limits             SubjectQuota            `json:"limits"`
+	ObservedAt         Timestamp               `json:"observedAt"`
+	SubjectRef         OwnershipRef            `json:"subjectRef"`
+	Usage              QuotaUsage              `json:"usage"`
+}
+
 type SubjectCleanupState = string
 
 const (
@@ -818,14 +861,18 @@ type SubjectPage struct {
 }
 
 type SubjectQuota struct {
-	MaxActiveInstances      int64 `json:"maxActiveInstances"`
-	MaxConcurrentOperations int64 `json:"maxConcurrentOperations"`
-	MaxMemoryBytes          int64 `json:"maxMemoryBytes"`
-	MaxPortSessions         int64 `json:"maxPortSessions"`
-	MaxSandboxes            int64 `json:"maxSandboxes"`
-	MaxSnapshots            int64 `json:"maxSnapshots"`
-	MaxVcpuCount            int64 `json:"maxVcpuCount"`
+	MaxActiveInstances      PolicyLimit `json:"maxActiveInstances"`
+	MaxConcurrentOperations PolicyLimit `json:"maxConcurrentOperations"`
+	MaxMemoryBytes          PolicyLimit `json:"maxMemoryBytes"`
+	MaxPortSessions         PolicyLimit `json:"maxPortSessions"`
+	MaxSandboxes            PolicyLimit `json:"maxSandboxes"`
+	MaxSnapshots            PolicyLimit `json:"maxSnapshots"`
+	MaxVcpuCount            PolicyLimit `json:"maxVcpuCount"`
 }
+
+type SubjectSandboxPolicy = contracts.SubjectSandboxPolicy
+
+type SubjectSandboxPolicyObservation = contracts.SubjectSandboxPolicyObservation
 
 type SubjectState = string
 
@@ -913,15 +960,15 @@ type TenantPage struct {
 }
 
 type TenantQuota struct {
-	MaxActiveInstances        int64 `json:"maxActiveInstances"`
-	MaxActiveSubjects         int64 `json:"maxActiveSubjects"`
-	MaxApplicationAuthorities int64 `json:"maxApplicationAuthorities"`
-	MaxConcurrentOperations   int64 `json:"maxConcurrentOperations"`
-	MaxMemoryBytes            int64 `json:"maxMemoryBytes"`
-	MaxPortSessions           int64 `json:"maxPortSessions"`
-	MaxSandboxes              int64 `json:"maxSandboxes"`
-	MaxSnapshots              int64 `json:"maxSnapshots"`
-	MaxVcpuCount              int64 `json:"maxVcpuCount"`
+	MaxActiveInstances        PolicyLimit `json:"maxActiveInstances"`
+	MaxActiveSubjects         PolicyLimit `json:"maxActiveSubjects"`
+	MaxApplicationAuthorities PolicyLimit `json:"maxApplicationAuthorities"`
+	MaxConcurrentOperations   PolicyLimit `json:"maxConcurrentOperations"`
+	MaxMemoryBytes            PolicyLimit `json:"maxMemoryBytes"`
+	MaxPortSessions           PolicyLimit `json:"maxPortSessions"`
+	MaxSandboxes              PolicyLimit `json:"maxSandboxes"`
+	MaxSnapshots              PolicyLimit `json:"maxSnapshots"`
+	MaxVcpuCount              PolicyLimit `json:"maxVcpuCount"`
 }
 
 type TenantQuotaUsage struct {
@@ -1029,18 +1076,32 @@ type UpdateTenantEgressContextRequest struct {
 	EgressContext *EgressContextName `json:"egressContext"`
 }
 
+type UpdateTenantQuotaRequest struct {
+	AggregateQuota TenantQuota `json:"aggregateQuota"`
+}
+
 type WaitSandboxRequest struct {
 	DeadlineMilliseconds int64          `json:"deadlineMilliseconds"`
 	States               []SandboxState `json:"states"`
 }
 
 type Workspace struct {
-	CreatedAt  Timestamp `json:"createdAt"`
-	Generation int64     `json:"generation"`
-	ID         OpaqueID  `json:"id"`
-	SizeBytes  int64     `json:"sizeBytes"`
-	State      string    `json:"state"`
-	UpdatedAt  Timestamp `json:"updatedAt"`
+	CreatedAt          Timestamp                   `json:"createdAt"`
+	Generation         int64                       `json:"generation"`
+	ID                 OpaqueID                    `json:"id"`
+	SizeBytes          int64                       `json:"sizeBytes"`
+	State              string                      `json:"state"`
+	StorageObservation WorkspaceStorageObservation `json:"storageObservation"`
+	UpdatedAt          Timestamp                   `json:"updatedAt"`
 }
 
 type WorkspacePath = string
+
+// WorkspaceStorageObservation Stat-only observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include blocks shared through reflinks and Snapshots; they are not guest filesystem usage or unique physical consumption. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity.
+type WorkspaceStorageObservation struct {
+	AllocatedBytes *int64                     `json:"allocatedBytes,omitempty"`
+	ObservedAt     *Timestamp                 `json:"observedAt,omitempty"`
+	Pressure       StoragePressureObservation `json:"pressure"`
+	Reason         *string                    `json:"reason,omitempty"`
+	Status         string                     `json:"status"`
+}

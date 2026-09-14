@@ -343,7 +343,7 @@ export interface ExecTimingSummary {
 export interface ExecutionPolicy {
   readonly dataPlaneTransport: "proxied" | "direct";
   readonly maximumBufferedOutputBytes: number;
-  readonly maximumDeadlineMilliseconds: number;
+  readonly maximumDeadlineMilliseconds: PositivePolicyLimit;
   readonly maximumTransferBytes: number;
   readonly streamWindowBytes: number;
   readonly terminalDetachSeconds: number;
@@ -412,10 +412,10 @@ export type LeaseState = "active" | "released" | "expired" | "fenced";
 
 export interface LifecyclePolicy {
   readonly drainGraceSeconds: number;
-  readonly idleSeconds: number;
+  readonly idleSeconds: PositivePolicyLimit;
   readonly initialState: "stopped" | "running";
   readonly leaseSeconds: number;
-  readonly maximumDurationSeconds: number;
+  readonly maximumDurationSeconds: PositivePolicyLimit;
 }
 
 export type Metadata = Readonly<Record<string, string>>;
@@ -493,9 +493,12 @@ export interface PingResult {
   readonly sandboxId: OpaqueID;
 }
 
+/** A finite nonnegative policy ceiling, or explicit null for no ceiling at this scope. Zero is a finite limit. Ancestor limits and physical capacity still apply. */
+export type PolicyLimit = number | null;
+
 export interface PortPolicy {
   readonly maximumSessionSeconds: number;
-  readonly maximumSessions: number;
+  readonly maximumSessions: PositivePolicyLimit;
   readonly name: string;
   readonly port: number;
   readonly protocol: "tcp" | "http";
@@ -514,6 +517,9 @@ export interface PortSession {
   readonly state: "open" | "closing" | "closed" | "expired" | "fenced";
   readonly transport: "proxied" | "direct";
 }
+
+/** A finite positive policy ceiling, or explicit null for no ceiling at this scope. */
+export type PositivePolicyLimit = number | null;
 
 export interface Problem {
   readonly ceiling?: SandboxResourceRequest;
@@ -573,6 +579,7 @@ export interface ProfileRevisionSpec {
   readonly attributedExecution?: AttributedExecutionPolicy;
   readonly execution: ExecutionPolicy;
   readonly lifecycle: LifecyclePolicy;
+  readonly lifecycleCeiling?: SandboxLifecycleLimits;
   readonly network: NetworkPolicy;
   readonly pool: string;
   readonly ports: readonly PortPolicy[];
@@ -585,6 +592,26 @@ export interface ProfileRevisionSpec {
 }
 
 export type ProfileState = "enabled" | "disabled";
+
+export interface QuotaConstrainingScopes {
+  readonly activeInstances: "none" | "subject" | "tenant" | "tenant_and_subject";
+  readonly concurrentOperations: "none" | "subject" | "tenant" | "tenant_and_subject";
+  readonly memoryBytes: "none" | "subject" | "tenant" | "tenant_and_subject";
+  readonly portSessions: "none" | "subject" | "tenant" | "tenant_and_subject";
+  readonly sandboxes: "none" | "subject" | "tenant" | "tenant_and_subject";
+  readonly snapshots: "none" | "subject" | "tenant" | "tenant_and_subject";
+  readonly vcpuCount: "none" | "subject" | "tenant" | "tenant_and_subject";
+}
+
+export interface QuotaHeadroom {
+  readonly activeInstances: PolicyLimit;
+  readonly concurrentOperations: PolicyLimit;
+  readonly memoryBytes: PolicyLimit;
+  readonly portSessions: PolicyLimit;
+  readonly sandboxes: PolicyLimit;
+  readonly snapshots: PolicyLimit;
+  readonly vcpuCount: PolicyLimit;
+}
 
 export interface QuotaUsage {
   readonly activeInstances: number;
@@ -624,8 +651,8 @@ export interface RestoreSnapshotRequest {
 }
 
 export interface RetentionPolicy {
-  readonly snapshotLimit: number;
-  readonly snapshotRetentionSeconds: number;
+  readonly snapshotLimit: PolicyLimit;
+  readonly snapshotRetentionSeconds: PositivePolicyLimit;
 }
 
 export interface ReviseProfileRequest {
@@ -689,6 +716,7 @@ export interface Sandbox {
   readonly id: OpaqueID;
   readonly instance?: Instance;
   readonly lastActivityAt?: Timestamp;
+  readonly lifecycle: LifecyclePolicy;
   readonly metadata: Metadata;
   readonly profile: ProfileName;
   readonly profileRevisionId: OpaqueID;
@@ -707,6 +735,11 @@ export interface SandboxInspection {
   readonly guestHealthy: boolean;
   readonly observedAt: Timestamp;
   readonly sandboxId: OpaqueID;
+}
+
+export interface SandboxLifecycleLimits {
+  readonly idleSeconds: PositivePolicyLimit;
+  readonly maximumDurationSeconds: PositivePolicyLimit;
 }
 
 export interface SandboxPage {
@@ -773,6 +806,12 @@ export interface StartupPolicy {
   readonly mode: StartupMode;
 }
 
+/** Storage admission pressure relevant to this Workspace, without host identity or raw filesystem capacity. Healthy is an observation, not a promise that an allocation will fit. */
+export interface StoragePressureObservation {
+  readonly observedAt?: Timestamp;
+  readonly status: "healthy" | "warning" | "admission_denied" | "unavailable";
+}
+
 export interface StreamCancelFrame {
   readonly sequence: number;
   readonly type: "cancel";
@@ -834,6 +873,15 @@ export interface Subject {
   readonly updatedAt: Timestamp;
 }
 
+export interface SubjectCapacity {
+  readonly available: QuotaHeadroom;
+  readonly constrainingScopes: QuotaConstrainingScopes;
+  readonly limits: SubjectQuota;
+  readonly observedAt: Timestamp;
+  readonly subjectRef: OwnershipRef;
+  readonly usage: QuotaUsage;
+}
+
 export type SubjectCleanupState = "none" | "pending" | "running" | "succeeded" | "failed";
 
 export interface SubjectPage {
@@ -842,13 +890,35 @@ export interface SubjectPage {
 }
 
 export interface SubjectQuota {
-  readonly maxActiveInstances: number;
-  readonly maxConcurrentOperations: number;
-  readonly maxMemoryBytes: number;
-  readonly maxPortSessions: number;
-  readonly maxSandboxes: number;
-  readonly maxSnapshots: number;
-  readonly maxVcpuCount: number;
+  readonly maxActiveInstances: PolicyLimit;
+  readonly maxConcurrentOperations: PolicyLimit;
+  readonly maxMemoryBytes: PolicyLimit;
+  readonly maxPortSessions: PolicyLimit;
+  readonly maxSandboxes: PolicyLimit;
+  readonly maxSnapshots: PolicyLimit;
+  readonly maxVcpuCount: PolicyLimit;
+}
+
+export interface SubjectSandboxPolicy {
+  readonly lifecycle: SandboxLifecycleLimits;
+  readonly profile: ProfileName;
+}
+
+export interface SubjectSandboxPolicyObservation {
+  readonly ceiling: SandboxLifecycleLimits;
+  readonly desired: SubjectSandboxPolicy | null;
+  readonly effective: LifecyclePolicy;
+  readonly execution: ExecutionPolicy;
+  readonly observedAt: Timestamp;
+  readonly profile: ProfileName;
+  readonly profileRevisionId: string;
+  readonly quota: SubjectQuota;
+  readonly resourceCeiling?: ProfileResourceCeiling;
+  readonly resources: ResourcePolicy;
+  readonly retention: RetentionPolicy;
+  readonly revision: number;
+  readonly subjectRef: OwnershipRef;
+  readonly tenantQuota: TenantQuota;
 }
 
 export type SubjectState = "active" | "closing" | "closed" | "expired";
@@ -922,15 +992,15 @@ export interface TenantPage {
 }
 
 export interface TenantQuota {
-  readonly maxActiveInstances: number;
-  readonly maxActiveSubjects: number;
-  readonly maxApplicationAuthorities: number;
-  readonly maxConcurrentOperations: number;
-  readonly maxMemoryBytes: number;
-  readonly maxPortSessions: number;
-  readonly maxSandboxes: number;
-  readonly maxSnapshots: number;
-  readonly maxVcpuCount: number;
+  readonly maxActiveInstances: PolicyLimit;
+  readonly maxActiveSubjects: PolicyLimit;
+  readonly maxApplicationAuthorities: PolicyLimit;
+  readonly maxConcurrentOperations: PolicyLimit;
+  readonly maxMemoryBytes: PolicyLimit;
+  readonly maxPortSessions: PolicyLimit;
+  readonly maxSandboxes: PolicyLimit;
+  readonly maxSnapshots: PolicyLimit;
+  readonly maxVcpuCount: PolicyLimit;
 }
 
 export interface TenantQuotaUsage {
@@ -1024,6 +1094,10 @@ export interface UpdateTenantEgressContextRequest {
   readonly egressContext: EgressContextName | null;
 }
 
+export interface UpdateTenantQuotaRequest {
+  readonly aggregateQuota: TenantQuota;
+}
+
 export interface WaitSandboxRequest {
   readonly deadlineMilliseconds: number;
   readonly states: readonly SandboxState[];
@@ -1035,10 +1109,20 @@ export interface Workspace {
   readonly id: OpaqueID;
   readonly sizeBytes: number;
   readonly state: "creating" | "ready" | "deleting" | "deleted" | "failed";
+  readonly storageObservation: WorkspaceStorageObservation;
   readonly updatedAt: Timestamp;
 }
 
 export type WorkspacePath = string;
+
+/** Stat-only observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include blocks shared through reflinks and Snapshots; they are not guest filesystem usage or unique physical consumption. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity. */
+export interface WorkspaceStorageObservation {
+  readonly allocatedBytes?: number;
+  readonly observedAt?: Timestamp;
+  readonly pressure: StoragePressureObservation;
+  readonly reason?: "not_observed" | "missing" | "probe_failed" | "deleted";
+  readonly status: "available" | "unavailable";
+}
 
 export type OperationID =
   | "acquireSandboxLease"
@@ -1065,6 +1149,7 @@ export type OperationID =
   | "drainSandbox"
   | "executeSandboxCommand"
   | "getApplicationAuthority"
+  | "getApplicationSandboxPolicy"
   | "getDeploymentTiming"
   | "getDeploymentUsage"
   | "getOperation"
@@ -1078,6 +1163,8 @@ export type OperationID =
   | "getSandboxTiming"
   | "getSnapshot"
   | "getSubject"
+  | "getSubjectCapacity"
+  | "getSubjectSandboxPolicy"
   | "getTenant"
   | "getTenantControllerAuthority"
   | "getTenantUsage"
@@ -1116,7 +1203,9 @@ export type OperationID =
   | "updateRunnerPool"
   | "updateSandboxMetadata"
   | "updateSubjectQuota"
+  | "updateSubjectSandboxPolicy"
   | "updateTenantEgressContext"
+  | "updateTenantQuota"
   | "waitForSandbox"
   | "writeSandboxFile";
 
@@ -1151,6 +1240,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   drainSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:drain" },
   executeSandboxCommand: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec", contentType: "application/json" },
   getApplicationAuthority: { method: "GET", path: "/v1/application-authorities/{authorityId}" },
+  getApplicationSandboxPolicy: { method: "GET", path: "/v1/subject-policy" },
   getDeploymentTiming: { method: "GET", path: "/v1/timings" },
   getDeploymentUsage: { method: "GET", path: "/v1/deployment-usage" },
   getOperation: { method: "GET", path: "/v1/operations/{operationId}" },
@@ -1164,6 +1254,8 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   getSandboxTiming: { method: "GET", path: "/v1/sandboxes/{sandboxId}/timings" },
   getSnapshot: { method: "GET", path: "/v1/snapshots/{snapshotId}" },
   getSubject: { method: "GET", path: "/v1/subjects/{subjectRef}" },
+  getSubjectCapacity: { method: "GET", path: "/v1/subject-usage" },
+  getSubjectSandboxPolicy: { method: "GET", path: "/v1/subjects/{subjectRef}/sandbox-policy" },
   getTenant: { method: "GET", path: "/v1/tenants/{tenantRef}" },
   getTenantControllerAuthority: { method: "GET", path: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}" },
   getTenantUsage: { method: "GET", path: "/v1/usage" },
@@ -1202,7 +1294,9 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   updateRunnerPool: { method: "PATCH", path: "/v1/runner-pools/{runnerPoolName}", contentType: "application/json" },
   updateSandboxMetadata: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/metadata", contentType: "application/json" },
   updateSubjectQuota: { method: "PUT", path: "/v1/subjects/{subjectRef}/quota", contentType: "application/json" },
+  updateSubjectSandboxPolicy: { method: "PUT", path: "/v1/subjects/{subjectRef}/sandbox-policy", contentType: "application/json" },
   updateTenantEgressContext: { method: "PUT", path: "/v1/tenants/{tenantRef}/egress-context", contentType: "application/json" },
+  updateTenantQuota: { method: "PUT", path: "/v1/tenants/{tenantRef}/quota", contentType: "application/json" },
   waitForSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:wait", contentType: "application/json" },
   writeSandboxFile: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/files", contentType: "application/octet-stream" },
 };

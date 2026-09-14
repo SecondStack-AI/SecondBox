@@ -1,14 +1,14 @@
 CREATE TABLE secondbox.tenant_quotas (
     tenant_ref text PRIMARY KEY,
-    max_sandboxes bigint NOT NULL,
-    max_active_instances bigint NOT NULL,
-    max_cpu_millis bigint NOT NULL,
-    max_memory_bytes bigint NOT NULL,
-    max_snapshots bigint NOT NULL,
-    max_port_sessions bigint NOT NULL,
-    max_concurrent_operations bigint NOT NULL,
-    max_active_subjects bigint NOT NULL,
-    max_application_authorities bigint NOT NULL,
+    max_sandboxes bigint,
+    max_active_instances bigint,
+    max_cpu_millis bigint,
+    max_memory_bytes bigint,
+    max_snapshots bigint,
+    max_port_sessions bigint,
+    max_concurrent_operations bigint,
+    max_active_subjects bigint,
+    max_application_authorities bigint,
     updated_at timestamptz NOT NULL
 );
 

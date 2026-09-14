@@ -352,6 +352,7 @@ type ReconcileReport struct {
 // WorkspaceStore is the provider-neutral runner-owned local workspace port.
 // Every mutating request includes a stable operation ID.
 type WorkspaceStore interface {
+	ObserveStorage(context.Context, int) ([]WorkspaceStorageObservation, error)
 	Create(context.Context, CreateWorkspaceRequest) (Receipt, error)
 	CloneFromSnapshot(context.Context, CloneWorkspaceRequest) (Receipt, error)
 	Open(context.Context, string, uint64) (ComputeAttachment, error)

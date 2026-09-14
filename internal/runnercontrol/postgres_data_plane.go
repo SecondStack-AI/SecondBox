@@ -309,8 +309,8 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 		input.FileOpen = proto.Clone(input.FileOpen).(*runnerv1.FileOpen)
 		input.FileOpen.ExpectedSize = uint64(input.MaximumResponseBytes)
 	}
-	if input.DeadlineAt.After(input.Now.Add(
-		time.Duration(policy.MaximumDeadlineMilliseconds) * time.Millisecond,
+	if !policy.MaximumDeadlineMilliseconds.IsUnlimited() && input.DeadlineAt.After(input.Now.Add(
+		time.Duration(policy.MaximumDeadlineMilliseconds)*time.Millisecond,
 	)) {
 		return DataPlaneSession{}, false, errors.Join(
 			ports.ErrInvalidRequest,
@@ -554,14 +554,14 @@ func lockDataPlaneSessionQuota(ctx context.Context, tx pgx.Tx, sessionID string)
 // admission locks so the capacity refusal can follow request validation.
 type dataPlaneCapacity struct {
 	sandboxActive, sandboxMaximum int64
-	subjectActive, subjectMaximum int64
-	tenantActive, tenantMaximum   int64
+	subjectActive, tenantActive   int64
+	subjectMaximum, tenantMaximum contracts.PolicyLimit
 }
 
 func (capacity dataPlaneCapacity) exhausted() bool {
 	return capacity.sandboxActive >= capacity.sandboxMaximum ||
-		capacity.subjectActive >= capacity.subjectMaximum ||
-		capacity.tenantActive >= capacity.tenantMaximum
+		!capacity.subjectMaximum.Allows(capacity.subjectActive+1) ||
+		!capacity.tenantMaximum.Allows(capacity.tenantActive+1)
 }
 
 func lockDataPlaneAuthority(
@@ -658,7 +658,8 @@ func lockDataPlaneAuthority(
 	}
 	var tenantState string
 	var tenantExpiresAt *time.Time
-	var tenantActive, tenantMaximum int64
+	var tenantActive int64
+	var tenantMaximum contracts.PolicyLimit
 	if err := tx.QueryRow(ctx, `
 		SELECT tenant.state,tenant.expires_at,quota.max_concurrent_operations,
 		       (SELECT count(*) FROM secondbox.data_plane_sessions
@@ -680,7 +681,8 @@ func lockDataPlaneAuthority(
 	if tenantState != contracts.TenantStateActive {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrInvalidLifecycleTransition
 	}
-	var sandboxActive, subjectActive, subjectMaximum int64
+	var sandboxActive, subjectActive int64
+	var subjectMaximum contracts.PolicyLimit
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM secondbox.data_plane_sessions
 		WHERE sandbox_id=$1 AND state IN ('pending','running','cancelling')`,

@@ -103,6 +103,10 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	activeStat, activeOK := activeInfo.Sys().(*syscall.Stat_t)
+	observation := store.observeWorkspaceStorage(workspaceID)
+	if !activeOK || observation.AllocatedBytes == nil || *observation.AllocatedBytes != activeStat.Blocks*512 {
+		t.Fatalf("qualified reflink observation = %+v; inode = %+v", observation, activeStat)
+	}
 	snapshotStat, snapshotOK := snapshotInfo.Sys().(*syscall.Stat_t)
 	if !activeOK || !snapshotOK ||
 		int64(activeStat.Blocks)*512 >= capacity ||

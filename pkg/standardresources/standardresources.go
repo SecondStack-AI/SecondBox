@@ -127,6 +127,12 @@ func ProfileLineage(name, runtimeDigest, toolchainDigest string) (resourceapply.
 	default:
 		return resourceapply.Profile{}, fmt.Errorf("SecondBox standard bundle %q is unknown", name)
 	}
+	if name == AgentCompartment || name == AgentCompartmentIsolated {
+		current := specs[len(specs)-1]
+		current.Lifecycle.MaximumDurationSeconds = secondboxclient.Unlimited
+		current.LifecycleCeiling = &secondboxclient.SandboxLifecycleLimits{IdleSeconds: secondboxclient.Unlimited, MaximumDurationSeconds: secondboxclient.Unlimited}
+		specs = append(specs, current)
+	}
 	return profileFromSpecs(name, specs)
 }
 
@@ -147,6 +153,12 @@ func DevelopmentProfileLineage(name, runtimeDigest, toolchainDigest string) (res
 		specs = []secondboxclient.ProfileRevisionSpec{isolatedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest)}
 	default:
 		return resourceapply.Profile{}, fmt.Errorf("SecondBox standard bundle %q is unknown", name)
+	}
+	if name == AgentCompartment || name == AgentCompartmentIsolated {
+		current := specs[len(specs)-1]
+		current.Lifecycle.MaximumDurationSeconds = secondboxclient.Unlimited
+		current.LifecycleCeiling = &secondboxclient.SandboxLifecycleLimits{IdleSeconds: secondboxclient.Unlimited, MaximumDurationSeconds: secondboxclient.Unlimited}
+		specs = append(specs, current)
 	}
 	return profileFromSpecs(name, specs)
 }
@@ -202,7 +214,7 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilli
 		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 10, IdleSeconds: 60, MaximumDurationSeconds: 900, LeaseSeconds: 60},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 0, SnapshotRetentionSeconds: 3600},
-		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: maximumDeadlineMilliseconds, MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 64 << 10, MaximumTransferBytes: 256 << 20, TerminalDetachSeconds: 0, DataPlaneTransport: "proxied"},
+		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: secondboxclient.PolicyLimit(maximumDeadlineMilliseconds), MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 64 << 10, MaximumTransferBytes: 256 << 20, TerminalDetachSeconds: 0, DataPlaneTransport: "proxied"},
 		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: AgentGateway, Port: 443}}, RequiresTenantEgressContext: &requiresTenantEgressContext},
 		Ports:     []secondboxclient.PortPolicy{},
 	}

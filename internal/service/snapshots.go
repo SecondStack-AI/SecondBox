@@ -43,12 +43,16 @@ func (service *ControlPlaneService) CreateSandboxSnapshot(
 		return contracts.Operation{}, false, err
 	}
 	now := service.now().UTC()
-	retainUntil := now.Add(time.Duration(retentionPolicy.SnapshotRetentionSeconds) * time.Second)
+	var retainUntil *time.Time
+	if !retentionPolicy.SnapshotRetentionSeconds.IsUnlimited() {
+		value := now.Add(time.Duration(retentionPolicy.SnapshotRetentionSeconds) * time.Second)
+		retainUntil = &value
+	}
 	snapshot := contracts.Snapshot{
 		ID: service.newID("snp"), TenantRef: principal.TenantRef,
 		SubjectRef: principal.SubjectRef, SandboxID: sandboxID,
 		Name: request.Name, Metadata: cloneMetadata(request.Metadata),
-		RetainUntil: &retainUntil,
+		RetainUntil: retainUntil,
 		CreatedAt:   now,
 	}
 	operation := contracts.Operation{

@@ -13,6 +13,8 @@
 
 ### Added
 
+- Added application-scoped quota headroom and retained Workspace storage observations, including allocated image blocks and admission-pressure freshness without exposing host identities. Platform operators can raise existing Tenant quotas without recreating retained resources.
+
 - Added `just qualify` for concurrent PR and release gates and `just release VERSION` for local qualification, artifact building, memory-capped parallel installer guests, and final staging, with per-stage logs and timings. Releases retain commit-exact evidence and require explicit publication.
 
 - Added friendly Sandbox lifecycle, file, port-forwarding, and Snapshot commands. `run` and `create` now accept size presets, explicit CPU/memory/Workspace requests bounded by optional Profile ceilings, quota, and Runner admission, and `--from sandbox/snapshot-name` or Snapshot identifiers. Memory and disk requests, Profile defaults, and finite ceilings require whole MiB. Requested disk capacity rounds up to a power of two, capped at a finite ceiling when the request fits; resume Profiles require their fixed size. An operator flexible-size Profile example removes CPU and memory ceilings while bounding disk at 256 GiB. Resolved resources appear in human Sandbox views, and an operator Profile example documents preparing dependencies with registry HTTPS access for golden Snapshots.

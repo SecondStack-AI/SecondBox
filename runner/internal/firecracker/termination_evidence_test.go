@@ -347,6 +347,11 @@ type terminalPathBackend struct {
 	inst *instance
 }
 
+// This termination fixture has no WorkspaceStore or storage-pressure controller.
+func (*terminalPathBackend) ObserveWorkspaceStorage(context.Context) ([]*runnerprotocol.WorkspaceStorageObservation, *runnerprotocol.StoragePressureObservation, error) {
+	return nil, nil, nil
+}
+
 func (*terminalPathBackend) Readiness(context.Context) (runnercontrol.BackendReadiness, error) {
 	return runnercontrol.BackendReadiness{
 		Capacity: &runnerprotocol.Capacity{},

@@ -65,16 +65,16 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 					Lifecycle: secondboxclient.LifecyclePolicy{
 						InitialState:           "running",
 						DrainGraceSeconds:      driver.config.Profile.DrainGraceSeconds,
-						IdleSeconds:            driver.config.Profile.IdleSeconds,
-						MaximumDurationSeconds: driver.config.Profile.MaximumDurationSeconds,
+						IdleSeconds:            secondboxclient.PolicyLimit(driver.config.Profile.IdleSeconds),
+						MaximumDurationSeconds: secondboxclient.PolicyLimit(driver.config.Profile.MaximumDurationSeconds),
 						LeaseSeconds:           driver.config.Profile.LeaseSeconds,
 					},
 					Retention: secondboxclient.RetentionPolicy{
-						SnapshotLimit:            driver.config.Profile.SnapshotLimit,
-						SnapshotRetentionSeconds: driver.config.Profile.SnapshotRetentionSeconds,
+						SnapshotLimit:            secondboxclient.PolicyLimit(driver.config.Profile.SnapshotLimit),
+						SnapshotRetentionSeconds: secondboxclient.PolicyLimit(driver.config.Profile.SnapshotRetentionSeconds),
 					},
 					Execution: secondboxclient.ExecutionPolicy{
-						MaximumDeadlineMilliseconds: driver.config.Profile.MaximumDeadlineMilliseconds,
+						MaximumDeadlineMilliseconds: secondboxclient.PolicyLimit(driver.config.Profile.MaximumDeadlineMilliseconds),
 						MaximumBufferedOutputBytes:  driver.config.Profile.MaximumBufferedOutputBytes,
 						StreamWindowBytes:           driver.config.Profile.StreamWindowBytes,
 						MaximumTransferBytes:        driver.config.Profile.MaximumTransferBytes,
