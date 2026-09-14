@@ -1,9 +1,9 @@
 # Configurable limits
 
-This pre-release contract targets clean initialization and newly created resources.
+This contract targets clean initialization and newly created resources.
 There is no old-state adoption, Profile mutation, workspace resize, or live hardware update.
-SecondStack's released pin remains v0.10.1; these APIs require a coordinated release after
-SecondBox v0.12.0. Unpublished local verification must not change that release pin.
+See the [deployment transition boundary](../operations/deployment.md#clean-initialization-boundary)
+before changing a deployment that already owns Workspaces.
 
 ## Representation and ownership
 
@@ -22,6 +22,28 @@ External mode without an explicitly supplied controller is read-only.
 
 Profile defaults and allowed lifecycle ceilings are immutable. Subject lifecycle selections
 apply only at future Sandbox creation; the effective lifecycle is pinned with that Sandbox.
+The optional `lifecycleCeiling` object sets both delegated dimensions. If omitted, the
+Profile's `lifecycle.idleSeconds` and `lifecycle.maximumDurationSeconds` are also the
+ceilings. When supplied, both fields are required; explicit `null` removes that Profile
+ceiling. For example, these fields of a Profile spec keep idle shutdown as the default
+while allowing a Subject to select another finite or unlimited idle/runtime policy:
+
+```json
+{
+  "lifecycle": {
+    "initialState": "running",
+    "drainGraceSeconds": 10,
+    "idleSeconds": 60,
+    "maximumDurationSeconds": null,
+    "leaseSeconds": 60
+  },
+  "lifecycleCeiling": {
+    "idleSeconds": null,
+    "maximumDurationSeconds": null
+  }
+}
+```
+
 An unlimited selection remains finite under a finite Profile ceiling. Quotas apply to new
 admission immediately, including existing Sandboxes' next starts or operations. Reductions
 below committed usage fail; they never evict resources. A Subject's unlimited quota remains
@@ -101,39 +123,3 @@ A newly requested finite lifecycle selection above its current Profile ceiling i
 with `profile_policy_ceiling_exceeded`. If an operator subsequently publishes a tighter
 Profile ceiling, future effective policy is the minimum of the stored selection and that
 ceiling. Existing Sandboxes still retain their creation policy.
-
-## Verification evidence (2026-09-14)
-
-`just verify-generated`, `just test`, and `just test-contract` passed against the changed
-contract and a disposable PostgreSQL database. Public HTTP integration tests cover clean
-initialization, explicit null and missing fields, effective inheritance, quota admission,
-zero Snapshots, delegated ceilings, revision conflicts, and idempotent replay.
-Controlled lifecycle clocks cover finite runtime termination despite activity, unlimited
-runtime after 24 hours, and idle shutdown after interest ends.
-
-Qualified Firecracker `just test-scenario` ran these four selected scenarios without skips:
-
-- `TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota`
-- `TestScenarioOrdinaryLifecycleAndCapacityRelease`
-- `TestScenarioTouchExtendsIdleExpiry` (unlimited runtime, idle stop, restart and retained file)
-- `TestScenarioWorkspaceStorageObservationPreservesStoppedFilesAndActivity`
-
-SecondStack passed its Agent Platform typecheck, 36 focused provider/activity/fleet tests,
-35 PostgreSQL integration tests, and the live Flue kernel orchestration test.
-The controlled keepalive test holds active interest for 30 simulated minutes without guest
-operations. This is separate from the real Runner scenarios: a combined live Flue/Runner
-turn beyond the former 900-second deadline was not run.
-
-ControlTower build, focused lint, formatting, six-locale validation, and the configuration
-deployment unit test passed. Real browser and administrator API checks used
-`http://localhost:18080` through the regular proxy, a source-built SecondBox API, real
-PostgreSQL, and test-owned management authority. Checks covered finite/unlimited saves,
-effective Profile clamping, rejected writes, stale revisions, zero Snapshot quota,
-unauthorized writes, pending state, loading/error states, and desktop/mobile layouts.
-The scoped Compose render validated; broad `just init-config` was not run because it
-imports and deploys unrelated configuration and can publish artifacts outside this task.
-
-Test delegation and test-owned desired configuration were removed, and CT's original
-connection settings restored. Retained user Sandboxes and files were not modified.
-The full scenario matrix, gVisor qualification, and coordinated released-consumer rollout
-remain unverified. No release pin or published artifact was changed.

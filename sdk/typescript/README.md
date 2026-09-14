@@ -18,9 +18,36 @@ const transport = new SecondBoxClient(
   "https://secondbox.example",
   token,
   fetch,
+  "tenant-ref",
+  "subject-ref",
+  "application",
 );
 const secondbox = new SecondBox(transport);
 ```
+
+Select the authority that issued the token. Application clients send Tenant/Subject
+headers for Sandbox operations. Management clients must explicitly pass
+`"tenant_controller"` or `"platform"` as the sixth argument so those headers are omitted.
+For example, a tenant-controller client can read and update Subject lifecycle policy:
+
+```ts
+const controllerToken = process.env.SECONDBOX_CONTROLLER_TOKEN;
+if (controllerToken === undefined) {
+  throw new Error("SECONDBOX_CONTROLLER_TOKEN is required");
+}
+const controller = new SecondBox(new SecondBoxClient(
+  "https://secondbox.example",
+  controllerToken,
+  fetch,
+  "tenant-ref",
+  "subject-ref",
+  "tenant_controller",
+));
+```
+
+The management token determines authority; the constructor's Tenant/Subject placeholders
+are not sent on management requests. A platform token is required for Tenant quota updates,
+while a tenant-controller token manages Subjects only within its own Tenant.
 
 Import the public wire types from `@secondstack-ai/secondbox`, the Flue 2.x adapter from `@secondstack-ai/secondbox/flue`, and Node's authenticated WebSocket plus SPKI-pinned direct-port transports from `@secondstack-ai/secondbox/node`.
 

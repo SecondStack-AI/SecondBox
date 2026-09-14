@@ -1,5 +1,15 @@
 # Deployment and runtime operations
 
+## Clean initialization boundary
+
+The configurable-limits contract requires a fresh database and a separate Runner storage
+root. It does not provide in-place migration or adoption of earlier deployment state;
+recorded migration checksum mismatches fail startup. Keep an existing deployment, its
+database, Runner storage, signed assets, and credentials together until its owners
+explicitly retire their Sandboxes. A new database cannot recover those Workspaces.
+Rollback means running the previous release with its original state, not attaching that
+state to the new deployment or resetting migration records.
+
 Each Runner selects one compute backend explicitly. RunnerPool backend homogeneity is control-plane-private and is sealed by the first healthy registration; operators cannot mutate or reset it. Profiles and public resources continue to name only the RunnerPool.
 
 Firecracker is the backend this guide deploys. The experimental Microsandbox backend has no supported deployment path on Linux: it is exercised through the repository's KVM qualification suites (`just test-microsandbox-linux`, `just test-scenario-microsandbox-linux`, both requiring a pinned local Microsandbox build, `/dev/kvm`, and a reflink-capable qualification filesystem), and its only documented operator procedure is the native macOS guide at [`microsandbox-macos.md`](microsandbox-macos.md), which also records the backend's environment contract and known limitations. The [gVisor runtime](gvisor-runtime.md) covers hosts without KVM, deployed from the released `runner-gvisor` and `gvisor-artifacts` images rather than by this guide.

@@ -78,9 +78,14 @@ Completion, expiry, or connection loss retires the attributed Instance and clear
 
 SecondBox releases three explicitly selected standard Profile bundles:
 
-- `agent-compartment` is bounded ephemeral compute for Flue-style agent turns. It starts immediately, has short idle and maximum-duration bounds, exposes no ports, and states `requiresTenantEgressContext: true`.
+- `agent-compartment` starts compute for Flue-style agent turns, defaults to 60-second idle shutdown and unlimited maximum runtime, exposes no ports, and states `requiresTenantEgressContext: true`.
 - `durable-coding` is a long-running coding workspace with larger inline CPU, memory, disk, process, operation, transfer, PTY-detach, Snapshot, and development-port bounds; it states `requiresTenantEgressContext: true`.
-- `agent-compartment-isolated` retains the bounded command, file, workspace, cancellation, and lifecycle capabilities of `agent-compartment` while denying all outbound network and DNS access, exposing no ports, and stating `requiresTenantEgressContext: false`.
+- `agent-compartment-isolated` uses the same Agent lifecycle defaults and bounded command, file, workspace, and cancellation capabilities while denying all outbound network and DNS access, exposing no ports, and stating `requiresTenantEgressContext: false`.
+
+Both Agent bundles allow delegated finite or unlimited idle and runtime selections through
+explicit null `lifecycleCeiling` dimensions. These settings affect new Sandboxes only;
+existing Sandboxes keep their pinned policy. Unlimited runtime does not remove command
+deadlines, cancellation, ownership checks, or idle shutdown.
 
 The declarative resource engine materializes standard bundles as ordinary immutable ProfileRevisions. Selection is explicit in `[standard_resources]`; the control plane has no built-in defaults, reserved-name behavior, or request-time reconciler. Each release declares the complete ordered lineage and canonical spec digest, validates an installed prefix, and appends only missing revisions. Existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules.
 

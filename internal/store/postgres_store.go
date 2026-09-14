@@ -1321,7 +1321,7 @@ func selectSnapshotCloneHomeRunner(
 		homeRunnerID  string
 		snapshotState string
 		snapshotSize  int64
-		retainUntil   time.Time
+		retainUntil   *time.Time
 	)
 	if err := tx.QueryRow(ctx, `
 		SELECT snapshot.home_runner_id,snapshot.size_bytes,snapshot.state,snapshot.retain_until
@@ -1334,7 +1334,7 @@ func selectSnapshotCloneHomeRunner(
 	); err != nil {
 		return "", mapNotFound(err, ports.ErrSnapshotNotFound)
 	}
-	if snapshotState != "ready" || !retainUntil.After(now.UTC()) ||
+	if snapshotState != "ready" || retainUntil != nil && !retainUntil.After(now.UTC()) ||
 		snapshotSize != spec.Resources.WorkspaceBytes {
 		return "", ports.ErrSnapshotUnavailable
 	}
