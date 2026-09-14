@@ -852,7 +852,7 @@ func TestSnapshotRestoreAdmissionPersistsEveryLocalPhaseIdentity(t *testing.T) {
 		) VALUES (
 			'runner-home','pool-local','runner-home','ready','["amd64"]',
 			'["compute","local-workspace"]','{}','[1]',1,1,'test','connection-home',0,
-			'active','{}','` + placementTestCacheJSON + `','firecracker',0,0,$1,1,$1,$1
+			'active','{}','`+placementTestCacheJSON+`','firecracker',0,0,$1,1,$1,$1
 		) ON CONFLICT (id) DO UPDATE SET state='ready',last_seen_at=EXCLUDED.last_seen_at`,
 		now,
 	); err != nil {
@@ -1461,7 +1461,7 @@ func seedLocalWorkspacePolicyAndRunner(
 		) VALUES (
 			'runner-home','pool-local','runner-home','ready','["amd64"]',
 			'["compute","local-workspace"]','{}','[1]',1,1,'test','connection-home',0,
-			'active','{}','` + placementTestCacheJSON + `','firecracker',0,0,$2,1,$2,$2
+			'active','{}','`+placementTestCacheJSON+`','firecracker',0,0,$2,1,$2,$2
 		) ON CONFLICT (id) DO UPDATE SET state='ready',last_seen_at=EXCLUDED.last_seen_at`,
 		pgx.QueryExecModeSimpleProtocol, string(specJSON), now,
 	); err != nil {

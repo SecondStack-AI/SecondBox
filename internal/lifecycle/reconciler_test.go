@@ -157,3 +157,22 @@ func TestRestartedSandboxMeasuresIdleFromItsOwnReadiness(t *testing.T) {
 		t.Fatalf("expired restart decision = %#v, want idle timeout", got)
 	}
 }
+
+func TestUnlimitedRuntimeKeepsActiveInterestBeyondFormerAgeDeadline(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	now := start.Add(24 * time.Hour)
+	view := View{Observed: contracts.SandboxStateReady, Desired: contracts.SandboxDesiredStateRunning, HasInstance: true, GuestLiveness: contracts.GuestLivenessReady, ReadyAt: start, LastUsefulActivityAt: now, IdleTimeout: time.Minute, MaximumDuration: time.Duration(contracts.Unlimited) * time.Second}
+	if got := Decide(view, now); got.Action != ActionWait {
+		t.Fatalf("unlimited active turn: %+v", got)
+	}
+	view.MaximumDuration = 900 * time.Second
+	view.ActiveSessions = 1
+	if got := Decide(view, now); got.TerminationReason != contracts.TerminationReasonMaximumDuration {
+		t.Fatalf("finite age despite activity/session: %+v", got)
+	}
+	view.MaximumDuration = time.Duration(contracts.Unlimited) * time.Second
+	view.ActiveSessions = 0
+	if got := Decide(view, now.Add(time.Minute)); got.TerminationReason != contracts.TerminationReasonIdleTimeout {
+		t.Fatalf("idle after interest ends: %+v", got)
+	}
+}

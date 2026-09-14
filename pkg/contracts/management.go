@@ -37,15 +37,15 @@ type TenantExpiryPolicy struct {
 
 // TenantQuota bounds aggregate tenant reservations and management resources.
 type TenantQuota struct {
-	MaxSandboxes              int64 `json:"maxSandboxes"`
-	MaxActiveInstances        int64 `json:"maxActiveInstances"`
-	MaxVCPUCount              int64 `json:"maxVcpuCount"`
-	MaxMemoryBytes            int64 `json:"maxMemoryBytes"`
-	MaxSnapshots              int64 `json:"maxSnapshots"`
-	MaxPortSessions           int64 `json:"maxPortSessions"`
-	MaxConcurrentOperations   int64 `json:"maxConcurrentOperations"`
-	MaxActiveSubjects         int64 `json:"maxActiveSubjects"`
-	MaxApplicationAuthorities int64 `json:"maxApplicationAuthorities"`
+	MaxSandboxes              PolicyLimit `json:"maxSandboxes"`
+	MaxActiveInstances        PolicyLimit `json:"maxActiveInstances"`
+	MaxVCPUCount              PolicyLimit `json:"maxVcpuCount"`
+	MaxMemoryBytes            PolicyLimit `json:"maxMemoryBytes"`
+	MaxSnapshots              PolicyLimit `json:"maxSnapshots"`
+	MaxPortSessions           PolicyLimit `json:"maxPortSessions"`
+	MaxConcurrentOperations   PolicyLimit `json:"maxConcurrentOperations"`
+	MaxActiveSubjects         PolicyLimit `json:"maxActiveSubjects"`
+	MaxApplicationAuthorities PolicyLimit `json:"maxApplicationAuthorities"`
 }
 
 // TenantQuotaUsage projects one tenant's aggregate persisted reservations.

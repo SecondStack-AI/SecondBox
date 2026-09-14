@@ -57,14 +57,14 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fresh.Results) != 6 || fresh.Results[1].Action != resourceapply.ActionCreate || fresh.Results[2].Action != resourceapply.ActionAppend || fresh.Results[3].Action != resourceapply.ActionAppend {
+	if len(fresh.Results) != 8 || fresh.Results[1].Action != resourceapply.ActionCreate || fresh.Results[2].Action != resourceapply.ActionAppend || fresh.Results[3].Action != resourceapply.ActionAppend {
 		t.Fatalf("fresh results = %#v", fresh.Results)
 	}
 	agent, err := client.GetProfile(t.Context(), standardresources.AgentCompartment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agent.Revisions) != 3 || agent.Revisions[0].Spec.Execution.MaximumDeadlineMilliseconds != 120000 || agent.CurrentRevision.Number != 3 || agent.CurrentRevision.Spec.Execution.MaximumDeadlineMilliseconds != 900000 {
+	if len(agent.Revisions) != 4 || agent.Revisions[0].Spec.Execution.MaximumDeadlineMilliseconds != 120000 || agent.CurrentRevision.Number != 4 || agent.CurrentRevision.Spec.Execution.MaximumDeadlineMilliseconds != 900000 {
 		t.Fatalf("fresh agent-compartment lineage = %#v", agent)
 	}
 	if policy := agent.CurrentRevision.Spec.AttributedExecution; policy == nil || policy.Gateway != standardresources.AgentGateway || policy.MaximumConnections != 2 {
@@ -99,13 +99,13 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 		t.Fatal("isolated Profile is absent from standard document")
 	}
 	upgraded.Profiles[isolatedIndex].Revisions = append([]resourceapply.ProfileRevision(nil), document.Profiles[isolatedIndex].Revisions...)
-	second := upgraded.Profiles[isolatedIndex].Revisions[0].Spec
+	second := upgraded.Profiles[isolatedIndex].Revisions[1].Spec
 	second.Lifecycle.InitialState = secondboxclient.SandboxDesiredStateStopped
 	digest, err := resourceapply.SpecDigest(second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	upgraded.Profiles[isolatedIndex].Revisions = append(upgraded.Profiles[isolatedIndex].Revisions, resourceapply.ProfileRevision{Number: 2, SpecDigest: digest, Spec: second})
+	upgraded.Profiles[isolatedIndex].Revisions = append(upgraded.Profiles[isolatedIndex].Revisions, resourceapply.ProfileRevision{Number: 3, SpecDigest: digest, Spec: second})
 	if _, err := resourceapply.Apply(t.Context(), client, upgraded); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	upgraded.Profiles[isolatedIndex].Revisions = append(upgraded.Profiles[isolatedIndex].Revisions, resourceapply.ProfileRevision{Number: 3, SpecDigest: thirdDigest, Spec: third})
+	upgraded.Profiles[isolatedIndex].Revisions = append(upgraded.Profiles[isolatedIndex].Revisions, resourceapply.ProfileRevision{Number: 4, SpecDigest: thirdDigest, Spec: third})
 	if _, err := resourceapply.Apply(t.Context(), client, upgraded); err != nil {
 		t.Fatal(err)
 	}

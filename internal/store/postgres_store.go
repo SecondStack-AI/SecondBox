@@ -379,6 +379,22 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
+	selection, err := readSubjectSandboxSelection(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Sandbox.Profile)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	var selectedLifecycle *contracts.SandboxLifecycleLimits
+	if selection != nil {
+		selectedLifecycle = &selection.Lifecycle
+	}
+	resolvedLifecycle, err := profile.CurrentRevision.Spec.ResolveLifecycle(selectedLifecycle)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("%w: %w", ports.ErrGrantEscalationDenied, err)
+	}
+	lifecycleJSON, err := json.Marshal(resolvedLifecycle)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
 	placementSpec := sandboxPlacementSpec(profile.CurrentRevision.Spec, resolvedResources)
 	var tenantEgressContext *string
 	if err := tx.QueryRow(ctx, `SELECT egress_context FROM secondbox.tenants WHERE ref=$1`, input.Principal.TenantRef).Scan(&tenantEgressContext); err != nil {
@@ -417,7 +433,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
-	subjectUsage, err := readSubjectQuotaUsage(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef)
+	subjectUsage, err := readSubjectQuotaUsage(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Sandbox.CreatedAt)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
@@ -443,6 +459,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 
 	sandbox := input.Sandbox
+	sandbox.Lifecycle = resolvedLifecycle
 	sandbox.Resources = resolvedResources
 	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.SubjectRef = input.Principal.SubjectRef
@@ -505,14 +522,14 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			current_instance_id,egress_context,metadata_json,compatibility_summary_json,last_activity_at,revision,
 			lifecycle_termination_reason,lifecycle_failure_class,lifecycle_failure_message,lifecycle_intent_kind,
 			reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,reconcile_retry_count,
-			reconcile_retry_limit,created_at,updated_at,deleted_at,vcpu_count,memory_bytes,workspace_bytes
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)`,
+			reconcile_retry_limit,created_at,updated_at,deleted_at,vcpu_count,memory_bytes,workspace_bytes,lifecycle_policy_json
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)`,
 		sandbox.ID, sandbox.TenantRef, sandbox.SubjectRef,
 		sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
 		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", sandbox.EgressContext, metadataJSON,
 		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
 		"", nil, nil, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
-		sandbox.Resources.VCPUCount, sandbox.Resources.MemoryBytes, sandbox.Resources.WorkspaceBytes,
+		sandbox.Resources.VCPUCount, sandbox.Resources.MemoryBytes, sandbox.Resources.WorkspaceBytes, lifecycleJSON,
 	); err != nil {
 		if isSandboxNameConflict(err) {
 			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrSandboxNameConflict
@@ -617,7 +634,7 @@ func (store *PostgresControlPlaneStore) GetSubjectUsage(
 	if err != nil {
 		return contracts.SubjectUsage{}, err
 	}
-	usage, err := readSubjectQuotaUsage(ctx, tx, tenantRef, subjectRef)
+	usage, err := readSubjectQuotaUsage(ctx, tx, tenantRef, subjectRef, time.Now())
 	if err != nil {
 		return contracts.SubjectUsage{}, err
 	}
@@ -1034,15 +1051,20 @@ const sandboxSelect = `
 	       workspace.id,workspace.tenant_ref,workspace.subject_ref,
 	       workspace.generation,workspace.state,workspace.logical_capacity_bytes,
 	       workspace.created_at,workspace.updated_at,
+	       workspace.storage_observation_json,home_runner.storage_pressure_json,
+ COALESCE(sandbox.lifecycle_policy_json,pinned_profile.spec_json->'lifecycle'),
 	       instance.id,instance.state,COALESCE(instance.guest_liveness,''),instance.termination_reason,
 	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at,instance.guest_features
 	FROM secondbox.sandboxes AS sandbox
 	JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+ JOIN secondbox.profile_revisions AS pinned_profile ON pinned_profile.id=sandbox.profile_revision_id
+	LEFT JOIN secondbox.runners AS home_runner ON home_runner.id=workspace.home_runner_id
 	LEFT JOIN secondbox.instances AS instance ON instance.id=sandbox.current_instance_id`
 
 func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	var sandbox contracts.Sandbox
 	var metadataJSON []byte
+	var storageJSON, pressureJSON, lifecycleJSON []byte
 	var instanceID, instanceState, guestLiveness, terminationReason sql.NullString
 	var guestFeatures []string
 	var instanceCreatedAt, instanceUpdatedAt sql.NullTime
@@ -1057,10 +1079,30 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		&sandbox.Workspace.TenantRef, &sandbox.Workspace.SubjectRef,
 		&sandbox.Workspace.Generation, &sandbox.Workspace.State, &sandbox.Workspace.SizeBytes,
 		&sandbox.Workspace.CreatedAt, &sandbox.Workspace.UpdatedAt,
+		&storageJSON, &pressureJSON, &lifecycleJSON,
 		&instanceID, &instanceState, &guestLiveness, &terminationReason,
 		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt, &guestFeatures,
 	); err != nil {
 		return contracts.Sandbox{}, err
+	}
+	if err := json.Unmarshal(lifecycleJSON, &sandbox.Lifecycle); err != nil {
+		return contracts.Sandbox{}, fmt.Errorf("SecondBox Sandbox lifecycle decoding failed: %w", err)
+	}
+	if len(storageJSON) != 0 {
+		if err := json.Unmarshal(storageJSON, &sandbox.Workspace.StorageObservation); err != nil {
+			return contracts.Sandbox{}, fmt.Errorf("SecondBox Workspace storage observation decoding failed: %w", err)
+		}
+	} else {
+		sandbox.Workspace.StorageObservation = contracts.WorkspaceStorageObservation{Status: "unavailable", Reason: "not_observed"}
+	}
+	sandbox.Workspace.StorageObservation.Pressure = contracts.StoragePressureObservation{Status: "unavailable"}
+	if len(pressureJSON) != 0 {
+		if err := json.Unmarshal(pressureJSON, &sandbox.Workspace.StorageObservation.Pressure); err != nil {
+			return contracts.Sandbox{}, fmt.Errorf("SecondBox storage pressure observation decoding failed: %w", err)
+		}
+	}
+	if sandbox.Workspace.State == "deleted" {
+		sandbox.Workspace.StorageObservation = contracts.WorkspaceStorageObservation{Status: "unavailable", Reason: "deleted", Pressure: contracts.StoragePressureObservation{Status: "unavailable"}}
 	}
 	if sandbox.EgressContext != nil {
 		if err := contracts.ValidateEgressContextName(*sandbox.EgressContext); err != nil {
@@ -1445,6 +1487,7 @@ func readSubjectQuotaUsage(
 	tx pgx.Tx,
 	tenantRef string,
 	subjectRef string,
+	observedAt time.Time,
 ) (quotaUsage, error) {
 	// Compute reservations (active instances, CPU, memory) include accepted
 	// running intent as well as live or pending Instances. A stopped Sandbox
@@ -1468,13 +1511,13 @@ func readSubjectQuotaUsage(
 		        WHERE tenant_ref=$1 AND subject_ref=$2
 		          AND state IN ('creating','ready','deleting')),
 		       (SELECT count(*) FROM secondbox.port_sessions
-		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('open','closing')),
+		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('open','closing') AND expires_at>$3),
 		       (SELECT count(*) FROM secondbox.data_plane_sessions
 		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('pending','running','cancelling'))
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.state<>'deleted'`,
-		tenantRef, subjectRef).Scan(
+		tenantRef, subjectRef, observedAt.UTC()).Scan(
 		&usage.sandboxes, &usage.activeInstances, &usage.vcpuCount, &usage.memoryBytes,
 		&usage.snapshots, &usage.portSessions,
 		&usage.concurrentOperations,
@@ -1566,13 +1609,13 @@ func readDeploymentQuotaUsage(
 }
 
 func subjectQuotaCoversUsage(quota contracts.QuotaLimits, usage quotaUsage) bool {
-	return quota.MaxSandboxes >= usage.sandboxes &&
-		quota.MaxActiveInstances >= usage.activeInstances &&
-		quota.MaxVCPUCount >= usage.vcpuCount &&
-		quota.MaxMemoryBytes >= usage.memoryBytes &&
-		quota.MaxSnapshots >= usage.snapshots &&
-		quota.MaxPortSessions >= usage.portSessions &&
-		quota.MaxConcurrentOperations >= usage.concurrentOperations
+	return quota.MaxSandboxes.Allows(usage.sandboxes) &&
+		quota.MaxActiveInstances.Allows(usage.activeInstances) &&
+		quota.MaxVCPUCount.Allows(usage.vcpuCount) &&
+		quota.MaxMemoryBytes.Allows(usage.memoryBytes) &&
+		quota.MaxSnapshots.Allows(usage.snapshots) &&
+		quota.MaxPortSessions.Allows(usage.portSessions) &&
+		quota.MaxConcurrentOperations.Allows(usage.concurrentOperations)
 }
 
 func tenantDataPlaneQuotaWouldExceed(
@@ -1580,13 +1623,13 @@ func tenantDataPlaneQuotaWouldExceed(
 	usage contracts.TenantQuotaUsage,
 	delta quotaUsage,
 ) bool {
-	return usage.Sandboxes+delta.sandboxes > quota.MaxSandboxes ||
-		usage.ActiveInstances+delta.activeInstances > quota.MaxActiveInstances ||
-		usage.VCPUCount+delta.vcpuCount > quota.MaxVCPUCount ||
-		usage.MemoryBytes+delta.memoryBytes > quota.MaxMemoryBytes ||
-		usage.Snapshots+delta.snapshots > quota.MaxSnapshots ||
-		usage.PortSessions+delta.portSessions > quota.MaxPortSessions ||
-		usage.ConcurrentOperations+delta.concurrentOperations > quota.MaxConcurrentOperations
+	return !quota.MaxSandboxes.Allows(usage.Sandboxes+delta.sandboxes) ||
+		!quota.MaxActiveInstances.Allows(usage.ActiveInstances+delta.activeInstances) ||
+		!quota.MaxVCPUCount.Allows(usage.VCPUCount+delta.vcpuCount) ||
+		!quota.MaxMemoryBytes.Allows(usage.MemoryBytes+delta.memoryBytes) ||
+		!quota.MaxSnapshots.Allows(usage.Snapshots+delta.snapshots) ||
+		!quota.MaxPortSessions.Allows(usage.PortSessions+delta.portSessions) ||
+		!quota.MaxConcurrentOperations.Allows(usage.ConcurrentOperations+delta.concurrentOperations)
 }
 
 func quotaWouldExceed(
@@ -1596,13 +1639,13 @@ func quotaWouldExceed(
 	requestedMemory int64,
 	requestedActiveInstances int64,
 ) bool {
-	return usage.sandboxes+1 > quota.MaxSandboxes ||
-		usage.activeInstances+requestedActiveInstances > quota.MaxActiveInstances ||
-		usage.vcpuCount+requestedCPU > quota.MaxVCPUCount ||
-		usage.memoryBytes+requestedMemory > quota.MaxMemoryBytes ||
-		usage.snapshots > quota.MaxSnapshots ||
-		usage.portSessions > quota.MaxPortSessions ||
-		usage.concurrentOperations > quota.MaxConcurrentOperations
+	return !quota.MaxSandboxes.Allows(usage.sandboxes+1) ||
+		!quota.MaxActiveInstances.Allows(usage.activeInstances+requestedActiveInstances) ||
+		!quota.MaxVCPUCount.Allows(usage.vcpuCount+requestedCPU) ||
+		!quota.MaxMemoryBytes.Allows(usage.memoryBytes+requestedMemory) ||
+		!quota.MaxSnapshots.Allows(usage.snapshots) ||
+		!quota.MaxPortSessions.Allows(usage.portSessions) ||
+		!quota.MaxConcurrentOperations.Allows(usage.concurrentOperations)
 }
 
 func mapNotFound(err error, notFound error) error {

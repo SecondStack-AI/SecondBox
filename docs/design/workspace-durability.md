@@ -1,5 +1,23 @@
 # Workspace durability
 
+## Storage observations
+
+The WorkspaceStore periodically reads current-image manifests and inode block
+counts without acquiring the compute writer lock, opening a compute attachment,
+mounting an image, or enumerating guest files. One Runner heartbeat visits at
+most 64 Workspace directories, continuing through the directory on subsequent
+heartbeats. It reports only logical identities, generation, measurement time,
+allocated bytes, and bounded failure reasons on the authenticated control
+channel. Pressure evidence reuses the backend's existing admission controller.
+
+PostgreSQL accepts measurements only from the Workspace's current home and for
+its current generation. Observation updates do not change Sandbox revision,
+activity, generation, or lifecycle timestamps. Busy Workspace rows are skipped
+to keep telemetry out of lifecycle lock waits; a later scan revisits them.
+Public reads use persisted evidence, preserve its original observation time,
+and never dispatch Runner work. Deleted Workspaces report unavailable storage.
+See [operational measurement semantics](../operations/observability-and-diagnostics.md#application-workspace-capacity).
+
 Each Sandbox owns one durable Workspace and one authoritative `home_runner_id`.
 The assigned runner's configured `SECONDBOX_RUNNER_WORKSPACE_ROOT` is the only
 writable authoritative copy of that Workspace known to SecondBox. PostgreSQL records the

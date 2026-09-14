@@ -17,7 +17,7 @@ func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *tes
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
-		) VALUES ('revision-terminal-failure','profile-terminal-failure',1,'{}',$1);
+		) VALUES ('revision-terminal-failure','profile-terminal-failure',1,'{"lifecycle":{"initialState":"stopped","idleSeconds":60,"maximumDurationSeconds":null,"drainGraceSeconds":10,"leaseSeconds":60}}',$1);
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
 			logical_capacity_bytes,generation,mutation_kind,mutation_id,
@@ -74,7 +74,7 @@ func TestPostgresLifecycleBatchClaimsOrderedCohortAndClosesExpiredActivity(t *te
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
-		) VALUES ('revision-batch','profile-batch',1,'{}',$1);
+		) VALUES ('revision-batch','profile-batch',1,'{"lifecycle":{"initialState":"stopped","idleSeconds":60,"maximumDurationSeconds":null,"drainGraceSeconds":10,"leaseSeconds":60}}',$1);
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
 			logical_capacity_bytes,generation,mutation_kind,mutation_id,
@@ -185,7 +185,7 @@ func TestPostgresLifecycleClaimSkipsLockedExpiredLeaseWithoutCountingItsSession(
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.profile_revisions (
 			id,profile_name,revision_number,spec_json,created_at
-		) VALUES ('revision-locked-expiry','profile-locked-expiry',1,'{}',$1);
+		) VALUES ('revision-locked-expiry','profile-locked-expiry',1,'{"lifecycle":{"initialState":"stopped","idleSeconds":60,"maximumDurationSeconds":null,"drainGraceSeconds":10,"leaseSeconds":60}}',$1);
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
 			logical_capacity_bytes,generation,mutation_kind,mutation_id,

@@ -193,6 +193,22 @@ message RunnerHeartbeat {
   DrainPhase drain_phase = 9;
   StartupTiming startup_timing = 10;
   string data_plane_advertised_address = 11;
+  repeated WorkspaceStorageObservation workspace_storage = 12;
+  StoragePressureObservation storage_pressure = 13;
+}
+
+// Observations never renew activity or authorize a Workspace mutation.
+message WorkspaceStorageObservation {
+  string workspace_id = 1;
+  uint64 generation = 2;
+  uint64 observed_at_unix_ms = 3;
+  optional uint64 allocated_bytes = 4;
+  string unavailable_reason = 5;
+}
+
+message StoragePressureObservation {
+  string status = 1;
+  uint64 observed_at_unix_ms = 2;
 }
 
 message Correlation {

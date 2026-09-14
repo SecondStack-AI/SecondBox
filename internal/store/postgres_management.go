@@ -299,7 +299,7 @@ func (store *PostgresControlPlaneStore) CreateManagedSubject(
 		subject.TenantRef, subject.CreatedAt.UTC()).Scan(&activeSubjects); err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox active Subject usage lookup failed: %w", err)
 	}
-	if activeSubjects+1 > tenantQuota.MaxActiveSubjects {
+	if !tenantQuota.MaxActiveSubjects.Allows(activeSubjects + 1) {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrQuotaExceeded
 	}
 	if err := insertSubject(ctx, tx, subject); err != nil {
@@ -412,7 +412,7 @@ func (store *PostgresControlPlaneStore) UpdateManagedSubjectQuota(
 	if !subjectQuotaWithinTenant(quota, tenantQuota) {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, ports.ErrGrantEscalationDenied
 	}
-	usage, err := readSubjectQuotaUsage(ctx, tx, tenantRef, subjectRef)
+	usage, err := readSubjectQuotaUsage(ctx, tx, tenantRef, subjectRef, now)
 	if err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
 	}
@@ -702,7 +702,7 @@ func (store *PostgresControlPlaneStore) GetTenantUsage(
 	}
 	subjects := make([]contracts.SubjectUsage, 0, len(subjectLimits))
 	for _, item := range subjectLimits {
-		reserved, err := readSubjectQuotaUsage(ctx, tx, tenantRef, item.ref)
+		reserved, err := readSubjectQuotaUsage(ctx, tx, tenantRef, item.ref, observedAt)
 		if err != nil {
 			return contracts.TenantUsage{}, err
 		}
@@ -1046,7 +1046,7 @@ func (store *PostgresControlPlaneStore) CreateManagedApplicationAuthority(
 		authority.TenantRef, authority.CreatedAt.UTC()).Scan(&applicationAuthorities); err != nil {
 		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ApplicationAuthority usage lookup failed: %w", err)
 	}
-	if applicationAuthorities+1 > tenantQuota.MaxApplicationAuthorities {
+	if !tenantQuota.MaxApplicationAuthorities.Allows(applicationAuthorities + 1) {
 		return contracts.ApplicationCredentialResponse{}, ports.AdminIdempotencyResult{}, ports.ErrQuotaExceeded
 	}
 	response, err := insertApplicationCredential(ctx, tx, authority)
@@ -1776,13 +1776,13 @@ func managedAuthorityExpiryAllowed(tenant contracts.Tenant, now time.Time, expir
 }
 
 func subjectQuotaWithinTenant(subject contracts.QuotaLimits, tenant contracts.TenantQuota) bool {
-	return subject.MaxSandboxes <= tenant.MaxSandboxes &&
-		subject.MaxActiveInstances <= tenant.MaxActiveInstances &&
-		subject.MaxVCPUCount <= tenant.MaxVCPUCount &&
-		subject.MaxMemoryBytes <= tenant.MaxMemoryBytes &&
-		subject.MaxSnapshots <= tenant.MaxSnapshots &&
-		subject.MaxPortSessions <= tenant.MaxPortSessions &&
-		subject.MaxConcurrentOperations <= tenant.MaxConcurrentOperations
+	return (subject.MaxSandboxes.IsUnlimited() || subject.MaxSandboxes.Within(tenant.MaxSandboxes)) &&
+		(subject.MaxActiveInstances.IsUnlimited() || subject.MaxActiveInstances.Within(tenant.MaxActiveInstances)) &&
+		(subject.MaxVCPUCount.IsUnlimited() || subject.MaxVCPUCount.Within(tenant.MaxVCPUCount)) &&
+		(subject.MaxMemoryBytes.IsUnlimited() || subject.MaxMemoryBytes.Within(tenant.MaxMemoryBytes)) &&
+		(subject.MaxSnapshots.IsUnlimited() || subject.MaxSnapshots.Within(tenant.MaxSnapshots)) &&
+		(subject.MaxPortSessions.IsUnlimited() || subject.MaxPortSessions.Within(tenant.MaxPortSessions)) &&
+		(subject.MaxConcurrentOperations.IsUnlimited() || subject.MaxConcurrentOperations.Within(tenant.MaxConcurrentOperations))
 }
 
 func generatePersistedAuthorityCredential(

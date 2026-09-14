@@ -21,6 +21,52 @@ These local commands do not require or transmit API credentials. The path must b
 
 The credentialed commands below show fully explicit application flags. Each of `--url`, `--token`, `--tenant-ref`, and `--subject-ref` may instead come from the environment or a stored application session; see [SDK, CLI, and Flue quick starts](sdk-cli-and-flue.md). Platform and tenant-controller sessions are typed separately and do not accept caller tenancy assertions.
 
+## Application workspace capacity
+
+`GET /v1/subject-usage` requires `sandbox:read` and returns only the authenticated
+application's Subject. The required tenancy headers must match that authority;
+query parameters cannot select another Subject. `limits` is the configured
+Subject quota, `usage` is its current reservation count, and `available` is the
+non-negative minimum of Subject and tenant remaining quota in each dimension.
+The dimensions cover durable Sandboxes, active Instances, vCPU, memory,
+Snapshots, port sessions, and concurrent operations. `observedAt` identifies the
+read-only database observation. Shared tenant activity can reduce `available`;
+this is neither a reservation nor a guarantee of Runner placement or storage
+admission. The response exposes no tenant totals or peer identities. Controller
+`GET /v1/usage` and platform `GET /v1/deployment-usage` keep their existing scope.
+
+The application CLI provides `secondbox subject usage`; Go and TypeScript SDKs
+provide `GetSubjectCapacity` and `getSubjectCapacity` respectively.
+
+Sandbox reads and listings include `workspace.storageObservation`. `sizeBytes`
+remains logical filesystem capacity. An available observation reports
+`allocatedBytes`: the current image inode's allocated 512-byte blocks, including
+blocks shared by reflinks and Snapshots. This is not guest filesystem usage or
+uniquely consumed physical disk. Do not sum it with Snapshot allocations as an
+exact host total. Guest-used bytes are not collected: observing a retained
+Workspace never boots compute or mounts its filesystem.
+
+Unavailable measurements have no byte value and use `not_observed`, `missing`,
+`probe_failed`, or `deleted`. An actual observation includes its original
+`observedAt`; no report leaves the previous timestamp unchanged. Compare that
+timestamp with the current time to identify stale evidence. A wholly absent
+Workspace directory is not discovered by the local scan and leaves its last
+measurement stale; this does not claim the Workspace is recoverable.
+
+The nested `pressure` observation has its own timestamp and reports `healthy`,
+`warning`, `admission_denied`, or `unavailable`. It describes admission pressure
+relevant to that Workspace without revealing host identity, topology, or raw
+filesystem capacity. Firecracker reports its existing storage-pressure
+controller. The other backends currently have no equivalent controller and
+report pressure as unavailable. Healthy pressure is not a promise that a large
+allocation fits.
+
+These additions require a release containing the post-v0.12.0 API and SDK
+contract. Measurement reporting requires the matching new Runner build. Older
+or offline Runners produce unavailable or stale observations; no estimate is
+substituted. Migration `0027_workspace_storage_observations` adds nullable
+observation columns without rewriting Workspace data or changing retention.
+
 ## Signals
 
 - `GET /healthz` reports only that the HTTP process can answer.

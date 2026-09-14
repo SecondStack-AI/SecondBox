@@ -77,6 +77,20 @@ func TestManagementCommandsUseTypedAuthoritiesAndGeneratedRoutes(t *testing.T) {
 	}
 }
 
+func TestSubjectCapacityHasHumanView(t *testing.T) {
+	var output bytes.Buffer
+	ctx := managementPresentationContext(&output, cliui.OutputPlain)
+	capacity := secondboxclient.SubjectCapacity{SubjectRef: "retained-workspaces", Limits: secondboxclient.SubjectQuota{MaxSandboxes: 100}, Usage: secondboxclient.QuotaUsage{Sandboxes: 12}, Available: secondboxclient.QuotaHeadroom{Sandboxes: 4}}
+	if err := writeManagementResult(ctx, &output, capacity); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"retained-workspaces", "Sandboxes", "Reserved", "Subject limit", "Available", "100", "12"} {
+		if !strings.Contains(output.String(), label) {
+			t.Fatalf("Subject capacity output lacks %q: %s", label, output.String())
+		}
+	}
+}
+
 func TestManagementCredentialStructuredOutputCarriesBearerTokenOnce(t *testing.T) {
 	requestPath := writeManagementRequestFixture(t, `{"expiresAt":"2026-08-26T00:00:00Z","metadata":{}}`)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

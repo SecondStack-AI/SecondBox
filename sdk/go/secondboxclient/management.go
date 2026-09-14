@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 )
 
 func (client *Client) CreateTenant(ctx context.Context, request CreateTenantRequest, idempotencyKey string) (Tenant, error) {
@@ -33,6 +34,12 @@ func (client *Client) ListTenants(ctx context.Context, options PageOptions) (Ten
 func (client *Client) UpdateTenantEgressContext(ctx context.Context, tenantRef OwnershipRef, request UpdateTenantEgressContextRequest, expectedRevision int64, idempotencyKey string) (Tenant, error) {
 	var tenant Tenant
 	err := client.mutateManagementJSON(ctx, "updateTenantEgressContext", map[string]string{"tenantRef": tenantRef}, expectedRevision, idempotencyKey, request, &tenant)
+	return tenant, err
+}
+
+func (client *Client) UpdateTenantQuota(ctx context.Context, tenantRef OwnershipRef, request UpdateTenantQuotaRequest, expectedRevision int64, idempotencyKey string) (Tenant, error) {
+	var tenant Tenant
+	err := client.mutateManagementJSON(ctx, "updateTenantQuota", map[string]string{"tenantRef": tenantRef}, expectedRevision, idempotencyKey, request, &tenant)
 	return tenant, err
 }
 
@@ -161,6 +168,12 @@ func (client *Client) RevokeApplicationAuthority(ctx context.Context, authorityI
 	return authority, err
 }
 
+func (client *Client) GetSubjectCapacity(ctx context.Context) (SubjectCapacity, error) {
+	var capacity SubjectCapacity
+	err := client.RequestJSON(ctx, "getSubjectCapacity", CallOptions{}, &capacity)
+	return capacity, err
+}
+
 func (client *Client) GetTenantUsage(ctx context.Context, supplied ...PageOptions) (TenantUsage, error) {
 	if len(supplied) > 1 {
 		return TenantUsage{}, errors.New("SecondBox Tenant usage accepts at most one page option")
@@ -214,4 +227,16 @@ func (client *Client) mutateManagementJSON(ctx context.Context, operationID stri
 		options.ContentType = "application/json"
 	}
 	return client.RequestJSON(ctx, operationID, options, target)
+}
+
+func (client *Client) GetSubjectSandboxPolicy(ctx context.Context, subjectRef OwnershipRef, profile string) (SubjectSandboxPolicyObservation, error) {
+	var result SubjectSandboxPolicyObservation
+	err := client.RequestJSON(ctx, "getSubjectSandboxPolicy", CallOptions{PathParameters: map[string]string{"subjectRef": subjectRef}, QueryParameters: url.Values{"profile": []string{profile}}}, &result)
+	return result, err
+}
+
+func (client *Client) UpdateSubjectSandboxPolicy(ctx context.Context, subjectRef OwnershipRef, request SubjectSandboxPolicy, revision int64, key string) (SubjectSandboxPolicyObservation, error) {
+	var result SubjectSandboxPolicyObservation
+	err := client.mutateManagementJSON(ctx, "updateSubjectSandboxPolicy", map[string]string{"subjectRef": subjectRef}, revision, key, request, &result)
+	return result, err
 }

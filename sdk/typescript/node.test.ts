@@ -189,6 +189,7 @@ function sandboxFixture(): Sandbox {
   return {
     id: "sandbox-1",
     profile: "default",
+    lifecycle: { initialState: "running", idleSeconds: 60, maximumDurationSeconds: null, drainGraceSeconds: 10, leaseSeconds: 60 },
     profileRevisionId: "profile-revision-1",
     egressContext: null,
     resources: { vcpuCount: 1, memoryBytes: 1073741824, workspaceBytes: 1073741824 },
@@ -200,6 +201,7 @@ function sandboxFixture(): Sandbox {
       generation: 7,
       state: "ready",
       sizeBytes: 1_073_741_824,
+      storageObservation: { status: "unavailable", reason: "not_observed", pressure: { status: "unavailable" } },
       createdAt: "2026-07-28T00:00:00Z",
       updatedAt: "2026-07-28T00:00:00Z",
     },

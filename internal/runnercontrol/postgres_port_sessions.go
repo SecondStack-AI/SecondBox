@@ -737,7 +737,8 @@ func enforcePortSessionCapacity(
 ) error {
 	var tenantState string
 	var tenantExpiresAt *time.Time
-	var tenantMaximum, tenantActive int64
+	var tenantActive int64
+	var tenantMaximum contracts.PolicyLimit
 	if err := tx.QueryRow(ctx, `
 		SELECT tenant.state,tenant.expires_at,quota.max_port_sessions,
 		       (SELECT count(*) FROM secondbox.port_sessions
@@ -759,7 +760,7 @@ func enforcePortSessionCapacity(
 	if tenantState != contracts.TenantStateActive {
 		return ports.ErrInvalidLifecycleTransition
 	}
-	var subjectMaximum int64
+	var subjectMaximum contracts.PolicyLimit
 	if err := tx.QueryRow(ctx, `
 		SELECT max_port_sessions FROM secondbox.subject_quotas
 		WHERE tenant_ref=$1 AND subject_ref=$2 FOR UPDATE`,
@@ -779,7 +780,7 @@ func enforcePortSessionCapacity(
 	).Scan(&subjectActive, &namedActive); err != nil {
 		return fmt.Errorf("SecondBox PortSession usage lookup: %w", err)
 	}
-	if tenantActive >= tenantMaximum || subjectActive >= subjectMaximum || namedActive >= policy.MaximumSessions {
+	if !tenantMaximum.Allows(tenantActive+1) || !subjectMaximum.Allows(subjectActive+1) || !policy.MaximumSessions.Allows(namedActive+1) {
 		return ports.ErrQuotaExceeded
 	}
 	return nil

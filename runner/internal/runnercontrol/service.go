@@ -1493,6 +1493,15 @@ func (s *RunnerProtocolService) sendHeartbeat(
 	connectionID string,
 	readiness BackendReadiness,
 ) error {
+	var storage []*runnerprotocol.WorkspaceStorageObservation
+	var pressure *runnerprotocol.StoragePressureObservation
+	if backend, ok := s.backend.(workspaceStorageBackend); ok {
+		var err error
+		storage, pressure, err = backend.ObserveWorkspaceStorage(context.Background())
+		if err != nil {
+			return fmt.Errorf("SecondBox Runner storage observation failed: %w", err)
+		}
+	}
 	return s.sendSequencedRunnerFrame(
 		stream,
 		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
@@ -1509,6 +1518,8 @@ func (s *RunnerProtocolService) sendHeartbeat(
 						ActiveAssignments: s.activeAssignments(),
 						DrainPhase:        s.drainPhase(),
 						StartupTiming:     s.startupTiming(),
+						WorkspaceStorage:  storage,
+						StoragePressure:   pressure,
 
 						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
 					},

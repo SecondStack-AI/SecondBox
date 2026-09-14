@@ -20,6 +20,11 @@ const contractPath = "contracts/openapi/v1/secondbox.openapi.json"
 var httpMethods = []string{"delete", "get", "patch", "post", "put"}
 
 var goContractSchemas = stringSet([]string{
+	"SandboxLifecycleLimits",
+ "SubjectSandboxPolicy",
+ "SubjectSandboxPolicyObservation",
+ "PolicyLimit",
+	"PositivePolicyLimit",
 	"AcquireLeaseRequest",
 	"AttributedExecutionPolicy",
 	"AttributedExecutionRequest",

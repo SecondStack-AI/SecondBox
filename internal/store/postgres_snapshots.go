@@ -105,9 +105,8 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot ProfileRevision decoding failed: %w", err)
 	}
-	if !input.Snapshot.RetainUntil.Equal(input.Snapshot.CreatedAt.Add(
-		time.Duration(spec.Retention.SnapshotRetentionSeconds) * time.Second,
-	)) {
+	if spec.Retention.SnapshotRetentionSeconds.IsUnlimited() && input.Snapshot.RetainUntil != nil ||
+		!spec.Retention.SnapshotRetentionSeconds.IsUnlimited() && (input.Snapshot.RetainUntil == nil || !input.Snapshot.RetainUntil.Equal(input.Snapshot.CreatedAt.Add(time.Duration(spec.Retention.SnapshotRetentionSeconds)*time.Second))) {
 		return contracts.Operation{}, ports.ErrQuotaExceeded
 	}
 	var count int64
@@ -125,7 +124,7 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	if err != nil {
 		return contracts.Operation{}, err
 	}
-	usage, err := readSubjectQuotaUsage(ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef)
+	usage, err := readSubjectQuotaUsage(ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef, input.Snapshot.CreatedAt)
 	if err != nil {
 		return contracts.Operation{}, err
 	}
@@ -133,7 +132,7 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	if err != nil {
 		return contracts.Operation{}, err
 	}
-	if count+1 > spec.Retention.SnapshotLimit || usage.snapshots+1 > quota.MaxSnapshots ||
+	if !spec.Retention.SnapshotLimit.Allows(count+1) || !quota.MaxSnapshots.Allows(usage.snapshots+1) ||
 		tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, quotaUsage{snapshots: 1}) {
 		return contracts.Operation{}, ports.ErrQuotaExceeded
 	}

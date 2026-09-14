@@ -63,6 +63,9 @@ type SandboxStore interface {
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
 	GetTenantOperation(ctx context.Context, tenantRef, operationID string) (contracts.Operation, error)
 	GetSubjectUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.SubjectUsage, error)
+	GetSubjectSandboxPolicy(context.Context, string, string, string, time.Time) (contracts.SubjectSandboxPolicyObservation, error)
+	UpdateSubjectSandboxPolicy(context.Context, string, string, contracts.SubjectSandboxPolicy, int64, time.Time, ports.AdminIdempotencyInput) (contracts.SubjectSandboxPolicyObservation, ports.AdminIdempotencyResult, error)
+	GetSubjectCapacity(ctx context.Context, tenantRef, subjectRef string, observedAt time.Time) (contracts.SubjectCapacity, error)
 	RelocateSandbox(ctx context.Context, input ports.WorkspaceRelocationInput) (contracts.Operation, error)
 }
 
@@ -106,6 +109,7 @@ type ManagementStore interface {
 	ListTenants(context.Context, int, string) (contracts.TenantPage, error)
 	SetTenantState(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
 	UpdateManagedTenantEgressContext(context.Context, string, *string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
+	UpdateManagedTenantQuota(context.Context, string, contracts.TenantQuota, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Tenant, ports.AdminIdempotencyResult, error)
 	CreateManagedSubject(context.Context, contracts.Subject, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
 	GetSubject(context.Context, string, string) (contracts.Subject, error)
 	ListSubjects(context.Context, string, int, string) (contracts.SubjectPage, error)
@@ -542,6 +546,13 @@ func (service *ControlPlaneService) GetSubjectUsage(
 		return contracts.SubjectUsage{}, ports.ErrAuthorizationDenied
 	}
 	return service.store.GetSubjectUsage(ctx, principal.TenantRef, principal.SubjectRef)
+}
+
+func (service *ControlPlaneService) GetSubjectCapacity(ctx context.Context, principal contracts.Principal) (contracts.SubjectCapacity, error) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
+		return contracts.SubjectCapacity{}, ports.ErrAuthorizationDenied
+	}
+	return service.store.GetSubjectCapacity(ctx, principal.TenantRef, principal.SubjectRef, service.now().UTC())
 }
 
 // GetOperation returns one durable mutation observation inside the authenticated Project.
@@ -1216,14 +1227,25 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		spec.Lifecycle.InitialState != contracts.SandboxDesiredStateRunning {
 		return invalidRequest(errors.New("SecondBox Profile initial state must be stopped or running"))
 	}
-	if spec.Lifecycle.DrainGraceSeconds < 1 || spec.Lifecycle.IdleSeconds < 1 ||
-		spec.Lifecycle.MaximumDurationSeconds < 1 || spec.Lifecycle.LeaseSeconds < 1 {
+	if spec.Lifecycle.DrainGraceSeconds < 1 || !spec.Lifecycle.IdleSeconds.Valid(1) ||
+		!spec.Lifecycle.MaximumDurationSeconds.Valid(1) || spec.Lifecycle.LeaseSeconds < 1 {
 		return invalidRequest(errors.New("SecondBox Profile lifecycle limits must be positive"))
 	}
-	if spec.Retention.SnapshotRetentionSeconds < 1 || spec.Retention.SnapshotLimit < 0 {
+	if err := (contracts.SandboxLifecycleLimits{IdleSeconds: spec.Lifecycle.IdleSeconds, MaximumDurationSeconds: spec.Lifecycle.MaximumDurationSeconds}).Validate(); err != nil {
+		return invalidRequest(err)
+	}
+	if spec.LifecycleCeiling != nil {
+		if err := spec.LifecycleCeiling.Validate(); err != nil {
+			return invalidRequest(err)
+		}
+		if !spec.Lifecycle.IdleSeconds.Within(spec.LifecycleCeiling.IdleSeconds) || !spec.Lifecycle.MaximumDurationSeconds.Within(spec.LifecycleCeiling.MaximumDurationSeconds) {
+			return invalidRequest(errors.New("SecondBox lifecycle defaults exceed Profile ceiling"))
+		}
+	}
+	if !spec.Retention.SnapshotRetentionSeconds.Valid(1) || !spec.Retention.SnapshotLimit.Valid(0) {
 		return invalidRequest(errors.New("SecondBox Profile retention limits are invalid"))
 	}
-	if spec.Execution.MaximumDeadlineMilliseconds < 1 || spec.Execution.MaximumBufferedOutputBytes < 1 ||
+	if !spec.Execution.MaximumDeadlineMilliseconds.Valid(1) || spec.Execution.MaximumBufferedOutputBytes < 1 ||
 		spec.Execution.MaximumBufferedOutputBytes > runnercontrol.MaximumBufferedExecBytes ||
 		spec.Execution.StreamWindowBytes < 4096 || spec.Execution.MaximumTransferBytes < 1 ||
 		spec.Execution.TerminalDetachSeconds < 0 {
@@ -1260,7 +1282,7 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	for _, port := range spec.Ports {
 		if port.Name == "" || port.Port < 1 || port.Port > 65535 ||
 			(port.Protocol != "tcp" && port.Protocol != "http") ||
-			port.MaximumSessions < 1 || port.MaximumSessionSeconds < 1 {
+			!port.MaximumSessions.Valid(1) || port.MaximumSessionSeconds < 1 {
 			return invalidRequest(errors.New("SecondBox Profile exposed-port policy is invalid"))
 		}
 	}

@@ -34,6 +34,10 @@ import {
   type SandboxResourceRequest,
   type Sandbox,
   type SandboxPage,
+  type SubjectCapacity,
+  type SubjectSandboxPolicy,
+  type SubjectSandboxPolicyObservation,
+  type SubjectQuota,
   type SandboxState,
   type StartSandboxRequest,
   type Snapshot,
@@ -51,6 +55,13 @@ import {
 } from "./transport.ts";
 
 export type {
+  PolicyLimit,
+  PositivePolicyLimit,
+  SandboxLifecycleLimits,
+  SubjectSandboxPolicy,
+  SubjectSandboxPolicyObservation,
+  SubjectQuota,
+  TenantQuota,
   BufferedExecRequest,
   Command,
   ExecStreamFrame,
@@ -71,6 +82,7 @@ export type {
   Sandbox,
   SandboxPage,
   SandboxState,
+  SubjectCapacity,
   Snapshot,
   SnapshotPage,
   RunnerPool,
@@ -153,6 +165,26 @@ export class SecondBox {
 
   public constructor(transport: SecondBoxClient) {
     this.transport = transport;
+  }
+
+  public async getSubjectCapacity(): Promise<SubjectCapacity> {
+    return this.requestJSON<SubjectCapacity>("getSubjectCapacity");
+  }
+
+  public async getApplicationSandboxPolicy(profile: string): Promise<SubjectSandboxPolicyObservation> {
+    return this.requestJSON("getApplicationSandboxPolicy", { queryParameters: { profile } });
+  }
+
+  public async getSubjectSandboxPolicy(subjectRef: string, profile: string): Promise<SubjectSandboxPolicyObservation> {
+    return this.requestJSON("getSubjectSandboxPolicy", { pathParameters: { subjectRef }, queryParameters: { profile } });
+  }
+
+  public async updateSubjectSandboxPolicy(subjectRef: string, revision: number, policy: SubjectSandboxPolicy, key: string): Promise<SubjectSandboxPolicyObservation> {
+    return this.requestJSON("updateSubjectSandboxPolicy", {
+      pathParameters: { subjectRef },
+      headers: { "If-Match": revisionETag(revision), "Idempotency-Key": key },
+      body: encodeJSONBody(policy),
+    });
   }
 
   public async request(

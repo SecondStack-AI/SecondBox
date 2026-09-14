@@ -328,7 +328,7 @@ func TestBufferedExecTransportSetupFailureReleasesConcurrentOperationQuota(t *te
 		MaximumOutputBytes: 1_024,
 	}
 	unavailableService := newDataPlaneService(nil)
-	for attempt := int64(0); attempt <= quota.MaxConcurrentOperations; attempt++ {
+	for attempt := int64(0); quota.MaxConcurrentOperations.Allows(attempt); attempt++ {
 		_, _, err := unavailableService.ExecuteSandboxCommand(
 			t.Context(), principal, fmt.Sprintf("setup-failure-request-%d", attempt),
 			sandbox.ID, sandbox.Generation, "",

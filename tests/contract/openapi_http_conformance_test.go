@@ -30,6 +30,9 @@ type auditedHTTPOperation struct {
 }
 
 var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
+	"getApplicationSandboxPolicy":     {"getApplicationSandboxPolicy", "200", "SubjectSandboxPolicyObservation", nil, nil},
+	"getSubjectSandboxPolicy":         {"getSubjectSandboxPolicy", "200", "SubjectSandboxPolicyObservation", nil, []string{"ETag"}},
+	"updateSubjectSandboxPolicy":      {"updateSubjectSandboxPolicy", "200", "SubjectSandboxPolicyObservation", []string{"If-Match", "Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
 	"listTenants":                     {"listTenants", "200", "TenantPage", nil, nil},
 	"createTenant":                    {"createTenant", "201", "Tenant", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getTenant":                       {"getTenant", "200", "Tenant", nil, []string{"ETag"}},
@@ -53,6 +56,8 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"rotateApplicationAuthority":      {"applicationAuthorityManagementAction", "200", "ApplicationCredentialResponse", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"revokeApplicationAuthority":      {"applicationAuthorityManagementAction", "200", "ApplicationAuthority", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getTenantUsage":                  {"getTenantUsage", "200", "TenantUsage", nil, nil},
+	"getSubjectCapacity":              {"getSubjectCapacity", "200", "SubjectCapacity", nil, nil},
+	"updateTenantQuota":               {"updateTenantQuota", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getDeploymentUsage":              {"getDeploymentUsage", "200", "DeploymentUsage", nil, nil},
 	"listProfiles":                    {"listProfiles", "200", "ProfilePage", nil, nil},
 	"createProfile":                   {"createProfile", "201", "Profile", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},

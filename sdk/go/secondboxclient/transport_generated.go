@@ -131,6 +131,9 @@ var operations = map[string]OperationMetadata{
 	"getApplicationAuthority": {
 		OperationID: "getApplicationAuthority", Method: "GET", PathTemplate: "/v1/application-authorities/{authorityId}",
 	},
+	"getApplicationSandboxPolicy": {
+		OperationID: "getApplicationSandboxPolicy", Method: "GET", PathTemplate: "/v1/subject-policy",
+	},
 	"getDeploymentTiming": {
 		OperationID: "getDeploymentTiming", Method: "GET", PathTemplate: "/v1/timings",
 	},
@@ -169,6 +172,12 @@ var operations = map[string]OperationMetadata{
 	},
 	"getSubject": {
 		OperationID: "getSubject", Method: "GET", PathTemplate: "/v1/subjects/{subjectRef}",
+	},
+	"getSubjectCapacity": {
+		OperationID: "getSubjectCapacity", Method: "GET", PathTemplate: "/v1/subject-usage",
+	},
+	"getSubjectSandboxPolicy": {
+		OperationID: "getSubjectSandboxPolicy", Method: "GET", PathTemplate: "/v1/subjects/{subjectRef}/sandbox-policy",
 	},
 	"getTenant": {
 		OperationID: "getTenant", Method: "GET", PathTemplate: "/v1/tenants/{tenantRef}",
@@ -319,10 +328,24 @@ var operations = map[string]OperationMetadata{
 		},
 		RequestBodyRequired: true,
 	},
+	"updateSubjectSandboxPolicy": {
+		OperationID: "updateSubjectSandboxPolicy", Method: "PUT", PathTemplate: "/v1/subjects/{subjectRef}/sandbox-policy",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "SubjectSandboxPolicy"},
+		},
+		RequestBodyRequired: true,
+	},
 	"updateTenantEgressContext": {
 		OperationID: "updateTenantEgressContext", Method: "PUT", PathTemplate: "/v1/tenants/{tenantRef}/egress-context",
 		RequestBody: []OperationMediaType{
 			{ContentType: "application/json", Schema: "UpdateTenantEgressContextRequest"},
+		},
+		RequestBodyRequired: true,
+	},
+	"updateTenantQuota": {
+		OperationID: "updateTenantQuota", Method: "PUT", PathTemplate: "/v1/tenants/{tenantRef}/quota",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "UpdateTenantQuotaRequest"},
 		},
 		RequestBodyRequired: true,
 	},
