@@ -15,9 +15,14 @@ A Profile declaration contains its complete ordered lineage. Every revision carr
 
 The release owns three amd64 standard bundles:
 
-- `agent-compartment` is short-lived, has no public Ports or Snapshots, and can reach only `agent-gateway.secondbox.internal` over HTTPS.
+- `agent-compartment` defaults to 60-second idle shutdown and unlimited maximum runtime, has no public Ports or Snapshots, and can reach only `agent-gateway.secondbox.internal` over HTTPS.
 - `durable-coding` is a bounded long-lived workspace with Snapshots, terminal detach, and the named `development-http` Port; it can reach only `platform-gateway.secondbox.internal` over HTTPS.
-- `agent-compartment-isolated` has the command, file, workspace, cancellation, and bounded lifecycle surface of `agent-compartment`, but its network policy is `deny_all`, it exposes no Ports, and it requires no logical gateway.
+- `agent-compartment-isolated` has the same lifecycle defaults and command, file, workspace, and cancellation surface as `agent-compartment`, but its network policy is `deny_all`, it exposes no Ports, and it requires no logical gateway.
+
+Both Agent bundles declare unlimited idle/runtime delegation ceilings. Subject selections
+apply at new Sandbox creation; existing Sandboxes keep their pinned lifecycle. See
+[configurable limits](../design/configurable-limits.md) for `lifecycleCeiling` omission and
+explicit-null semantics. Individual commands and ownership leases remain bounded.
 
 The bundle resolver takes runtime/toolchain identity from the verified release artifact manifest. Standard documents contain no tokens, application authorities, runner credentials, host paths, or storage keys.
 

@@ -19,11 +19,13 @@ func TestScenarioSnapshotDurabilityAndInPlaceRestore(t *testing.T) {
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)
 	waitForScenarioRunner(t, fixture, 90*time.Second)
+	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
+	spec.Retention.SnapshotRetentionSeconds = contracts.Unlimited
 	profile := createScenarioProfile(
 		t,
 		fixture,
 		"scenario-snapshot-durability",
-		scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning),
+		spec,
 	)
 	handle, _ := createScenarioSandbox(t, fixture, profile, "snapshot-durability")
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
@@ -56,7 +58,7 @@ func TestScenarioSnapshotDurabilityAndInPlaceRestore(t *testing.T) {
 	)
 	if snapshot.SourceGeneration != stopped.Generation ||
 		snapshot.SandboxID != stopped.ID ||
-		snapshot.State != "ready" {
+		snapshot.State != "ready" || snapshot.RetainUntil != nil {
 		t.Fatalf("SecondBox scenario ready Snapshot = %#v", snapshot)
 	}
 	if createOperation.Kind != "snapshot_create" || createOperation.Snapshot == nil {
@@ -145,7 +147,7 @@ func TestScenarioSnapshotDurabilityAndInPlaceRestore(t *testing.T) {
 			PathParameters: map[string]string{"snapshotId": snapshot.ID},
 		},
 	)
-	if got.ID != snapshot.ID || got.State != "ready" {
+	if got.ID != snapshot.ID || got.State != "ready" || got.RetainUntil != nil {
 		t.Fatalf("SecondBox scenario get Snapshot = %#v", got)
 	}
 	page := scenarioJSON[contracts.SnapshotPage](

@@ -350,7 +350,7 @@ CREATE TABLE secondbox.snapshots (
     size_bytes bigint NOT NULL,
     metadata_json jsonb NOT NULL,
     state text NOT NULL,
-    retain_until timestamptz NOT NULL,
+    retain_until timestamptz,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
     retention_ended_at timestamptz

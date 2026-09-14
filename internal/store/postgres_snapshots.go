@@ -20,9 +20,9 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	ctx context.Context,
 	input ports.SnapshotCreationInput,
 ) (contracts.Operation, error) {
-	if input.Snapshot.RetainUntil == nil || input.EffectID == "" || input.CommandID == "" ||
+	if input.EffectID == "" || input.CommandID == "" ||
 		len(input.FencingToken) < 32 {
-		return contracts.Operation{}, errors.New("SecondBox Snapshot local effect identity, retention, and fence are required")
+		return contracts.Operation{}, errors.New("SecondBox Snapshot local effect identity and fence are required")
 	}
 	metadataJSON, err := json.Marshal(input.Snapshot.Metadata)
 	if err != nil {
@@ -153,7 +153,7 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 		snapshot.ID, snapshot.TenantRef, snapshot.SubjectRef, snapshot.SandboxID,
 		workspaceID, homeRunnerID, input.Operation.ID, input.EffectID,
 		generation, snapshot.Name, capacity, metadataJSON,
-		snapshot.RetainUntil.UTC(), snapshot.CreatedAt.UTC(),
+		snapshot.RetainUntil, snapshot.CreatedAt.UTC(),
 	); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot insert failed: %w", err)
 	}
@@ -577,7 +577,7 @@ func (store *PostgresControlPlaneStore) ListSnapshots(
 	}
 	rows, err := store.pool.Query(ctx, snapshotSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3
-		  AND state<>'deleted' AND retain_until>$4
+		  AND state<>'deleted' AND (retain_until IS NULL OR retain_until>$4)
 		  AND ($5='' OR (created_at,id)<($6,$5))
 		ORDER BY created_at DESC,id DESC LIMIT $7`,
 		tenantRef, subjectRef, sandboxID, now.UTC(), cursorID, cursorCreatedAt, limit+1,
@@ -616,7 +616,7 @@ func (store *PostgresControlPlaneStore) GetSnapshot(
 	snapshot, err := scanSnapshot(store.pool.QueryRow(
 		ctx, snapshotSelect+`
 		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3
-		  AND state<>'deleted' AND retain_until>$4`,
+		  AND state<>'deleted' AND (retain_until IS NULL OR retain_until>$4)`,
 		snapshotID, tenantRef, subjectRef, now.UTC(),
 	))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -832,16 +832,14 @@ type snapshotScanner interface {
 func scanSnapshot(row snapshotScanner) (contracts.Snapshot, error) {
 	var snapshot contracts.Snapshot
 	var metadataJSON []byte
-	var retainUntil time.Time
 	if err := row.Scan(
 		&snapshot.ID, &snapshot.TenantRef, &snapshot.SubjectRef,
 		&snapshot.SandboxID, &snapshot.WorkspaceID, &snapshot.SourceGeneration,
 		&snapshot.Name, &snapshot.SizeBytes, &snapshot.State, &metadataJSON,
-		&retainUntil, &snapshot.CreatedAt, &snapshot.RetentionEndedAt,
+		&snapshot.RetainUntil, &snapshot.CreatedAt, &snapshot.RetentionEndedAt,
 	); err != nil {
 		return contracts.Snapshot{}, err
 	}
-	snapshot.RetainUntil = &retainUntil
 	if err := json.Unmarshal(metadataJSON, &snapshot.Metadata); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot metadata decoding failed: %w", err)
 	}
