@@ -15,9 +15,12 @@ type PolicyLimit int64
 
 const Unlimited PolicyLimit = -1
 
+// Policy integers remain exact in every supported JSON SDK.
+const MaximumPolicyLimit int64 = 1<<53 - 1
+
 func (limit PolicyLimit) IsUnlimited() bool { return limit == Unlimited }
 func (limit PolicyLimit) Valid(minimum int64) bool {
-	return limit.IsUnlimited() || int64(limit) >= minimum
+	return limit.IsUnlimited() || int64(limit) >= minimum && int64(limit) <= MaximumPolicyLimit
 }
 func (limit PolicyLimit) Allows(value int64) bool {
 	return limit.IsUnlimited() || value <= int64(limit)
@@ -58,8 +61,8 @@ func (limit *PolicyLimit) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
-	if value < 0 {
-		return errors.New("SecondBox policy limit must be nonnegative or null")
+	if value < 0 || value > MaximumPolicyLimit {
+		return errors.New("SecondBox policy limit must be an exact nonnegative JSON integer or null")
 	}
 	*limit = PolicyLimit(value)
 	return nil
@@ -136,3 +139,40 @@ func (policy *LifecyclePolicy) UnmarshalJSON(data []byte) error {
 }
 
 type PositivePolicyLimit = PolicyLimit
+
+func (request *CreateTenantRequest) UnmarshalJSON(data []byte) error {
+	type wire CreateTenantRequest
+	var decoded wire
+	if err := decodeCompletePolicy(data, &decoded, "aggregateQuota"); err != nil {
+		return err
+	}
+	*request = CreateTenantRequest(decoded)
+	return nil
+}
+func (request *CreateSubjectRequest) UnmarshalJSON(data []byte) error {
+	type wire CreateSubjectRequest
+	var decoded wire
+	if err := decodeCompletePolicy(data, &decoded, "quota"); err != nil {
+		return err
+	}
+	*request = CreateSubjectRequest(decoded)
+	return nil
+}
+func (request *UpdateSubjectQuotaRequest) UnmarshalJSON(data []byte) error {
+	type wire UpdateSubjectQuotaRequest
+	var decoded wire
+	if err := decodeCompletePolicy(data, &decoded, "quota"); err != nil {
+		return err
+	}
+	*request = UpdateSubjectQuotaRequest(decoded)
+	return nil
+}
+func (policy *RetentionPolicy) UnmarshalJSON(data []byte) error {
+	type wire RetentionPolicy
+	var decoded wire
+	if err := decodeCompletePolicy(data, &decoded, "snapshotLimit", "snapshotRetentionSeconds"); err != nil {
+		return err
+	}
+	*policy = RetentionPolicy(decoded)
+	return nil
+}

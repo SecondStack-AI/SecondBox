@@ -71,7 +71,69 @@ deleted. Idle timeout stops compute and preserves files. Its settlement watch ho
 interest through model thinking between guest operations. Reads of inventory or policy
 neither touch activity nor create Leases, start compute, or reconcile configuration.
 
-CT shows lifecycle first, then quota headroom and Profile execution/resource restrictions.
+CT shows lifecycle first, then Subject/Tenant quota restrictions and Profile execution/resource restrictions.
 A save shows its scope before deployment: future Sandboxes for lifecycle; immediate new
 admission for quotas. Desired values and SecondBox effective values remain distinct when
 application fails or the service has not received a compatible release.
+
+## Public operations and validation
+
+`GET /v1/subject-policy?profile=NAME` requires an application authority with `sandbox:read`
+and that Profile grant. It returns only its own Subject policy and applicable Tenant limits.
+Controller `GET` and `PUT /v1/subjects/{subjectRef}/sandbox-policy` select lifecycle limits
+for that Subject and Profile. PUT requires the complete `{profile,lifecycle}` object,
+`If-Match`, and `Idempotency-Key`; replay returns the original result, stale revisions fail.
+A Subject has one selected Profile policy; creation with another granted Profile inherits
+that Profile's defaults. Reads do not apply desired configuration.
+
+`GET /v1/subject-usage` returns finite or null `available` per dimension and
+`constrainingScopes` (`subject`, `tenant`, `tenant_and_subject`, or `none`). It exposes no
+peer identities. Expired port sessions do not consume observed admission headroom.
+Policy integers must fit exact JSON integers (at most 2^53−1); durations additionally must
+fit the implementation's duration clock. These representation bounds are not unlimited.
+
+The latest standard `agent-compartment` and `agent-compartment-isolated` revisions use
+60-second idle shutdown, null maximum runtime, and null delegated lifecycle ceilings.
+Published historical revision identities remain immutable. No existing Sandbox changes
+its pinned policy when those standard bundles are published.
+
+A newly requested finite lifecycle selection above its current Profile ceiling is rejected
+with `profile_policy_ceiling_exceeded`. If an operator subsequently publishes a tighter
+Profile ceiling, future effective policy is the minimum of the stored selection and that
+ceiling. Existing Sandboxes still retain their creation policy.
+
+## Verification evidence (2026-09-14)
+
+`just verify-generated`, `just test`, and `just test-contract` passed against the changed
+contract and a disposable PostgreSQL database. Public HTTP integration tests cover clean
+initialization, explicit null and missing fields, effective inheritance, quota admission,
+zero Snapshots, delegated ceilings, revision conflicts, and idempotent replay.
+Controlled lifecycle clocks cover finite runtime termination despite activity, unlimited
+runtime after 24 hours, and idle shutdown after interest ends.
+
+Qualified Firecracker `just test-scenario` ran these four selected scenarios without skips:
+
+- `TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota`
+- `TestScenarioOrdinaryLifecycleAndCapacityRelease`
+- `TestScenarioTouchExtendsIdleExpiry` (unlimited runtime, idle stop, restart and retained file)
+- `TestScenarioWorkspaceStorageObservationPreservesStoppedFilesAndActivity`
+
+SecondStack passed its Agent Platform typecheck, 36 focused provider/activity/fleet tests,
+35 PostgreSQL integration tests, and the live Flue kernel orchestration test.
+The controlled keepalive test holds active interest for 30 simulated minutes without guest
+operations. This is separate from the real Runner scenarios: a combined live Flue/Runner
+turn beyond the former 900-second deadline was not run.
+
+ControlTower build, focused lint, formatting, six-locale validation, and the configuration
+deployment unit test passed. Real browser and administrator API checks used
+`http://localhost:18080` through the regular proxy, a source-built SecondBox API, real
+PostgreSQL, and test-owned management authority. Checks covered finite/unlimited saves,
+effective Profile clamping, rejected writes, stale revisions, zero Snapshot quota,
+unauthorized writes, pending state, loading/error states, and desktop/mobile layouts.
+The scoped Compose render validated; broad `just init-config` was not run because it
+imports and deploys unrelated configuration and can publish artifacts outside this task.
+
+Test delegation and test-owned desired configuration were removed, and CT's original
+connection settings restored. Retained user Sandboxes and files were not modified.
+The full scenario matrix, gVisor qualification, and coordinated released-consumer rollout
+remain unverified. No release pin or published artifact was changed.

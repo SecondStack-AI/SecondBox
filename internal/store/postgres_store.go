@@ -389,7 +389,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 	resolvedLifecycle, err := profile.CurrentRevision.Spec.ResolveLifecycle(selectedLifecycle)
 	if err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("%w: %w", ports.ErrGrantEscalationDenied, err)
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("%w: %w", ports.ErrProfilePolicyCeilingExceeded, err)
 	}
 	lifecycleJSON, err := json.Marshal(resolvedLifecycle)
 	if err != nil {

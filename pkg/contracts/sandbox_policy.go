@@ -71,15 +71,25 @@ func (spec ProfileRevisionSpec) ResolveLifecycle(selection *SandboxLifecycleLimi
 		return LifecyclePolicy{}, err
 	}
 	ceiling := spec.LifecycleCeilings()
+	policy.IdleSeconds = MinimumPolicyLimit(selection.IdleSeconds, ceiling.IdleSeconds)
+	policy.MaximumDurationSeconds = MinimumPolicyLimit(selection.MaximumDurationSeconds, ceiling.MaximumDurationSeconds)
+	return policy, nil
+}
+
+// ValidateLifecycleSelection rejects new finite requests above the current grant.
+// Resolution still applies the current ceiling if an operator later tightens it.
+func (spec ProfileRevisionSpec) ValidateLifecycleSelection(selection SandboxLifecycleLimits) error {
+	if err := selection.Validate(); err != nil {
+		return err
+	}
+	ceiling := spec.LifecycleCeilings()
 	for _, axis := range []struct {
 		name           string
 		value, ceiling PolicyLimit
 	}{{"idleSeconds", selection.IdleSeconds, ceiling.IdleSeconds}, {"maximumDurationSeconds", selection.MaximumDurationSeconds, ceiling.MaximumDurationSeconds}} {
 		if !axis.value.IsUnlimited() && !axis.value.Within(axis.ceiling) {
-			return LifecyclePolicy{}, fmt.Errorf("SecondBox lifecycle %s exceeds Profile ceiling", axis.name)
+			return fmt.Errorf("SecondBox lifecycle %s exceeds Profile ceiling", axis.name)
 		}
 	}
-	policy.IdleSeconds = MinimumPolicyLimit(selection.IdleSeconds, ceiling.IdleSeconds)
-	policy.MaximumDurationSeconds = MinimumPolicyLimit(selection.MaximumDurationSeconds, ceiling.MaximumDurationSeconds)
-	return policy, nil
+	return nil
 }

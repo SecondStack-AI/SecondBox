@@ -592,7 +592,7 @@ func TestScenarioTouchExtendsIdleExpiry(t *testing.T) {
 	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
 	spec.Lifecycle.IdleSeconds = 5
 	spec.Lifecycle.DrainGraceSeconds = 1
-	spec.Lifecycle.MaximumDurationSeconds = 120
+	spec.Lifecycle.MaximumDurationSeconds = contracts.Unlimited
 	profile := createScenarioProfile(t, fixture, "scenario-touch-idle", spec)
 	handle, _ := createScenarioSandbox(t, fixture, profile, "touch-idle")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -601,6 +601,11 @@ func TestScenarioTouchExtendsIdleExpiry(t *testing.T) {
 	ready := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
 	if ready.LastActivityAt == nil {
 		t.Fatal("SecondBox scenario ready Sandbox omitted lastActivityAt")
+	}
+	writeScenarioFile(t, ctx, fixture.subject, handle, "idle-retained.txt", []byte("survives idle stop"))
+	ready, err := handle.Refresh(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
 	initialActivity := ready.LastActivityAt.UTC()
 	originalExpiry := initialActivity.Add(time.Duration(spec.Lifecycle.IdleSeconds) * time.Second)
@@ -658,6 +663,12 @@ func TestScenarioTouchExtendsIdleExpiry(t *testing.T) {
 			current.State == secondboxclient.SandboxStateStopping) &&
 			current.Instance != nil &&
 			current.Instance.TerminationReason == contracts.TerminationReasonIdleTimeout {
+			waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateStopped)
+			startScenarioSandbox(t, ctx, fixture, handle, "idle-retained-resume")
+			if content := readScenarioFile(t, ctx, fixture.subject, handle, "idle-retained.txt"); string(content) != "survives idle stop" {
+				t.Fatalf("idle stop lost file: %q", content)
+			}
+			stopScenarioSandbox(t, ctx, fixture, handle, "idle-retained-stop")
 			return
 		}
 		if current.Generation != ready.Generation {

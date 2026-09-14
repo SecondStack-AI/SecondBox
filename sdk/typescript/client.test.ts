@@ -1210,3 +1210,18 @@ test("high-level lifecycle and Metadata mutation use the observed revision fence
   assert.notEqual(idempotencies[0], "");
   assert.equal(handle.snapshot.revision, 2);
 });
+
+test("tenant controller policy updates omit application ownership headers and preserve explicit null", async () => {
+ const transport = new SecondBoxClient("https://secondbox.example", "controller-token", async (input, init) => {
+  const request = new Request(input, init);
+  assert.equal(request.method,"PUT");
+  assert.equal(request.headers.get("X-SecondBox-Tenant-Ref"),null);
+  assert.equal(request.headers.get("X-SecondBox-Subject-Ref"),null);
+  assert.equal(request.headers.get("If-Match"),'"revision-4"');
+  assert.equal(request.headers.get("Idempotency-Key"),"policy-update");
+  assert.deepEqual(await request.json(),{profile:"agent",lifecycle:{idleSeconds:60,maximumDurationSeconds:null}});
+  return Response.json({revision:5});
+ }, "tenant", "subject", "tenant_controller");
+ const result = await new SecondBox(transport).updateSubjectSandboxPolicy("subject",4,{profile:"agent",lifecycle:{idleSeconds:60,maximumDurationSeconds:null}},"policy-update");
+ assert.equal(result.revision,5);
+});

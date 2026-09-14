@@ -1242,10 +1242,10 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 			return invalidRequest(errors.New("SecondBox lifecycle defaults exceed Profile ceiling"))
 		}
 	}
-	if !spec.Retention.SnapshotRetentionSeconds.Valid(1) || !spec.Retention.SnapshotLimit.Valid(0) {
+	if !spec.Retention.SnapshotRetentionSeconds.Valid(1) || int64(spec.Retention.SnapshotRetentionSeconds) > int64((1<<63-1)/time.Second) || !spec.Retention.SnapshotLimit.Valid(0) {
 		return invalidRequest(errors.New("SecondBox Profile retention limits are invalid"))
 	}
-	if !spec.Execution.MaximumDeadlineMilliseconds.Valid(1) || spec.Execution.MaximumBufferedOutputBytes < 1 ||
+	if !spec.Execution.MaximumDeadlineMilliseconds.Valid(1) || int64(spec.Execution.MaximumDeadlineMilliseconds) > int64((1<<63-1)/time.Millisecond) || spec.Execution.MaximumBufferedOutputBytes < 1 ||
 		spec.Execution.MaximumBufferedOutputBytes > runnercontrol.MaximumBufferedExecBytes ||
 		spec.Execution.StreamWindowBytes < 4096 || spec.Execution.MaximumTransferBytes < 1 ||
 		spec.Execution.TerminalDetachSeconds < 0 {

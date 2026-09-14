@@ -171,8 +171,8 @@ export class SecondBox {
     return this.requestJSON<SubjectCapacity>("getSubjectCapacity");
   }
 
-  public async getApplicationSandboxPolicy(profile: string): Promise<SubjectSandboxPolicyObservation> {
-    return this.requestJSON("getApplicationSandboxPolicy", { queryParameters: { profile } });
+  public async getApplicationSandboxPolicy(profile: string, signal?: AbortSignal): Promise<SubjectSandboxPolicyObservation> {
+    return this.requestJSON("getApplicationSandboxPolicy", { queryParameters: { profile }, ...(signal === undefined ? {} : { signal }) });
   }
 
   public async getSubjectSandboxPolicy(subjectRef: string, profile: string): Promise<SubjectSandboxPolicyObservation> {
