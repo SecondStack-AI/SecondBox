@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Changed policy ceilings and quota dimensions to explicit integer-or-null values, with complete-object validation and nullable admission headroom. Added delegated Subject lifecycle selection for future Sandboxes; fresh Agent Profiles use unlimited maximum runtime while finite workloads retain age-based termination.
+
 - Rotated the Firecracker microVM bundle to `secondbox-0.12.0` with a new RSA-4096 trust anchor, shipping the guest port-credit and streaming-exec fixes from #127, #128, and #134. Existing deployments require reinstallation and resource recreation because the guided updater refuses bundle digest changes. See [v0.12.0 release notes](docs/releases/v0.12.0.md) for the fingerprint and bundle identity.
 
 - Added a lean release tier with sharded Firecracker and local gVisor qualification, amd64 images, and one installer guest. `just nightly` retains the full scenario matrix; `just release VERSION --full` also builds arm64 images and runs all installer modes. Manifests record built platforms and evidence remains commit-exact.

@@ -48,6 +48,10 @@ func TestPolicyLimitObjectsRequireEveryDimension(t *testing.T) {
 		target   any
 		document string
 	}{
+		{"create subject quota", &CreateSubjectRequest{}, `{"ref":"subject"}`},
+		{"create tenant quota", &CreateTenantRequest{}, `{"ref":"tenant"}`},
+		{"replace subject quota", &UpdateSubjectQuotaRequest{}, `{}`},
+		{"retention snapshot count", &RetentionPolicy{}, `{"snapshotRetentionSeconds":3600}`},
 		{"subject quota", &QuotaLimits{}, `{"maxSandboxes":null}`},
 		{"tenant quota", &TenantQuota{}, `{"maxSandboxes":null}`},
 		{"lifecycle", &LifecyclePolicy{}, `{"initialState":"running","drainGraceSeconds":10,"idleSeconds":60,"leaseSeconds":60}`},
@@ -58,5 +62,17 @@ func TestPolicyLimitObjectsRequireEveryDimension(t *testing.T) {
 				t.Fatalf("incomplete policy error = %v", err)
 			}
 		})
+	}
+}
+
+func TestLifecycleResolutionAlwaysAppliesCurrentProfileCeiling(t *testing.T) {
+	spec := ProfileRevisionSpec{Lifecycle: LifecyclePolicy{IdleSeconds: 60, MaximumDurationSeconds: Unlimited}, LifecycleCeiling: &SandboxLifecycleLimits{IdleSeconds: 100, MaximumDurationSeconds: Unlimited}}
+	selection := SandboxLifecycleLimits{IdleSeconds: 600, MaximumDurationSeconds: Unlimited}
+	if err := spec.ValidateLifecycleSelection(selection); err == nil {
+		t.Fatal("new selection above Profile ceiling accepted")
+	}
+	effective, err := spec.ResolveLifecycle(&selection)
+	if err != nil || effective.IdleSeconds != 100 || effective.MaximumDurationSeconds != Unlimited {
+		t.Fatalf("effective parent policy = %+v, %v", effective, err)
 	}
 }

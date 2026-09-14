@@ -573,6 +573,7 @@ const (
 	ProblemCodeInternalError                        ProblemCode = "internal_error"
 	ProblemCodeTerminalReplayEvicted                ProblemCode = "terminal_replay_evicted"
 	ProblemCodeWaitExpired                          ProblemCode = "wait_expired"
+	ProblemCodeProfilePolicyCeilingExceeded         ProblemCode = "profile_policy_ceiling_exceeded"
 )
 
 type ProblemDetail struct {

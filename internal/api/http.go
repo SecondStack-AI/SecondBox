@@ -1065,6 +1065,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusServiceUnavailable, "egress_context_unavailable", "Sandbox egress context is unavailable", true
 	case errors.Is(err, ports.ErrGrantEscalationDenied):
 		return http.StatusForbidden, "grant_escalation_denied", "Requested grant exceeds the Tenant ceiling", false
+	case errors.Is(err, ports.ErrProfilePolicyCeilingExceeded):
+		return http.StatusForbidden, "profile_policy_ceiling_exceeded", "Requested lifecycle policy exceeds the Profile ceiling", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):
 		return http.StatusBadRequest, "invalid_request", "List page cursor is invalid", false
 	case errors.Is(err, ports.ErrPortPolicyDenied):

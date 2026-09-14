@@ -56,7 +56,7 @@ func readSubjectSandboxPolicy(ctx context.Context, tx pgx.Tx, tenantRef, subject
 	}
 	effective, err := profile.CurrentRevision.Spec.ResolveLifecycle(limits)
 	if err != nil {
-		return result, fmt.Errorf("%w: %w", ports.ErrGrantEscalationDenied, err)
+		return result, fmt.Errorf("%w: %w", ports.ErrProfilePolicyCeilingExceeded, err)
 	}
 	spec := profile.CurrentRevision.Spec
 	return contracts.SubjectSandboxPolicyObservation{
@@ -111,8 +111,8 @@ func (store *PostgresControlPlaneStore) UpdateSubjectSandboxPolicy(ctx context.C
 	if profile.State != "enabled" {
 		return result, receipt, ports.ErrProfileDisabled
 	}
-	if _, err := profile.CurrentRevision.Spec.ResolveLifecycle(&selection.Lifecycle); err != nil {
-		return result, receipt, fmt.Errorf("%w: %w", ports.ErrGrantEscalationDenied, err)
+	if err := profile.CurrentRevision.Spec.ValidateLifecycleSelection(selection.Lifecycle); err != nil {
+		return result, receipt, fmt.Errorf("%w: %w", ports.ErrProfilePolicyCeilingExceeded, err)
 	}
 	encoded, err := json.Marshal(selection)
 	if err != nil {
