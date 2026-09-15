@@ -161,7 +161,8 @@ func (broker *PostgresEffectBroker) queueWorkspaceDelete(
 	replaceFailedCreate := (workspace.Mutation.Kind == "create" ||
 		workspace.Mutation.Kind == "clone") &&
 		workspace.Mutation.State == "failed"
-	if workspace.Mutation.State == "" || replaceFailedCreate {
+	mutationAcquired := workspace.Mutation.State == "" || replaceFailedCreate
+	if mutationAcquired {
 		tag, err := tx.Exec(ctx, `
 			UPDATE secondbox.workspaces
 			SET state='deleting',mutation_kind='workspace_delete',mutation_id=$2,
@@ -190,6 +191,7 @@ func (broker *PostgresEffectBroker) queueWorkspaceDelete(
 	handled, err := broker.resumeWorkspaceDeleteEffect(
 		ctx, tx, claim, locked, effectID, initialCommandID,
 		operationID, requestID, now.UTC(), nextReconcileAt.UTC(),
+		mutationAcquired,
 	)
 	if err != nil {
 		return err
@@ -272,6 +274,7 @@ func (broker *PostgresEffectBroker) resumeWorkspaceDeleteEffect(
 	requestID string,
 	now time.Time,
 	nextReconcileAt time.Time,
+	mutationAcquired bool,
 ) (bool, error) {
 	var state, currentCommandID string
 	var retryCount int64
@@ -300,7 +303,7 @@ func (broker *PostgresEffectBroker) resumeWorkspaceDeleteEffect(
 			"effectId", effectID,
 		)
 		if err := releaseEffectReconcileClaim(
-			ctx, tx, claim, now, nextReconcileAt, "Workspace delete",
+			ctx, tx, claim, now, nextReconcileAt, "Workspace delete", mutationAcquired,
 		); err != nil {
 			return false, err
 		}
@@ -308,7 +311,7 @@ func (broker *PostgresEffectBroker) resumeWorkspaceDeleteEffect(
 	}
 	if state == "queued" && effectDeadline.After(now) {
 		if err := releaseEffectReconcileClaim(
-			ctx, tx, claim, now, nextReconcileAt, "Workspace delete",
+			ctx, tx, claim, now, nextReconcileAt, "Workspace delete", mutationAcquired,
 		); err != nil {
 			return false, err
 		}
@@ -366,7 +369,7 @@ func (broker *PostgresEffectBroker) resumeWorkspaceDeleteEffect(
 		return false, fmt.Errorf("SecondBox lifecycle Workspace delete retry mutation update failed: %w", err)
 	}
 	if err := releaseEffectReconcileClaim(
-		ctx, tx, claim, now, nextReconcileAt, "Workspace delete",
+		ctx, tx, claim, now, nextReconcileAt, "Workspace delete", true,
 	); err != nil {
 		return false, err
 	}
@@ -953,7 +956,8 @@ func (broker *PostgresEffectBroker) queueStop(
 		workspace.Mutation.OperationID == operationID &&
 		workspace.Mutation.ExpectedGeneration == generation &&
 		workspace.Mutation.TargetGeneration == generation
-	if workspace.Mutation.State == "" || replaceFailedStart {
+	mutationAcquired := workspace.Mutation.State == "" || replaceFailedStart
+	if mutationAcquired {
 		tag, err := tx.Exec(ctx, `
 			UPDATE secondbox.workspaces
 			SET mutation_kind='stop',mutation_id=$2,mutation_effect_id=$2,
@@ -998,6 +1002,7 @@ func (broker *PostgresEffectBroker) queueStop(
 	handled, err := broker.resumeStopEffect(
 		ctx, tx, claim, effectID, commandID, runnerID, assignmentID,
 		workspace.ID, payload, deadline, now.UTC(), nextReconcileAt.UTC(),
+		mutationAcquired || locked.SandboxState == contracts.SandboxStateFailed,
 	)
 	if err != nil {
 		return err
@@ -1106,6 +1111,7 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 	nextDeadline time.Time,
 	now time.Time,
 	nextReconcileAt time.Time,
+	recoveryChanged bool,
 ) (bool, error) {
 	var state, currentCommandID string
 	var retryCount, retryLimit int64
@@ -1136,7 +1142,7 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 	}
 	if state != "queued" || effectDeadline.After(now) {
 		if err := releaseEffectReconcileClaim(
-			ctx, tx, claim, now, nextReconcileAt, "stop",
+			ctx, tx, claim, now, nextReconcileAt, "stop", recoveryChanged,
 		); err != nil {
 			return false, err
 		}
@@ -1185,7 +1191,7 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 			return false, fmt.Errorf("SecondBox lifecycle stop exhausted Workspace mutation release failed: %w", err)
 		}
 		if err := releaseEffectReconcileClaim(
-			ctx, tx, claim, now, nextReconcileAt, "stop",
+			ctx, tx, claim, now, nextReconcileAt, "stop", true,
 		); err != nil {
 			return false, err
 		}
@@ -1252,13 +1258,19 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 		return false, ports.ErrRevisionConflict
 	}
 	if err := releaseEffectReconcileClaim(
-		ctx, tx, claim, now, nextReconcileAt, "stop",
+		ctx, tx, claim, now, nextReconcileAt, "stop", true,
 	); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
+// Pure waits retain the public revision and timestamp. Callers must include
+// changes in the enclosing transaction (mutation acquisition and failed-state
+// recovery), not just changes to the effect. Retries and exhaustion advance.
+// The Sandbox/Workspace and effect rows remain locked until commit; releasing
+// the non-empty owner rejects replay until another claim. The worker consumes
+// claims sequentially, never replaying an old claim after reacquiring the row.
 func releaseEffectReconcileClaim(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -1266,13 +1278,15 @@ func releaseEffectReconcileClaim(
 	now time.Time,
 	nextReconcileAt time.Time,
 	effectKind string,
+	advanceRevision bool,
 ) error {
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL,
-		    revision=revision+1,updated_at=$3
+		    revision=revision+CASE WHEN $6 THEN 1 ELSE 0 END,
+		    updated_at=CASE WHEN $6 THEN $3 ELSE updated_at END
 		WHERE id=$1 AND revision=$4 AND reconcile_owner=$5`,
-		claim.SandboxID, nextReconcileAt, now, claim.Revision, claim.WorkerID,
+		claim.SandboxID, nextReconcileAt, now, claim.Revision, claim.WorkerID, advanceRevision,
 	)
 	if err != nil {
 		return fmt.Errorf("SecondBox lifecycle %s reconcile release failed: %w", effectKind, err)
