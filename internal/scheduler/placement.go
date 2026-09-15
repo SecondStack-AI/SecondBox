@@ -3,10 +3,12 @@ package scheduler
 
 import (
 	"errors"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 var ErrNoCompatibleRunner = errors.New("SecondBox scheduler found no compatible runner")
@@ -162,7 +164,12 @@ func compatible(
 	if runner.BackendKind == "" || !runner.Capabilities["compute"] {
 		return false
 	}
-	if len(requirements.PreferredArtifactDigests) != 2 || !hasMaterialization(runner, requirements.PreferredArtifactDigests[0], requirements.PreferredArtifactDigests[1]) {
+	if len(requirements.PreferredArtifactDigests) != 2 {
+		return false
+	}
+	// Selected images are prepared and verified before placement, outside the fixed release catalog.
+	if !slices.Contains(requirements.RequiredCapabilities, contracts.RunnerCapabilityClientSelectedImage) &&
+		!hasMaterialization(runner, requirements.PreferredArtifactDigests[0], requirements.PreferredArtifactDigests[1]) {
 		return false
 	}
 	if requirements.GuestProtocolGeneration == 0 ||

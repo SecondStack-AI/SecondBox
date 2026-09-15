@@ -96,6 +96,31 @@ func TestSelectRunnerRejectsUnavailablePool(t *testing.T) {
 	}
 }
 
+func TestSelectRunnerUsesPreparedImageWithoutFixedMaterialization(t *testing.T) {
+	now := time.Now().UTC()
+	requirements := Requirements{
+		PoolName: "general", Architecture: "amd64",
+		RequiredCapabilities:     []string{"client-selected-image"},
+		GuestProtocolGeneration:  1,
+		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Instances: 1},
+		PreferredArtifactDigests: []string{"sha256:selected-runtime", "sha256:selected-toolchain"},
+	}
+	runner := RunnerSnapshot{
+		ID: "home", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
+	}
+	runner.Capabilities["client-selected-image"] = true
+	if _, err := SelectRunner(requirements, []RunnerSnapshot{runner}, now, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	delete(runner.Capabilities, "client-selected-image")
+	if _, err := SelectRunner(requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrNoCompatibleRunner) {
+		t.Fatalf("unsupported selected image placement = %v", err)
+	}
+}
+
 func TestSelectRunnerRequiresExactPinnedEgressContext(t *testing.T) {
 	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
 	required := "tenant-blue"
