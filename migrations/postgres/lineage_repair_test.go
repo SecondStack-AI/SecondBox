@@ -46,6 +46,8 @@ var postFenceMigrationFiles = []string{
 	"0025_remove_runner_pool_capacity_policy.sql",
 	"0026_instance_guest_features.sql",
 	"0027_workspace_storage_observations.sql",
+	"0028_policy_limits_and_retention.sql",
+	"0029_instance_execution_images.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {
