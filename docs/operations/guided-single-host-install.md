@@ -109,6 +109,14 @@ to bind the existing platform session to those refs.
 
 ## Update a completed installation
 
+**v0.14.0 requires a fresh deployment.** Do not use the update commands below
+to move an existing installation, including v0.13.0, to v0.14.0. Its initial
+migration checksum changed; `update --resume` cannot repair that mismatch.
+Install with a fresh database and a separate Runner storage root, and retain
+the previous deployment with its original state for rollback until its owners
+retire their Sandboxes. Do not reset migration records or attach retained
+Workspaces to the new database. See the [v0.14.0 release notes](../releases/v0.14.0.md).
+
 Updates are explicit and operator-initiated; there is no automatic background updater. Use the target release's bootstrap so the temporary, checksum-verified `secondbox-deploy` binary understands that release's update contract even when the installed binary is older.
 
 Before upgrading across migration `0024_snapshot_name_index.sql`, inspect every

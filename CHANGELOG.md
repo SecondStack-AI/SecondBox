@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Required a fresh database and separate Runner storage root for v0.14.0 because the unlimited Snapshot retention fix changes the initial migration checksum. See the [v0.14.0 release notes](docs/releases/v0.14.0.md).
+
 - Changed policy ceilings and quota dimensions to explicit integer-or-null values, with complete-object validation and nullable admission headroom. Added delegated Subject lifecycle selection for future Sandboxes; fresh Agent Profiles use unlimited maximum runtime while finite workloads retain age-based termination.
 
 - Rotated the Firecracker microVM bundle to `secondbox-0.12.0` with a new RSA-4096 trust anchor, shipping the guest port-credit and streaming-exec fixes from #127, #128, and #134. Existing deployments require reinstallation and resource recreation because the guided updater refuses bundle digest changes. See [v0.12.0 release notes](docs/releases/v0.12.0.md) for the fingerprint and bundle identity.
@@ -35,6 +37,8 @@
 - Removed static application authorities: `SECONDBOX_APPLICATION_AUTHORITIES_JSON`, the `applications.application_authorities_file` manifest key, and every deployment, Compose, installer, diagnostics, and support-bundle surface that carried them. v0.6.0 is a clean-install boundary with no import, compatibility, fallback, or dual-source mode for v0.5.2 installations ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
 
 ### Fixed
+
+- Preserved unlimited Snapshot retention through persistence and Snapshot reads/lists, without assigning an expiry.
 
 - Kept Workspace storage probes off the Runner heartbeat and command paths, bounded scans across reconnects, and omitted exclusive-byte measurements when unshared encoded extents prevent physical accounting.
 
