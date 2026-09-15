@@ -49,7 +49,7 @@ func TestPreparationCapacityBytesRejectsOverflow(t *testing.T) {
 	if got, err := preparationCapacityBytes(8<<30, 16<<30); err != nil || got != 32<<30 {
 		t.Fatalf("preparation capacity = %d, %v", got, err)
 	}
-	if _, err := preparationCapacityBytes(int64(^uint64(0)>>1), 1); err == nil {
+	if _, err := preparationCapacityBytes(int64(^uint64(0)>>1), 2); err == nil {
 		t.Fatal("overflowing preparation capacity was accepted")
 	}
 }
