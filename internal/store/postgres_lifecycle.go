@@ -677,11 +677,18 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		scheduled := nextReconcileAt.UTC()
 		scheduledAt = &scheduled
 	}
+	// Retiring an attributed generation normally parks its Sandbox. A pending
+	// explicit start belongs to the successor generation and must survive the
+	// cleanup of an earlier failed command.
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET state=$1,lifecycle_action=CASE WHEN $2='wait' THEN lifecycle_action ELSE $2 END,
 		    desired_state=CASE
-		      WHEN $2 IN ('drain','finish_stop') AND desired_state='running' AND EXISTS (
+		      WHEN $2 IN ('drain','finish_stop') AND desired_state='running' AND NOT EXISTS (
+		        SELECT 1 FROM secondbox.operations AS operation
+		        WHERE operation.sandbox_id=secondbox.sandboxes.id
+		          AND operation.kind='start' AND operation.state IN ('pending','running')
+		      ) AND EXISTS (
 		        SELECT 1 FROM secondbox.assignments AS assignment
 		        WHERE assignment.instance_id=secondbox.sandboxes.current_instance_id
 		          AND assignment.execution_authorization_ref IS NOT NULL
@@ -730,6 +737,24 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		}
 		if workspaceTag.RowsAffected() != 1 {
 			return ports.ErrGenerationFenced
+		}
+		if claim.DesiredState == contracts.SandboxDesiredStateRunning {
+			var startOperationID string
+			err := tx.QueryRow(ctx, `
+				SELECT id FROM secondbox.operations
+				WHERE sandbox_id=$1 AND kind='start' AND state IN ('pending','running')
+				ORDER BY created_at DESC,id DESC LIMIT 1`, claim.SandboxID,
+			).Scan(&startOperationID)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("SecondBox finish-stop pending start lookup failed: %w", err)
+			}
+			if err == nil {
+				if err := setWorkspaceMutation(ctx, tx, finishStopWorkspaceID, "start",
+					startOperationID, startOperationID, startOperationID,
+					nextGeneration, nextGeneration, now); err != nil {
+					return err
+				}
+			}
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.leases

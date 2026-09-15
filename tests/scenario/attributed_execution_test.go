@@ -4,6 +4,7 @@ package scenario_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -275,5 +276,73 @@ func TestScenarioAttributedConcurrentSandboxesKeepOwnAuthority(t *testing.T) {
 		if stopped.Instance != nil || stopped.DesiredState != contracts.SandboxDesiredStateStopped || stopped.Generation <= command.ready.Generation {
 			t.Fatalf("concurrent attributed command did not retire: %+v", stopped)
 		}
+	}
+}
+
+// A missing gateway fails before guest readiness. The failed generation must
+// remain fenced until the Runner retires it, then public lifecycle intents
+// must progress without manual database repair.
+func TestScenarioStartupFailureLifecycleRecovery(t *testing.T) {
+	for _, action := range []string{"start", "stop", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			fixture, handle, gateway := newScenarioAttributedSandbox(t)
+			if err := gateway.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+			defer cancel()
+			start := requestScenarioLifecycle(t, ctx, handle, "missing-gateway", func(options secondboxclient.LifecycleOptions) (contracts.Operation, error) {
+				return handle.Start(ctx, secondboxclient.StartSandboxRequest{
+					AttributedExecution: &contracts.AttributedExecutionRequest{
+						AuthorizationRef: "scenario-missing-gateway", ExpiresAt: time.Now().Add(time.Minute),
+					},
+				}, options)
+			})
+			_, err := fixture.subject.WaitOperation(ctx, start.ID, 100*time.Millisecond)
+			var failure *secondboxclient.OperationFailure
+			if !errors.As(err, &failure) || failure.Operation.State != contracts.OperationStateFailed || failure.Operation.Error == nil || failure.Operation.Error.Code != "startup_failed" {
+				t.Fatalf("missing gateway error=%v", err)
+			}
+			failed := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateFailed)
+			if failed.Instance == nil {
+				t.Fatal("failed generation lost its Instance before Runner cleanup")
+			}
+
+			// The next start is ordinary: it must not inherit attribution from
+			// the failed command, or get parked when that command is retired.
+			recovery := requestScenarioLifecycle(t, ctx, handle, "recover-"+action, func(options secondboxclient.LifecycleOptions) (contracts.Operation, error) {
+				switch action {
+				case "start":
+					return handle.Start(ctx, secondboxclient.StartSandboxRequest{}, options)
+				case "stop":
+					return handle.Stop(ctx, options)
+				default:
+					return handle.Delete(ctx, options)
+				}
+			})
+			profile := createScenarioProfile(t, fixture, "scenario-lifecycle", scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning))
+			other, created := createScenarioSandbox(t, fixture, profile, "after-startup-failure")
+			waitForScenarioOperation(t, ctx, fixture.subject, created)
+			waitForSandbox(t, ctx, other, secondboxclient.SandboxStateReady)
+			waitForScenarioOperation(t, ctx, fixture.subject, recovery)
+			wanted := secondboxclient.SandboxStateStopped
+			if action == "start" {
+				wanted = secondboxclient.SandboxStateReady
+			} else if action == "delete" {
+				wanted = secondboxclient.SandboxStateDeleted
+			}
+			recovered := waitForSandbox(t, ctx, handle, wanted)
+			if recovered.Generation <= failed.Generation {
+				t.Fatalf("recovery reused failed generation: before=%+v after=%+v", failed, recovered)
+			}
+			if action == "start" {
+				if recovered.Instance == nil || recovered.Instance.ID == failed.Instance.ID {
+					t.Fatalf("recovery reused failed Instance: %+v", recovered)
+				}
+				assertScenarioExited(t, executeScenarioCommand(t, ctx, handle, "printf recovered", 1024, "recovered-exec"), 0, "recovered", "")
+			} else if recovered.Instance != nil {
+				t.Fatalf("retired Sandbox still has an Instance: %+v", recovered)
+			}
+		})
 	}
 }

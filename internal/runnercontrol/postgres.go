@@ -4065,6 +4065,7 @@ func recordFenceEvent(
 	}
 	var (
 		stopEffectID, stopCommandID, workspaceID, homeRunnerID    string
+		stopCommandKind                                           string
 		mutationKind, mutationID, mutationEffectID, mutationState string
 		workspaceGeneration, capacity                             int64
 	)
@@ -4072,8 +4073,9 @@ func recordFenceEvent(
 		SELECT effect.id,effect.command_id,workspace.id,workspace.home_runner_id,
 		       workspace.mutation_kind,workspace.mutation_id,
 		       workspace.mutation_effect_id,workspace.mutation_state,
-		       workspace.generation,workspace.logical_capacity_bytes
+		       workspace.generation,workspace.logical_capacity_bytes,command.kind
 		FROM secondbox.lifecycle_effects AS effect
+		JOIN secondbox.runner_commands AS command ON command.id=effect.command_id
 		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=effect.sandbox_id
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		WHERE effect.assignment_id=$1 AND effect.kind='stop' AND effect.state='queued'
@@ -4082,7 +4084,7 @@ func recordFenceEvent(
 	).Scan(
 		&stopEffectID, &stopCommandID, &workspaceID, &homeRunnerID,
 		&mutationKind, &mutationID, &mutationEffectID, &mutationState,
-		&workspaceGeneration, &capacity,
+		&workspaceGeneration, &capacity, &stopCommandKind,
 	)
 	hasStopAuthority := stopAuthorityErr == nil
 	if stopAuthorityErr != nil && !errors.Is(stopAuthorityErr, pgx.ErrNoRows) {
@@ -4175,7 +4177,7 @@ func recordFenceEvent(
 	// replay for the same fence. The stop effect remains queued while its
 	// generation-advance command is outstanding, so treat that command as the
 	// durable idempotency marker instead of acknowledging and reinserting it.
-	if stopCommandID == localCommandID {
+	if stopCommandKind == "local-workspace" {
 		return nil
 	}
 	localCommand := &runnerv1.LocalWorkspaceCommand{

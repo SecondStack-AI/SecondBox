@@ -1,13 +1,18 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestReconcilerConsumesDurableClaimAndCommitsOneTransition(t *testing.T) {
@@ -439,6 +444,7 @@ func TestReconcilerProcessesClaimBatchSequentially(t *testing.T) {
 }
 
 type fakeReconcileStore struct {
+	applyErrors       map[string]error
 	claim             ports.LifecycleReconcileClaim
 	batchClaims       []ports.LifecycleReconcileClaim
 	batchSize         int
@@ -499,7 +505,7 @@ func (store *fakeReconcileStore) ApplyLifecycleAction(
 	store.action = action
 	store.appliedSandboxIDs = append(store.appliedSandboxIDs, claim.SandboxID)
 	store.nextReconcileAt = nextReconcileAt
-	return nil
+	return store.applyErrors[claim.SandboxID]
 }
 
 // The wake-up a restart schedules must agree with the decision the next
@@ -529,5 +535,57 @@ func TestReconcilerSchedulesRestartedSandboxFromItsOwnReadiness(t *testing.T) {
 	want := readyAt.Add(time.Minute)
 	if !store.nextReconcileAt.Equal(want) {
 		t.Fatalf("next reconciliation = %s, want idle deadline %s", store.nextReconcileAt, want)
+	}
+}
+
+func TestReconcilerBatchContinuesAfterRetryableClaimFailure(t *testing.T) {
+	for _, failure := range []error{
+		ports.ErrRevisionConflict, ports.ErrGenerationFenced,
+		ports.ErrWorkspaceMutation, ports.ErrSerializationContention,
+		&pgconn.PgError{Code: "40001"}, &pgconn.PgError{Code: "40P01"},
+	} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			store := &fakeReconcileStore{
+				batchClaims: []ports.LifecycleReconcileClaim{
+					{SandboxID: "failed", ObservedState: "creating", DesiredState: "stopped"},
+					{SandboxID: "healthy", ObservedState: "creating", DesiredState: "stopped"},
+				},
+				applyErrors: map[string]error{"failed": failure},
+			}
+			reconciler := Reconciler{Store: store, WorkerID: "worker", ClaimDuration: time.Minute,
+				PollInterval: time.Second, BatchSize: 2}
+			found, err := reconciler.RunBatch(t.Context(), time.Now, ports.LifecycleWakeTriggerImmediate)
+			if !found || !errors.Is(err, failure) || len(store.appliedSandboxIDs) != 2 {
+				t.Fatalf("found=%t error=%v processed=%v", found, err, store.appliedSandboxIDs)
+			}
+			fatal := errors.New("database unavailable")
+			store.applyErrors["healthy"] = fatal
+			_, err = reconciler.RunBatch(t.Context(), time.Now, ports.LifecycleWakeTriggerImmediate)
+			if !errors.Is(err, fatal) || IsRetryableReconcileError(err) {
+				t.Fatalf("fatal error hidden by earlier contention: %v", err)
+			}
+		})
+	}
+}
+
+func TestReconcilerDefersEffectRevisionConflictAtPollDeadline(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "failed", ObservedState: "failed", DesiredState: "running",
+	}}
+	now := time.Now()
+	reconciler := Reconciler{Store: store, Effects: &fakeEffectExecutor{err: ports.ErrRevisionConflict},
+		WorkerID: "worker", ClaimDuration: time.Minute, PollInterval: time.Second}
+	_, _, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerImmediate)
+	if err != nil || store.action != "wait" || !store.nextReconcileAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("error=%v action=%s next=%v", err, store.action, store.nextReconcileAt)
+	}
+	for _, field := range []string{"level=WARN", "sandboxId=failed", "action=start_instance", ports.ErrRevisionConflict.Error()} {
+		if !strings.Contains(logs.String(), field) {
+			t.Fatalf("deferral log omitted %q: %s", field, logs.String())
+		}
 	}
 }

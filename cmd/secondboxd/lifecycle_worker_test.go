@@ -47,10 +47,16 @@ func TestLifecycleReconcilerRunsImmediatelyAndStopsWithContext(t *testing.T) {
 func TestLifecycleReconcilerRetriesRevisionContention(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	store := &contentionLifecycleStore{cancel: cancel, applyErr: ports.ErrRevisionConflict}
+	started := time.Now()
+	wakeups := make(chan struct{}, 1)
+	wakeups <- struct{}{}
 	err := runLifecycleReconciler(ctx, lifecycle.Reconciler{
 		Store: store, WorkerID: "worker-contention",
-		ClaimDuration: time.Minute, PollInterval: time.Hour, BatchSize: 1,
-	}, nil)
+		ClaimDuration: time.Minute, PollInterval: 20 * time.Millisecond, BatchSize: 1,
+	}, wakeups)
+	if time.Since(started) < 20*time.Millisecond {
+		t.Fatal("revision contention retried without backoff")
+	}
 	if err != nil || store.applyCalls != 1 || store.claimCalls != 2 {
 		t.Fatalf(
 			"lifecycle contention result = error %v, claims %d, applies %d",
@@ -68,7 +74,7 @@ func TestReconcileWorkersRetryRawPostgresContention(t *testing.T) {
 			}
 			if err := runLifecycleReconciler(ctx, lifecycle.Reconciler{
 				Store: lifecycleStore, WorkerID: "worker-postgres-contention",
-				ClaimDuration: time.Minute, PollInterval: time.Hour, BatchSize: 1,
+				ClaimDuration: time.Minute, PollInterval: time.Millisecond, BatchSize: 1,
 			}, nil); err != nil || lifecycleStore.claimCalls != 2 {
 				t.Fatalf("lifecycle PostgreSQL contention result = error %v, claims %d", err, lifecycleStore.claimCalls)
 			}

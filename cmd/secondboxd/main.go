@@ -667,15 +667,15 @@ func runLifecycleReconciler(
 			if ctx.Err() != nil {
 				return nil
 			}
-			// Contention is retryable by definition. Treating it as fatal here
-			// shuts down the whole server, taking every attached runner with it,
-			// because two placements raced for the same row. A fenced
-			// generation is the same shape: the claim lost its race with a
-			// generation advance, and the next claim observes fresh state.
-			if errors.Is(err, ports.ErrRevisionConflict) ||
-				retryablePostgresContention(err) ||
-				errors.Is(err, ports.ErrGenerationFenced) {
-				wakeTrigger = ports.LifecycleWakeTriggerImmediate
+			if lifecycle.IsRetryableReconcileError(err) {
+				slog.WarnContext(ctx, "SecondBox lifecycle reconciliation retry delayed", "error", err)
+				// A stale claim cannot safely write a durable deferral. Bound
+				// retries here, ignoring notifications already queued by the
+				// conflicting work, so an unchanged row cannot spin forever.
+				if _, running := waitForWork(ctx, reconciler.PollInterval, nil); !running {
+					return nil
+				}
+				wakeTrigger = ports.LifecycleWakeTriggerDeadline
 				continue
 			}
 			return fmt.Errorf("SecondBox lifecycle reconciliation failed: %w", err)
