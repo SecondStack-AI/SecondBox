@@ -10,13 +10,13 @@ CREATE UNIQUE INDEX schema_migrations_version_idx ON secondbox.schema_migrations
 CREATE TABLE secondbox.subject_quotas (
     tenant_ref text NOT NULL,
     subject_ref text NOT NULL,
-    max_sandboxes bigint NOT NULL,
-    max_active_instances bigint NOT NULL,
-    max_cpu_millis bigint NOT NULL,
-    max_memory_bytes bigint NOT NULL,
-    max_snapshots bigint NOT NULL,
-    max_port_sessions bigint NOT NULL,
-    max_concurrent_operations bigint NOT NULL,
+    max_sandboxes bigint,
+    max_active_instances bigint,
+    max_cpu_millis bigint,
+    max_memory_bytes bigint,
+    max_snapshots bigint,
+    max_port_sessions bigint,
+    max_concurrent_operations bigint,
     updated_at timestamptz NOT NULL,
     PRIMARY KEY (tenant_ref, subject_ref)
 );
@@ -148,6 +148,7 @@ CREATE INDEX workspaces_pending_mutation_idx
     WHERE mutation_state <> '';
 
 CREATE TABLE secondbox.sandboxes (
+ lifecycle_policy_json jsonb,
     id text PRIMARY KEY,
     tenant_ref text NOT NULL,
     subject_ref text NOT NULL,
@@ -349,7 +350,7 @@ CREATE TABLE secondbox.snapshots (
     size_bytes bigint NOT NULL,
     metadata_json jsonb NOT NULL,
     state text NOT NULL,
-    retain_until timestamptz NOT NULL,
+    retain_until timestamptz,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
     retention_ended_at timestamptz

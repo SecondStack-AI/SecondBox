@@ -18,6 +18,6 @@ ALTER TABLE secondbox.tenant_quotas
     ALTER COLUMN max_active_subjects DROP NOT NULL,
     ALTER COLUMN max_application_authorities DROP NOT NULL;
 
-ALTER TABLE secondbox.sandboxes ADD COLUMN lifecycle_policy_json jsonb;
-ALTER TABLE secondbox.subjects ADD COLUMN sandbox_policy_json jsonb;
+ALTER TABLE secondbox.sandboxes ADD COLUMN IF NOT EXISTS lifecycle_policy_json jsonb;
+ALTER TABLE secondbox.subjects ADD COLUMN IF NOT EXISTS sandbox_policy_json jsonb;
 ALTER TABLE secondbox.snapshots ALTER COLUMN retain_until DROP NOT NULL;

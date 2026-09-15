@@ -14,6 +14,7 @@ CREATE TABLE secondbox.tenants (
 CREATE INDEX tenants_created_idx ON secondbox.tenants (created_at, ref);
 
 CREATE TABLE secondbox.subjects (
+ sandbox_policy_json jsonb,
     tenant_ref text NOT NULL,
     ref text NOT NULL,
     state text NOT NULL,
