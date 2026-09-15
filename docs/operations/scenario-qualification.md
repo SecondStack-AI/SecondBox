@@ -8,6 +8,8 @@ The suite never skips. It exits non-zero unless qualification is explicitly requ
 
 Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` and review
 all paths, signing-key fingerprints, component digests, and dedicated VM inputs.
+Set `SECONDBOX_SCENARIO_EXECUTION_IMAGE` to a signed digest reference that every Firecracker scenario Runner can retrieve.
+Configure the Runner registry allowlist, registry CA directory, execution-image public key, and execution-image limits for that reference.
 Supply `SECONDBOX_TEST_DATABASE_URL` for a disposable PostgreSQL database and
 run `npm ci --ignore-scripts` in the checkout. The example documents every key.
 

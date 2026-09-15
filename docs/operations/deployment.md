@@ -102,7 +102,8 @@ Existing manifests must remove the retired `policy.default_subject_max_*`, `depl
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
-Enabled Runner features remain an explicit rollout decision in `policy.runner_enabled_features`.
+`policy.runner_enabled_features` must include `client-selected-image` because generation 5 requires an image on every create and start.
+Enable other Runner features only when their backend evidence and application grants are ready.
 
 The data-plane and Runner command polling cadences are optional tuning overrides, each defaulting to 250 milliseconds. The data-plane cadence also drives session/accounting sweeps and polling on proxied streams; it does not set retention deadlines. Runner command polling provides fallback delivery alongside work notifications. To migrate an existing manifest, remove `data_plane_poll_interval_milliseconds` and `runner_command_poll_interval_milliseconds` from `[policy]`. Preserve any intentional non-default values under `[overrides]`; the old policy keys are rejected.
 
@@ -234,7 +235,18 @@ secondbox-deploy runner-template
 secondbox-deploy runner-template --output /secure/secondbox/runner-east-1.toml
 ```
 
-Replace `runners = []` in the deployment manifest with the completed block. Required values are invalid placeholders; validation cannot accept the scaffold before the operator supplies them. Set all three execution-image limits to positive byte counts, and keep the cache limit at least as large as the expanded-image limit. A cold pull requires free storage equal to twice the maximum download size plus the maximum expanded size because the archive, extraction staging, and published cache can overlap. Existing manifests must add these fields before a generation-5 Runner starts. Leave the three remote-only paths empty for same-host placement.
+Replace `runners = []` in the deployment manifest with the completed block.
+Required values are invalid placeholders, and validation cannot accept the scaffold before the operator supplies them.
+Set all three execution-image limits to positive byte counts, and keep the cache limit at least as large as the expanded-image limit.
+A cold pull reserves `2 * execution_image_max_download_bytes + execution_image_max_expanded_bytes` because the archive, extraction staging, and published cache can overlap.
+The cold pull also needs existing filesystem usage, Workspace reservations, and this staging reservation to stay below the configured storage-pressure denial threshold.
+The guided install values reserve 48 GiB for staging from a 16 GiB download limit and a 16 GiB expanded limit.
+Existing manifests must add these fields before a generation-5 Runner starts.
+Leave the three remote-only paths empty for same-host placement.
+
+For a remote Runner, map the manifest values to `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES`.
+Install Skopeo in the Runner image or host environment.
+The same-host package renders these environment values and mounts the selected cache, certificate, and trust paths.
 
 <!-- runner-template-output:start -->
 ```toml

@@ -164,6 +164,12 @@ func (manager *Manager) Prepare(
 		manager.cacheMu.RUnlock()
 		return prepared, nil
 	}
+	manager.cacheMu.Lock()
+	if err := manager.ensureCacheCapacity(cacheDirectory); err != nil {
+		manager.cacheMu.Unlock()
+		return PreparedImage{}, err
+	}
+	manager.cacheMu.Unlock()
 	preparationBytes, err := preparationCapacityBytes(manager.maximumDownloadBytes, manager.maximumExpandedBytes)
 	if err != nil {
 		return PreparedImage{}, err
@@ -181,12 +187,6 @@ func (manager *Manager) Prepare(
 			resultErr = errors.Join(resultErr, releaseErr)
 		}
 	}()
-	manager.cacheMu.Lock()
-	if err := manager.ensureCacheCapacity(cacheDirectory); err != nil {
-		manager.cacheMu.Unlock()
-		return PreparedImage{}, err
-	}
-	manager.cacheMu.Unlock()
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_DOWNLOAD); err != nil {
 		return PreparedImage{}, err
 	}

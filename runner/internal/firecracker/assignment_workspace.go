@@ -34,7 +34,7 @@ func (failure localWorkspaceError) LocalWorkspaceTerminal() runnerprotocol.Local
 func (b *AssignmentBackend) ExecuteLocalWorkspace(
 	ctx context.Context,
 	command *runnerprotocol.LocalWorkspaceCommand,
-) (runnercontrol.LocalWorkspaceEvidence, error) {
+) (_ runnercontrol.LocalWorkspaceEvidence, resultErr error) {
 	if b == nil || b.manager == nil || b.manager.workspaceStore == nil {
 		return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
 			fmt.Errorf("SecondBox Firecracker WorkspaceStore is unavailable"),
@@ -50,27 +50,39 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 		WorkspaceID:  command.WorkspaceId,
 		FencingToken: append([]byte(nil), command.FencingToken...),
 	}
+	if command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
+		command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT {
+		if b.storagePressure == nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
+				fmt.Errorf("SecondBox Firecracker local-workspace storage pressure control is unavailable"),
+			)
+		}
+		if command.LogicalCapacityBytes > math.MaxInt64 {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
+				fmt.Errorf("SecondBox Firecracker local-workspace capacity exceeds Runner bounds"),
+			)
+		}
+		reservationID := "local-workspace:" + command.OperationId
+		if err := b.storagePressure.Reserve(ctx, reservationID, command.LogicalCapacityBytes); err != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
+				fmt.Errorf("SecondBox Firecracker local-workspace storage reservation: %w", err),
+			)
+		}
+		defer func() {
+			resultErr = errors.Join(resultErr, b.storagePressure.Release(context.Background(), reservationID))
+		}()
+	}
 	var (
 		receipt workspacestore.Receipt
 		err     error
 	)
 	switch command.Kind {
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
-		if command.LogicalCapacityBytes > math.MaxInt64 {
-			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
-				fmt.Errorf("SecondBox Firecracker local-workspace capacity exceeds Runner bounds"),
-			)
-		}
 		receipt, err = b.manager.workspaceStore.Create(ctx, workspacestore.CreateWorkspaceRequest{
 			Mutation:      mutation,
 			CapacityBytes: int64(command.LogicalCapacityBytes),
 		})
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT:
-		if command.LogicalCapacityBytes > math.MaxInt64 {
-			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
-				fmt.Errorf("SecondBox Firecracker local-workspace capacity exceeds Runner bounds"),
-			)
-		}
 		receipt, err = b.manager.workspaceStore.CloneFromSnapshot(
 			ctx,
 			workspacestore.CloneWorkspaceRequest{

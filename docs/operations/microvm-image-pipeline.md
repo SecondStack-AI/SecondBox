@@ -84,8 +84,14 @@ docker run --rm --privileged --platform linux/amd64 \
   -e SECONDBOX_CLIENT_IMAGE_SOURCE_COMMIT="$(git rev-parse HEAD)" \
   -e SECONDBOX_CLIENT_IMAGE_SOURCE_REFERENCE=registry.example/base/userspace@sha256:<digest> \
   secondbox-client-image-builder:local
+
+printf '%s' "$REGISTRY_PUSH_TOKEN" | docker login registry.example \
+  --username "$REGISTRY_PUSH_USERNAME" --password-stdin
+docker push registry.example/secondbox/agent:local
+docker logout registry.example
 ```
 
+Authenticate to the output registry before publication and push the exact reference supplied in `SECONDBOX_CLIENT_IMAGE_OUTPUT_REFERENCE`.
 The signing private key stays outside the OCI image.
 The Runner receives only the public key and its DER SHA-256 fingerprint.
 The output image is a distribution artifact, not a normal Linux process image.

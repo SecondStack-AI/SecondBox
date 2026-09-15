@@ -114,6 +114,9 @@ type BootStage = string
 
 const (
 	BootStageRunnerAdmission  BootStage = "runner_admission"
+	BootStageImageResolve     BootStage = "image_resolve"
+	BootStageImageDownload    BootStage = "image_download"
+	BootStageImageExtract     BootStage = "image_extract"
 	BootStageArtifactVerify   BootStage = "artifact_verify"
 	BootStageWorkspaceAttach  BootStage = "workspace_attach"
 	BootStageNetworkSetup     BootStage = "network_setup"

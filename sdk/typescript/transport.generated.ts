@@ -88,7 +88,7 @@ export type AuthorityKind = "platform" | "tenant_controller" | "application";
 
 export type AuthorityState = "active" | "expired" | "revoked";
 
-export type BootStage = "runner_admission" | "artifact_verify" | "workspace_attach" | "network_setup" | "compute_launch" | "guest_negotiation" | "ready";
+export type BootStage = "runner_admission" | "image_resolve" | "image_download" | "image_extract" | "artifact_verify" | "workspace_attach" | "network_setup" | "compute_launch" | "guest_negotiation" | "ready";
 
 export interface BootStageTiming {
   readonly cumulativeMilliseconds: number;

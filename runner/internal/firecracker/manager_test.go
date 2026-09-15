@@ -893,6 +893,12 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	jailerUID := os.Getuid()
+	jailerGID := os.Getgid()
+	if jailerUID == 0 {
+		jailerUID = 10001
+		jailerGID = 10001
+	}
 
 	m := &Manager{cfg: &config.Config{
 		FirecrackerPath:            filepath.Join(dir, "firecracker"),
@@ -900,9 +906,9 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMKernelPath:          kernel,
 		MicroVMSharedImagePath:     shared,
 		MicroVMJailerChrootBaseDir: filepath.Join(dir, "jailer-root"),
-		MicroVMJailerUIDStart:      10001,
+		MicroVMJailerUIDStart:      jailerUID,
 		MicroVMJailerUIDCount:      1,
-		MicroVMJailerGID:           10001,
+		MicroVMJailerGID:           jailerGID,
 		MicroVMJailerCgroupVersion: 2,
 		MicroVMJailerParentCgroup:  "secondbox-runner-test",
 		MicroVMMemoryMiB:           512,
@@ -912,7 +918,7 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	}}
 	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512}
 	attachment := managerTestAttachment(t, workspace)
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, attachment, shared, "agfc123", "", 10001, false, policy)
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, attachment, shared, "agfc123", "", jailerUID, false, policy)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
