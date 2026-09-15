@@ -25,6 +25,7 @@ func main() {
 		panic(err)
 	}
 	handle, _, err := client.CreateSandbox(ctx, secondbox.CreateSandboxRequest{
+		Image:   secondbox.ExecutionImage{Reference: mustEnv("SECONDBOX_IMAGE")},
 		Profile: "durable-coding", Metadata: secondbox.Metadata{"example": "go"},
 	}, "")
 	if err != nil {

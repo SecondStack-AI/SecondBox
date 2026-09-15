@@ -88,7 +88,7 @@ export type AuthorityKind = "platform" | "tenant_controller" | "application";
 
 export type AuthorityState = "active" | "expired" | "revoked";
 
-export type BootStage = "runner_admission" | "artifact_verify" | "workspace_attach" | "network_setup" | "compute_launch" | "guest_negotiation" | "ready";
+export type BootStage = "runner_admission" | "image_resolve" | "image_download" | "image_extract" | "artifact_verify" | "workspace_attach" | "network_setup" | "compute_launch" | "guest_negotiation" | "ready";
 
 export interface BootStageTiming {
   readonly cumulativeMilliseconds: number;
@@ -155,6 +155,7 @@ export interface CreateRunnerPoolRequest {
 }
 
 export interface CreateSandboxRequest {
+  readonly image?: ExecutionImage;
   readonly metadata: Metadata;
   readonly profile: ProfileName;
   readonly resources?: SandboxResourceRequest;
@@ -340,6 +341,10 @@ export interface ExecTimingSummary {
   readonly outcome: "exited" | "deadline_exceeded";
 }
 
+export interface ExecutionImage {
+  readonly reference: string;
+}
+
 export interface ExecutionPolicy {
   readonly dataPlaneTransport: "proxied" | "direct";
   readonly maximumBufferedOutputBytes: number;
@@ -377,6 +382,12 @@ export interface HTTPRouteTimingSummary {
   readonly statusClass: "1xx" | "2xx" | "3xx" | "4xx" | "5xx" | "other";
 }
 
+export interface ImagePreparation {
+  readonly image: PublicExecutionImage;
+  readonly preparedRunners: number;
+  readonly targetRunners: number;
+}
+
 export type InfrastructureFailureKind = "transport" | "admission" | "generation_fenced" | "lease_fenced" | "guest_agent" | "execution_node" | "service";
 
 export interface Instance {
@@ -386,6 +397,7 @@ export interface Instance {
   readonly guestHeartbeatAt?: Timestamp;
   readonly guestLiveness: GuestLiveness;
   readonly id: OpaqueID;
+  readonly image: PublicExecutionImage;
   readonly readyAt?: Timestamp;
   readonly sandboxId: OpaqueID;
   readonly state: InstanceState;
@@ -440,6 +452,7 @@ export interface Operation {
   readonly createdAt: Timestamp;
   readonly error?: Problem;
   readonly id: OpaqueID;
+  readonly imagePreparation?: ImagePreparation;
   readonly kind: OperationKind;
   readonly requestId: CorrelationID;
   readonly sandbox?: Sandbox;
@@ -450,7 +463,7 @@ export interface Operation {
   readonly updatedAt: Timestamp;
 }
 
-export type OperationKind = "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "subject_cleanup" | "cancel_exec" | "cancel_terminal";
+export type OperationKind = "prepare_image" | "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "subject_cleanup" | "cancel_exec" | "cancel_terminal";
 
 export interface OperationStageTiming {
   readonly cumulativeMilliseconds: number;
@@ -520,6 +533,11 @@ export interface PortSession {
 
 /** A finite positive policy ceiling, or explicit null for no ceiling at this scope. */
 export type PositivePolicyLimit = number | null;
+
+export interface PrepareImageRequest {
+  readonly image: ExecutionImage;
+  readonly profile?: string;
+}
 
 export interface Problem {
   readonly ceiling?: SandboxResourceRequest;
@@ -592,6 +610,11 @@ export interface ProfileRevisionSpec {
 }
 
 export type ProfileState = "enabled" | "disabled";
+
+export interface PublicExecutionImage {
+  readonly requestedReference: string;
+  readonly resolvedDigest?: string;
+}
 
 export interface QuotaConstrainingScopes {
   readonly activeInstances: "none" | "subject" | "tenant" | "tenant_and_subject";
@@ -714,6 +737,7 @@ export interface Sandbox {
   readonly egressContext: EgressContextName | null;
   readonly generation: number;
   readonly id: OpaqueID;
+  readonly image?: PublicExecutionImage;
   readonly instance?: Instance;
   readonly lastActivityAt?: Timestamp;
   readonly lifecycle: LifecyclePolicy;
@@ -796,6 +820,7 @@ export type SpawnFailureKind = "not_found" | "permission_denied" | "invalid_cwd"
 
 export interface StartSandboxRequest {
   readonly attributedExecution?: AttributedExecutionRequest;
+  readonly image?: ExecutionImage;
 }
 
 /** cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot. */
@@ -1183,6 +1208,7 @@ export type OperationID =
   | "listTenantControllerAuthorities"
   | "listTenants"
   | "pingSandbox"
+  | "prepareImage"
   | "reactivateTenant"
   | "readEgressContextPreflight"
   | "readSandboxFile"
@@ -1274,6 +1300,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   listTenantControllerAuthorities: { method: "GET", path: "/v1/tenants/{tenantRef}/controller-authorities" },
   listTenants: { method: "GET", path: "/v1/tenants" },
   pingSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:ping" },
+  prepareImage: { method: "POST", path: "/v1/images:prepare", contentType: "application/json" },
   reactivateTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:reactivate" },
   readEgressContextPreflight: { method: "GET", path: "/v1/diagnostics/egress-contexts" },
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },

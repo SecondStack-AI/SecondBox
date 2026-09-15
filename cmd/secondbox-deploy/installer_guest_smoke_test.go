@@ -33,6 +33,7 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			advertisesContext := test.context
 			plan := install.InstallPlan{OperationID: "install_0123456789abcdef", CLI: install.CLIPlan{ConfigPath: filepath.Join(t.TempDir(), "config.json"), TenantRef: "local", SubjectRef: "local-operator"}, Paths: []install.PlannedPath{{Name: "secondbox-binary", Path: binary}}}
+			plan.Release.Images = map[string]string{"microvm-artifacts": "registry.example/secondbox/installer-smoke:stable"}
 			runner := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, Capacity: map[string]int64{"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
 			if advertisesContext {
 				runner.SupportedEgressContexts = []string{expectedInstallerComposeProject(plan)}

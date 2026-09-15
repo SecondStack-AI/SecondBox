@@ -146,6 +146,21 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		if observed != contracts.SandboxStateStopped && observed != contracts.SandboxStateFailed {
 			return contracts.Operation{}, ports.ErrWorkspaceMutation
 		}
+		if input.Operation.RequestMetadata["executionImageReference"] == "" {
+			var reference, digest string
+			if err := tx.QueryRow(ctx, `SELECT execution_image_reference,execution_image_digest FROM secondbox.sandboxes WHERE id=$1`, input.SandboxID).Scan(&reference, &digest); err != nil {
+				return contracts.Operation{}, fmt.Errorf("SecondBox pinned execution image lookup failed: %w", err)
+			}
+			if reference != "" {
+				if input.Operation.RequestMetadata == nil {
+					input.Operation.RequestMetadata = make(map[string]string)
+				}
+				if digest != "" {
+					reference = contracts.ExecutionImageDigestReference(reference, digest)
+				}
+				input.Operation.RequestMetadata["executionImageReference"] = reference
+			}
+		}
 		var specJSON []byte
 		if err := tx.QueryRow(ctx, `SELECT spec_json FROM secondbox.profile_revisions WHERE id=$1`,
 			locked.ProfileRevisionID).Scan(&specJSON); err != nil {

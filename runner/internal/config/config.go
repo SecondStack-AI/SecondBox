@@ -2,6 +2,7 @@
 package config
 
 import (
+	"context"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -73,9 +74,35 @@ type Config struct {
 	NetworkPolicyManagementCIDRs         []netip.Prefix
 	NetworkPolicyEgressContexts          networkpolicy.EgressContextConfig
 	NetworkPolicyDNSUpstream             netip.AddrPort
+	ExecutionImageCacheRoot              string
+	ExecutionImageFetcherSocket          string
+	ExecutionImageRegistryAllowlist      []string
+	ExecutionImageRegistryCertificates   string
+	ExecutionImagePublicKeyPath          string
+	ExecutionImagePublicKeySHA256        string
+	ExecutionImageMaximumDownloadBytes   int64
+	ExecutionImageMaximumExpandedBytes   int64
+	ExecutionImageMaximumCacheBytes      int64
 }
 
-func (c *Config) ValidateMicroVMTrustAnchor() error {
+// VerifyMicroVMArtifactDirectory verifies one selected bundle against operator trust.
+func VerifyMicroVMArtifactDirectory(ctx context.Context, directory, publicKeyPath, publicKeySHA256 string) error {
+	if !filepath.IsAbs(publicKeyPath) || len(publicKeySHA256) != sha256.Size*2 {
+		return fmt.Errorf("SecondBox execution image verification requires an explicit signing key and fingerprint")
+	}
+	verification := &Config{
+		MicroVMKernelPath:          filepath.Join(directory, "kernel"),
+		MicroVMRootfsPath:          filepath.Join(directory, "rootfs.ext4"),
+		MicroVMToolRootfsPath:      filepath.Join(directory, "rootfs.ext4"),
+		MicroVMSharedImagePath:     filepath.Join(directory, "shared.img"),
+		MicroVMToolSharedImagePath: filepath.Join(directory, "shared.img"),
+		MicroVMPublicKeyPath:       publicKeyPath,
+		MicroVMPublicKeySHA256:     publicKeySHA256,
+	}
+	return verification.ValidateMicroVMTrustAnchor(ctx)
+}
+
+func (c *Config) ValidateMicroVMTrustAnchor(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
@@ -99,7 +126,7 @@ func (c *Config) ValidateMicroVMTrustAnchor() error {
 	if c.MicroVMPublicKeySHA256 != "" && actualFingerprintHex != c.MicroVMPublicKeySHA256 {
 		return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 mismatch: expected %s, got %s", c.MicroVMPublicKeySHA256, actualFingerprintHex)
 	}
-	return verifyArtifactSet(c, publicKey)
+	return verifyArtifactSet(ctx, c, publicKey)
 }
 
 func readPublicKey(path string) (*rsa.PublicKey, []byte, error) {
@@ -122,7 +149,7 @@ func readPublicKey(path string) (*rsa.PublicKey, []byte, error) {
 	return rsaPublicKey, der, nil
 }
 
-func verifyArtifactSet(cfg *Config, publicKey *rsa.PublicKey) error {
+func verifyArtifactSet(ctx context.Context, cfg *Config, publicKey *rsa.PublicKey) error {
 	if cfg.MicroVMToolRootfsPath != "" && cfg.MicroVMToolRootfsPath != cfg.MicroVMRootfsPath {
 		return fmt.Errorf("SecondBox Runner tool rootfs must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set")
 	}
@@ -167,14 +194,14 @@ func verifyArtifactSet(cfg *Config, publicKey *rsa.PublicKey) error {
 			return fmt.Errorf("signed SecondBox Runner artifact %s: %w", name, err)
 		}
 	}
-	if err := verifyChecksums(artifactDir); err != nil {
+	if err := verifyChecksums(ctx, artifactDir); err != nil {
 		return err
 	}
-	manifest, err := os.ReadFile(filepath.Join(artifactDir, "manifest.json"))
+	manifest, err := ReadArtifactMetadata(filepath.Join(artifactDir, "manifest.json"), MaximumArtifactManifestBytes)
 	if err != nil {
 		return fmt.Errorf("read SecondBox Runner manifest: %w", err)
 	}
-	signature, err := os.ReadFile(filepath.Join(artifactDir, "manifest.sig"))
+	signature, err := ReadArtifactMetadata(filepath.Join(artifactDir, "manifest.sig"), MaximumArtifactSignatureBytes)
 	if err != nil {
 		return fmt.Errorf("read SecondBox Runner manifest signature: %w", err)
 	}
@@ -182,7 +209,7 @@ func verifyArtifactSet(cfg *Config, publicKey *rsa.PublicKey) error {
 	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature); err != nil {
 		return fmt.Errorf("verify SecondBox Runner manifest signature: %w", err)
 	}
-	if err := verifySignedManifestArtifacts(artifactDir, manifest); err != nil {
+	if err := verifySignedManifestArtifacts(ctx, artifactDir, manifest); err != nil {
 		return err
 	}
 	return verifySecondBoxRootfsContract(artifactDir)
@@ -209,7 +236,7 @@ type artifactManifestEntry struct {
 	SHA256 string `json:"sha256"`
 }
 
-func verifySignedManifestArtifacts(artifactDir string, manifestData []byte) error {
+func verifySignedManifestArtifacts(ctx context.Context, artifactDir string, manifestData []byte) error {
 	var manifest artifactManifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		return fmt.Errorf("parse SecondBox Runner manifest: %w", err)
@@ -231,7 +258,7 @@ func verifySignedManifestArtifacts(artifactDir string, manifestData []byte) erro
 		if signed.entry.Path != signed.path {
 			return fmt.Errorf("SecondBox Runner manifest %s path must be %s, got %s", label, signed.path, signed.entry.Path)
 		}
-		actual, err := fileSHA256Hex(filepath.Join(artifactDir, signed.entry.Path))
+		actual, err := fileSHA256Hex(ctx, filepath.Join(artifactDir, signed.entry.Path))
 		if err != nil {
 			return err
 		}
@@ -250,7 +277,7 @@ func verifySignedManifestArtifacts(artifactDir string, manifestData []byte) erro
 			!strings.HasPrefix(component.entry.ManifestDigest, "sha256:") {
 			return fmt.Errorf("SecondBox Runner manifest missing %s path or digest", label)
 		}
-		actual, err := fileSHA256Hex(filepath.Join(artifactDir, component.path))
+		actual, err := fileSHA256Hex(ctx, filepath.Join(artifactDir, component.path))
 		if err != nil {
 			return err
 		}
@@ -262,7 +289,7 @@ func verifySignedManifestArtifacts(artifactDir string, manifestData []byte) erro
 }
 
 func verifySecondBoxRootfsContract(artifactDir string) error {
-	data, err := os.ReadFile(filepath.Join(artifactDir, "secondbox-rootfs-contract.json"))
+	data, err := ReadArtifactMetadata(filepath.Join(artifactDir, "secondbox-rootfs-contract.json"), 64<<10)
 	if err != nil {
 		return fmt.Errorf("read SecondBox rootfs contract: %w", err)
 	}
@@ -282,13 +309,17 @@ func safeManifestPath(path string) bool {
 	return path != "" && path != "." && !filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.HasPrefix(path, ".."+string(os.PathSeparator)) && path != ".."
 }
 
-func verifyChecksums(artifactDir string) error {
-	data, err := os.ReadFile(filepath.Join(artifactDir, "SHA256SUMS"))
+func verifyChecksums(ctx context.Context, artifactDir string) error {
+	data, err := ReadArtifactMetadata(filepath.Join(artifactDir, "SHA256SUMS"), 64<<10)
 	if err != nil {
 		return fmt.Errorf("read SecondBox Runner checksums: %w", err)
 	}
 	want := map[string]string{}
-	for _, line := range strings.Split(string(data), "\n") {
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > 128 {
+		return fmt.Errorf("SecondBox artifact checksums exceed 128 entries")
+	}
+	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 {
 			want[strings.TrimPrefix(fields[1], "*")] = fields[0]
@@ -310,7 +341,7 @@ func verifyChecksums(artifactDir string) error {
 		if expected == "" {
 			return fmt.Errorf("SHA256SUMS missing %s", name)
 		}
-		actual, err := fileSHA256Hex(filepath.Join(artifactDir, name))
+		actual, err := fileSHA256Hex(ctx, filepath.Join(artifactDir, name))
 		if err != nil {
 			return err
 		}
@@ -321,15 +352,27 @@ func verifyChecksums(artifactDir string) error {
 	return nil
 }
 
-func fileSHA256Hex(path string) (string, error) {
+func fileSHA256Hex(ctx context.Context, path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", path, err)
 	}
 	defer file.Close()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
+	if _, err := io.Copy(hash, contextReader{ctx: ctx, reader: file}); err != nil {
 		return "", fmt.Errorf("hash %s: %w", path, err)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader contextReader) Read(buffer []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(buffer)
 }

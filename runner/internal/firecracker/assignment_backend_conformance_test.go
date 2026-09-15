@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
@@ -25,6 +26,25 @@ import (
 
 func TestAssignmentBackendComputeConformance(t *testing.T) {
 	conformance.Run(t, newFirecrackerConformanceFixture)
+}
+
+type conformanceExecutionImagePreparer struct {
+	directory string
+}
+
+func (preparer conformanceExecutionImagePreparer) VerifyLocal(
+	ctx context.Context,
+	image *runnerprotocol.ExecutionImage,
+	progress func(runnerprotocol.AssignmentProgressStage) error,
+) (executionimage.PreparedImage, error) {
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
+		return executionimage.PreparedImage{}, err
+	}
+	return executionimage.PreparedImage{
+		Directory:          preparer.directory,
+		RequestedReference: image.Reference,
+		ResolvedDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}, nil
 }
 
 func TestAssignmentBackendRequiresWorkspaceStore(t *testing.T) {
@@ -79,10 +99,24 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 			fixture := newFirecrackerConformanceFixture(t)
 			assignment := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
 			mutate(assignment)
-			if err := fixture.Backend.ValidateAssignment(context.Background(), assignment); err == nil {
+			backend := fixture.Backend.(*AssignmentBackend)
+			if _, err := backend.assignmentGuestProtocolStart(assignment, filepath.Dir(backend.manager.cfg.MicroVMKernelPath)); err == nil {
 				t.Fatalf("accepted immutable asset substitution: %+v", assignment.Assets)
 			}
 		})
+	}
+}
+
+func TestSelectedImageValidationDoesNotUseHistoricalManifest(t *testing.T) {
+	fixture := newFirecrackerConformanceFixture(t)
+	backend := fixture.Backend.(*AssignmentBackend)
+	selectedDirectory := filepath.Dir(backend.manager.cfg.MicroVMKernelPath)
+	backend.manager.cfg.MicroVMKernelPath = filepath.Join(t.TempDir(), "historical", "kernel")
+	if err := backend.ValidateAssignment(t.Context(), fixture.Assignment); err != nil {
+		t.Fatalf("selected image consulted unrelated historical assets: %v", err)
+	}
+	if _, err := backend.assignmentGuestProtocolStart(fixture.Assignment, selectedDirectory); err != nil {
+		t.Fatalf("selected image guest authority: %v", err)
 	}
 }
 
@@ -190,11 +224,12 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			NetworkPolicyMaximumDNSPins:                4,
 			NetworkPolicyMaximumDNSTTL:                 time.Minute,
 		},
-		instances:     map[string]*instance{},
-		pendingSpawns: map[runtimeInstanceKey]int{},
-		guestIPs:      map[string]string{},
-		networkPolicy: &recordingHostNetworkPolicyEnforcer{},
-		runnerID:      "runner-1",
+		instances:       map[string]*instance{},
+		pendingSpawns:   map[runtimeInstanceKey]int{},
+		guestIPs:        map[string]string{},
+		networkPolicy:   &recordingHostNetworkPolicyEnforcer{},
+		runnerID:        "runner-1",
+		executionImages: conformanceExecutionImagePreparer{directory: artifactDir},
 	}
 	workspacePath := filepath.Join(t.TempDir(), "workspace.raw")
 	if err := os.WriteFile(workspacePath, make([]byte, 4096), 0o600); err != nil {
@@ -312,6 +347,7 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			)
 		},
 		Assignment: &runnerprotocol.AssignmentCommand{
+			ExecutionImage: &runnerprotocol.ExecutionImage{Reference: "registry.example/secondbox/conformance:stable"},
 			Fence: &runnerprotocol.AssignmentFence{
 				AssignmentId:      "assignment-1",
 				SandboxId:         "sandbox-1",

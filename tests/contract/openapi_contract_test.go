@@ -681,21 +681,23 @@ func TestSandboxCreateRejectsInfrastructureAuthorityOverrides(t *testing.T) {
 	document := loadOpenAPIContract(t)
 	createSchema := componentSchema(t, document, "CreateSandboxRequest")
 	properties := object(t, createSchema["properties"], "CreateSandboxRequest.properties")
-	if len(properties) != 4 ||
+	if len(properties) != 5 ||
 		properties["resources"] == nil ||
 		properties["profile"] == nil ||
+		properties["image"] == nil ||
 		properties["metadata"] == nil ||
 		properties["sourceSnapshotId"] == nil {
 		t.Fatalf(
-			"CreateSandboxRequest properties must be profile, metadata, sourceSnapshotId, and resources, got %v",
+			"CreateSandboxRequest properties must be profile, image, metadata, sourceSnapshotId, and resources, got %v",
 			properties,
 		)
 	}
-	if err := validateClosedCreateShape(t, createSchema, map[string]any{"profile": "standard", "metadata": map[string]string{}}); err != nil {
+	image := map[string]any{"reference": "registry.example/agents/coding:stable"}
+	if err := validateClosedCreateShape(t, createSchema, map[string]any{"profile": "standard", "image": image, "metadata": map[string]string{}}); err != nil {
 		t.Fatalf("valid profile-based create was rejected: %v", err)
 	}
 	if err := validateClosedCreateShape(t, createSchema, map[string]any{
-		"profile": "standard", "metadata": map[string]string{},
+		"profile": "standard", "image": image, "metadata": map[string]string{},
 		"sourceSnapshotId": "snapshot-one",
 	}); err != nil {
 		t.Fatalf("valid Snapshot-seeded create was rejected: %v", err)
@@ -703,7 +705,7 @@ func TestSandboxCreateRejectsInfrastructureAuthorityOverrides(t *testing.T) {
 
 	for _, forbidden := range []string{
 		"backend", "backendRef", "vcpuCount", "environmentId", "fencingToken",
-		"hostPath", "image", "imageRef", "idempotencyKey", "lifecycle",
+		"hostPath", "imageRef", "idempotencyKey", "lifecycle",
 		"lifecyclePolicyId", "memoryBytes", "network", "placement",
 		"resourceClassId", "runnerCredential", "runnerId",
 		"runnerPool", "secondStackProjectId", "storageRef", "subjectRef", "tenantRef", "egressContext",
@@ -786,7 +788,7 @@ func TestDataPlaneSchemasHideProviderRunnerAndUpstreamAuthority(t *testing.T) {
 	forbiddenProperties := map[string]bool{}
 	for _, name := range []string{
 		"backend", "backendRef", "environmentId", "fencingToken", "hostPath",
-		"image", "imageRef", "lifecyclePolicyId", "placement", "resourceClassId",
+		"imageRef", "lifecyclePolicyId", "placement", "resourceClassId",
 		"runnerCredential", "runnerEndpoint", "runnerHost", "runnerId", "runnerToken",
 		"secondStackProjectId", "secondStackSubjectId", "storageRef", "subjectRef", "tenantRef",
 	} {

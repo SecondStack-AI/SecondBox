@@ -190,6 +190,26 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
+	registryDirectory := manifest.Runners[0].ExecutionImageRegistryConfigDirectory
+	for _, directory := range []string{registryDirectory, filepath.Join(registryDirectory, "certificates")} {
+		if err := createDirectory(directory, 0700); err != nil {
+			return SingleHostInstallResult{}, err
+		}
+	}
+	tenants := map[string]any{}
+	if plan.CLI.TenantRef != "" {
+		host, repository, _ := strings.Cut(release.MicroVM.ImageReference, "/")
+		repository, _, _ = strings.Cut(repository, "@")
+		repository, _, _ = strings.Cut(repository, ":")
+		tenants[plan.CLI.TenantRef] = map[string]any{"registry": host, "repositories": []string{repository}, "authentication": map[string]string{"mode": "anonymous"}}
+	}
+	registryJSON, err := json.Marshal(tenants)
+	if err != nil {
+		return SingleHostInstallResult{}, err
+	}
+	if err := write(filepath.Join(registryDirectory, "tenants.json"), append(registryJSON, '\n'), 0600); err != nil {
+		return SingleHostInstallResult{}, err
+	}
 	encoded, err := encodeManifest(manifest)
 	if err != nil {
 		return SingleHostInstallResult{}, err
@@ -419,6 +439,14 @@ func singleHostManifest(plan install.InstallPlan, release releasecontract.Artifa
 	}
 	dnsUpstream := netip.MustParseAddr(plan.Network.DNSUpstream)
 	manifest.Runners = []Runner{{RunnerID: runnerID, Placement: "same-host", PoolID: standardresources.PoolAMD64, SoftwareVersion: release.Version, ControlPlaneAddress: plan.Network.RunnerAddress, ControlPlaneServerName: "control-plane", IdentityHostDirectory: runnerIdentity, ArtifactHostDirectory: artifacts, StateHostDirectory: runnerStorage, FirecrackerJailerUIDStart: integer(plan.Network.JailerUIDRange.Start), FirecrackerJailerUIDCount: integer(plan.Network.JailerUIDRange.Count), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(plan.Network.JailerUIDRange.Start), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: plan.Network.CgroupParent, FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: plan.Compute.FirecrackerCPUTemplate, ArtifactPublicKeySHA256: signingKeyID, StorageRecoveryPercent: integer(storageDeny - 10), StorageWarningPercent: integer(storageDeny - 5), StorageAdmissionDenyPercent: integer(storageDeny), SandboxMaxVCPUs: integer(maxVCPUs), SandboxMaxMemoryMiB: integer(maxMemoryMiB), SandboxMaxDiskMiB: integer(maxDiskMiB), SandboxMemoryBudgetMiB: integer(plan.Capacity.MaxMemoryBytes / (1 << 20)), SandboxGuestIP: guest.String(), SandboxBridgeName: "sbx0", SandboxBridgeCIDR: bridge.String() + "/" + fmt.Sprint(prefix.Bits()), SandboxGuestCIDR: prefix.String(), SandboxTapPrefix: plan.Network.TAPPrefix, SandboxDeleteBridge: boolean(true), NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: bridge.String(), NetworkPolicyManagementCIDRs: prefix.String(), EgressContexts: []RunnerEgressContext{{Name: contextName, Gateways: contextGateways}}, NetworkPolicyDNSUpstream: netip.AddrPortFrom(dnsUpstream, 53).String(), MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(plan.Capacity.MaxSandboxes), MaxConcurrentStarts: integer(plan.Capacity.ConcurrentStarts), MaxConcurrentWorkspaceCreates: integer(plan.Capacity.ConcurrentStarts), MaxConcurrentOperationsGlobal: integer(plan.Capacity.ConcurrentOperations), FileTransferMaxBytes: integer(1 << 30), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:" + fmt.Sprint(dataPort), DataPlaneAdvertisedAddress: plan.Network.DataPlaneAddress}}
+	manifest.Runners[0].ExecutionImageRegistries, _, _ = strings.Cut(release.MicroVM.ImageReference, "/")
+	manifest.Deployment.ExecutionImagePublicKey = filepath.Join(artifacts, "signing.pub")
+	manifest.Deployment.ExecutionImagePublicKeySHA256 = signingKeyID
+	manifest.Runners[0].ExecutionImageRegistryConfigDirectory = filepath.Join(installPath(plan, "secrets"), "image-registry")
+	manifest.Runners[0].ExecutionImagePublicKeySHA256 = signingKeyID
+	manifest.Runners[0].ExecutionImageMaxDownloadBytes = integer(16 << 30)
+	manifest.Runners[0].ExecutionImageMaxExpandedBytes = integer(16 << 30)
+	manifest.Runners[0].ExecutionImageMaxCacheBytes = integer(64 << 30)
 	return manifest, nil
 }
 

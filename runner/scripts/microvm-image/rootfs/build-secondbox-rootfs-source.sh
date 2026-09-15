@@ -157,7 +157,7 @@ write_secondbox_source_manifest() {
     PYTHON_REQUIREMENTS_SHA256="$python_requirements_sha256" \
     DOCKERFILE_NAME="$(basename "$dockerfile_path")" \
     DOCKERFILE_SHA256="$dockerfile_sha256" \
-    GIT_COMMIT="$(git -C "$repo_root" rev-parse HEAD)" \
+    GIT_COMMIT="$source_commit" \
     python3 - "$provenance_dir/rootfs-source-manifest.json" <<'PY'
 import json
 import os
@@ -213,6 +213,12 @@ debian_snapshot=""
 guest_protocol_minimum=""
 guest_protocol_maximum=""
 image_definition_sha256=""
+source_commit="${SECONDBOX_RUNNER_MICROVM_SOURCE_COMMIT-}"
+if [ -z "$source_commit" ]; then
+    source_commit="$(git -C "$repo_root" rev-parse HEAD)"
+fi
+[[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] ||
+    fail_secondbox_image_build "SECONDBOX_RUNNER_MICROVM_SOURCE_COMMIT must be a 40-character lowercase Git commit"
 
 [ -n "$out_dir" ] ||
     fail_secondbox_image_build "SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR is required"

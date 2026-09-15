@@ -8,6 +8,10 @@ The suite never skips. It exits non-zero unless qualification is explicitly requ
 
 Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` and review
 all paths, signing-key fingerprints, component digests, and dedicated VM inputs.
+Set `SECONDBOX_SCENARIO_EXECUTION_IMAGE` to a signed digest reference that every Firecracker scenario Runner can retrieve.
+Set `SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG` to an operator configuration directory containing `tenants.json`, credential files when needed, and `certificates/`.
+Grant the selected repository to `scenario-tenant`; paths in the configuration use the fetcher's `/run/image-registry` mount.
+The harness copies this configuration into its private run directory and starts an unprivileged fetcher with only the cache, socket, publisher key, and registry configuration.
 Supply `SECONDBOX_TEST_DATABASE_URL` for a disposable PostgreSQL database and
 run `npm ci --ignore-scripts` in the checkout. The example documents every key.
 
@@ -121,7 +125,7 @@ Verification checks the fixed artifact set, payload checksums, signed manifest, 
 
 ## Required variables
 
-Set all five variables. Paths must be clean absolute paths that already exist.
+Set all seven variables. Paths must be clean absolute paths that already exist.
 
 ```sh
 export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
@@ -129,6 +133,8 @@ export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$artifact_target"
 export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$artifact_public_key"
 export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$artifact_public_key_sha256"
 export SECONDBOX_RUNNER_WORKSPACE_ROOT='/srv/secondbox/qualification/workspaces'
+export SECONDBOX_SCENARIO_EXECUTION_IMAGE='registry.example/secondbox/qualification-agent:stable'
+export SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG='/etc/secondbox/qualification-image-registry'
 just test-scenario
 ```
 
@@ -137,6 +143,8 @@ just test-scenario
 - `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY` is the independently trusted PEM public key.
 - `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256` is the 64-character lowercase SHA-256 of that key's canonical DER encoding.
 - `SECONDBOX_RUNNER_WORKSPACE_ROOT` is the dedicated XFS or Btrfs parent described above.
+- `SECONDBOX_SCENARIO_EXECUTION_IMAGE` is a retrievable OCI execution image signed by the configured artifact key. Selected-image coverage uses this reference; fixed-Profile coverage retains the Profile's assets, including snapshot-resume and gVisor.
+- `SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG` contains the Tenant registry configuration and optional authentication and CA files for that image.
 
 `SECONDBOX_SCENARIO_TEST_PATTERN` is an optional Go regular expression for a focused diagnostic rerun. It does not qualify a commit; qualification requires the unfiltered command.
 

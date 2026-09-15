@@ -114,6 +114,9 @@ type BootStage = string
 
 const (
 	BootStageRunnerAdmission  BootStage = "runner_admission"
+	BootStageImageResolve     BootStage = "image_resolve"
+	BootStageImageDownload    BootStage = "image_download"
+	BootStageImageExtract     BootStage = "image_extract"
 	BootStageArtifactVerify   BootStage = "artifact_verify"
 	BootStageWorkspaceAttach  BootStage = "workspace_attach"
 	BootStageNetworkSetup     BootStage = "network_setup"
@@ -339,6 +342,8 @@ type ExecTimingSummary struct {
 	Outcome  string              `json:"outcome"`
 }
 
+type ExecutionImage = contracts.ExecutionImage
+
 type ExecutionPolicy = contracts.ExecutionPolicy
 
 type FileExistsResult struct {
@@ -383,6 +388,8 @@ type HTTPRouteTimingSummary struct {
 	StatusClass string              `json:"statusClass"`
 }
 
+type ImagePreparation = contracts.ImagePreparation
+
 type InfrastructureFailureKind = string
 
 const (
@@ -402,6 +409,7 @@ type Instance struct {
 	GuestHeartbeatAt  *Timestamp                 `json:"guestHeartbeatAt,omitempty"`
 	GuestLiveness     GuestLiveness              `json:"guestLiveness"`
 	ID                OpaqueID                   `json:"id"`
+	Image             PublicExecutionImage       `json:"image"`
 	ReadyAt           *Timestamp                 `json:"readyAt,omitempty"`
 	SandboxID         OpaqueID                   `json:"sandboxId"`
 	State             InstanceState              `json:"state"`
@@ -464,6 +472,7 @@ type Operation = contracts.Operation
 type OperationKind = string
 
 const (
+	OperationKindPrepareImage    OperationKind = "prepare_image"
 	OperationKindCreate          OperationKind = "create"
 	OperationKindStart           OperationKind = "start"
 	OperationKindDrain           OperationKind = "drain"
@@ -530,6 +539,8 @@ type PortSession struct {
 
 // PositivePolicyLimit A finite positive policy ceiling, or explicit null for no ceiling at this scope.
 type PositivePolicyLimit = contracts.PositivePolicyLimit
+
+type PrepareImageRequest = contracts.PrepareImageRequest
 
 type Problem = contracts.Problem
 
@@ -611,6 +622,8 @@ const (
 	ProfileStateEnabled  ProfileState = "enabled"
 	ProfileStateDisabled ProfileState = "disabled"
 )
+
+type PublicExecutionImage = contracts.PublicExecutionImage
 
 type QuotaConstrainingScopes struct {
 	ActiveInstances      string `json:"activeInstances"`

@@ -15,6 +15,7 @@ test("TypeScript SDK live control-plane contract", async () => {
   const { application, profile } = await newTypeScriptLiveSubjectFixture();
 
   const { handle, operation } = await application.createSandbox({
+    image: { reference: "registry.example/secondbox/sdk-live:stable" },
     profile: profile.name,
     metadata: { sdk: "typescript", purpose: "live-contract" },
     idempotencyKey: "typescript-create-sandbox",

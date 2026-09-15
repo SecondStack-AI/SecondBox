@@ -58,7 +58,7 @@ func TestSandboxRequestedResourcesHTTPAndQuota(t *testing.T) {
 				{"vcpuCount": 2, "memoryBytes": 512 << 20, "workspaceBytes": 2 << 30},
 				{"vcpuCount": 4, "memoryBytes": 1 << 30, "workspaceBytes": 8 << 30},
 			} {
-				response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resource-create-"+strconv.Itoa(index), map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": resources})
+				response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resource-create-"+strconv.Itoa(index), map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": resources})
 				if response.StatusCode != http.StatusAccepted {
 					t.Fatalf("create status=%d body=%s", response.StatusCode, readResponse(t, response))
 				}
@@ -96,14 +96,14 @@ func TestSandboxRequestedResourcesHTTPAndQuota(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					response = lifecycleHTTPRequest(t, server.URL, credential, http.MethodPost, "/v1/sandboxes/"+sandbox.ID+":start", "resource-start-"+strconv.Itoa(index), strconv.FormatInt(sandbox.Revision, 10), "", nil)
+					response = lifecycleHTTPRequest(t, server.URL, credential, http.MethodPost, "/v1/sandboxes/"+sandbox.ID+":start", "resource-start-"+strconv.Itoa(index), strconv.FormatInt(sandbox.Revision, 10), "", contracts.StartSandboxRequest{Image: testExecutionImage()})
 					if response.StatusCode != http.StatusAccepted {
 						t.Fatalf("start status=%d body=%s", response.StatusCode, readResponse(t, response))
 					}
 					response.Body.Close()
 				}
 			}
-			response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resource-over", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 5}})
+			response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resource-over", map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 5}})
 			if response.StatusCode != http.StatusBadRequest {
 				t.Fatalf("above ceiling status=%d body=%s", response.StatusCode, readResponse(t, response))
 			}
@@ -153,7 +153,7 @@ func TestSandboxPartialResourcesPinRevisionAndIdempotency(t *testing.T) {
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-resources-partial")
 	principal := authenticateCredential(t, controlPlane, credential)
 	memory := int64(512 << 20)
-	request := contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}, Resources: &contracts.SandboxResourceRequest{MemoryBytes: &memory}}
+	request := contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}, Resources: &contracts.SandboxResourceRequest{MemoryBytes: &memory}}
 	first, _, err := controlPlane.CreateSandbox(t.Context(), principal, "resources-partial", request)
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestSandboxRequestedResourcesFitSmallerHomeRunner(t *testing.T) {
 	}
 	principal := authenticateCredential(t, controlPlane, credential)
 	cpu, memory, disk := int64(2), int64(1<<30), int64(2<<30)
-	request := contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}, Resources: &contracts.SandboxResourceRequest{VCPUCount: &cpu, MemoryBytes: &memory, WorkspaceBytes: &disk}}
+	request := contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}, Resources: &contracts.SandboxResourceRequest{VCPUCount: &cpu, MemoryBytes: &memory, WorkspaceBytes: &disk}}
 	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "resources-placement", request)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +266,7 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 	}
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
-	response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-create", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 2, "memoryBytes": 1 << 30, "workspaceBytes": 3 << 30}})
+	response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-create", map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 2, "memoryBytes": 1 << 30, "workspaceBytes": 3 << 30}})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", response.StatusCode, readResponse(t, response))
 	}
@@ -291,7 +291,7 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 		{"memory quota", map[string]int64{"memoryBytes": 1 << 30}, http.StatusTooManyRequests, "quota_exceeded"},
 		{"rounded disk ceiling", map[string]int64{"workspaceBytes": 8<<30 + 1<<20}, http.StatusBadRequest, "resources_exceed_profile"},
 	} {
-		response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-"+strings.ReplaceAll(test.name, " ", "-"), map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": test.resources})
+		response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-"+strings.ReplaceAll(test.name, " ", "-"), map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": test.resources})
 		if response.StatusCode != test.status {
 			t.Fatalf("%s status=%d body=%s", test.name, response.StatusCode, readResponse(t, response))
 		}
@@ -319,7 +319,7 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 	if _, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(t.Context(), admin, profile.Name, "revise-snapshot-resume", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision); err != nil {
 		t.Fatal(err)
 	}
-	response = authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resume-refused", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"memoryBytes": 128 << 20}})
+	response = authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resume-refused", map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"memoryBytes": 128 << 20}})
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("resume status=%d body=%s", response.StatusCode, readResponse(t, response))
 	}

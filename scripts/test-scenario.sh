@@ -343,7 +343,13 @@ else
   workspace_device="$(stat -c %d "$workspace_root")"
 fi
 if [[ "$scenario_backend" == "firecracker" ]]; then
-  artifacts_device="$(stat -c %d "$artifacts_dir")"
+	: "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:?Firecracker scenario requires a retrievable signed SECONDBOX_SCENARIO_EXECUTION_IMAGE}"
+	[[ "$SECONDBOX_SCENARIO_EXECUTION_IMAGE" == */* ]] ||
+		fail "SECONDBOX_SCENARIO_EXECUTION_IMAGE must contain a registry host"
+	export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY="${SECONDBOX_SCENARIO_EXECUTION_IMAGE%%/*}"
+	: "${SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG:?Firecracker scenario requires an operator Tenant registry configuration directory}"
+	[[ -f "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/tenants.json" ]] || fail "scenario registry configuration must contain tenants.json"
+	artifacts_device="$(stat -c %d "$artifacts_dir")"
   checkout_device="$(stat -c %d "$repo_root")"
   [[ "$workspace_device" == "$artifacts_device" && "$workspace_device" == "$checkout_device" ]] ||
     fail "workspace root, microVM artifacts, and checkout must share one reflink filesystem"
@@ -499,6 +505,7 @@ relocation_identity_dir="$run_dir/relocation-runner-identity"
 relocation_state_dir="$run_dir/relocation-runner-state"
 asset_catalog="$run_dir/signed-assets.json"
 mkdir -p "$pki_dir" "$state_dir" "$relocation_state_dir"
+mkdir -p "$state_dir/execution-image-certificates"
 scenario_workspace_dir="$(mktemp -d "$workspace_root/secondbox-scenario.XXXXXX")"
 relocation_workspace_dir="$(mktemp -d "$workspace_root/secondbox-scenario-relocation.XXXXXX")"
 mkdir -p "$scenario_workspace_dir/jailer-root"
@@ -552,6 +559,20 @@ openssl x509 -req \
   -extfile "$pki_dir/server.ext" >/dev/null 2>&1
 chmod 0600 "$pki_dir/runner-ca.key" "$pki_dir/server.key"
 chmod 0644 "$pki_dir/runner-ca.crt" "$pki_dir/server.crt"
+
+export SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY="$run_dir/image-registry"
+mkdir -p "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/certificates" "$scenario_workspace_dir/execution-images"
+if [[ "$scenario_backend" == "firecracker" ]]; then
+  cp "$public_key" "$pki_dir/execution-image.pub"
+  cp -a "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/." "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/"
+else
+  openssl pkey -in "$pki_dir/runner-ca.key" -pubout -out "$pki_dir/execution-image.pub" 2>/dev/null
+  export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY=unused.invalid
+  printf '{}\n' >"$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/tenants.json"
+fi
+chmod 0644 "$pki_dir/execution-image.pub"
+export SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256
+SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256="$(openssl pkey -pubin -in "$pki_dir/execution-image.pub" -outform DER 2>/dev/null | sha256_stream | awk '{print $1}')"
 
 export SECONDBOX_RUNNER_CA_CERTIFICATE="$pki_dir/runner-ca.crt"
 export SECONDBOX_RUNNER_CA_PRIVATE_KEY="$pki_dir/runner-ca.key"
@@ -810,6 +831,9 @@ cleanup() {
       failure_logs=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs --tail 200 control-plane secondbox-runner postgres)
     else
       failure_logs=(compose logs --tail 200 control-plane secondbox-runner postgres)
+      if [[ "$scenario_backend" == "firecracker" ]]; then
+        failure_logs+=(image-fetcher)
+      fi
     fi
     if ! "${failure_logs[@]}" >&2; then
       echo "SecondBox scenario could not collect failure logs" >&2
@@ -845,7 +869,7 @@ cleanup() {
     echo "SecondBox scenario host-network cleanup left the bridge behind: $SECONDBOX_SCENARIO_BRIDGE_NAME" >&2
     status=1
   fi
-  compose_down_arguments=(down --volumes --remove-orphans)
+  compose_down_arguments=(--profile image-preparation down --volumes --remove-orphans)
   if [[ "$scenario_backend" != "firecracker" && "$runner_external" != "true" ]]; then
     # Docker Compose excludes inactive profile services from `down`. The
     # relocation runner may be stopped but still retain the locally built
@@ -874,7 +898,7 @@ cleanup() {
     status=1
   fi
   if [[ "$native_macos" != "true" ]]; then
-    for directory in "$state_dir" "$relocation_state_dir" "$scenario_workspace_dir" "$relocation_workspace_dir"; do
+    for directory in "$state_dir" "$relocation_state_dir" "$scenario_workspace_dir" "$relocation_workspace_dir" "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY"; do
       if [[ -d "$directory" ]] &&
          ! docker run --rm \
            --entrypoint /bin/chown \
@@ -1005,7 +1029,7 @@ direct_host_firewall apply
 if [[ "$scenario_mode" == "suite" ]]; then
   bootstrap_tenant="scenario-tenant"
   bootstrap_subject="scenario-subject"
-  bootstrap_profile_grants='["agent-compartment-isolated","scenario-attributed","scenario-agent-compartment-network-enabled","scenario-concurrent-instance-isolation","scenario-cli-target-shape","scenario-control-restart","scenario-data-paths","scenario-direct-exec","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-microsandbox-cold-start-observation","scenario-microsandbox-relocation","scenario-microsandbox-snapshot-resume-rejected","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle","scenario-storage-observation","scenario-uncached-materialization","scenario-unsupported-architecture"]'
+  bootstrap_profile_grants='["agent-compartment-isolated","scenario-attributed","scenario-agent-compartment-network-enabled","scenario-concurrent-instance-isolation","scenario-cli-target-shape","scenario-control-restart","scenario-data-paths","scenario-direct-exec","scenario-direct-port","scenario-execution","scenario-lifecycle","scenario-microsandbox-cold-start-observation","scenario-microsandbox-relocation","scenario-microsandbox-snapshot-resume-rejected","scenario-network-allow","scenario-network-deny","scenario-no-capacity","scenario-over-capacity","scenario-port-lease","scenario-real-boot","scenario-runner-loss","scenario-selected-image","scenario-snapshot-durability","scenario-snapshot-other-sandbox","scenario-snapshot-resume","scenario-snapshot-retention","scenario-touch-idle","scenario-storage-observation","scenario-uncached-materialization","scenario-unsupported-architecture"]'
 else
   bootstrap_tenant="$(jq -er '.tenantRef' "$SECONDBOX_STRESS_CONFIG")"
   bootstrap_subject="$(jq -er '.subjectRef' "$SECONDBOX_STRESS_CONFIG")"
@@ -1113,6 +1137,9 @@ fi
 if [[ "$runner_external" == "true" ]]; then
   "$SECONDBOX_SCENARIO_SERVICE_CONTROL" up --detach --wait --wait-timeout 300 secondbox-runner
 else
+  if [[ "$scenario_backend" == "firecracker" ]]; then
+    compose --profile image-preparation up --detach --wait --wait-timeout 120 image-fetcher
+  fi
   compose up --detach --wait --wait-timeout 300 secondbox-runner
 fi
 

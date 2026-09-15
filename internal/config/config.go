@@ -64,6 +64,8 @@ type Config struct {
 	AssignmentRetryLimit             int64
 	SchedulerSerializationRetryLimit int
 	AssetCatalogPath                 string
+	ExecutionImagePublicKeyPath      string
+	ExecutionImagePublicKeySHA256    string
 	RunnerEnabledFeatures            []string
 }
 
@@ -200,6 +202,14 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	executionImagePublicKeyPath, err := requiredAbsolutePath("SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY")
+	if err != nil {
+		return Config{}, err
+	}
+	executionImagePublicKeySHA256, err := requiredString("SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256")
+	if err != nil {
+		return Config{}, err
+	}
 	runnerEnabledFeatures, err := requiredCSV("SECONDBOX_RUNNER_ENABLED_FEATURES")
 	if err != nil {
 		return Config{}, err
@@ -231,6 +241,8 @@ func FromEnvironment() (Config, error) {
 		AssignmentRetryLimit:             assignmentRetryLimit,
 		SchedulerSerializationRetryLimit: schedulerSerializationRetryLimitInt,
 		AssetCatalogPath:                 signedAssetCatalogPath,
+		ExecutionImagePublicKeyPath:      executionImagePublicKeyPath,
+		ExecutionImagePublicKeySHA256:    executionImagePublicKeySHA256,
 		RunnerEnabledFeatures:            runnerEnabledFeatures,
 	}, nil
 }

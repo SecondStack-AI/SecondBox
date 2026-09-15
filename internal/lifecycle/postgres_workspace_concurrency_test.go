@@ -83,11 +83,11 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
-			reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
+			lifecycle_request_metadata_json,reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
 		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-automatic-start'),
 			'sandbox-automatic-start','tenant','subject','profile-automatic-start',
 			'revision-automatic-start','stopped','running',2,
-			'workspace-automatic-start','','{}','{}','worker-automatic-start',$3,5,$2,$2
+			'workspace-automatic-start','','{}','{}','{}','worker-automatic-start',$3,5,$2,$2
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		string(specJSON),
@@ -224,7 +224,10 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			t.Fatal(err)
 		}
 		binding := contracts.AttributedExecutionRequest{AuthorizationRef: "command-authorization", ExpiresAt: now.Add(20 * time.Second)}
-		metadata, err := json.Marshal(binding.AttributedExecutionMetadata())
+		metadata, err := json.Marshal(contracts.MergeExecutionImageMetadata(
+			contracts.ExecutionImage{},
+			&binding,
+		))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -262,6 +265,35 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			!slices.Contains(request.Requirements.RequiredCapabilities, contracts.RunnerCapabilityAttributedExecution) ||
 			!request.OperationDeadline.Equal(binding.ExpiresAt) {
 			t.Fatalf("attributed scheduling lost authority: %+v", request)
+		}
+	})
+	t.Run("automatic recovery preserves the image digest", func(t *testing.T) {
+		digest := "sha256:" + strings.Repeat("c", 64)
+		if _, err := pool.Exec(t.Context(), `
+		 UPDATE secondbox.sandboxes SET execution_image_reference='registry.example/agent:stable',
+		 execution_image_digest=$1,lifecycle_request_metadata_json='{"executionImageReference":"registry.example/agent:stable"}',
+		 reconcile_owner='worker-automatic-start',reconcile_claim_expires_at=$2 WHERE id='sandbox-automatic-start';
+		 UPDATE secondbox.workspaces SET mutation_operation_id='' WHERE id='workspace-automatic-start'`,
+			pgx.QueryExecModeSimpleProtocol, digest, now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if err := broker.ExecuteLifecycleEffect(t.Context(), ports.LifecycleReconcileClaim{
+			SandboxID: "sandbox-automatic-start", WorkerID: "worker-automatic-start", Revision: 5,
+		}, lifecycle.Decision{Action: lifecycle.ActionStartInstance}, now, now.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		var payload []byte
+		if err := pool.QueryRow(t.Context(), `SELECT command.payload FROM secondbox.runner_commands command
+		 JOIN secondbox.lifecycle_effects effect ON effect.command_id=command.id
+		 WHERE effect.sandbox_id='sandbox-automatic-start' AND effect.kind='prepare_image'`).Scan(&payload); err != nil {
+			t.Fatal(err)
+		}
+		var command runnerv1.ControlPlaneToRunner
+		if err := proto.Unmarshal(payload, &command); err != nil {
+			t.Fatal(err)
+		}
+		if command.GetPrepareImage().Reference != "registry.example/agent@"+digest {
+			t.Fatalf("automatic recovery resolved a mutable reference: %v", command.GetPrepareImage())
 		}
 	})
 }

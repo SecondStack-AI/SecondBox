@@ -41,7 +41,8 @@ func (store *PostgresControlPlaneStore) PingGuest(
 		    AND instance.id=sandbox.current_instance_id AND instance.generation=$4
 		  RETURNING instance.id,instance.sandbox_id,instance.generation,instance.state,
 		            instance.guest_liveness,instance.termination_reason,instance.created_at,instance.guest_features,
-		            instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at
+		            instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at,
+		            instance.requested_image_reference,instance.resolved_image_digest
 		), lifecycle_wakeup AS (
 		  UPDATE secondbox.sandboxes AS sandbox
 		  SET next_reconcile_at=$6,reconcile_owner='',reconcile_claim_expires_at=NULL,
@@ -53,7 +54,8 @@ func (store *PostgresControlPlaneStore) PingGuest(
 		    AND sandbox.current_instance_id=instance.id
 		)
 		SELECT id,sandbox_id,generation,state,guest_liveness,termination_reason,created_at,
-		       updated_at,ready_at,guest_heartbeat_at,stopped_at,guest_features
+		       updated_at,ready_at,guest_heartbeat_at,stopped_at,guest_features,
+		       requested_image_reference,resolved_image_digest
 		FROM updated_instance`,
 		input.TenantRef, input.SubjectRef, input.SandboxID, input.Generation,
 		liveness, input.Now.UTC(),
@@ -61,6 +63,7 @@ func (store *PostgresControlPlaneStore) PingGuest(
 		&instance.ID, &instance.SandboxID, &instance.Generation, &instance.State,
 		&instance.GuestLiveness, &instance.TerminationReason, &instance.CreatedAt,
 		&instance.UpdatedAt, &instance.ReadyAt, &instance.GuestHeartbeatAt, &instance.StoppedAt, &instance.GuestFeatures,
+		&instance.Image.RequestedReference, &instance.Image.ResolvedDigest,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.Instance{}, ports.ErrGenerationFenced

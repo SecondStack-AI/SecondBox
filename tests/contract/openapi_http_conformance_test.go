@@ -30,6 +30,7 @@ type auditedHTTPOperation struct {
 }
 
 var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
+	"prepareImage":                    {"prepareImage", "202", "Operation", []string{"Idempotency-Key"}, []string{"Idempotency-Replayed"}},
 	"getApplicationSandboxPolicy":     {"getApplicationSandboxPolicy", "200", "SubjectSandboxPolicyObservation", nil, nil},
 	"getSubjectSandboxPolicy":         {"getSubjectSandboxPolicy", "200", "SubjectSandboxPolicyObservation", nil, []string{"ETag"}},
 	"updateSubjectSandboxPolicy":      {"updateSubjectSandboxPolicy", "200", "SubjectSandboxPolicyObservation", []string{"If-Match", "Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},

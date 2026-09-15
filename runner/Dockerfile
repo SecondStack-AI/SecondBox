@@ -15,7 +15,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
       -ldflags="-X main.releaseVersion=${RELEASE_VERSION} -X main.sourceCommit=${SOURCE_COMMIT}" \
       -o /out/secondbox-runner ./cmd/secondbox-runner \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
-      -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent
+      -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+      -o /out/secondbox-image-fetcher ./cmd/secondbox-image-fetcher
 
 FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c AS firecracker-release
 
@@ -45,7 +47,7 @@ ARG PUBLIC_CONTRACT_DIGEST
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      bubblewrap ca-certificates e2fsprogs iproute2 iptables nftables procps util-linux \
+      bubblewrap ca-certificates e2fsprogs iproute2 iptables nftables procps skopeo util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 secondbox-runner \
     && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/secondbox-runner --create-home --shell /usr/sbin/nologin secondbox-runner \
@@ -58,6 +60,7 @@ LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondB
       ai.secondstack.secondbox.public-contract-digest="${PUBLIC_CONTRACT_DIGEST}"
 
 COPY --from=runner-builder /out/secondbox-runner /usr/local/bin/secondbox-runner
+COPY --from=runner-builder /out/secondbox-image-fetcher /usr/local/bin/secondbox-image-fetcher
 COPY --from=runner-builder /out/secondbox-guest-agent /usr/local/bin/secondbox-guest-agent
 COPY --from=firecracker-release /out-firecracker /usr/local/bin/firecracker
 COPY --from=firecracker-release /out-jailer /usr/local/bin/jailer
@@ -65,8 +68,9 @@ COPY --from=firecracker-release /out-LICENSE /usr/share/licenses/firecracker/LIC
 COPY --from=firecracker-release /out-NOTICE /usr/share/licenses/firecracker/NOTICE
 COPY --from=firecracker-release /out-THIRD-PARTY /usr/share/licenses/firecracker/THIRD-PARTY
 COPY LICENSE /usr/share/licenses/secondbox-runner/LICENSE
-COPY --chmod=0755 runner/scripts/container/secondbox-runner-entrypoint.sh /usr/local/bin/secondbox-runner-entrypoint
-COPY --chmod=0755 runner/scripts/microvm-host-network-setup.sh /usr/local/bin/microvm-host-network-setup
+COPY runner/scripts/container/secondbox-runner-entrypoint.sh /usr/local/bin/secondbox-runner-entrypoint
+COPY runner/scripts/microvm-host-network-setup.sh /usr/local/bin/microvm-host-network-setup
+RUN chmod 0755 /usr/local/bin/secondbox-runner-entrypoint /usr/local/bin/microvm-host-network-setup
 
 USER 0:0
 WORKDIR /var/lib/secondbox-runner

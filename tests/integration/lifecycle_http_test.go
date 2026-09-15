@@ -112,7 +112,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	start := lifecycleHTTPRequest(
 		t, server.URL, credential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-start",
-		strconv.FormatInt(sandbox.Revision, 10), "", nil,
+		strconv.FormatInt(sandbox.Revision, 10), "", contracts.StartSandboxRequest{Image: testExecutionImage()},
 	)
 	if start.StatusCode != http.StatusAccepted || start.Header.Get("Idempotency-Replayed") != "false" {
 		t.Fatalf("start status=%d replay=%q body=%s", start.StatusCode, start.Header.Get("Idempotency-Replayed"), readResponse(t, start))
@@ -122,7 +122,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	replay := lifecycleHTTPRequest(
 		t, server.URL, credential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-start",
-		strconv.FormatInt(sandbox.Revision, 10), "", nil,
+		strconv.FormatInt(sandbox.Revision, 10), "", contracts.StartSandboxRequest{Image: testExecutionImage()},
 	)
 	if replay.StatusCode != http.StatusAccepted || replay.Header.Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("start replay status=%d replay=%q body=%s", replay.StatusCode, replay.Header.Get("Idempotency-Replayed"), readResponse(t, replay))
@@ -135,7 +135,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	isolated := lifecycleHTTPRequest(
 		t, server.URL, otherCredential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-isolated",
-		strconv.FormatInt(sandbox.Revision, 10), "", nil,
+		strconv.FormatInt(sandbox.Revision, 10), "", contracts.StartSandboxRequest{Image: testExecutionImage()},
 	)
 	assertProblem(t, isolated, http.StatusNotFound, "not_found")
 
@@ -172,7 +172,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	}
 	deleteSandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "lifecycle-http-delete-create",
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile: profile.Name, Metadata: map[string]string{},
 		},
 	)
@@ -210,7 +210,7 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "request-correlation-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -235,11 +235,15 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	const requestID = "request-correlation-http-1"
+	requestBody, err := json.Marshal(contracts.StartSandboxRequest{Image: testExecutionImage()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := http.NewRequestWithContext(
 		t.Context(),
 		http.MethodPost,
 		server.URL+"/v1/sandboxes/"+sandbox.ID+":start",
-		nil,
+		bytes.NewReader(requestBody),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +252,7 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "request-correlation-start")
 	request.Header.Set("If-Match", `"revision-`+strconv.FormatInt(sandbox.Revision, 10)+`"`)
 	request.Header.Set("X-Request-ID", requestID)
+	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -335,7 +340,7 @@ func TestAuditTenantAttribution(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "audit-attribution-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +380,7 @@ func TestWaitInspectLeasePingAndTouchHTTPContract(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "activity-http-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -100,19 +100,28 @@ type AdminIdempotencyResult struct {
 	Replayed bool
 }
 
+type ImagePreparationInput struct {
+	Principal     contracts.Principal
+	Request       contracts.PrepareImageRequest
+	ProfileGrants []string
+	Operation     contracts.Operation
+	Idempotency   AdminIdempotencyInput
+}
+
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
-	Resources          *contracts.SandboxResourceRequest
-	Principal          contracts.Principal
-	Sandbox            contracts.Sandbox
-	Operation          contracts.Operation
-	IdempotencyKey     string
-	RequestHash        string
-	IdempotencyEnds    time.Time
-	WorkspaceEffectID  string
-	WorkspaceCommandID string
-	FencingToken       []byte
-	SourceSnapshotID   string
+	Resources                *contracts.SandboxResourceRequest
+	Principal                contracts.Principal
+	Sandbox                  contracts.Sandbox
+	Operation                contracts.Operation
+	IdempotencyKey           string
+	RequestHash              string
+	IdempotencyEnds          time.Time
+	WorkspaceEffectID        string
+	WorkspaceCommandID       string
+	FencingToken             []byte
+	SourceSnapshotID         string
+	LifecycleRequestMetadata map[string]string
 }
 
 // UpdateSandboxMetadataInput replaces consumer correlation metadata at one revision.

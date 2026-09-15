@@ -103,9 +103,12 @@ func testPostgresInstanceTerminalReason(
 		Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 			AssignmentResult: &runnerv1.AssignmentResult{
 				MessageId: "terminal-ready-2", Sequence: 2, Fence: fence,
-				Terminal:    runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
-				BackendKind: "firecracker", BackendReference: "fc-terminal",
-				Correlation: correlation,
+				Terminal:                runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+				BackendKind:             "firecracker",
+				BackendReference:        "fc-terminal",
+				RequestedImageReference: testExecutionImage().Reference,
+				ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				Correlation:             correlation,
 			},
 		},
 	}
@@ -298,7 +301,9 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 							Fence:       fence,
 							Terminal:    runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
 							BackendKind: "firecracker", BackendReference: "fc-" + instanceID,
-							Correlation: correlation,
+							RequestedImageReference: testExecutionImage().Reference,
+							ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+							Correlation:             correlation,
 						},
 					},
 				},

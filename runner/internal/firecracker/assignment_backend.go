@@ -27,11 +27,13 @@ import (
 )
 
 type activeRunnerAssignment struct {
-	executionBinding *runnerprotocol.AttributedExecution
-	fence            *runnerprotocol.AssignmentFence
-	correlation      *runnerprotocol.Correlation
-	backendReference string
-	egressContext    string
+	executionBinding        *runnerprotocol.AttributedExecution
+	fence                   *runnerprotocol.AssignmentFence
+	correlation             *runnerprotocol.Correlation
+	backendReference        string
+	egressContext           string
+	requestedImageReference string
+	resolvedImageDigest     string
 }
 
 type signedArtifactManifest struct {
@@ -322,6 +324,7 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 			},
 			SnapshotResumeReady:      snapshotResumeReady,
 			AttributedExecutionReady: b.manager.cfg.NetworkPolicyEgressContexts.HasAttributedGateway(),
+			ClientSelectedImageReady: true,
 		},
 		BackendKind:      runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 		Materializations: materializations,
@@ -471,7 +474,8 @@ func (b *AssignmentBackend) ValidateAssignment(
 	active, alreadyActive := b.assignments[assignment.Fence.AssignmentId]
 	b.mu.Unlock()
 	if alreadyActive {
-		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) {
+		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) &&
+			active.requestedImageReference == assignment.GetExecutionImage().GetReference() {
 			return nil
 		}
 		return fmt.Errorf("SecondBox Firecracker assignment ID was reused with different fencing")
@@ -492,19 +496,20 @@ func (b *AssignmentBackend) ValidateAssignment(
 		return fmt.Errorf("SecondBox Firecracker assignment deadline has expired")
 	}
 	supportedCapabilities := map[string]bool{
-		"attributed-execution": b.manager.cfg.NetworkPolicyEgressContexts.HasAttributedGateway(),
-		"cgroup":               true,
-		"cleanup":              true,
-		"evidence":             true,
-		"firecracker":          true,
-		"jailer":               true,
-		"kvm":                  true,
-		"local-workspace":      true,
-		"network-policy":       true,
-		"signed-artifacts":     true,
-		"storage":              true,
-		"tap":                  true,
-		"vsock":                true,
+		"attributed-execution":  b.manager.cfg.NetworkPolicyEgressContexts.HasAttributedGateway(),
+		"client-selected-image": true,
+		"cgroup":                true,
+		"cleanup":               true,
+		"evidence":              true,
+		"firecracker":           true,
+		"jailer":                true,
+		"kvm":                   true,
+		"local-workspace":       true,
+		"network-policy":        true,
+		"signed-artifacts":      true,
+		"storage":               true,
+		"tap":                   true,
+		"vsock":                 true,
 	}
 	for _, capability := range requirements.RequiredCapabilities {
 		if !supportedCapabilities[capability] {
@@ -519,6 +524,9 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if _, err := b.validateAssignmentStartupMode(requirements.StartupMode); err != nil {
 		return err
 	}
+	if assignment.ExecutionImage != nil && requirements.StartupMode != assignmentStartupModeColdBoot {
+		return fmt.Errorf("SecondBox Firecracker client-selected image requires cold_boot startup")
+	}
 	if int(requirements.VcpuCount) > b.manager.cfg.MicroVMVCPUs ||
 		int(requirements.MemoryBytes/mib) > b.manager.cfg.MicroVMMemoryMiB ||
 		int(requirements.DiskBytes/mib) > b.manager.cfg.MicroVMWorkspaceSizeMiB {
@@ -527,8 +535,10 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if _, err := b.compileAssignmentNetworkPolicy(assignment); err != nil {
 		return err
 	}
-	if _, err := b.assignmentGuestProtocolStart(assignment); err != nil {
-		return err
+	if assignment.ExecutionImage == nil {
+		if _, err := b.assignmentGuestProtocolStart(assignment, ""); err != nil {
+			return err
+		}
 	}
 	if err := b.checkWorkspaceAdmission(ctx, requirements.DiskBytes); err != nil {
 		return fmt.Errorf("SecondBox Firecracker assignment storage pressure: %w", err)
@@ -591,20 +601,23 @@ func (b *AssignmentBackend) StartAssignment(
 	assignment *runnerprotocol.AssignmentCommand,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (result runnercontrol.BackendInstance, resultErr error) {
-	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
-		return result, err
-	}
 	if assignment == nil || assignment.Fence == nil || assignment.Requirements == nil {
 		return runnercontrol.BackendInstance{}, fmt.Errorf("SecondBox Firecracker assignment is incomplete")
 	}
+	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+		return result, err
+	}
 	b.mu.Lock()
 	if active, ok := b.assignments[assignment.Fence.AssignmentId]; ok {
-		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) {
+		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) &&
+			active.requestedImageReference == assignment.GetExecutionImage().GetReference() {
 			b.mu.Unlock()
 			return runnercontrol.BackendInstance{
-				BackendKind:      "firecracker",
-				BackendReference: active.backendReference,
-				GuestFeatures:    b.manager.assignmentGuestFeatures(active.backendReference),
+				BackendKind:             "firecracker",
+				BackendReference:        active.backendReference,
+				GuestFeatures:           b.manager.assignmentGuestFeatures(active.backendReference),
+				RequestedImageReference: active.requestedImageReference,
+				ResolvedImageDigest:     active.resolvedImageDigest,
 			}, nil
 		}
 		b.mu.Unlock()
@@ -652,12 +665,20 @@ func (b *AssignmentBackend) StartAssignment(
 			)
 		}
 	}()
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
+	preparedImage, err := b.manager.executionImages.VerifyLocal(
+		ctx,
+		assignment.ExecutionImage,
+		progress,
+	)
+	if err != nil {
 		return runnercontrol.BackendInstance{}, err
+	}
+	if preparedImage.Release != nil {
+		defer preparedImage.Release()
 	}
 	const mib = uint64(1 << 20)
 	requirements := assignment.Requirements
-	guestStart, err := b.assignmentGuestProtocolStart(assignment)
+	guestStart, err := b.assignmentGuestProtocolStart(assignment, preparedImage.Directory)
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
@@ -710,6 +731,8 @@ func (b *AssignmentBackend) StartAssignment(
 		GuestBuildID:            guestStart.GuestBuildID,
 		ImageManifestDigest:     guestStart.ImageManifestDigest,
 		ToolchainManifestDigest: guestStart.ToolchainManifestDigest,
+		ExecutionImageDirectory: preparedImage.Directory,
+		ExecutionImageArtifacts: preparedImage.Artifacts,
 		MandatoryGuestFeatures:  guestStart.MandatoryFeatures,
 		RuntimeClass:            runtimemanager.RuntimeClassToolExecutor,
 		StartupMode:             startupMode,
@@ -775,7 +798,9 @@ func (b *AssignmentBackend) StartAssignment(
 			AssignmentId:      assignment.Fence.AssignmentId,
 			RunnerId:          b.manager.runnerID,
 		},
-		backendReference: backendReference,
+		backendReference:        backendReference,
+		requestedImageReference: preparedImage.RequestedReference,
+		resolvedImageDigest:     preparedImage.ResolvedDigest,
 	}
 	b.mu.Unlock()
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
@@ -786,9 +811,11 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	reservationHeld = false
 	return runnercontrol.BackendInstance{
-		BackendKind:      "firecracker",
-		BackendReference: backendReference,
-		GuestFeatures:    b.manager.assignmentGuestFeatures(backendReference),
+		BackendKind:             "firecracker",
+		BackendReference:        backendReference,
+		GuestFeatures:           b.manager.assignmentGuestFeatures(backendReference),
+		RequestedImageReference: preparedImage.RequestedReference,
+		ResolvedImageDigest:     preparedImage.ResolvedDigest,
 	}, nil
 }
 
@@ -880,8 +907,11 @@ type assignmentGuestProtocolStart struct {
 	MandatoryFeatures       []string
 }
 
-func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerprotocol.AssignmentCommand) (assignmentGuestProtocolStart, error) {
-	manifestPath := filepath.Join(filepath.Dir(b.manager.cfg.MicroVMKernelPath), "manifest.json")
+func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (assignmentGuestProtocolStart, error) {
+	if artifactDirectory == "" {
+		artifactDirectory = filepath.Dir(b.manager.cfg.MicroVMKernelPath)
+	}
+	manifestPath := filepath.Join(artifactDirectory, "manifest.json")
 	manifest, err := loadSignedArtifactManifest(manifestPath)
 	if err != nil {
 		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker assignment signed compatibility metadata: %w", err)
@@ -989,7 +1019,7 @@ func equalStringSets(left, right []string) bool {
 }
 
 func loadSignedArtifactManifest(path string) (signedArtifactManifest, error) {
-	data, err := os.ReadFile(path)
+	data, err := config.ReadArtifactMetadata(path, config.MaximumArtifactManifestBytes)
 	if err != nil {
 		return signedArtifactManifest{}, err
 	}

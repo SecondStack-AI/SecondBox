@@ -2257,11 +2257,13 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 		&runnerv1.RunnerToControlPlane{
 			Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 				AssignmentResult: &runnerv1.AssignmentResult{
-					Fence:            fence,
-					Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
-					BackendKind:      "firecracker",
-					BackendReference: "fc-ready-evidence",
-					GuestFeatures:    []string{"exec_input_recovery"},
+					Fence:                   fence,
+					Terminal:                runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+					BackendKind:             "firecracker",
+					BackendReference:        "fc-ready-evidence",
+					RequestedImageReference: runnerControlTestExecutionImageReference,
+					ResolvedImageDigest:     runnerControlTestExecutionImageDigest,
+					GuestFeatures:           []string{"exec_input_recovery"},
 					Correlation: &runnerv1.Correlation{
 						RequestId: "request-start", OperationId: "operation-start",
 						SandboxId: fence.SandboxId, InstanceId: fence.InstanceId,
@@ -2393,10 +2395,12 @@ func TestReadyAssignmentDefersStopIntentToLifecycleReconciliation(t *testing.T) 
 		&runnerv1.RunnerToControlPlane{
 			Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 				AssignmentResult: &runnerv1.AssignmentResult{
-					Fence:            fence,
-					Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
-					BackendKind:      "firecracker",
-					BackendReference: "fc-ready-after-stop",
+					Fence:                   fence,
+					Terminal:                runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+					BackendKind:             "firecracker",
+					BackendReference:        "fc-ready-after-stop",
+					RequestedImageReference: runnerControlTestExecutionImageReference,
+					ResolvedImageDigest:     runnerControlTestExecutionImageDigest,
 					Correlation: &runnerv1.Correlation{
 						RequestId: "request-start", OperationId: "operation-start",
 						SandboxId: fence.SandboxId, InstanceId: fence.InstanceId,
@@ -2492,6 +2496,11 @@ func insertDeliveredAssignmentCommand(
 	}
 }
 
+const (
+	runnerControlTestExecutionImageReference = "registry.example/secondbox/runner-control-test@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	runnerControlTestExecutionImageDigest    = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+)
+
 func seedStartingAssignment(
 	t *testing.T,
 	store *PostgresStateStore,
@@ -2524,8 +2533,9 @@ func seedStartingAssignment(
 			3,$1,$5,'{}','{}',2,$4,$4
 		);
 		INSERT INTO secondbox.instances (
-			id,sandbox_id,generation,state,guest_liveness,termination_reason,created_at,updated_at
-		) VALUES ($5,$2,3,'starting','starting','',$4,$4);
+			id,sandbox_id,generation,state,guest_liveness,termination_reason,
+			requested_image_reference,resolved_image_digest,created_at,updated_at
+		) VALUES ($5,$2,3,'starting','starting','',$10,'',$4,$4);
 		INSERT INTO secondbox.assignments (
 			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
@@ -2546,7 +2556,7 @@ func seedStartingAssignment(
 		pgx.QueryExecModeSimpleProtocol,
 		"workspace-"+suffix, fence.SandboxId, "assignment-command-"+suffix,
 		now, fence.InstanceId, fence.AssignmentId, fence.FencingToken,
-		assignmentState, now.Add(time.Hour),
+		assignmentState, now.Add(time.Hour), runnerControlTestExecutionImageReference,
 	); err != nil {
 		t.Fatal(err)
 	}

@@ -414,6 +414,11 @@ func (service *ControlPlaneService) createSandboxOperation(
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
+	if request.Image.Reference != "" {
+		if err := request.Image.Validate(); err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, invalidRequest(err)
+		}
+	}
 	if len(request.SourceSnapshotID) > 128 {
 		return contracts.Sandbox{}, contracts.Operation{}, false,
 			invalidRequest(errors.New("SecondBox source Snapshot ID exceeds its bound"))
@@ -452,6 +457,7 @@ func (service *ControlPlaneService) createSandboxOperation(
 		IdempotencyEnds:   service.idempotencyExpiration(now),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
 		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID, Resources: request.Resources,
+		LifecycleRequestMetadata: request.Image.LifecycleMetadata(),
 	})
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
@@ -579,10 +585,16 @@ func (service *ControlPlaneService) StartSandbox(
 	sandboxID string,
 	idempotencyKey string,
 	expectedRevision int64,
+	image contracts.ExecutionImage,
 ) (contracts.Operation, error) {
+	if image.Reference != "" {
+		if err := image.Validate(); err != nil {
+			return contracts.Operation{}, invalidRequest(err)
+		}
+	}
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "start", contracts.SandboxDesiredStateRunning,
-		idempotencyKey, expectedRevision, nil, nil,
+		idempotencyKey, expectedRevision, image.LifecycleMetadata(), nil,
 	)
 }
 

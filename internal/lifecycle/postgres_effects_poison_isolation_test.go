@@ -52,10 +52,10 @@ func TestInvalidProfileStartFailsBeforeAssignmentAndReleasesWorkspace(t *testing
 		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
-			reconcile_owner,revision,created_at,updated_at
+			lifecycle_request_metadata_json,reconcile_owner,revision,created_at,updated_at
 		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-profile'),
 			'sandbox-profile','tenant','subject','profile','revision-bogus','stopped','running',
-			3,'workspace-profile','','{}','{}','worker-profile',2,$1,$1
+			3,'workspace-profile','','{}','{}','{"executionImageReference":"registry.example/secondbox/lifecycle-test:stable"}','worker-profile',2,$1,$1
 		);
 		INSERT INTO secondbox.operations (
 			id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,

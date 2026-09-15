@@ -32,6 +32,8 @@ func runRunCommand(
 	flags.SetOutput(io.Discard)
 	var resourceFlags resourceOptions
 	resourceFlags.register(flags)
+	var imageFlags executionImageOptions
+	imageFlags.register(flags)
 	name := flags.String("name", "", "reserved Sandbox name for later reference")
 	source := flags.String("from", "", "Snapshot identifier or sandbox/name")
 	keep := flags.Bool("keep", false, "retain the Sandbox instead of deleting it")
@@ -55,6 +57,10 @@ func runRunCommand(
 		return fmt.Errorf("SecondBox CLI parse run options: %w", err)
 	}
 	resources, err := resourceFlags.resolve(flags)
+	if err != nil {
+		return err
+	}
+	image, err := imageFlags.resolve()
 	if err != nil {
 		return err
 	}
@@ -128,6 +134,7 @@ func runRunCommand(
 				resources:        resources,
 				sourceSnapshotID: *source,
 				metadata:         metadata,
+				image:            image,
 				operands:         flags.Args(),
 				cwd:              *cwd,
 				keep:             *keep,
@@ -138,6 +145,7 @@ func runRunCommand(
 	request := secondboxclient.RunRequest{
 		Profile:              profile,
 		Resources:            resources,
+		Image:                image,
 		SourceSnapshotID:     *source,
 		Metadata:             metadata,
 		Command:              command,
@@ -227,6 +235,7 @@ type interactiveRequest struct {
 	profile          string
 	sourceSnapshotID string
 	resources        *secondboxclient.SandboxResourceRequest
+	image            secondboxclient.ExecutionImage
 	metadata         map[string]string
 	operands         []string
 	cwd              string
@@ -249,7 +258,7 @@ func runInteractiveSandbox(
 	report io.Writer,
 ) (resultErr error) {
 	handle, _, err := client.CreateSandbox(ctx, secondboxclient.CreateSandboxRequest{
-		Profile: request.profile, Metadata: request.metadata, Resources: request.resources, SourceSnapshotID: request.sourceSnapshotID,
+		Profile: request.profile, Metadata: request.metadata, Resources: request.resources, SourceSnapshotID: request.sourceSnapshotID, Image: request.image,
 	}, "")
 	if err != nil {
 		return &sandboxCreationError{cause: err, profile: request.profile}

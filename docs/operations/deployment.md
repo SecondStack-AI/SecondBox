@@ -102,7 +102,8 @@ Existing manifests must remove the retired `policy.default_subject_max_*`, `depl
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
-Enabled Runner features remain an explicit rollout decision in `policy.runner_enabled_features`.
+`policy.runner_enabled_features` must include `client-selected-image` because generation 5 requires an image on every create and start.
+Enable other Runner features only when their backend evidence and application grants are ready.
 
 The data-plane and Runner command polling cadences are optional tuning overrides, each defaulting to 250 milliseconds. The data-plane cadence also drives session/accounting sweeps and polling on proxied streams; it does not set retention deadlines. Runner command polling provides fallback delivery alongside work notifications. To migrate an existing manifest, remove `data_plane_poll_interval_milliseconds` and `runner_command_poll_interval_milliseconds` from `[policy]`. Preserve any intentional non-default values under `[overrides]`; the old policy keys are rejected.
 
@@ -116,7 +117,7 @@ Runner protocol minimum and maximum are not configuration. Both binaries compile
 
 ## Tenant-aware egress topology
 
-The tenant-aware release uses Runner protocol generation 4 exactly. A v0.7.2 control plane or Runner supports generation 3 and cannot join a generation-4 deployment. Upgrade the control plane and every Runner as one coordinated replacement; a mixed fleet, legacy assignment, or global-gateway fallback is unsupported.
+The client-selected-image release uses Runner protocol generation 5 exactly. Earlier control planes and Runners cannot join a generation-5 deployment. Upgrade the control plane and every Runner as one coordinated replacement. A mixed fleet, legacy assignment, or global-gateway fallback is unsupported. The first cold start also includes registry download, extraction, and signature verification. Size assignment and ingress deadlines for that work; warm starts use the verified Runner-local cache.
 
 One SecondBox Tenant represents one SecondStack installation and has at most one nullable operator-selected egress-context name. Names are opaque and match `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`, so they contain 1 through 63 lowercase ASCII letters, digits, or hyphens and begin and end with an alphanumeric character. They are not DNS names or network coordinates. Do not put SecondStack hostnames, proxy endpoints, certificates, network ranges, Tenant references, or secrets in a context name or in control-plane configuration.
 
@@ -234,7 +235,51 @@ secondbox-deploy runner-template
 secondbox-deploy runner-template --output /secure/secondbox/runner-east-1.toml
 ```
 
-Replace `runners = []` in the deployment manifest with the completed block. Required values are invalid placeholders; validation cannot accept the scaffold before the operator supplies them. Leave the three remote-only paths empty for same-host placement.
+Replace `runners = []` in the deployment manifest with the completed block.
+Required values are invalid placeholders, and validation cannot accept the scaffold before the operator supplies them.
+Set all three execution-image limits to positive byte counts, and keep the cache limit at least as large as the expanded-image limit.
+Each preparation reserves `2 * execution_image_max_download_bytes + execution_image_max_expanded_bytes` because the archive, extraction staging, and published cache can overlap.
+This conservative reservation also applies to cached images and must fit below the storage-pressure denial threshold with existing filesystem usage and Workspace reservations.
+The guided install values reserve 48 GiB for staging from a 16 GiB download limit and a 16 GiB expanded limit.
+Existing manifests must add these fields before a generation-5 Runner starts.
+They must also set `[deployment].execution_image_public_key` to the publisher's PEM public key and `execution_image_public_key_sha256` to its SHA-256 DER fingerprint.
+Calculate the fingerprint with `openssl pkey -pubin -in PUBLIC_KEY -outform DER | sha256sum`.
+Use that same publisher fingerprint for each Runner's execution-image trust, and make the public key readable by the fetcher's UID 10002.
+This publisher may differ from the historical release asset publisher.
+Leave the three remote-only paths empty for same-host placement.
+
+For a remote Runner, map the manifest values to `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES`.
+Run `secondbox-image-fetcher` as a separate unprivileged user with Skopeo, access to the image cache, and a private Unix socket at `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET`.
+It must have no access to Workspaces, host devices, or the Docker socket.
+Configure its explicit `SECONDBOX_IMAGE_FETCHER_*` environment as shown in `deploy/compose.same-host-runner.yml`.
+The same-host package provisions this separate service and its mounts.
+
+### Tenant registry access
+
+The Runner host's `execution_image_registry_config_directory` contains `tenants.json`, private credential files, and a `certificates` directory for private registry CAs.
+Paths in the JSON refer to the fetcher container, not to the host.
+For example:
+
+```json
+{
+  "application-tenant": {
+    "registry": "registry.example.com",
+    "repositories": ["agent-sandbox"],
+    "authentication": {
+      "mode": "token",
+      "username": "sandbox-reader",
+      "tokenFile": "/run/image-registry/pull-token"
+    }
+  }
+}
+```
+
+Use `{"mode":"anonymous"}` for public access.
+Use `{"mode":"docker_config","dockerConfigFile":"/run/image-registry/docker.json"}` for an exported Docker login file, including a JSON-key password.
+Credential helpers are not supported; export the authentication entry itself.
+The fetcher reads the files for each preparation, so credential rotation needs no application changes.
+The same-host initialization service assigns this directory to UID 10002; keep credentials private and readable by that UID.
+Neither lifecycle requests nor Agent Platform receive these credentials.
 
 <!-- runner-template-output:start -->
 ```toml
@@ -260,6 +305,20 @@ identity_host_directory = '<replace-with-absolute-runner-host-path>'
 # Artifact trust
 # Execution-asset directory on the Runner host; absolute when set and required for same-host placement.
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'
+# Registry hosts allowed for client-selected execution images.
+execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
+# Private directory containing tenants.json and exported registry credentials on the Runner host.
+execution_image_registry_config_directory = '<replace-with-absolute-tenant-registry-config-directory>'
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package mounts the deployment's execution-image publisher key.
+execution_image_public_key = ''
+# Client-selected execution-image signing-key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
+execution_image_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
+# Maximum downloaded OCI archive size per image.
+execution_image_max_download_bytes = 0
+# Maximum expanded signed bundle size per image.
+execution_image_max_expanded_bytes = 0
+# Maximum retained expanded image cache size.
+execution_image_max_cache_bytes = 0
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/signing.pub.
 artifact_public_key = ''
 # Provisioned signed-artifact key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.

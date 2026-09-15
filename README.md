@@ -117,7 +117,7 @@ Credentials are verified against the deployment before anything is written, then
 ### Run something
 
 ```sh
-secondbox run durable-coding -- python3 -c 'print("hello from SecondBox")'
+secondbox run durable-coding --image registry.example/secondbox/agent:stable -- python3 -c 'print("hello from SecondBox")'
 ```
 
 ## Using the CLI
@@ -128,8 +128,8 @@ secondbox run durable-coding -- python3 -c 'print("hello from SecondBox")'
 it. Add `--keep` to retain its Workspace and report its identifier:
 
 ```sh
-secondbox run durable-coding --name mybox --keep -- true
-secondbox run durable-coding --cpus 2 --memory 4GiB --disk 20GiB -- python3 -c 'print("hello")'
+secondbox run durable-coding --image registry.example/secondbox/agent:stable --name mybox --keep -- true
+secondbox run durable-coding --image registry.example/secondbox/agent:stable --cpus 2 --memory 4GiB --disk 20GiB -- python3 -c 'print("hello")'
 secondbox get mybox
 ```
 
@@ -144,7 +144,7 @@ For creation without an initial command, `create` returns the admitted Operation
 immediately. The Profile determines the initial state; check readiness before exec:
 
 ```sh
-secondbox create durable-coding --size small --name worker
+secondbox create durable-coding --image registry.example/secondbox/agent:stable --size small --name worker
 secondbox get worker
 secondbox ls
 ```
@@ -191,8 +191,8 @@ Profile's ceilings:
 secondbox stop mybox
 secondbox snapshot mybox --name with-deps
 secondbox snapshots mybox
-secondbox run durable-coding --from mybox/with-deps -- cat /workspace/out.txt
-secondbox start mybox
+secondbox run durable-coding --image registry.example/secondbox/agent:stable --from mybox/with-deps -- cat /workspace/out.txt
+secondbox start mybox --image registry.example/secondbox/agent:stable
 secondbox stop mybox
 secondbox rm mybox
 ```

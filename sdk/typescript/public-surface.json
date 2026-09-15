@@ -160,6 +160,7 @@
       "profile"
     ],
     "optional": [
+      "image",
       "resources",
       "sourceSnapshotId"
     ]
@@ -388,6 +389,12 @@
     ],
     "optional": []
   },
+  "ExecutionImage": {
+    "required": [
+      "reference"
+    ],
+    "optional": []
+  },
   "ExecutionPolicy": {
     "required": [
       "dataPlaneTransport",
@@ -431,12 +438,21 @@
     ],
     "optional": []
   },
+  "ImagePreparation": {
+    "required": [
+      "image",
+      "preparedRunners",
+      "targetRunners"
+    ],
+    "optional": []
+  },
   "Instance": {
     "required": [
       "createdAt",
       "generation",
       "guestLiveness",
       "id",
+      "image",
       "sandboxId",
       "state",
       "updatedAt"
@@ -501,6 +517,7 @@
     "optional": [
       "completedAt",
       "error",
+      "imagePreparation",
       "sandbox",
       "sandboxId",
       "snapshot",
@@ -578,6 +595,14 @@
     ],
     "optional": [
       "certificateSpkiSha256"
+    ]
+  },
+  "PrepareImageRequest": {
+    "required": [
+      "image"
+    ],
+    "optional": [
+      "profile"
     ]
   },
   "Problem": {
@@ -658,6 +683,14 @@
       "attributedExecution",
       "lifecycleCeiling",
       "resourceCeiling"
+    ]
+  },
+  "PublicExecutionImage": {
+    "required": [
+      "requestedReference"
+    ],
+    "optional": [
+      "resolvedDigest"
     ]
   },
   "QuotaConstrainingScopes": {
@@ -815,6 +848,7 @@
     ],
     "optional": [
       "deletedAt",
+      "image",
       "instance",
       "lastActivityAt"
     ]
@@ -901,7 +935,8 @@
   "StartSandboxRequest": {
     "required": [],
     "optional": [
-      "attributedExecution"
+      "attributedExecution",
+      "image"
     ]
   },
   "StartupPolicy": {

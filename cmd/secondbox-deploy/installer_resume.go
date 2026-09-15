@@ -705,7 +705,7 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 			placementRetries := 0
 			for attempt := 0; ; attempt++ {
 				name = "installer-smoke-" + strings.ToLower(rand.Text())
-				command, stdout, stderr = installedCLICommand(ctx, plan, "run", profile, "--name", name, "--", "/bin/echo", "hello")
+				command, stdout, stderr = installedCLICommand(ctx, plan, "run", profile, "--image", plan.Release.Images["microvm-artifacts"], "--name", name, "--", "/bin/echo", "hello")
 				err = command.Run()
 				if err == nil || attempt >= 30 || !strings.Contains(stderr.String(), "code=home_runner_unavailable") {
 					break

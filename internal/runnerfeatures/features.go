@@ -18,6 +18,7 @@ func Parse(names []string) ([]runnerv1.RunnerFeature, error) {
 		"evidence":              runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 		"local-workspace":       runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 		"tenant-egress-context": runnerv1.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT,
+		"client-selected-image": runnerv1.RunnerFeature_RUNNER_FEATURE_CLIENT_SELECTED_IMAGE,
 	}
 	features := make([]runnerv1.RunnerFeature, 0, len(names))
 	for _, name := range names {

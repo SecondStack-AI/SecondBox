@@ -152,6 +152,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("GET /v1/leases/{leaseID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getLease)))
 	mux.Handle("DELETE /v1/leases/{leaseID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.releaseLease)))
 	mux.Handle("POST /v1/leases/{leaseAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.renewLease)))
+	mux.Handle("POST /v1/images:prepare", apiHandler.authenticate(http.HandlerFunc(apiHandler.prepareImage)))
 	mux.Handle("GET /v1/operations/{operationID}", apiHandler.authenticateOperationInspection(http.HandlerFunc(apiHandler.getOperation)))
 	mux.Handle("GET /v1/operations/{operationID}/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOperationTiming)))
 	return apiHandler.withRequestID(mux), nil
@@ -590,11 +591,13 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 				return
 			}
 		}
-		var metadata map[string]string
-		if body != nil && body.AttributedExecution != nil {
-			metadata = body.AttributedExecution.AttributedExecutionMetadata()
+		if body == nil {
+			body = &contracts.StartSandboxRequest{}
 		}
-		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, metadata)
+		apiHandler.mutateSandboxLifecycle(
+			writer, request, sandboxID, action,
+			contracts.MergeExecutionImageMetadata(body.Image, body.AttributedExecution),
+		)
 	case "drain", "stop":
 		if err := requireEmptyBody(request); err != nil {
 			apiHandler.writeError(writer, request, err)

@@ -161,7 +161,9 @@ func (runner *FakeRunner) AssignmentReady(
 				Sequence:  sequence, Fence: fence,
 				Terminal:    runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
 				BackendKind: "firecracker", BackendReference: "fc-conformance",
-				Correlation: runner.assignmentCorrelation(fence),
+				RequestedImageReference: "registry.example/secondbox/integration-agent@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				Correlation:             runner.assignmentCorrelation(fence),
 			},
 		},
 	})
@@ -185,7 +187,9 @@ func (runner *FakeRunner) ReorderedAssignmentReady(
 				Sequence:  sequence, Fence: fence,
 				Terminal:    runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
 				BackendKind: "firecracker", BackendReference: "fc-reordered",
-				Correlation: runner.assignmentCorrelation(fence),
+				RequestedImageReference: "registry.example/secondbox/integration-agent@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				Correlation:             runner.assignmentCorrelation(fence),
 			},
 		},
 	}

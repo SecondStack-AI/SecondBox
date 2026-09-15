@@ -11,6 +11,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
@@ -39,6 +40,7 @@ type EffectBrokerConfig struct {
 	RetryLimit              int64
 	SerializationRetryLimit int
 	AssetCatalog            AssetCatalog
+	ExecutionImageAuthority *assetcatalog.ExecutionImageAuthority
 	SessionCanceller        ActiveSessionCanceller
 	NewID                   func(string) string
 	NewFencingToken         func() ([]byte, error)
@@ -423,6 +425,7 @@ type startPlan struct {
 	requestID         string
 	egressContext     *string
 	spec              contracts.ProfileRevisionSpec
+	image             contracts.PublicExecutionImage
 }
 
 func (broker *PostgresEffectBroker) scheduleAndStart(
@@ -474,11 +477,26 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	if err != nil {
 		return broker.failInvalidProfileStart(ctx, claim, plan, err, now.UTC())
 	}
+	selectedReference := ""
+	if plan.image.RequestedReference != "" {
+		var prepared bool
+		assets, selectedReference, prepared, err = broker.prepareStartImage(ctx, claim, plan, now.UTC())
+		if err != nil {
+			return broker.failStartPreparation(ctx, claim, plan, err, now.UTC(), "image_preparation_failed", "Selected execution image could not be prepared")
+		}
+		if !prepared {
+			return broker.deferUnavailableHomeRunnerStart(ctx, claim, plan.generation, nextReconcileAt.UTC())
+		}
+		guestProtocolGeneration = assets[0].GuestProtocolGeneration
+	}
 	// The Runner is told which backend prerequisites its Assignment needs. The
 	// startup mode travels separately, as its own field, because a Runner decides
 	// whether it can honour a mode from its own start paths rather than from a
 	// capability string the control plane echoed back at it.
 	requiredCapabilities := []string{"network-policy", "storage", "cleanup", "local-workspace"}
+	if selectedReference != "" {
+		requiredCapabilities = append(requiredCapabilities, contracts.RunnerCapabilityClientSelectedImage)
+	}
 	if plan.attributed != nil {
 		requiredCapabilities = append(requiredCapabilities, contracts.RunnerCapabilityAttributedExecution)
 	}
@@ -521,7 +539,11 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			RequestId: plan.requestID, OperationId: plan.operationID, SandboxId: claim.SandboxID,
 			SandboxGeneration: uint64(plan.generation),
 		},
-		NetworkPolicy: networkPolicy,
+		NetworkPolicy:  networkPolicy,
+		ExecutionImage: &runnerv1.ExecutionImage{Reference: selectedReference},
+	}
+	if selectedReference == "" {
+		assignmentCommand.ExecutionImage = nil
 	}
 	if plan.egressContext != nil {
 		assignmentCommand.EgressContext = *plan.egressContext
@@ -554,14 +576,12 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 				DiskBytes:   plan.resources.WorkspaceBytes,
 				Instances:   1, Operations: plan.spec.Resources.ConcurrentOperations,
 			},
-			GuestProtocolGeneration: guestProtocolGeneration,
-			PreferredArtifactDigests: []string{
-				plan.spec.RuntimeBundleDigest, plan.spec.ToolchainBundleDigest,
-			},
+			GuestProtocolGeneration:  guestProtocolGeneration,
+			PreferredArtifactDigests: []string{assets[0].ManifestDigest, assets[1].ManifestDigest},
 		},
 		AssignmentCommand: assignmentCommand, FencingToken: fencingToken,
 		ResolvedArtifacts: map[string]string{
-			"runtime": plan.spec.RuntimeBundleDigest, "toolchain": plan.spec.ToolchainBundleDigest,
+			"runtime": assets[0].ManifestDigest, "toolchain": assets[1].ManifestDigest,
 		},
 		ClaimExpiresAt:    now.UTC().Add(broker.config.AssignmentClaimDuration),
 		OperationDeadline: deadline, RetryLimit: broker.config.RetryLimit,
@@ -643,9 +663,14 @@ func (broker *PostgresEffectBroker) failInvalidProfileStart(
 	cause error,
 	now time.Time,
 ) error {
+	return broker.failStartPreparation(ctx, claim, plan, cause, now, "profile_unavailable", "Pinned Profile cannot be resolved to qualified execution assets")
+}
+
+func (broker *PostgresEffectBroker) failStartPreparation(ctx context.Context, claim ports.LifecycleReconcileClaim, plan startPlan, cause error, now time.Time, errorCode, safeMessage string) error {
 	slog.WarnContext(
 		ctx,
-		"SecondBox lifecycle start was rejected by an invalid Profile",
+		"SecondBox lifecycle start preparation failed",
+		"errorCode", errorCode,
 		"sandboxId", claim.SandboxID,
 		"profileRevisionId", plan.profileRevisionID,
 		"error", cause,
@@ -686,7 +711,6 @@ func (broker *PostgresEffectBroker) failInvalidProfileStart(
 			return fmt.Errorf("SecondBox lifecycle invalid Profile Workspace release failed: %w", err)
 		}
 	}
-	const safeMessage = "Pinned Profile cannot be resolved to qualified execution assets"
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET state='failed',lifecycle_action='fail',
@@ -702,11 +726,11 @@ func (broker *PostgresEffectBroker) failInvalidProfileStart(
 	if plan.operationID != "" {
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.operations
-			SET state='failed',error_code='profile_unavailable',error_message=$2,
+			SET state='failed',error_code=$4,error_message=$2,
 			    retryable=false,started_at=COALESCE(started_at,$3),
 			    completed_at=$3,updated_at=$3
 			WHERE id=$1 AND state IN ('pending','running')`,
-			plan.operationID, safeMessage, now,
+			plan.operationID, safeMessage, now, errorCode,
 		); err != nil {
 			return fmt.Errorf("SecondBox lifecycle invalid Profile Operation failure failed: %w", err)
 		}
@@ -798,12 +822,14 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	var plan startPlan
 	var specJSON []byte
 	var metadataJSON []byte
+	var imageReference, imageDigest string
 	err := broker.pool.QueryRow(ctx, `
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,sandbox.lifecycle_request_metadata_json,
 		       sandbox.workspace_id,sandbox.generation,sandbox.profile_revision_id,
 		       sandbox.egress_context,sandbox.vcpu_count,sandbox.memory_bytes,sandbox.workspace_bytes,
 		       revision.spec_json,workspace.mutation_id,
-		       COALESCE(operation.id,''),COALESCE(operation.request_id,'')
+		       COALESCE(operation.id,''),COALESCE(operation.request_id,''),
+		       sandbox.execution_image_reference,sandbox.execution_image_digest
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
@@ -816,6 +842,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		&plan.workspaceID, &plan.generation, &plan.profileRevisionID, &plan.egressContext,
 		&plan.resources.VCPUCount, &plan.resources.MemoryBytes, &plan.resources.WorkspaceBytes,
 		&specJSON, &plan.mutationID, &plan.operationID, &plan.requestID,
+		&imageReference, &imageDigest,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return startPlan{}, ports.ErrRevisionConflict
@@ -836,6 +863,12 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	if err != nil {
 		return startPlan{}, err
 	}
+	if metadata["executionImageReference"] != "" {
+		plan.image, err = contracts.ParseExecutionImageMetadata(metadata)
+		if err != nil {
+			return startPlan{}, err
+		}
+	}
 	if plan.spec.Network.RequiresTenantEgressContext == nil {
 		return startPlan{}, errors.New("SecondBox lifecycle start Profile egress-context requirement is absent")
 	}
@@ -850,6 +883,9 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		return startPlan{}, errors.New("SecondBox lifecycle start isolated Sandbox has an unexpected egress-context pin")
 	}
 	if plan.operationID == "" && plan.attributed == nil {
+		if imageDigest != "" {
+			plan.image = contracts.PublicExecutionImage{RequestedReference: contracts.ExecutionImageDigestReference(imageReference, imageDigest), ResolvedDigest: imageDigest}
+		}
 		plan.operationID = stableEffectID(
 			"automatic-start",
 			claim.SandboxID,

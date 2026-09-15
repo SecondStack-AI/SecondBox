@@ -42,6 +42,7 @@ type EffectExecutor interface {
 
 // Reconciler consumes durable desired state one idempotent transition at a time.
 type Reconciler struct {
+	PrepareImages func(context.Context, time.Time) (bool, error)
 	Store         ReconcileStore
 	Effects       EffectExecutor
 	WorkerID      string
@@ -81,9 +82,17 @@ func (reconciler Reconciler) RunBatch(
 		reconciler.BatchSize <= 0 || clock == nil {
 		return false, errors.New("SecondBox lifecycle batch reconciler dependencies and bounds are required")
 	}
+	preparationChanged := false
+	if reconciler.PrepareImages != nil {
+		var err error
+		preparationChanged, err = reconciler.PrepareImages(ctx, clock())
+		if err != nil {
+			return false, err
+		}
+	}
 	if reconciler.BatchSize == 1 {
 		_, found, err := reconciler.RunOnce(ctx, clock(), wakeTrigger)
-		return found, err
+		return found || preparationChanged, err
 	}
 	store, ok := reconciler.Store.(BatchReconcileStore)
 	if !ok {
@@ -94,7 +103,7 @@ func (reconciler Reconciler) RunBatch(
 		reconciler.BatchSize, wakeTrigger,
 	)
 	if err != nil || len(claims) == 0 {
-		return false, err
+		return preparationChanged, err
 	}
 	if len(claims) > reconciler.BatchSize {
 		return false, errors.New("SecondBox lifecycle batch claim exceeded its bound")

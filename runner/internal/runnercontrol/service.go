@@ -73,9 +73,11 @@ type BackendReadiness struct {
 
 // BackendInstance is the provider-private identity of a ready compute instance.
 type BackendInstance struct {
-	GuestFeatures    []string
-	BackendKind      string
-	BackendReference string
+	GuestFeatures           []string
+	BackendKind             string
+	BackendReference        string
+	RequestedImageReference string
+	ResolvedImageDigest     string
 }
 
 // BackendInstanceTerminal is bounded post-ready runtime evidence. It cannot
@@ -679,6 +681,8 @@ func (s *RunnerProtocolService) consumeCommands(
 	defer assignmentsInFlight.Wait()
 	var workspaceCreatesInFlight sync.WaitGroup
 	defer workspaceCreatesInFlight.Wait()
+	var imagePreparationsInFlight sync.WaitGroup
+	defer imagePreparationsInFlight.Wait()
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
 	assignmentSlots := make(
@@ -747,6 +751,19 @@ func (s *RunnerProtocolService) consumeCommands(
 			}
 			// Sequence acceptance above already ran in receive order, so a
 			// concurrent start cannot reorder the control command stream.
+			if preparation := frame.message.GetPrepareImage(); preparation != nil {
+				imagePreparationsInFlight.Add(1)
+				go func() {
+					defer imagePreparationsInFlight.Done()
+					if err := s.handleImagePreparation(connectionCtx, stream, preparation); err != nil {
+						select {
+						case asyncErrors <- err:
+						default:
+						}
+					}
+				}()
+				continue
+			}
 			if assignment := frame.message.GetAssignment(); assignment != nil {
 				workspaceCreatesInFlight.Wait()
 				select {
@@ -912,6 +929,9 @@ func (state *controlCommandState) accept(
 	case message.GetLocalWorkspace() != nil:
 		messageID = message.GetLocalWorkspace().MessageId
 		sequence = message.GetLocalWorkspace().Sequence
+	case message.GetPrepareImage() != nil:
+		messageID = message.GetPrepareImage().MessageId
+		sequence = message.GetPrepareImage().Sequence
 	case message.GetDataPlaneDirectOpen() != nil:
 		messageID = message.GetDataPlaneDirectOpen().MessageId
 		sequence = message.GetDataPlaneDirectOpen().Sequence
@@ -1202,11 +1222,15 @@ func (s *RunnerProtocolService) handleAssignment(
 	progress := func(stage runnerprotocol.AssignmentProgressStage) error {
 		return s.sendAssignmentProgress(stream, assignment, stage, time.Now())
 	}
-	startCtx := ctx
+	startCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(int64(assignment.DeadlineUnixMs)))
+	defer cancel()
 	if execution := assignment.AttributedExecution; execution != nil {
-		var cancel context.CancelFunc
-		startCtx, cancel = context.WithDeadline(ctx, time.UnixMilli(int64(execution.ExpiresAtUnixMs)))
-		defer cancel()
+		executionDeadline := time.UnixMilli(int64(execution.ExpiresAtUnixMs))
+		if assignmentDeadline, _ := startCtx.Deadline(); executionDeadline.Before(assignmentDeadline) {
+			var cancelExecution context.CancelFunc
+			startCtx, cancelExecution = context.WithDeadline(startCtx, executionDeadline)
+			defer cancelExecution()
+		}
 	}
 	instance, err := s.backend.StartAssignment(startCtx, assignment, progress)
 	terminal := runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY
@@ -1246,15 +1270,17 @@ func (s *RunnerProtocolService) handleAssignment(
 			return &runnerprotocol.RunnerToControlPlane{
 				Message: &runnerprotocol.RunnerToControlPlane_AssignmentResult{
 					AssignmentResult: &runnerprotocol.AssignmentResult{
-						MessageId:        s.messageID(sequence),
-						Sequence:         sequence,
-						Fence:            assignment.Fence,
-						Terminal:         terminal,
-						BackendKind:      instance.BackendKind,
-						BackendReference: instance.BackendReference,
-						GuestFeatures:    append([]string(nil), instance.GuestFeatures...),
-						SafeDetail:       safeDetail,
-						Correlation:      s.assignmentCorrelation(assignment),
+						MessageId:               s.messageID(sequence),
+						Sequence:                sequence,
+						Fence:                   assignment.Fence,
+						Terminal:                terminal,
+						BackendKind:             instance.BackendKind,
+						BackendReference:        instance.BackendReference,
+						GuestFeatures:           append([]string(nil), instance.GuestFeatures...),
+						RequestedImageReference: instance.RequestedImageReference,
+						ResolvedImageDigest:     instance.ResolvedImageDigest,
+						SafeDetail:              safeDetail,
+						Correlation:             s.assignmentCorrelation(assignment),
 					},
 				},
 			}
