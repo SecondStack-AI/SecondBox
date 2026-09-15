@@ -58,8 +58,16 @@ func TestStoragePressureReclaimsOnlyUnusedImages(t *testing.T) {
 			}
 		}
 	}
-	if err := manager.reclaimUnusedImages("registry.example/agent@sha256:" + strings.Repeat("c", 64)); err != nil {
-		t.Fatal(err)
+	results := make(chan error, 16)
+	for range cap(results) {
+		go func() {
+			results <- manager.reclaimUnusedImages("registry.example/agent@sha256:" + strings.Repeat("c", 64))
+		}()
+	}
+	for range cap(results) {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, letter := range []string{"a", "b", "c"} {
 		_, err := os.Stat(filepath.Join(manager.cacheRoot, strings.Repeat(letter, 64)))

@@ -426,6 +426,8 @@ func (manager *Manager) evictOldestUnpinned(target string) (bool, error) {
 
 // Storage pressure requests one pass over expired, unlocked cache entries.
 func (manager *Manager) reclaimUnusedImages(reference string) error {
+	manager.cacheMu.Lock()
+	defer manager.cacheMu.Unlock()
 	entries, _, err := manager.cacheEntries()
 	if err != nil {
 		return err
