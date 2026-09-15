@@ -197,11 +197,11 @@ func verifyArtifactSet(ctx context.Context, cfg *Config, publicKey *rsa.PublicKe
 	if err := verifyChecksums(ctx, artifactDir); err != nil {
 		return err
 	}
-	manifest, err := os.ReadFile(filepath.Join(artifactDir, "manifest.json"))
+	manifest, err := ReadArtifactMetadata(filepath.Join(artifactDir, "manifest.json"), MaximumArtifactManifestBytes)
 	if err != nil {
 		return fmt.Errorf("read SecondBox Runner manifest: %w", err)
 	}
-	signature, err := os.ReadFile(filepath.Join(artifactDir, "manifest.sig"))
+	signature, err := ReadArtifactMetadata(filepath.Join(artifactDir, "manifest.sig"), MaximumArtifactSignatureBytes)
 	if err != nil {
 		return fmt.Errorf("read SecondBox Runner manifest signature: %w", err)
 	}
@@ -289,7 +289,7 @@ func verifySignedManifestArtifacts(ctx context.Context, artifactDir string, mani
 }
 
 func verifySecondBoxRootfsContract(artifactDir string) error {
-	data, err := os.ReadFile(filepath.Join(artifactDir, "secondbox-rootfs-contract.json"))
+	data, err := ReadArtifactMetadata(filepath.Join(artifactDir, "secondbox-rootfs-contract.json"), 64<<10)
 	if err != nil {
 		return fmt.Errorf("read SecondBox rootfs contract: %w", err)
 	}
@@ -310,12 +310,16 @@ func safeManifestPath(path string) bool {
 }
 
 func verifyChecksums(ctx context.Context, artifactDir string) error {
-	data, err := os.ReadFile(filepath.Join(artifactDir, "SHA256SUMS"))
+	data, err := ReadArtifactMetadata(filepath.Join(artifactDir, "SHA256SUMS"), 64<<10)
 	if err != nil {
 		return fmt.Errorf("read SecondBox Runner checksums: %w", err)
 	}
 	want := map[string]string{}
-	for _, line := range strings.Split(string(data), "\n") {
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > 128 {
+		return fmt.Errorf("SecondBox artifact checksums exceed 128 entries")
+	}
+	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 {
 			want[strings.TrimPrefix(fields[1], "*")] = fields[0]

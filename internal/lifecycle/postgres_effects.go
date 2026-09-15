@@ -822,12 +822,14 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	var plan startPlan
 	var specJSON []byte
 	var metadataJSON []byte
+	var imageReference, imageDigest string
 	err := broker.pool.QueryRow(ctx, `
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,sandbox.lifecycle_request_metadata_json,
 		       sandbox.workspace_id,sandbox.generation,sandbox.profile_revision_id,
 		       sandbox.egress_context,sandbox.vcpu_count,sandbox.memory_bytes,sandbox.workspace_bytes,
 		       revision.spec_json,workspace.mutation_id,
-		       COALESCE(operation.id,''),COALESCE(operation.request_id,'')
+		       COALESCE(operation.id,''),COALESCE(operation.request_id,''),
+		       sandbox.execution_image_reference,sandbox.execution_image_digest
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
@@ -840,6 +842,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		&plan.workspaceID, &plan.generation, &plan.profileRevisionID, &plan.egressContext,
 		&plan.resources.VCPUCount, &plan.resources.MemoryBytes, &plan.resources.WorkspaceBytes,
 		&specJSON, &plan.mutationID, &plan.operationID, &plan.requestID,
+		&imageReference, &imageDigest,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return startPlan{}, ports.ErrRevisionConflict
@@ -880,6 +883,9 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		return startPlan{}, errors.New("SecondBox lifecycle start isolated Sandbox has an unexpected egress-context pin")
 	}
 	if plan.operationID == "" && plan.attributed == nil {
+		if imageDigest != "" {
+			plan.image = contracts.PublicExecutionImage{RequestedReference: contracts.ExecutionImageDigestReference(imageReference, imageDigest), ResolvedDigest: imageDigest}
+		}
 		plan.operationID = stableEffectID(
 			"automatic-start",
 			claim.SandboxID,

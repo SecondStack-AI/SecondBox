@@ -267,6 +267,35 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			t.Fatalf("attributed scheduling lost authority: %+v", request)
 		}
 	})
+	t.Run("automatic recovery preserves the image digest", func(t *testing.T) {
+		digest := "sha256:" + strings.Repeat("c", 64)
+		if _, err := pool.Exec(t.Context(), `
+		 UPDATE secondbox.sandboxes SET execution_image_reference='registry.example/agent:stable',
+		 execution_image_digest=$1,lifecycle_request_metadata_json='{"executionImageReference":"registry.example/agent:stable"}',
+		 reconcile_owner='worker-automatic-start',reconcile_claim_expires_at=$2 WHERE id='sandbox-automatic-start';
+		 UPDATE secondbox.workspaces SET mutation_operation_id='' WHERE id='workspace-automatic-start'`,
+			pgx.QueryExecModeSimpleProtocol, digest, now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if err := broker.ExecuteLifecycleEffect(t.Context(), ports.LifecycleReconcileClaim{
+			SandboxID: "sandbox-automatic-start", WorkerID: "worker-automatic-start", Revision: 5,
+		}, lifecycle.Decision{Action: lifecycle.ActionStartInstance}, now, now.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		var payload []byte
+		if err := pool.QueryRow(t.Context(), `SELECT command.payload FROM secondbox.runner_commands command
+		 JOIN secondbox.lifecycle_effects effect ON effect.command_id=command.id
+		 WHERE effect.sandbox_id='sandbox-automatic-start' AND effect.kind='prepare_image'`).Scan(&payload); err != nil {
+			t.Fatal(err)
+		}
+		var command runnerv1.ControlPlaneToRunner
+		if err := proto.Unmarshal(payload, &command); err != nil {
+			t.Fatal(err)
+		}
+		if command.GetPrepareImage().Reference != "registry.example/agent@"+digest {
+			t.Fatalf("automatic recovery resolved a mutable reference: %v", command.GetPrepareImage())
+		}
+	})
 }
 
 func TestOrdinaryStopAndSnapshotDeleteSerializeAcrossControlPlaneReplicas(t *testing.T) {

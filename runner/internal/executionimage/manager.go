@@ -424,6 +424,30 @@ func (manager *Manager) evictOldestUnpinned(target string) (bool, error) {
 	return false, nil
 }
 
+// Storage pressure requests one pass over expired, unlocked cache entries.
+func (manager *Manager) reclaimUnusedImages(reference string) error {
+	entries, _, err := manager.cacheEntries()
+	if err != nil {
+		return err
+	}
+	_, digest, _ := strings.Cut(reference, "@")
+	for _, entry := range entries {
+		if filepath.Base(entry.path) == strings.TrimPrefix(digest, "sha256:") {
+			continue
+		}
+		manager.pinMu.Lock()
+		pinned := manager.pins[entry.path] > 0
+		manager.pinMu.Unlock()
+		if pinned {
+			continue
+		}
+		if _, err := manager.evictCacheEntry(entry.path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (manager *Manager) evictCacheEntry(path string) (bool, error) {
 	locks := filepath.Join(manager.cacheRoot, ".locks")
 	if err := os.MkdirAll(locks, 0o700); err != nil {
@@ -705,7 +729,7 @@ func extractDockerArchive(ctx context.Context, archivePath, target string, maxim
 	if err := extractTarFile(ctx, archivePath, archiveDirectory, "", archiveBudget); err != nil {
 		return err
 	}
-	manifestBytes, err := os.ReadFile(filepath.Join(archiveDirectory, "manifest.json"))
+	manifestBytes, err := config.ReadArtifactMetadata(filepath.Join(archiveDirectory, "manifest.json"), config.MaximumArtifactManifestBytes)
 	if err != nil {
 		return fmt.Errorf("SecondBox execution image archive manifest read failed: %w", err)
 	}

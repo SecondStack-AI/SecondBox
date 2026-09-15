@@ -46,6 +46,9 @@ func FetchExecutionImage(ctx context.Context, socket string, input FetchRequest,
 		if result.Error != "" {
 			return FetchResult{}, errors.New(result.Error)
 		}
+		if input.ReclaimOnly && result.CacheReclaimed {
+			return result, nil
+		}
 		if result.Digest != "" {
 			if !imageDigestPattern.MatchString(result.Digest) || len(result.Manifest) == 0 || len(result.Signature) == 0 {
 				return FetchResult{}, errors.New("SecondBox image fetcher returned incomplete signed metadata")

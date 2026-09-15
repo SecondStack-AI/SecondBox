@@ -130,6 +130,24 @@ func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
 }
 
 func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
+	t.Run("bounded metadata", func(t *testing.T) {
+		dir := checksumFixture(t)
+		if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(strings.Repeat("a", 65537)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyChecksums(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "at most") {
+			t.Fatalf("unbounded checksum metadata: %v", err)
+		}
+	})
+	t.Run("bounded entries", func(t *testing.T) {
+		dir := checksumFixture(t)
+		if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(strings.Repeat("a b\n", 129)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyChecksums(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "128 entries") {
+			t.Fatalf("unbounded checksum entries: %v", err)
+		}
+	})
 	t.Run("good", func(t *testing.T) {
 		dir := checksumFixture(t)
 		if err := verifyChecksums(t.Context(), dir); err != nil {

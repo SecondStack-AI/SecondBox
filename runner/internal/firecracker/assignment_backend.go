@@ -535,8 +535,10 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if _, err := b.compileAssignmentNetworkPolicy(assignment); err != nil {
 		return err
 	}
-	if _, err := b.assignmentGuestProtocolStart(assignment, ""); err != nil {
-		return err
+	if assignment.ExecutionImage == nil {
+		if _, err := b.assignmentGuestProtocolStart(assignment, ""); err != nil {
+			return err
+		}
 	}
 	if err := b.checkWorkspaceAdmission(ctx, requirements.DiskBytes); err != nil {
 		return fmt.Errorf("SecondBox Firecracker assignment storage pressure: %w", err)
@@ -1017,7 +1019,7 @@ func equalStringSets(left, right []string) bool {
 }
 
 func loadSignedArtifactManifest(path string) (signedArtifactManifest, error) {
-	data, err := os.ReadFile(path)
+	data, err := config.ReadArtifactMetadata(path, config.MaximumArtifactManifestBytes)
 	if err != nil {
 		return signedArtifactManifest{}, err
 	}

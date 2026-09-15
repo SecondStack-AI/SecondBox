@@ -242,6 +242,10 @@ Each preparation reserves `2 * execution_image_max_download_bytes + execution_im
 This conservative reservation also applies to cached images and must fit below the storage-pressure denial threshold with existing filesystem usage and Workspace reservations.
 The guided install values reserve 48 GiB for staging from a 16 GiB download limit and a 16 GiB expanded limit.
 Existing manifests must add these fields before a generation-5 Runner starts.
+They must also set `[deployment].execution_image_public_key` to the publisher's PEM public key and `execution_image_public_key_sha256` to its SHA-256 DER fingerprint.
+Calculate the fingerprint with `openssl pkey -pubin -in PUBLIC_KEY -outform DER | sha256sum`.
+Use that same publisher fingerprint for each Runner's execution-image trust, and make the public key readable by the fetcher's UID 10002.
+This publisher may differ from the historical release asset publisher.
 Leave the three remote-only paths empty for same-host placement.
 
 For a remote Runner, map the manifest values to `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES`.
@@ -305,7 +309,7 @@ artifact_host_directory = '<replace-with-absolute-runner-host-path>'
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
 # Private directory containing tenants.json and exported registry credentials on the Runner host.
 execution_image_registry_config_directory = '<replace-with-absolute-tenant-registry-config-directory>'
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses the release signing key.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package mounts the deployment's execution-image publisher key.
 execution_image_public_key = ''
 # Client-selected execution-image signing-key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
 execution_image_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'

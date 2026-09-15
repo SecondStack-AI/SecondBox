@@ -45,6 +45,30 @@ func TestVerifiedArtifactsRetainIdentityAcrossPublication(t *testing.T) {
 	}
 }
 
+func TestStoragePressureReclaimsOnlyUnusedImages(t *testing.T) {
+	manager := &Manager{cacheRoot: t.TempDir(), pins: make(map[string]int)}
+	for _, letter := range []string{"a", "b", "c"} {
+		directory := filepath.Join(manager.cacheRoot, strings.Repeat(letter, 64))
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if letter == "b" {
+			if err := retainPreparedDirectory(directory, time.Now().Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := manager.reclaimUnusedImages("registry.example/agent@sha256:" + strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	for _, letter := range []string{"a", "b", "c"} {
+		_, err := os.Stat(filepath.Join(manager.cacheRoot, strings.Repeat(letter, 64)))
+		if letter == "a" && !errors.Is(err, os.ErrNotExist) || letter != "a" && err != nil {
+			t.Fatalf("cache entry %s after reclamation: %v", letter, err)
+		}
+	}
+}
+
 func TestPreparationCapacityBytesRejectsOverflow(t *testing.T) {
 	if got, err := preparationCapacityBytes(8<<30, 16<<30); err != nil || got != 32<<30 {
 		t.Fatalf("preparation capacity = %d, %v", got, err)

@@ -28,7 +28,7 @@ artifact_host_directory = '<replace-with-absolute-runner-host-path>'
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
 # Private directory containing tenants.json and exported registry credentials on the Runner host.
 execution_image_registry_config_directory = '<replace-with-absolute-tenant-registry-config-directory>'
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses the release signing key.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package mounts the deployment's execution-image publisher key.
 execution_image_public_key = ''
 # Client-selected execution-image signing-key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
 execution_image_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'

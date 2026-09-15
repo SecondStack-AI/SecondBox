@@ -99,10 +99,24 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 			fixture := newFirecrackerConformanceFixture(t)
 			assignment := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
 			mutate(assignment)
-			if err := fixture.Backend.ValidateAssignment(context.Background(), assignment); err == nil {
+			backend := fixture.Backend.(*AssignmentBackend)
+			if _, err := backend.assignmentGuestProtocolStart(assignment, filepath.Dir(backend.manager.cfg.MicroVMKernelPath)); err == nil {
 				t.Fatalf("accepted immutable asset substitution: %+v", assignment.Assets)
 			}
 		})
+	}
+}
+
+func TestSelectedImageValidationDoesNotUseHistoricalManifest(t *testing.T) {
+	fixture := newFirecrackerConformanceFixture(t)
+	backend := fixture.Backend.(*AssignmentBackend)
+	selectedDirectory := filepath.Dir(backend.manager.cfg.MicroVMKernelPath)
+	backend.manager.cfg.MicroVMKernelPath = filepath.Join(t.TempDir(), "historical", "kernel")
+	if err := backend.ValidateAssignment(t.Context(), fixture.Assignment); err != nil {
+		t.Fatalf("selected image consulted unrelated historical assets: %v", err)
+	}
+	if _, err := backend.assignmentGuestProtocolStart(fixture.Assignment, selectedDirectory); err != nil {
+		t.Fatalf("selected image guest authority: %v", err)
 	}
 }
 
