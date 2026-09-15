@@ -367,6 +367,38 @@ func (store *Store) mutate(
 	return receipt, nil
 }
 
+func (store *Store) replay(
+	ctx context.Context,
+	request any,
+	mutation Mutation,
+	kind string,
+) (Receipt, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, false, err
+	}
+	if err := validateMutation(mutation); err != nil {
+		return Receipt{}, false, err
+	}
+	digest, err := inputDigest(request, mutation.FencingToken)
+	if err != nil {
+		return Receipt{}, false, err
+	}
+	return store.loadReceipt(mutation, digest, kind)
+}
+
+func (store *Store) ReplayCreate(
+	ctx context.Context,
+	request CreateWorkspaceRequest,
+) (Receipt, bool, error) {
+	if request.CapacityBytes < minimumExt4Bytes {
+		return Receipt{}, false, fmt.Errorf(
+			"SecondBox WorkspaceStore logical capacity must be at least %d bytes",
+			minimumExt4Bytes,
+		)
+	}
+	return store.replay(ctx, request, request.Mutation, ReceiptWorkspaceCreate)
+}
+
 // Create reflinks an immutable capacity template, assigns the Workspace its
 // deterministic filesystem UUID, then atomically publishes generation one and
 // its durable operation receipt.
@@ -374,11 +406,8 @@ func (store *Store) Create(
 	ctx context.Context,
 	request CreateWorkspaceRequest,
 ) (Receipt, error) {
-	if request.CapacityBytes < minimumExt4Bytes {
-		return Receipt{}, fmt.Errorf(
-			"SecondBox WorkspaceStore logical capacity must be at least %d bytes",
-			minimumExt4Bytes,
-		)
+	if receipt, found, err := store.ReplayCreate(ctx, request); found || err != nil {
+		return receipt, err
 	}
 	return store.mutate(ctx, request, request.Mutation, ReceiptWorkspaceCreate, func() (Receipt, error) {
 		if err := store.ensureWorkspaceLayout(request.WorkspaceID); err != nil {
@@ -427,20 +456,30 @@ func (store *Store) Create(
 	})
 }
 
+func (store *Store) ReplayCloneFromSnapshot(
+	ctx context.Context,
+	request CloneWorkspaceRequest,
+) (Receipt, bool, error) {
+	if request.CapacityBytes < minimumExt4Bytes {
+		return Receipt{}, false, fmt.Errorf(
+			"SecondBox WorkspaceStore logical capacity must be at least %d bytes",
+			minimumExt4Bytes,
+		)
+	}
+	if err := validateID(request.SourceSnapshot); err != nil {
+		return Receipt{}, false, err
+	}
+	return store.replay(ctx, request, request.Mutation, ReceiptWorkspaceClone)
+}
+
 // CloneFromSnapshot creates generation one as an independent FICLONE of one
 // immutable runner-local Snapshot. The target remains pinned to this Runner.
 func (store *Store) CloneFromSnapshot(
 	ctx context.Context,
 	request CloneWorkspaceRequest,
 ) (Receipt, error) {
-	if request.CapacityBytes < minimumExt4Bytes {
-		return Receipt{}, fmt.Errorf(
-			"SecondBox WorkspaceStore logical capacity must be at least %d bytes",
-			minimumExt4Bytes,
-		)
-	}
-	if err := validateID(request.SourceSnapshot); err != nil {
-		return Receipt{}, err
+	if receipt, found, err := store.ReplayCloneFromSnapshot(ctx, request); found || err != nil {
+		return receipt, err
 	}
 	return store.mutate(ctx, request, request.Mutation, ReceiptWorkspaceClone, func() (Receipt, error) {
 		source, err := store.readSnapshotManifest(request.SourceSnapshot)

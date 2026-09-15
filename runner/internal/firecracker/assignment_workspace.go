@@ -52,14 +52,37 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 	}
 	if command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
 		command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT {
-		if b.storagePressure == nil {
-			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
-				fmt.Errorf("SecondBox Firecracker local-workspace storage pressure control is unavailable"),
-			)
-		}
 		if command.LogicalCapacityBytes > math.MaxInt64 {
 			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
 				fmt.Errorf("SecondBox Firecracker local-workspace capacity exceeds Runner bounds"),
+			)
+		}
+		var (
+			replayed  workspacestore.Receipt
+			found     bool
+			replayErr error
+		)
+		if command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE {
+			replayed, found, replayErr = b.manager.workspaceStore.ReplayCreate(ctx, workspacestore.CreateWorkspaceRequest{
+				Mutation:      mutation,
+				CapacityBytes: int64(command.LogicalCapacityBytes),
+			})
+		} else {
+			replayed, found, replayErr = b.manager.workspaceStore.ReplayCloneFromSnapshot(ctx, workspacestore.CloneWorkspaceRequest{
+				Mutation:       mutation,
+				SourceSnapshot: command.SnapshotId,
+				CapacityBytes:  int64(command.LogicalCapacityBytes),
+			})
+		}
+		if replayErr != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(replayErr)
+		}
+		if found {
+			return localWorkspaceReceiptEvidence(replayed), nil
+		}
+		if b.storagePressure == nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
+				fmt.Errorf("SecondBox Firecracker local-workspace storage pressure control is unavailable"),
 			)
 		}
 		reservationID := "local-workspace:" + command.OperationId
@@ -240,12 +263,16 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 	if err != nil {
 		return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
 	}
+	return localWorkspaceReceiptEvidence(receipt), nil
+}
+
+func localWorkspaceReceiptEvidence(receipt workspacestore.Receipt) runnercontrol.LocalWorkspaceEvidence {
 	return runnercontrol.LocalWorkspaceEvidence{
 		PreviousGeneration: receipt.PreviousGeneration,
 		Generation:         receipt.Generation,
 		LogicalCapacity:    uint64(receipt.CapacityBytes),
 		ReceiptRecordedAt:  receipt.RecordedAt,
-	}, nil
+	}
 }
 
 type workspaceRelocationExport struct {

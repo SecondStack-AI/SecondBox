@@ -1,13 +1,78 @@
 package firecracker
 
 import (
+	"context"
 	"errors"
 	"syscall"
 	"testing"
+	"time"
 
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
+
+type replayWorkspaceStore struct {
+	workspacestore.WorkspaceStore
+	receipt      workspacestore.Receipt
+	createCalled bool
+}
+
+func (store *replayWorkspaceStore) ReplayCreate(
+	context.Context,
+	workspacestore.CreateWorkspaceRequest,
+) (workspacestore.Receipt, bool, error) {
+	return store.receipt, true, nil
+}
+
+func (store *replayWorkspaceStore) Create(
+	context.Context,
+	workspacestore.CreateWorkspaceRequest,
+) (workspacestore.Receipt, error) {
+	store.createCalled = true
+	return workspacestore.Receipt{}, errors.New("unexpected Workspace create after replay")
+}
+
+func TestLocalWorkspaceCreateReplayBypassesStoragePressureAdmission(t *testing.T) {
+	recordedAt := time.Now().UTC()
+	store := &replayWorkspaceStore{receipt: workspacestore.Receipt{
+		Kind:          workspacestore.ReceiptWorkspaceCreate,
+		OperationID:   "operation-replay",
+		WorkspaceID:   "workspace-replay",
+		Generation:    1,
+		CapacityBytes: 64 << 20,
+		RecordedAt:    recordedAt,
+	}}
+	controller, err := newStoragePressureController(
+		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90},
+		&mutableStoragePressureProbe{sample: storagePressureSample{
+			Backend: "ext4", TotalBytes: 100 << 20, UsedBytes: 95 << 20,
+		}},
+		func(context.Context, string) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &AssignmentBackend{
+		manager:         &Manager{workspaceStore: store},
+		storagePressure: controller,
+	}
+	evidence, err := backend.ExecuteLocalWorkspace(t.Context(), &runnerprotocol.LocalWorkspaceCommand{
+		Kind:                 runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		OperationId:          "operation-replay",
+		WorkspaceId:          "workspace-replay",
+		FencingToken:         []byte("fencing-token"),
+		LogicalCapacityBytes: 64 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.createCalled || controller.ReservedBytes() != 0 {
+		t.Fatalf("replay performed allocation: create=%t reserved=%d", store.createCalled, controller.ReservedBytes())
+	}
+	if evidence.Generation != 1 || evidence.LogicalCapacity != 64<<20 || !evidence.ReceiptRecordedAt.Equal(recordedAt) {
+		t.Fatalf("replay evidence = %+v", evidence)
+	}
+}
 
 func TestLocalWorkspaceFailureMapsStableTerminalKinds(t *testing.T) {
 	testCases := []struct {

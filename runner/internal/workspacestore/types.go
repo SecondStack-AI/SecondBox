@@ -353,7 +353,9 @@ type ReconcileReport struct {
 // Every mutating request includes a stable operation ID.
 type WorkspaceStore interface {
 	ObserveStorage(context.Context, int) ([]WorkspaceStorageObservation, error)
+	ReplayCreate(context.Context, CreateWorkspaceRequest) (Receipt, bool, error)
 	Create(context.Context, CreateWorkspaceRequest) (Receipt, error)
+	ReplayCloneFromSnapshot(context.Context, CloneWorkspaceRequest) (Receipt, bool, error)
 	CloneFromSnapshot(context.Context, CloneWorkspaceRequest) (Receipt, error)
 	Open(context.Context, string, uint64) (ComputeAttachment, error)
 	AdvanceGeneration(context.Context, AdvanceGenerationRequest) (Receipt, error)
