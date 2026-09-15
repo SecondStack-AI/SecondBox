@@ -163,6 +163,11 @@ func decideStopping(view View) Decision {
 	if view.StopEffectState == "runner_failed" {
 		return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
 	}
+	if view.StopEffectState == "queued" {
+		// Compute liveness is not proof that the fence or local generation
+		// advance completed. Their delivery deadlines still need servicing.
+		return Decision{Action: ActionStopInstance}
+	}
 	computeIsTerminal := !view.HasInstance ||
 		view.GuestLiveness == contracts.GuestLivenessStopped ||
 		view.GuestLiveness == contracts.GuestLivenessLost

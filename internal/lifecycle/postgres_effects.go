@@ -879,12 +879,12 @@ func (broker *PostgresEffectBroker) queueStop(
 	if locked.Revision != claim.Revision {
 		return ports.ErrRevisionConflict
 	}
-	var assignmentID, instanceID, runnerID, operationID, requestID, assignmentState string
+	var assignmentID, instanceID, runnerID, operationID, requestID string
 	var generation int64
 	var fencingToken []byte
 	if err := tx.QueryRow(ctx, `
 		SELECT assignment.id,assignment.instance_id,assignment.runner_id,
-		       assignment.generation,assignment.fencing_token,assignment.state,
+		       assignment.generation,assignment.fencing_token,
 		       COALESCE((
 		         SELECT operation.id FROM secondbox.operations AS operation
 		         WHERE operation.sandbox_id=sandbox.id
@@ -902,12 +902,12 @@ func (broker *PostgresEffectBroker) queueStop(
 		WHERE sandbox.id=$1 AND sandbox.reconcile_owner=$2
 		  AND sandbox.revision=$3 AND assignment.generation=sandbox.generation
 		  AND assignment.instance_id=sandbox.current_instance_id
-		  AND assignment.state IN ('assigned','accepted','starting','ready','uncertain','fencing','failed_terminal')
+		  AND assignment.state IN ('assigned','accepted','starting','ready','uncertain','fencing','failed_terminal','released')
 		ORDER BY assignment.created_at DESC,assignment.id DESC LIMIT 1
 		FOR UPDATE OF assignment`,
 		claim.SandboxID, claim.WorkerID, claim.Revision,
 	).Scan(
-		&assignmentID, &instanceID, &runnerID, &generation, &fencingToken, &assignmentState,
+		&assignmentID, &instanceID, &runnerID, &generation, &fencingToken,
 		&operationID, &requestID,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -918,6 +918,11 @@ func (broker *PostgresEffectBroker) queueStop(
 	generationText := fmt.Sprintf("%d", generation)
 	effectID := stableEffectID("stop-effect", claim.SandboxID, generationText)
 	commandID := stableEffectID("stop-command", claim.SandboxID, generationText)
+	if locked.Workspace.Mutation.Kind == "stop" && locked.Workspace.Mutation.EffectID != "" {
+		// Runner-loss recovery can own the same generation boundary through
+		// an effect created by the Assignment reconciler.
+		effectID = locked.Workspace.Mutation.EffectID
+	}
 	operationID, requestID = stopCorrelation(operationID, requestID, effectID)
 	workspace := locked.Workspace
 	if workspace.State != "ready" || workspace.Generation != generation ||
@@ -925,10 +930,12 @@ func (broker *PostgresEffectBroker) queueStop(
 		return ports.ErrGenerationFenced
 	}
 	// An explicit retry may already hold a queued start for this failed
-	// generation. Its Operation survives the cleanup; finish_stop releases
-	// the mutation and the next start acquires it for the new generation.
-	replaceFailedStart := assignmentState == "failed_terminal" &&
+	// generation. finish_stop rebinds its pending Operation to the successor.
+	// Stop exhaustion can leave the Assignment ready, so the Sandbox failure
+	// and exact queued mutation establish recovery authority here.
+	replaceFailedStart := locked.SandboxState == contracts.SandboxStateFailed &&
 		workspace.Mutation.Kind == "start" && workspace.Mutation.State == "queued" &&
+		workspace.Mutation.OperationID == operationID &&
 		workspace.Mutation.ExpectedGeneration == generation &&
 		workspace.Mutation.TargetGeneration == generation
 	if workspace.Mutation.State == "" || replaceFailedStart {
@@ -981,6 +988,14 @@ func (broker *PostgresEffectBroker) queueStop(
 		return err
 	}
 	if handled {
+		if locked.SandboxState == contracts.SandboxStateFailed {
+			if _, err := tx.Exec(ctx, `
+				UPDATE secondbox.sandboxes
+				SET state='stopping',lifecycle_action='stop_instance'
+				WHERE id=$1`, claim.SandboxID); err != nil {
+				return fmt.Errorf("SecondBox lifecycle stop recovery transition failed: %w", err)
+			}
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
@@ -1091,6 +1106,19 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 	if err != nil {
 		return false, fmt.Errorf("SecondBox lifecycle stop retry lookup failed: %w", err)
 	}
+	if state == "runner_failed" && claim.ObservedState == contracts.SandboxStateFailed {
+		// Only a newly claimed recovery intent renews an exhausted effect.
+		// Keep the counter monotonic so command identities are never reused.
+		retryLimit = retryCount + broker.config.RetryLimit + 1
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='queued',retry_limit=$2,effect_deadline=$3,
+			    failure_class='',failure_message='',updated_at=$3
+			WHERE id=$1`, effectID, retryLimit, now); err != nil {
+			return false, fmt.Errorf("SecondBox lifecycle stop recovery renewal failed: %w", err)
+		}
+		state, effectDeadline = "queued", now
+	}
 	if state != "queued" || effectDeadline.After(now) {
 		if err := releaseEffectReconcileClaim(
 			ctx, tx, claim, now, nextReconcileAt, "stop",
@@ -1152,6 +1180,30 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 	retryCommandID := stableEffectID(
 		initialCommandID, fmt.Sprintf("retry-%d", nextRetryCount),
 	)
+	// Once the Runner has fenced compute, retry the local generation advance
+	// itself. Replacing it with another fence would lose the receipt boundary.
+	var commandKind, commandAssignmentID string
+	var persistedPayload []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT kind,assignment_id,payload FROM secondbox.runner_commands WHERE id=$1`,
+		currentCommandID,
+	).Scan(&commandKind, &commandAssignmentID, &persistedPayload); err != nil {
+		return false, fmt.Errorf("SecondBox lifecycle stop retry command lookup failed: %w", err)
+	}
+	if commandKind == "local-workspace" {
+		if commandAssignmentID != effectID {
+			return false, errors.New("SecondBox lifecycle generation retry command authority is invalid")
+		}
+		commandPayload = persistedPayload
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces SET mutation_state='advancing',updated_at=$3
+			WHERE id=$1 AND mutation_kind='stop' AND mutation_id=$2`,
+			workspaceID, effectID, now); err != nil {
+			return false, fmt.Errorf("SecondBox lifecycle stop generation retry failed: %w", err)
+		}
+	} else if commandKind != "lifecycle_fence" || commandAssignmentID != assignmentID {
+		return false, errors.New("SecondBox lifecycle stop retry command authority is invalid")
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_commands
 		SET state='expired',target_connection_id='',updated_at=$2
@@ -1164,8 +1216,8 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 		INSERT INTO secondbox.runner_commands (
 			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 			delivery_count,created_at,updated_at,delivered_at
-		) VALUES ($1,$2,$3,'lifecycle_fence',$4,'pending','',0,$5,$5,NULL)`,
-		retryCommandID, runnerID, assignmentID, commandPayload, now,
+		) VALUES ($1,$2,$3,$6,$4,'pending','',0,$5,$5,NULL)`,
+		retryCommandID, runnerID, commandAssignmentID, commandPayload, now, commandKind,
 	); err != nil {
 		return false, fmt.Errorf("SecondBox lifecycle stop retry command insert failed: %w", err)
 	}

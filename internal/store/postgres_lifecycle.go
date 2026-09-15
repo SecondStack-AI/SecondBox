@@ -738,6 +738,24 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		if workspaceTag.RowsAffected() != 1 {
 			return ports.ErrGenerationFenced
 		}
+		if claim.DesiredState == contracts.SandboxDesiredStateRunning {
+			var startOperationID string
+			err := tx.QueryRow(ctx, `
+				SELECT id FROM secondbox.operations
+				WHERE sandbox_id=$1 AND kind='start' AND state IN ('pending','running')
+				ORDER BY created_at DESC,id DESC LIMIT 1`, claim.SandboxID,
+			).Scan(&startOperationID)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("SecondBox finish-stop pending start lookup failed: %w", err)
+			}
+			if err == nil {
+				if err := setWorkspaceMutation(ctx, tx, finishStopWorkspaceID, "start",
+					startOperationID, startOperationID, startOperationID,
+					nextGeneration, nextGeneration, now); err != nil {
+					return err
+				}
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.leases
 			SET state='fenced',revision=revision+1,updated_at=$3

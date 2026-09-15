@@ -2201,6 +2201,36 @@ func TestSuccessfulFenceWithStopAuthorityReleasesAssignment(t *testing.T) {
 			advanceCommandState, advanceCommandKind,
 		)
 	}
+	// A generation-advance retry has a new delivery identity. A duplicate
+	// fence result must recognize its kind and preserve the outstanding retry.
+	retryID := effectID + "-generation-retry"
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) SELECT $2,runner_id,assignment_id,kind,payload,'pending','',0,$3,$3,NULL
+		  FROM secondbox.runner_commands WHERE id=$1;
+		UPDATE secondbox.lifecycle_effects SET command_id=$2 WHERE id=$4`,
+		pgx.QueryExecModeSimpleProtocol, effectCommandID, retryID, now, effectID); err != nil {
+		t.Fatal(err)
+	}
+	replayTx, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayTx.Rollback(t.Context())
+	if err := recordFenceEvent(t.Context(), replayTx, "runner-home", result, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := replayTx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(t.Context(), `SELECT command_id FROM secondbox.lifecycle_effects WHERE id=$1`, effectID).Scan(&effectCommandID); err != nil {
+		t.Fatal(err)
+	}
+	if effectCommandID != retryID {
+		t.Fatalf("duplicate fence replaced generation retry: %s", effectCommandID)
+	}
 }
 
 func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
