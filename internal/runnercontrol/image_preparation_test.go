@@ -7,6 +7,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestImagePreparationResultAuthorityAndReplay(t *testing.T) {
@@ -37,9 +38,9 @@ func TestImagePreparationResultAuthorityAndReplay(t *testing.T) {
 	if err := write("runner-other", result, now); err == nil {
 		t.Fatal("unassigned Runner supplied preparation evidence")
 	}
-	invalid := *result
+	invalid := proto.Clone(result).(*runnerv1.PrepareImageResult)
 	invalid.ResolvedDigest = "invalid" + strings.Repeat("a", 64)
-	if err := write("runner-authorized", &invalid, now); err == nil {
+	if err := write("runner-authorized", invalid, now); err == nil {
 		t.Fatal("invalid digest was accepted")
 	}
 	if err := write("runner-authorized", result, now); err != nil {
