@@ -518,6 +518,7 @@ func validateScheduleRequest(request ScheduleRequest) error {
 	}
 	command := request.AssignmentCommand
 	if command == nil || command.Fence == nil ||
+		command.ExecutionImage == nil ||
 		command.Fence.AssignmentId != request.AssignmentID ||
 		command.Fence.SandboxId != request.SandboxID ||
 		command.Fence.InstanceId != request.InstanceID ||
@@ -533,6 +534,9 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		command.Correlation.SandboxGeneration != command.Fence.SandboxGeneration ||
 		command.DeadlineUnixMs == 0 {
 		return errors.New("SecondBox scheduler Assignment command does not match durable assignment authority")
+	}
+	if err := (contracts.ExecutionImage{Reference: command.ExecutionImage.Reference}).Validate(); err != nil {
+		return fmt.Errorf("SecondBox scheduler Assignment execution image is invalid: %w", err)
 	}
 	if request.Requirements.EgressContext == nil {
 		if command.Requirements.RequiresTenantEgressContext || command.EgressContext != "" {

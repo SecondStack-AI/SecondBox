@@ -289,6 +289,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	registration := task4Registration(runnerID, connectionID, poolName)
 	registration.SupportedEgressContexts = []string{"tenant-blue"}
+	registration.Capabilities.ClientSelectedImageReady = true
 	if duplicate, err := stateStore.RecordRegistration(t.Context(), registration, now); err != nil || duplicate {
 		t.Fatalf("RecordRegistration duplicate, error = %t, %v", duplicate, err)
 	}
@@ -376,7 +377,10 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 				WorkspaceID: workspaceID, StartMutationID: task4IDForIndex("workspace-start", index),
 				Requirements: scheduler.Requirements{
 					PoolName: poolName, Architecture: "amd64", EgressContext: &requiredEgressContext,
-					RequiredCapabilities:    []string{"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution},
+					RequiredCapabilities: []string{
+						"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution,
+						contracts.RunnerCapabilityClientSelectedImage,
+					},
 					GuestProtocolGeneration: 1,
 					Capacity: scheduler.Capacity{
 						VCPUCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
@@ -385,6 +389,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					PreferredArtifactDigests: []string{runtimeDigest, toolchainDigest},
 				},
 				AssignmentCommand: &runnerv1.AssignmentCommand{
+					ExecutionImage: &runnerv1.ExecutionImage{Reference: testExecutionImage().Reference},
 					AttributedExecution: &runnerv1.AttributedExecution{
 						TenantRef: "task4-project", SubjectRef: "task4-subject", AuthorizationRef: "scheduler-command",
 						ExpiresAtUnixMs: uint64(now.Add(2 * time.Minute).UnixMilli()), Gateway: "gateway", MaximumConnections: 32,
@@ -397,7 +402,10 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					ProfileRevisionId: profileRevisionID,
 					Requirements: &runnerv1.ProfileRequirements{
 						VcpuCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
-						Architecture: "amd64", RequiredCapabilities: []string{"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution},
+						Architecture: "amd64", RequiredCapabilities: []string{
+							"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution,
+							contracts.RunnerCapabilityClientSelectedImage,
+						},
 						MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 						RequiresTenantEgressContext: true,
 					},
@@ -572,7 +580,9 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 				},
 				Terminal:    runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
 				BackendKind: "firecracker", BackendReference: "fc-stale",
-				Correlation: proto.Clone(delivery.Message.GetAssignment().Correlation).(*runnerv1.Correlation),
+				RequestedImageReference: delivery.Message.GetAssignment().ExecutionImage.Reference,
+				ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				Correlation:             proto.Clone(delivery.Message.GetAssignment().Correlation).(*runnerv1.Correlation),
 			},
 		},
 	}
