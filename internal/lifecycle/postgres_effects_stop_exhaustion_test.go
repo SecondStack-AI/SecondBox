@@ -165,6 +165,7 @@ func TestStopRetryExhaustionToleratesExpiredCommandAndReleasesMutation(t *testin
 		now.Add(time.Minute),
 		now,
 		now.Add(time.Second),
+		false,
 	)
 	if err != nil || !handled {
 		t.Fatalf("stop retry exhaustion = %t, %v", handled, err)
@@ -176,12 +177,13 @@ func TestStopRetryExhaustionToleratesExpiredCommandAndReleasesMutation(t *testin
 		effectState, failureClass, commandState        string
 		mutationKind, mutationState, reconcileOwner    string
 		mutationID, mutationEffectID, mutationOperator string
+		revision                                       int64
 	)
 	if err := connection.QueryRow(t.Context(), `
 		SELECT effect.state,effect.failure_class,command.state,
 		       workspace.mutation_kind,workspace.mutation_state,workspace.mutation_id,
 		       workspace.mutation_effect_id,workspace.mutation_operation_id,
-		       sandbox.reconcile_owner
+		       sandbox.reconcile_owner,sandbox.revision
 		FROM secondbox.lifecycle_effects AS effect
 		JOIN secondbox.runner_commands AS command ON command.id='command-exhaust'
 		JOIN secondbox.workspaces AS workspace ON workspace.id='workspace-exhaust'
@@ -190,7 +192,7 @@ func TestStopRetryExhaustionToleratesExpiredCommandAndReleasesMutation(t *testin
 	).Scan(
 		&effectState, &failureClass, &commandState,
 		&mutationKind, &mutationState, &mutationID,
-		&mutationEffectID, &mutationOperator, &reconcileOwner,
+		&mutationEffectID, &mutationOperator, &reconcileOwner, &revision,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -202,12 +204,12 @@ func TestStopRetryExhaustionToleratesExpiredCommandAndReleasesMutation(t *testin
 		mutationID != "" ||
 		mutationEffectID != "" ||
 		mutationOperator != "" ||
-		reconcileOwner != "" {
+		reconcileOwner != "" || revision != 6 {
 		t.Fatalf(
-			"effect=%q/%q command=%q mutation=%q/%q/%q/%q/%q owner=%q",
+			"effect=%q/%q command=%q mutation=%q/%q/%q/%q/%q owner=%q revision=%d",
 			effectState, failureClass, commandState,
 			mutationKind, mutationState, mutationID,
-			mutationEffectID, mutationOperator, reconcileOwner,
+			mutationEffectID, mutationOperator, reconcileOwner, revision,
 		)
 	}
 }

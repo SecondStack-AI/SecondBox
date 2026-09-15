@@ -200,6 +200,7 @@ func TestSucceededDeleteEffectWithoutFinalizedSandboxDefers(t *testing.T) {
 		"request-del",
 		now,
 		now.Add(time.Second),
+		false,
 	)
 	if err != nil || !handled {
 		t.Fatalf("succeeded delete without finalization = %t, %v, want a deferral", handled, err)
