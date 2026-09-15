@@ -846,7 +846,7 @@ func TestProtocolServiceExecCancellationKillsProcessGroupDescendant(t *testing.T
 		}
 		if runtime.GOOS == "linux" {
 			status, readErr := os.ReadFile(fmt.Sprintf("/proc/%d/stat", childPID))
-			if errors.Is(readErr, os.ErrNotExist) {
+			if errors.Is(readErr, os.ErrNotExist) || errors.Is(readErr, unix.ESRCH) {
 				return
 			}
 			if readErr != nil {
