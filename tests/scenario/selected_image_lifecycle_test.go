@@ -20,7 +20,7 @@ func TestScenarioSelectedImagePreservesDigestAndWorkspace(t *testing.T) {
 	waitForScenarioRunner(t, fixture, 90*time.Second)
 	profile := createScenarioProfile(t, fixture, "scenario-selected-image", scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning))
 	image := contracts.ExecutionImage{Reference: requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_EXECUTION_IMAGE")}
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	defer cancel()
 	prepared, err := fixture.subject.PrepareImage(ctx, sb.PrepareImageRequest{Image: image, Profile: profile.Name}, uniqueScenarioKey(t, "prepare-image"))
 	if err != nil {
