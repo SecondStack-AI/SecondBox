@@ -51,6 +51,40 @@ Run that container with the Docker socket, a writable output directory, the sign
 Set every `SECONDBOX_CLIENT_IMAGE_*` variable explicitly.
 The source reference must contain a digest.
 The source commit must be the exact SecondBox revision used by the builder image.
+The prepared source image must contain Python 3 and pip because the rootfs inventory records the installed Python environment.
+The builder always uses prepared OCI mode and forbids browser packages.
+Both output directories must be absent before the build starts.
+
+This example builds the amd64 builder on any Docker host and runs the privileged Linux work on the Docker daemon:
+
+```sh
+docker buildx build --platform linux/amd64 --load \
+  -f deploy/client-execution-image-builder.Dockerfile \
+  -t secondbox-client-image-builder:local .
+
+mkdir -p /absolute/output-parent
+docker run --rm --privileged --platform linux/amd64 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /absolute/output-parent:/output \
+  -v /absolute/kernel-parent:/kernel:ro \
+  -v /absolute/signing-parent:/signing:ro \
+  -e SECONDBOX_CLIENT_IMAGE_ARTIFACT_VERSION=local \
+  -e SECONDBOX_CLIENT_IMAGE_BUNDLE_DIR=/output/bundle \
+  -e SECONDBOX_CLIENT_IMAGE_KERNEL_PATH=/kernel/vmlinux \
+  -e SECONDBOX_CLIENT_IMAGE_KERNEL_CONFIG= \
+  -e SECONDBOX_CLIENT_IMAGE_OUTPUT_REFERENCE=registry.example/secondbox/agent:local \
+  -e SECONDBOX_CLIENT_IMAGE_PUBLIC_KEY=/signing/signing.pub \
+  -e SECONDBOX_CLIENT_IMAGE_PUBLIC_KEY_SHA256=<64-lowercase-hex-fingerprint> \
+  -e SECONDBOX_CLIENT_IMAGE_ROOTFS_SIZE_MIB=12288 \
+  -e SECONDBOX_CLIENT_IMAGE_ROOTFS_SOURCE_DIR=/output/rootfs-source \
+  -e SECONDBOX_CLIENT_IMAGE_ROOTFS_UUID=<fixed-uuid> \
+  -e SECONDBOX_CLIENT_IMAGE_SHARED_FORMAT=ext4 \
+  -e SECONDBOX_CLIENT_IMAGE_SHARED_SIZE_MIB=256 \
+  -e SECONDBOX_CLIENT_IMAGE_SIGNING_KEY=/signing/signing.key \
+  -e SECONDBOX_CLIENT_IMAGE_SOURCE_COMMIT="$(git rev-parse HEAD)" \
+  -e SECONDBOX_CLIENT_IMAGE_SOURCE_REFERENCE=registry.example/base/userspace@sha256:<digest> \
+  secondbox-client-image-builder:local
+```
 
 The signing private key stays outside the OCI image.
 The Runner receives only the public key and its DER SHA-256 fingerprint.

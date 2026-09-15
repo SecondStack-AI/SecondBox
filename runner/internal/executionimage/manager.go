@@ -42,6 +42,8 @@ type PreparedImage struct {
 	Release            func()
 }
 
+type CapacityReservation func(context.Context, uint64) (func() error, error)
+
 type Manager struct {
 	cacheRoot            string
 	registryAllowlist    []string
@@ -92,9 +94,13 @@ func (manager *Manager) Prepare(
 	operationID string,
 	image *runnerprotocol.ExecutionImage,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
-) (PreparedImage, error) {
+	reserveCapacity CapacityReservation,
+) (prepared PreparedImage, resultErr error) {
 	if image == nil || !imageReferencePattern.MatchString(image.Reference) {
 		return PreparedImage{}, errors.New("SecondBox execution image reference is invalid")
+	}
+	if reserveCapacity == nil {
+		return PreparedImage{}, errors.New("SecondBox execution image capacity reservation is required")
 	}
 	registry := strings.SplitN(image.Reference, "/", 2)[0]
 	if !slices.Contains(manager.registryAllowlist, registry) {
@@ -121,16 +127,18 @@ func (manager *Manager) Prepare(
 	defer lock.Close()
 	manager.cacheMu.RLock()
 	if _, err := os.Stat(cacheDirectory); err == nil {
-		if err := config.VerifyMicroVMArtifactDirectory(cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
+		artifacts, err := manager.verifyAndCaptureArtifacts(ctx, cacheDirectory)
+		if err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
 		}
-		prepared, err := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest)
-		manager.cacheMu.RUnlock()
-		if err == nil {
-			_ = os.Chtimes(cacheDirectory, time.Now(), time.Now())
+		if err := os.Chtimes(cacheDirectory, time.Now(), time.Now()); err != nil {
+			manager.cacheMu.RUnlock()
+			return PreparedImage{}, fmt.Errorf("SecondBox execution image cache access-time update failed: %w", err)
 		}
-		return prepared, err
+		prepared := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest, artifacts)
+		manager.cacheMu.RUnlock()
+		return prepared, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		manager.cacheMu.RUnlock()
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image cache inspection failed: %w", err)
@@ -147,14 +155,32 @@ func (manager *Manager) Prepare(
 	manager.cacheMu.RUnlock()
 	if cacheErr == nil {
 		manager.cacheMu.RLock()
-		if err := config.VerifyMicroVMArtifactDirectory(cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
+		artifacts, err := manager.verifyAndCaptureArtifacts(ctx, cacheDirectory)
+		if err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
 		}
-		prepared, err := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest)
+		prepared := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest, artifacts)
 		manager.cacheMu.RUnlock()
-		return prepared, err
+		return prepared, nil
 	}
+	preparationBytes, err := preparationCapacityBytes(manager.maximumDownloadBytes, manager.maximumExpandedBytes)
+	if err != nil {
+		return PreparedImage{}, err
+	}
+	releaseCapacity, err := reserveCapacity(ctx, preparationBytes)
+	if err != nil {
+		return PreparedImage{}, fmt.Errorf("SecondBox execution image staging capacity reservation failed: %w", err)
+	}
+	defer func() {
+		if releaseErr := releaseCapacity(); releaseErr != nil {
+			if prepared.Release != nil {
+				prepared.Release()
+				prepared = PreparedImage{}
+			}
+			resultErr = errors.Join(resultErr, releaseErr)
+		}
+	}()
 	manager.cacheMu.Lock()
 	if err := manager.ensureCacheCapacity(cacheDirectory); err != nil {
 		manager.cacheMu.Unlock()
@@ -191,13 +217,18 @@ func (manager *Manager) Prepare(
 	if err := extractDockerArchive(ctx, archivePath, candidate, manager.maximumDownloadBytes, manager.maximumExpandedBytes); err != nil {
 		return PreparedImage{}, err
 	}
-	if err := config.VerifyMicroVMArtifactDirectory(candidate, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
+	artifacts, err := manager.verifyAndCaptureArtifacts(ctx, candidate)
+	if err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image signature verification failed: %w", err)
 	}
 	if err := os.Rename(candidate, cacheDirectory); err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image cache publication failed: %w", err)
 	}
-	return manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest)
+	artifacts, err = relocateVerifiedArtifacts(cacheDirectory, artifacts)
+	if err != nil {
+		return PreparedImage{}, err
+	}
+	return manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest, artifacts), nil
 }
 
 func (manager *Manager) downloadArchive(ctx context.Context, archivePath string, args []string) ([]byte, error) {
@@ -296,12 +327,23 @@ func (manager *Manager) ensureCacheCapacity(target string) error {
 	if err := syscall.Statfs(manager.cacheRoot, &stat); err != nil {
 		return fmt.Errorf("SecondBox execution image free-space inspection failed: %w", err)
 	}
-	available := int64(stat.Bavail) * int64(stat.Bsize)
-	required := manager.maximumDownloadBytes*2 + manager.maximumExpandedBytes
+	available := uint64(stat.Bavail) * uint64(stat.Bsize)
+	required, err := preparationCapacityBytes(manager.maximumDownloadBytes, manager.maximumExpandedBytes)
+	if err != nil {
+		return err
+	}
 	if available < required {
 		return fmt.Errorf("SecondBox execution image preparation requires %d free bytes, only %d are available", required, available)
 	}
 	return nil
+}
+
+func preparationCapacityBytes(maximumDownloadBytes, maximumExpandedBytes int64) (uint64, error) {
+	if maximumDownloadBytes <= 0 || maximumExpandedBytes <= 0 ||
+		uint64(maximumDownloadBytes) > (^uint64(0)-uint64(maximumExpandedBytes))/2 {
+		return 0, errors.New("SecondBox execution image preparation capacity is invalid")
+	}
+	return uint64(maximumDownloadBytes)*2 + uint64(maximumExpandedBytes), nil
 }
 
 func (manager *Manager) cacheEntries() ([]cacheEntry, int64, error) {
@@ -342,15 +384,52 @@ func (manager *Manager) cacheEntries() ([]cacheEntry, int64, error) {
 	return entries, total, nil
 }
 
-func (manager *Manager) preparedImage(directory, reference, digest string) (PreparedImage, error) {
+func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 	artifacts := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, 3)
 	for _, artifact := range []struct{ label, name string }{{"kernel", "kernel"}, {"rootfs", "rootfs.ext4"}, {"shared image", "shared.img"}} {
 		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, filepath.Join(directory, artifact.name))
 		if err != nil {
-			return PreparedImage{}, fmt.Errorf("record verified execution image %s identity: %w", artifact.label, err)
+			return nil, fmt.Errorf("record execution image %s identity before verification: %w", artifact.label, err)
 		}
 		artifacts = append(artifacts, identity)
 	}
+	if err := config.VerifyMicroVMArtifactDirectory(ctx, directory, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
+		return nil, err
+	}
+	for _, artifact := range artifacts {
+		current, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.Label, artifact.Path)
+		if err != nil {
+			return nil, fmt.Errorf("record execution image %s identity after verification: %w", artifact.Label, err)
+		}
+		if !sameVerifiedArtifactIdentity(artifact, current) {
+			return nil, fmt.Errorf("SecondBox execution image %s changed during signature verification", artifact.Label)
+		}
+	}
+	return artifacts, nil
+}
+
+func relocateVerifiedArtifacts(directory string, artifacts []runtimemanager.VerifiedExecutionImageArtifact) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+	relocated := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		current, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.Label, filepath.Join(directory, filepath.Base(artifact.Path)))
+		if err != nil {
+			return nil, fmt.Errorf("record published execution image %s identity: %w", artifact.Label, err)
+		}
+		if !sameVerifiedArtifactIdentity(artifact, current) {
+			return nil, fmt.Errorf("SecondBox execution image %s changed during cache publication", artifact.Label)
+		}
+		relocated = append(relocated, current)
+	}
+	return relocated, nil
+}
+
+func sameVerifiedArtifactIdentity(left, right runtimemanager.VerifiedExecutionImageArtifact) bool {
+	left.Path = ""
+	right.Path = ""
+	return left == right
+}
+
+func (manager *Manager) preparedImage(directory, reference, digest string, artifacts []runtimemanager.VerifiedExecutionImageArtifact) PreparedImage {
 	manager.pinMu.Lock()
 	if manager.pins == nil {
 		manager.pins = make(map[string]int)
@@ -370,7 +449,7 @@ func (manager *Manager) preparedImage(directory, reference, digest string) (Prep
 				}
 			})
 		},
-	}, nil
+	}
 }
 
 type operationResolution struct {

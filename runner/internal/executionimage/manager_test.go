@@ -11,7 +11,48 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
+
+func TestVerifiedArtifactsRetainIdentityAcrossPublication(t *testing.T) {
+	staging := t.TempDir()
+	for _, name := range []string{"kernel", "rootfs.ext4", "shared.img"} {
+		if err := os.WriteFile(filepath.Join(staging, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifacts := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, 3)
+	for _, artifact := range []struct{ label, name string }{{"kernel", "kernel"}, {"rootfs", "rootfs.ext4"}, {"shared image", "shared.img"}} {
+		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, filepath.Join(staging, artifact.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifacts = append(artifacts, identity)
+	}
+	published := filepath.Join(filepath.Dir(staging), "published")
+	if err := os.Rename(staging, published); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relocateVerifiedArtifacts(published, artifacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(published, "kernel"), []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relocateVerifiedArtifacts(published, artifacts); err == nil || !strings.Contains(err.Error(), "changed during cache publication") {
+		t.Fatalf("replacement identity error = %v", err)
+	}
+}
+
+func TestPreparationCapacityBytesRejectsOverflow(t *testing.T) {
+	if got, err := preparationCapacityBytes(8<<30, 16<<30); err != nil || got != 32<<30 {
+		t.Fatalf("preparation capacity = %d, %v", got, err)
+	}
+	if _, err := preparationCapacityBytes(int64(^uint64(0)>>1), 1); err == nil {
+		t.Fatal("overflowing preparation capacity was accepted")
+	}
+}
 
 func TestOuterDockerArchiveAcceptsContainedLayerLink(t *testing.T) {
 	root := t.TempDir()

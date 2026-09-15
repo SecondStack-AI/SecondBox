@@ -56,7 +56,7 @@ var firecrackerVersionLock string
 
 // Manager owns Firecracker-backed sandbox runtime instances.
 type executionImagePreparer interface {
-	Prepare(context.Context, string, *runnerprotocol.ExecutionImage, func(runnerprotocol.AssignmentProgressStage) error) (executionimage.PreparedImage, error)
+	Prepare(context.Context, string, *runnerprotocol.ExecutionImage, func(runnerprotocol.AssignmentProgressStage) error, executionimage.CapacityReservation) (executionimage.PreparedImage, error)
 }
 
 type Manager struct {
@@ -1145,7 +1145,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		return "", err
 	}
 	opts.CompartmentID = compartmentID
-	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Minute)
+	setupCtx, cancelSetup := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancelSetup()
 
 	host, err := m.reserveInstanceHost(ctx, setupCtx, sandboxID, compartmentID, opts)

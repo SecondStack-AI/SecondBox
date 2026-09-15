@@ -121,7 +121,7 @@ Verification checks the fixed artifact set, payload checksums, signed manifest, 
 
 ## Required variables
 
-Set all five variables. Paths must be clean absolute paths that already exist.
+Set all six variables. Paths must be clean absolute paths that already exist.
 
 ```sh
 export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
@@ -129,6 +129,7 @@ export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$artifact_target"
 export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$artifact_public_key"
 export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$artifact_public_key_sha256"
 export SECONDBOX_RUNNER_WORKSPACE_ROOT='/srv/secondbox/qualification/workspaces'
+export SECONDBOX_SCENARIO_EXECUTION_IMAGE='registry.example/secondbox/qualification-agent:stable'
 just test-scenario
 ```
 
@@ -137,6 +138,7 @@ just test-scenario
 - `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY` is the independently trusted PEM public key.
 - `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256` is the 64-character lowercase SHA-256 of that key's canonical DER encoding.
 - `SECONDBOX_RUNNER_WORKSPACE_ROOT` is the dedicated XFS or Btrfs parent described above.
+- `SECONDBOX_SCENARIO_EXECUTION_IMAGE` is a retrievable OCI execution image signed by the configured artifact key. Its registry host is allowed explicitly for the scenario Runner, and the scenario passes the image to every create and start operation.
 
 `SECONDBOX_SCENARIO_TEST_PATTERN` is an optional Go regular expression for a focused diagnostic rerun. It does not qualify a commit; qualification requires the unfiltered command.
 

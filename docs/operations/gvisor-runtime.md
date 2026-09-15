@@ -4,6 +4,8 @@ The gVisor runner is the supported backend for Linux x86_64 hosts that cannot ex
 `/dev/kvm`, Kubernetes nodes included. It is a separate, operator-managed Runner deployment; it does not alter or replace the qualified
 Linux Firecracker installer, container, systemd units, network setup, or standard Profiles.
 
+Generation 5 requires an execution image on every create and start request, but client-selected image materialization currently exists only for Firecracker cold boot. Do not upgrade a gVisor deployment to generation 5 until gVisor implements that capability. A generation-5 control plane cannot keep a generation-4 gVisor Runner connected as a compatibility fallback.
+
 ## Host contract
 
 Use a Linux x86_64 host with loop-device support (`/dev/loop-control`), `nftables`, `iproute2`,

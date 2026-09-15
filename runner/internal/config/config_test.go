@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -9,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,8 +33,17 @@ var checksumArtifactNames = []string{
 func TestValidateMicroVMTrustAnchorVerifiesRSASignature(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
 		cfg, _ := signedArtifactFixture(t)
-		if err := cfg.ValidateMicroVMTrustAnchor(); err != nil {
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	t.Run("cancelled", func(t *testing.T) {
+		cfg, _ := signedArtifactFixture(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := cfg.ValidateMicroVMTrustAnchor(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled verification error = %v", err)
 		}
 	})
 
@@ -43,7 +54,7 @@ func TestValidateMicroVMTrustAnchorVerifiesRSASignature(t *testing.T) {
 			t.Fatal(err)
 		}
 		writePublicKeyFixture(t, cfg, &wrongKey.PublicKey)
-		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil || !strings.Contains(err.Error(), "verify SecondBox Runner manifest signature") {
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil || !strings.Contains(err.Error(), "verify SecondBox Runner manifest signature") {
 			t.Fatalf("wrong-key verification error = %v", err)
 		}
 	})
@@ -59,7 +70,7 @@ func TestValidateMicroVMTrustAnchorVerifiesRSASignature(t *testing.T) {
 		if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil || !strings.Contains(err.Error(), "verify SecondBox Runner manifest signature") {
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil || !strings.Contains(err.Error(), "verify SecondBox Runner manifest signature") {
 			t.Fatalf("tampered-payload verification error = %v", err)
 		}
 	})
@@ -68,7 +79,7 @@ func TestValidateMicroVMTrustAnchorVerifiesRSASignature(t *testing.T) {
 func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
 	t.Run("malformed fingerprint", func(t *testing.T) {
 		cfg := &Config{MicroVMPublicKeySHA256: "not-hex"}
-		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
 			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters") {
 			t.Fatalf("malformed-fingerprint error = %v", err)
 		}
@@ -76,7 +87,7 @@ func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
 
 	t.Run("fingerprint without key", func(t *testing.T) {
 		cfg := &Config{MicroVMPublicKeySHA256: strings.Repeat("ab", sha256.Size)}
-		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
 			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY") {
 			t.Fatalf("fingerprint-without-key error = %v", err)
 		}
@@ -84,7 +95,7 @@ func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
 
 	t.Run("unreadable key path", func(t *testing.T) {
 		cfg := &Config{MicroVMPublicKeyPath: filepath.Join(t.TempDir(), "absent.pem")}
-		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
 			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY ") {
 			t.Fatalf("unreadable-key error = %v", err)
 		}
@@ -93,7 +104,7 @@ func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
 	t.Run("separate tool rootfs", func(t *testing.T) {
 		cfg, _ := signedArtifactFixture(t)
 		cfg.MicroVMToolRootfsPath = "/images/other-rootfs.ext4"
-		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
 			!strings.Contains(err.Error(), "must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
 			t.Fatalf("separate-tool-rootfs error = %v", err)
 		}
@@ -102,7 +113,7 @@ func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
 	t.Run("separate tool shared image", func(t *testing.T) {
 		cfg, _ := signedArtifactFixture(t)
 		cfg.MicroVMToolSharedImagePath = "/images/other-shared.img"
-		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
 			!strings.Contains(err.Error(), "must match SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
 			t.Fatalf("separate-tool-shared-image error = %v", err)
 		}
@@ -111,7 +122,7 @@ func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
 	t.Run("missing shared image", func(t *testing.T) {
 		cfg, _ := signedArtifactFixture(t)
 		cfg.MicroVMSharedImagePath = ""
-		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
 			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH is required when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
 			t.Fatalf("missing-shared-image error = %v", err)
 		}
@@ -121,7 +132,7 @@ func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
 func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
 	t.Run("good", func(t *testing.T) {
 		dir := checksumFixture(t)
-		if err := verifyChecksums(dir); err != nil {
+		if err := verifyChecksums(t.Context(), dir); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -131,7 +142,7 @@ func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
 		if err := os.Remove(filepath.Join(dir, "rootfs.ext4")); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyChecksums(dir); err == nil || !strings.Contains(err.Error(), "rootfs.ext4") {
+		if err := verifyChecksums(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "rootfs.ext4") {
 			t.Fatalf("missing-file checksum error = %v", err)
 		}
 	})
@@ -141,7 +152,7 @@ func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "kernel"), []byte("altered"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyChecksums(dir); err == nil || !strings.Contains(err.Error(), "checksum mismatch for kernel") {
+		if err := verifyChecksums(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "checksum mismatch for kernel") {
 			t.Fatalf("altered-content checksum error = %v", err)
 		}
 	})
@@ -172,14 +183,14 @@ func signedArtifactFixture(t *testing.T) (*Config, string) {
 		}
 	}
 	entry := func(name string) artifactManifestEntry {
-		digest, err := fileSHA256Hex(filepath.Join(dir, name))
+		digest, err := fileSHA256Hex(t.Context(), filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
 		}
 		return artifactManifestEntry{Path: name, SHA256: digest}
 	}
 	component := func(name string) artifactComponentManifestEntry {
-		digest, err := fileSHA256Hex(filepath.Join(dir, name))
+		digest, err := fileSHA256Hex(t.Context(), filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
 		}

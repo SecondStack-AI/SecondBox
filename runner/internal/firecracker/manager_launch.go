@@ -241,7 +241,7 @@ func verifyAndCaptureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroV
 	if err != nil {
 		return nil, fmt.Errorf("record microVM trust anchor identities: %w", err)
 	}
-	if err := cfg.ValidateMicroVMTrustAnchor(); err != nil {
+	if err := cfg.ValidateMicroVMTrustAnchor(context.Background()); err != nil {
 		return nil, err
 	}
 	unchanged, err := trustedMicroVMArtifactsUnchanged(before)

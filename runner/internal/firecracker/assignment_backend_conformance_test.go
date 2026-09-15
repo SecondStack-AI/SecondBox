@@ -33,11 +33,19 @@ type conformanceExecutionImagePreparer struct {
 }
 
 func (preparer conformanceExecutionImagePreparer) Prepare(
-	_ context.Context,
+	ctx context.Context,
 	_ string,
 	image *runnerprotocol.ExecutionImage,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
+	reserveCapacity executionimage.CapacityReservation,
 ) (executionimage.PreparedImage, error) {
+	releaseCapacity, err := reserveCapacity(ctx, 32<<30)
+	if err != nil {
+		return executionimage.PreparedImage{}, err
+	}
+	if err := releaseCapacity(); err != nil {
+		return executionimage.PreparedImage{}, err
+	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_RESOLVE); err != nil {
 		return executionimage.PreparedImage{}, err
 	}

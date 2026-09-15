@@ -343,7 +343,11 @@ else
   workspace_device="$(stat -c %d "$workspace_root")"
 fi
 if [[ "$scenario_backend" == "firecracker" ]]; then
-  artifacts_device="$(stat -c %d "$artifacts_dir")"
+	: "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:?Firecracker scenario requires a retrievable signed SECONDBOX_SCENARIO_EXECUTION_IMAGE}"
+	[[ "$SECONDBOX_SCENARIO_EXECUTION_IMAGE" == */* ]] ||
+		fail "SECONDBOX_SCENARIO_EXECUTION_IMAGE must contain a registry host"
+	export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY="${SECONDBOX_SCENARIO_EXECUTION_IMAGE%%/*}"
+	artifacts_device="$(stat -c %d "$artifacts_dir")"
   checkout_device="$(stat -c %d "$repo_root")"
   [[ "$workspace_device" == "$artifacts_device" && "$workspace_device" == "$checkout_device" ]] ||
     fail "workspace root, microVM artifacts, and checkout must share one reflink filesystem"
@@ -499,6 +503,7 @@ relocation_identity_dir="$run_dir/relocation-runner-identity"
 relocation_state_dir="$run_dir/relocation-runner-state"
 asset_catalog="$run_dir/signed-assets.json"
 mkdir -p "$pki_dir" "$state_dir" "$relocation_state_dir"
+mkdir -p "$state_dir/execution-image-certificates"
 scenario_workspace_dir="$(mktemp -d "$workspace_root/secondbox-scenario.XXXXXX")"
 relocation_workspace_dir="$(mktemp -d "$workspace_root/secondbox-scenario-relocation.XXXXXX")"
 mkdir -p "$scenario_workspace_dir/jailer-root"

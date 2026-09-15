@@ -234,7 +234,7 @@ secondbox-deploy runner-template
 secondbox-deploy runner-template --output /secure/secondbox/runner-east-1.toml
 ```
 
-Replace `runners = []` in the deployment manifest with the completed block. Required values are invalid placeholders; validation cannot accept the scaffold before the operator supplies them. Leave the three remote-only paths empty for same-host placement.
+Replace `runners = []` in the deployment manifest with the completed block. Required values are invalid placeholders; validation cannot accept the scaffold before the operator supplies them. Set all three execution-image limits to positive byte counts, and keep the cache limit at least as large as the expanded-image limit. A cold pull requires free storage equal to twice the maximum download size plus the maximum expanded size because the archive, extraction staging, and published cache can overlap. Existing manifests must add these fields before a generation-5 Runner starts. Leave the three remote-only paths empty for same-host placement.
 
 <!-- runner-template-output:start -->
 ```toml

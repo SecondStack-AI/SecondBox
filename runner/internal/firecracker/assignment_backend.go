@@ -666,7 +666,21 @@ func (b *AssignmentBackend) StartAssignment(
 			)
 		}
 	}()
-	preparedImage, err := b.manager.executionImages.Prepare(ctx, assignment.Correlation.OperationId, assignment.ExecutionImage, progress)
+	imageReservationID := assignment.Fence.AssignmentId + "-execution-image-staging"
+	preparedImage, err := b.manager.executionImages.Prepare(
+		ctx,
+		assignment.Correlation.OperationId,
+		assignment.ExecutionImage,
+		progress,
+		func(reservationContext context.Context, requestedBytes uint64) (func() error, error) {
+			if err := b.storagePressure.Reserve(reservationContext, imageReservationID, requestedBytes); err != nil {
+				return nil, err
+			}
+			return func() error {
+				return b.storagePressure.Release(context.Background(), imageReservationID)
+			}, nil
+		},
+	)
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}

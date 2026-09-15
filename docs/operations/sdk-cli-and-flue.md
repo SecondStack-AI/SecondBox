@@ -208,10 +208,10 @@ The service rejects a reserved name that could never resolve: one that is blank,
 `run` creates a Sandbox from a Profile, waits for it to become ready, runs one command, and deletes the Sandbox:
 
 ```sh
-./dist/secondbox run durable-coding -- python3 -c 'print("hello")'
+./dist/secondbox run durable-coding --image registry.example/secondbox/agent:stable -- python3 -c 'print("hello")'
 ```
 
-`--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling, `--stdin`, and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails. Standard input is read before anything is created, so an oversized input leaves no Sandbox behind.
+`--image` selects a signed execution image from a Runner-allowed registry. For a private registry, add `--image-pull-username USER --image-pull-token-file /absolute/path/to/token`; the CLI reads the token from the file and the control plane keeps it only in the operation-scoped credential broker. `--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling, `--stdin`, and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails. Standard input is read before anything is created, so an oversized input leaves no Sandbox behind.
 
 ### Resource sizes and retained Sandboxes
 
@@ -248,9 +248,9 @@ including disk, to preserve resume identity. `get` and the TTY `run --keep`
 receipt show the resolved allocation.
 
 ```sh
-secondbox run durable-coding --name mybox --keep -- true
+secondbox run durable-coding --image registry.example/secondbox/agent:stable --name mybox --keep -- true
 secondbox get mybox
-secondbox create durable-coding --cpus 2 --memory 4GiB --disk 20GiB --name worker
+secondbox create durable-coding --image registry.example/secondbox/agent:stable --cpus 2 --memory 4GiB --disk 20GiB --name worker
 secondbox get worker
 ```
 
@@ -299,14 +299,14 @@ With a local Node project containing `package.json` and `package-lock.json`
 (and a test script), prepare and reuse its dependencies:
 
 ```sh
-secondbox run durable-coding-registries --size medium --name golden --keep -- true
+secondbox run durable-coding-registries --image registry.example/secondbox/agent:stable --size medium --name golden --keep -- true
 secondbox cp -r ./project golden:/workspace/project
 secondbox exec golden --cwd project --deadline 10m -- npm ci --registry=https://registry.npmjs.org
 secondbox stop golden
 secondbox snapshot golden --name with-deps
 secondbox snapshots golden
-secondbox run durable-coding-registries --size medium --from golden/with-deps --cwd project -- npm test
-secondbox create durable-coding-registries --size medium --from golden/with-deps --name nextbox
+secondbox run durable-coding-registries --image registry.example/secondbox/agent:stable --size medium --from golden/with-deps --cwd project -- npm test
+secondbox create durable-coding-registries --image registry.example/secondbox/agent:stable --size medium --from golden/with-deps --name nextbox
 secondbox get nextbox
 ```
 
@@ -340,8 +340,8 @@ stays on the source home. This is not a portable backup or a machine image.
 For a throwaway session, `run --tty` creates the Sandbox, attaches the terminal, and deletes it when the terminal ends:
 
 ```sh
-./dist/secondbox run durable-coding --tty
-./dist/secondbox run durable-coding --tty -- /bin/bash
+./dist/secondbox run durable-coding --image registry.example/secondbox/agent:stable --tty
+./dist/secondbox run durable-coding --image registry.example/secondbox/agent:stable --tty -- /bin/bash
 ```
 
 Disposal runs on every exit, including a dropped connection, because the Sandbox exists only to serve that session; `--keep` opts out and reports the identifier so `secondbox shell` can resume it. `--tty` cannot be combined with `--stdin`, `--json`, or `--shell`, which all describe a buffered command, and it accepts at most one operand, used as the terminal command. Both forms share one implementation, so the Lease, generation, and idempotency handling described below applies to each.
