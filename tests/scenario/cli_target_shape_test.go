@@ -34,7 +34,6 @@ func TestScenarioCLITargetShape(t *testing.T) {
 	cpuCeiling, diskCeiling := spec.Resources.VCPUCount, spec.Resources.WorkspaceBytes
 	spec.ResourceCeiling = contracts.ProfileResourceCeiling{"vcpuCount": &cpuCeiling, "memoryBytes": nil, "workspaceBytes": &diskCeiling}
 	profile := createScenarioProfile(t, fixture, "scenario-cli-target-shape", spec)
-	executionImage := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_EXECUTION_IMAGE")
 	name := uniqueScenarioKey(t, "original")
 	cloneName := uniqueScenarioKey(t, "clone")
 	// Register by name before creating anything: run --keep can fail after
@@ -55,7 +54,7 @@ func TestScenarioCLITargetShape(t *testing.T) {
 			}
 		})
 	}
-	if got := cli.success(t, ctx, "run", profile.Name, "--image", executionImage, "--keep", "--name", name, "--cpus", "1", "--memory", "1GiB", "--disk", "33MiB", "--", "/bin/sh", "-c", "echo hello"); got != "hello\n" {
+	if got := cli.success(t, ctx, "run", profile.Name, "--keep", "--name", name, "--cpus", "1", "--memory", "1GiB", "--disk", "33MiB", "--", "/bin/sh", "-c", "echo hello"); got != "hello\n" {
 		t.Fatalf("SecondBox scenario CLI run stdout=%q", got)
 	}
 	original := scenarioCLIJSON[sb.Sandbox](t, cli.success(t, ctx, "--output", "json", "get", name))
@@ -63,7 +62,7 @@ func TestScenarioCLITargetShape(t *testing.T) {
 		t.Fatalf("SecondBox scenario CLI get unexpected Sandbox: %+v", original)
 	}
 	originalHandle := sb.NewSandboxHandle(fixture.subject, original)
-	refused := cli.run(t, ctx, "run", profile.Name, "--image", executionImage, "--cpus", "999", "--", "true")
+	refused := cli.run(t, ctx, "run", profile.Name, "--cpus", "999", "--", "true")
 	if refused.exitCode == 0 || refused.stdout != "" || !strings.Contains(refused.stderr, "resources_exceed_profile") || !strings.Contains(strings.ToLower(refused.stderr), "ceiling") {
 		t.Fatalf("SecondBox scenario CLI resource refusal: %+v", refused)
 	}
@@ -102,7 +101,7 @@ func TestScenarioCLITargetShape(t *testing.T) {
 	if snapshot.State != "ready" || snapshot.SandboxID != original.ID {
 		t.Fatalf("SecondBox scenario CLI snapshot not ready: %+v", snapshot)
 	}
-	created := scenarioCLIJSON[sb.Operation](t, cli.success(t, ctx, "create", profile.Name, "--image", executionImage, "--memory", "1GiB", "--name", cloneName, "--from", name+"/golden"))
+	created := scenarioCLIJSON[sb.Operation](t, cli.success(t, ctx, "create", profile.Name, "--memory", "1GiB", "--name", cloneName, "--from", name+"/golden"))
 	if created.ID == "" || created.SandboxID == "" || created.SandboxID == original.ID {
 		t.Fatalf("SecondBox scenario CLI clone Operation: %+v", created)
 	}
@@ -132,9 +131,6 @@ func TestScenarioCLITargetShape(t *testing.T) {
 func scenarioCLITransition(t *testing.T, ctx context.Context, cli scenarioCLI, fixture scenarioFixture, handle *sb.SandboxHandle, name, verb string, state sb.SandboxState) {
 	t.Helper()
 	args := []string{verb, name}
-	if verb == "start" {
-		args = append(args, "--image", requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_EXECUTION_IMAGE"))
-	}
 	if verb == "rm" {
 		args = append(args, "--force")
 	}

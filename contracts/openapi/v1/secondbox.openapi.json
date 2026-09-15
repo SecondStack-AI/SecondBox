@@ -8164,8 +8164,7 @@
         "additionalProperties": false,
         "required": [
           "profile",
-          "metadata",
-          "image"
+          "metadata"
         ],
         "properties": {
           "profile": {

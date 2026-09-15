@@ -1,6 +1,8 @@
 package contracts
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -17,6 +19,18 @@ const (
 // ExecutionImage selects one signed OCI execution bundle for a lifecycle operation.
 type ExecutionImage struct {
 	Reference string `json:"reference"`
+}
+
+func (image *ExecutionImage) UnmarshalJSON(data []byte) error {
+	type executionImageFields ExecutionImage
+	var decoded executionImageFields
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*image = ExecutionImage(decoded)
+	return image.Validate()
 }
 
 type PrepareImageRequest struct {

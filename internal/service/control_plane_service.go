@@ -414,8 +414,10 @@ func (service *ControlPlaneService) createSandboxOperation(
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
-	if err := request.Image.Validate(); err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, invalidRequest(err)
+	if request.Image.Reference != "" {
+		if err := request.Image.Validate(); err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, invalidRequest(err)
+		}
 	}
 	if len(request.SourceSnapshotID) > 128 {
 		return contracts.Sandbox{}, contracts.Operation{}, false,

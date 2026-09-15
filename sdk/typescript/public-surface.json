@@ -156,11 +156,11 @@
   },
   "CreateSandboxRequest": {
     "required": [
-      "image",
       "metadata",
       "profile"
     ],
     "optional": [
+      "image",
       "resources",
       "sourceSnapshotId"
     ]

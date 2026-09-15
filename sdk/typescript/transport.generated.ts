@@ -155,7 +155,7 @@ export interface CreateRunnerPoolRequest {
 }
 
 export interface CreateSandboxRequest {
-  readonly image: ExecutionImage;
+  readonly image?: ExecutionImage;
   readonly metadata: Metadata;
   readonly profile: ProfileName;
   readonly resources?: SandboxResourceRequest;

@@ -347,6 +347,8 @@ if [[ "$scenario_backend" == "firecracker" ]]; then
 	[[ "$SECONDBOX_SCENARIO_EXECUTION_IMAGE" == */* ]] ||
 		fail "SECONDBOX_SCENARIO_EXECUTION_IMAGE must contain a registry host"
 	export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY="${SECONDBOX_SCENARIO_EXECUTION_IMAGE%%/*}"
+	: "${SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG:?Firecracker scenario requires an operator Tenant registry configuration directory}"
+	[[ -f "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/tenants.json" ]] || fail "scenario registry configuration must contain tenants.json"
 	artifacts_device="$(stat -c %d "$artifacts_dir")"
   checkout_device="$(stat -c %d "$repo_root")"
   [[ "$workspace_device" == "$artifacts_device" && "$workspace_device" == "$checkout_device" ]] ||
@@ -557,6 +559,20 @@ openssl x509 -req \
   -extfile "$pki_dir/server.ext" >/dev/null 2>&1
 chmod 0600 "$pki_dir/runner-ca.key" "$pki_dir/server.key"
 chmod 0644 "$pki_dir/runner-ca.crt" "$pki_dir/server.crt"
+
+export SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY="$run_dir/image-registry"
+mkdir -p "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/certificates" "$scenario_workspace_dir/execution-images"
+if [[ "$scenario_backend" == "firecracker" ]]; then
+  cp "$public_key" "$pki_dir/execution-image.pub"
+  cp -a "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/." "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/"
+else
+  openssl pkey -in "$pki_dir/runner-ca.key" -pubout -out "$pki_dir/execution-image.pub" 2>/dev/null
+  export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY=unused.invalid
+  printf '{}\n' >"$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/tenants.json"
+fi
+chmod 0644 "$pki_dir/execution-image.pub"
+export SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256
+SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256="$(openssl pkey -pubin -in "$pki_dir/execution-image.pub" -outform DER 2>/dev/null | sha256_stream | awk '{print $1}')"
 
 export SECONDBOX_RUNNER_CA_CERTIFICATE="$pki_dir/runner-ca.crt"
 export SECONDBOX_RUNNER_CA_PRIVATE_KEY="$pki_dir/runner-ca.key"
@@ -1118,6 +1134,9 @@ fi
 if [[ "$runner_external" == "true" ]]; then
   "$SECONDBOX_SCENARIO_SERVICE_CONTROL" up --detach --wait --wait-timeout 300 secondbox-runner
 else
+  if [[ "$scenario_backend" == "firecracker" ]]; then
+    compose --profile image-preparation up --detach --wait --wait-timeout 120 image-fetcher
+  fi
   compose up --detach --wait --wait-timeout 300 secondbox-runner
 fi
 

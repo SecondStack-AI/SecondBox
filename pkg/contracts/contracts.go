@@ -554,7 +554,7 @@ type SandboxPage struct {
 // and an optional retained Snapshot used to seed generation one.
 type CreateSandboxRequest struct {
 	Resources        *SandboxResourceRequest `json:"resources,omitempty"`
-	Image            ExecutionImage          `json:"image"`
+	Image            ExecutionImage          `json:"image,omitzero"`
 	Profile          string                  `json:"profile"`
 	Metadata         map[string]string       `json:"metadata"`
 	SourceSnapshotID string                  `json:"sourceSnapshotId,omitempty"`

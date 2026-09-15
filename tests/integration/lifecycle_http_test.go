@@ -25,7 +25,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "lifecycle-http-create",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
