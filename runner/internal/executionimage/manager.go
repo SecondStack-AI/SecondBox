@@ -44,6 +44,8 @@ type PreparedImage struct {
 
 type CapacityReservation func(context.Context, uint64) (func() error, error)
 
+var ErrCapacityAdmissionDenied = errors.New("SecondBox execution image capacity admission denied")
+
 type Manager struct {
 	cacheRoot            string
 	registryAllowlist    []string
@@ -174,7 +176,7 @@ func (manager *Manager) Prepare(
 	if err != nil {
 		return PreparedImage{}, err
 	}
-	releaseCapacity, err := reserveCapacity(ctx, preparationBytes)
+	releaseCapacity, err := manager.reservePreparationCapacity(ctx, cacheDirectory, preparationBytes, reserveCapacity)
 	if err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image staging capacity reservation failed: %w", err)
 	}
@@ -229,6 +231,32 @@ func (manager *Manager) Prepare(
 		return PreparedImage{}, err
 	}
 	return manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest, artifacts), nil
+}
+
+func (manager *Manager) reservePreparationCapacity(
+	ctx context.Context,
+	target string,
+	requestedBytes uint64,
+	reserve CapacityReservation,
+) (func() error, error) {
+	for {
+		release, err := reserve(ctx, requestedBytes)
+		if err == nil {
+			return release, nil
+		}
+		if !errors.Is(err, ErrCapacityAdmissionDenied) {
+			return nil, err
+		}
+		manager.cacheMu.Lock()
+		evicted, evictionErr := manager.evictOldestUnpinned(target)
+		manager.cacheMu.Unlock()
+		if evictionErr != nil {
+			return nil, evictionErr
+		}
+		if !evicted {
+			return nil, err
+		}
+	}
 }
 
 func (manager *Manager) downloadArchive(ctx context.Context, archivePath string, args []string) ([]byte, error) {
@@ -301,9 +329,17 @@ func (manager *Manager) ensureCacheCapacity(target string) error {
 	if err != nil {
 		return err
 	}
+	required, err := preparationCapacityBytes(manager.maximumDownloadBytes, manager.maximumExpandedBytes)
+	if err != nil {
+		return err
+	}
+	available, err := manager.availableCacheBytes()
+	if err != nil {
+		return err
+	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].modified.Before(entries[j].modified) })
 	for _, entry := range entries {
-		if total+manager.maximumExpandedBytes <= manager.maximumCacheBytes {
+		if total+manager.maximumExpandedBytes <= manager.maximumCacheBytes && available >= required {
 			break
 		}
 		if entry.path == target {
@@ -319,23 +355,50 @@ func (manager *Manager) ensureCacheCapacity(target string) error {
 			return fmt.Errorf("SecondBox execution image cache eviction failed: %w", err)
 		}
 		total -= entry.size
+		available, err = manager.availableCacheBytes()
+		if err != nil {
+			return err
+		}
 	}
 	if total+manager.maximumExpandedBytes > manager.maximumCacheBytes {
 		return fmt.Errorf("SecondBox execution image cache cannot reserve %d bytes within its %d-byte limit", manager.maximumExpandedBytes, manager.maximumCacheBytes)
-	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(manager.cacheRoot, &stat); err != nil {
-		return fmt.Errorf("SecondBox execution image free-space inspection failed: %w", err)
-	}
-	available := uint64(stat.Bavail) * uint64(stat.Bsize)
-	required, err := preparationCapacityBytes(manager.maximumDownloadBytes, manager.maximumExpandedBytes)
-	if err != nil {
-		return err
 	}
 	if available < required {
 		return fmt.Errorf("SecondBox execution image preparation requires %d free bytes, only %d are available", required, available)
 	}
 	return nil
+}
+
+func (manager *Manager) availableCacheBytes() (uint64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(manager.cacheRoot, &stat); err != nil {
+		return 0, fmt.Errorf("SecondBox execution image free-space inspection failed: %w", err)
+	}
+	return uint64(stat.Bavail) * uint64(stat.Bsize), nil
+}
+
+func (manager *Manager) evictOldestUnpinned(target string) (bool, error) {
+	entries, _, err := manager.cacheEntries()
+	if err != nil {
+		return false, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].modified.Before(entries[j].modified) })
+	for _, entry := range entries {
+		if entry.path == target {
+			continue
+		}
+		manager.pinMu.Lock()
+		pinned := manager.pins[entry.path] > 0
+		manager.pinMu.Unlock()
+		if pinned {
+			continue
+		}
+		if err := os.RemoveAll(entry.path); err != nil {
+			return false, fmt.Errorf("SecondBox execution image cache eviction failed: %w", err)
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func preparationCapacityBytes(maximumDownloadBytes, maximumExpandedBytes int64) (uint64, error) {

@@ -54,6 +54,40 @@ func TestPreparationCapacityBytesRejectsOverflow(t *testing.T) {
 	}
 }
 
+func TestPreparationCapacityEvictsBeforeRetryingPressureAdmission(t *testing.T) {
+	root := t.TempDir()
+	oldest := filepath.Join(root, strings.Repeat("a", 64))
+	if err := os.Mkdir(oldest, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldest, "rootfs.ext4"), []byte("cached"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{cacheRoot: root, pins: make(map[string]int)}
+	reservations := 0
+	release, err := manager.reservePreparationCapacity(
+		t.Context(),
+		filepath.Join(root, strings.Repeat("b", 64)),
+		1024,
+		func(context.Context, uint64) (func() error, error) {
+			reservations++
+			if _, statErr := os.Stat(oldest); statErr == nil {
+				return nil, ErrCapacityAdmissionDenied
+			}
+			return func() error { return nil }, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release == nil || reservations != 2 {
+		t.Fatalf("capacity reservation release=%v attempts=%d", release != nil, reservations)
+	}
+	if _, err := os.Stat(oldest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pressure eviction retained oldest cache entry: %v", err)
+	}
+}
+
 func TestOuterDockerArchiveAcceptsContainedLayerLink(t *testing.T) {
 	root := t.TempDir()
 	archive := filepath.Join(root, "image.tar")

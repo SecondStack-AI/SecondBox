@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
@@ -674,6 +675,9 @@ func (b *AssignmentBackend) StartAssignment(
 		progress,
 		func(reservationContext context.Context, requestedBytes uint64) (func() error, error) {
 			if err := b.storagePressure.Reserve(reservationContext, imageReservationID, requestedBytes); err != nil {
+				if errors.Is(err, ErrStoragePressureAdmissionDenied) {
+					return nil, errors.Join(executionimage.ErrCapacityAdmissionDenied, err)
+				}
 				return nil, err
 			}
 			return func() error {
