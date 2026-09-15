@@ -234,6 +234,8 @@ func TestTrustedMicroVMArtifactsDetectsSameSizeRestoredMtimeMutation(t *testing.
 		path:     path,
 		identity: identity,
 	}}}
+	// Some qualified Runner filesystems expose ctime at one-second resolution.
+	time.Sleep(1100 * time.Millisecond)
 	if err := os.WriteFile(path, []byte("after!"), 0o600); err != nil {
 		t.Fatalf("mutate artifact: %v", err)
 	}
@@ -898,9 +900,9 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMKernelPath:          kernel,
 		MicroVMSharedImagePath:     shared,
 		MicroVMJailerChrootBaseDir: filepath.Join(dir, "jailer-root"),
-		MicroVMJailerUIDStart:      os.Getuid(),
+		MicroVMJailerUIDStart:      10001,
 		MicroVMJailerUIDCount:      1,
-		MicroVMJailerGID:           os.Getgid(),
+		MicroVMJailerGID:           10001,
 		MicroVMJailerCgroupVersion: 2,
 		MicroVMJailerParentCgroup:  "secondbox-runner-test",
 		MicroVMMemoryMiB:           512,
@@ -910,7 +912,7 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	}}
 	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512}
 	attachment := managerTestAttachment(t, workspace)
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, attachment, shared, "agfc123", "", os.Getuid(), false, policy)
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, attachment, shared, "agfc123", "", 10001, false, policy)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
