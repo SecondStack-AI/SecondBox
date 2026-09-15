@@ -21,9 +21,9 @@ var httpMethods = []string{"delete", "get", "patch", "post", "put"}
 
 var goContractSchemas = stringSet([]string{
 	"SandboxLifecycleLimits",
- "SubjectSandboxPolicy",
- "SubjectSandboxPolicyObservation",
- "PolicyLimit",
+	"SubjectSandboxPolicy",
+	"SubjectSandboxPolicyObservation",
+	"PolicyLimit",
 	"PositivePolicyLimit",
 	"AcquireLeaseRequest",
 	"AttributedExecutionPolicy",

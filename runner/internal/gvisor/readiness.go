@@ -4,12 +4,12 @@ package gvisor
 
 import (
 	"bytes"
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 

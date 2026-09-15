@@ -23,8 +23,8 @@ func TestAssignmentProgressReplayWithNanosecondPrecisionIsAccepted(t *testing.T)
 		Message: &runnerv1.RunnerToControlPlane_AssignmentProgress{
 			AssignmentProgress: &runnerv1.AssignmentProgress{
 				MessageId: "progress-replay-message", Sequence: 1,
-				Fence: fence,
-				Stage: runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
+				Fence:            fence,
+				Stage:            runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
 				ObservedAtUnixMs: uint64(observed.UnixMilli()),
 				ObservedAtUnixNs: uint64(observed.UnixNano()),
 				Correlation: &runnerv1.Correlation{
@@ -83,8 +83,8 @@ func TestAssignmentProgressEvidenceDisagreementDoesNotFailDelivery(t *testing.T)
 			Message: &runnerv1.RunnerToControlPlane_AssignmentProgress{
 				AssignmentProgress: &runnerv1.AssignmentProgress{
 					MessageId: "progress-disagree-message", Sequence: 1,
-					Fence: fence,
-					Stage: runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
+					Fence:            fence,
+					Stage:            runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
 					ObservedAtUnixMs: uint64(at.UnixMilli()),
 					Correlation:      correlation,
 				},

@@ -62,15 +62,15 @@ type startupSpanSummary struct {
 // measurements, and discarding them would make a safety abort destroy the data
 // it exists to protect. The field is absent from a clean run's report.
 type lifecycleReport struct {
-	SchemaVersion    int          `json:"schemaVersion"`
-	StartedAt        time.Time    `json:"startedAt"`
-	CompletedAt      time.Time    `json:"completedAt"`
-	SourceCommit     string       `json:"sourceCommit"`
-	GoVersion        string       `json:"goVersion"`
-	ArtifactManifest string       `json:"artifactManifestDigest"`
-	ShedArrivals     int64        `json:"shedArrivals"`
-	IncompleteReason string       `json:"incompleteReason,omitempty"`
-	AbortedAtRail    string       `json:"abortedAtRail,omitempty"`
+	SchemaVersion    int       `json:"schemaVersion"`
+	StartedAt        time.Time `json:"startedAt"`
+	CompletedAt      time.Time `json:"completedAt"`
+	SourceCommit     string    `json:"sourceCommit"`
+	GoVersion        string    `json:"goVersion"`
+	ArtifactManifest string    `json:"artifactManifestDigest"`
+	ShedArrivals     int64     `json:"shedArrivals"`
+	IncompleteReason string    `json:"incompleteReason,omitempty"`
+	AbortedAtRail    string    `json:"abortedAtRail,omitempty"`
 
 	Capacity []capacitySummary `json:"capacity,omitempty"`
 
