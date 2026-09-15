@@ -363,4 +363,4 @@ rather than a rising ladder, because the defect it targets is a race on one
 database row and repetition finds it faster than depth. It reproduced on the
 second rung where a six-rung ladder to 32 had passed cleanly.
 
-See [assignment-dispatch-stall.md](assignment-dispatch-stall.md).
+See [assignment-dispatch-stall.md](../plans/evidence/assignment-dispatch-stall.md).

@@ -49,7 +49,7 @@ and index entries for the full retention window. The frames are paying for a
 capability that session structurally cannot use.
 
 Both prior plans flag the cost as unquantified.
-`docs/plans/2026-07-31-relay-data-plane-wakeups.md` records under **Not
+`docs/plans/completed/2026-07-31-relay-data-plane-wakeups.md` records under **Not
 measured** that notification volume "under a large File transfer and a saturated
 relay Port session was reasoned about and pinned by the migration scope tests,
 but not observed against a live workload", and that the inbound rule notifies
@@ -80,9 +80,9 @@ Frames stay the delivery mechanism. The caller-facing read at
 and post-detach replay. Persistence cannot be removed from the write path
 without replacing delivery, which is out of scope and was decided against twice.
 
-The transport split is settled. `docs/plans/2026-07-31-direct-port-data-plane.md`
+The transport split is settled. `docs/plans/completed/2026-07-31-direct-port-data-plane.md`
 rejected moving PTY, Exec, or File to the direct transport, and
-`docs/plans/2026-07-31-relay-data-plane-wakeups.md` removed the poll latency that
+`docs/plans/completed/2026-07-31-relay-data-plane-wakeups.md` removed the poll latency that
 was the strongest argument for doing so. This plan does not reopen either
 decision. It changes how long a frame is kept, not how it travels.
 
@@ -246,7 +246,7 @@ Phase one — remove frames:
    session grow". Binding cleanup batching to a session-size limit would make an
    operator's session sizing silently retune cleanup transaction width. The
    constant follows the Category C pattern established by
-   `docs/plans/2026-08-01-configuration-surface.md`, so it may later gain a
+   `docs/plans/completed/2026-08-01-configuration-surface.md`, so it may later gain a
    validated optional override without becoming required. Always admit one first
    row for progress if a historical row exceeds the budget; such a transaction is
    bounded by that row's stored `payload_bytes`, not by today's
@@ -282,7 +282,7 @@ plan remain unconditional, so an early stop cannot leave **Not measured** behind
 ### Configuration-surface prerequisite — satisfied
 
 The operator-facing part of Task 7 depends on Tasks 3, 7, and 8 of
-`docs/plans/2026-08-01-configuration-surface.md`, which create the deployment-
+`docs/plans/completed/2026-08-01-configuration-surface.md`, which create the deployment-
 manifest schema and help, compiler, generated `deploy/secondbox.example.toml`,
 redacted `secondbox-deploy inspect` output, and operator documentation.
 
@@ -500,14 +500,14 @@ retention behavior proceeds, satisfy the configuration-surface prerequisite
 before completing the operator-facing retention deliverables or shipping the
 behavior; do not merely name future artifacts.
 
-Update `docs/plans/2026-07-31-relay-data-plane-wakeups.md` so **Not measured**
+Update `docs/plans/completed/2026-07-31-relay-data-plane-wakeups.md` so **Not measured**
 links to the recorded evidence. If the behavior change proceeds, update
 `docs/design/runner-protocol.md` to describe separate frame and session horizons,
 the per-kind replay rules, compact duplicate evidence, and the two-phase sweep;
 update `docs/design/api-conventions.md` so Terminal `nextClientSequence` names
 the durable session projection rather than the retained outbox as its sole source
 of truth; and update `docs/design/service-boundaries.md` plus
-`docs/plans/2026-08-01-configuration-surface.md` to distinguish operator-owned
+`docs/plans/completed/2026-08-01-configuration-surface.md` to distinguish operator-owned
 transition-specific session deadlines from the maximum frame fallback. Add the
 same positive operator-facing explanation to `docs/operations/deployment.md`,
 the deployment-manifest schema and retention-field help, the generated
@@ -529,8 +529,8 @@ input with 4,096 output bytes, a 1 MiB File upload and download, and a 1 MiB
 forced-relay Port exchange in 16 KiB public frames. The baseline used `main` at
 `f781e7c` with the measurement-only harness overlaid; the changed run used this
 implementation. The raw reports are
-[baseline](evidence/2026-08-01-relay-retention-baseline.json) and
-[changed](evidence/2026-08-01-relay-retention-changed.json).
+[baseline](../evidence/2026-08-01-relay-retention-baseline.json) and
+[changed](../evidence/2026-08-01-relay-retention-changed.json).
 
 Each baseline cycle left all 290 new frame rows and about 4.32 MB of encoded
 payload live after the sweep. The changed sweep left no frame from the measured

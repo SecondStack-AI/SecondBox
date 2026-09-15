@@ -9,6 +9,10 @@ provenance-2026-08-06: Repository-owner direction to un-gate and implement, take
 
 # Plan: Snapshot-Resume Sandbox Startup
 
+## Remaining work
+
+The resume path is implemented and the recorded unsaturated restart p95 is 130 ms. This plan remains open for the unchecked cache/trust, identity-isolation, recovery, and end-to-end qualification gates below. Its 200 ms creation p95 target was not met (recorded p95: 522 ms). Measurements describe their recorded commits, not current release performance.
+
 ## Outcome
 
 Make an unsaturated Sandbox reach `ready` in 100–200 ms by resuming an identity-neutral, post-boot memory snapshot instead of booting the guest kernel, init, and guest agent for every Instance. The full signed toolset remains in the guest.

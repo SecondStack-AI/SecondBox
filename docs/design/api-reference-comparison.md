@@ -1,6 +1,6 @@
 # API reference comparison
 
-SecondBox borrows proven ergonomic shapes without inheriting another product's ownership or durability model. This comparison is pinned to primary source revisions so later upstream changes cannot silently alter SecondBox semantics.
+SecondBox borrows proven ergonomic shapes without inheriting another product's ownership or durability model. This is historical API-design research pinned to the source revisions below, not a current product comparison. The [consumer operation matrix](consumer-operation-matrix.md) and [API conventions](api-conventions.md) describe SecondBox's maintained contract.
 
 ## Source pins
 

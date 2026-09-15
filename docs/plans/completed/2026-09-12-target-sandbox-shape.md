@@ -1,12 +1,16 @@
 ---
 title: Target Sandbox Shape
 date: 2026-09-12
-status: in-progress
+status: implemented
 owner: SecondStack
 provenance: UX audit of the user-facing surface against E2B, Daytona, Modal, and Vercel Sandbox, 2026-09-12
 ---
 
 # Plan: Target Sandbox Shape
+
+## Archive outcome
+
+Merged in `333b366` (#126). Friendly verbs, requested resources, golden Snapshots, guided tenancy bootstrap, and the CLI scenario are implemented. The later [qualification plan](2026-09-12-fast-qualification.md) records full-matrix validation. Deferred image selection, registry-egress standard bundles, and server size catalogs remain outside this implementation.
 
 ## Outcome
 

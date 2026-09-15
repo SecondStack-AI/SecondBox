@@ -46,8 +46,9 @@ All paths are workspace-relative protocol strings. The guest opens and pins the 
 
 Binary reads and writes remain bytes throughout the protocol. Read chunks consume runner byte credit; writes require declared size, ordered offsets, an exact SHA-256 checksum, a bounded create mode, and an atomic commit. Filesystem cancellation does not convert partial bytes into a completed write.
 
-Public Snapshot operations run only while the Sandbox is stopped, after the VM
-and all host-side Workspace users have detached. They are runner-local
+Snapshot creation and restore require a stopped Sandbox after compute and
+all host-side Workspace users have detached. Snapshot deletion may run while
+compute is active when no restore references it. These are runner-local
 WorkspaceStore operations and require no guest-protocol message or freeze
 feature.
 

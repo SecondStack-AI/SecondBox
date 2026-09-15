@@ -10,7 +10,7 @@ provenance: Customer-shared SecondBox architecture review, 2026-08-25
 
 Deliver SecondBox v0.6.0 as one implementation pull request that makes a single customer-operated deployment safely consumable by multiple SecondStack installations in the same trust domain. Implement the work as tested vertical slices: establish the public contract, make persisted authorities work end to end, add delegated management, retire static application credentials, enforce quotas, complete subject lifecycle cleanup, then finish the operator, deployment, Profile, and release surfaces. Every task must leave every gate in `Validation Commands` green.
 
-The canonical target design is [Customer-shared tenancy](../design/customer-shared-tenancy.md). Keep the control plane unprivileged, keep Runners independently deployed and privileged, and preserve the existing Sandbox, Instance, Workspace, Runner, and immutable Profile contracts. This plan changes management isolation and credential lifecycle; it does not introduce a configurable role system, public registration, billing, tenant-specific Profile copies, Kubernetes-native compute, automatic Sandbox relocation, or a tenant-aware shared egress gateway.
+The canonical target design is [Customer-shared tenancy](../../design/customer-shared-tenancy.md). Keep the control plane unprivileged, keep Runners independently deployed and privileged, and preserve the existing Sandbox, Instance, Workspace, Runner, and immutable Profile contracts. This plan changes management isolation and credential lifecycle; it does not introduce a configurable role system, public registration, billing, tenant-specific Profile copies, Kubernetes-native compute, automatic Sandbox relocation, or a tenant-aware shared egress gateway.
 
 ## Fixed decisions
 
@@ -152,6 +152,6 @@ Close the one pull request only after the full customer-shared path works throug
 - [x] Prove application credentials cannot call management, Profile mutation, aggregate timing, Runner administration, or another subject's routes, and that tenant controllers cannot call Sandbox routes.
 - [x] Run the isolated/network-enabled concurrent scenario on a qualified KVM Runner and capture bounded evidence without tenant identifiers in metric labels or secrets in artifacts.
 - [x] Update authorization, service-boundary, security, threat-model, recovery, deployment, backup, diagnostics, CLI, declarative-resource, downstream-integration, and release documentation to match the implemented contract.
-- [x] Remove prospective wording from [Customer-shared tenancy](../design/customer-shared-tenancy.md), reconcile linked design documents, and verify their claims against tests and operator commands.
+- [x] Remove prospective wording from [Customer-shared tenancy](../../design/customer-shared-tenancy.md), reconcile linked design documents, and verify their claims against tests and operator commands.
 - [x] Stage v0.6.0 release artifacts and verify OpenAPI, Go SDK, TypeScript SDK, binaries, OCI images, standard bundles, source-free suite, SBOMs, attestations, and qualification evidence all carry one immutable release identity.
 - [x] Run every command in `Validation Commands`, resolve failures without weakening gates, and leave the branch ready for its single implementation pull request and subsequent release publication.

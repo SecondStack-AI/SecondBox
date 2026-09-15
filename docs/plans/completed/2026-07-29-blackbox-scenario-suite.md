@@ -40,7 +40,7 @@ The suite closes that gap and nothing else. It reuses `sdk/go/secondboxclient` s
 
 ## Dependencies
 
-This plan assumes the runner-local copy-on-write workspace migration in `docs/plans/2026-07-29-runner-local-cow-workspaces.md` has landed: checkpoints removed, Snapshot create/delete/restore as asynchronous Operations, and each Sandbox assigned to one authoritative home runner at a time. Tasks 6 and 8 assert that model directly. Tasks 1 through 5 do not depend on it and can proceed in parallel.
+This plan assumes the runner-local copy-on-write workspace migration in `docs/plans/completed/2026-07-29-runner-local-cow-workspaces.md` has landed: checkpoints removed, Snapshot create/delete/restore as asynchronous Operations, and each Sandbox assigned to one authoritative home runner at a time. Tasks 6 and 8 assert that model directly. Tasks 1 through 5 do not depend on it and can proceed in parallel.
 
 ## Validation Commands
 

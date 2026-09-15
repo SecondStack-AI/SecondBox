@@ -1,6 +1,6 @@
 # SecondBox
 
-**Durable, isolated development sandboxes — as a service you run yourself.**
+**Self-hosted, isolated Sandboxes with durable workspaces.**
 
 [![CI](https://github.com/SecondStack-AI/SecondBox/actions/workflows/ci.yml/badge.svg)](https://github.com/SecondStack-AI/SecondBox/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SecondStack-AI/SecondBox)](https://github.com/SecondStack-AI/SecondBox/releases/latest)
@@ -8,15 +8,15 @@
 
 SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, long-lived dev environments — inside isolated Sandboxes whose filesystems survive between sessions. The Firecracker backend boots each Sandbox as a microVM on KVM hosts; the gVisor backend serves Linux hosts without KVM, including Kubernetes nodes.
 
-- **Hardware isolation.** On KVM hosts every Sandbox is a Firecracker microVM, not a container. The gVisor backend substitutes a userspace-kernel sentry for hosts without hardware virtualization; its isolation boundary is the sentry, not KVM.
+- **Workload isolation.** Firecracker uses hardware virtualization on KVM hosts. gVisor uses a userspace-kernel sentry on hosts without KVM.
 - **Durable workspaces.** A Sandbox keeps its disk across stops, restarts, and generations. Snapshot it and restore in place.
-- **Real terminals.** A genuine PTY with raw mode, resize forwarding, and bounded reconnect — not a line-buffered exec loop.
-- **Multi-tenant by construction.** Every row is scoped to an opaque tenant and subject reference. Application tokens carry fixed scopes and explicit Profile grants.
+- **Interactive terminals.** PTYs support raw mode, resize forwarding, and bounded reconnect.
+- **Scoped access.** Application-owned resources belong to one Tenant and Subject. Application tokens carry fixed scopes and explicit Profile grants.
 - **Immutable Profiles.** Operators fix image, resource defaults and optional ceilings, lifecycle, network, and port policy. Each Sandbox pins the revision resolved at creation.
 - **Self-hosted.** One unprivileged control plane, PostgreSQL, and one or more privileged runners you place yourself.
 
 > [!NOTE]
-> SecondBox is a **networked control plane**, not an embeddable library. Sandboxes run on separately deployed runners, and a client only ever talks to the control plane over HTTPS. There is no daemonless mode.
+> SecondBox is a network service with separately deployed Runners. Clients use the control-plane API; authorities explicitly granted direct Port transport also connect to the admitted Runner endpoint.
 
 ## How it works
 
@@ -42,14 +42,23 @@ To fetch the small published bootstrap and run the wizard:
 curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh | sh
 ```
 
-To update a completed guided deployment after stopping every Sandbox, pass its recorded operation directory to the latest bootstrap:
+**v0.14.0 requires a fresh database and separate Runner storage root**, including
+when coming from v0.13.0. Do not use the update command to cross that boundary.
+Retain the old deployment with its original state for rollback; see the
+[v0.14.0 release notes](docs/releases/v0.14.0.md).
+
+To update a compatible completed guided deployment after stopping every Sandbox, pass its recorded operation directory to the latest bootstrap:
 
 ```sh
 curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh \
   | sh -s -- update /absolute/path/to/secondbox-install-operation
 ```
 
-Run the same command with `update --check` first for read-only compatibility, drift, and staging-capacity validation. The guided updater accepts completed v0.6.0 or newer installations; v0.6.0 is a clean-install boundary, so earlier installations require a fresh deployment with explicit workload migration. Updates preserve the existing PostgreSQL volume, generated authority, Runner identity, Workspaces, Snapshots, storage, ports, and Compose project. The v1 updater rejects releases that change runtime or toolchain bundle digests because existing Sandboxes remain pinned to their immutable Profile revisions.
+For a compatible target, run `update --check` first to validate compatibility,
+drift, and staging capacity. Updates preserve recorded authority, Runner identity,
+and durable data. Database, Runner protocol, and execution-bundle changes can
+require recreation; the [update guide](docs/operations/guided-single-host-install.md#update-a-completed-installation)
+records those boundaries.
 
 The bootstrap downloads only the release-pinned Linux amd64 `secondbox-deploy` binary to a temporary directory, verifies its embedded SHA-256 digest, and dispatches the requested install or update operation. It does not invoke sudo or modify the host itself. The installer shows its exact privileged action list before asking sudo to run its narrow host-preparation entry point.
 
@@ -108,12 +117,12 @@ Credentials are verified against the deployment before anything is written, then
 ### Run something
 
 ```sh
-secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
+secondbox run durable-coding -- python3 -c 'print("hello from SecondBox")'
 ```
 
 ## Using the CLI
 
-### Run with the resources you need
+### Create and size a Sandbox
 
 `run` creates a Sandbox, waits for readiness, executes a command, and deletes
 it. Add `--keep` to retain its Workspace and report its identifier:
@@ -124,35 +133,15 @@ secondbox run durable-coding --cpus 2 --memory 4GiB --disk 20GiB -- python3 -c '
 secondbox get mybox
 ```
 
-| Size | vCPUs | Memory | Workspace |
-|---|---:|---:|---:|
-| `small` | 1 | 1 GiB | 4 GiB |
-| `medium` | 2 | 4 GiB | 16 GiB |
-| `large` | 4 | 8 GiB | 50 GiB |
+Use `--size small|medium|large` for client presets, or request individual axes
+within the Profile's ceilings, Tenant/Subject quota, and Runner capacity.
+Disk requests round up, capped by a finite Profile ceiling; the resolved
+allocation appears in `get`. Snapshot-resume Profiles require their exact shape.
+See [resource sizing](docs/operations/sdk-cli-and-flue.md#resource-sizes-and-retained-sandboxes)
+for presets, rounding, and operator examples.
 
-Explicit `--cpus`, `--memory`, and `--disk` override individual preset axes.
-Byte sizes accept `GiB`, `MiB`, `KiB`, `g`, `m`, `k` (case-insensitive binary
-units), or plain bytes. Without a preset, omitted axes use the Profile values.
-Requested disk capacity rounds up to the next power of two before admission,
-so 20 GiB becomes 32 GiB, except that a request within the Profile's disk
-ceiling never fails because of rounding: it resolves to the ceiling itself
-when the rounded value would exceed it, which is why `--size large` still
-fits standard `durable-coding` at 50 GiB. Omitted disk uses the Profile
-default unchanged.
-
-Without `resourceCeiling`, Profile resource defaults are also ceilings.
-Operators may publish explicit bounds for all three axes, using `null` to
-leave an axis bounded only by Tenant/Subject quota and Runner admission.
-The [flexible Profile example](examples/resources/durable-coding-flexible.json)
-permits unbounded CPU/memory and up to 256 GiB of Workspace capacity. Requests
-above a finite bound fail with `resources_exceed_profile`, never shrink.
-`snapshot_resume` Profiles require their exact default size and reject changes
-with `resources_fixed_by_profile`. `get` and the TTY retained Sandbox summary
-show the resolved resources.
-
-For creation without an initial command, use `create`. It returns the admitted
-Operation immediately; the Profile chooses the initial state. Inspect readiness
-before executing in it, or use `run --keep -- true` to create and wait:
+For creation without an initial command, `create` returns the admitted Operation
+immediately. The Profile determines the initial state; check readiness before exec:
 
 ```sh
 secondbox create durable-coding --size small --name worker
@@ -260,11 +249,14 @@ Full reference: [SDK, CLI, and Flue quick starts](docs/operations/sdk-cli-and-fl
 
 ## SDKs
 
-Go and TypeScript share one handwritten composition layer over generated transports and wire types: idempotency keys, bounded-wait looping, lease keepers that renew in the background, outcome decoding, and `run`.
+Go and TypeScript each provide a handwritten composition layer over generated transports and wire types: idempotency keys, bounded-wait looping, lease keepers that renew in the background, outcome decoding, and `run`.
 
 ```go
-client, _ := secondboxclient.NewSecondBoxSubjectClient(
+client, err := secondboxclient.NewSecondBoxSubjectClient(
     "https://secondbox.example.com", token, "acme", "alice", http.DefaultClient)
+if err != nil {
+    log.Fatal(err)
+}
 
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 defer cancel()
@@ -277,8 +269,12 @@ handle, outcome, err := client.Run(ctx, secondboxclient.RunRequest{
     DeadlineMilliseconds: 30_000,
     MaximumOutputBytes:   1 << 20,
 })
+// Run retains any created Sandbox; the caller owns cleanup, including on error.
+_ = handle
+if err != nil {
+    log.Fatal(err)
+}
 fmt.Print(string(outcome.Result.Stdout))
-_ = handle // Run never deletes; disposal is yours
 ```
 
 <details>
@@ -316,7 +312,7 @@ if (result.kind === "exited") process.stdout.write(result.stdout);
 | --- | --- |
 | `cmd/secondbox` | the CLI |
 | `cmd/secondboxd` | unprivileged control plane |
-| `runner` | privileged Firecracker runner and guest agent |
+| `runner` | privileged compute backends, WorkspaceStore, and guest agent |
 | `contracts` | canonical public, runner, and guest-agent protocols |
 | `internal` | domain, API, scheduling, reconciliation, persistence |
 | `migrations/postgres` | database migration lineage |
@@ -345,13 +341,19 @@ The external scenario gate joins the HTTP API, PostgreSQL, the runner protocol, 
 SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 just test-scenario
 ```
 
-See [scenario qualification](docs/operations/scenario-qualification.md) for optional end-to-end testing and timing budgets. Every commit admitted to `main` must pass the GitHub-hosted CI workflow. Releases are built locally, uploaded to a private draft, and published as stable GitHub, GHCR, and npm artifacts without rebuilding. See [release operator setup](docs/operations/release-operator-setup.md).
+See [scenario qualification](docs/operations/scenario-qualification.md) for host setup, automated `just qualify` tiers, and timing budgets. Runner protocol, lifecycle reconciliation, and Workspace durability changes require the scenario gate. Every commit admitted to `main` must pass the GitHub-hosted CI workflow. Releases are built locally, uploaded to a private draft, and published as stable GitHub, GHCR, and npm artifacts without rebuilding. See [release operator setup](docs/operations/release-operator-setup.md).
 
 ## Security
 
-Runner connections require TLS 1.3, a CA-signed certificate identifying the Runner, and a pre-shared Runner credential. The HTTP API accepts the deployment-wide platform token for operators, and explicitly configured application authorities bound to fixed tenant and subject references, exact operation scopes, and named Profile grants. None of these authorities are interchangeable.
+Runner connections require TLS 1.3, a CA-signed certificate identifying the Runner, and a pre-shared Runner credential. The HTTP API accepts the deployment-wide platform token for operators, persisted tenant-controller credentials for delegated management, and persisted application credentials bound to fixed Tenant/Subject references, exact operation scopes, and named Profile grants. None of these authorities are interchangeable.
 
 Loss of an unbacked home-runner workspace filesystem loses that Sandbox: PostgreSQL recovery cannot reconstruct runner-local data. Back up each Runner's stable identity and workspace root as one consistent unit — see [backup and recovery](docs/operations/backup-and-restore.md) and the [threat model](docs/design/threat-model.md).
+
+## Documentation
+
+Use the [documentation index](docs/README.md) for architecture, operations, and
+SDK references. [Plans](docs/plans/README.md) lists unfinished work separately
+from completed implementations and historical qualification evidence.
 
 ## License
 

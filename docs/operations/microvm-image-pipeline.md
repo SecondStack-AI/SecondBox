@@ -43,16 +43,23 @@ The verifier never trusts the artifact's bundled `signing.pub`. The trusted key 
 
 The signed bundle is approximately 11 GB and is not embedded in the source-less GitHub release zip. Local release preparation reads an independently signed bundle from the absolute path configured by `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR`, verifies it against `SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256`, and builds the exact allowlist as the dedicated `microvm-artifacts` OCI archive. The hosted publisher pushes that supplied archive without rebuilding it. Image labels and the artifact manifest bind the verified public-key fingerprint and `manifest.json` digest.
 
-Initialization accepts exactly one explicit source mode:
+For a manual deployment, materialize the release's digest-pinned
+`microvm-artifacts` image into the operator-selected artifact directory and
+verify it with the independent public key before enrolling the Runner. Set
+`artifact_host_directory` and the matching trust and asset pins in the Runner
+declaration; [deployment operations](deployment.md) documents that contract.
+`secondbox-deploy runner-init` issues Runner identity and configuration, not
+execution assets.
 
-- `directory` reads `SECONDBOX_RUNNER_MICROVM_ARTIFACT_SOURCE_DIR`. Source checkouts use this mode and resolve a relative directory against the repository root.
-- `ghcr-image` pulls `SECONDBOX_RUNNER_MICROVM_ARTIFACT_IMAGE`, validates its identity labels, and extracts `/secondbox-runner-microvm` through a temporary container.
+The [guided installer](guided-single-host-install.md) materializes the image
+from the verified release manifest. It extracts into a create-only temporary
+directory, verifies the fixed allowlist and signed component identities against
+the release-bound fingerprint, and publishes the directory atomically. Resume
+rechecks and reuses a recorded verified directory. A different bundle needs a
+separate target and a coordinated deployment transition.
 
-There is no automatic selection or fallback between modes. Both paths verify the exact file allowlist, the independently pinned signing-key fingerprint, payload checksums, manifest signature and hash bindings, and verified standard-toolset state before atomically replacing an empty target at `SECONDBOX_RUNNER_MICROVM_ARTIFACTS_DIR`. A non-empty target is accepted only when it is the same verified bundle; a different target fails init. Matching GHCR labels allow repeat init to verify the installed target without extracting the 11 GB image again.
-
-Docker access belongs to the host init process. The runner never receives artifact-distribution credentials.
-
-The [guided single-host installer](guided-single-host-install.md) implements the same `ghcr-image` trust boundary for a published release: it pulls only the digest-pinned microVM-artifact reference, extracts into a create-only temporary directory, enforces the fixed allowlist and signed component identities, compares `signing.pub` with the separately release-bound canonical fingerprint, and publishes the directory atomically. A recorded verified directory is rechecked and reused on resume rather than re-extracting the approximately 11 GB image.
+Docker access belongs to host preparation. The Runner consumes already verified
+assets and receives no artifact-distribution credentials.
 
 The build pipeline:
 
@@ -88,31 +95,30 @@ SECONDBOX_RUNNER_MICROVM_SHARED_FORMAT=ext4
 
 ## Standard package set (reproducible rootfs source)
 
-`scripts/microvm-image/rootfs/` bakes a standard package set for coding and
-productivity workloads into the tool-VM (matplotlib/pandas/scipy, office + PDF
-libraries, OCR, LibreOffice headless, fonts, …) so agents do not pay a runtime
-install delay. By default it creates a fresh Debian bookworm rootfs using
-`debootstrap` and the pinned snapshot in
-`scripts/microvm-image/rootfs/debian-rootfs.lock`, then applies `apt-std.txt`,
-the pinned `requirements-std.txt`, and `config/`.
+The [rootfs source directory](../../runner/scripts/microvm-image/rootfs/README.md)
+defines the coding and document-processing toolset. Select exactly one explicit
+immutable source: a content-addressed OCI reference or the committed declarative
+Debian image definition. There is no default source selection.
+
+Set the required inputs described by that directory and
+`runner/scripts/microvm-image/build.sh --help`, then run:
 
 ```sh
-just build-microvm-images-std
+just -f runner/Justfile build-microvm-images-std
 ```
 
-The rootfs builder consumes exactly one explicit immutable source: a content-addressed OCI reference or the declarative Debian image definition. It writes `rootfs-source-manifest.json`, `rootfs-debian-packages.lock`, `rootfs-python.freeze`, and the Debian and Python license inventories into the prepared source. The signed-image builder copies them into the artifact directory and binds every digest from `manifest.json`.
-
-The package lists are the tracked source of truth; edit them and rerun to change
-the set. Apt determinism comes from the locked Debian snapshot, and pip
-determinism comes from pinned top-level requirements plus the generated freeze
-file. See `scripts/microvm-image/rootfs/README.md`.
+`secondbox-apt-packages.txt`, `secondbox-python-requirements.txt`, and `config/`
+are the package/configuration inputs. The builder writes the source manifest,
+Debian package lock, Python freeze, and license inventories. The signed image
+manifest binds those digests. Edit the tracked inputs and rebuild to change
+the toolset; updating the Runner binary alone does not change a signed guest.
 
 ## CI artifact evidence
 
-CI publishes artifact provenance through the Host-owned evidence command:
+From the `runner/` module, record artifact evidence with:
 
 ```sh
-go run ./runner/cmd/secondbox-artifact-evidence \
+go run ./cmd/secondbox-artifact-evidence \
   --artifacts "$SECONDBOX_RUNNER_MICROVM_OUT_DIR" \
   --out /path/to/new/firecracker-artifacts.json
 ```

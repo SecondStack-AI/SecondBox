@@ -1,6 +1,9 @@
 # Plan: Attributed command execution
 
-Status: design agreed with Fable 5.1; implementation submitted in PR #123. Exact-release-commit qualification and publication are pending.
+## Archive outcome
+
+Implemented in `0d7b377` (#123), with connection-close termination corrected in `5739d46` (#125). The feature is included in the source history for v0.14.0. The original unchecked implementation checklist is retained as history, not an assertion that every proposed adversarial experiment or downstream rollout was completed. Current contracts are in [Profiles and authorization](../../design/profiles-and-authorization.md) and [Networking and ports](../../design/networking-and-ports.md).
+
 Provide trusted network attribution for one command and its descendants without making guest code an identity authority.
 The application retains authorization and credential custody; SecondBox supplies isolated execution and lifecycle evidence.
 No application credentials, provider names, tokens, or integration policies enter SecondBox.

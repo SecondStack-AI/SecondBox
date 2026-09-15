@@ -1,12 +1,16 @@
 # Plan: Linux-First Mergeable Microsandbox Backend Spike
 
+## Archive outcome
+
+Merged in `7ac0a84` (#96). The dual-platform functional spike is closed with the signing limitation recorded below; Microsandbox remains experimental. This archive does not claim production macOS signing or notarization qualification.
+
 > **Execution status (2026-08-14): Tasks 0L through 9M and every verifiable Task 10M functional
 > gate passed.** The final suites passed 22 scenarios on Apple Silicon Microsandbox, 22 scenarios
 > on Linux Microsandbox, and 22 scenarios on Linux Firecracker. The Linux rerun used a freshly
 > built bundle from the post-macOS patched tree. Production or repository signing cannot be
 > qualified on `mini1`; ad-hoc signing used only to execute a local binary is not signing
 > verification. Microsandbox remains experimental. See
-> [Task 10M qualification evidence](evidence/2026-08-14-microsandbox-task-10-qualification.md).
+> [Task 10M qualification evidence](../evidence/2026-08-14-microsandbox-task-10-qualification.md).
 
 Add Microsandbox as an explicitly selected experimental SecondBox compute backend alongside
 Firecracker. The finished spike must run the same durable Sandbox and complete data-plane lifecycle
@@ -305,7 +309,7 @@ backend-specific public operation surface.
 - `just test-microsandbox-linux`
 - `just test-firecracker`
 
-Evidence: [Task 5L data-plane qualification](evidence/2026-08-13-microsandbox-task-5-data-plane.md).
+Evidence: [Task 5L data-plane qualification](../evidence/2026-08-13-microsandbox-task-5-data-plane.md).
 
 ### Task 6L: Translate network policy and complete lifecycle evidence
 
@@ -336,7 +340,7 @@ SecondBox's fail-closed resolved-policy contract and bounded operational evidenc
 - `just lint`
 - `just test`
 
-Evidence: [Task 6L network and lifecycle qualification](evidence/2026-08-13-microsandbox-task-6-network-lifecycle.md).
+Evidence: [Task 6L network and lifecycle qualification](../evidence/2026-08-13-microsandbox-task-6-network-lifecycle.md).
 
 ### Task 7L: Qualify the complete Linux vertical slice
 
@@ -380,7 +384,7 @@ work.
 - `just test-scenario-microsandbox-linux`
 - `just test-scenario`
 
-Evidence: [Task 7L Linux vertical-slice qualification](evidence/2026-08-13-microsandbox-task-7-linux-qualification.md).
+Evidence: [Task 7L Linux vertical-slice qualification](../evidence/2026-08-13-microsandbox-task-7-linux-qualification.md).
 
 ### Task 8M: Prove the completed Linux mechanisms on Apple Silicon
 
@@ -415,7 +419,7 @@ does not redesign shared contracts.
 - `just test-microsandbox-probe-macos`
 - `git diff --check`
 
-Evidence: [Task 8M Apple Silicon feasibility](evidence/2026-08-13-microsandbox-task-8-macos-feasibility.md).
+Evidence: [Task 8M Apple Silicon feasibility](../evidence/2026-08-13-microsandbox-task-8-macos-feasibility.md).
 
 ### Task 9M: Port WorkspaceStore, runner composition, and packaging to macOS
 
@@ -455,7 +459,7 @@ nftables code.
 - `just test-workspacestore-linux`
 - `just test-microsandbox-linux`
 
-Evidence: [Task 9M macOS port qualification](evidence/2026-08-13-microsandbox-task-9-macos-port.md).
+Evidence: [Task 9M macOS port qualification](../evidence/2026-08-13-microsandbox-task-9-macos-port.md).
 
 ### Task 10M: Qualify macOS and close the dual-platform spike
 
@@ -508,9 +512,9 @@ The spike is complete only when both real-host suites pass with comparable evide
 - `just test-scenario-microsandbox-macos`
 - `just test-scenario`
 
-Evidence: [Task 10M qualification](evidence/2026-08-14-microsandbox-task-10-qualification.md),
-[macOS scenario result](evidence/2026-08-14-microsandbox-task-10-macos-scenario.json),
-[macOS cold starts](evidence/2026-08-14-microsandbox-task-10-macos-cold-starts.json),
-[Linux Microsandbox scenario](evidence/2026-08-14-microsandbox-task-10-linux-scenario.json),
-[Linux cold starts](evidence/2026-08-14-microsandbox-task-10-linux-cold-starts.json), and
-[Firecracker scenario](evidence/2026-08-14-microsandbox-task-10-firecracker-scenario.json).
+Evidence: [Task 10M qualification](../evidence/2026-08-14-microsandbox-task-10-qualification.md),
+[macOS scenario result](../evidence/2026-08-14-microsandbox-task-10-macos-scenario.json),
+[macOS cold starts](../evidence/2026-08-14-microsandbox-task-10-macos-cold-starts.json),
+[Linux Microsandbox scenario](../evidence/2026-08-14-microsandbox-task-10-linux-scenario.json),
+[Linux cold starts](../evidence/2026-08-14-microsandbox-task-10-linux-cold-starts.json), and
+[Firecracker scenario](../evidence/2026-08-14-microsandbox-task-10-firecracker-scenario.json).

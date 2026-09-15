@@ -32,11 +32,7 @@ Rebuilding the bundle rotates its identity. The guest agent, `/init`, and the mi
 - A runner refuses any Assignment whose pinned component digests differ from its own locally verified manifest, so the bundle install, the signed asset catalog update, and the standard-resource apply are one coordinated step.
 - Announce the rotation in the release notes, naming what requires the new bundle and what still works against an older verified one.
 
-v0.3.0 rotated the anchor and the bundle: snapshot-resume needs a guest agent that supports template mode and the one-time assignment bind, and both live in the rootfs.
-
-v0.7.0 through v0.10.1 carry the v0.6.0 Firecracker microVM bundle and trust anchor forward unchanged. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact previously published signed bundle; do not rebuild it from other guest sources. A different runtime or toolchain component-manifest digest makes the v1 guided updater reject these releases because existing Sandboxes remain pinned to their immutable Profile revisions. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
-
-v0.12.0 rotated the bundle and signing authority again; v0.12.0 through v0.14.0 use the [v0.12.0 identities and reinstall boundary](../releases/v0.12.0.md). The checked-in release example pins that bundle and the independently provisioned public key.
+The [v0.12.0 release](../releases/v0.12.0.md) rotated the Firecracker bundle and signing authority. [v0.14.0](../releases/v0.14.0.md) retains that bundle and anchor but requires a fresh database and Runner storage root. Consult the target release notes before choosing bundle inputs. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact previously published signed bundle; do not rebuild it from other guest sources. A different runtime or toolchain component-manifest digest makes the v1 guided updater reject an update because existing Sandboxes remain pinned to their immutable Profile revisions. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
 
 ## Automated release
 
@@ -57,7 +53,7 @@ docker buildx create --name secondbox-suite-release --driver docker-container \
   --driver-opt image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 ```
 
- Create the configured
+Create the configured
 `RELEASE_OUTPUT_ROOT` and `SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT` parents;
 the latter must be on Btrfs or XFS and traversable by the system libvirt account.
 The checked-in examples describe the reviewed release host using public paths;
@@ -67,10 +63,10 @@ review and provision every path for another host.
 just qualify                  # PR gates and four independent Firecracker shards
 just qualify --tier release   # gates, sharded Firecracker and local gVisor host
 just nightly                  # full scenarios and no-KVM gVisor pod suite
-# After merging, from clean main:
-just release VERSION           # lean amd64 release
-just release VERSION --full    # alternative: nightly matrix and arm64 images
-just release VERSION --resume  # after a gate-only failure: reuse the retained build
+# After merging, from a clean checkout of origin/main:
+just release VERSION          # lean amd64 release
+just release VERSION --full   # alternative: nightly matrix and arm64 images
+just release VERSION --resume # recover a gate-only failure using the retained build
 ```
 
 Release preflight checks source, tag identity, inputs, the pinned Go/protoc and
@@ -79,10 +75,10 @@ headroom (200 GiB free in each output/workspace filesystem and enough available
 memory for a guest plus 16 GiB). It creates a local tag only when absent and
 never pushes it. Existing tags must identify HEAD. All three versioned output
 directories must be absent; failed output is retained for diagnosis, so archive
-or remove only your own failed run's directories before retrying. When a run
-failed only in a gate after the build and every scenario stage passed,
-`--resume` keeps the retained `VERSION-build` and its commit-exact evidence,
-requalifies the gates alone, and continues from the candidate.
+or remove only your own failed run's directories before starting a fresh run.
+When only a gate failed after the build and every scenario stage passed,
+`--resume` reuses `VERSION-build` and its commit-exact evidence, reruns the gates,
+and continues from candidate staging.
 
 Qualification and the unbound artifact build run concurrently. Once both pass,
 staging binds commit-exact Firecracker and gVisor evidence into the candidate.
@@ -113,7 +109,7 @@ systemd-run --user --unit="secondbox-suite-release-VERSION-$(date +%s)" --collec
   --property="StandardOutput=file:$PWD/.tmp/release-console.log" \
   --property=StandardError=inherit --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
   --setenv="SECONDBOX_TEST_DATABASE_URL=${SECONDBOX_TEST_DATABASE_URL:-}" \
-  /usr/bin/just release VERSION           # append --full or --resume as needed
+  /usr/bin/just release VERSION
 ```
 
 Reserve the KVM host before starting, and the dedicated no-KVM VM for `--full`. Do not stop
@@ -124,68 +120,26 @@ are `RELEASE_OUTPUT_ROOT/VERSION-candidate` and `RELEASE_OUTPUT_ROOT/VERSION`;
 command prints the exact tag-push and `release-upload` commands for explicit
 publication. Neither command is run automatically.
 
-## Appendix: manual release on hosts without automation
+## Publication
 
-Mechanics reference for exceptional operator-run hosts. The project release skill
-uses `just release` and its documented recovery sequence, not this manual chain.
+After `just release VERSION` succeeds, review its final manifest and qualification
+logs, then use the exact tag-push and upload continuation it prints. Both must
+refer to that successful run's version and output directory. Do not create a
+release through independent tag, candidate, or upload commands.
 
+Upload reads the tag's `docs/releases/vVERSION.md` when present, otherwise uses
+a placeholder; an optional third `NOTES_FILE` argument supplies the body. It
+appends the install and SDK footer and refreshes the draft on retry. The publisher
+preserves that body. Use the [release skill](../../.agents/skills/secondbox-release/SKILL.md)
+for release decisions, recovery, and verification.
 
-Tag the clean commit. On the qualified host, run the unfiltered scenario suite, stage the same commit, then upload the draft:
-
-```sh
-# Tag locally only; the tag is pushed right before the upload, once every
-# qualification has passed, so a failed qualification never leaves an
-# unusable public module tag.
-git tag v0.10.1
-
-export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
-export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$artifact_target"
-export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$artifact_public_key"
-export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$artifact_public_key_sha256"
-export SECONDBOX_RUNNER_WORKSPACE_ROOT='/srv/secondbox/qualification/workspaces'
-just test-scenario
-
-# On the no-KVM qualification host (root, Docker with Compose and Buildx, a
-# node-local k3s for the pod placement), at the same tag: assemble the build
-# directory as gvisor-runtime.md describes (bin/runsc, bin/secondbox-guest-agent,
-# rootfs), export the scenario inputs, run both suites, then copy both evidence
-# files to the release host (defaults: .tmp/gvisor-linux-scenario-qualification-evidence.json
-# and .tmp/gvisor-pod-linux-scenario-qualification-evidence.json).
-export SECONDBOX_GVISOR_LINUX_BUILD=/absolute/path/to/build
-export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
-export SECONDBOX_RUNNER_WORKSPACE_ROOT=/absolute/path/on/reflink-fs/gvisor-scenario-workspaces
-just test-scenario-gvisor
-just test-scenario-gvisor-pod
-export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE=/protected/releases/evidence/gvisor-linux-scenario-qualification-evidence.json
-export SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE=/protected/releases/evidence/gvisor-pod-linux-scenario-qualification-evidence.json
-
-export SECONDBOX_RELEASE_POSTGRES_IMAGE='docker.io/library/postgres@sha256:REVIEWED_DIGEST'
-just release-candidate 0.10.1 /protected/releases/installer-candidate
-
-export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
-export SECONDBOX_INSTALLER_RELEASE_DIRECTORY=/protected/releases/installer-candidate
-export SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT=/srv/secondbox/qualification/installer-workspaces
-qualification_image=/protected/releases/images/ubuntu-24.04-installer-qualification.img
-qualification_image_sha256="$(scripts/prepare-installer-qualification-image.sh "$qualification_image")"
-export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE="$qualification_image"
-export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256="$qualification_image_sha256"
-just test-installer-qualified
-
-just release-stage 0.10.1 /protected/releases/secondbox-0.10.1
-git push origin refs/tags/v0.10.1
-just release-upload 0.10.1 /protected/releases/secondbox-0.10.1
-```
-
-`test-scenario` writes `.tmp/scenario-qualification-evidence.json` only after the full suite and cleanup pass. Its `sourceCommit` must equal `HEAD`, so run it after the release pull request merges and before staging; do not reuse evidence from the review branch. `release-candidate` then builds an explicitly non-publishable manifest with the reviewed, digest-pinned bundled-service images and no installer-qualification claim. The repository-owned QEMU/libvirt driver tests that candidate and writes `.tmp/installer-qualification-evidence.json` after its clean-host, reboot, resume, uninstall, purge, and real-microVM assertions pass. The helper downloads the pinned Ubuntu qualification image only when the target path is absent and prints its reviewed SHA-256 for the explicit driver input; retain that image for subsequent releases or choose a new absent target after the repository pin changes. The candidate and final manifest share a qualification-subject digest: every final manifest field participates except the candidate marker and installer-evidence reference. `release-stage` requires both evidence documents, rejects evidence for different release bytes, and emits the publishable final manifest. `release-upload` creates a draft with notes from `docs/releases/vVERSION.md` at
-the tag (or an explicit third `NOTES_FILE` argument), appends the fenced install and SDK
-footer, and dispatches the GitHub workflow. Retries refresh the draft body;
-the publisher preserves it; the workflow does not rebuild or qualify anything.
-
-Watch the dispatched run with:
+Watch the dispatched workflow with:
 
 ```sh
 gh run list --workflow release.yml --limit 1
 gh run watch --exit-status
 ```
 
-If publication fails, fix the cause and run `just release-upload` again while the release is still a draft. Never move a published tag; use a new patch version instead.
+If publication fails while the release is still a draft, fix the cause and retry
+the same upload from the successful staged run. Never move a published tag;
+use a new patch version for changed artifacts.

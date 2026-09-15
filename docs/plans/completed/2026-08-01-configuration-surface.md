@@ -37,7 +37,7 @@ Two symptoms show the conflation is not cosmetic:
 - `config.go:187` rejects a session byte bound smaller than the frame byte bound,
   and `config.go:286` rejects a protocol minimum above the maximum. The code
   already owns these relationships; it declines to own the values.
-- `docs/plans/2026-07-31-direct-port-data-plane.md` records
+- `docs/plans/completed/2026-07-31-direct-port-data-plane.md` records
   `SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS` "at the deployed 250 ms"
   costing roughly 250 ms mean and 500 ms worst case per round trip, making SSH
   connection setup cost seconds. A tuning constant promoted to required operator
@@ -259,7 +259,7 @@ separate change.
 
 - `SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS` and
   `SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS`.
-  `docs/plans/2026-07-31-relay-data-plane-wakeups.md` states both "remain
+  `docs/plans/completed/2026-07-31-relay-data-plane-wakeups.md` states both "remain
   mandatory recovery bounds" rather than "tunable optimisations", and lists
   "reducing, renaming, or repurposing either configured poll interval" as a
   non-goal. Giving them defaults does not reduce, rename, or repurpose them, and

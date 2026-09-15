@@ -10,17 +10,17 @@ Every response carries `X-Request-ID`; a valid client-supplied `X-Request-ID` is
 
 `Idempotency-Key` is required for declared create and state-changing operations, including the canonical POST, PATCH, PUT, and DELETE mutations that expose it. Its scope is asserted tenant, subject, operation, and target. Repeating the same key and canonical payload returns the original durable result and sets `Idempotency-Replayed: true`; reusing it with a different canonical payload returns `409 idempotency_conflict`. The record and mutation commit in one PostgreSQL transaction. Records expire after the documented retention interval and outlive ordinary HTTP retries.
 
-Streaming Exec and Terminal cancellation apply that key contract independently of session state. The cancellation frame, the transition to `closing`, and the response snapshot commit atomically. Repeating a key returns that exact snapshot even after the runner has acknowledged cancellation and the live session is `closed`. A different key is a new accepted request with `Idempotency-Replayed: false`, including when the session is already closing or closed; state idempotency is not request replay.
+Streaming Exec and Terminal cancellation apply that key contract independently of session state. The payload-free cancellation command, the transition to `closing`, and the response snapshot commit atomically. Repeating a key returns that exact snapshot even after the runner has acknowledged cancellation and the live session is `closed`. A different key is a new accepted request with `Idempotency-Replayed: false`, including when the session is already closing or closed; state idempotency is not request replay.
 
 Errors use `application/problem+json` with stable `type`, `title`, `status`, `code`, `requestId`, `retryable`, and bounded structured `details`. Messages are diagnostic, not machine contracts. Authentication, authorization, quota, admission, generation, lease, guest, runner, infrastructure, and transport failures have distinct codes.
 
 ## Resource surface
 
-The HTTP resources cover Profiles and revisions, RunnerPools, Runners, Sandboxes, Operations, Leases, exec sessions, terminal sessions, files, snapshots, and port sessions. Runner projections never appear inside Sandbox responses.
+The HTTP resources cover Tenants, Subjects, controller and application authorities, policy and usage, Profiles and revisions, RunnerPools, Runners, Sandboxes, Operations, Leases, exec sessions, terminal sessions, files, Snapshots, and port sessions. Runner projections never appear inside Sandbox responses.
 
 Snapshot creation is a lifecycle-scoped, revision-guarded, idempotent reflink of the stopped Sandbox's current local Workspace image. Snapshot create, delete, and restore return durable Operations; list and get use read scope. Snapshot responses contain logical size, creation time, optional expiry, lifecycle state, and bounded metadata. They contain no Workspace-image checksum, home Runner, host path, provider reference, or storage key.
 
-`POST /v1/sandboxes` accepts only:
+`POST /v1/sandboxes` requires `profile` and `metadata`:
 
 ```json
 {
@@ -31,7 +31,16 @@ Snapshot creation is a lifecycle-scoped, revision-guarded, idempotent reflink of
 }
 ```
 
-Tenant and subject ownership come from the trusted request headers. A Sandbox creation request cannot override backend, image, resources, lifecycle, storage, network, timeouts, ports, runner pool, placement, generation, or Instance state.
+Creation also accepts optional `resources` (`vcpuCount`, `memoryBytes`, and
+`workspaceBytes`) within the Profile ceilings, and `sourceSnapshotId` to clone
+a ready Snapshot into a new Sandbox on the same home Runner. Clone admission
+requires the source disk capacity and compatible asset identity. See
+[Profiles and authorization](profiles-and-authorization.md) for sizing rules.
+
+Tenant and Subject ownership come from the authenticated request context.
+The request cannot select a backend, image, network, port policy, runner pool,
+placement, generation, or Instance state. Effective lifecycle comes from the
+pinned Profile and any applicable delegated Subject policy.
 
 ## Lifecycle semantics
 
@@ -56,7 +65,17 @@ Both forms accept bounded cwd, environment, stdin, deadline, and output limits. 
 
 Terminal outcomes are a closed union: `exited`, `spawn_failed`, `deadline_exceeded`, `cancelled`, `output_exhausted`, and `infrastructure_failed`. Spawn failure further distinguishes executable not found, permission denied, invalid cwd, and malformed executable. Service outcomes are never synthetic exit codes.
 
-Streaming exec creates a durable, generation-fenced session and returns an opaque WebSocket URL using `secondbox.exec.v1`. The attach request repeats API authentication and the Sandbox generation. Every stdin frame carries canonical base64 data and an explicit `endOfInput` boolean. A true value closes process stdin after the frame's bytes; an empty payload is valid only for this EOF frame, and later stdin is rejected. Ordered stdin, output-credit, and cancel frames are durably relayed to the current Assignment; exact retransmission of one persisted client sequence is idempotent, while a changed duplicate or a gap fails. Stdout, stderr, and the single terminal outcome remain replayable across a client reconnect. No output is admitted beyond granted credit or the negotiated outstanding window. Disconnect requests guest cancellation without stopping or deleting the Sandbox. If the output limit is reached after bytes were emitted, those ordered partial bytes are delivered before `output_exhausted`.
+Streaming exec creates a durable, generation-fenced session and returns an
+opaque WebSocket URL using `secondbox.exec.v1`. Attachment repeats API
+authentication and the Sandbox generation. Stdin frames carry canonical base64
+data and an explicit `endOfInput` boolean. A true value closes stdin after those
+bytes; an empty payload is valid only for EOF, and later stdin is rejected.
+Input, credit, cancellation, output, and the terminal outcome flow through a
+bounded live stream. PostgreSQL retains session lifecycle, accounting, and
+terminal state, not payload frames. Exec output has no durable reconnect replay.
+Disconnect cancels the command; ordinary execution leaves the Sandbox intact,
+while an attributed generation retires its Instance. If the output limit is
+reached after bytes were emitted, those bytes precede `output_exhausted`.
 
 PTY creation pins the current tenant, subject, Sandbox generation, ready Assignment fence, active Lease, and ProfileRevision policy into one stable Terminal session ID. The returned endpoint accepts only authenticated `secondbox.terminal.v1` WebSocket upgrades for the same generation, and PostgreSQL grants only one active attachment. Client text frames are exactly one canonical-base64 `terminal_input`, positive `credit`, bounded `resize`, or `cancel` with one gap-free sequence shared across reconnects. The descriptor's `nextClientSequence` comes from the durable session producer-sequence projection. The Runner retains output and the single terminal outcome in a per-session in-memory replay ring bounded by the pinned stream window; a reconnect supplies its last acknowledged output sequence and receives exactly the later frames. A cursor older than the ring fails explicitly. The ring does not survive a Runner restart, which also terminates the microVM and leaves no useful PTY to reattach. Output cannot exceed credit, the pinned outstanding window, or the pinned response limit.
 

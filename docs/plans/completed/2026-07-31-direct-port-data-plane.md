@@ -8,6 +8,10 @@ provenance: SSH and VS Code latency evidence from the SecondStack ssh-piper ingr
 
 # Plan: Direct Port Data Plane
 
+## Archive outcome
+
+The direct Port transport is implemented and latency-qualified. SSH and VS Code Remote-SSH were not qualified by this effort; the Result section retains that limitation. Current transport behavior is documented in [Direct data plane](../../design/direct-data-plane.md).
+
 ## Outcome
 
 Remove PostgreSQL from the Port byte path without weakening Port admission

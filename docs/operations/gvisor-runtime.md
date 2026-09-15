@@ -77,9 +77,8 @@ rootfs/
   It rejects symlinks and incompatible existing node types and is idempotent. The runner only
   validates this contract; it never repairs or mutates a flat root after the resulting digest is
   pinned. The digest must equal the materialization's `flatRootDigest`. The qualification drivers
-  below consume and prepare this same build directory before calculating identity: the CI
-  `buildx` image publishes nothing an operator can qualify from, so assemble the directory locally
-  for both enrollment and qualification.
+  below consume and prepare this same build directory before calculating identity: local build directory is for source qualification. For release enrollment, use the
+  published `runner-gvisor` and `gvisor-artifacts` images as described below.
 
 ## Operator-owned resources
 
@@ -376,7 +375,9 @@ just test-gvisor-pod
 just test-scenario-gvisor-pod
 ```
 
-The qualification wrappers refuse hosts that expose `/dev/kvm`, prepare and validate the flat-root
-contract before deriving its digest, verify the `runsc` binary against the reviewed pin, derive
-the materialization from the build directory, and run the complete control-plane scenario suite
-against the gVisor runner container.
+Pod qualification requires a node without `/dev/kvm`. The host scenario driver
+also runs on a KVM-capable release host; it still selects gVisor and systrap,
+without using KVM. The wrappers prepare and validate the flat root, verify the
+pinned `runsc`, and derive materialization identity from the build directory.
+Scenario coverage follows the selected release or nightly tier; see
+[scenario qualification](scenario-qualification.md).
