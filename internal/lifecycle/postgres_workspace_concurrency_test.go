@@ -224,7 +224,10 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			t.Fatal(err)
 		}
 		binding := contracts.AttributedExecutionRequest{AuthorizationRef: "command-authorization", ExpiresAt: now.Add(20 * time.Second)}
-		metadata, err := json.Marshal(binding.AttributedExecutionMetadata())
+		metadata, err := json.Marshal(contracts.MergeExecutionImageMetadata(
+			contracts.ExecutionImage{Reference: "registry.example/secondbox/lifecycle-test:stable"},
+			&binding,
+		))
 		if err != nil {
 			t.Fatal(err)
 		}

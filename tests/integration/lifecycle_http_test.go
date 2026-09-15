@@ -235,11 +235,15 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	const requestID = "request-correlation-http-1"
+	requestBody, err := json.Marshal(contracts.StartSandboxRequest{Image: testExecutionImage()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := http.NewRequestWithContext(
 		t.Context(),
 		http.MethodPost,
 		server.URL+"/v1/sandboxes/"+sandbox.ID+":start",
-		nil,
+		bytes.NewReader(requestBody),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +252,7 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "request-correlation-start")
 	request.Header.Set("If-Match", `"revision-`+strconv.FormatInt(sandbox.Revision, 10)+`"`)
 	request.Header.Set("X-Request-ID", requestID)
+	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
