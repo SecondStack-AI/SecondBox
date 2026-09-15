@@ -1015,7 +1015,7 @@ func TestHTTPAuthenticationStrictCreateAndFixedCardinalityMetrics(t *testing.T) 
 	assertHTTPStatusAndClose(t, doHTTP(t, malformedRefs), http.StatusBadRequest)
 
 	response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "http-create", map[string]any{
-		"profile": profile.Name, "metadata": map[string]string{"project-name": project.Name},
+		"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{"project-name": project.Name},
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("POST /v1/sandboxes status = %d body=%s", response.StatusCode, readResponse(t, response))

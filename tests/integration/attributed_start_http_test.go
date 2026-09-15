@@ -80,7 +80,7 @@ func TestAttributedStartHTTPAdmissionAndReplay(t *testing.T) {
 			"/v1/sandboxes/"+sandbox.ID+":start", "attributed-http-invalid", strconv.FormatInt(sandbox.Revision, 10), "", invalid)
 		assertProblem(t, response, http.StatusBadRequest, "invalid_request")
 	}
-	body := contracts.StartSandboxRequest{AttributedExecution: &contracts.AttributedExecutionRequest{
+	body := contracts.StartSandboxRequest{Image: testExecutionImage(), AttributedExecution: &contracts.AttributedExecutionRequest{
 		AuthorizationRef: "command-http", ExpiresAt: time.Date(2026, 7, 28, 12, 0, 45, 0, time.UTC),
 	}}
 	var operationID string

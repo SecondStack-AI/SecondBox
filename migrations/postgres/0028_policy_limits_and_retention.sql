@@ -1,7 +1,7 @@
 ALTER TABLE secondbox.subject_quotas
     ALTER COLUMN max_sandboxes DROP NOT NULL,
     ALTER COLUMN max_active_instances DROP NOT NULL,
-    ALTER COLUMN max_cpu_millis DROP NOT NULL,
+    ALTER COLUMN max_vcpu_count DROP NOT NULL,
     ALTER COLUMN max_memory_bytes DROP NOT NULL,
     ALTER COLUMN max_snapshots DROP NOT NULL,
     ALTER COLUMN max_port_sessions DROP NOT NULL,
@@ -10,7 +10,7 @@ ALTER TABLE secondbox.subject_quotas
 ALTER TABLE secondbox.tenant_quotas
     ALTER COLUMN max_sandboxes DROP NOT NULL,
     ALTER COLUMN max_active_instances DROP NOT NULL,
-    ALTER COLUMN max_cpu_millis DROP NOT NULL,
+    ALTER COLUMN max_vcpu_count DROP NOT NULL,
     ALTER COLUMN max_memory_bytes DROP NOT NULL,
     ALTER COLUMN max_snapshots DROP NOT NULL,
     ALTER COLUMN max_port_sessions DROP NOT NULL,
