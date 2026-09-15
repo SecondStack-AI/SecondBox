@@ -46,6 +46,26 @@ pinned Profile and any applicable delegated Subject policy.
 
 Create, start, drain, stop, Snapshot create/delete/restore, and Sandbox delete are idempotent asynchronous mutations that return `202` with a durable `Operation`. `GET /v1/operations/{id}` is the canonical polling surface. `wait` is a bounded long-poll for declared Sandbox states and never changes activity.
 
+`DELETE /v1/sandboxes/{sandboxId}` can return `409 workspace_mutation_conflict`
+while a stop owns the Workspace mutation slot, including a stop caused by idle
+timeout or maximum duration. The request is rejected: no delete Operation or
+idempotency result is recorded, and the stop continues unchanged. The conflict
+lasts through compute detach and the local generation receipt until PostgreSQL
+commits the stopped generation on the successful path. A receipt alone is not
+completion; terminal stop failure requires inspecting the failure and recovery
+state rather than assuming deletion can finish.
+
+For this case, wait for stop progress, re-read the Sandbox, and retry DELETE with
+its current `ETag` in `If-Match` and the same `Idempotency-Key`. Bound retries and
+backoff by the caller's deadline; runner unavailability need not clear within
+that deadline. A stale `If-Match` returns `412 precondition_failed` before the
+mutation-slot check and also requires a fresh read. The shared
+`workspace_mutation_conflict` problem currently carries `retryable: false`;
+this explicit read-and-retry procedure applies to an outstanding stop, and does
+not imply every use of that error code will resolve automatically. Once DELETE
+returns `202`, poll its Operation; an identical accepted request replays that
+Operation even after the Sandbox revision advances.
+
 Start accepts an optional `attributedExecution` body member with `authorizationRef` and `expiresAt`. Omission requests ordinary execution; explicit null or malformed attribution is invalid. The binding participates in idempotency, so reusing a key with a different command reference conflicts. Profile policy supplies routing and bounds, and an unsupported home Runner refuses admission. The Go SDK accepts `StartSandboxRequest` before `LifecycleOptions`; the TypeScript start options include the same optional member.
 
 `get` and `list` return durable projections. `inspect` returns the latest generation-fenced guest heartbeat and active-session evidence persisted by the runner path; it does not renew activity or synthesize a fresh observation while no synchronous runner-effect broker exists. `ping` reports that same persisted guest liveness without touch. `touch` explicitly renews useful activity for the current generation and may carry a Lease. `drain` rejects new work immediately, waits only through the profile grace, and then allows stop to fence remaining work. `stop` removes compute without deleting the Sandbox or workspace. `delete` never occurs on connection loss.
