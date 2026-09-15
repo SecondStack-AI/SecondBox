@@ -54,7 +54,7 @@ func TestScenarioCLITargetShape(t *testing.T) {
 			}
 		})
 	}
-	if got := cli.success(t, ctx, "run", profile.Name, "--keep", "--name", name, "--cpus", "1", "--memory", "1GiB", "--disk", "33MiB", "--", "/bin/sh", "-c", "echo hello"); got != "hello\n" {
+	if got := cli.success(t, ctx, "run", profile.Name, "--image", "registry.example/secondbox/test-agent:stable", "--keep", "--name", name, "--cpus", "1", "--memory", "1GiB", "--disk", "33MiB", "--", "/bin/sh", "-c", "echo hello"); got != "hello\n" {
 		t.Fatalf("SecondBox scenario CLI run stdout=%q", got)
 	}
 	original := scenarioCLIJSON[sb.Sandbox](t, cli.success(t, ctx, "--output", "json", "get", name))
@@ -62,7 +62,7 @@ func TestScenarioCLITargetShape(t *testing.T) {
 		t.Fatalf("SecondBox scenario CLI get unexpected Sandbox: %+v", original)
 	}
 	originalHandle := sb.NewSandboxHandle(fixture.subject, original)
-	refused := cli.run(t, ctx, "run", profile.Name, "--cpus", "999", "--", "true")
+	refused := cli.run(t, ctx, "run", profile.Name, "--image", "registry.example/secondbox/test-agent:stable", "--cpus", "999", "--", "true")
 	if refused.exitCode == 0 || refused.stdout != "" || !strings.Contains(refused.stderr, "resources_exceed_profile") || !strings.Contains(strings.ToLower(refused.stderr), "ceiling") {
 		t.Fatalf("SecondBox scenario CLI resource refusal: %+v", refused)
 	}

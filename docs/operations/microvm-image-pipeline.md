@@ -39,6 +39,22 @@ just -f runner/Justfile verify-microvm-images \
 
 The verifier never trusts the artifact's bundled `signing.pub`. The trusted key and fingerprint are mandatory; an unsigned bundle or a missing, malformed, or mismatched trust anchor fails verification.
 
+## Client execution image builder
+
+`scripts/build-client-execution-image.sh` converts one digest-pinned OCI userspace into a signed execution image.
+The script uses the same rootfs, guest-agent, kernel, manifest, and signature pipeline as release artifacts.
+It then packages the exact artifact allowlist under `/secondbox-runner-microvm` in an OCI image.
+
+Use `deploy/client-execution-image-builder.Dockerfile` when the build host does not have the required build tools.
+Run that container with the Docker socket, a writable output directory, and the source kernel directory mounted.
+Set every `SECONDBOX_CLIENT_IMAGE_*` variable explicitly.
+The source reference must contain a digest.
+The source commit must be the exact SecondBox revision used by the builder image.
+
+The signing private key stays outside the OCI image.
+The Runner receives only the public key and its DER SHA-256 fingerprint.
+The output image is a distribution artifact, not a normal Linux process image.
+
 ## Release distribution and host materialization
 
 The signed bundle is approximately 11 GB and is not embedded in the source-less GitHub release zip. Local release preparation reads an independently signed bundle from the absolute path configured by `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR`, verifies it against `SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256`, and builds the exact allowlist as the dedicated `microvm-artifacts` OCI archive. The hosted publisher pushes that supplied archive without rebuilding it. Image labels and the artifact manifest bind the verified public-key fingerprint and `manifest.json` digest.

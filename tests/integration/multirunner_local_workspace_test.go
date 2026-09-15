@@ -107,7 +107,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		t.Context(),
 		principal,
 		"multirunner-create-a",
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  profile.Name,
 			Metadata: map[string]string{"fixture": "runner-a"},
 		},
@@ -158,7 +158,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		t.Context(),
 		principal,
 		"multirunner-create-b",
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  profile.Name,
 			Metadata: map[string]string{"fixture": "runner-b"},
 		},
@@ -216,6 +216,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		sandboxA.ID,
 		"multirunner-start-draining-home",
 		currentA.Revision,
+		testExecutionImage(),
 	); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		t.Fatalf("start on draining home error = %v, want ErrHomeRunnerUnavailable", err)
 	}
@@ -242,6 +243,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		sandboxA.ID,
 		"multirunner-start-offline-home",
 		currentA.Revision,
+		testExecutionImage(),
 	); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		t.Fatalf("start on offline home error = %v, want ErrHomeRunnerUnavailable", err)
 	}
@@ -270,6 +272,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		sandboxA.ID,
 		"multirunner-start-returned-home",
 		currentA.Revision,
+		testExecutionImage(),
 	)
 	if err != nil {
 		t.Fatalf("start after same home runner returned: %v", err)

@@ -25,7 +25,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "lifecycle-http-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	}
 	deleteSandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "lifecycle-http-delete-create",
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile: profile.Name, Metadata: map[string]string{},
 		},
 	)
@@ -210,7 +210,7 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "request-correlation-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -335,7 +335,7 @@ func TestAuditTenantAttribution(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "audit-attribution-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +375,7 @@ func TestWaitInspectLeasePingAndTouchHTTPContract(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "activity-http-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)

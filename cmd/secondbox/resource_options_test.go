@@ -81,7 +81,7 @@ func TestRunAndCreateSendResources(t *testing.T) {
 			if command == "run" {
 				_, _, err = invokeRun(t, recorder, append(args, "--", "true"))
 			} else {
-				err = runLifecycleVerb(t.Context(), execTestSession(recorder.server.URL), command, args, io.Discard, recorder.server.Client())
+				err = runTestLifecycleVerb(t.Context(), execTestSession(recorder.server.URL), command, args, io.Discard, recorder.server.Client())
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -105,13 +105,13 @@ func TestCreationCeilingProblemPresentation(t *testing.T) {
 			defer server.Close()
 			var err error
 			if command == "create" {
-				err = runLifecycleVerb(t.Context(), verbTestSession(server), command, []string{"durable-coding", "--cpus", "8"}, io.Discard, server.Client())
+				err = runTestLifecycleVerb(t.Context(), verbTestSession(server), command, []string{"durable-coding", "--cpus", "8"}, io.Discard, server.Client())
 			} else {
 				args := []string{"durable-coding", "--cpus", "8", "--", "true"}
 				if command == "interactive" {
 					args = []string{"durable-coding", "--cpus", "8", "--tty"}
 				}
-				err = runRunCommand(t.Context(), verbTestSession(server), args, execCommandEnvironment{stdout: io.Discard, stderr: io.Discard, httpClient: server.Client()}, sandboxShellEnvironment{})
+				err = runTestRunCommand(t.Context(), verbTestSession(server), args, execCommandEnvironment{stdout: io.Discard, stderr: io.Discard, httpClient: server.Client()}, sandboxShellEnvironment{})
 			}
 			var api *sb.APIError
 			if !errors.As(err, &api) || api.Problem.Code != sb.ProblemCodeResourcesExceedProfile {
@@ -196,7 +196,7 @@ func TestCreateRendersResourceAlignmentRefusal(t *testing.T) {
 		_, _ = io.WriteString(w, `{"code":"invalid_request","title":"SecondBox resources.memoryBytes must use whole MiB (multiples of 1048576 bytes)","details":[{"field":"resources.memoryBytes","reason":"must use whole MiB (multiples of 1048576 bytes)"}]}`)
 	}))
 	defer server.Close()
-	err := runLifecycleVerb(t.Context(), verbTestSession(server), "create", []string{"durable-coding", "--memory", "1073741825"}, io.Discard, server.Client())
+	err := runTestLifecycleVerb(t.Context(), verbTestSession(server), "create", []string{"durable-coding", "--memory", "1073741825"}, io.Discard, server.Client())
 	if err == nil {
 		t.Fatal("unaligned request accepted")
 	}

@@ -27,6 +27,7 @@ func (r *Runner) packagedPaths() []packagedRunnerPath {
 		{"firecracker_log_directory", &r.FirecrackerLogDirectory, "/var/lib/secondbox-runner/state/firecracker-logs"},
 		{"snapshot_template_cache_root", &r.SnapshotTemplateCacheRoot, "/var/lib/secondbox-runner/state/snapshot-template-cache"},
 		{"artifact_public_key", &r.ArtifactPublicKey, "/opt/secondbox-artifacts/signing.pub"},
+		{"execution_image_public_key", &r.ExecutionImagePublicKey, "/opt/secondbox-artifacts/signing.pub"},
 		{"sandbox_network_state_directory", &r.SandboxNetworkStateDir, "/var/lib/secondbox-runner/state/network"},
 		{"network_policy_nft_path", &r.NetworkPolicyNFTPath, "/usr/sbin/nft"},
 	}

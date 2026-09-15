@@ -73,9 +73,11 @@ type BackendReadiness struct {
 
 // BackendInstance is the provider-private identity of a ready compute instance.
 type BackendInstance struct {
-	GuestFeatures    []string
-	BackendKind      string
-	BackendReference string
+	GuestFeatures           []string
+	BackendKind             string
+	BackendReference        string
+	RequestedImageReference string
+	ResolvedImageDigest     string
 }
 
 // BackendInstanceTerminal is bounded post-ready runtime evidence. It cannot
@@ -1246,15 +1248,17 @@ func (s *RunnerProtocolService) handleAssignment(
 			return &runnerprotocol.RunnerToControlPlane{
 				Message: &runnerprotocol.RunnerToControlPlane_AssignmentResult{
 					AssignmentResult: &runnerprotocol.AssignmentResult{
-						MessageId:        s.messageID(sequence),
-						Sequence:         sequence,
-						Fence:            assignment.Fence,
-						Terminal:         terminal,
-						BackendKind:      instance.BackendKind,
-						BackendReference: instance.BackendReference,
-						GuestFeatures:    append([]string(nil), instance.GuestFeatures...),
-						SafeDetail:       safeDetail,
-						Correlation:      s.assignmentCorrelation(assignment),
+						MessageId:               s.messageID(sequence),
+						Sequence:                sequence,
+						Fence:                   assignment.Fence,
+						Terminal:                terminal,
+						BackendKind:             instance.BackendKind,
+						BackendReference:        instance.BackendReference,
+						GuestFeatures:           append([]string(nil), instance.GuestFeatures...),
+						RequestedImageReference: instance.RequestedImageReference,
+						ResolvedImageDigest:     instance.ResolvedImageDigest,
+						SafeDetail:              safeDetail,
+						Correlation:             s.assignmentCorrelation(assignment),
 					},
 				},
 			}

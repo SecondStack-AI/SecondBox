@@ -423,6 +423,7 @@ type startPlan struct {
 	requestID         string
 	egressContext     *string
 	spec              contracts.ProfileRevisionSpec
+	image             contracts.PublicExecutionImage
 }
 
 func (broker *PostgresEffectBroker) scheduleAndStart(
@@ -478,7 +479,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	// startup mode travels separately, as its own field, because a Runner decides
 	// whether it can honour a mode from its own start paths rather than from a
 	// capability string the control plane echoed back at it.
-	requiredCapabilities := []string{"network-policy", "storage", "cleanup", "local-workspace"}
+	requiredCapabilities := []string{"network-policy", "storage", "cleanup", "local-workspace", "client-selected-image"}
 	if plan.attributed != nil {
 		requiredCapabilities = append(requiredCapabilities, contracts.RunnerCapabilityAttributedExecution)
 	}
@@ -521,7 +522,8 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			RequestId: plan.requestID, OperationId: plan.operationID, SandboxId: claim.SandboxID,
 			SandboxGeneration: uint64(plan.generation),
 		},
-		NetworkPolicy: networkPolicy,
+		NetworkPolicy:  networkPolicy,
+		ExecutionImage: &runnerv1.ExecutionImage{Reference: plan.image.RequestedReference},
 	}
 	if plan.egressContext != nil {
 		assignmentCommand.EgressContext = *plan.egressContext
@@ -833,6 +835,10 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		}
 	}
 	plan.attributed, err = contracts.ParseAttributedExecutionMetadata(metadata)
+	if err != nil {
+		return startPlan{}, err
+	}
+	plan.image, err = contracts.ParseExecutionImageMetadata(metadata)
 	if err != nil {
 		return startPlan{}, err
 	}

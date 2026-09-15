@@ -114,6 +114,9 @@ type Runner struct {
 	IdentityHostDirectory         string                `toml:"identity_host_directory"`
 	ArtifactHostDirectory         string                `toml:"artifact_host_directory"`
 	StateHostDirectory            string                `toml:"state_host_directory"`
+	ExecutionImageRegistries      string                `toml:"execution_image_registries"`
+	ExecutionImagePublicKey       string                `toml:"execution_image_public_key,omitempty"`
+	ExecutionImagePublicKeySHA256 string                `toml:"execution_image_public_key_sha256"`
 	LogPath                       string                `toml:"log_path,omitempty"`
 	LogDirectory                  string                `toml:"log_directory,omitempty"`
 	FirecrackerPath               string                `toml:"firecracker_path,omitempty"`

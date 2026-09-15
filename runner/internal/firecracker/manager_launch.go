@@ -140,6 +140,19 @@ func (m *Manager) prepareLaunchImage(dir string, image microVMImageSelection) (m
 	if err := m.validateTrustAnchorForLaunch(); err != nil {
 		return microVMImageSelection{}, fmt.Errorf("verify microVM trust anchor: %w", err)
 	}
+	if image.KernelPath != "" && image.KernelPath != m.cfg.MicroVMKernelPath {
+		selectedConfig := *m.cfg
+		selectedConfig.MicroVMKernelPath = image.KernelPath
+		selectedConfig.MicroVMRootfsPath = image.RootfsPath
+		selectedConfig.MicroVMToolRootfsPath = image.RootfsPath
+		selectedConfig.MicroVMSharedImagePath = image.SharedImagePath
+		selectedConfig.MicroVMToolSharedImagePath = image.SharedImagePath
+		artifacts, err := verifyAndCaptureTrustedMicroVMArtifacts(&selectedConfig)
+		if err != nil {
+			return microVMImageSelection{}, fmt.Errorf("verify selected microVM image: %w", err)
+		}
+		return stageTrustedLaunchImageFiles(dir, image, artifacts)
+	}
 	return m.stageTrustedLaunchImage(dir, image)
 }
 
@@ -382,6 +395,14 @@ func (m *Manager) microVMImageForStart(opts runtimemanager.StartOpts) (microVMIm
 	}
 	switch runtimeClass {
 	case runtimemanager.RuntimeClassToolExecutor:
+		if opts.ExecutionImageDirectory != "" {
+			return microVMImageSelection{
+				RuntimeClass:    runtimeClass,
+				KernelPath:      filepath.Join(opts.ExecutionImageDirectory, "kernel"),
+				RootfsPath:      filepath.Join(opts.ExecutionImageDirectory, "rootfs.ext4"),
+				SharedImagePath: filepath.Join(opts.ExecutionImageDirectory, "shared.img"),
+			}, nil
+		}
 		rootfsPath := firstNonEmpty(m.cfg.MicroVMToolRootfsPath, m.cfg.MicroVMRootfsPath)
 		sharedImagePath := firstNonEmpty(m.cfg.MicroVMToolSharedImagePath, m.cfg.MicroVMSharedImagePath)
 		return microVMImageSelection{

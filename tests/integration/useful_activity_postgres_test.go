@@ -24,7 +24,7 @@ func TestEveryUsefulSessionKindSuppressesIdleReclamationWhileGuestHeartbeatDoesN
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "useful-session-idle-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestTerminalGuestLivenessWakesDeadlineScheduledSandbox(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "terminal-liveness-wakeup-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)

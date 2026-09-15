@@ -153,7 +153,7 @@ func TestSandboxPartialResourcesPinRevisionAndIdempotency(t *testing.T) {
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-resources-partial")
 	principal := authenticateCredential(t, controlPlane, credential)
 	memory := int64(512 << 20)
-	request := contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}, Resources: &contracts.SandboxResourceRequest{MemoryBytes: &memory}}
+	request := contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}, Resources: &contracts.SandboxResourceRequest{MemoryBytes: &memory}}
 	first, _, err := controlPlane.CreateSandbox(t.Context(), principal, "resources-partial", request)
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestSandboxRequestedResourcesFitSmallerHomeRunner(t *testing.T) {
 	}
 	principal := authenticateCredential(t, controlPlane, credential)
 	cpu, memory, disk := int64(2), int64(1<<30), int64(2<<30)
-	request := contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}, Resources: &contracts.SandboxResourceRequest{VCPUCount: &cpu, MemoryBytes: &memory, WorkspaceBytes: &disk}}
+	request := contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}, Resources: &contracts.SandboxResourceRequest{VCPUCount: &cpu, MemoryBytes: &memory, WorkspaceBytes: &disk}}
 	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "resources-placement", request)
 	if err != nil {
 		t.Fatal(err)

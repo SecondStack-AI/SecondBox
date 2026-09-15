@@ -15,6 +15,7 @@ import {
   type ExecOutcome,
   type ExecStreamFrame,
   type ExecStreamSession,
+  type ExecutionImage,
   type FileExistsResult,
   type FileStat,
   type FileWriteResult,
@@ -74,6 +75,7 @@ export type {
   BufferedExecRequest,
   Command,
   ExecStreamFrame,
+  ExecutionImage,
   FileStat,
   Lease,
   Metadata,
@@ -524,6 +526,7 @@ export class SecondBox {
     requirePositiveInteger(request.maximumOutputBytes, "run maximumOutputBytes");
     requirePositiveInteger(request.readyTimeoutMilliseconds, "run readyTimeoutMilliseconds");
     const { handle } = await this.createSandbox({
+      image: request.image,
       profile: request.profile,
       ...(request.metadata === undefined ? {} : { metadata: request.metadata }),
       ...(request.resources === undefined ? {} : { resources: request.resources }),
@@ -1710,6 +1713,7 @@ export class SandboxHandle implements SandboxFilesystem {
 }
 
 export interface CreateSandboxOptions {
+  readonly image: ExecutionImage;
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
@@ -1724,6 +1728,7 @@ export interface WaitForOptions {
 }
 
 export interface RunRequest extends Omit<BufferedExecRequest, "environment"> {
+  readonly image: ExecutionImage;
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;

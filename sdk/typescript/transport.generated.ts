@@ -155,6 +155,7 @@ export interface CreateRunnerPoolRequest {
 }
 
 export interface CreateSandboxRequest {
+  readonly image: ExecutionImage;
   readonly metadata: Metadata;
   readonly profile: ProfileName;
   readonly resources?: SandboxResourceRequest;
@@ -340,6 +341,11 @@ export interface ExecTimingSummary {
   readonly outcome: "exited" | "deadline_exceeded";
 }
 
+export interface ExecutionImage {
+  readonly pullCredentials?: RegistryPullCredentials;
+  readonly reference: string;
+}
+
 export interface ExecutionPolicy {
   readonly dataPlaneTransport: "proxied" | "direct";
   readonly maximumBufferedOutputBytes: number;
@@ -386,6 +392,7 @@ export interface Instance {
   readonly guestHeartbeatAt?: Timestamp;
   readonly guestLiveness: GuestLiveness;
   readonly id: OpaqueID;
+  readonly image: PublicExecutionImage;
   readonly readyAt?: Timestamp;
   readonly sandboxId: OpaqueID;
   readonly state: InstanceState;
@@ -593,6 +600,11 @@ export interface ProfileRevisionSpec {
 
 export type ProfileState = "enabled" | "disabled";
 
+export interface PublicExecutionImage {
+  readonly requestedReference: string;
+  readonly resolvedDigest?: string;
+}
+
 export interface QuotaConstrainingScopes {
   readonly activeInstances: "none" | "subject" | "tenant" | "tenant_and_subject";
   readonly concurrentOperations: "none" | "subject" | "tenant" | "tenant_and_subject";
@@ -621,6 +633,11 @@ export interface QuotaUsage {
   readonly sandboxes: number;
   readonly snapshots: number;
   readonly vcpuCount: number;
+}
+
+export interface RegistryPullCredentials {
+  readonly token: string;
+  readonly username?: string;
 }
 
 export interface RelocateSandboxRequest {
@@ -796,6 +813,7 @@ export type SpawnFailureKind = "not_found" | "permission_denied" | "invalid_cwd"
 
 export interface StartSandboxRequest {
   readonly attributedExecution?: AttributedExecutionRequest;
+  readonly image: ExecutionImage;
 }
 
 /** cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot. */

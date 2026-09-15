@@ -3,6 +3,7 @@ package firecracker
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -98,6 +99,35 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	publicKeySHA256, err := required("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256")
 	if err != nil {
 		return nil, err
+	}
+	executionImagePublicKeyPath, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY")
+	if err != nil {
+		return nil, err
+	}
+	executionImagePublicKeySHA256, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256")
+	if err != nil {
+		return nil, err
+	}
+	executionImageCacheRoot, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT")
+	if err != nil {
+		return nil, err
+	}
+	executionImageRegistriesRaw, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES")
+	if err != nil {
+		return nil, err
+	}
+	executionImageRegistries := strings.Split(executionImageRegistriesRaw, ",")
+	for _, registry := range executionImageRegistries {
+		if registry == "" || strings.TrimSpace(registry) != registry || strings.Contains(registry, "/") {
+			return nil, fmt.Errorf("SecondBox Firecracker config requires comma-separated registry hosts in SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES")
+		}
+	}
+	executionImageRegistryCertificates, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES")
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(executionImageRegistryCertificates) {
+		return nil, fmt.Errorf("SecondBox Firecracker config requires an absolute SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES path")
 	}
 	runnerWorkspaceRoot, err := required("SECONDBOX_RUNNER_WORKSPACE_ROOT")
 	if err != nil {
@@ -289,5 +319,10 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		NetworkPolicyManagementCIDRs:               networkPolicyConfig.CompileOptions.ManagementPrefixes,
 		NetworkPolicyEgressContexts:                networkPolicyConfig.EgressContexts,
 		NetworkPolicyDNSUpstream:                   networkPolicyConfig.DNSUpstream,
+		ExecutionImageCacheRoot:                    executionImageCacheRoot,
+		ExecutionImageRegistryAllowlist:            executionImageRegistries,
+		ExecutionImageRegistryCertificates:         executionImageRegistryCertificates,
+		ExecutionImagePublicKeyPath:                executionImagePublicKeyPath,
+		ExecutionImagePublicKeySHA256:              executionImagePublicKeySHA256,
 	}, nil
 }

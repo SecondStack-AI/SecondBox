@@ -88,7 +88,7 @@ func (recorder *runTestServer) joinedRequests() string {
 func invokeRun(t *testing.T, recorder *runTestServer, args []string) (string, string, error) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	err := runRunCommand(
+	err := runTestRunCommand(
 		context.Background(),
 		execTestSession(recorder.server.URL),
 		args,
@@ -281,7 +281,7 @@ func TestRunOperationalCommandRoutesRun(t *testing.T) {
 	handled, err := runOperationalCommand(
 		context.Background(),
 		execTestSession(recorder.server.URL),
-		[]string{"run", "durable-coding", "--", "true"},
+		[]string{"run", "durable-coding", "--image", testExecutionImageReference, "--", "true"},
 		&output,
 	)
 	if !handled {
@@ -319,7 +319,7 @@ func TestSuppliedFlagRecognisesEveryForm(t *testing.T) {
 func TestRunForwardsStandardInput(t *testing.T) {
 	recorder := newRunTestServer(t, exitedOutcomeJSON(0, "", ""))
 	var stdout, stderr bytes.Buffer
-	err := runRunCommand(
+	err := runTestRunCommand(
 		context.Background(),
 		execTestSession(recorder.server.URL),
 		[]string{"durable-coding", "--stdin", "--", "cat"},
@@ -343,7 +343,7 @@ func TestRunForwardsStandardInput(t *testing.T) {
 func TestRunRefusesOversizedStdinBeforeCreating(t *testing.T) {
 	recorder := newRunTestServer(t, exitedOutcomeJSON(0, "", ""))
 	var stdout, stderr bytes.Buffer
-	err := runRunCommand(
+	err := runTestRunCommand(
 		context.Background(),
 		execTestSession(recorder.server.URL),
 		[]string{"durable-coding", "--stdin", "--", "cat"},
@@ -402,7 +402,7 @@ func TestRunRetriesDeleteWhenTheRevisionMoved(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	var stdout, stderr bytes.Buffer
-	err := runRunCommand(
+	err := runTestRunCommand(
 		context.Background(),
 		execTestSession(server.URL),
 		[]string{"durable-coding", "--", "true"},
@@ -450,7 +450,7 @@ func TestRunReportsADeleteFailureThatIsNotARace(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	var stdout, stderr bytes.Buffer
-	err := runRunCommand(
+	err := runTestRunCommand(
 		context.Background(),
 		execTestSession(server.URL),
 		[]string{"durable-coding", "--", "true"},

@@ -584,6 +584,7 @@ func (session *Session) acceptHello(hello *runnerv1.RunnerHello) (Event, error) 
 	}{
 		{runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE, "runner does not implement the mandatory local-workspace protocol"},
 		{runnerv1.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT, "runner does not implement context-aware assignments"},
+		{runnerv1.RunnerFeature_RUNNER_FEATURE_CLIENT_SELECTED_IMAGE, "runner does not implement client-selected images"},
 	} {
 		if enabled[requirement.feature] && !mandatory[requirement.feature] {
 			return session.rejection(

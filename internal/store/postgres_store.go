@@ -491,6 +491,10 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox metadata encoding failed: %w", err)
 	}
+	lifecycleRequestMetadataJSON, err := json.Marshal(input.LifecycleRequestMetadata)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox lifecycle request metadata encoding failed: %w", err)
+	}
 	compatibilityJSON, err := json.Marshal(map[string]any{
 		"pool": profile.CurrentRevision.Spec.Pool, "architecture": profile.CurrentRevision.Spec.Architecture,
 	})
@@ -522,14 +526,16 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			current_instance_id,egress_context,metadata_json,compatibility_summary_json,last_activity_at,revision,
 			lifecycle_termination_reason,lifecycle_failure_class,lifecycle_failure_message,lifecycle_intent_kind,
 			reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,reconcile_retry_count,
-			reconcile_retry_limit,created_at,updated_at,deleted_at,vcpu_count,memory_bytes,workspace_bytes,lifecycle_policy_json
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)`,
+			reconcile_retry_limit,created_at,updated_at,deleted_at,vcpu_count,memory_bytes,workspace_bytes,lifecycle_policy_json,
+			lifecycle_request_metadata_json
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)`,
 		sandbox.ID, sandbox.TenantRef, sandbox.SubjectRef,
 		sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
 		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", sandbox.EgressContext, metadataJSON,
 		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
 		"", nil, nil, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
 		sandbox.Resources.VCPUCount, sandbox.Resources.MemoryBytes, sandbox.Resources.WorkspaceBytes, lifecycleJSON,
+		lifecycleRequestMetadataJSON,
 	); err != nil {
 		if isSandboxNameConflict(err) {
 			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrSandboxNameConflict
@@ -1064,7 +1070,8 @@ const sandboxSelect = `
 	       workspace.storage_observation_json,home_runner.storage_pressure_json,
  COALESCE(sandbox.lifecycle_policy_json,pinned_profile.spec_json->'lifecycle'),
 	       instance.id,instance.state,COALESCE(instance.guest_liveness,''),instance.termination_reason,
-	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at,instance.guest_features
+	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at,instance.guest_features,
+	       instance.requested_image_reference,instance.resolved_image_digest
 	FROM secondbox.sandboxes AS sandbox
 	JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
  JOIN secondbox.profile_revisions AS pinned_profile ON pinned_profile.id=sandbox.profile_revision_id
@@ -1076,6 +1083,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	var metadataJSON []byte
 	var storageJSON, pressureJSON, lifecycleJSON []byte
 	var instanceID, instanceState, guestLiveness, terminationReason sql.NullString
+	var requestedImageReference, resolvedImageDigest sql.NullString
 	var guestFeatures []string
 	var instanceCreatedAt, instanceUpdatedAt sql.NullTime
 	var readyAt, guestHeartbeatAt, stoppedAt sql.NullTime
@@ -1092,6 +1100,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		&storageJSON, &pressureJSON, &lifecycleJSON,
 		&instanceID, &instanceState, &guestLiveness, &terminationReason,
 		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt, &guestFeatures,
+		&requestedImageReference, &resolvedImageDigest,
 	); err != nil {
 		return contracts.Sandbox{}, err
 	}
@@ -1128,6 +1137,10 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 			State: instanceState.String, GuestLiveness: guestLiveness.String, GuestFeatures: guestFeatures,
 			TerminationReason: terminationReason.String, CreatedAt: instanceCreatedAt.Time,
 			UpdatedAt: instanceUpdatedAt.Time,
+			Image: contracts.PublicExecutionImage{
+				RequestedReference: requestedImageReference.String,
+				ResolvedDigest:     resolvedImageDigest.String,
+			},
 		}
 		if readyAt.Valid {
 			sandbox.Instance.ReadyAt = &readyAt.Time

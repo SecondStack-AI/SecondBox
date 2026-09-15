@@ -470,7 +470,7 @@ func (fixture *teardownFixture) createReadySandbox(t *testing.T) (string, string
 	operation, created, err := fixture.controlPlane.CreateSandboxOperation(
 		t.Context(), fixture.principal,
 		fmt.Sprintf("teardown-create-%d", integrationIdentitySequence.Add(1)),
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  fixture.profileName,
 			Metadata: map[string]string{"fixture": "teardown-attribution"},
 		},
@@ -488,6 +488,7 @@ func (fixture *teardownFixture) createReadySandbox(t *testing.T) (string, string
 		t.Context(), fixture.principal, sandboxID,
 		fmt.Sprintf("teardown-start-%d", integrationIdentitySequence.Add(1)),
 		current.Revision,
+		testExecutionImage(),
 	)
 	if err != nil {
 		t.Fatal(err)

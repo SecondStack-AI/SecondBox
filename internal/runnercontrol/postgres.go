@@ -3700,18 +3700,24 @@ func recordAssignmentEvent(
 		}
 		if state == "ready" {
 			if result.Terminal != runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY ||
-				result.BackendKind == "" || result.BackendReference == "" {
+				result.BackendKind == "" || result.BackendReference == "" ||
+				result.RequestedImageReference == "" || result.ResolvedImageDigest == "" {
 				return ErrStaleAssignmentEvidence
 			}
-			var backendKind, backendReference string
+			var backendKind, backendReference, requestedImageReference, resolvedImageDigest string
 			if err := tx.QueryRow(ctx, `
-				SELECT backend_kind,backend_reference
-				FROM secondbox.assignments WHERE id=$1`,
+				SELECT assignment.backend_kind,assignment.backend_reference,
+				       instance.requested_image_reference,instance.resolved_image_digest
+				FROM secondbox.assignments AS assignment
+				JOIN secondbox.instances AS instance ON instance.id=assignment.instance_id
+				WHERE assignment.id=$1`,
 				result.Fence.AssignmentId,
-			).Scan(&backendKind, &backendReference); err != nil {
+			).Scan(&backendKind, &backendReference, &requestedImageReference, &resolvedImageDigest); err != nil {
 				return fmt.Errorf("SecondBox runner ready AssignmentResult replay lookup: %w", err)
 			}
-			if backendKind != result.BackendKind || backendReference != result.BackendReference {
+			if backendKind != result.BackendKind || backendReference != result.BackendReference ||
+				requestedImageReference != result.RequestedImageReference ||
+				resolvedImageDigest != result.ResolvedImageDigest {
 				return errors.New("SecondBox runner ready AssignmentResult replay changed backend evidence")
 			}
 			return acknowledgeAssignmentCommands(
@@ -3727,7 +3733,8 @@ func recordAssignmentEvent(
 			return err
 		}
 		if result.Terminal == runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY {
-			if result.BackendKind == "" || result.BackendReference == "" {
+			if result.BackendKind == "" || result.BackendReference == "" ||
+				result.RequestedImageReference == "" || result.ResolvedImageDigest == "" {
 				return errors.New("SecondBox runner ready AssignmentResult requires backend evidence")
 			}
 			if _, err := tx.Exec(ctx, `
@@ -3738,13 +3745,20 @@ func recordAssignmentEvent(
 			); err != nil {
 				return fmt.Errorf("SecondBox runner ready AssignmentResult update: %w", err)
 			}
-			if _, err := tx.Exec(ctx, `
+			instanceUpdate, err := tx.Exec(ctx, `
 				UPDATE secondbox.instances
 				SET state='ready',guest_liveness='ready',ready_at=$2,
-				    guest_heartbeat_at=$2,updated_at=$2,guest_features=$3 WHERE id=$1`,
+				    guest_heartbeat_at=$2,updated_at=$2,guest_features=$3,
+				    requested_image_reference=$4,resolved_image_digest=$5
+				WHERE id=$1 AND requested_image_reference=$4`,
 				result.Fence.InstanceId, now, append([]string{}, result.GuestFeatures...),
-			); err != nil {
+				result.RequestedImageReference, result.ResolvedImageDigest,
+			)
+			if err != nil {
 				return fmt.Errorf("SecondBox runner ready Instance update: %w", err)
+			}
+			if instanceUpdate.RowsAffected() != 1 {
+				return errors.New("SecondBox runner ready AssignmentResult changed the requested execution image")
 			}
 			command, err := tx.Exec(ctx, `
 				UPDATE secondbox.workspaces AS workspace

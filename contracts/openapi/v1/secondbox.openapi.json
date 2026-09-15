@@ -7078,9 +7078,67 @@
       "StartSandboxRequest": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "image"
+        ],
         "properties": {
+          "image": {
+            "$ref": "#/components/schemas/ExecutionImage"
+          },
           "attributedExecution": {
             "$ref": "#/components/schemas/AttributedExecutionRequest"
+          }
+        }
+      },
+      "ExecutionImage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reference"
+        ],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*/[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}|@sha256:[a-f0-9]{64})$"
+          },
+          "pullCredentials": {
+            "$ref": "#/components/schemas/RegistryPullCredentials"
+          }
+        }
+      },
+      "RegistryPullCredentials": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        }
+      },
+      "PublicExecutionImage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestedReference"
+        ],
+        "properties": {
+          "requestedReference": {
+            "type": "string"
+          },
+          "resolvedDigest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
           }
         }
       },
@@ -8074,11 +8132,15 @@
         "additionalProperties": false,
         "required": [
           "profile",
-          "metadata"
+          "metadata",
+          "image"
         ],
         "properties": {
           "profile": {
             "$ref": "#/components/schemas/ProfileName"
+          },
+          "image": {
+            "$ref": "#/components/schemas/ExecutionImage"
           },
           "metadata": {
             "$ref": "#/components/schemas/Metadata"
@@ -8318,6 +8380,7 @@
           "generation",
           "state",
           "guestLiveness",
+          "image",
           "createdAt",
           "updatedAt"
         ],
@@ -8338,6 +8401,9 @@
           },
           "guestLiveness": {
             "$ref": "#/components/schemas/GuestLiveness"
+          },
+          "image": {
+            "$ref": "#/components/schemas/PublicExecutionImage"
           },
           "guestFeatures": {
             "type": "array",

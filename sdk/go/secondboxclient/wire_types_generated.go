@@ -339,6 +339,8 @@ type ExecTimingSummary struct {
 	Outcome  string              `json:"outcome"`
 }
 
+type ExecutionImage = contracts.ExecutionImage
+
 type ExecutionPolicy = contracts.ExecutionPolicy
 
 type FileExistsResult struct {
@@ -402,6 +404,7 @@ type Instance struct {
 	GuestHeartbeatAt  *Timestamp                 `json:"guestHeartbeatAt,omitempty"`
 	GuestLiveness     GuestLiveness              `json:"guestLiveness"`
 	ID                OpaqueID                   `json:"id"`
+	Image             PublicExecutionImage       `json:"image"`
 	ReadyAt           *Timestamp                 `json:"readyAt,omitempty"`
 	SandboxID         OpaqueID                   `json:"sandboxId"`
 	State             InstanceState              `json:"state"`
@@ -612,6 +615,8 @@ const (
 	ProfileStateDisabled ProfileState = "disabled"
 )
 
+type PublicExecutionImage = contracts.PublicExecutionImage
+
 type QuotaConstrainingScopes struct {
 	ActiveInstances      string `json:"activeInstances"`
 	ConcurrentOperations string `json:"concurrentOperations"`
@@ -641,6 +646,8 @@ type QuotaUsage struct {
 	Snapshots            int64 `json:"snapshots"`
 	VcpuCount            int64 `json:"vcpuCount"`
 }
+
+type RegistryPullCredentials = contracts.RegistryPullCredentials
 
 type RelocateSandboxRequest struct {
 	RunnerPool     *ProfileName `json:"runnerPool,omitempty"`

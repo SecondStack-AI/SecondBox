@@ -28,7 +28,7 @@ func TestRunAndCreateFromSnapshot(t *testing.T) {
 					server = recorder.server
 					invoke = func(args []string) error {
 						if command == "create" {
-							return runLifecycleVerb(t.Context(), execTestSession(server.URL), command, args, io.Discard, server.Client())
+							return runTestLifecycleVerb(t.Context(), execTestSession(server.URL), command, args, io.Discard, server.Client())
 						}
 						_, _, err := invokeRun(t, recorder, append(args, "--", "true"))
 						return err
@@ -88,9 +88,9 @@ func TestRunAndCreatePreserveSnapshotProblem(t *testing.T) {
 			args := []string{"durable-coding", "--from", "snp_base", "--disk", "4GiB"}
 			var err error
 			if command == "create" {
-				err = runLifecycleVerb(t.Context(), verbTestSession(server), command, args, io.Discard, server.Client())
+				err = runTestLifecycleVerb(t.Context(), verbTestSession(server), command, args, io.Discard, server.Client())
 			} else {
-				err = runRunCommand(t.Context(), verbTestSession(server), append(args, "--", "true"), execCommandEnvironment{stdout: io.Discard, stderr: io.Discard, httpClient: server.Client()}, sandboxShellEnvironment{})
+				err = runTestRunCommand(t.Context(), verbTestSession(server), append(args, "--", "true"), execCommandEnvironment{stdout: io.Discard, stderr: io.Discard, httpClient: server.Client()}, sandboxShellEnvironment{})
 			}
 			var api *sb.APIError
 			if !errors.As(err, &api) || api.Problem == nil || api.Problem.Code != sb.ProblemCodeStateConflict {

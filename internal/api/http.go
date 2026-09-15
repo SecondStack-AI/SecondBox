@@ -590,17 +590,21 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 				return
 			}
 		}
-		var metadata map[string]string
-		if body != nil && body.AttributedExecution != nil {
-			metadata = body.AttributedExecution.AttributedExecutionMetadata()
+		if body == nil {
+			apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox start request requires an execution image")))
+			return
 		}
-		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, metadata)
+		apiHandler.mutateSandboxLifecycle(
+			writer, request, sandboxID, action,
+			contracts.MergeExecutionImageMetadata(body.Image, body.AttributedExecution),
+			body.Image.PullCredentials,
+		)
 	case "drain", "stop":
 		if err := requireEmptyBody(request); err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, nil)
+		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, nil, nil)
 	case "relocate":
 		var body contracts.RelocateSandboxRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
@@ -724,6 +728,7 @@ func (apiHandler *handler) mutateSandboxLifecycle(
 	sandboxID string,
 	action string,
 	metadata map[string]string,
+	pullCredentials *contracts.RegistryPullCredentials,
 ) {
 	expectedRevision, err := parseIfMatch(request)
 	if err != nil {
@@ -732,7 +737,7 @@ func (apiHandler *handler) mutateSandboxLifecycle(
 	}
 	operation, replayed, err := apiHandler.service.MutateSandbox(
 		request.Context(), requestPrincipal(request), sandboxID, action,
-		request.Header.Get("Idempotency-Key"), expectedRevision, metadata,
+		request.Header.Get("Idempotency-Key"), expectedRevision, metadata, pullCredentials,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -748,7 +753,7 @@ func (apiHandler *handler) deleteSandbox(writer http.ResponseWriter, request *ht
 		return
 	}
 	apiHandler.mutateSandboxLifecycle(
-		writer, request, request.PathValue("sandboxID"), "delete", nil,
+		writer, request, request.PathValue("sandboxID"), "delete", nil, nil,
 	)
 }
 

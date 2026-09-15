@@ -151,14 +151,14 @@ func TestScenarioCLIProcessAgainstStub(t *testing.T) {
 	cli := newScenarioCLI(t, server.URL, token, "stub-tenant", "stub-subject")
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	if got := cli.success(t, ctx, "run", sandbox.Profile, "--keep", "--name", name, "--cpus", "1", "--memory", "1GiB", "--", "/bin/sh", "-c", "echo hello"); got != "hello\n" {
+	if got := cli.success(t, ctx, "run", sandbox.Profile, "--image", "registry.example/secondbox/test-agent:stable", "--keep", "--name", name, "--cpus", "1", "--memory", "1GiB", "--", "/bin/sh", "-c", "echo hello"); got != "hello\n" {
 		t.Fatalf("SecondBox scenario run stdout=%q", got)
 	}
 	got := scenarioCLIJSON[sb.Sandbox](t, cli.success(t, ctx, "--output", "json", "get", name))
 	if got.ID != sandbox.ID || got.Resources.VCPUCount != 1 {
 		t.Fatalf("SecondBox scenario get: %+v", got)
 	}
-	refused := cli.run(t, ctx, "run", sandbox.Profile, "--cpus", "999", "--", "true")
+	refused := cli.run(t, ctx, "run", sandbox.Profile, "--image", "registry.example/secondbox/test-agent:stable", "--cpus", "999", "--", "true")
 	if refused.exitCode == 0 || refused.stdout != "" || !strings.Contains(refused.stderr, "resources_exceed_profile") || !strings.Contains(refused.stderr, "ceiling") {
 		t.Fatalf("SecondBox scenario refusal: %+v", refused)
 	}

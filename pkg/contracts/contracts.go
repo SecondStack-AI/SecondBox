@@ -490,18 +490,19 @@ type Workspace struct {
 
 // Instance is replaceable compute evidence without runner or backend authority.
 type Instance struct {
-	GuestFeatures     []string   `json:"guestFeatures,omitempty"`
-	ID                string     `json:"id"`
-	SandboxID         string     `json:"sandboxId"`
-	Generation        int64      `json:"generation"`
-	State             string     `json:"state"`
-	GuestLiveness     string     `json:"guestLiveness"`
-	TerminationReason string     `json:"terminationReason,omitempty"`
-	CreatedAt         time.Time  `json:"createdAt"`
-	UpdatedAt         time.Time  `json:"updatedAt"`
-	ReadyAt           *time.Time `json:"readyAt,omitempty"`
-	GuestHeartbeatAt  *time.Time `json:"guestHeartbeatAt,omitempty"`
-	StoppedAt         *time.Time `json:"stoppedAt,omitempty"`
+	GuestFeatures     []string             `json:"guestFeatures,omitempty"`
+	Image             PublicExecutionImage `json:"image"`
+	ID                string               `json:"id"`
+	SandboxID         string               `json:"sandboxId"`
+	Generation        int64                `json:"generation"`
+	State             string               `json:"state"`
+	GuestLiveness     string               `json:"guestLiveness"`
+	TerminationReason string               `json:"terminationReason,omitempty"`
+	CreatedAt         time.Time            `json:"createdAt"`
+	UpdatedAt         time.Time            `json:"updatedAt"`
+	ReadyAt           *time.Time           `json:"readyAt,omitempty"`
+	GuestHeartbeatAt  *time.Time           `json:"guestHeartbeatAt,omitempty"`
+	StoppedAt         *time.Time           `json:"stoppedAt,omitempty"`
 }
 
 // ActivitySession is useful generation-bound work that prevents idle reclamation.
@@ -552,6 +553,7 @@ type SandboxPage struct {
 // and an optional retained Snapshot used to seed generation one.
 type CreateSandboxRequest struct {
 	Resources        *SandboxResourceRequest `json:"resources,omitempty"`
+	Image            ExecutionImage          `json:"image"`
 	Profile          string                  `json:"profile"`
 	Metadata         map[string]string       `json:"metadata"`
 	SourceSnapshotID string                  `json:"sourceSnapshotId,omitempty"`

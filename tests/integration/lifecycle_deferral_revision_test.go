@@ -66,6 +66,7 @@ func TestInvalidProfileStartFailsBeforeAssignmentAndRequiresExplicitRetry(t *tes
 	if _, err := fixture.controlPlane.StartSandbox(
 		t.Context(), fixture.principal, sandboxID,
 		"invalid-profile-explicit-retry-"+sandboxID, failed.Revision,
+		testExecutionImage(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func createStoppedSandboxWantedRunning(
 	operation, created, err := fixture.controlPlane.CreateSandboxOperation(
 		t.Context(), fixture.principal,
 		"deferral-create-"+label+"-"+strconv.FormatInt(integrationIdentitySequence.Add(1), 10),
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  fixture.profileName,
 			Metadata: map[string]string{"fixture": "lifecycle-deferral"},
 		},
@@ -170,6 +171,7 @@ func createStoppedSandboxWantedRunning(
 	if _, err := fixture.controlPlane.StartSandbox(
 		t.Context(), fixture.principal, sandboxID,
 		"deferral-start-"+label+"-"+sandboxID, current.Revision,
+		testExecutionImage(),
 	); err != nil {
 		t.Fatal(err)
 	}

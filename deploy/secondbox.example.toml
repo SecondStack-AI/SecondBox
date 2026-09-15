@@ -41,7 +41,7 @@ platform_token_file = 'secrets/platform-token'
 [policy]
 # Data-plane session, result, and idempotency retention deadline.
 data_plane_retention_seconds = 86400
-runner_enabled_features = 'exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy'
+runner_enabled_features = 'exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy,client-selected-image'
 
 [standard_resources]
 artifact_manifest = 'development-artifact-manifest.json'
@@ -51,7 +51,7 @@ apply_wait_seconds = 180
 [[standard_resources.runner_pools]]
 name = 'standard-amd64'
 architectures = ['amd64']
-capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
+capabilities = ['client-selected-image', 'compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
 state = 'ready'
 
 [overrides]

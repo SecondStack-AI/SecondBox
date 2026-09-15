@@ -29,6 +29,7 @@ enum RunnerFeature {
   // assignment payloads land with the generation-4 placement contract; older
   // generations are never negotiated as a fallback.
   RUNNER_FEATURE_TENANT_EGRESS_CONTEXT = 8;
+  RUNNER_FEATURE_CLIENT_SELECTED_IMAGE = 9;
 }
 
 message RunnerHello {
@@ -310,6 +311,17 @@ message AssignmentCommand {
   // exactly when requirements.requires_tenant_egress_context is false.
   string egress_context = 12;
   AttributedExecution attributed_execution = 13;
+  ExecutionImage execution_image = 14;
+}
+
+message ExecutionImage {
+  string reference = 1;
+  RegistryPullCredentials pull_credentials = 2;
+}
+
+message RegistryPullCredentials {
+  string username = 1;
+  string token = 2;
 }
 
 // Attribution is control-plane authority fixed before guest networking opens.
@@ -353,6 +365,9 @@ enum AssignmentProgressStage {
   ASSIGNMENT_PROGRESS_STAGE_READY = 6;
   ASSIGNMENT_PROGRESS_STAGE_TEARDOWN = 7;
   ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION = 8;
+  ASSIGNMENT_PROGRESS_STAGE_IMAGE_RESOLVE = 9;
+  ASSIGNMENT_PROGRESS_STAGE_IMAGE_DOWNLOAD = 10;
+  ASSIGNMENT_PROGRESS_STAGE_IMAGE_EXTRACT = 11;
 }
 
 message AssignmentProgress {
@@ -388,6 +403,8 @@ message AssignmentResult {
   string backend_reference = 6;
   string safe_detail = 7;
   Correlation correlation = 8;
+  string requested_image_reference = 10;
+  string resolved_image_digest = 11;
 }
 
 enum FenceReason {

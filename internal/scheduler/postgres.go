@@ -383,9 +383,10 @@ func (store *PostgresStore) scheduleOnce(
 	orderedWrites.Queue(`
 		INSERT INTO secondbox.instances (
 			id,sandbox_id,generation,state,guest_liveness,termination_reason,created_at,updated_at,
-			ready_at,stopped_at
-		) VALUES ($1,$2,$3,'starting','starting','',$4,$4,NULL,NULL)`,
+			ready_at,stopped_at,requested_image_reference,resolved_image_digest
+		) VALUES ($1,$2,$3,'starting','starting','',$4,$4,NULL,NULL,$5,'')`,
 		assignment.InstanceID, assignment.SandboxID, generation, placementAt,
+		request.AssignmentCommand.ExecutionImage.Reference,
 	)
 	orderedWrites.Queue(`
 		INSERT INTO secondbox.assignments (

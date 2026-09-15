@@ -73,6 +73,25 @@ type Config struct {
 	NetworkPolicyManagementCIDRs         []netip.Prefix
 	NetworkPolicyEgressContexts          networkpolicy.EgressContextConfig
 	NetworkPolicyDNSUpstream             netip.AddrPort
+	ExecutionImageCacheRoot              string
+	ExecutionImageRegistryAllowlist      []string
+	ExecutionImageRegistryCertificates   string
+	ExecutionImagePublicKeyPath          string
+	ExecutionImagePublicKeySHA256        string
+}
+
+// VerifyMicroVMArtifactDirectory verifies one selected bundle against operator trust.
+func VerifyMicroVMArtifactDirectory(directory, publicKeyPath, publicKeySHA256 string) error {
+	verification := &Config{
+		MicroVMKernelPath:          filepath.Join(directory, "kernel"),
+		MicroVMRootfsPath:          filepath.Join(directory, "rootfs.ext4"),
+		MicroVMToolRootfsPath:      filepath.Join(directory, "rootfs.ext4"),
+		MicroVMSharedImagePath:     filepath.Join(directory, "shared.img"),
+		MicroVMToolSharedImagePath: filepath.Join(directory, "shared.img"),
+		MicroVMPublicKeyPath:       publicKeyPath,
+		MicroVMPublicKeySHA256:     publicKeySHA256,
+	}
+	return verification.ValidateMicroVMTrustAnchor()
 }
 
 func (c *Config) ValidateMicroVMTrustAnchor() error {

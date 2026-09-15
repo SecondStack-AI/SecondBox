@@ -422,7 +422,7 @@ func invokeTTYRun(t *testing.T, recorder *shellTestServer, args []string) (strin
 	inputReader, inputWriter := io.Pipe()
 	t.Cleanup(func() { _ = inputWriter.Close(); _ = inputReader.Close() })
 	var stdout, stderr bytes.Buffer
-	err := runRunCommand(
+	err := runTestRunCommand(
 		t.Context(),
 		execTestSession(recorder.server.URL),
 		args,

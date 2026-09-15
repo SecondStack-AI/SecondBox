@@ -156,6 +156,7 @@
   },
   "CreateSandboxRequest": {
     "required": [
+      "image",
       "metadata",
       "profile"
     ],
@@ -388,6 +389,14 @@
     ],
     "optional": []
   },
+  "ExecutionImage": {
+    "required": [
+      "reference"
+    ],
+    "optional": [
+      "pullCredentials"
+    ]
+  },
   "ExecutionPolicy": {
     "required": [
       "dataPlaneTransport",
@@ -437,6 +446,7 @@
       "generation",
       "guestLiveness",
       "id",
+      "image",
       "sandboxId",
       "state",
       "updatedAt"
@@ -660,6 +670,14 @@
       "resourceCeiling"
     ]
   },
+  "PublicExecutionImage": {
+    "required": [
+      "requestedReference"
+    ],
+    "optional": [
+      "resolvedDigest"
+    ]
+  },
   "QuotaConstrainingScopes": {
     "required": [
       "activeInstances",
@@ -695,6 +713,14 @@
       "vcpuCount"
     ],
     "optional": []
+  },
+  "RegistryPullCredentials": {
+    "required": [
+      "token"
+    ],
+    "optional": [
+      "username"
+    ]
   },
   "RelocateSandboxRequest": {
     "required": [],
@@ -899,7 +925,9 @@
     ]
   },
   "StartSandboxRequest": {
-    "required": [],
+    "required": [
+      "image"
+    ],
     "optional": [
       "attributedExecution"
     ]

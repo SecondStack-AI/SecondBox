@@ -31,7 +31,7 @@ func TestLifecycleStopCancelsInFlightGenerationSession(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "lifecycle-stop-cancel-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func TestPostgresLivePublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "relay-public-cancel-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func TestPostgresDataPlaneRejectsAdmissionWithoutActiveHomeRunnerConnection(t *t
 		t.Context(),
 		principal,
 		"relay-runner-offline-create",
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  profile.Name,
 			Metadata: map[string]string{},
 		},
@@ -427,7 +427,7 @@ func TestPostgresLiveDataPlanePersistsOneBufferedExecOutcome(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "live-buffered-exec-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -502,7 +502,7 @@ func TestPostgresDirectFileAndTerminalAdmissionsAreDurableAndPayloadFree(t *test
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "direct-file-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -615,7 +615,7 @@ func TestPostgresLiveStreamingExecTerminalOutcomes(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "live-stream-outcomes-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -797,7 +797,7 @@ func TestPostgresDataPlaneReadAdmissionClampsToSessionLimit(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "read-clamp-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -855,7 +855,7 @@ func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testin
 	principal := authenticateCredential(t, controlPlane, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "profile-bounds-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)

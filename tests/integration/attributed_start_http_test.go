@@ -20,7 +20,7 @@ func TestAttributedStartHTTPAdmissionAndReplay(t *testing.T) {
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "attributed-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-attributed-http")
 	principal := authenticateCredential(t, controlPlane, credential)
-	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "attributed-http-create", contracts.CreateSandboxRequest{
+	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "attributed-http-create", contracts.CreateSandboxRequest{Image: testExecutionImage(),
 		Profile: profile.Name, Metadata: map[string]string{},
 	})
 	if err != nil {

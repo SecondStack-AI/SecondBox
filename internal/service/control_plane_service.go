@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/imagecredentials"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -155,6 +156,7 @@ type ControlPlaneConfig struct {
 	IdempotencyRetention  time.Duration
 	PortSessionStore      runnercontrol.PortSessionStore
 	PublicBaseURL         string
+	ImageCredentials      *imagecredentials.Broker
 }
 
 // ControlPlaneService owns validation, authentication, and transaction inputs.
@@ -170,6 +172,7 @@ type ControlPlaneService struct {
 	idempotencyRetention  time.Duration
 	portSessionStore      runnercontrol.PortSessionStore
 	publicBaseURL         string
+	imageCredentials      *imagecredentials.Broker
 }
 
 // SystemClock returns the current time for production control-plane wiring.
@@ -196,6 +199,7 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		idempotencyRetention: config.IdempotencyRetention,
 		liveDataPlane:        config.LiveDataPlane,
 		portSessionStore:     config.PortSessionStore, publicBaseURL: config.PublicBaseURL,
+		imageCredentials: config.ImageCredentials,
 	}
 	if config.DataPlaneStore != nil && config.DataPlanePollInterval <= 0 {
 		return nil, errors.New("SecondBox data-plane poll interval is required with the store")
@@ -414,6 +418,9 @@ func (service *ControlPlaneService) createSandboxOperation(
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
+	if err := request.Image.Validate(); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, invalidRequest(err)
+	}
 	if len(request.SourceSnapshotID) > 128 {
 		return contracts.Sandbox{}, contracts.Operation{}, false,
 			invalidRequest(errors.New("SecondBox source Snapshot ID exceeds its bound"))
@@ -444,6 +451,17 @@ func (service *ControlPlaneService) createSandboxOperation(
 		ID: operationID, SandboxID: sandboxID, Kind: "create", State: contracts.OperationStatePending,
 		RequestID: requestID, CreatedAt: now, UpdatedAt: now,
 	}
+	if request.Image.PullCredentials != nil {
+		if service.imageCredentials == nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, errors.New("SecondBox image credential broker is unavailable")
+		}
+		if err := service.imageCredentials.Store(operation.ID, imagecredentials.PullCredentials{
+			Username: request.Image.PullCredentials.Username,
+			Token:    request.Image.PullCredentials.Token,
+		}); err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, err
+		}
+	}
 	audit := service.newAudit(ctx, principal, "sandbox.created", "sandbox", sandboxID, principal.TenantRef, now)
 	storedSandbox, storedOperation, created, err := service.store.CreateSandbox(ctx, ports.CreateSandboxInput{
 		Principal: principal,
@@ -452,9 +470,22 @@ func (service *ControlPlaneService) createSandboxOperation(
 		IdempotencyEnds:   service.idempotencyExpiration(now),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
 		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID, Resources: request.Resources,
+		LifecycleRequestMetadata: request.Image.LifecycleMetadata(),
 	})
 	if err != nil {
+		if service.imageCredentials != nil {
+			service.imageCredentials.Delete(operation.ID)
+		}
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	if request.Image.PullCredentials != nil && storedOperation.ID != operation.ID {
+		service.imageCredentials.Delete(operation.ID)
+		if err := service.imageCredentials.Store(storedOperation.ID, imagecredentials.PullCredentials{
+			Username: request.Image.PullCredentials.Username,
+			Token:    request.Image.PullCredentials.Token,
+		}); err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, err
+		}
 	}
 	if created {
 		if storedSandbox.EgressContext != nil {
@@ -579,10 +610,14 @@ func (service *ControlPlaneService) StartSandbox(
 	sandboxID string,
 	idempotencyKey string,
 	expectedRevision int64,
+	image contracts.ExecutionImage,
 ) (contracts.Operation, error) {
+	if err := image.Validate(); err != nil {
+		return contracts.Operation{}, invalidRequest(err)
+	}
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "start", contracts.SandboxDesiredStateRunning,
-		idempotencyKey, expectedRevision, nil, nil,
+		idempotencyKey, expectedRevision, image.LifecycleMetadata(), nil, image.PullCredentials,
 	)
 }
 
@@ -596,7 +631,7 @@ func (service *ControlPlaneService) StopSandbox(
 ) (contracts.Operation, error) {
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "stop", contracts.SandboxDesiredStateStopped,
-		idempotencyKey, expectedRevision, nil, nil,
+		idempotencyKey, expectedRevision, nil, nil, nil,
 	)
 }
 
@@ -610,7 +645,7 @@ func (service *ControlPlaneService) DeleteSandbox(
 ) (contracts.Operation, error) {
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "delete", contracts.SandboxDesiredStateDeleted,
-		idempotencyKey, expectedRevision, nil, nil,
+		idempotencyKey, expectedRevision, nil, nil, nil,
 	)
 }
 
@@ -683,6 +718,7 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 	expectedRevision int64,
 	requestMetadata map[string]string,
 	replayed *bool,
+	pullCredentials *contracts.RegistryPullCredentials,
 ) (contracts.Operation, error) {
 	if principal.TenantRef == "" {
 		return contracts.Operation{}, ports.ErrAuthorizationDenied
@@ -707,6 +743,17 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 		State: contracts.OperationStatePending, RequestID: service.requestID(ctx),
 		RequestMetadata: cloneMetadata(requestMetadata), CreatedAt: now, UpdatedAt: now,
 	}
+	if pullCredentials != nil {
+		if service.imageCredentials == nil {
+			return contracts.Operation{}, errors.New("SecondBox image credential broker is unavailable")
+		}
+		if err := service.imageCredentials.Store(operation.ID, imagecredentials.PullCredentials{
+			Username: pullCredentials.Username,
+			Token:    pullCredentials.Token,
+		}); err != nil {
+			return contracts.Operation{}, err
+		}
+	}
 	audit := service.newAudit(
 		ctx, principal, "sandbox."+kind, "sandbox", sandboxID, principal.TenantRef, now,
 	)
@@ -717,7 +764,19 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 		IdempotencyEnds: service.idempotencyExpiration(now), ExpectedRevision: expectedRevision,
 	})
 	if err != nil {
+		if service.imageCredentials != nil {
+			service.imageCredentials.Delete(operation.ID)
+		}
 		return contracts.Operation{}, err
+	}
+	if pullCredentials != nil && storedOperation.ID != operation.ID {
+		service.imageCredentials.Delete(operation.ID)
+		if err := service.imageCredentials.Store(storedOperation.ID, imagecredentials.PullCredentials{
+			Username: pullCredentials.Username,
+			Token:    pullCredentials.Token,
+		}); err != nil {
+			return contracts.Operation{}, err
+		}
 	}
 	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 		return contracts.Operation{}, err
@@ -737,6 +796,7 @@ func (service *ControlPlaneService) MutateSandbox(
 	idempotencyKey string,
 	expectedRevision int64,
 	metadata map[string]string,
+	pullCredentials *contracts.RegistryPullCredentials,
 ) (contracts.Operation, bool, error) {
 	desiredState := contracts.SandboxDesiredStateStopped
 	switch kind {
@@ -751,7 +811,7 @@ func (service *ControlPlaneService) MutateSandbox(
 	var replayed bool
 	operation, err := service.setSandboxDesiredState(
 		ctx, principal, sandboxID, kind, desiredState, idempotencyKey,
-		expectedRevision, metadata, &replayed,
+		expectedRevision, metadata, &replayed, pullCredentials,
 	)
 	return operation, replayed, err
 }

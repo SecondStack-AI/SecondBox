@@ -78,6 +78,7 @@ type ServerConfig struct {
 	WorkWakeups         worknotify.Source
 	Now                 func() time.Time
 	NewConnectionID     func() string
+	CommandEnricher     func(*runnerv1.ControlPlaneToRunner) error
 }
 
 // Server terminates the authenticated runner-initiated gRPC stream.
@@ -493,6 +494,11 @@ func (server *Server) sendNextOutboundFrame(
 	streamSendDurations := make([]time.Duration, len(deliveries))
 	for index := range deliveries {
 		delivery := &deliveries[index]
+		if server.config.CommandEnricher != nil {
+			if err := server.config.CommandEnricher(delivery.Message); err != nil {
+				return false, fmt.Errorf("SecondBox runner command enrichment: %w", err)
+			}
+		}
 		streamSendStartedAt := time.Now()
 		if err := stream.Send(delivery.Message); err != nil {
 			persistErr := server.config.StateStore.MarkCommandsDelivered(

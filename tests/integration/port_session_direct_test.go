@@ -363,7 +363,7 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 	principal := authenticateCredential(t, controlPlane, key.Credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "direct-port-sandbox-"+name,
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)

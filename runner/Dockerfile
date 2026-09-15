@@ -45,7 +45,7 @@ ARG PUBLIC_CONTRACT_DIGEST
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      bubblewrap ca-certificates e2fsprogs iproute2 iptables nftables procps util-linux \
+      bubblewrap ca-certificates e2fsprogs iproute2 iptables nftables procps skopeo util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 secondbox-runner \
     && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/secondbox-runner --create-home --shell /usr/sbin/nologin secondbox-runner \
@@ -65,8 +65,9 @@ COPY --from=firecracker-release /out-LICENSE /usr/share/licenses/firecracker/LIC
 COPY --from=firecracker-release /out-NOTICE /usr/share/licenses/firecracker/NOTICE
 COPY --from=firecracker-release /out-THIRD-PARTY /usr/share/licenses/firecracker/THIRD-PARTY
 COPY LICENSE /usr/share/licenses/secondbox-runner/LICENSE
-COPY --chmod=0755 runner/scripts/container/secondbox-runner-entrypoint.sh /usr/local/bin/secondbox-runner-entrypoint
-COPY --chmod=0755 runner/scripts/microvm-host-network-setup.sh /usr/local/bin/microvm-host-network-setup
+COPY runner/scripts/container/secondbox-runner-entrypoint.sh /usr/local/bin/secondbox-runner-entrypoint
+COPY runner/scripts/microvm-host-network-setup.sh /usr/local/bin/microvm-host-network-setup
+RUN chmod 0755 /usr/local/bin/secondbox-runner-entrypoint /usr/local/bin/microvm-host-network-setup
 
 USER 0:0
 WORKDIR /var/lib/secondbox-runner

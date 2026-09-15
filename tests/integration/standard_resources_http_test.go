@@ -119,7 +119,7 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 		t.Fatal(err)
 	}
 	principal := authenticateCredential(t, controlPlane, credential)
-	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "standard-isolated-pinning", secondboxclient.CreateSandboxRequest{Profile: standardresources.AgentCompartmentIsolated, Metadata: map[string]string{}})
+	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "standard-isolated-pinning", secondboxclient.CreateSandboxRequest{Image: testExecutionImage(), Profile: standardresources.AgentCompartmentIsolated, Metadata: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}

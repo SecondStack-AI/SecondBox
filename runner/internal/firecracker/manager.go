@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
@@ -75,6 +76,7 @@ type Manager struct {
 	evidence             runnerevidence.Sink
 	runnerID             string
 	workspaceStore       workspacestore.WorkspaceStore
+	executionImages      *executionimage.Manager
 }
 
 // SetWorkspaceStore binds the provider-neutral local workspace authority before
@@ -276,6 +278,10 @@ func New(cfg *config.Config) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verify microVM trust anchor: %w", err)
 	}
+	executionImages, err := executionimage.NewManager(cfg)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.MicroVMAllowUnjailed {
 		if relocated, ok := relocateRunDirForUnixSockets(cfg.MicroVMRunDir); ok {
 			originalRunDir := cfg.MicroVMRunDir
@@ -304,6 +310,7 @@ func New(cfg *config.Config) (*Manager, error) {
 		jailerUIDs:        map[int]string{},
 		network:           IPTapConfigurer{},
 		trustedArtifacts:  trustedArtifacts,
+		executionImages:   executionImages,
 		snapshotTemplates: snapshotTemplates,
 		evidence:          runnerevidence.SlogSink{},
 		signalInstance:    signalFirecrackerByID,

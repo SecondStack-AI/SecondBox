@@ -41,7 +41,7 @@ func TestPublicTerminalDeliversOverLiveDataPlaneRatherThanPollInterval(t *testin
 	principal := authenticateCredential(t, controlPlane, key.Credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "terminal-wakeup-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
