@@ -53,7 +53,7 @@ func TestOperationResolutionRejectsReferenceSubstitution(t *testing.T) {
 func TestRegistryCertificateArgsRequireExplicitCA(t *testing.T) {
 	root := t.TempDir()
 	manager := &Manager{registryCertificates: root}
-	if args := manager.registryCertificateArgs("registry.example:5443"); args != nil {
+	if args := manager.registryCertificateArgs("registry.example:5443", "--cert-dir"); args != nil {
 		t.Fatalf("certificate arguments without CA = %#v", args)
 	}
 	directory := filepath.Join(root, "registry.example:5443")
@@ -63,8 +63,12 @@ func TestRegistryCertificateArgsRequireExplicitCA(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "ca.crt"), []byte("test CA"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--cert-dir", directory}
-	if args := manager.registryCertificateArgs("registry.example:5443"); !slices.Equal(args, want) {
-		t.Fatalf("certificate arguments = %#v, want %#v", args, want)
+	inspectWant := []string{"--cert-dir", directory}
+	if args := manager.registryCertificateArgs("registry.example:5443", "--cert-dir"); !slices.Equal(args, inspectWant) {
+		t.Fatalf("inspect certificate arguments = %#v, want %#v", args, inspectWant)
+	}
+	copyWant := []string{"--src-cert-dir", directory}
+	if args := manager.registryCertificateArgs("registry.example:5443", "--src-cert-dir"); !slices.Equal(args, copyWant) {
+		t.Fatalf("copy certificate arguments = %#v, want %#v", args, copyWant)
 	}
 }

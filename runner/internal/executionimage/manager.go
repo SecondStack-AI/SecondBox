@@ -89,8 +89,8 @@ func (manager *Manager) Prepare(
 		return PreparedImage{}, err
 	}
 	defer cleanupAuth()
-	certificateArgs := manager.registryCertificateArgs(registry)
-	resolvedDigest, err := manager.resolveOperationDigest(ctx, operationID, image.Reference, authFile, certificateArgs)
+	inspectCertificateArgs := manager.registryCertificateArgs(registry, "--cert-dir")
+	resolvedDigest, err := manager.resolveOperationDigest(ctx, operationID, image.Reference, authFile, inspectCertificateArgs)
 	if err != nil {
 		return PreparedImage{}, err
 	}
@@ -118,7 +118,7 @@ func (manager *Manager) Prepare(
 	defer os.RemoveAll(workDirectory)
 	archivePath := filepath.Join(workDirectory, "image.tar")
 	args := []string{"copy"}
-	args = append(args, certificateArgs...)
+	args = append(args, manager.registryCertificateArgs(registry, "--src-cert-dir")...)
 	if authFile != "" {
 		args = append(args, "--authfile", authFile)
 	}
@@ -223,10 +223,10 @@ func (manager *Manager) resolveDigest(ctx context.Context, reference, authFile s
 	return digest, nil
 }
 
-func (manager *Manager) registryCertificateArgs(registry string) []string {
+func (manager *Manager) registryCertificateArgs(registry, flag string) []string {
 	certificateDirectory := filepath.Join(manager.registryCertificates, registry)
 	if _, err := os.Stat(filepath.Join(certificateDirectory, "ca.crt")); err == nil {
-		return []string{"--cert-dir", certificateDirectory}
+		return []string{flag, certificateDirectory}
 	}
 	return nil
 }
