@@ -58,12 +58,21 @@ guest writes can change allocation during observation; this is sampled evidence,
 not an atomic filesystem snapshot. Pending/unknown extent allocation leaves
 `exclusiveBytes` absent with `exclusiveReason: "exclusive_extents_unstable"`.
 
-The scan visits at most 64 directory entries per call and requests at most 4,096
+One background scan per Runner visits at most 64 directory entries per call and requests at most 4,096
 extents per image in one ioctl. An incomplete map omits `exclusiveBytes` with
 `exclusiveReason: "exclusive_extent_limit"`; it never reports a partial sum.
 Btrfs determines sharing by walking backrefs, which can be slow for heavily
 shared extents on older kernels. The extent cap does not impose a wall-clock
-deadline on an individual kernel ioctl.
+deadline on an individual kernel ioctl. Heartbeats only consume completed batches;
+they never wait for the scan. A blocked ioctl cannot delay command consumption or
+heartbeats, and reconnects do not start additional scans while it remains blocked.
+Completed results retain their original `observedAt`; cancelled incomplete scans
+do not refresh prior observations.
+
+An unshared encoded extent (including btrfs compression) omits `exclusiveBytes`
+with `exclusiveReason: "exclusive_extents_encoded"`. FIEMAP exposes its logical
+length, which cannot establish a physical lower bound. Shared encoded extents
+contribute zero and do not prevent measuring the remaining unshared extents.
 
 Unsupported FIEMAP (`ENOTTY`/`EOPNOTSUPP`, or a non-Linux Runner) leaves
 `exclusiveBytes` absent with `exclusiveReason: "fiemap_unsupported"`; other probe

@@ -30,16 +30,30 @@ func TestWorkspaceStorageObservationRealReflink(t *testing.T) {
 	if _, err := store.Create(t.Context(), CreateWorkspaceRequest{Mutation: testMutation("create-real", "real"), CapacityBytes: capacity}); err != nil {
 		t.Fatal(err)
 	}
-	fresh := store.observeWorkspaceStorage("real")
-	if runtime.GOOS == "linux" {
-		if fresh.AllocatedBytes == nil || fresh.ExclusiveBytes == nil || *fresh.ExclusiveBytes > 1024*1024 || *fresh.AllocatedBytes < 64*1024*1024 {
-			t.Fatalf("fresh reflink observation = %+v", fresh)
-		}
-		t.Logf("fresh 2 GiB Workspace: allocatedBytes=%d exclusiveBytes=%d", *fresh.AllocatedBytes, *fresh.ExclusiveBytes)
-	}
 	attachment, err := store.Open(t.Context(), "real", 1)
 	if err != nil {
 		t.Fatal(err)
+	}
+	freshInfo, err := attachment.Descriptor().Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := store.observeWorkspaceStorage("real")
+	if fresh.AllocatedBytes == nil || *fresh.AllocatedBytes != freshInfo.Sys().(*syscall.Stat_t).Blocks*512 {
+		t.Fatalf("fresh allocated observation differs from st_blocks: %+v", fresh)
+	}
+	if runtime.GOOS == "linux" {
+		if fresh.ExclusiveBytes == nil {
+			if fresh.ExclusiveReason != "exclusive_extents_encoded" {
+				t.Fatalf("fresh exclusive observation: %+v", fresh)
+			}
+			t.Logf("fresh 2 GiB Workspace: allocatedBytes=%d exclusiveReason=%s", *fresh.AllocatedBytes, fresh.ExclusiveReason)
+		} else {
+			if *fresh.ExclusiveBytes > 1024*1024 {
+				t.Fatalf("fresh reflink has too much exclusive allocation: %+v", fresh)
+			}
+			t.Logf("fresh 2 GiB Workspace: allocatedBytes=%d exclusiveBytes=%d", *fresh.AllocatedBytes, *fresh.ExclusiveBytes)
+		}
 	}
 	if _, err := attachment.Descriptor().WriteAt([]byte("retained"), capacity-4096); err != nil {
 		t.Fatal(err)
@@ -55,8 +69,14 @@ func TestWorkspaceStorageObservationRealReflink(t *testing.T) {
 	if observed.AllocatedBytes == nil || *observed.AllocatedBytes != info.Sys().(*syscall.Stat_t).Blocks*512 || *observed.AllocatedBytes >= capacity {
 		t.Fatalf("real sparse observation: %+v", observed)
 	}
-	if runtime.GOOS == "linux" && (observed.ExclusiveBytes == nil || *observed.ExclusiveBytes < *fresh.ExclusiveBytes+4096) {
-		t.Fatalf("write did not grow exclusive allocation: %+v", observed)
+	if runtime.GOOS == "linux" {
+		if observed.ExclusiveBytes == nil {
+			if observed.ExclusiveReason != "exclusive_extents_encoded" {
+				t.Fatalf("written exclusive observation: %+v", observed)
+			}
+		} else if fresh.ExclusiveBytes != nil && *observed.ExclusiveBytes < *fresh.ExclusiveBytes+4096 {
+			t.Fatalf("write did not grow exclusive allocation: %+v", observed)
+		}
 	}
 	if err := attachment.Close(); err != nil {
 		t.Fatal(err)

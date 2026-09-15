@@ -36,7 +36,7 @@ func TestScenarioWorkspaceStorageObservationPreservesStoppedFilesAndActivity(t *
 		for {
 			observed := scenarioJSON[contracts.Sandbox](t, ctx, fixture.subject, "getSandbox", secondboxclient.CallOptions{PathParameters: map[string]string{"sandboxId": handle.Snapshot().ID}})
 			storage := observed.Workspace.StorageObservation
-			if storage.Status == "available" && storage.ObservedAt != nil && storage.ObservedAt.After(after) && (storage.ExclusiveBytes != nil || os.Getenv("SECONDBOX_SCENARIO_HOST_PLATFORM") == "darwin") {
+			if storage.Status == "available" && storage.ObservedAt != nil && storage.ObservedAt.After(after) && (storage.ExclusiveBytes != nil || storage.ExclusiveReason == "exclusive_extents_encoded" || os.Getenv("SECONDBOX_SCENARIO_HOST_PLATFORM") == "darwin") {
 				return observed
 			}
 			select {
@@ -55,6 +55,9 @@ func TestScenarioWorkspaceStorageObservationPreservesStoppedFilesAndActivity(t *
 			t.Fatalf("8 MiB guest write grew exclusive bytes by %d (before=%d after=%d)", growth, *baseline.ExclusiveBytes, *written.ExclusiveBytes)
 		}
 		t.Logf("running Sandbox 8 MiB write: exclusiveBytes %d -> %d, growth=%d", *baseline.ExclusiveBytes, *written.ExclusiveBytes, growth)
+	}
+	if baseline.ExclusiveBytes == nil || written.ExclusiveBytes == nil {
+		t.Logf("exclusive growth unavailable: before=%s after=%s", baseline.ExclusiveReason, written.ExclusiveReason)
 	}
 	content := []byte("retained file measured without compute activity\n")
 	writeScenarioFile(t, ctx, fixture.subject, handle, "observation.txt", content)

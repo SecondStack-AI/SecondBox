@@ -36,6 +36,8 @@
 
 ### Fixed
 
+- Kept Workspace storage probes off the Runner heartbeat and command paths, bounded scans across reconnects, and omitted exclusive-byte measurements when unshared encoded extents prevent physical accounting.
+
 - Distinguished missing Workspace files from missing Sandbox compute in data-plane errors, preserving generation fencing for stopped Sandboxes.
 
 - Fixed port forwarding to bound every session by its granted Lease lifetime and keep individual connection failures from stopping other connections. Guided-install smoke runs now wait for Sandbox deletion to release capacity before starting the next run.

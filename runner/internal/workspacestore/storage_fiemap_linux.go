@@ -14,6 +14,7 @@ const (
 	fiemapExtentLast           = 0x00000001
 	fiemapExtentUnknown        = 0x00000002
 	fiemapExtentDelalloc       = 0x00000004
+	fiemapExtentEncoded        = 0x00000008
 	fiemapExtentShared         = 0x00002000
 )
 
@@ -78,6 +79,11 @@ func measureWorkspaceExclusiveBytes(probe func(*workspaceFiemap) error) (*int64,
 		end = extent.Logical + extent.Length
 		// Unwritten extents are allocated and must count unless shared.
 		if extent.Flags&fiemapExtentShared == 0 {
+			// Encoded (including compressed) extent lengths are logical bytes;
+			// FIEMAP does not expose their reclaimable physical allocation.
+			if extent.Flags&fiemapExtentEncoded != 0 {
+				return nil, "exclusive_extents_encoded"
+			}
 			if extent.Length > uint64(math.MaxInt64-exclusive) {
 				return nil, "exclusive_probe_failed"
 			}

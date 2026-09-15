@@ -27,6 +27,7 @@ func TestWorkspaceExclusiveStorageValidation(t *testing.T) {
 		{name: "unsupported", allocated: &allocated, reason: "fiemap_unsupported", valid: true},
 		{name: "cap", allocated: &allocated, reason: "exclusive_extent_limit", valid: true},
 		{name: "unstable", allocated: &allocated, reason: "exclusive_extents_unstable", valid: true},
+		{name: "encoded", allocated: &allocated, reason: "exclusive_extents_encoded", valid: true},
 		{name: "probe failed", allocated: &allocated, reason: "exclusive_probe_failed", valid: true},
 		{name: "unknown reason", allocated: &allocated, reason: "unknown"},
 		{name: "value and reason", allocated: &allocated, exclusive: &exclusive, reason: "fiemap_unsupported"},

@@ -1120,7 +1120,7 @@ export type WorkspacePath = string;
 export interface WorkspaceStorageObservation {
   readonly allocatedBytes?: number;
   readonly exclusiveBytes?: number;
-  readonly exclusiveReason?: "fiemap_unsupported" | "exclusive_probe_failed" | "exclusive_extent_limit" | "exclusive_extents_unstable";
+  readonly exclusiveReason?: "fiemap_unsupported" | "exclusive_probe_failed" | "exclusive_extent_limit" | "exclusive_extents_unstable" | "exclusive_extents_encoded";
   readonly observedAt?: Timestamp;
   readonly pressure: StoragePressureObservation;
   readonly reason?: "not_observed" | "missing" | "probe_failed" | "deleted";

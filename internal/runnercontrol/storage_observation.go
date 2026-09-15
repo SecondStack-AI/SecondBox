@@ -47,7 +47,7 @@ func persistWorkspaceStorageObservations(ctx context.Context, tx pgx.Tx, heartbe
 				return fmt.Errorf("SecondBox Workspace exclusive storage observation requires allocated storage")
 			}
 			switch item.ExclusiveReason {
-			case "fiemap_unsupported", "exclusive_probe_failed", "exclusive_extent_limit", "exclusive_extents_unstable":
+			case "fiemap_unsupported", "exclusive_probe_failed", "exclusive_extent_limit", "exclusive_extents_unstable", "exclusive_extents_encoded":
 				observation.ExclusiveReason = item.ExclusiveReason
 			default:
 				return fmt.Errorf("SecondBox Workspace exclusive storage observation reason is invalid")

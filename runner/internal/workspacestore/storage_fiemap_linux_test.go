@@ -1,7 +1,10 @@
 package workspacestore
 
 import (
+	"bytes"
 	"math"
+	"os"
+	"syscall"
 	"testing"
 	"unsafe"
 
@@ -35,6 +38,8 @@ func TestWorkspaceExclusiveBytesFiemap(t *testing.T) {
 		{name: "delayed allocation is not partial", extents: []workspaceFiemapExtent{{Length: 4096}, {Logical: 4096, Length: 4096, Flags: fiemapExtentDelalloc | fiemapExtentLast}}, reason: "exclusive_extents_unstable"},
 		{name: "unknown", extents: []workspaceFiemapExtent{{Length: 4096, Flags: fiemapExtentUnknown | fiemapExtentLast}}, reason: "exclusive_extents_unstable"},
 		{name: "overflow", extents: []workspaceFiemapExtent{{Length: math.MaxUint64, Flags: fiemapExtentLast}}, reason: "exclusive_probe_failed"},
+		{name: "encoded is not physical bytes", extents: []workspaceFiemapExtent{{Length: 4096}, {Logical: 4096, Length: 65536, Flags: fiemapExtentEncoded | fiemapExtentLast}}, reason: "exclusive_extents_encoded"},
+		{name: "shared encoded contributes zero", extents: []workspaceFiemapExtent{{Length: 65536, Flags: fiemapExtentShared | fiemapExtentEncoded | fiemapExtentLast}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, reason := measureWorkspaceExclusiveBytes(func(mapping *workspaceFiemap) error {
@@ -50,4 +55,37 @@ func TestWorkspaceExclusiveBytesFiemap(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWorkspaceExclusiveBytesRealCompressedBtrfs(t *testing.T) {
+	parent := os.Getenv("SECONDBOX_WORKSPACESTORE_COMPRESSED_QUALIFICATION_FILESYSTEM")
+	if parent == "" {
+		t.Skip("compressed btrfs qualification filesystem must be explicit")
+	}
+	file, err := os.CreateTemp(parent, "secondbox-compressed-observation-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Remove(file.Name()); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer file.Close()
+	if _, err := file.Write(bytes.Repeat([]byte("compressed Workspace observation\n"), 8192)); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocated := info.Sys().(*syscall.Stat_t).Blocks * 512
+	exclusive, reason := observeExclusiveBytes(file)
+	if exclusive != nil || reason != "exclusive_extents_encoded" {
+		t.Fatalf("compressed extent result=%v reason=%q", exclusive, reason)
+	}
+	t.Logf("compressed file: logicalBytes=%d allocatedBytes=%d exclusiveReason=%s", info.Size(), allocated, reason)
 }

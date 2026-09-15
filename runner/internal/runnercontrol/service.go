@@ -236,6 +236,9 @@ type RunnerProtocolService struct {
 	workspaceRelocationSources map[string]*workspaceRelocationSource
 	workspaceRelocationTargets map[string]*workspaceRelocationTarget
 	supportedEgressContexts    map[string]struct{}
+	storageObservationMu       sync.Mutex
+	storageObservationRunning  bool
+	storageObservationResult   *workspaceStorageResult
 }
 
 // NewRunnerProtocolService validates immutable identity before creating the composition root.
@@ -469,6 +472,8 @@ func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
 }
 
 func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := s.connector.Connect(ctx)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner protocol connect: %w", err)
@@ -519,7 +524,7 @@ func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, e
 	); err != nil {
 		return false, err
 	}
-	if err := s.sendHeartbeat(stream, welcome.ConnectionId, readiness); err != nil {
+	if err := s.sendHeartbeat(ctx, stream, welcome.ConnectionId, readiness); err != nil {
 		return true, err
 	}
 	return true, s.consumeCommands(ctx, stream, welcome, readiness)
@@ -849,7 +854,7 @@ func (s *RunnerProtocolService) sendHeartbeats(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.sendHeartbeat(stream, connectionID, readiness); err != nil {
+			if err := s.sendHeartbeat(ctx, stream, connectionID, readiness); err != nil {
 				select {
 				case asyncErrors <- err:
 				case <-ctx.Done():
@@ -1489,18 +1494,14 @@ func (s *RunnerProtocolService) handleDrain(
 }
 
 func (s *RunnerProtocolService) sendHeartbeat(
+	ctx context.Context,
 	stream RunnerProtocolStream,
 	connectionID string,
 	readiness BackendReadiness,
 ) error {
-	var storage []*runnerprotocol.WorkspaceStorageObservation
-	var pressure *runnerprotocol.StoragePressureObservation
-	if backend, ok := s.backend.(workspaceStorageBackend); ok {
-		var err error
-		storage, pressure, err = backend.ObserveWorkspaceStorage(context.Background())
-		if err != nil {
-			return fmt.Errorf("SecondBox Runner storage observation failed: %w", err)
-		}
+	observation := s.pollWorkspaceStorage(ctx)
+	if observation.err != nil {
+		return fmt.Errorf("SecondBox Runner storage observation failed: %w", observation.err)
 	}
 	return s.sendSequencedRunnerFrame(
 		stream,
@@ -1518,8 +1519,8 @@ func (s *RunnerProtocolService) sendHeartbeat(
 						ActiveAssignments: s.activeAssignments(),
 						DrainPhase:        s.drainPhase(),
 						StartupTiming:     s.startupTiming(),
-						WorkspaceStorage:  storage,
-						StoragePressure:   pressure,
+						WorkspaceStorage:  observation.storage,
+						StoragePressure:   observation.pressure,
 
 						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
 					},
