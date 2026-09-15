@@ -103,7 +103,7 @@ func TestSandboxRequestedResourcesHTTPAndQuota(t *testing.T) {
 					response.Body.Close()
 				}
 			}
-			response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resource-over", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 5}})
+			response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resource-over", map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 5}})
 			if response.StatusCode != http.StatusBadRequest {
 				t.Fatalf("above ceiling status=%d body=%s", response.StatusCode, readResponse(t, response))
 			}
@@ -291,7 +291,7 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 		{"memory quota", map[string]int64{"memoryBytes": 1 << 30}, http.StatusTooManyRequests, "quota_exceeded"},
 		{"rounded disk ceiling", map[string]int64{"workspaceBytes": 8<<30 + 1<<20}, http.StatusBadRequest, "resources_exceed_profile"},
 	} {
-		response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-"+strings.ReplaceAll(test.name, " ", "-"), map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": test.resources})
+		response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-"+strings.ReplaceAll(test.name, " ", "-"), map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": test.resources})
 		if response.StatusCode != test.status {
 			t.Fatalf("%s status=%d body=%s", test.name, response.StatusCode, readResponse(t, response))
 		}
