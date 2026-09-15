@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -839,6 +840,22 @@ func TestProtocolServiceExecCancellationKillsProcessGroupDescendant(t *testing.T
 		err := unix.Kill(childPID, 0)
 		if errors.Is(err, unix.ESRCH) {
 			return
+		}
+		if err != nil {
+			t.Fatalf("inspect descendant process %d: %v", childPID, err)
+		}
+		if runtime.GOOS == "linux" {
+			status, readErr := os.ReadFile(fmt.Sprintf("/proc/%d/stat", childPID))
+			if errors.Is(readErr, os.ErrNotExist) {
+				return
+			}
+			if readErr != nil {
+				t.Fatalf("read descendant process %d status: %v", childPID, readErr)
+			}
+			closingName := strings.LastIndex(string(status), ") ")
+			if closingName >= 0 && len(status) > closingName+2 && status[closingName+2] == 'Z' {
+				return
+			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
