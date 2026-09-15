@@ -1115,9 +1115,11 @@ export interface Workspace {
 
 export type WorkspacePath = string;
 
-/** Stat-only observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include blocks shared through reflinks and Snapshots; they are not guest filesystem usage or unique physical consumption. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity. */
+/** Read-only metadata observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include shared blocks. Exclusive bytes sum extents unshared with templates, Snapshots, or other Workspaces and represent image bytes deletion would free. Neither measures guest filesystem usage. Summed exclusive bytes are a physical lower bound; summed allocated bytes are not. Both measurements use the same image descriptor and timestamp. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity. */
 export interface WorkspaceStorageObservation {
   readonly allocatedBytes?: number;
+  readonly exclusiveBytes?: number;
+  readonly exclusiveReason?: "fiemap_unsupported" | "exclusive_probe_failed" | "exclusive_extent_limit" | "exclusive_extents_unstable";
   readonly observedAt?: Timestamp;
   readonly pressure: StoragePressureObservation;
   readonly reason?: "not_observed" | "missing" | "probe_failed" | "deleted";

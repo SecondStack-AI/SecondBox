@@ -3,6 +3,7 @@ package workspacestore
 import (
 	"errors"
 	"os"
+	"runtime"
 	"syscall"
 	"testing"
 )
@@ -21,18 +22,26 @@ func TestWorkspaceStorageObservationRealReflink(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	store, err := New(t.Context(), Config{Root: root, FormatterKind: FormatterMke2fs, TemplateCapacityBytes: minimumExt4Bytes})
+	const capacity = int64(2 * 1024 * 1024 * 1024)
+	store, err := New(t.Context(), Config{Root: root, FormatterKind: FormatterMke2fs, TemplateCapacityBytes: capacity})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(t.Context(), CreateWorkspaceRequest{Mutation: testMutation("create-real", "real"), CapacityBytes: minimumExt4Bytes}); err != nil {
+	if _, err := store.Create(t.Context(), CreateWorkspaceRequest{Mutation: testMutation("create-real", "real"), CapacityBytes: capacity}); err != nil {
 		t.Fatal(err)
+	}
+	fresh := store.observeWorkspaceStorage("real")
+	if runtime.GOOS == "linux" {
+		if fresh.AllocatedBytes == nil || fresh.ExclusiveBytes == nil || *fresh.ExclusiveBytes > 1024*1024 || *fresh.AllocatedBytes < 64*1024*1024 {
+			t.Fatalf("fresh reflink observation = %+v", fresh)
+		}
+		t.Logf("fresh 2 GiB Workspace: allocatedBytes=%d exclusiveBytes=%d", *fresh.AllocatedBytes, *fresh.ExclusiveBytes)
 	}
 	attachment, err := store.Open(t.Context(), "real", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := attachment.Descriptor().WriteAt([]byte("retained"), minimumExt4Bytes-4096); err != nil {
+	if _, err := attachment.Descriptor().WriteAt([]byte("retained"), capacity-4096); err != nil {
 		t.Fatal(err)
 	}
 	if err := attachment.Descriptor().Sync(); err != nil {
@@ -43,8 +52,11 @@ func TestWorkspaceStorageObservationRealReflink(t *testing.T) {
 		t.Fatal(err)
 	}
 	observed := store.observeWorkspaceStorage("real")
-	if observed.AllocatedBytes == nil || *observed.AllocatedBytes != info.Sys().(*syscall.Stat_t).Blocks*512 || *observed.AllocatedBytes >= minimumExt4Bytes {
+	if observed.AllocatedBytes == nil || *observed.AllocatedBytes != info.Sys().(*syscall.Stat_t).Blocks*512 || *observed.AllocatedBytes >= capacity {
 		t.Fatalf("real sparse observation: %+v", observed)
+	}
+	if runtime.GOOS == "linux" && (observed.ExclusiveBytes == nil || *observed.ExclusiveBytes < *fresh.ExclusiveBytes+4096) {
+		t.Fatalf("write did not grow exclusive allocation: %+v", observed)
 	}
 	if err := attachment.Close(); err != nil {
 		t.Fatal(err)
@@ -55,6 +67,9 @@ func TestWorkspaceStorageObservationRealReflink(t *testing.T) {
 	shared := store.observeWorkspaceStorage("real")
 	if shared.AllocatedBytes == nil || *shared.AllocatedBytes != *observed.AllocatedBytes {
 		t.Fatalf("reflink changes are not unique-byte accounting: %+v", shared)
+	}
+	if runtime.GOOS == "linux" && (shared.ExclusiveBytes == nil || *shared.ExclusiveBytes != 0) {
+		t.Fatalf("Snapshot must share all current image extents: %+v", shared)
 	}
 }
 

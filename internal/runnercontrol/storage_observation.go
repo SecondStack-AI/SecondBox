@@ -36,6 +36,23 @@ func persistWorkspaceStorageObservations(ctx context.Context, tx pgx.Tx, heartbe
 		} else if item.UnavailableReason != "missing" && item.UnavailableReason != "probe_failed" {
 			return fmt.Errorf("SecondBox Workspace storage observation reason is invalid")
 		}
+		if item.ExclusiveBytes != nil {
+			if item.AllocatedBytes == nil || item.GetExclusiveBytes() > math.MaxInt64 || item.ExclusiveReason != "" {
+				return fmt.Errorf("SecondBox Workspace exclusive storage observation is invalid")
+			}
+			exclusive := int64(item.GetExclusiveBytes())
+			observation.ExclusiveBytes = &exclusive
+		} else if item.ExclusiveReason != "" {
+			if item.AllocatedBytes == nil {
+				return fmt.Errorf("SecondBox Workspace exclusive storage observation requires allocated storage")
+			}
+			switch item.ExclusiveReason {
+			case "fiemap_unsupported", "exclusive_probe_failed", "exclusive_extent_limit", "exclusive_extents_unstable":
+				observation.ExclusiveReason = item.ExclusiveReason
+			default:
+				return fmt.Errorf("SecondBox Workspace exclusive storage observation reason is invalid")
+			}
+		}
 		encoded, err := json.Marshal(observation)
 		if err != nil {
 			return err

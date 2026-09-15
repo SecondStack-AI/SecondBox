@@ -1098,11 +1098,13 @@ type Workspace struct {
 
 type WorkspacePath = string
 
-// WorkspaceStorageObservation Stat-only observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include blocks shared through reflinks and Snapshots; they are not guest filesystem usage or unique physical consumption. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity.
+// WorkspaceStorageObservation Read-only metadata observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include shared blocks. Exclusive bytes sum extents unshared with templates, Snapshots, or other Workspaces and represent image bytes deletion would free. Neither measures guest filesystem usage. Summed exclusive bytes are a physical lower bound; summed allocated bytes are not. Both measurements use the same image descriptor and timestamp. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity.
 type WorkspaceStorageObservation struct {
-	AllocatedBytes *int64                     `json:"allocatedBytes,omitempty"`
-	ObservedAt     *Timestamp                 `json:"observedAt,omitempty"`
-	Pressure       StoragePressureObservation `json:"pressure"`
-	Reason         *string                    `json:"reason,omitempty"`
-	Status         string                     `json:"status"`
+	AllocatedBytes  *int64                     `json:"allocatedBytes,omitempty"`
+	ExclusiveBytes  *int64                     `json:"exclusiveBytes,omitempty"`
+	ExclusiveReason *string                    `json:"exclusiveReason,omitempty"`
+	ObservedAt      *Timestamp                 `json:"observedAt,omitempty"`
+	Pressure        StoragePressureObservation `json:"pressure"`
+	Reason          *string                    `json:"reason,omitempty"`
+	Status          string                     `json:"status"`
 }

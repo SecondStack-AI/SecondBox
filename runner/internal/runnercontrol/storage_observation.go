@@ -23,6 +23,11 @@ func ObserveWorkspaceStorage(ctx context.Context, store workspacestore.Workspace
 			value := uint64(*observation.AllocatedBytes)
 			item.AllocatedBytes = &value
 		}
+		if observation.ExclusiveBytes != nil {
+			value := uint64(*observation.ExclusiveBytes)
+			item.ExclusiveBytes = &value
+		}
+		item.ExclusiveReason = observation.ExclusiveReason
 		result = append(result, item)
 	}
 	return result, nil

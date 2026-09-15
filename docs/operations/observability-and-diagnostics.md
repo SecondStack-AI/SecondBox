@@ -41,13 +41,38 @@ provide `GetSubjectCapacity` and `getSubjectCapacity` respectively.
 Sandbox reads and listings include `workspace.storageObservation`. `sizeBytes`
 remains logical filesystem capacity. An available observation reports
 `allocatedBytes`: the current image inode's allocated 512-byte blocks, including
-blocks shared by reflinks and Snapshots. This is not guest filesystem usage or
-uniquely consumed physical disk. Do not sum it with Snapshot allocations as an
-exact host total. Guest-used bytes are not collected: observing a retained
-Workspace never boots compute or mounts its filesystem.
+blocks shared by reflinks and Snapshots. Optional `exclusiveBytes` sums the current
+image's FIEMAP extent lengths without `FIEMAP_EXTENT_SHARED`, including allocated
+unwritten extents and excluding holes. Exclusive means unshared with anything:
+the capacity template, Snapshots, or other Workspaces. It represents image bytes
+that deleting this Workspace would free. Neither field is guest filesystem usage.
+Summing `exclusiveBytes` across Workspaces gives a physical lower bound; summing
+`allocatedBytes` overcounts shared blocks and is not a physical consumption total.
+On filesystems that never set the shared flag (such as ext4 or overlay), all
+allocated extents count as exclusive; lack of shared flags is not an error.
 
-Unavailable measurements have no byte value and use `not_observed`, `missing`,
-`probe_failed`, or `deleted`. An actual observation includes its original
+Both fields use the same read-only image descriptor, generation, and `observedAt`.
+Observation only reads inode and extent metadata: it never boots compute, mounts
+the guest filesystem, writes data, or requests FIEMAP synchronization. Concurrent
+guest writes can change allocation during observation; this is sampled evidence,
+not an atomic filesystem snapshot. Pending/unknown extent allocation leaves
+`exclusiveBytes` absent with `exclusiveReason: "exclusive_extents_unstable"`.
+
+The scan visits at most 64 directory entries per call and requests at most 4,096
+extents per image in one ioctl. An incomplete map omits `exclusiveBytes` with
+`exclusiveReason: "exclusive_extent_limit"`; it never reports a partial sum.
+Btrfs determines sharing by walking backrefs, which can be slow for heavily
+shared extents on older kernels. The extent cap does not impose a wall-clock
+deadline on an individual kernel ioctl.
+
+Unsupported FIEMAP (`ENOTTY`/`EOPNOTSUPP`, or a non-Linux Runner) leaves
+`exclusiveBytes` absent with `exclusiveReason: "fiemap_unsupported"`; other probe
+failures use `exclusive_probe_failed`. In each case `status` remains `available`
+and `allocatedBytes` remains available. A measured zero is present as
+`exclusiveBytes: 0`. Older observations can omit both exclusive fields.
+
+Wholly unavailable observations have no byte values and use a `reason` of
+`not_observed`, `missing`, `probe_failed`, or `deleted`. An actual observation includes its original
 `observedAt`; no report leaves the previous timestamp unchanged. Compare that
 timestamp with the current time to identify stale evidence. A wholly absent
 Workspace directory is not discovered by the local scan and leaves its last

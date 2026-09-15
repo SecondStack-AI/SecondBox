@@ -15,6 +15,8 @@
 
 ### Added
 
+- Added optional `exclusiveBytes` to Workspace storage observations, measuring image extents unshared with templates, Snapshots, or other Workspaces. Allocated bytes remain available when FIEMAP is unsupported or exceeds the bounded scan, with a separate exclusive-measurement reason.
+
 - Added application-scoped quota headroom and retained Workspace storage observations, including allocated image blocks and admission-pressure freshness without exposing host identities. Platform operators can raise existing Tenant quotas without recreating retained resources.
 
 - Added `just qualify` for concurrent PR and release gates and `just release VERSION` for local qualification, artifact building, memory-capped parallel installer guests, and final staging, with per-stage logs and timings. Releases retain commit-exact evidence and require explicit publication.

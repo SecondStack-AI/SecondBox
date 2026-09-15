@@ -5,6 +5,7 @@ package scenario_test
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -22,6 +23,36 @@ func TestScenarioWorkspaceStorageObservationPreservesStoppedFilesAndActivity(t *
 	defer cancel()
 	waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
 	waitForScenarioOperation(t, ctx, fixture.subject, operation)
+	// Flush through the guest's execution API, never through the observation.
+	// This gives FIEMAP stable extents while compute remains running.
+	assertScenarioExited(t, executeScenarioCommand(t, ctx, handle, "sync", 1024, "storage-baseline-sync"), 0, "", "")
+	waitStorage := func(after time.Time) contracts.Sandbox {
+		t.Helper()
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			observed := scenarioJSON[contracts.Sandbox](t, ctx, fixture.subject, "getSandbox", secondboxclient.CallOptions{PathParameters: map[string]string{"sandboxId": handle.Snapshot().ID}})
+			storage := observed.Workspace.StorageObservation
+			if storage.Status == "available" && storage.ObservedAt != nil && storage.ObservedAt.After(after) && (storage.ExclusiveBytes != nil || os.Getenv("SECONDBOX_SCENARIO_HOST_PLATFORM") == "darwin") {
+				return observed
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("Runner exclusive storage observation did not arrive: %+v", storage)
+			case <-ticker.C:
+			}
+		}
+	}
+	baseline := waitStorage(time.Now().UTC()).Workspace.StorageObservation
+	assertScenarioExited(t, executeScenarioCommand(t, ctx, handle, "dd if=/dev/urandom of=/workspace/exclusive.bin bs=1048576 count=8 2>/dev/null && sync", 1024, "storage-exclusive-write"), 0, "", "")
+	written := waitStorage(time.Now().UTC()).Workspace.StorageObservation
+	if baseline.ExclusiveBytes != nil && written.ExclusiveBytes != nil {
+		growth := *written.ExclusiveBytes - *baseline.ExclusiveBytes
+		if growth < 8*1024*1024 || growth > 12*1024*1024 {
+			t.Fatalf("8 MiB guest write grew exclusive bytes by %d (before=%d after=%d)", growth, *baseline.ExclusiveBytes, *written.ExclusiveBytes)
+		}
+		t.Logf("running Sandbox 8 MiB write: exclusiveBytes %d -> %d, growth=%d", *baseline.ExclusiveBytes, *written.ExclusiveBytes, growth)
+	}
 	content := []byte("retained file measured without compute activity\n")
 	writeScenarioFile(t, ctx, fixture.subject, handle, "observation.txt", content)
 	stopped := stopScenarioSandbox(t, ctx, fixture, handle, "storage-observation-stop")
@@ -57,7 +88,7 @@ func TestScenarioWorkspaceStorageObservationPreservesStoppedFilesAndActivity(t *
 	})
 	waitForScenarioOperation(t, ctx, fixture.subject, deletedOperation)
 	deleted := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateDeleted)
-	if deleted.Workspace.StorageObservation.Reason != "deleted" || deleted.Workspace.StorageObservation.AllocatedBytes != nil {
+	if deleted.Workspace.StorageObservation.Reason != "deleted" || deleted.Workspace.StorageObservation.AllocatedBytes != nil || deleted.Workspace.StorageObservation.ExclusiveBytes != nil {
 		t.Fatalf("deleted storage observation = %+v", deleted.Workspace.StorageObservation)
 	}
 }

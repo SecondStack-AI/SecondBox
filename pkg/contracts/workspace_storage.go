@@ -3,11 +3,13 @@ package contracts
 import "time"
 
 type WorkspaceStorageObservation struct {
-	Status         string                     `json:"status"`
-	ObservedAt     *time.Time                 `json:"observedAt,omitempty"`
-	AllocatedBytes *int64                     `json:"allocatedBytes,omitempty"`
-	Reason         string                     `json:"reason,omitempty"`
-	Pressure       StoragePressureObservation `json:"pressure"`
+	Status          string                     `json:"status"`
+	ObservedAt      *time.Time                 `json:"observedAt,omitempty"`
+	AllocatedBytes  *int64                     `json:"allocatedBytes,omitempty"`
+	ExclusiveBytes  *int64                     `json:"exclusiveBytes,omitempty"`
+	ExclusiveReason string                     `json:"exclusiveReason,omitempty"`
+	Reason          string                     `json:"reason,omitempty"`
+	Pressure        StoragePressureObservation `json:"pressure"`
 }
 
 type StoragePressureObservation struct {
