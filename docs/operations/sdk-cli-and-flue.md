@@ -211,7 +211,14 @@ The service rejects a reserved name that could never resolve: one that is blank,
 ./dist/secondbox run durable-coding --image registry.example/secondbox/agent:stable -- python3 -c 'print("hello")'
 ```
 
-`--image` selects a signed execution image from a Runner-allowed registry. For a private registry, add `--image-pull-username USER --image-pull-token-file /absolute/path/to/token`; the CLI reads the token from the file and the control plane keeps it only in the operation-scoped credential broker. `--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling, `--stdin`, and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails. Standard input is read before anything is created, so an oversized input leaves no Sandbox behind.
+`--image` selects a signed execution image from a Tenant-authorized repository.
+The SecondBox operator configures registry authentication once per Tenant; the CLI does not accept pull credentials.
+Create and run require an image; an ordinary start can omit it to reuse the last successful digest.
+`--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error.
+`--metadata name=value` is repeatable and cannot restate the reserved name key.
+`--ready-timeout` bounds the wait for readiness and defaults to five minutes.
+Output handling, `--stdin`, and exit status match `exec`, and the Sandbox is disposed of even when the command fails.
+Standard input is read before anything is created, so oversized input leaves no Sandbox behind.
 
 ### Resource sizes and retained Sandboxes
 

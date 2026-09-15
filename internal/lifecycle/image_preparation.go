@@ -85,5 +85,8 @@ func (broker *PostgresEffectBroker) prepareStartImage(ctx context.Context, claim
 	if assets[0].Architecture != plan.spec.Architecture {
 		return nil, "", false, errors.New("SecondBox selected image architecture does not satisfy the pinned Profile")
 	}
+	if _, err := broker.pool.Exec(ctx, `UPDATE secondbox.sandboxes SET execution_image_reference=$2,execution_image_digest=$3 WHERE id=$1 AND execution_image_digest='' AND generation=$4 AND reconcile_owner=$5`, claim.SandboxID, plan.image.RequestedReference, result.ResolvedDigest, plan.generation, claim.WorkerID); err != nil {
+		return nil, "", false, err
+	}
 	return assets, contracts.ExecutionImageDigestReference(plan.image.RequestedReference, result.ResolvedDigest), true, nil
 }

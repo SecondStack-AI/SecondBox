@@ -238,15 +238,44 @@ secondbox-deploy runner-template --output /secure/secondbox/runner-east-1.toml
 Replace `runners = []` in the deployment manifest with the completed block.
 Required values are invalid placeholders, and validation cannot accept the scaffold before the operator supplies them.
 Set all three execution-image limits to positive byte counts, and keep the cache limit at least as large as the expanded-image limit.
-A cold pull reserves `2 * execution_image_max_download_bytes + execution_image_max_expanded_bytes` because the archive, extraction staging, and published cache can overlap.
-The cold pull also needs existing filesystem usage, Workspace reservations, and this staging reservation to stay below the configured storage-pressure denial threshold.
+Each preparation reserves `2 * execution_image_max_download_bytes + execution_image_max_expanded_bytes` because the archive, extraction staging, and published cache can overlap.
+This conservative reservation also applies to cached images and must fit below the storage-pressure denial threshold with existing filesystem usage and Workspace reservations.
 The guided install values reserve 48 GiB for staging from a 16 GiB download limit and a 16 GiB expanded limit.
 Existing manifests must add these fields before a generation-5 Runner starts.
 Leave the three remote-only paths empty for same-host placement.
 
 For a remote Runner, map the manifest values to `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES`.
-Install Skopeo in the Runner image or host environment.
-The same-host package renders these environment values and mounts the selected cache, certificate, and trust paths.
+Run `secondbox-image-fetcher` as a separate unprivileged user with Skopeo, access to the image cache, and a private Unix socket at `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET`.
+It must have no access to Workspaces, host devices, or the Docker socket.
+Configure its explicit `SECONDBOX_IMAGE_FETCHER_*` environment as shown in `deploy/compose.same-host-runner.yml`.
+The same-host package provisions this separate service and its mounts.
+
+### Tenant registry access
+
+The Runner host's `execution_image_registry_config_directory` contains `tenants.json`, private credential files, and a `certificates` directory for private registry CAs.
+Paths in the JSON refer to the fetcher container, not to the host.
+For example:
+
+```json
+{
+  "application-tenant": {
+    "registry": "registry.example.com",
+    "repositories": ["agent-sandbox"],
+    "authentication": {
+      "mode": "token",
+      "username": "sandbox-reader",
+      "tokenFile": "/run/image-registry/pull-token"
+    }
+  }
+}
+```
+
+Use `{"mode":"anonymous"}` for public access.
+Use `{"mode":"docker_config","dockerConfigFile":"/run/image-registry/docker.json"}` for an exported Docker login file, including a JSON-key password.
+Credential helpers are not supported; export the authentication entry itself.
+The fetcher reads the files for each preparation, so credential rotation needs no application changes.
+The same-host initialization service assigns this directory to UID 10002; keep credentials private and readable by that UID.
+Neither lifecycle requests nor Agent Platform receive these credentials.
 
 <!-- runner-template-output:start -->
 ```toml

@@ -17,7 +17,7 @@ func TestSandboxHTTPStateAndIDFiltersBindPagination(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	var sandboxes []contracts.Sandbox
 	for i := 0; i < 3; i++ {
-		sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, fmt.Sprintf("filter-http-create-%d", i), contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{"filter": "yes"}})
+		sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, fmt.Sprintf("filter-http-create-%d", i), contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{"filter": "yes"}})
 		if err != nil {
 			t.Fatal(err)
 		}

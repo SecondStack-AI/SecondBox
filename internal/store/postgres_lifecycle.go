@@ -151,13 +151,14 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			if err := tx.QueryRow(ctx, `SELECT execution_image_reference,execution_image_digest FROM secondbox.sandboxes WHERE id=$1`, input.SandboxID).Scan(&reference, &digest); err != nil {
 				return contracts.Operation{}, fmt.Errorf("SecondBox pinned execution image lookup failed: %w", err)
 			}
-			if reference != "" && digest != "" {
+			if reference != "" {
 				if input.Operation.RequestMetadata == nil {
 					input.Operation.RequestMetadata = make(map[string]string)
 				}
-				input.Operation.RequestMetadata["executionImageReference"] = contracts.ExecutionImageDigestReference(reference, digest)
-			} else if reference != "" {
-				return contracts.Operation{}, fmt.Errorf("%w: SecondBox Sandbox has no successful image pin; start requires an explicit image", ports.ErrInvalidRequest)
+				if digest != "" {
+					reference = contracts.ExecutionImageDigestReference(reference, digest)
+				}
+				input.Operation.RequestMetadata["executionImageReference"] = reference
 			}
 		}
 		var specJSON []byte

@@ -1,98 +1,93 @@
 # Client-selected execution images
 
-## Purpose
+## Ownership and public contract
 
-A SecondBox application selects an execution image for each Sandbox create or start operation.
-The image contains one signed Firecracker bundle in the `/secondbox-runner-microvm` directory.
-The Runner downloads the image, verifies the bundle, and starts the new Instance with that bundle.
+The application owns its userspace image and builds it with a pinned SecondBox builder.
+The signed bundle includes the existing guest agent, not the public `secondbox` CLI.
+SecondBox uses the existing signed manifest and guest handshake; it does not require matching builder and host release numbers.
 
-The Sandbox Profile continues to control resources, network policy, placement, and guest protocol compatibility.
-The image request cannot change those controls.
-The Sandbox workspace remains on its home Runner and survives an image change.
+Create requires `image.reference`, a fully qualified OCI tag or digest.
+Start accepts an optional image.
+An omitted image reuses the Sandbox's pinned digest, resolved after idempotency replay inside the admission transaction.
+Before the first preparation, it uses the explicit image recorded at creation.
+The first verified preparation establishes the initial digest pin, even if guest startup later fails.
+Persisted Sandboxes without a selected-image identity retain their original immutable Profile assets.
 
-## Public contract
+A newly accepted tag selection resolves once per Operation.
+Replays and retries retain that digest; a distinct explicit tag selection can resolve newer content.
+For a later explicit replacement, the successful Instance updates the Sandbox pin.
+An unsuccessful replacement does not replace the last successful pin.
+The Profile still controls resources, placement, networking, and lifecycle policy.
+Image selection does not rewrite historical Profile revisions.
 
-The create and start request bodies contain a required `image` object.
-The object contains a fully qualified OCI reference and optional pull credentials.
-The credentials are separate from the reference.
+## Retrieval boundary and credential custody
 
-A tag resolves once for each new lifecycle Operation.
-The Runner records the resolved digest before it downloads the bundle.
-Retries of the same Operation use that digest.
-A new Operation resolves the tag again.
+Each Runner host runs an unprivileged image fetcher in a separate container.
+The fetcher executable shares the Runner release image, but receives no Workspace mounts, host devices, Docker socket, or privileged capabilities.
+It receives only the image cache, a host-private Unix socket, registry configuration, and publisher public key.
+The privileged Runner handles shared storage reservations and verifies local files before launch; it does not retrieve registry content or extract archives.
 
-The public Sandbox and Instance records contain the requested reference and resolved digest.
-The public Operation never contains pull credentials.
+The operator configures one registry authentication record per Tenant on each eligible host.
+Lifecycle and preparation requests contain neither credentials nor credential selectors.
+The record grants exact repositories and selects anonymous access, username/token access, or an exported Docker login file.
+Docker login authentication supports encoded username/password credentials, including JSON-key passwords, and identity tokens.
+External credential helpers are rejected because their executables and desktop state do not belong in the fetcher.
 
-## Credential custody
+The fetcher reads Tenant configuration for each preparation, including cache hits.
+It also checks the host-wide registry allowlist and performs registry authorization before reusing cached bytes.
+An explicit empty auth document prevents anonymous access from inheriting a host login.
+Temporary auth files are private and removed after use.
+Credentials never enter guest files, Operations, or durable Runner commands.
+TLS verification is mandatory; private CAs reside under the configured `certificates/<registry-host>/ca.crt` directory.
 
-The control plane keeps pull credentials in a bounded memory broker.
-It binds one credential to one lifecycle Operation ID.
-The durable assignment record contains only the non-secret image reference.
-The control plane adds the credential when it sends the assignment on the authenticated Runner stream.
+## Signed metadata and launch authority
 
-A control-plane restart can remove a credential before the Runner receives it.
-The Operation then fails with a credential-required error.
-The client must submit a new lifecycle request with current credentials.
+Preparation uses existing lifecycle effects and durable Runner command delivery.
+The fetcher streams progress and returns bounded signed metadata through its local socket.
+It has no independent job database or retry scheduler.
+The control plane verifies the existing bundle signature with its configured publisher key before constructing an assignment from the signed component identities.
+The assignment contains a digest reference and authorized identities, never a mutable tag or pull credentials.
 
-The Runner writes credentials to a temporary Skopeo auth file with mode `0600`.
-The Runner removes the file after the registry operation.
-The guest never receives the credential.
-The Runner does not use a global Docker login.
+The Runner independently verifies local bundle bytes and checks the assigned component identities before guest negotiation.
+A materialization report cannot overwrite assignment authority.
+Captured-file identity checks reject replacement between verification and Firecracker staging.
+Failed verification does not select another image.
 
-## Retrieval and trust
+## Preparation without compute
 
-Each Runner has an explicit registry-host allowlist.
-The allowlist prevents a client from using the Runner as a credentialed network proxy.
-The Runner uses normal TLS certificate validation.
-An operator can install a private CA at `registry-certificates/<registry-host>/ca.crt` in the Runner state directory.
-SecondBox has no insecure-TLS option.
+`POST /v1/images:prepare` accepts an image and optional Profile and returns the existing asynchronous Operation.
+It requires lifecycle authority and uses the intersection of Tenant and application Profile grants.
+Admission captures a finite set of ready eligible Runners; a Profile narrows that set.
+The service resolves the reference once, verifies signed metadata, and sends that digest to compatible members of the captured set.
+Fleet members added later are not silently added to the Operation.
 
-Client-selected images have an explicit signing public key and fingerprint in Runner configuration.
-This trust root is separate from the fixed release bundle trust configuration, although a release installer can deliberately set both to the release key.
+The initial bounds are 16 target Runners and a 30-minute deadline.
+A request above the target bound must select a narrower Profile.
+Preparation consumes the existing Tenant and Subject concurrent-operation quota but allocates no Sandbox, Workspace, or VM.
+Operation inspection reports the image digest and target/completion counts.
+A failed target or expired deadline fails the Operation rather than claiming complete coverage.
 
-The Runner resolves the reference through the registry before each new Operation.
-This authorization check also occurs when the digest is already in the local cache.
-One tenant cannot use another tenant's cached private bytes without valid registry access.
+## Cache and storage
 
-The Runner downloads an exact digest with Skopeo.
-It extracts only the fixed bundle directory from the OCI layers.
-It verifies the existing checksum, signature, trust-anchor, and rootfs contracts.
-The Runner publishes the cache directory only after all checks pass.
-The Runner records the verified kernel, rootfs, and shared-image file identities and passes those exact identities to Firecracker staging.
-Any replacement between verification and staging fails the assignment.
+The shared cache is keyed by digest, but access remains Tenant-authorized.
+Cross-process digest locks serialize publication and prevent eviction during local verification and launch.
+Only complete, verified directories enter the cache.
+Prepared entries retain a bounded expiry marker until the preparation deadline to close the preparation-to-launch eviction window.
+Preparation is not a permanent cache-residency promise.
 
-The cache key is the resolved digest.
-A per-digest file lock serializes publication on one Runner.
-Incomplete staging directories are not valid cache entries.
-Explicit operator limits bound the downloaded archive, expanded bundle, and retained cache.
-The Runner evicts the least recently used complete images before a cold pull and refuses preparation when the configured free-space reserve is unavailable.
+Operator limits bound compressed download size, expanded bundle size, and retained cache size.
+Cold retrieval is serialized and can evict unpinned least-recently-used entries.
+The Runner conservatively reserves worst-case staging capacity before each fetch request, including warm requests, through the same pressure controller used by Workspace and Instance storage.
+Consequently a warm preparation can be refused under storage pressure even if its bytes are present.
+This avoids a second allocator or an unaccounted cold-pull race across the process boundary.
 
-## Backend scope
+## Backend and workspace behavior
 
-The first implementation supports cold Firecracker starts on Linux amd64.
-The Runner advertises `client-selected-image` only when it supports this path.
-The scheduler requires that feature for an image-selected assignment.
+The qualified selected-image backend is cold Firecracker on Linux amd64.
+Only a supporting Runner advertises `client-selected-image`.
+Snapshot-resume Profiles, gVisor, and Microsandbox reject selected-image assignments until their materialization paths are implemented and qualified.
 
-Snapshot-resume Profiles reject client-selected images.
-Snapshot templates contain one exact rootfs and cannot safely accept another bundle.
-The gVisor and Microsandbox backends also reject this contract until they implement and qualify their own materialization paths.
-
-## Workspace and upgrade behavior
-
-An image change creates a new Instance against the same workspace disk.
-SecondBox does not migrate files, repair dependencies, run upgrade hooks, or restore the previous image automatically.
-The caller must stop a running Sandbox before it selects another image.
-
-The caller can select an older digest later.
-This changes the execution tools only.
-It does not revert workspace changes.
-
-## Progress and failure
-
-The Runner reports image resolution, download, extraction, verification, and VM start stages through assignment progress.
-The lifecycle Operation remains asynchronous during this work.
-Its assignment deadline covers registry resolution, cache locking, download, extraction, verification, workspace attachment, and VM launch.
-
-Registry authentication, registry availability, invalid references, failed signatures, corrupt bundles, and unsupported backends fail explicitly.
-SecondBox does not select a different image and does not use an unverified directory.
+An image change boots a new Instance against the same Workspace disk.
+The caller stops active compute before requesting another image.
+SecondBox does not migrate files, repair dependencies, run upgrade hooks, or automatically restore an older image.
+Selecting an older digest later does not revert Workspace changes.

@@ -492,12 +492,19 @@ func (fixture *teardownFixture) createReadySandbox(t *testing.T) (string, string
 		t.Context(), fixture.principal, sandboxID,
 		fmt.Sprintf("teardown-start-%d", integrationIdentitySequence.Add(1)),
 		current.Revision,
-		testExecutionImage(),
+		contracts.ExecutionImage{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.runLifecycle(t, sandboxID, lifecycle.ActionStartInstance)
+	pinned, err := fixture.controlPlane.GetSandbox(t.Context(), fixture.principal, sandboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.Image == nil || pinned.Image.ResolvedDigest != "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" {
+		t.Fatalf("initial image was not pinned before guest readiness: %+v", pinned.Image)
+	}
 	fixture.completeAssignmentReady(t, sandboxID)
 	return sandboxID, startOperation.ID
 }

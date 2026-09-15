@@ -16,6 +16,7 @@ import {
   type ExecStreamFrame,
   type ExecStreamSession,
   type ExecutionImage,
+  type PrepareImageRequest,
   type FileExistsResult,
   type FileStat,
   type FileWriteResult,
@@ -76,6 +77,8 @@ export type {
   Command,
   ExecStreamFrame,
   ExecutionImage,
+  PrepareImageRequest,
+  ImagePreparation,
   FileStat,
   Lease,
   Metadata,
@@ -325,6 +328,17 @@ export class SecondBox {
           );
       }
     }
+  }
+
+  public prepareImage(
+    request: PrepareImageRequest,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<Operation> {
+    return this.requestJSON<Operation>("prepareImage", {
+      headers: { "Idempotency-Key": options.idempotencyKey ?? idempotencyKey() },
+      body: encodeJSONBody({ image: executionImageJSON(request.image), ...(request.profile === undefined ? {} : { profile: request.profile }) }),
+      signal: options.signal,
+    });
   }
 
   public sandbox(snapshot: Sandbox, leaseID?: string): SandboxHandle {

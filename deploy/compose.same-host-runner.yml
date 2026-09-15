@@ -9,7 +9,7 @@ services:
       runner-config-init:
         condition: service_completed_successfully
       image-fetcher:
-        condition: service_started
+        condition: service_healthy
     privileged: true
     network_mode: host
     cgroup: host
@@ -195,6 +195,11 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     networks: [secondbox-backend]
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/secondbox-image-fetcher/fetcher.sock"]
+      interval: 5s
+      timeout: 2s
+      retries: 6
 
 volumes:
   runner-config-runtime:
