@@ -922,6 +922,7 @@ test("run creates, waits, and executes one command", async () => {
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const outcome = await api.run({
     profile: "durable-coding",
+    image: executionImage,
     resources,
     command: { mode: "shell", command: "cat" },
     stdinBase64: "aGVsbG8K",

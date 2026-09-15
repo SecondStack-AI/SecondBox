@@ -174,24 +174,6 @@ func trustedArtifactsFromExecutionImage(artifacts []runtimemanager.VerifiedExecu
 	return &trustedMicroVMArtifacts{files: files}
 }
 
-func captureMicroVMImageArtifacts(image microVMImageSelection) (*trustedMicroVMArtifacts, error) {
-	paths := []trustedMicroVMArtifactFile{
-		{label: "kernel", path: image.KernelPath},
-		{label: "rootfs", path: image.RootfsPath},
-	}
-	if strings.TrimSpace(image.SharedImagePath) != "" {
-		paths = append(paths, trustedMicroVMArtifactFile{label: "shared image", path: image.SharedImagePath})
-	}
-	for i := range paths {
-		identity, err := trustedMicroVMArtifactIdentityFor(paths[i].path)
-		if err != nil {
-			return nil, fmt.Errorf("record selected microVM %s identity: %w", paths[i].label, err)
-		}
-		paths[i].identity = identity
-	}
-	return &trustedMicroVMArtifacts{files: paths}, nil
-}
-
 func (m *Manager) microVMImageSourceRootfs(image microVMImageSelection) string {
 	if strings.TrimSpace(image.RootfsPath) != "" {
 		return image.RootfsPath
