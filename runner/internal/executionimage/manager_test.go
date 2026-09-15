@@ -1,13 +1,86 @@
 package executionimage
 
 import (
+	"archive/tar"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestOuterDockerArchiveAcceptsContainedLayerLink(t *testing.T) {
+	root := t.TempDir()
+	archive := filepath.Join(root, "image.tar")
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := tar.NewWriter(file)
+	for _, header := range []*tar.Header{
+		{Name: "blob.tar", Mode: 0o400, Size: 4, Typeflag: tar.TypeReg},
+		{Name: "layer/layer.tar", Linkname: "../blob.tar", Typeflag: tar.TypeSymlink},
+	} {
+		if err := writer.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if header.Typeflag == tar.TypeReg {
+			if _, err := io.WriteString(writer, "data"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "extracted")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractTarFile(archive, target, ""); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(target, "layer", "layer.tar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "data" {
+		t.Fatalf("hard-linked layer content = %q", content)
+	}
+}
+
+func TestOuterDockerArchiveRejectsEscapingLayerLink(t *testing.T) {
+	root := t.TempDir()
+	archive := filepath.Join(root, "image.tar")
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := tar.NewWriter(file)
+	if err := writer.WriteHeader(&tar.Header{
+		Name: "layer/layer.tar", Linkname: "../../outside.tar", Typeflag: tar.TypeSymlink,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "extracted")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractTarFile(archive, target, ""); err == nil || !strings.Contains(err.Error(), "link target is unsafe") {
+		t.Fatalf("escaping link error = %v", err)
+	}
+}
 
 func TestOperationResolutionIsDurableAndStable(t *testing.T) {
 	root := t.TempDir()

@@ -357,6 +357,27 @@ func extractTarFile(path, target, requiredPrefix string) error {
 			if copyErr != nil || closeErr != nil {
 				return errors.Join(copyErr, closeErr)
 			}
+		case tar.TypeLink, tar.TypeSymlink:
+			if requiredPrefix != "" {
+				return fmt.Errorf("SecondBox execution image layer entry %q cannot be a link", header.Name)
+			}
+			linkTarget := filepath.Clean(filepath.Join(filepath.Dir(destination), header.Linkname))
+			if !strings.HasPrefix(linkTarget, filepath.Clean(target)+string(filepath.Separator)) {
+				return errors.New("SecondBox execution image tar link target is unsafe")
+			}
+			info, err := os.Stat(linkTarget)
+			if err != nil {
+				return fmt.Errorf("SecondBox execution image tar link target is invalid: %w", err)
+			}
+			if !info.Mode().IsRegular() {
+				return errors.New("SecondBox execution image tar link target is not a regular file")
+			}
+			if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+				return err
+			}
+			if err := os.Link(linkTarget, destination); err != nil {
+				return fmt.Errorf("SecondBox execution image tar link materialization failed: %w", err)
+			}
 		default:
 			return fmt.Errorf("SecondBox execution image tar entry %q has unsupported type", header.Name)
 		}
