@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-[[ "$#" -eq 2 ]] || { echo "usage: scripts/release-upload.sh VERSION OUTPUT_DIR" >&2; exit 2; }
+[[ "$#" -ge 2 && "$#" -le 3 ]] || { echo "usage: scripts/release-upload.sh VERSION OUTPUT_DIR [NOTES_FILE]" >&2; exit 2; }
 version="$1"
 output="$2"
 tag="v${version}"
@@ -16,14 +16,32 @@ tag="v${version}"
   exit 1
 }
 
+notes="$(mktemp)"
+trap 'rm -f "$notes"' EXIT
+if [[ -n "${3:-}" ]]; then
+  [[ -f "$3" && -r "$3" ]] || { echo "release notes file is not readable: $3" >&2; exit 1; }
+  cat -- "$3" >"$notes"
+else
+  # Read the immutable tag, never unrelated notes in the caller's checkout.
+  git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null
+  notes_path="docs/releases/$tag.md"
+  if git cat-file -e "refs/tags/$tag:$notes_path" 2>/dev/null; then
+    git show "refs/tags/$tag:$notes_path" >"$notes"
+  else
+    printf 'Publishing locally built artifacts.\n' >"$notes"
+  fi
+fi
+printf '\n\nGuided Linux amd64 install: curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh | sh. SDK: npm install @secondstack-ai/secondbox@%s\n' "$version" >>"$notes"
+
 gh auth status >/dev/null
 if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
   test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true || {
     echo "release $tag is already public" >&2
     exit 1
   }
+  gh release edit "$tag" --notes-file "$notes"
 else
-  gh release create "$tag" --draft --verify-tag --title "SecondBox $tag" --notes "Publishing locally built artifacts."
+  gh release create "$tag" --draft --verify-tag --title "SecondBox $tag" --notes-file "$notes"
 fi
 
 gh release upload "$tag" "$output"/* --clobber

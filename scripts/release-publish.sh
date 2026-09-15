@@ -31,7 +31,6 @@ gh release edit "$tag" \
   --draft=false \
   --prerelease=false \
   --latest \
-  --title "SecondBox $tag" \
-  --notes "Guided Linux amd64 install: curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh | sh. SDK: npm install @secondstack-ai/secondbox@${version}"
+  --title "SecondBox $tag"
 
 echo "Published stable release $tag."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "SecondBox Release"
+  short_description: "Cut, publish, verify, or retract a SecondBox release"
+  default_prompt: "Use $secondbox-release to cut and publish the next SecondBox release from origin/main."

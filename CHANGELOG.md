@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- Added `just release VERSION --resume`, which reuses a retained checksummed build and commit-exact scenario evidence after a gate-only failure, requalifies the gates, and continues from the installer candidate.
+
+### Fixed
+
+- Preserved release notes through draft upload, retries, and stable publication.
+
+## 0.5.0 to 0.14.0 (consolidated) - 2026-09-15
+
+Changes published across releases 0.5.0 through 0.14.0 that were never cut out
+of Unreleased at the time. Per-release details are in `docs/releases/`.
+
 ### Changed
 
 - Required a fresh database and separate Runner storage root for v0.14.0 because the unlimited Snapshot retention fix changes the initial migration checksum. See the [v0.14.0 release notes](docs/releases/v0.14.0.md).

@@ -36,6 +36,8 @@ v0.3.0 rotated the anchor and the bundle: snapshot-resume needs a guest agent th
 
 v0.7.0 through v0.10.1 carry the v0.6.0 Firecracker microVM bundle and trust anchor forward unchanged. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact previously published signed bundle; do not rebuild it from other guest sources. A different runtime or toolchain component-manifest digest makes the v1 guided updater reject these releases because existing Sandboxes remain pinned to their immutable Profile revisions. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
 
+v0.12.0 rotated the bundle and signing authority again; v0.12.0 through v0.14.0 use the [v0.12.0 identities and reinstall boundary](../releases/v0.12.0.md). The checked-in release example pins that bundle and the independently provisioned public key.
+
 ## Automated release
 
 Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` for PR
@@ -58,15 +60,17 @@ docker buildx create --name secondbox-suite-release --driver docker-container \
  Create the configured
 `RELEASE_OUTPUT_ROOT` and `SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT` parents;
 the latter must be on Btrfs or XFS and traversable by the system libvirt account.
-The checked-in examples describe the reviewed release host using public paths.
+The checked-in examples describe the reviewed release host using public paths;
+review and provision every path for another host.
 
 ```sh
 just qualify                  # PR gates and four independent Firecracker shards
 just qualify --tier release   # gates, sharded Firecracker and local gVisor host
 just nightly                  # full scenarios and no-KVM gVisor pod suite
 # After merging, from clean main:
-just release 0.11.0            # lean amd64 release
-just release 0.11.0 --full     # alternative: nightly matrix and arm64 images
+just release VERSION           # lean amd64 release
+just release VERSION --full    # alternative: nightly matrix and arm64 images
+just release VERSION --resume  # after a gate-only failure: reuse the retained build
 ```
 
 Release preflight checks source, tag identity, inputs, the pinned Go/protoc and
@@ -75,7 +79,10 @@ headroom (200 GiB free in each output/workspace filesystem and enough available
 memory for a guest plus 16 GiB). It creates a local tag only when absent and
 never pushes it. Existing tags must identify HEAD. All three versioned output
 directories must be absent; failed output is retained for diagnosis, so archive
-or remove only your own failed run's directories before retrying.
+or remove only your own failed run's directories before retrying. When a run
+failed only in a gate after the build and every scenario stage passed,
+`--resume` keeps the retained `VERSION-build` and its commit-exact evidence,
+requalifies the gates alone, and continues from the candidate.
 
 Qualification and the unbound artifact build run concurrently. Once both pass,
 staging binds commit-exact Firecracker and gVisor evidence into the candidate.
@@ -101,13 +108,12 @@ terminal disappears, launch the release in a user service:
 
 ```sh
 mkdir -p .tmp
-systemd-run --user --unit="secondbox-suite-release-$(date +%s)" --collect \
+systemd-run --user --unit="secondbox-suite-release-VERSION-$(date +%s)" --collect \
   --property="WorkingDirectory=$PWD" \
   --property="StandardOutput=file:$PWD/.tmp/release-console.log" \
   --property=StandardError=inherit --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
-  --setenv="SECONDBOX_TEST_DATABASE_URL=$SECONDBOX_TEST_DATABASE_URL" \
-  /usr/bin/just release 0.11.0            # lean amd64 release
-just release 0.11.0 --full     # alternative: nightly matrix and arm64 images
+  --setenv="SECONDBOX_TEST_DATABASE_URL=${SECONDBOX_TEST_DATABASE_URL:-}" \
+  /usr/bin/just release VERSION           # append --full or --resume as needed
 ```
 
 Reserve the KVM host before starting, and the dedicated no-KVM VM for `--full`. Do not stop
@@ -119,6 +125,9 @@ command prints the exact tag-push and `release-upload` commands for explicit
 publication. Neither command is run automatically.
 
 ## Appendix: manual release on hosts without automation
+
+Mechanics reference for exceptional operator-run hosts. The project release skill
+uses `just release` and its documented recovery sequence, not this manual chain.
 
 
 Tag the clean commit. On the qualified host, run the unfiltered scenario suite, stage the same commit, then upload the draft:
@@ -167,7 +176,10 @@ git push origin refs/tags/v0.10.1
 just release-upload 0.10.1 /protected/releases/secondbox-0.10.1
 ```
 
-`test-scenario` writes `.tmp/scenario-qualification-evidence.json` only after the full suite and cleanup pass. Its `sourceCommit` must equal `HEAD`, so run it after the release pull request merges and before staging; do not reuse evidence from the review branch. `release-candidate` then builds an explicitly non-publishable manifest with the reviewed, digest-pinned bundled-service images and no installer-qualification claim. The repository-owned QEMU/libvirt driver tests that candidate and writes `.tmp/installer-qualification-evidence.json` after its clean-host, reboot, resume, uninstall, purge, and real-microVM assertions pass. The helper downloads the pinned Ubuntu qualification image only when the target path is absent and prints its reviewed SHA-256 for the explicit driver input; retain that image for subsequent releases or choose a new absent target after the repository pin changes. The candidate and final manifest share a qualification-subject digest: every final manifest field participates except the candidate marker and installer-evidence reference. `release-stage` requires both evidence documents, rejects evidence for different release bytes, and emits the publishable final manifest. `release-upload` creates a private draft and dispatches the GitHub workflow; the workflow does not rebuild or qualify anything.
+`test-scenario` writes `.tmp/scenario-qualification-evidence.json` only after the full suite and cleanup pass. Its `sourceCommit` must equal `HEAD`, so run it after the release pull request merges and before staging; do not reuse evidence from the review branch. `release-candidate` then builds an explicitly non-publishable manifest with the reviewed, digest-pinned bundled-service images and no installer-qualification claim. The repository-owned QEMU/libvirt driver tests that candidate and writes `.tmp/installer-qualification-evidence.json` after its clean-host, reboot, resume, uninstall, purge, and real-microVM assertions pass. The helper downloads the pinned Ubuntu qualification image only when the target path is absent and prints its reviewed SHA-256 for the explicit driver input; retain that image for subsequent releases or choose a new absent target after the repository pin changes. The candidate and final manifest share a qualification-subject digest: every final manifest field participates except the candidate marker and installer-evidence reference. `release-stage` requires both evidence documents, rejects evidence for different release bytes, and emits the publishable final manifest. `release-upload` creates a draft with notes from `docs/releases/vVERSION.md` at
+the tag (or an explicit third `NOTES_FILE` argument), appends the install/SDK
+footer, and dispatches the GitHub workflow. Retries refresh the draft body;
+the publisher preserves it; the workflow does not rebuild or qualify anything.
 
 Watch the dispatched run with:
 

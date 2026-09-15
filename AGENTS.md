@@ -16,3 +16,7 @@
 - Do not catch, log, and swallow errors. Implement one intended path and fail explicitly when its prerequisites are absent.
 - Keep exported names and error prefixes greppable and domain-specific. Remove replaced code instead of retaining compatibility paths.
 - Run `just verify-generated`, `just test`, and the relevant contract, Compose, runner, or Firecracker suite before handoff. Run `just test-scenario` on a qualified host when a change touches the runner protocol, lifecycle reconciliation, or workspace durability.
+
+- Project skills live in `.agents/skills/` (Codex) with symlinks in `.claude/skills/` (Claude). `secondbox-release` owns cutting, publishing, verifying, and retracting releases; `worklog` owns the shared session ledger.
+- Read `.worklog/` in the primary worktree (today's UTC file and the most recent earlier file) at session start and append at hand-off, after any release step, and whenever you discover a host or process gotcha. Follow the `worklog` skill; the directory is git-ignored and must never be committed.
+- Releases are cut only by `just release VERSION` from a clean `origin/main` checkout; never push a `v*` tag or run `release-upload` outside that flow; a run that failed only in a gate continues with `just release VERSION --resume`.
