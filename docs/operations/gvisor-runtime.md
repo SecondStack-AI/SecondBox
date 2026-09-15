@@ -341,6 +341,32 @@ remains operator-authored and unqualified.
 
 ## Qualification before enrollment
 
+For qualification on the release host, set `QUALIFY_GVISOR_HOST_BUILD_ROOT` to an
+absolute, dedicated cache path and `SECONDBOX_RUNNER_WORKSPACE_ROOT` to an existing
+reflink-capable workspace root. `scripts/qualify-gvisor.sh --host --preflight`
+accepts an absent cache; `--host` prepares it automatically before scenarios.
+The cache path must have no symlink components or commas, and its existing
+ancestor must be writable. Docker with Buildx and permission to run containers
+with bind mounts are required. No host path or authority is selected implicitly.
+
+Preparation uses `runner/deploy/gvisor-artifact-transport.Dockerfile`: its pinned
+source image and runsc fetcher, the guest agent built from this checkout, and the
+same materialization and flat-root digests recorded by release artifact manifests.
+A container without host devices or privileged mode preserves numeric owners,
+modes, timestamps, and extended attributes when extracting. Before publishing or
+reusing a build, it verifies checksums, the runsc pin, and both digests against the
+builder's original metadata. A mismatch fails without replacing that build.
+
+The cache is owned by the invoking user with mode 0700 and an ownership marker.
+Existing manually assembled directories are refused; configure a fresh dedicated
+path instead. Preparation holds a per-cache lock and atomically publishes each
+verified build under its image identity. Concurrent shards share those immutable
+inputs; source changes produce another build without replacing an active reader's
+assets. BuildKit caches unchanged compilation and downloads. Completed build
+directories and Docker build images are retained; operators may remove them only
+after all users of that cache have finished. The local manual-build and remote
+nightly VM paths below remain separate qualification entry points.
+
 Run the backend qualification suites and the full scenario driver on the target host class — a
 real Linux x86-64 host without `/dev/kvm`. Both drivers run as root (network namespaces, nft
 tables, and loop devices are created and destroyed), need Docker with Compose for the scenario
