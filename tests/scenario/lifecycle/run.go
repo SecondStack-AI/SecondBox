@@ -484,12 +484,12 @@ func (driver *lifecycleDriver) releaseCellResources(
 // parameter list because the list had already reached ten positional arguments,
 // where a transposed pair is a silent defect rather than a compile error.
 type cellObservation struct {
-	measurement     string
-	pattern         arrivalPattern
-	resident        int
-	schedule        arrivalSchedule
-	samples         *transitionSamples
-	timings         *startupTimingSamples
+	measurement       string
+	pattern           arrivalPattern
+	resident          int
+	schedule          arrivalSchedule
+	samples           *transitionSamples
+	timings           *startupTimingSamples
 	occupancy         []occupancySample
 	completed         int64
 	shed              int64

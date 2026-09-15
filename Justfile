@@ -34,7 +34,10 @@ test-gvisor-probe build_dir work_dir:
 test-gvisor build_dir:
     just -f runner/Justfile test-gvisor "{{build_dir}}"
 
-lint:
+verify-gofmt:
+    scripts/verify-gofmt.sh
+
+lint: verify-gofmt
     golangci-lint run ./...
     cd runner && golangci-lint run --config ../.golangci.yml ./...
 

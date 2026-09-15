@@ -28,11 +28,11 @@ type helperPortConnection struct {
 	// helper connection; unlike a mutex, acquisition observes cancellation.
 	readGate  chan struct{}
 	writeGate chan struct{}
-	buffer       bytes.Buffer
-	sawEOF       bool
-	terminal     error
-	closeOnce    sync.Once
-	closeErr     error
+	buffer    bytes.Buffer
+	sawEOF    bool
+	terminal  error
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerprotocol.AssignmentFence, open *runnerprotocol.PortOpen) (runnercontrol.PortConnection, error) {
