@@ -39,6 +39,7 @@ var (
 	// capability on the pool or revises the Profile's startup mode.
 	ErrStartupModeUnsupported        = errors.New("SecondBox RunnerPool does not support the Profile startup mode")
 	ErrSandboxNotFound               = errors.New("SecondBox Sandbox not found")
+	ErrWorkspaceFileNotFound         = errors.New("SecondBox Workspace file not found")
 	ErrSandboxNameConflict           = errors.New("SecondBox Sandbox name is already in use")
 	ErrIdempotencyConflict           = errors.New("SecondBox idempotency key payload conflict")
 	ErrCredentialResponseUnavailable = errors.New("SecondBox credential response is unavailable")

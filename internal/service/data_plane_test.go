@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"strings"
 	"testing"
 	"time"
@@ -386,4 +387,11 @@ func (*deadlineProofRelay) CancelPublicDataPlaneSession(
 	runnercontrol.PublicDataPlaneCancellation,
 ) (runnercontrol.DataPlaneSession, bool, error) {
 	panic("unexpected public streaming session cancellation")
+}
+
+func TestMissingFileTerminalIsNotMissingSandbox(t *testing.T) {
+	err := fileTerminalError(runnercontrol.DataPlaneSession{TerminalKind: runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_NOT_FOUND.String()})
+	if !errors.Is(err, ports.ErrWorkspaceFileNotFound) || errors.Is(err, ports.ErrSandboxNotFound) {
+		t.Fatalf("missing file terminal = %v", err)
+	}
 }

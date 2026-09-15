@@ -125,7 +125,7 @@ func TestListSandboxesFiltersByMetadataContainment(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			page, err := controlPlaneStore.ListSandboxes(
-				t.Context(), tenantRef, subjectRef, 100, "", test.filter,
+				t.Context(), tenantRef, subjectRef, 100, "", contracts.SandboxListFilter{Metadata: test.filter},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -158,7 +158,7 @@ func TestListSandboxesBindsCursorToItsFilter(t *testing.T) {
 		}
 	}
 	unfiltered, err := controlPlaneStore.ListSandboxes(
-		t.Context(), tenantRef, subjectRef, 2, "", nil,
+		t.Context(), tenantRef, subjectRef, 2, "", contracts.SandboxListFilter{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -168,14 +168,14 @@ func TestListSandboxesBindsCursorToItsFilter(t *testing.T) {
 	}
 	_, err = controlPlaneStore.ListSandboxes(
 		t.Context(), tenantRef, subjectRef, 2, *unfiltered.NextCursor,
-		map[string]string{"tier": "gold"},
+		contracts.SandboxListFilter{Metadata: map[string]string{"tier": "gold"}},
 	)
 	if !errors.Is(err, pagination.ErrInvalidListCursor) {
 		t.Fatalf("error = %v; want an invalid-cursor rejection across filters", err)
 	}
 
 	filtered, err := controlPlaneStore.ListSandboxes(
-		t.Context(), tenantRef, subjectRef, 2, "", map[string]string{"tier": "gold"},
+		t.Context(), tenantRef, subjectRef, 2, "", contracts.SandboxListFilter{Metadata: map[string]string{"tier": "gold"}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +184,7 @@ func TestListSandboxesBindsCursorToItsFilter(t *testing.T) {
 		t.Fatal("a filtered first page must produce a cursor")
 	}
 	_, err = controlPlaneStore.ListSandboxes(
-		t.Context(), tenantRef, subjectRef, 2, *filtered.NextCursor, nil,
+		t.Context(), tenantRef, subjectRef, 2, *filtered.NextCursor, contracts.SandboxListFilter{},
 	)
 	if !errors.Is(err, pagination.ErrInvalidListCursor) {
 		t.Fatalf("error = %v; want the reverse direction rejected too", err)
@@ -208,7 +208,7 @@ func TestListSandboxesPagesWithinOneFilter(t *testing.T) {
 	}
 	filter := map[string]string{"tier": "gold"}
 	first, err := controlPlaneStore.ListSandboxes(
-		t.Context(), tenantRef, subjectRef, 1, "", filter,
+		t.Context(), tenantRef, subjectRef, 1, "", contracts.SandboxListFilter{Metadata: filter},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestListSandboxesPagesWithinOneFilter(t *testing.T) {
 		t.Fatal("a bounded filtered page must produce a cursor")
 	}
 	second, err := controlPlaneStore.ListSandboxes(
-		t.Context(), tenantRef, subjectRef, 1, *first.NextCursor, filter,
+		t.Context(), tenantRef, subjectRef, 1, *first.NextCursor, contracts.SandboxListFilter{Metadata: filter},
 	)
 	if err != nil {
 		t.Fatal(err)

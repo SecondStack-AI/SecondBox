@@ -607,7 +607,22 @@ func lockDataPlaneAuthority(
 		&runnerConnected,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrSandboxNotFound
+		// A missing current Assignment must not disguise a retained Sandbox as
+		// missing. Resolve its generation under lock before classifying absence.
+		var generation int64
+		lookupErr := tx.QueryRow(ctx, `SELECT generation FROM secondbox.sandboxes
+			WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
+			input.TenantRef, input.SubjectRef, input.SandboxID).Scan(&generation)
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrSandboxNotFound
+		}
+		if lookupErr != nil {
+			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox data-plane Sandbox lookup: %w", lookupErr)
+		}
+		if generation != input.Generation {
+			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrGenerationFenced
+		}
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrLifecycleUnavailable
 	}
 	if err != nil {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox data-plane authority lookup: %w", err)

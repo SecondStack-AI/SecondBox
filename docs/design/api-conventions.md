@@ -69,3 +69,27 @@ Filesystem operations are binary-safe read/write, UTF-8 convenience read/write, 
 An exposed-port session names only a profile-approved guest port and protocol and requires the current generation and Lease. The control plane never discloses a runner address except to an authority holding the direct data-plane scope, for one admitted session, with the expected certificate SPKI SHA-256 pin. Proxied sessions return an expiring control-plane WebSocket endpoint. Both transports use a one-time endpoint credential; public payloads are binary bytes, and disconnect closes the session.
 
 See [Domain and lifecycle](domain-lifecycle.md), [Networking and ports](networking-and-ports.md), and [API reference comparison](api-reference-comparison.md).
+
+## Inventory filters and quota update observations
+
+`GET /v1/sandboxes` accepts repeated `state` (up to nine values) and `id`
+(up to 64 values) filters alongside Metadata containment. Values within a set
+combine with OR; state, ID, and Metadata filters combine with AND. Results remain
+Tenant/Subject-scoped and cursor-paginated. Cursors bind to the normalized filters;
+reordering a set is allowed, changing it is rejected. Sandbox `lifecycle` and
+`resources` already report the resolved settings; inventory consumers need not
+fetch Profile history to reconstruct those values.
+
+Subject quota updates return `quotaObservation` on the updated Subject, containing
+limits, usage, and Tenant-constrained admission headroom from the mutation's
+transaction. The Subject revision and observation timestamp identify this result.
+Idempotent replay preserves the original observation; it does not refresh it.
+Ordinary Subject reads omit this mutation observation. Both SDKs offer typed
+Subject and application-authority management helpers with revision and idempotency
+headers; the transport must be configured with tenant-controller authority.
+
+A missing Workspace file returns `file_not_found`. A missing owned resource
+returns `not_found`; an existing Sandbox without current compute returns
+`execution_node_unavailable`, or `generation_fenced` if the request names an old
+generation. Inactive Leases return `lease_fenced`. A file miss does not require a
+follow-up Sandbox read to determine whether the file or its compute is absent.

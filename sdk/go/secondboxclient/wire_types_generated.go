@@ -574,6 +574,7 @@ const (
 	ProblemCodeTerminalReplayEvicted                ProblemCode = "terminal_replay_evicted"
 	ProblemCodeWaitExpired                          ProblemCode = "wait_expired"
 	ProblemCodeProfilePolicyCeilingExceeded         ProblemCode = "profile_policy_ceiling_exceeded"
+	ProblemCodeFileNotFound                         ProblemCode = "file_not_found"
 )
 
 type ProblemDetail struct {
@@ -825,16 +826,17 @@ type StreamingExecRequest struct {
 type StringMap = map[string]string
 
 type Subject struct {
-	CleanupState SubjectCleanupState `json:"cleanupState"`
-	CreatedAt    Timestamp           `json:"createdAt"`
-	ExpiresAt    *Timestamp          `json:"expiresAt,omitempty"`
-	Metadata     Metadata            `json:"metadata"`
-	Quota        SubjectQuota        `json:"quota"`
-	Ref          OwnershipRef        `json:"ref"`
-	Revision     int64               `json:"revision"`
-	State        SubjectState        `json:"state"`
-	TenantRef    OwnershipRef        `json:"tenantRef"`
-	UpdatedAt    Timestamp           `json:"updatedAt"`
+	CleanupState     SubjectCleanupState `json:"cleanupState"`
+	CreatedAt        Timestamp           `json:"createdAt"`
+	ExpiresAt        *Timestamp          `json:"expiresAt,omitempty"`
+	Metadata         Metadata            `json:"metadata"`
+	Quota            SubjectQuota        `json:"quota"`
+	QuotaObservation *SubjectCapacity    `json:"quotaObservation,omitempty"`
+	Ref              OwnershipRef        `json:"ref"`
+	Revision         int64               `json:"revision"`
+	State            SubjectState        `json:"state"`
+	TenantRef        OwnershipRef        `json:"tenantRef"`
+	UpdatedAt        Timestamp           `json:"updatedAt"`
 }
 
 type SubjectCapacity struct {

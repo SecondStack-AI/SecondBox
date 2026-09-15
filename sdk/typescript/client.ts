@@ -34,6 +34,15 @@ import {
   type SandboxResourceRequest,
   type Sandbox,
   type SandboxPage,
+  type Subject,
+  type SubjectPage,
+  type CreateSubjectRequest,
+  type UpdateSubjectQuotaRequest,
+  type ApplicationAuthority,
+  type ApplicationAuthorityPage,
+  type CreateApplicationAuthorityRequest,
+  type ApplicationCredentialResponse,
+  type TenantUsage,
   type SubjectCapacity,
   type SubjectSandboxPolicy,
   type SubjectSandboxPolicyObservation,
@@ -82,6 +91,15 @@ export type {
   Sandbox,
   SandboxPage,
   SandboxState,
+  Subject,
+  SubjectPage,
+  CreateSubjectRequest,
+  UpdateSubjectQuotaRequest,
+  ApplicationAuthority,
+  ApplicationAuthorityPage,
+  CreateApplicationAuthorityRequest,
+  ApplicationCredentialResponse,
+  TenantUsage,
   SubjectCapacity,
   Snapshot,
   SnapshotPage,
@@ -156,6 +174,8 @@ export interface PageOptions {
 
 export interface SandboxListOptions extends PageOptions {
   readonly metadata?: Metadata;
+  readonly states?: readonly SandboxState[];
+  readonly ids?: readonly string[];
   readonly signal?: AbortSignal;
 }
 
@@ -165,6 +185,64 @@ export class SecondBox {
 
   public constructor(transport: SecondBoxClient) {
     this.transport = transport;
+  }
+
+  public getSubject(subjectRef: string, signal?: AbortSignal): Promise<Subject> {
+    return this.requestJSON("getSubject", { pathParameters: { subjectRef }, signal });
+  }
+
+  public listSubjects(options: PageOptions = {}, signal?: AbortSignal): Promise<SubjectPage> {
+    return this.requestJSON("listSubjects", { queryParameters: pageQuery(options), signal });
+  }
+
+  public createSubject(request: CreateSubjectRequest, key: string, signal?: AbortSignal): Promise<Subject> {
+    return this.mutateController("createSubject", {}, undefined, key, request, signal);
+  }
+
+  public updateSubjectQuota(subjectRef: string, request: UpdateSubjectQuotaRequest, revision: number, key: string, signal?: AbortSignal): Promise<Subject> {
+    return this.mutateController("updateSubjectQuota", { subjectRef }, revision, key, request, signal);
+  }
+
+  public closeSubject(subjectRef: string, revision: number, key: string, signal?: AbortSignal): Promise<Subject> {
+    return this.mutateController("closeSubject", { subjectRef }, revision, key, undefined, signal);
+  }
+
+  public cleanupSubject(subjectRef: string, revision: number, key: string, signal?: AbortSignal): Promise<Operation> {
+    return this.mutateController("cleanupSubject", { subjectRef }, revision, key, undefined, signal);
+  }
+
+  public getApplicationAuthority(authorityId: string, signal?: AbortSignal): Promise<ApplicationAuthority> {
+    return this.requestJSON("getApplicationAuthority", { pathParameters: { authorityId }, signal });
+  }
+
+  public listApplicationAuthorities(subjectRef: string, options: PageOptions = {}, signal?: AbortSignal): Promise<ApplicationAuthorityPage> {
+    return this.requestJSON("listApplicationAuthorities", { queryParameters: { ...pageQuery(options), ...(subjectRef ? { subjectRef } : {}) }, signal });
+  }
+
+  public createApplicationAuthority(request: CreateApplicationAuthorityRequest, key: string, signal?: AbortSignal): Promise<ApplicationCredentialResponse> {
+    return this.mutateController("createApplicationAuthority", {}, undefined, key, request, signal);
+  }
+
+  public rotateApplicationAuthority(authorityId: string, revision: number, key: string, signal?: AbortSignal): Promise<ApplicationCredentialResponse> {
+    return this.mutateController("rotateApplicationAuthority", { authorityId }, revision, key, undefined, signal);
+  }
+
+  public revokeApplicationAuthority(authorityId: string, revision: number, key: string, signal?: AbortSignal): Promise<ApplicationAuthority> {
+    return this.mutateController("revokeApplicationAuthority", { authorityId }, revision, key, undefined, signal);
+  }
+
+  public getTenantUsage(options: PageOptions = {}, signal?: AbortSignal): Promise<TenantUsage> {
+    return this.requestJSON("getTenantUsage", { queryParameters: pageQuery(options), signal });
+  }
+
+  private mutateController<T>(operationID: OperationID, pathParameters: Readonly<Record<string, string>>, revision: number | undefined, key: string, request: unknown, signal?: AbortSignal): Promise<T> {
+    if (!/^[\x21-\x7e]{1,128}$/.test(key)) throw new Error("SecondBox management Idempotency-Key must contain 1 through 128 visible ASCII characters");
+    return this.requestJSON(operationID, {
+      pathParameters,
+      headers: { "Idempotency-Key": key, ...(revision === undefined ? {} : { "If-Match": revisionETag(revision) }) },
+      ...(request === undefined ? {} : { body: encodeJSONBody(request) }),
+      signal,
+    });
   }
 
   public async getSubjectCapacity(): Promise<SubjectCapacity> {
@@ -360,8 +438,9 @@ export class SecondBox {
     if (metadata.length > 8) {
       throw new Error("SecondBox Sandbox metadata filter must not exceed 8 entries");
     }
+    if ((options.states?.length ?? 0) > 9 || (options.ids?.length ?? 0) > 64) throw new Error("SecondBox Sandbox filter exceeds 9 states or 64 IDs");
     return this.requestJSON<SandboxPage>("listSandboxes", {
-      queryParameters: { ...pageQuery(options), ...(metadata.length === 0 ? {} : { metadata }) },
+      queryParameters: { ...pageQuery(options), ...(metadata.length === 0 ? {} : { metadata }), ...(options.states?.length ? { state: [...options.states] } : {}), ...(options.ids?.length ? { id: [...options.ids] } : {}) },
       signal: options.signal,
     });
   }

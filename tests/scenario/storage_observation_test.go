@@ -23,6 +23,9 @@ func TestScenarioWorkspaceStorageObservationPreservesStoppedFilesAndActivity(t *
 	defer cancel()
 	waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
 	waitForScenarioOperation(t, ctx, fixture.subject, operation)
+	if _, err := handle.ReadFile(ctx, "missing-observation-file", 1024, ""); secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodeFileNotFound {
+		t.Fatalf("missing file must not mean missing compute: %v", err)
+	}
 	// Flush through the guest's execution API, never through the observation.
 	// This gives FIEMAP stable extents while compute remains running.
 	assertScenarioExited(t, executeScenarioCommand(t, ctx, handle, "sync", 1024, "storage-baseline-sync"), 0, "", "")

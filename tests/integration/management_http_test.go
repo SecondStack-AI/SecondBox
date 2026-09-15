@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -367,6 +368,14 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 	)
 	if err != nil || updatedSubject.Revision != subjectA.Revision+1 || updatedSubject.Quota.MaxSandboxes != 3 {
 		t.Fatalf("Subject quota expansion = %#v error=%v", updatedSubject, err)
+	}
+	observation := updatedSubject.QuotaObservation
+	if observation == nil || observation.Limits.MaxSandboxes != 3 || observation.Available.Sandboxes != 3 || !observation.ObservedAt.Equal(updatedSubject.UpdatedAt) {
+		t.Fatalf("quota update must carry its committed capacity: %+v", observation)
+	}
+	replayedSubject, err := controllerAClient.UpdateSubjectQuota(t.Context(), subjectA.Ref, expandedQuota, subjectA.Revision, "subject-quota-expand-key")
+	if err != nil || !reflect.DeepEqual(replayedSubject, updatedSubject) {
+		t.Fatalf("quota replay = %+v, %v", replayedSubject, err)
 	}
 	overCeilingQuota := expandedQuota
 	overCeilingQuota.Quota.MaxSandboxes = 9
