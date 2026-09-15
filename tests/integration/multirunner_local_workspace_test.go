@@ -356,12 +356,14 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		&runnerv1.RunnerToControlPlane{
 			Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 				AssignmentResult: &runnerv1.AssignmentResult{
-					MessageId:        "multirunner-assignment-ready",
-					Sequence:         2,
-					Fence:            proto.Clone(assignment.Fence).(*runnerv1.AssignmentFence),
-					Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
-					BackendKind:      "firecracker",
-					BackendReference: "fc-multirunner-routing",
+					MessageId:               "multirunner-assignment-ready",
+					Sequence:                2,
+					Fence:                   proto.Clone(assignment.Fence).(*runnerv1.AssignmentFence),
+					Terminal:                runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+					BackendKind:             "firecracker",
+					BackendReference:        "fc-multirunner-routing",
+					RequestedImageReference: assignment.ExecutionImage.Reference,
+					ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 					Correlation: proto.Clone(
 						assignment.Correlation,
 					).(*runnerv1.Correlation),

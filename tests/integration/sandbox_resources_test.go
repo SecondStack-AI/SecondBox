@@ -58,7 +58,7 @@ func TestSandboxRequestedResourcesHTTPAndQuota(t *testing.T) {
 				{"vcpuCount": 2, "memoryBytes": 512 << 20, "workspaceBytes": 2 << 30},
 				{"vcpuCount": 4, "memoryBytes": 1 << 30, "workspaceBytes": 8 << 30},
 			} {
-				response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resource-create-"+strconv.Itoa(index), map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": resources})
+				response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resource-create-"+strconv.Itoa(index), map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": resources})
 				if response.StatusCode != http.StatusAccepted {
 					t.Fatalf("create status=%d body=%s", response.StatusCode, readResponse(t, response))
 				}
@@ -266,7 +266,7 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 	}
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
-	response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-create", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 2, "memoryBytes": 1 << 30, "workspaceBytes": 3 << 30}})
+	response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "flexible-create", map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"vcpuCount": 2, "memoryBytes": 1 << 30, "workspaceBytes": 3 << 30}})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", response.StatusCode, readResponse(t, response))
 	}
