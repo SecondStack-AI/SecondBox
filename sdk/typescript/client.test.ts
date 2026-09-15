@@ -895,6 +895,7 @@ test("run creates, waits, and executes one command", async () => {
     paths.push(`${init?.method ?? "GET"} ${url.pathname}`);
     if (url.pathname === "/v1/sandboxes" && init?.method === "POST") {
       assert.deepEqual(JSON.parse(String(init.body)).resources, resources);
+      assert.equal(Object.hasOwn(JSON.parse(String(init.body)), "image"), false);
       return Response.json({
         id: "operation-1",
         sandboxId: "sandbox-1",
@@ -922,7 +923,6 @@ test("run creates, waits, and executes one command", async () => {
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const outcome = await api.run({
     profile: "durable-coding",
-    image: executionImage,
     resources,
     command: { mode: "shell", command: "cat" },
     stdinBase64: "aGVsbG8K",

@@ -441,7 +441,7 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 	startQuotaRace := make(chan struct{})
 	go func() {
 		<-startQuotaRace
-		_, _, raceErr := applicationClient.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{Image: testExecutionImage(),
+		_, _, raceErr := applicationClient.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{
 			Profile: "management-quota-profile", Metadata: map[string]string{},
 		}, "subject-quota-race-sandbox-key")
 		quotaRace <- quotaRaceOutcome{kind: "usage", err: raceErr}

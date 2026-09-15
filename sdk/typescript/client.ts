@@ -1737,7 +1737,7 @@ function executionImageJSON(image: ExecutionImage): JSONValue {
 }
 
 export interface CreateSandboxOptions {
-  readonly image: ExecutionImage;
+  readonly image?: ExecutionImage;
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
@@ -1752,7 +1752,7 @@ export interface WaitForOptions {
 }
 
 export interface RunRequest extends Omit<BufferedExecRequest, "environment"> {
-  readonly image: ExecutionImage;
+  readonly image?: ExecutionImage;
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;

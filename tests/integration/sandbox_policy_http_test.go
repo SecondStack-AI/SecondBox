@@ -90,7 +90,7 @@ func TestSandboxPolicyHTTPPinsFutureLifecycleAndDelegatedBounds(t *testing.T) {
 	if _, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, initial.Revision, name+"-stale"); secondboxclient.ProblemCodeOf(err) != "precondition_failed" {
 		t.Fatalf("stale policy = %v", err)
 	}
-	first, _, err := application.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{Image: testExecutionImage(), Profile: name, Metadata: map[string]string{}}, name+"-first")
+	first, _, err := application.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{Profile: name, Metadata: map[string]string{}}, name+"-first")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestSandboxPolicyHTTPPinsFutureLifecycleAndDelegatedBounds(t *testing.T) {
 	if err != nil || selected.Effective.IdleSeconds != 600 || selected.Effective.MaximumDurationSeconds != 120 {
 		t.Fatalf("clamped policy = %+v, %v", selected, err)
 	}
-	second, _, err := application.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{Image: testExecutionImage(), Profile: name, Metadata: map[string]string{}}, name+"-second")
+	second, _, err := application.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{Profile: name, Metadata: map[string]string{}}, name+"-second")
 	if err != nil {
 		t.Fatal(err)
 	}

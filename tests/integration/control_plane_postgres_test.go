@@ -71,7 +71,7 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "same-request", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+			sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "same-request", contracts.CreateSandboxRequest{
 				Profile: profile.Name, Metadata: map[string]string{"purpose": "concurrency"},
 			})
 			if err != nil {
@@ -132,7 +132,7 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 	if nextReconcileAt != nil {
 		t.Fatalf("creating Sandbox next reconcile = %v, want no speculative work", nextReconcileAt)
 	}
-	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "same-request", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "same-request", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{"purpose": "different-payload"},
 	}); !errors.Is(err, ports.ErrIdempotencyConflict) {
 		t.Fatalf("idempotency payload mismatch error = %v, want ErrIdempotencyConflict", err)
@@ -154,7 +154,7 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 	if existing.ProfileRevisionID != profile.CurrentRevision.ID {
 		t.Fatalf("existing Sandbox revision changed to %q after profile revision", existing.ProfileRevisionID)
 	}
-	future, _, err := controlPlane.CreateSandbox(t.Context(), principal, "future-request", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	future, _, err := controlPlane.CreateSandbox(t.Context(), principal, "future-request", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{},
 	})
 	if err != nil {
@@ -238,7 +238,7 @@ func TestSubjectCloseSerializedBeforeSandboxAdmissionRejectsAuthenticatedRequest
 	created := make(chan error, 1)
 	go func() {
 		close(started)
-		_, _, createErr := controlPlane.CreateSandbox(t.Context(), principal, "subject-close-admission", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+		_, _, createErr := controlPlane.CreateSandbox(t.Context(), principal, "subject-close-admission", contracts.CreateSandboxRequest{
 			Profile: profile.Name, Metadata: map[string]string{},
 		})
 		created <- createErr
@@ -288,7 +288,7 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		t.Context(),
 		principal,
 		"snapshot-clone-source",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}, Resources: resources},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}, Resources: resources},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +377,7 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		t.Context(),
 		principal,
 		"snapshot-clone-capacity-rejected",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(),
+		contracts.CreateSandboxRequest{
 			Profile:          profile.Name,
 			Metadata:         map[string]string{"fork": "target"},
 			SourceSnapshotID: snapshotID, Resources: resources,
@@ -394,7 +394,7 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = controlPlane.CreateSandbox(t.Context(), principal, "snapshot-clone-wrong-capacity", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	_, _, err = controlPlane.CreateSandbox(t.Context(), principal, "snapshot-clone-wrong-capacity", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{}, SourceSnapshotID: snapshotID,
 	})
 	if !errors.Is(err, ports.ErrSnapshotUnavailable) {
@@ -404,7 +404,7 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		t.Context(),
 		principal,
 		"snapshot-clone-target",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(),
+		contracts.CreateSandboxRequest{
 			Profile:          profile.Name,
 			Metadata:         map[string]string{"fork": "target"},
 			SourceSnapshotID: snapshotID, Resources: resources,
@@ -544,7 +544,7 @@ func TestSandboxCreationWaitsForDurableHomeWorkspaceReceipt(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, credential)
 	operation, created, err := controlPlane.CreateSandboxOperation(
 		t.Context(), principal, "local-create",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -692,7 +692,7 @@ func TestSandboxReadsAreScopedToTenantAndSubject(t *testing.T) {
 		t.Context(),
 		owner,
 		"subject-isolation-create",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -727,7 +727,7 @@ func TestSandboxReadsAreScopedToTenantAndSubject(t *testing.T) {
 		t.Context(),
 		other,
 		"subject-isolation-create",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -788,7 +788,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 	_, _, credential := createProjectAccountAndCredential(t, controlPlane, admin, "admission")
 	principal := authenticateCredential(t, controlPlane, credential)
 
-	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "absent-profile", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "absent-profile", contracts.CreateSandboxRequest{
 		Profile: "absent-profile", Metadata: map[string]string{},
 	}); !errors.Is(err, ports.ErrProfileNotFound) {
 		t.Fatalf("absent Profile admission error = %v, want ErrProfileNotFound", err)
@@ -808,7 +808,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 	if disabled.State != contracts.ProfileStateDisabled || disabled.Revision != disabledRevision+1 {
 		t.Fatalf("disabled Profile = %+v, want disabled with head revision advanced once", disabled)
 	}
-	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "disabled-profile", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "disabled-profile", contracts.CreateSandboxRequest{
 		Profile: disabled.Name, Metadata: map[string]string{},
 	}); !errors.Is(err, ports.ErrProfileDisabled) {
 		t.Fatalf("disabled Profile admission error = %v, want ErrProfileDisabled", err)
@@ -822,7 +822,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "incompatible-profile", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "incompatible-profile", contracts.CreateSandboxRequest{
 		Profile: incompatible.Name, Metadata: map[string]string{},
 	}); !errors.Is(err, ports.ErrRunnerPoolUnavailable) {
 		t.Fatalf("incompatible Profile admission error = %v, want ErrRunnerPoolUnavailable", err)
@@ -849,7 +849,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "snapshot-resume-profile", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "snapshot-resume-profile", contracts.CreateSandboxRequest{
 		Profile: resumeProfile.Name, Metadata: map[string]string{},
 	}); !errors.Is(err, ports.ErrStartupModeUnsupported) {
 		t.Fatalf("snapshot_resume admission error = %v, want ErrStartupModeUnsupported", err)
@@ -888,7 +888,7 @@ func TestConcurrentSubjectQuotaAdmissionNeverOvercommits(t *testing.T) {
 	for index := 0; index < 2; index++ {
 		go func(index int) {
 			<-start
-			_, _, err := controlPlane.CreateSandbox(t.Context(), principal, fmt.Sprintf("quota-race-%d", index), contracts.CreateSandboxRequest{Image: testExecutionImage(),
+			_, _, err := controlPlane.CreateSandbox(t.Context(), principal, fmt.Sprintf("quota-race-%d", index), contracts.CreateSandboxRequest{
 				Profile: profile.Name, Metadata: map[string]string{},
 			})
 			results <- err
@@ -927,7 +927,7 @@ func TestConcurrentSubjectQuotaAdmissionNeverOvercommits(t *testing.T) {
 	}
 	t.Cleanup(reopenedStore.Close)
 	restarted := newControlPlaneService(t, reopenedStore, generousQuota())
-	if _, _, err := restarted.CreateSandbox(t.Context(), principal, "quota-after-restart", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	if _, _, err := restarted.CreateSandbox(t.Context(), principal, "quota-after-restart", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{},
 	}); !errors.Is(err, ports.ErrQuotaExceeded) {
 		t.Fatalf("admission after restart = %v, want persisted Subject quota refusal", err)
@@ -940,7 +940,7 @@ func TestPostgresRestartRecoversCredentialIdempotencyAndSandboxState(t *testing.
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "restart")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "restart-profile")
 	principal := authenticateCredential(t, controlPlane, credential)
-	created, _, err := controlPlane.CreateSandbox(t.Context(), principal, "restart-idempotency", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	created, _, err := controlPlane.CreateSandbox(t.Context(), principal, "restart-idempotency", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{"restart": "durable"},
 	})
 	if err != nil {
@@ -955,7 +955,7 @@ func TestPostgresRestartRecoversCredentialIdempotencyAndSandboxState(t *testing.
 	t.Cleanup(reopenedStore.Close)
 	restarted := newControlPlaneService(t, reopenedStore, generousQuota())
 	restartedPrincipal := authenticateCredential(t, restarted, credential)
-	replayed, createdAgain, err := restarted.CreateSandbox(t.Context(), restartedPrincipal, "restart-idempotency", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	replayed, createdAgain, err := restarted.CreateSandbox(t.Context(), restartedPrincipal, "restart-idempotency", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{"restart": "durable"},
 	})
 	if err != nil {
@@ -1015,7 +1015,7 @@ func TestHTTPAuthenticationStrictCreateAndFixedCardinalityMetrics(t *testing.T) 
 	assertHTTPStatusAndClose(t, doHTTP(t, malformedRefs), http.StatusBadRequest)
 
 	response := authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "http-create", map[string]any{
-		"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{"project-name": project.Name},
+		"profile": profile.Name, "metadata": map[string]string{"project-name": project.Name},
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("POST /v1/sandboxes status = %d body=%s", response.StatusCode, readResponse(t, response))

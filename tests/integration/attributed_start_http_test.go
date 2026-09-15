@@ -20,7 +20,7 @@ func TestAttributedStartHTTPAdmissionAndReplay(t *testing.T) {
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "attributed-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-attributed-http")
 	principal := authenticateCredential(t, controlPlane, credential)
-	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "attributed-http-create", contracts.CreateSandboxRequest{Image: testExecutionImage(),
+	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "attributed-http-create", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{},
 	})
 	if err != nil {
@@ -71,16 +71,16 @@ func TestAttributedStartHTTPAdmissionAndReplay(t *testing.T) {
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 	for _, invalid := range []any{
-		map[string]any{"image": testExecutionImage(), "attributedExecution": nil},
-		map[string]any{"image": testExecutionImage(), "attributedExecution": map[string]any{}},
-		map[string]any{"image": testExecutionImage(), "gateway": "caller-selected"},
-		map[string]any{"image": testExecutionImage(), "attributedExecution": map[string]any{"authorizationRef": "command", "expiresAt": "2026-07-28T12:00:45Z", "gateway": "caller-selected"}},
+		map[string]any{"attributedExecution": nil},
+		map[string]any{"attributedExecution": map[string]any{}},
+		map[string]any{"gateway": "caller-selected"},
+		map[string]any{"attributedExecution": map[string]any{"authorizationRef": "command", "expiresAt": "2026-07-28T12:00:45Z", "gateway": "caller-selected"}},
 	} {
 		response := lifecycleHTTPRequest(t, server.URL, credential, http.MethodPost,
 			"/v1/sandboxes/"+sandbox.ID+":start", "attributed-http-invalid", strconv.FormatInt(sandbox.Revision, 10), "", invalid)
 		assertProblem(t, response, http.StatusBadRequest, "invalid_request")
 	}
-	body := contracts.StartSandboxRequest{Image: testExecutionImage(), AttributedExecution: &contracts.AttributedExecutionRequest{
+	body := contracts.StartSandboxRequest{AttributedExecution: &contracts.AttributedExecutionRequest{
 		AuthorizationRef: "command-http", ExpiresAt: time.Date(2026, 7, 28, 12, 0, 45, 0, time.UTC),
 	}}
 	var operationID string

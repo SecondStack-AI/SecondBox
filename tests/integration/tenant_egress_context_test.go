@@ -38,7 +38,7 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 
 	if _, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "missing-egress-context",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: requiringProfile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: requiringProfile.Name, Metadata: map[string]string{}},
 	); !errors.Is(err, ports.ErrTenantEgressContextRequired) {
 		t.Fatalf("requiring Profile without Tenant context error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 	}
 	first, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "first-egress-context-sandbox",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: requiringProfile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: requiringProfile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 	}
 	second, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "second-egress-context-sandbox",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: requiringProfile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: requiringProfile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestTenantEgressContextPinsOnlyNewRequiringSandboxesAndRecovers(t *testing.
 	)
 	isolated, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "isolated-with-tenant-context",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: isolatedProfile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: isolatedProfile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)

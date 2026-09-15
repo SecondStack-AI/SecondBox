@@ -58,7 +58,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	principal := authenticateCredential(t, controlPlane, key.Credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "data-plane-http-create",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +295,7 @@ func TestBufferedExecTransportSetupFailureReleasesConcurrentOperationQuota(t *te
 	principal := authenticateCredential(t, controlPlane, key.Credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "data-plane-setup-failure-create",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -407,7 +407,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	principal := authenticateCredential(t, controlPlane, key.Credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "flue-real-service-create",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}},
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -533,7 +533,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	owner := authenticateCredential(t, controlPlane, ownerKey.Credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), owner, "isolation-owner-sandbox",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(),
+		contracts.CreateSandboxRequest{
 			Profile: profile.Name, Metadata: map[string]string{"secret": "owner-only"},
 		},
 	)

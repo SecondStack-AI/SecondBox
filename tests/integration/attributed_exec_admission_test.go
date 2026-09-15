@@ -18,7 +18,7 @@ func TestAttributedGenerationKeepsOneExecAfterSessionCleanup(t *testing.T) {
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "attributed-exec")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-attributed-exec")
 	principal := authenticateCredential(t, controlPlane, credential)
-	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "attributed-exec-create", contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}})
+	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "attributed-exec-create", contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,7 +17,7 @@ func TestSandboxStorageObservationHTTPReadsAndListsPersistedEvidence(t *testing.
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "storage-observation-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "storage-observation-http-profile")
 	principal := authenticateCredential(t, controlPlane, credential)
-	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "storage-observation-http-create", contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: profile.Name, Metadata: map[string]string{}})
+	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "storage-observation-http-create", contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}

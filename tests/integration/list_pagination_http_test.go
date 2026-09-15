@@ -148,7 +148,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 			t.Context(),
 			sandboxPrincipal,
 			fmt.Sprintf("%s-sandbox-request-%d", suffix, index),
-			contracts.CreateSandboxRequest{Image: testExecutionImage(), Profile: sandboxProfile.Name, Metadata: map[string]string{}},
+			contracts.CreateSandboxRequest{Profile: sandboxProfile.Name, Metadata: map[string]string{}},
 		)
 		if err != nil {
 			t.Fatal(err)

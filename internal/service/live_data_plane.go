@@ -931,7 +931,8 @@ func (stream *SandboxTerminalStream) checkpoint(
 	stream.checkpointMu.Lock()
 	defer stream.checkpointMu.Unlock()
 	stream.mu.Lock()
-	if terminal == nil && stream.version == stream.persistedVersion {
+	// Only the outcome checkpoint may publish the final receive sequence.
+	if terminal == nil && (stream.terminal || stream.version == stream.persistedVersion) {
 		session := stream.session
 		stream.mu.Unlock()
 		return session, nil

@@ -76,7 +76,7 @@ func TestLifecycleVerbsResolveAndWait(t *testing.T) {
 						args = append(args, "--no-wait")
 					}
 					var output bytes.Buffer
-					if err := runTestLifecycleVerb(t.Context(), verbTestSession(server), command, args, &output, server.Client()); err != nil {
+					if err := runLifecycleVerb(t.Context(), verbTestSession(server), command, args, &output, server.Client()); err != nil {
 						t.Fatal(err)
 					}
 					if output.String() != raw {
@@ -116,7 +116,7 @@ func TestCreateGetAndListVerbs(t *testing.T) {
 	defer server.Close()
 	session := verbTestSession(server)
 	var output bytes.Buffer
-	if err := runTestLifecycleVerb(t.Context(), session, "create", []string{"durable-coding", "--name", "mybox", "--metadata", "team=dev", "--from", "snp_base"}, &output, server.Client()); err != nil {
+	if err := runLifecycleVerb(t.Context(), session, "create", []string{"durable-coding", "--name", "mybox", "--metadata", "team=dev", "--from", "snp_base"}, &output, server.Client()); err != nil {
 		t.Fatal(err)
 	}
 	if created.Profile != "durable-coding" || created.SourceSnapshotID != "snp_base" || created.Metadata[contracts.SandboxNameMetadataKey] != "mybox" || created.Metadata["team"] != "dev" {
@@ -124,7 +124,7 @@ func TestCreateGetAndListVerbs(t *testing.T) {
 	}
 	for _, command := range []string{"ls", "list"} {
 		output.Reset()
-		if err := runTestLifecycleVerb(t.Context(), session, command, []string{"--name", "mybox"}, &output, server.Client()); err != nil {
+		if err := runLifecycleVerb(t.Context(), session, command, []string{"--name", "mybox"}, &output, server.Client()); err != nil {
 			t.Fatal(err)
 		}
 		if output.String() != rawList {
@@ -132,7 +132,7 @@ func TestCreateGetAndListVerbs(t *testing.T) {
 		}
 	}
 	output.Reset()
-	if err := runTestLifecycleVerb(t.Context(), session, "get", []string{"mybox"}, &output, server.Client()); err != nil {
+	if err := runLifecycleVerb(t.Context(), session, "get", []string{"mybox"}, &output, server.Client()); err != nil {
 		t.Fatal(err)
 	}
 	if output.String() != execSandboxJSON {
@@ -140,7 +140,7 @@ func TestCreateGetAndListVerbs(t *testing.T) {
 	}
 	output.Reset()
 	ctx := withPresentation(t.Context(), presentation{renderer: cliui.Renderer{Output: &output, OutputMode: cliui.OutputPlain}})
-	if err := runTestLifecycleVerb(ctx, session, "ls", []string{"--name", "mybox"}, &output, server.Client()); err != nil {
+	if err := runLifecycleVerb(ctx, session, "ls", []string{"--name", "mybox"}, &output, server.Client()); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "stopped") {
@@ -174,7 +174,7 @@ func TestRemovalConfirmationOnlyOnTTY(t *testing.T) {
 			if test.force {
 				args = append(args, "--force")
 			}
-			err := runTestLifecycleVerb(ctx, verbTestSession(server), "rm", args, &output, server.Client())
+			err := runLifecycleVerb(ctx, verbTestSession(server), "rm", args, &output, server.Client())
 			if (err == nil) != test.accepted || (mutations == 1) != test.accepted {
 				t.Fatalf("err=%v mutations=%d", err, mutations)
 			}

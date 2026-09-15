@@ -38,7 +38,7 @@ func TestPublicSnapshotCreateDeleteAreAsyncIdempotentAndProviderNeutral(t *testi
 		t.Context(),
 		principal,
 		"snapshot-http-create-sandbox",
-		contracts.CreateSandboxRequest{Image: testExecutionImage(),
+		contracts.CreateSandboxRequest{
 			Profile:  profile.Name,
 			Metadata: map[string]string{},
 		},
