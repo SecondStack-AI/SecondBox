@@ -116,7 +116,7 @@ Runner protocol minimum and maximum are not configuration. Both binaries compile
 
 ## Tenant-aware egress topology
 
-The tenant-aware release uses Runner protocol generation 4 exactly. A v0.7.2 control plane or Runner supports generation 3 and cannot join a generation-4 deployment. Upgrade the control plane and every Runner as one coordinated replacement; a mixed fleet, legacy assignment, or global-gateway fallback is unsupported.
+The client-selected-image release uses Runner protocol generation 5 exactly. Earlier control planes and Runners cannot join a generation-5 deployment. Upgrade the control plane and every Runner as one coordinated replacement. A mixed fleet, legacy assignment, or global-gateway fallback is unsupported. The first cold start also includes registry download, extraction, and signature verification. Size assignment and ingress deadlines for that work; warm starts use the verified Runner-local cache.
 
 One SecondBox Tenant represents one SecondStack installation and has at most one nullable operator-selected egress-context name. Names are opaque and match `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`, so they contain 1 through 63 lowercase ASCII letters, digits, or hyphens and begin and end with an alphanumeric character. They are not DNS names or network coordinates. Do not put SecondStack hostnames, proxy endpoints, certificates, network ranges, Tenant references, or secrets in a context name or in control-plane configuration.
 
@@ -262,6 +262,9 @@ identity_host_directory = '<replace-with-absolute-runner-host-path>'
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'
 # Registry hosts allowed for client-selected execution images.
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
+execution_image_max_download_bytes = 8589934592
+execution_image_max_expanded_bytes = 17179869184
+execution_image_max_cache_bytes = 68719476736
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses the release signing key.
 execution_image_public_key = ''
 # Client-selected execution-image signing-key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.

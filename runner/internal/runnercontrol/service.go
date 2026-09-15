@@ -1204,11 +1204,15 @@ func (s *RunnerProtocolService) handleAssignment(
 	progress := func(stage runnerprotocol.AssignmentProgressStage) error {
 		return s.sendAssignmentProgress(stream, assignment, stage, time.Now())
 	}
-	startCtx := ctx
+	startCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(int64(assignment.DeadlineUnixMs)))
+	defer cancel()
 	if execution := assignment.AttributedExecution; execution != nil {
-		var cancel context.CancelFunc
-		startCtx, cancel = context.WithDeadline(ctx, time.UnixMilli(int64(execution.ExpiresAtUnixMs)))
-		defer cancel()
+		executionDeadline := time.UnixMilli(int64(execution.ExpiresAtUnixMs))
+		if assignmentDeadline, _ := startCtx.Deadline(); executionDeadline.Before(assignmentDeadline) {
+			var cancelExecution context.CancelFunc
+			startCtx, cancelExecution = context.WithDeadline(startCtx, executionDeadline)
+			defer cancelExecution()
+		}
 	}
 	instance, err := s.backend.StartAssignment(startCtx, assignment, progress)
 	terminal := runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY

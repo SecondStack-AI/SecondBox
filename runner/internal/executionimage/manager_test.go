@@ -3,12 +3,14 @@ package executionimage
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOuterDockerArchiveAcceptsContainedLayerLink(t *testing.T) {
@@ -42,7 +44,7 @@ func TestOuterDockerArchiveAcceptsContainedLayerLink(t *testing.T) {
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := extractTarFile(archive, target, ""); err != nil {
+	if err := extractTarFile(t.Context(), archive, target, "", &byteBudget{maximum: 1024}); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(filepath.Join(target, "layer", "layer.tar"))
@@ -51,6 +53,82 @@ func TestOuterDockerArchiveAcceptsContainedLayerLink(t *testing.T) {
 	}
 	if string(content) != "data" {
 		t.Fatalf("hard-linked layer content = %q", content)
+	}
+}
+
+func TestLayerWhiteoutsAndReplacementProduceFinalBundle(t *testing.T) {
+	target := t.TempDir()
+	first := filepath.Join(t.TempDir(), "first.tar")
+	writeTestTar(t, first, []*tar.Header{
+		{Name: selectedBundleDirectory + "/keep", Mode: 0o600, Size: 3, Typeflag: tar.TypeReg},
+		{Name: selectedBundleDirectory + "/remove", Mode: 0o600, Size: 3, Typeflag: tar.TypeReg},
+	}, []string{"old", "old"})
+	second := filepath.Join(t.TempDir(), "second.tar")
+	writeTestTar(t, second, []*tar.Header{
+		{Name: selectedBundleDirectory + "/.wh.remove", Typeflag: tar.TypeChar},
+		{Name: selectedBundleDirectory + "/keep", Mode: 0o600, Size: 3, Typeflag: tar.TypeReg},
+	}, []string{"", "new"})
+	budget := &byteBudget{maximum: 1024}
+	if err := extractTarFile(t.Context(), first, target, selectedBundleDirectory+"/", budget); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyLayerWhiteouts(t.Context(), second, target, selectedBundleDirectory+"/"); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractTarFile(t.Context(), second, target, selectedBundleDirectory+"/", budget); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "keep")); err != nil || string(data) != "new" {
+		t.Fatalf("replacement = %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "remove")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("whiteout target remains: %v", err)
+	}
+}
+
+func TestDigestLockStopsAtContextDeadline(t *testing.T) {
+	manager := &Manager{cacheRoot: t.TempDir()}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	first, err := manager.lockDigest(t.Context(), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := manager.lockDigest(ctx, digest); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("contended digest lock = %v, want deadline", err)
+	}
+}
+
+func TestExtractionBudgetRejectsOversizedEntry(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "oversized.tar")
+	writeTestTar(t, archive, []*tar.Header{{Name: "large", Mode: 0o600, Size: 4, Typeflag: tar.TypeReg}}, []string{"data"})
+	err := extractTarFile(t.Context(), archive, t.TempDir(), "", &byteBudget{maximum: 3})
+	if err == nil || !strings.Contains(err.Error(), "exceeds 3 bytes") {
+		t.Fatalf("oversized extraction = %v", err)
+	}
+}
+
+func writeTestTar(t *testing.T, path string, headers []*tar.Header, bodies []string) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := tar.NewWriter(file)
+	for index, header := range headers {
+		if err := writer.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if bodies[index] != "" {
+			if _, err := io.WriteString(writer, bodies[index]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := errors.Join(writer.Close(), file.Close()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -77,7 +155,7 @@ func TestOuterDockerArchiveRejectsEscapingLayerLink(t *testing.T) {
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := extractTarFile(archive, target, ""); err == nil || !strings.Contains(err.Error(), "link target is unsafe") {
+	if err := extractTarFile(t.Context(), archive, target, "", &byteBudget{maximum: 1024}); err == nil || !strings.Contains(err.Error(), "link target is unsafe") {
 		t.Fatalf("escaping link error = %v", err)
 	}
 }

@@ -24,6 +24,8 @@ import {
 } from "./client.ts";
 import { SecondBoxAPIError, SecondBoxClient, type TerminalSession } from "./transport.ts";
 
+const executionImage = { reference: "registry.example/secondbox/sdk-test:stable" };
+
 test("Sandbox start sends attributed execution with lifecycle authority", async () => {
   const attributedExecution = { authorizationRef: "command-sdk", expiresAt: "2026-09-10T12:00:00Z" };
   const fetcher: typeof fetch = async (input, init) => {
@@ -32,12 +34,12 @@ test("Sandbox start sends attributed execution with lifecycle authority", async 
     assert.equal(new URL(request.url).pathname, "/v1/sandboxes/sandbox-1:start");
     assert.equal(request.headers.get("Idempotency-Key"), "start-command-sdk");
     assert.equal(request.headers.get("If-Match"), '"revision-7"');
-    assert.deepEqual(await request.json(), { attributedExecution });
+    assert.deepEqual(await request.json(), { image: executionImage, attributedExecution });
     return Response.json({ id: "operation-start", state: "pending", kind: "start" });
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const handle = new SandboxHandle(api, { ...sandbox("stopped"), revision: 7 });
-  const operation = await handle.start({ attributedExecution, idempotencyKey: "start-command-sdk" });
+  const operation = await handle.start({ image: executionImage, attributedExecution, idempotencyKey: "start-command-sdk" });
   assert.equal(operation.id, "operation-start");
 });
 
@@ -791,7 +793,12 @@ test("createSandbox returns a handle for the created resource", async () => {
   const resources = { memoryBytes: 512 * 1024 * 1024 };
   const fetcher: typeof fetch = async (input, init) => {
     if (init?.method === "POST") {
-      assert.deepEqual(JSON.parse(String(init.body)).resources, resources);
+      assert.deepEqual(JSON.parse(String(init.body)), {
+        image: executionImage,
+        profile: "durable-coding",
+        metadata: {},
+        resources,
+      });
       idempotency = new Headers(init.headers).get("Idempotency-Key") ?? "";
       return Response.json({
         id: "operation-1",
@@ -806,7 +813,7 @@ test("createSandbox returns a handle for the created resource", async () => {
     return Response.json(sandbox("creating"));
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
-  const { handle, operation } = await api.createSandbox({ profile: "durable-coding", resources });
+  const { handle, operation } = await api.createSandbox({ image: executionImage, profile: "durable-coding", resources });
   assert.equal(operation.sandboxId, "sandbox-1");
   assert.equal(handle.snapshot.id, "sandbox-1");
   assert.notEqual(idempotency, "");
@@ -825,7 +832,7 @@ test("createSandbox rejects an operation without a Sandbox reference", async () 
     });
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   await assert.rejects(
-    api.createSandbox({ profile: "durable-coding" }),
+    api.createSandbox({ image: executionImage, profile: "durable-coding" }),
     /no Sandbox reference/,
   );
 });

@@ -325,6 +325,13 @@ func TestPrepareLaunchImageUsesVerifiedExecutionImageTrust(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, artifact := range []struct{ label, path string }{{"kernel", image.KernelPath}, {"rootfs", image.RootfsPath}, {"shared image", image.SharedImagePath}} {
+		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, artifact.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		image.VerifiedArtifacts = append(image.VerifiedArtifacts, identity)
+	}
 	manager := &Manager{cfg: &config.Config{
 		MicroVMPublicKeyPath: "/fixed-release-authority/public.pem",
 		MicroVMKernelPath:    "/fixed-release-bundle/kernel",
@@ -338,6 +345,30 @@ func TestPrepareLaunchImageUsesVerifiedExecutionImageTrust(t *testing.T) {
 	}
 	if staged.KernelPath == image.KernelPath || staged.RootfsPath == image.RootfsPath {
 		t.Fatalf("verified execution image was not staged: %#v", staged)
+	}
+}
+
+func TestPrepareLaunchImageRejectsChangedVerifiedExecutionImage(t *testing.T) {
+	sourceDir := t.TempDir()
+	image := microVMImageSelection{
+		KernelPath: filepath.Join(sourceDir, "kernel"), RootfsPath: filepath.Join(sourceDir, "rootfs.ext4"),
+		SharedImagePath: filepath.Join(sourceDir, "shared.img"), VerifiedExecutionImage: true,
+	}
+	for _, artifact := range []struct{ label, path string }{{"kernel", image.KernelPath}, {"rootfs", image.RootfsPath}, {"shared image", image.SharedImagePath}} {
+		if err := os.WriteFile(artifact.path, []byte(artifact.label), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, artifact.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		image.VerifiedArtifacts = append(image.VerifiedArtifacts, identity)
+	}
+	if err := os.WriteFile(image.KernelPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Manager{}).prepareLaunchImage(t.TempDir(), image); err == nil || !strings.Contains(err.Error(), "changed before staging") {
+		t.Fatalf("prepare changed verified execution image = %v", err)
 	}
 }
 

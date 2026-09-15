@@ -59,10 +59,14 @@ The Runner downloads an exact digest with Skopeo.
 It extracts only the fixed bundle directory from the OCI layers.
 It verifies the existing checksum, signature, trust-anchor, and rootfs contracts.
 The Runner publishes the cache directory only after all checks pass.
+The Runner records the verified kernel, rootfs, and shared-image file identities and passes those exact identities to Firecracker staging.
+Any replacement between verification and staging fails the assignment.
 
 The cache key is the resolved digest.
 A per-digest file lock serializes publication on one Runner.
 Incomplete staging directories are not valid cache entries.
+Explicit operator limits bound the downloaded archive, expanded bundle, and retained cache.
+The Runner evicts the least recently used complete images before a cold pull and refuses preparation when the configured free-space reserve is unavailable.
 
 ## Backend scope
 
@@ -88,6 +92,7 @@ It does not revert workspace changes.
 
 The Runner reports image resolution, download, extraction, verification, and VM start stages through assignment progress.
 The lifecycle Operation remains asynchronous during this work.
+Its assignment deadline covers registry resolution, cache locking, download, extraction, verification, workspace attachment, and VM launch.
 
 Registry authentication, registry availability, invalid references, failed signatures, corrupt bundles, and unsupported backends fail explicitly.
 SecondBox does not select a different image and does not use an unverified directory.

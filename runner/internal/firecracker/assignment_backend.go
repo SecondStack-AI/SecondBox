@@ -602,11 +602,11 @@ func (b *AssignmentBackend) StartAssignment(
 	assignment *runnerprotocol.AssignmentCommand,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (result runnercontrol.BackendInstance, resultErr error) {
-	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
-		return result, err
-	}
 	if assignment == nil || assignment.Fence == nil || assignment.Requirements == nil {
 		return runnercontrol.BackendInstance{}, fmt.Errorf("SecondBox Firecracker assignment is incomplete")
+	}
+	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+		return result, err
 	}
 	b.mu.Lock()
 	if active, ok := b.assignments[assignment.Fence.AssignmentId]; ok {
@@ -669,6 +669,9 @@ func (b *AssignmentBackend) StartAssignment(
 	preparedImage, err := b.manager.executionImages.Prepare(ctx, assignment.Correlation.OperationId, assignment.ExecutionImage, progress)
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
+	}
+	if preparedImage.Release != nil {
+		defer preparedImage.Release()
 	}
 	manifest, err := loadSignedArtifactManifest(filepath.Join(preparedImage.Directory, "manifest.json"))
 	if err != nil {
@@ -734,6 +737,7 @@ func (b *AssignmentBackend) StartAssignment(
 		ImageManifestDigest:     guestStart.ImageManifestDigest,
 		ToolchainManifestDigest: guestStart.ToolchainManifestDigest,
 		ExecutionImageDirectory: preparedImage.Directory,
+		ExecutionImageArtifacts: preparedImage.Artifacts,
 		MandatoryGuestFeatures:  guestStart.MandatoryFeatures,
 		RuntimeClass:            runtimemanager.RuntimeClassToolExecutor,
 		StartupMode:             startupMode,

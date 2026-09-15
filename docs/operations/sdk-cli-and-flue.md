@@ -461,6 +461,7 @@ const api = new SecondBox(
 
 await api.validateProfile("durable-coding", signal);
 const { handle } = await api.createSandbox({
+  image: { reference: executionImageReference },
   profile: "durable-coding",
   metadata: {},
   signal,
@@ -474,11 +475,11 @@ await handle.delete({
 });
 ```
 
-Lifecycle methods generate one request key when absent and fence the handle's observed revision. A caller may supply a durable idempotency key or an explicit expected revision, but the SDK never refreshes and replays after a fence. Data-plane helpers bind the handle’s observed generation and optional Lease ID. Poll intervals, deadlines, and output limits remain explicit. The full operation matrix is in [Consumer operation matrix](../design/consumer-operation-matrix.md).
+Lifecycle methods generate one request key when absent and fence the handle's observed revision. A caller may supply a durable idempotency key or an explicit expected revision, but the SDK never refreshes and replays after a fence. Create and start calls require an execution image reference. Data-plane helpers bind the handle’s observed generation and optional Lease ID. Poll intervals, deadlines, and output limits remain explicit. The full operation matrix is in [Consumer operation matrix](../design/consumer-operation-matrix.md).
 
 ## Attributed commands
 
-Create the Sandbox with a Profile revision that permits attributed execution. Stop its ordinary Instance explicitly before starting an attributed generation. With the TypeScript SDK, call `handle.start({ ...options, attributedExecution: { authorizationRef, expiresAt } })`, where `authorizationRef` is the application's bounded non-secret authorization reference and `expiresAt` is an absolute UTC timestamp within the Profile execution limit. Wait for the start Operation before executing one command. The application retains credential selection and authorization; SecondBox supplies the generation identity.
+Create the Sandbox with a Profile revision that permits attributed execution. Stop its ordinary Instance explicitly before starting an attributed generation. With the TypeScript SDK, call `handle.start({ ...options, image: { reference: executionImageReference }, attributedExecution: { authorizationRef, expiresAt } })`, where `authorizationRef` is the application's bounded non-secret authorization reference and `expiresAt` is an absolute UTC timestamp within the Profile execution limit. Wait for the start Operation before executing one command. The application retains credential selection and authorization; SecondBox supplies the generation identity.
 
 The Runner injects `SECONDBOX_EXECUTION_GATEWAY` into that command as an IPv4 `host:port`, without a URL scheme. Configure the command's HTTP proxy variables explicitly, for example in its shell wrapper:
 

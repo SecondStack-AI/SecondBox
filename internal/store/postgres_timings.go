@@ -18,7 +18,8 @@ import (
 )
 
 const startupTimingStagesSQL = `
-	'runner_admission','artifact_verify','workspace_attach','network_setup',
+	'runner_admission','image_resolve','image_download','image_extract',
+	'artifact_verify','workspace_attach','network_setup',
 	'compute_launch','guest_negotiation','ready'`
 
 // OrchestrationStages is the complete ordered vocabulary of provider-neutral

@@ -129,6 +129,21 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if !filepath.IsAbs(executionImageRegistryCertificates) {
 		return nil, fmt.Errorf("SecondBox Firecracker config requires an absolute SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES path")
 	}
+	executionImageMaximumDownloadBytes, err := requiredInt("SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES")
+	if err != nil {
+		return nil, err
+	}
+	executionImageMaximumExpandedBytes, err := requiredInt("SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES")
+	if err != nil {
+		return nil, err
+	}
+	executionImageMaximumCacheBytes, err := requiredInt("SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES")
+	if err != nil {
+		return nil, err
+	}
+	if executionImageMaximumDownloadBytes <= 0 || executionImageMaximumExpandedBytes <= 0 || executionImageMaximumCacheBytes < executionImageMaximumExpandedBytes {
+		return nil, fmt.Errorf("SecondBox Firecracker config requires positive execution image limits and SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES at least SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES")
+	}
 	runnerWorkspaceRoot, err := required("SECONDBOX_RUNNER_WORKSPACE_ROOT")
 	if err != nil {
 		return nil, err
@@ -324,5 +339,8 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		ExecutionImageRegistryCertificates:         executionImageRegistryCertificates,
 		ExecutionImagePublicKeyPath:                executionImagePublicKeyPath,
 		ExecutionImagePublicKeySHA256:              executionImagePublicKeySHA256,
+		ExecutionImageMaximumDownloadBytes:         int64(executionImageMaximumDownloadBytes),
+		ExecutionImageMaximumExpandedBytes:         int64(executionImageMaximumExpandedBytes),
+		ExecutionImageMaximumCacheBytes:            int64(executionImageMaximumCacheBytes),
 	}, nil
 }

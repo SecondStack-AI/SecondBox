@@ -672,6 +672,7 @@ func TestCreateSandboxReturnsHandleForTheCreatedResource(t *testing.T) {
 		_, _ = io.WriteString(writer, sandboxJSON("sandbox-1", "creating"))
 	})
 	handle, operation, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Image:   ExecutionImage{Reference: "registry.example/secondbox/sdk-test:stable"},
 		Profile: "durable-coding", Resources: resources, Metadata: Metadata{},
 	}, "")
 	if err != nil {
@@ -693,6 +694,7 @@ func TestCreateSandboxRejectsOperationWithoutSandboxReference(t *testing.T) {
 			"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
 	})
 	_, _, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Image:   ExecutionImage{Reference: "registry.example/secondbox/sdk-test:stable"},
 		Profile: "durable-coding", Metadata: Metadata{},
 	}, "")
 	if err == nil || !strings.Contains(err.Error(), "no Sandbox reference") {

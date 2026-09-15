@@ -496,6 +496,7 @@ export class SecondBox {
     const operation = await this.requestJSON<Operation>("createSandbox", {
       headers: { "Idempotency-Key": request.idempotencyKey ?? idempotencyKey() },
       body: encodeJSONBody({
+        image: request.image,
         profile: request.profile,
         metadata: request.metadata ?? {},
         ...(request.resources === undefined ? {} : { resources: request.resources }),
@@ -1161,9 +1162,12 @@ export class SandboxHandle implements SandboxFilesystem {
   }
 
   public start(options: LifecycleOptions & StartSandboxRequest): Promise<Operation> {
-    const request: JSONValue = options.attributedExecution === undefined
-      ? {}
-      : { attributedExecution: { ...options.attributedExecution } };
+    const request: JSONValue = {
+      image: options.image,
+      ...(options.attributedExecution === undefined
+        ? {}
+        : { attributedExecution: { ...options.attributedExecution } }),
+    };
     return this.lifecycle("startSandbox", options, request);
   }
 

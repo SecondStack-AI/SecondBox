@@ -15,15 +15,20 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
 var (
 	imageDigestPattern    = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	cacheDirectoryPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	imageReferencePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*/[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[a-f0-9]{64})$`)
 )
 
@@ -33,6 +38,8 @@ type PreparedImage struct {
 	Directory          string
 	RequestedReference string
 	ResolvedDigest     string
+	Artifacts          []runtimemanager.VerifiedExecutionImageArtifact
+	Release            func()
 }
 
 type Manager struct {
@@ -42,11 +49,18 @@ type Manager struct {
 	publicKeyPath        string
 	publicKeySHA256      string
 	skopeoPath           string
+	maximumDownloadBytes int64
+	maximumExpandedBytes int64
+	maximumCacheBytes    int64
+	coldPreparationGate  chan struct{}
+	cacheMu              sync.RWMutex
+	pinMu                sync.Mutex
+	pins                 map[string]int
 }
 
 func NewManager(cfg *config.Config) (*Manager, error) {
-	if cfg == nil || !filepath.IsAbs(cfg.ExecutionImageCacheRoot) || len(cfg.ExecutionImageRegistryAllowlist) == 0 || !filepath.IsAbs(cfg.ExecutionImageRegistryCertificates) {
-		return nil, errors.New("SecondBox execution image manager requires absolute cache and registry certificate roots plus a registry allowlist")
+	if cfg == nil || !filepath.IsAbs(cfg.ExecutionImageCacheRoot) || len(cfg.ExecutionImageRegistryAllowlist) == 0 || !filepath.IsAbs(cfg.ExecutionImageRegistryCertificates) || cfg.ExecutionImageMaximumDownloadBytes <= 0 || cfg.ExecutionImageMaximumExpandedBytes <= 0 || cfg.ExecutionImageMaximumCacheBytes < cfg.ExecutionImageMaximumExpandedBytes {
+		return nil, errors.New("SecondBox execution image manager requires absolute cache and registry certificate roots, a registry allowlist, positive download and expansion limits, and a cache limit at least as large as the expansion limit")
 	}
 	skopeoPath, err := exec.LookPath("skopeo")
 	if err != nil {
@@ -65,6 +79,11 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		publicKeyPath:        cfg.ExecutionImagePublicKeyPath,
 		publicKeySHA256:      cfg.ExecutionImagePublicKeySHA256,
 		skopeoPath:           skopeoPath,
+		maximumDownloadBytes: cfg.ExecutionImageMaximumDownloadBytes,
+		maximumExpandedBytes: cfg.ExecutionImageMaximumExpandedBytes,
+		maximumCacheBytes:    cfg.ExecutionImageMaximumCacheBytes,
+		coldPreparationGate:  make(chan struct{}, 1),
+		pins:                 make(map[string]int),
 	}, nil
 }
 
@@ -95,19 +114,53 @@ func (manager *Manager) Prepare(
 		return PreparedImage{}, err
 	}
 	cacheDirectory := filepath.Join(manager.cacheRoot, strings.TrimPrefix(resolvedDigest, "sha256:"))
-	lock, err := manager.lockDigest(resolvedDigest)
+	lock, err := manager.lockDigest(ctx, resolvedDigest)
 	if err != nil {
 		return PreparedImage{}, err
 	}
 	defer lock.Close()
+	manager.cacheMu.RLock()
 	if _, err := os.Stat(cacheDirectory); err == nil {
 		if err := config.VerifyMicroVMArtifactDirectory(cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
+			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
 		}
-		return PreparedImage{Directory: cacheDirectory, RequestedReference: image.Reference, ResolvedDigest: resolvedDigest}, nil
+		prepared, err := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest)
+		manager.cacheMu.RUnlock()
+		if err == nil {
+			_ = os.Chtimes(cacheDirectory, time.Now(), time.Now())
+		}
+		return prepared, err
 	} else if !errors.Is(err, os.ErrNotExist) {
+		manager.cacheMu.RUnlock()
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image cache inspection failed: %w", err)
 	}
+	manager.cacheMu.RUnlock()
+	select {
+	case manager.coldPreparationGate <- struct{}{}:
+		defer func() { <-manager.coldPreparationGate }()
+	case <-ctx.Done():
+		return PreparedImage{}, context.Cause(ctx)
+	}
+	manager.cacheMu.RLock()
+	_, cacheErr := os.Stat(cacheDirectory)
+	manager.cacheMu.RUnlock()
+	if cacheErr == nil {
+		manager.cacheMu.RLock()
+		if err := config.VerifyMicroVMArtifactDirectory(cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
+			manager.cacheMu.RUnlock()
+			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
+		}
+		prepared, err := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest)
+		manager.cacheMu.RUnlock()
+		return prepared, err
+	}
+	manager.cacheMu.Lock()
+	if err := manager.ensureCacheCapacity(cacheDirectory); err != nil {
+		manager.cacheMu.Unlock()
+		return PreparedImage{}, err
+	}
+	manager.cacheMu.Unlock()
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_DOWNLOAD); err != nil {
 		return PreparedImage{}, err
 	}
@@ -115,7 +168,7 @@ func (manager *Manager) Prepare(
 	if err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image staging creation failed: %w", err)
 	}
-	defer os.RemoveAll(workDirectory)
+	defer func() { _ = os.RemoveAll(workDirectory) }()
 	archivePath := filepath.Join(workDirectory, "image.tar")
 	args := []string{"copy"}
 	args = append(args, manager.registryCertificateArgs(registry, "--src-cert-dir")...)
@@ -127,15 +180,15 @@ func (manager *Manager) Prepare(
 		repository = repository[:separator]
 	}
 	args = append(args, "docker://"+repository+"@"+resolvedDigest, "docker-archive:"+archivePath)
-	command := exec.CommandContext(ctx, manager.skopeoPath, args...)
-	if output, err := command.CombinedOutput(); err != nil {
+	output, err := manager.downloadArchive(ctx, archivePath, args)
+	if err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image download failed: %w: %s", err, boundedOutput(output))
 	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_EXTRACT); err != nil {
 		return PreparedImage{}, err
 	}
 	candidate := filepath.Join(workDirectory, "bundle")
-	if err := extractDockerArchive(archivePath, candidate); err != nil {
+	if err := extractDockerArchive(ctx, archivePath, candidate, manager.maximumDownloadBytes, manager.maximumExpandedBytes); err != nil {
 		return PreparedImage{}, err
 	}
 	if err := config.VerifyMicroVMArtifactDirectory(candidate, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
@@ -144,7 +197,180 @@ func (manager *Manager) Prepare(
 	if err := os.Rename(candidate, cacheDirectory); err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image cache publication failed: %w", err)
 	}
-	return PreparedImage{Directory: cacheDirectory, RequestedReference: image.Reference, ResolvedDigest: resolvedDigest}, nil
+	return manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest)
+}
+
+func (manager *Manager) downloadArchive(ctx context.Context, archivePath string, args []string) ([]byte, error) {
+	command := exec.CommandContext(ctx, manager.skopeoPath, args...)
+	var output boundedLogWriter
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Start(); err != nil {
+		return output.Bytes(), err
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			if err == nil {
+				if info, statErr := os.Stat(archivePath); statErr != nil {
+					return output.Bytes(), statErr
+				} else if info.Size() > manager.maximumDownloadBytes {
+					return output.Bytes(), fmt.Errorf("downloaded archive exceeds %d bytes", manager.maximumDownloadBytes)
+				}
+			}
+			return output.Bytes(), err
+		case <-ticker.C:
+			if info, err := os.Stat(archivePath); err == nil && info.Size() > manager.maximumDownloadBytes {
+				_ = command.Process.Kill()
+				<-done
+				return output.Bytes(), fmt.Errorf("downloaded archive exceeds %d bytes", manager.maximumDownloadBytes)
+			}
+		case <-ctx.Done():
+			_ = command.Process.Kill()
+			<-done
+			return output.Bytes(), context.Cause(ctx)
+		}
+	}
+}
+
+type boundedLogWriter struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func (writer *boundedLogWriter) Write(data []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	const maximum = 64 << 10
+	remaining := maximum - len(writer.data)
+	if remaining > 0 {
+		writer.data = append(writer.data, data[:min(len(data), remaining)]...)
+	}
+	return len(data), nil
+}
+
+func (writer *boundedLogWriter) Bytes() []byte {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return append([]byte(nil), writer.data...)
+}
+
+type cacheEntry struct {
+	path     string
+	size     int64
+	modified time.Time
+}
+
+func (manager *Manager) ensureCacheCapacity(target string) error {
+	entries, total, err := manager.cacheEntries()
+	if err != nil {
+		return err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].modified.Before(entries[j].modified) })
+	for _, entry := range entries {
+		if total+manager.maximumExpandedBytes <= manager.maximumCacheBytes {
+			break
+		}
+		if entry.path == target {
+			continue
+		}
+		manager.pinMu.Lock()
+		pinned := manager.pins[entry.path] > 0
+		manager.pinMu.Unlock()
+		if pinned {
+			continue
+		}
+		if err := os.RemoveAll(entry.path); err != nil {
+			return fmt.Errorf("SecondBox execution image cache eviction failed: %w", err)
+		}
+		total -= entry.size
+	}
+	if total+manager.maximumExpandedBytes > manager.maximumCacheBytes {
+		return fmt.Errorf("SecondBox execution image cache cannot reserve %d bytes within its %d-byte limit", manager.maximumExpandedBytes, manager.maximumCacheBytes)
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(manager.cacheRoot, &stat); err != nil {
+		return fmt.Errorf("SecondBox execution image free-space inspection failed: %w", err)
+	}
+	available := int64(stat.Bavail) * int64(stat.Bsize)
+	required := manager.maximumDownloadBytes*2 + manager.maximumExpandedBytes
+	if available < required {
+		return fmt.Errorf("SecondBox execution image preparation requires %d free bytes, only %d are available", required, available)
+	}
+	return nil
+}
+
+func (manager *Manager) cacheEntries() ([]cacheEntry, int64, error) {
+	directoryEntries, err := os.ReadDir(manager.cacheRoot)
+	if err != nil {
+		return nil, 0, fmt.Errorf("SecondBox execution image cache read failed: %w", err)
+	}
+	var entries []cacheEntry
+	var total int64
+	for _, directoryEntry := range directoryEntries {
+		if !directoryEntry.IsDir() || !cacheDirectoryPattern.MatchString(directoryEntry.Name()) {
+			continue
+		}
+		path := filepath.Join(manager.cacheRoot, directoryEntry.Name())
+		var size int64
+		if err := filepath.WalkDir(path, func(_ string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.Type().IsRegular() {
+				info, err := entry.Info()
+				if err != nil {
+					return err
+				}
+				size += info.Size()
+			}
+			return nil
+		}); err != nil {
+			return nil, 0, fmt.Errorf("SecondBox execution image cache accounting failed: %w", err)
+		}
+		info, err := directoryEntry.Info()
+		if err != nil {
+			return nil, 0, err
+		}
+		entries = append(entries, cacheEntry{path: path, size: size, modified: info.ModTime()})
+		total += size
+	}
+	return entries, total, nil
+}
+
+func (manager *Manager) preparedImage(directory, reference, digest string) (PreparedImage, error) {
+	artifacts := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, 3)
+	for _, artifact := range []struct{ label, name string }{{"kernel", "kernel"}, {"rootfs", "rootfs.ext4"}, {"shared image", "shared.img"}} {
+		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, filepath.Join(directory, artifact.name))
+		if err != nil {
+			return PreparedImage{}, fmt.Errorf("record verified execution image %s identity: %w", artifact.label, err)
+		}
+		artifacts = append(artifacts, identity)
+	}
+	manager.pinMu.Lock()
+	if manager.pins == nil {
+		manager.pins = make(map[string]int)
+	}
+	manager.pins[directory]++
+	manager.pinMu.Unlock()
+	var once sync.Once
+	return PreparedImage{
+		Directory: directory, RequestedReference: reference, ResolvedDigest: digest, Artifacts: artifacts,
+		Release: func() {
+			once.Do(func() {
+				manager.pinMu.Lock()
+				defer manager.pinMu.Unlock()
+				manager.pins[directory]--
+				if manager.pins[directory] == 0 {
+					delete(manager.pins, directory)
+				}
+			})
+		},
+	}, nil
 }
 
 type operationResolution struct {
@@ -184,7 +410,7 @@ func (manager *Manager) resolveOperationDigest(ctx context.Context, operationID,
 		return "", fmt.Errorf("SecondBox execution image resolution staging failed: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return "", fmt.Errorf("SecondBox execution image resolution permissions failed: %w", err)
@@ -257,7 +483,7 @@ func (manager *Manager) writeAuthFile(registry string, credentials *runnerprotoc
 	return path, cleanup, nil
 }
 
-func (manager *Manager) lockDigest(digest string) (*os.File, error) {
+func (manager *Manager) lockDigest(ctx context.Context, digest string) (*os.File, error) {
 	lockDirectory := filepath.Join(manager.cacheRoot, ".locks")
 	if err := os.MkdirAll(lockDirectory, 0o700); err != nil {
 		return nil, fmt.Errorf("SecondBox execution image lock directory failed: %w", err)
@@ -266,20 +492,32 @@ func (manager *Manager) lockDigest(digest string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox execution image lock open failed: %w", err)
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		_ = lock.Close()
-		return nil, fmt.Errorf("SecondBox execution image lock failed: %w", err)
+	for {
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return lock, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			_ = lock.Close()
+			return nil, fmt.Errorf("SecondBox execution image lock failed: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			_ = lock.Close()
+			return nil, context.Cause(ctx)
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
-	return lock, nil
 }
 
-func extractDockerArchive(archivePath, target string) error {
+func extractDockerArchive(ctx context.Context, archivePath, target string, maximumArchiveBytes, maximumExpandedBytes int64) error {
 	archiveDirectory, err := os.MkdirTemp(filepath.Dir(target), ".docker-archive-")
 	if err != nil {
 		return fmt.Errorf("SecondBox execution image archive staging failed: %w", err)
 	}
-	defer os.RemoveAll(archiveDirectory)
-	if err := extractTarFile(archivePath, archiveDirectory, ""); err != nil {
+	defer func() { _ = os.RemoveAll(archiveDirectory) }()
+	archiveBudget := &byteBudget{maximum: maximumArchiveBytes}
+	if err := extractTarFile(ctx, archivePath, archiveDirectory, "", archiveBudget); err != nil {
 		return err
 	}
 	manifestBytes, err := os.ReadFile(filepath.Join(archiveDirectory, "manifest.json"))
@@ -295,19 +533,37 @@ func extractDockerArchive(archivePath, target string) error {
 	if err := os.Mkdir(target, 0o700); err != nil {
 		return fmt.Errorf("SecondBox execution image bundle creation failed: %w", err)
 	}
+	expandedBudget := &byteBudget{maximum: maximumExpandedBytes}
 	for _, layer := range manifests[0].Layers {
 		cleanLayer := filepath.Clean(layer)
 		if filepath.IsAbs(cleanLayer) || cleanLayer == "." || strings.HasPrefix(cleanLayer, ".."+string(filepath.Separator)) {
 			return errors.New("SecondBox execution image archive layer path is unsafe")
 		}
-		if err := extractTarFile(filepath.Join(archiveDirectory, cleanLayer), target, selectedBundleDirectory+"/"); err != nil {
+		layerPath := filepath.Join(archiveDirectory, cleanLayer)
+		if err := applyLayerWhiteouts(ctx, layerPath, target, selectedBundleDirectory+"/"); err != nil {
+			return err
+		}
+		if err := extractTarFile(ctx, layerPath, target, selectedBundleDirectory+"/", expandedBudget); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractTarFile(path, target, requiredPrefix string) error {
+type byteBudget struct {
+	used    int64
+	maximum int64
+}
+
+func (budget *byteBudget) consume(size int64) error {
+	if size < 0 || size > budget.maximum-budget.used {
+		return fmt.Errorf("SecondBox execution image extraction exceeds %d bytes", budget.maximum)
+	}
+	budget.used += size
+	return nil
+}
+
+func extractTarFile(ctx context.Context, path, target, requiredPrefix string, budget *byteBudget) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("SecondBox execution image tar open failed: %w", err)
@@ -315,6 +571,9 @@ func extractTarFile(path, target, requiredPrefix string) error {
 	defer file.Close()
 	reader := tar.NewReader(file)
 	for {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -339,12 +598,27 @@ func extractTarFile(path, target, requiredPrefix string) error {
 		if !strings.HasPrefix(destination, filepath.Clean(target)+string(filepath.Separator)) {
 			return errors.New("SecondBox execution image tar destination is unsafe")
 		}
+		base := filepath.Base(name)
+		if requiredPrefix != "" && strings.HasPrefix(base, ".wh.") {
+			continue
+		}
 		switch header.Typeflag {
 		case tar.TypeDir:
+			if info, err := os.Lstat(destination); err == nil && !info.IsDir() {
+				if err := os.RemoveAll(destination); err != nil {
+					return err
+				}
+			}
 			if err := os.MkdirAll(destination, 0o700); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
+			if err := budget.consume(header.Size); err != nil {
+				return err
+			}
+			if err := os.RemoveAll(destination); err != nil {
+				return err
+			}
 			if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 				return err
 			}
@@ -352,7 +626,7 @@ func extractTarFile(path, target, requiredPrefix string) error {
 			if err != nil {
 				return err
 			}
-			_, copyErr := io.CopyN(output, reader, header.Size)
+			_, copyErr := io.CopyN(output, contextReader{ctx: ctx, reader: reader}, header.Size)
 			closeErr := output.Close()
 			if copyErr != nil || closeErr != nil {
 				return errors.Join(copyErr, closeErr)
@@ -382,6 +656,71 @@ func extractTarFile(path, target, requiredPrefix string) error {
 			return fmt.Errorf("SecondBox execution image tar entry %q has unsupported type", header.Name)
 		}
 	}
+}
+
+func applyLayerWhiteouts(ctx context.Context, path, target, requiredPrefix string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("SecondBox execution image tar open failed: %w", err)
+	}
+	defer file.Close()
+	reader := tar.NewReader(file)
+	for {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("SecondBox execution image tar read failed: %w", err)
+		}
+		name := filepath.Clean(header.Name)
+		if !strings.HasPrefix(name, requiredPrefix) {
+			continue
+		}
+		name = strings.TrimPrefix(name, requiredPrefix)
+		base := filepath.Base(name)
+		if !strings.HasPrefix(base, ".wh.") {
+			continue
+		}
+		destination := filepath.Join(target, name)
+		if !strings.HasPrefix(destination, filepath.Clean(target)+string(filepath.Separator)) {
+			return errors.New("SecondBox execution image whiteout destination is unsafe")
+		}
+		if base == ".wh..wh..opq" {
+			entries, err := os.ReadDir(filepath.Dir(destination))
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			for _, entry := range entries {
+				if err := os.RemoveAll(filepath.Join(filepath.Dir(destination), entry.Name())); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		whiteoutName := strings.TrimPrefix(base, ".wh.")
+		if whiteoutName == "" || whiteoutName == "." || whiteoutName == ".." {
+			return errors.New("SecondBox execution image whiteout name is unsafe")
+		}
+		if err := os.RemoveAll(filepath.Join(filepath.Dir(destination), whiteoutName)); err != nil {
+			return err
+		}
+	}
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader contextReader) Read(buffer []byte) (int, error) {
+	if err := context.Cause(reader.ctx); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(buffer)
 }
 
 func boundedOutput(output []byte) string {

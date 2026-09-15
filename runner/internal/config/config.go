@@ -78,6 +78,9 @@ type Config struct {
 	ExecutionImageRegistryCertificates   string
 	ExecutionImagePublicKeyPath          string
 	ExecutionImagePublicKeySHA256        string
+	ExecutionImageMaximumDownloadBytes   int64
+	ExecutionImageMaximumExpandedBytes   int64
+	ExecutionImageMaximumCacheBytes      int64
 }
 
 // VerifyMicroVMArtifactDirectory verifies one selected bundle against operator trust.

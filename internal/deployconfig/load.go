@@ -679,6 +679,18 @@ func validateRunner(prefix string, r Runner) error {
 			}
 		}
 	}
+	for name, value := range map[string]*int64{
+		"execution_image_max_download_bytes": r.ExecutionImageMaxDownloadBytes,
+		"execution_image_max_expanded_bytes": r.ExecutionImageMaxExpandedBytes,
+		"execution_image_max_cache_bytes":    r.ExecutionImageMaxCacheBytes,
+	} {
+		if value == nil || *value <= 0 {
+			return manifestError(prefix+"."+name+" must be positive", nil)
+		}
+	}
+	if *r.ExecutionImageMaxCacheBytes < *r.ExecutionImageMaxExpandedBytes {
+		return manifestError(prefix+".execution_image_max_cache_bytes must be at least execution_image_max_expanded_bytes", nil)
+	}
 	for name, value := range map[string]string{
 		"identity_directory":              r.IdentityDirectory,
 		"log_path":                        r.LogPath,
@@ -1104,6 +1116,9 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES"] = "/var/lib/secondbox-runner/registry-certificates"
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY"] = r.ExecutionImagePublicKey
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256"] = r.ExecutionImagePublicKeySHA256
+	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxDownloadBytes)
+	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxExpandedBytes)
+	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxCacheBytes)
 	env["SECONDBOX_COMPUTE_BACKEND"] = "firecracker"
 	env["SECONDBOX_RUNNER_LOG_DIR"] = r.LogDirectory
 	env["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"] = filepath.Join(r.IdentityDirectory, "runner.crt")

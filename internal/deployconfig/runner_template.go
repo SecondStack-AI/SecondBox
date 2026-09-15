@@ -30,6 +30,12 @@ execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
 execution_image_public_key = ''
 # Client-selected execution-image signing-key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
 execution_image_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
+# Maximum downloaded OCI archive size per image.
+execution_image_max_download_bytes = 8589934592
+# Maximum expanded signed bundle size per image.
+execution_image_max_expanded_bytes = 17179869184
+# Maximum retained expanded image cache size.
+execution_image_max_cache_bytes = 68719476736
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/signing.pub.
 artifact_public_key = ''
 # Provisioned signed-artifact key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.

@@ -46,7 +46,8 @@ The script uses the same rootfs, guest-agent, kernel, manifest, and signature pi
 It then packages the exact artifact allowlist under `/secondbox-runner-microvm` in an OCI image.
 
 Use `deploy/client-execution-image-builder.Dockerfile` when the build host does not have the required build tools.
-Run that container with the Docker socket, a writable output directory, and the source kernel directory mounted.
+The public builder targets Linux amd64 and needs a Linux Docker daemon, privileged loop-device and mount access, the Docker socket, and enough free space for the source layers, rootfs image, signed bundle, and final OCI build context.
+Run that container with the Docker socket, a writable output directory, the signing key and public key, and the source kernel directory mounted.
 Set every `SECONDBOX_CLIENT_IMAGE_*` variable explicitly.
 The source reference must contain a digest.
 The source commit must be the exact SecondBox revision used by the builder image.

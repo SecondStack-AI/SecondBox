@@ -175,6 +175,7 @@ type microVMImageSelection struct {
 	RootfsPath             string
 	SharedImagePath        string
 	VerifiedExecutionImage bool
+	VerifiedArtifacts      []runtimemanager.VerifiedExecutionImageArtifact
 }
 
 type trustedMicroVMArtifacts struct {

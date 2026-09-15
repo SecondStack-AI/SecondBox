@@ -130,10 +130,10 @@ func (m *Manager) validateTrustAnchorForLaunch() error {
 
 func (m *Manager) prepareLaunchImage(dir string, image microVMImageSelection) (microVMImageSelection, error) {
 	if image.VerifiedExecutionImage {
-		artifacts, err := captureMicroVMImageArtifacts(image)
-		if err != nil {
-			return microVMImageSelection{}, err
+		if len(image.VerifiedArtifacts) == 0 {
+			return microVMImageSelection{}, fmt.Errorf("verified execution image artifact identities are not recorded")
 		}
+		artifacts := trustedArtifactsFromExecutionImage(image.VerifiedArtifacts)
 		return stageTrustedLaunchImageFiles(dir, image, artifacts)
 	}
 	if m == nil || m.cfg == nil || strings.TrimSpace(m.cfg.MicroVMPublicKeyPath) == "" {
@@ -161,6 +161,17 @@ func (m *Manager) prepareLaunchImage(dir string, image microVMImageSelection) (m
 		return stageTrustedLaunchImageFiles(dir, image, artifacts)
 	}
 	return m.stageTrustedLaunchImage(dir, image)
+}
+
+func trustedArtifactsFromExecutionImage(artifacts []runtimemanager.VerifiedExecutionImageArtifact) *trustedMicroVMArtifacts {
+	files := make([]trustedMicroVMArtifactFile, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		files = append(files, trustedMicroVMArtifactFile{label: artifact.Label, path: artifact.Path, identity: trustedMicroVMArtifactIdentity{
+			dev: artifact.Device, ino: artifact.Inode, size: artifact.Size,
+			modTimeUnixNano: artifact.ModTimeUnixNano, ctimeUnixNano: artifact.ChangeUnixNano,
+		}})
+	}
+	return &trustedMicroVMArtifacts{files: files}
 }
 
 func captureMicroVMImageArtifacts(image microVMImageSelection) (*trustedMicroVMArtifacts, error) {
@@ -206,6 +217,13 @@ func (m *Manager) stageTrustedLaunchImage(dir string, image microVMImageSelectio
 }
 
 func stageTrustedLaunchImageFiles(dir string, image microVMImageSelection, artifacts *trustedMicroVMArtifacts) (microVMImageSelection, error) {
+	unchanged, err := trustedMicroVMArtifactsUnchanged(artifacts)
+	if err != nil {
+		return microVMImageSelection{}, err
+	}
+	if !unchanged {
+		return microVMImageSelection{}, fmt.Errorf("trusted microVM artifacts changed before staging launch image")
+	}
 	staged := image
 	staged.KernelPath = filepath.Join(dir, kernelName)
 	staged.RootfsPath = filepath.Join(dir, rootfsName)
@@ -223,7 +241,7 @@ func stageTrustedLaunchImageFiles(dir string, image microVMImageSelection, artif
 			return microVMImageSelection{}, fmt.Errorf("stage trusted shared image: %w", err)
 		}
 	}
-	unchanged, err := trustedMicroVMArtifactsUnchanged(artifacts)
+	unchanged, err = trustedMicroVMArtifactsUnchanged(artifacts)
 	if err != nil {
 		return microVMImageSelection{}, err
 	}
@@ -427,6 +445,7 @@ func (m *Manager) microVMImageForStart(opts runtimemanager.StartOpts) (microVMIm
 				RootfsPath:             filepath.Join(opts.ExecutionImageDirectory, "rootfs.ext4"),
 				SharedImagePath:        filepath.Join(opts.ExecutionImageDirectory, "shared.img"),
 				VerifiedExecutionImage: true,
+				VerifiedArtifacts:      opts.ExecutionImageArtifacts,
 			}, nil
 		}
 		rootfsPath := firstNonEmpty(m.cfg.MicroVMToolRootfsPath, m.cfg.MicroVMRootfsPath)

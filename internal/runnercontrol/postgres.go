@@ -3957,6 +3957,12 @@ func assignmentProgressStageName(stage runnerv1.AssignmentProgressStage) (string
 	switch stage {
 	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION:
 		return "runner_admission", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_RESOLVE:
+		return "image_resolve", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_DOWNLOAD:
+		return "image_download", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_EXTRACT:
+		return "image_extract", nil
 	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY:
 		return "artifact_verify", nil
 	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH:
