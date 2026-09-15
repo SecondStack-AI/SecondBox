@@ -277,6 +277,8 @@ func (manager *Manager) reservePreparationCapacity(
 
 func (manager *Manager) downloadArchive(ctx context.Context, archivePath string, args []string) ([]byte, error) {
 	command := exec.CommandContext(ctx, manager.skopeoPath, args...)
+	// Skopeo's temporary layers belong in the reserved cache staging area.
+	command.Env = append(os.Environ(), "TMPDIR="+filepath.Dir(archivePath))
 	var output boundedLogWriter
 	command.Stdout = &output
 	command.Stderr = &output
@@ -291,6 +293,9 @@ func (manager *Manager) downloadArchive(ctx context.Context, archivePath string,
 		select {
 		case err := <-done:
 			if err == nil {
+				if err := manager.checkDownloadStaging(filepath.Dir(archivePath)); err != nil {
+					return output.Bytes(), err
+				}
 				if info, statErr := os.Stat(archivePath); statErr != nil {
 					return output.Bytes(), statErr
 				} else if info.Size() > manager.maximumDownloadBytes {
@@ -299,10 +304,10 @@ func (manager *Manager) downloadArchive(ctx context.Context, archivePath string,
 			}
 			return output.Bytes(), err
 		case <-ticker.C:
-			if info, err := os.Stat(archivePath); err == nil && info.Size() > manager.maximumDownloadBytes {
+			if err := manager.checkDownloadStaging(filepath.Dir(archivePath)); err != nil {
 				_ = command.Process.Kill()
 				<-done
-				return output.Bytes(), fmt.Errorf("downloaded archive exceeds %d bytes", manager.maximumDownloadBytes)
+				return output.Bytes(), err
 			}
 		case <-ctx.Done():
 			_ = command.Process.Kill()
@@ -310,6 +315,33 @@ func (manager *Manager) downloadArchive(ctx context.Context, archivePath string,
 			return output.Bytes(), context.Cause(ctx)
 		}
 	}
+}
+
+func (manager *Manager) checkDownloadStaging(directory string) error {
+	remaining := uint64(manager.maximumDownloadBytes) * 2
+	return filepath.WalkDir(directory, func(_ string, entry os.DirEntry, walkErr error) error {
+		if errors.Is(walkErr, os.ErrNotExist) {
+			return nil // Skopeo can remove a temporary layer during inspection.
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Size() > manager.maximumDownloadBytes || uint64(info.Size()) > remaining {
+			return errors.New("SecondBox image download staging exceeds its reserved size limit")
+		}
+		remaining -= uint64(info.Size())
+		return nil
+	})
 }
 
 type boundedLogWriter struct {

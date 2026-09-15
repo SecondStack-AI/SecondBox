@@ -831,6 +831,9 @@ cleanup() {
       failure_logs=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs --tail 200 control-plane secondbox-runner postgres)
     else
       failure_logs=(compose logs --tail 200 control-plane secondbox-runner postgres)
+      if [[ "$scenario_backend" == "firecracker" ]]; then
+        failure_logs+=(image-fetcher)
+      fi
     fi
     if ! "${failure_logs[@]}" >&2; then
       echo "SecondBox scenario could not collect failure logs" >&2

@@ -267,6 +267,32 @@ func TestOuterDockerArchiveRejectsEscapingLayerLink(t *testing.T) {
 	}
 }
 
+func TestImageDownloadStagesTemporaryLayersInCache(t *testing.T) {
+	root := t.TempDir()
+	archive := filepath.Join(root, "image.tar")
+	skopeo := filepath.Join(t.TempDir(), "skopeo")
+	script := "#!/bin/sh\nset -eu\ntest \"$TMPDIR\" = \"$1\"\nprintf layer > \"$TMPDIR/temporary-layer\"\nprintf archive > \"$1/image.tar\"\n"
+	if err := os.WriteFile(skopeo, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", t.TempDir())
+	manager := &Manager{skopeoPath: skopeo, maximumDownloadBytes: 1024}
+	if output, err := manager.downloadArchive(t.Context(), archive, []string{root}); err != nil {
+		t.Fatalf("Image download staging: %v: %s", err, output)
+	}
+}
+
+func TestImageDownloadLimitsTemporaryLayerBytes(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "temporary-layer"), make([]byte, 1025), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{maximumDownloadBytes: 1024}
+	if err := manager.checkDownloadStaging(root); err == nil {
+		t.Fatal("Oversized temporary image layer was accepted")
+	}
+}
+
 func TestOperationResolutionIsDurableAndStable(t *testing.T) {
 	root := t.TempDir()
 	counter := filepath.Join(root, "counter")
