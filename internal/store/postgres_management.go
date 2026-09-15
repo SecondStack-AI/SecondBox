@@ -441,6 +441,11 @@ func (store *PostgresControlPlaneStore) UpdateManagedSubjectQuota(
 		quota.MaxConcurrentOperations, subject.UpdatedAt); err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Subject quota ledger update failed: %w", err)
 	}
+	capacity, err := readSubjectCapacity(ctx, tx, tenantRef, subjectRef, now)
+	if err != nil {
+		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err
+	}
+	subject.QuotaObservation = &capacity
 	result, err = insertAdminIdempotency(ctx, tx, idempotency, subject)
 	if err != nil {
 		return contracts.Subject{}, ports.AdminIdempotencyResult{}, err

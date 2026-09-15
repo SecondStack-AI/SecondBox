@@ -15,6 +15,17 @@ func (store *PostgresControlPlaneStore) GetSubjectCapacity(ctx context.Context, 
 		return contracts.SubjectCapacity{}, fmt.Errorf("SecondBox Subject capacity transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	capacity, err := readSubjectCapacity(ctx, tx, tenantRef, subjectRef, observedAt)
+	if err != nil {
+		return contracts.SubjectCapacity{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.SubjectCapacity{}, fmt.Errorf("SecondBox Subject capacity commit failed: %w", err)
+	}
+	return capacity, nil
+}
+
+func readSubjectCapacity(ctx context.Context, tx pgx.Tx, tenantRef, subjectRef string, observedAt time.Time) (contracts.SubjectCapacity, error) {
 	limits, err := readSubjectQuota(ctx, tx, tenantRef, subjectRef)
 	if err != nil {
 		return contracts.SubjectCapacity{}, err
@@ -30,9 +41,6 @@ func (store *PostgresControlPlaneStore) GetSubjectCapacity(ctx context.Context, 
 	tenantUsage, err := readTenantQuotaUsage(ctx, tx, tenantRef, observedAt)
 	if err != nil {
 		return contracts.SubjectCapacity{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.SubjectCapacity{}, fmt.Errorf("SecondBox Subject capacity commit failed: %w", err)
 	}
 	return contracts.SubjectCapacity{
 		SubjectRef: subjectRef, Limits: limits, ObservedAt: observedAt.UTC(),

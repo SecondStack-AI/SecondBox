@@ -29,11 +29,22 @@ func TestSandboxStorageObservationHTTPReadsAndListsPersistedEvidence(t *testing.
 	defer pool.Close()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	allocated := int64(4096)
+	exclusive := int64(0)
 	for _, test := range []struct {
 		name   string
 		stored *contracts.WorkspaceStorageObservation
 		want   contracts.WorkspaceStorageObservation
 	}{
+		{
+			name:   "available with zero exclusive bytes",
+			stored: &contracts.WorkspaceStorageObservation{Status: "available", ObservedAt: &now, AllocatedBytes: &allocated, ExclusiveBytes: &exclusive},
+			want:   contracts.WorkspaceStorageObservation{Status: "available", ObservedAt: &now, AllocatedBytes: &allocated, ExclusiveBytes: &exclusive, Pressure: contracts.StoragePressureObservation{Status: "unavailable"}},
+		},
+		{
+			name:   "exclusive unsupported preserves allocated",
+			stored: &contracts.WorkspaceStorageObservation{Status: "available", ObservedAt: &now, AllocatedBytes: &allocated, ExclusiveReason: "fiemap_unsupported"},
+			want:   contracts.WorkspaceStorageObservation{Status: "available", ObservedAt: &now, AllocatedBytes: &allocated, ExclusiveReason: "fiemap_unsupported", Pressure: contracts.StoragePressureObservation{Status: "unavailable"}},
+		},
 		{
 			name: "absent",
 			want: contracts.WorkspaceStorageObservation{Status: "unavailable", Reason: "not_observed", Pressure: contracts.StoragePressureObservation{Status: "unavailable"}},

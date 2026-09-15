@@ -11,13 +11,14 @@ import (
 )
 
 func TestHighLevelSandboxAdoptionListingAndMetadataFencing(t *testing.T) {
-	var observedMetadata []string
+	var observedMetadata, observedStates, observedIDs []string
 	var observedIfMatch string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/v1/sandboxes":
 			observedMetadata = request.URL.Query()["metadata"]
+			observedStates, observedIDs = request.URL.Query()["state"], request.URL.Query()["id"]
 			_, _ = io.WriteString(writer, `{"items":[]}`)
 		case request.Method == http.MethodGet && request.URL.Path == "/v1/sandboxes/sandbox-1":
 			_, _ = io.WriteString(writer, sandboxResourceJSON(7))
@@ -34,12 +35,16 @@ func TestHighLevelSandboxAdoptionListingAndMetadataFencing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.ListSandboxes(t.Context(), SandboxListOptions{
+		States: []SandboxState{"stopped", "failed"}, IDs: []OpaqueID{"sandbox-a", "sandbox-b"},
 		PageOptions: PageOptions{Limit: 10}, Metadata: Metadata{"z": "last", "a": "first"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(observedMetadata, []string{"a=first", "z=last"}) {
 		t.Fatalf("metadata query = %#v", observedMetadata)
+	}
+	if !slices.Equal(observedStates, []string{"stopped", "failed"}) || !slices.Equal(observedIDs, []string{"sandbox-a", "sandbox-b"}) {
+		t.Fatal("Sandbox set filters were not preserved")
 	}
 	handle, err := client.AdoptSandbox(t.Context(), "sandbox-1")
 	if err != nil {

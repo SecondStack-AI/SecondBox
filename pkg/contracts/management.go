@@ -104,16 +104,18 @@ type Tenant struct {
 
 // Subject is one tenant-scoped application ownership identity.
 type Subject struct {
-	TenantRef    string            `json:"tenantRef"`
-	Ref          string            `json:"ref"`
-	State        string            `json:"state"`
-	CleanupState string            `json:"cleanupState"`
-	Quota        QuotaLimits       `json:"quota"`
-	Metadata     map[string]string `json:"metadata"`
-	ExpiresAt    *time.Time        `json:"expiresAt,omitempty"`
-	Revision     int64             `json:"revision"`
-	CreatedAt    time.Time         `json:"createdAt"`
-	UpdatedAt    time.Time         `json:"updatedAt"`
+	// QuotaObservation is the atomic post-update capacity snapshot, retained on idempotent replay.
+	QuotaObservation *SubjectCapacity  `json:"quotaObservation,omitempty"`
+	TenantRef        string            `json:"tenantRef"`
+	Ref              string            `json:"ref"`
+	State            string            `json:"state"`
+	CleanupState     string            `json:"cleanupState"`
+	Quota            QuotaLimits       `json:"quota"`
+	Metadata         map[string]string `json:"metadata"`
+	ExpiresAt        *time.Time        `json:"expiresAt,omitempty"`
+	Revision         int64             `json:"revision"`
+	CreatedAt        time.Time         `json:"createdAt"`
+	UpdatedAt        time.Time         `json:"updatedAt"`
 }
 
 // TenantControllerAuthority is the non-secret projection of one tenant controller.

@@ -992,7 +992,8 @@
       "updatedAt"
     ],
     "optional": [
-      "expiresAt"
+      "expiresAt",
+      "quotaObservation"
     ]
   },
   "SubjectCapacity": {
@@ -1298,6 +1299,8 @@
     ],
     "optional": [
       "allocatedBytes",
+      "exclusiveBytes",
+      "exclusiveReason",
       "observedAt",
       "reason"
     ]

@@ -574,6 +574,7 @@ const (
 	ProblemCodeTerminalReplayEvicted                ProblemCode = "terminal_replay_evicted"
 	ProblemCodeWaitExpired                          ProblemCode = "wait_expired"
 	ProblemCodeProfilePolicyCeilingExceeded         ProblemCode = "profile_policy_ceiling_exceeded"
+	ProblemCodeFileNotFound                         ProblemCode = "file_not_found"
 )
 
 type ProblemDetail struct {
@@ -825,16 +826,17 @@ type StreamingExecRequest struct {
 type StringMap = map[string]string
 
 type Subject struct {
-	CleanupState SubjectCleanupState `json:"cleanupState"`
-	CreatedAt    Timestamp           `json:"createdAt"`
-	ExpiresAt    *Timestamp          `json:"expiresAt,omitempty"`
-	Metadata     Metadata            `json:"metadata"`
-	Quota        SubjectQuota        `json:"quota"`
-	Ref          OwnershipRef        `json:"ref"`
-	Revision     int64               `json:"revision"`
-	State        SubjectState        `json:"state"`
-	TenantRef    OwnershipRef        `json:"tenantRef"`
-	UpdatedAt    Timestamp           `json:"updatedAt"`
+	CleanupState     SubjectCleanupState `json:"cleanupState"`
+	CreatedAt        Timestamp           `json:"createdAt"`
+	ExpiresAt        *Timestamp          `json:"expiresAt,omitempty"`
+	Metadata         Metadata            `json:"metadata"`
+	Quota            SubjectQuota        `json:"quota"`
+	QuotaObservation *SubjectCapacity    `json:"quotaObservation,omitempty"`
+	Ref              OwnershipRef        `json:"ref"`
+	Revision         int64               `json:"revision"`
+	State            SubjectState        `json:"state"`
+	TenantRef        OwnershipRef        `json:"tenantRef"`
+	UpdatedAt        Timestamp           `json:"updatedAt"`
 }
 
 type SubjectCapacity struct {
@@ -1098,11 +1100,13 @@ type Workspace struct {
 
 type WorkspacePath = string
 
-// WorkspaceStorageObservation Stat-only observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include blocks shared through reflinks and Snapshots; they are not guest filesystem usage or unique physical consumption. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity.
+// WorkspaceStorageObservation Read-only metadata observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include shared blocks. Exclusive bytes sum extents unshared with templates, Snapshots, or other Workspaces and represent image bytes deletion would free. Neither measures guest filesystem usage. Summed exclusive bytes are a physical lower bound; summed allocated bytes are not. Both measurements use the same image descriptor and timestamp. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity.
 type WorkspaceStorageObservation struct {
-	AllocatedBytes *int64                     `json:"allocatedBytes,omitempty"`
-	ObservedAt     *Timestamp                 `json:"observedAt,omitempty"`
-	Pressure       StoragePressureObservation `json:"pressure"`
-	Reason         *string                    `json:"reason,omitempty"`
-	Status         string                     `json:"status"`
+	AllocatedBytes  *int64                     `json:"allocatedBytes,omitempty"`
+	ExclusiveBytes  *int64                     `json:"exclusiveBytes,omitempty"`
+	ExclusiveReason *string                    `json:"exclusiveReason,omitempty"`
+	ObservedAt      *Timestamp                 `json:"observedAt,omitempty"`
+	Pressure        StoragePressureObservation `json:"pressure"`
+	Reason          *string                    `json:"reason,omitempty"`
+	Status          string                     `json:"status"`
 }

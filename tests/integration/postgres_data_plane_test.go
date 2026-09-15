@@ -945,3 +945,41 @@ func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testin
 		t.Fatalf("in-policy exec at saturated capacity error = %v", err)
 	}
 }
+
+func TestPostgresDataPlaneDistinguishesRetainedAndMissingSandbox(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "relay-absent-compute")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-absent-compute")
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(t.Context(), principal, "absent-compute-create", contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{DatabaseURL: integrationDatabaseURL, Retention: time.Hour, MaximumSessionBytes: 4 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	now := time.Now().UTC()
+	for _, test := range []struct {
+		name, id   string
+		generation int64
+		want       error
+	}{
+		{"retained", sandbox.ID, sandbox.Generation, ports.ErrLifecycleUnavailable},
+		{"generation", sandbox.ID, sandbox.Generation + 1, ports.ErrGenerationFenced},
+		{"missing", "missing-sandbox", sandbox.Generation, ports.ErrSandboxNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
+				ID: "dps_absent_" + test.name, StreamID: "stream_absent_" + test.name, TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef, SandboxID: test.id, Generation: test.generation,
+				RequestID: "request-absent-" + test.name, Kind: "exec", Operation: "exec", IdempotencyKey: "absent-" + test.name, RequestHash: "absent-" + test.name, DeadlineAt: now.Add(time.Minute), MaximumResponseBytes: 1024,
+				ExecOpen: &runnerv1.ExecOpen{Command: &runnerv1.ExecOpen_Shell{Shell: "true"}, DeadlineUnixMs: uint64(now.Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024}, Now: now,
+			})
+			if !errors.Is(err, test.want) {
+				t.Fatalf("admission=%v, want %v", err, test.want)
+			}
+		})
+	}
+}

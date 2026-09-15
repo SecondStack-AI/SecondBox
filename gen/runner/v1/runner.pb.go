@@ -2840,6 +2840,8 @@ type WorkspaceStorageObservation struct {
 	ObservedAtUnixMs  uint64                 `protobuf:"varint,3,opt,name=observed_at_unix_ms,json=observedAtUnixMs,proto3" json:"observed_at_unix_ms,omitempty"`
 	AllocatedBytes    *uint64                `protobuf:"varint,4,opt,name=allocated_bytes,json=allocatedBytes,proto3,oneof" json:"allocated_bytes,omitempty"`
 	UnavailableReason string                 `protobuf:"bytes,5,opt,name=unavailable_reason,json=unavailableReason,proto3" json:"unavailable_reason,omitempty"`
+	ExclusiveBytes    *uint64                `protobuf:"varint,6,opt,name=exclusive_bytes,json=exclusiveBytes,proto3,oneof" json:"exclusive_bytes,omitempty"`
+	ExclusiveReason   string                 `protobuf:"bytes,7,opt,name=exclusive_reason,json=exclusiveReason,proto3" json:"exclusive_reason,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -2905,6 +2907,20 @@ func (x *WorkspaceStorageObservation) GetAllocatedBytes() uint64 {
 func (x *WorkspaceStorageObservation) GetUnavailableReason() string {
 	if x != nil {
 		return x.UnavailableReason
+	}
+	return ""
+}
+
+func (x *WorkspaceStorageObservation) GetExclusiveBytes() uint64 {
+	if x != nil && x.ExclusiveBytes != nil {
+		return *x.ExclusiveBytes
+	}
+	return 0
+}
+
+func (x *WorkspaceStorageObservation) GetExclusiveReason() string {
+	if x != nil {
+		return x.ExclusiveReason
 	}
 	return ""
 }
@@ -9131,7 +9147,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	" \x01(\v2\".secondbox.runner.v1.StartupTimingR\rstartupTiming\x12A\n" +
 	"\x1ddata_plane_advertised_address\x18\v \x01(\tR\x1adataPlaneAdvertisedAddress\x12]\n" +
 	"\x11workspace_storage\x18\f \x03(\v20.secondbox.runner.v1.WorkspaceStorageObservationR\x10workspaceStorage\x12Z\n" +
-	"\x10storage_pressure\x18\r \x01(\v2/.secondbox.runner.v1.StoragePressureObservationR\x0fstoragePressure\"\x80\x02\n" +
+	"\x10storage_pressure\x18\r \x01(\v2/.secondbox.runner.v1.StoragePressureObservationR\x0fstoragePressure\"\xed\x02\n" +
 	"\x1bWorkspaceStorageObservation\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12\x1e\n" +
 	"\n" +
@@ -9139,8 +9155,11 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"generation\x12-\n" +
 	"\x13observed_at_unix_ms\x18\x03 \x01(\x04R\x10observedAtUnixMs\x12,\n" +
 	"\x0fallocated_bytes\x18\x04 \x01(\x04H\x00R\x0eallocatedBytes\x88\x01\x01\x12-\n" +
-	"\x12unavailable_reason\x18\x05 \x01(\tR\x11unavailableReasonB\x12\n" +
-	"\x10_allocated_bytes\"c\n" +
+	"\x12unavailable_reason\x18\x05 \x01(\tR\x11unavailableReason\x12,\n" +
+	"\x0fexclusive_bytes\x18\x06 \x01(\x04H\x01R\x0eexclusiveBytes\x88\x01\x01\x12)\n" +
+	"\x10exclusive_reason\x18\a \x01(\tR\x0fexclusiveReasonB\x12\n" +
+	"\x10_allocated_bytesB\x12\n" +
+	"\x10_exclusive_bytes\"c\n" +
 	"\x1aStoragePressureObservation\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12-\n" +
 	"\x13observed_at_unix_ms\x18\x02 \x01(\x04R\x10observedAtUnixMs\"\x9b\x02\n" +

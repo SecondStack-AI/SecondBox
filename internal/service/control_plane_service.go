@@ -59,7 +59,7 @@ type SandboxStore interface {
 	CreateSandbox(ctx context.Context, input ports.CreateSandboxInput) (contracts.Sandbox, contracts.Operation, bool, error)
 	UpdateSandboxMetadata(ctx context.Context, input ports.UpdateSandboxMetadataInput) (contracts.Sandbox, error)
 	GetSandbox(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.Sandbox, error)
-	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string, metadata map[string]string) (contracts.SandboxPage, error)
+	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string, filter contracts.SandboxListFilter) (contracts.SandboxPage, error)
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
 	GetTenantOperation(ctx context.Context, tenantRef, operationID string) (contracts.Operation, error)
 	GetSubjectUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.SubjectUsage, error)
@@ -527,13 +527,13 @@ func (service *ControlPlaneService) ListSandboxes(
 	principal contracts.Principal,
 	limit int,
 	cursor string,
-	metadata map[string]string,
+	filter contracts.SandboxListFilter,
 ) (contracts.SandboxPage, error) {
 	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return contracts.SandboxPage{}, ports.ErrAuthorizationDenied
 	}
 	return service.store.ListSandboxes(
-		ctx, principal.TenantRef, principal.SubjectRef, boundedLimit(limit), cursor, metadata,
+		ctx, principal.TenantRef, principal.SubjectRef, boundedLimit(limit), cursor, filter,
 	)
 }
 

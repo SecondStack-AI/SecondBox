@@ -825,7 +825,7 @@
             "tenantControllerBearer": []
           }
         ],
-        "description": "Replaces a Subject quota in the tenant fixed by the authenticated controller. The quota must remain within the Tenant ceiling and cannot be narrowed below committed usage.",
+        "description": "Replaces a Subject quota in the tenant fixed by the authenticated controller. The quota must remain within the Tenant ceiling and cannot be narrowed below committed usage. The result includes quotaObservation, computed in the same transaction as the mutation and retained unchanged on idempotent replay.",
         "parameters": [
           {
             "$ref": "#/components/parameters/SubjectRefPath"
@@ -2122,6 +2122,12 @@
           },
           {
             "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/SandboxStateFilter"
+          },
+          {
+            "$ref": "#/components/parameters/SandboxIDFilter"
           }
         ],
         "responses": {
@@ -4850,6 +4856,36 @@
         "schema": {
           "$ref": "#/components/schemas/WorkspacePath"
         }
+      },
+      "SandboxStateFilter": {
+        "name": "state",
+        "in": "query",
+        "required": false,
+        "description": "Repeatable exact-match filter. Values within this set combine with OR; different filter sets combine with AND. Page cursors are bound to the normalized filter sets.",
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 9,
+          "items": {
+            "$ref": "#/components/schemas/SandboxState"
+          }
+        }
+      },
+      "SandboxIDFilter": {
+        "name": "id",
+        "in": "query",
+        "required": false,
+        "description": "Repeatable exact-match filter. Values within this set combine with OR; different filter sets combine with AND. Page cursors are bound to the normalized filter sets.",
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/components/schemas/OpaqueID"
+          }
+        }
       }
     },
     "pathItems": {
@@ -6351,6 +6387,10 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "quotaObservation": {
+            "$ref": "#/components/schemas/SubjectCapacity",
+            "description": "Atomic capacity observation returned by quota updates, at the returned Subject revision. Idempotent replay retains its original timestamp and values; ordinary Subject reads omit this field."
           }
         }
       },
@@ -8115,7 +8155,7 @@
           "status",
           "pressure"
         ],
-        "description": "Stat-only observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include blocks shared through reflinks and Snapshots; they are not guest filesystem usage or unique physical consumption. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity.",
+        "description": "Read-only metadata observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include shared blocks. Exclusive bytes sum extents unshared with templates, Snapshots, or other Workspaces and represent image bytes deletion would free. Neither measures guest filesystem usage. Summed exclusive bytes are a physical lower bound; summed allocated bytes are not. Both measurements use the same image descriptor and timestamp. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity.",
         "properties": {
           "status": {
             "type": "string",
@@ -8131,6 +8171,22 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "exclusiveBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "exclusiveReason": {
+            "type": "string",
+            "description": "Reason exclusive bytes are absent while allocated bytes remain available. Both exclusive fields can be absent in older observations.",
+            "enum": [
+              "fiemap_unsupported",
+              "exclusive_probe_failed",
+              "exclusive_extent_limit",
+              "exclusive_extents_unstable",
+              "exclusive_extents_encoded"
+            ]
           },
           "reason": {
             "type": "string",
@@ -10188,7 +10244,8 @@
           "internal_error",
           "terminal_replay_evicted",
           "wait_expired",
-          "profile_policy_ceiling_exceeded"
+          "profile_policy_ceiling_exceeded",
+          "file_not_found"
         ]
       },
       "ProblemDetail": {

@@ -22,6 +22,8 @@ type PageOptions struct {
 type SandboxListOptions struct {
 	PageOptions
 	Metadata Metadata
+	States   []SandboxState
+	IDs      []OpaqueID
 }
 
 func (client *Client) ListProfiles(ctx context.Context, options PageOptions) (ProfilePage, error) {
@@ -134,6 +136,15 @@ func (client *Client) ListSandboxes(ctx context.Context, options SandboxListOpti
 	slices.Sort(keys)
 	for _, key := range keys {
 		query.Add("metadata", key+"="+options.Metadata[key])
+	}
+	if len(options.States) > 9 || len(options.IDs) > 64 {
+		return SandboxPage{}, errors.New("SecondBox Sandbox filter exceeds 9 states or 64 IDs")
+	}
+	for _, state := range options.States {
+		query.Add("state", state)
+	}
+	for _, id := range options.IDs {
+		query.Add("id", id)
 	}
 	var page SandboxPage
 	err = client.RequestJSON(ctx, "listSandboxes", CallOptions{QueryParameters: query}, &page)

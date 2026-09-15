@@ -1225,3 +1225,40 @@ test("tenant controller policy updates omit application ownership headers and pr
  const result = await new SecondBox(transport).updateSubjectSandboxPolicy("subject",4,{profile:"agent",lifecycle:{idleSeconds:60,maximumDurationSeconds:null}},"policy-update");
  assert.equal(result.revision,5);
 });
+
+test("controller helpers preserve revision fences, idempotency, and authority kind", async () => {
+  const seen: { path: string; headers: Headers; body: string | undefined }[] = [];
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "controller-token", async (input, init) => {
+    seen.push({ path: new URL(String(input)).pathname, headers: new Headers(init?.headers), body: init?.body as string | undefined });
+    return Response.json({ ref: "subject/name", revision: 8, quotaObservation: { observedAt: "2026-09-15T00:00:00Z" } });
+  }, "ignored-tenant", "ignored-subject", "tenant_controller"));
+  const quota = { maxSandboxes: 3, maxActiveInstances: null, maxVcpuCount: null, maxMemoryBytes: null, maxSnapshots: null, maxPortSessions: null, maxConcurrentOperations: null };
+  const result = await api.updateSubjectQuota("subject/name", { quota }, 7, "quota-update");
+  assert.equal(result.revision, 8);
+  assert.ok(result.quotaObservation);
+  assert.equal(seen[0]?.path, "/v1/subjects/subject%2Fname/quota");
+  assert.equal(seen[0]?.headers.get("If-Match"), '"revision-7"');
+  assert.equal(seen[0]?.headers.get("Idempotency-Key"), "quota-update");
+  assert.equal(seen[0]?.headers.get("X-SecondBox-Tenant-Ref"), null);
+  assert.deepEqual(JSON.parse(seen[0]?.body ?? ""), { quota });
+  await api.rotateApplicationAuthority("authority-id", 9, "rotate-key");
+  assert.equal(seen[1]?.path, "/v1/application-authorities/authority-id:rotate");
+  assert.equal(seen[1]?.headers.get("If-Match"), '"revision-9"');
+  assert.equal(seen[1]?.body, undefined);
+  assert.throws(() => api.closeSubject("subject/name", 0, "close-key"));
+  assert.throws(() => api.closeSubject("subject/name", 1, ""));
+  assert.equal(seen.length, 2);
+});
+
+test("Sandbox list forwards state and ID sets without losing metadata", async () => {
+  let url: URL | undefined;
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", async (input) => {
+    url = new URL(String(input));
+    return Response.json({ items: [] });
+  }));
+  await api.listSandboxes({ states: ["stopped", "failed"], ids: ["sandbox-a", "sandbox-b"], metadata: { owner: "agent" }, limit: 1 });
+  assert.deepEqual(url?.searchParams.getAll("state"), ["stopped", "failed"]);
+  assert.deepEqual(url?.searchParams.getAll("id"), ["sandbox-a", "sandbox-b"]);
+  assert.deepEqual(url?.searchParams.getAll("metadata"), ["owner=agent"]);
+  assert.throws(() => api.listSandboxes({ ids: Array(65).fill("sandbox-a") }));
+});

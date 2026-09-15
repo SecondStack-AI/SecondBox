@@ -534,7 +534,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "snapshot_name_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "resources_exceed_profile" | "resources_fixed_by_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired" | "profile_policy_ceiling_exceeded";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "snapshot_name_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "resources_exceed_profile" | "resources_fixed_by_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired" | "profile_policy_ceiling_exceeded" | "file_not_found";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -866,6 +866,7 @@ export interface Subject {
   readonly expiresAt?: Timestamp;
   readonly metadata: Metadata;
   readonly quota: SubjectQuota;
+  readonly quotaObservation?: SubjectCapacity;
   readonly ref: OwnershipRef;
   readonly revision: number;
   readonly state: SubjectState;
@@ -1115,9 +1116,11 @@ export interface Workspace {
 
 export type WorkspacePath = string;
 
-/** Stat-only observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include blocks shared through reflinks and Snapshots; they are not guest filesystem usage or unique physical consumption. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity. */
+/** Read-only metadata observation of the current Workspace image. Allocated bytes are st_blocks times 512 and include shared blocks. Exclusive bytes sum extents unshared with templates, Snapshots, or other Workspaces and represent image bytes deletion would free. Neither measures guest filesystem usage. Summed exclusive bytes are a physical lower bound; summed allocated bytes are not. Both measurements use the same image descriptor and timestamp. Timestamps remain unchanged while the Runner is offline. Reads never start compute or renew activity. */
 export interface WorkspaceStorageObservation {
   readonly allocatedBytes?: number;
+  readonly exclusiveBytes?: number;
+  readonly exclusiveReason?: "fiemap_unsupported" | "exclusive_probe_failed" | "exclusive_extent_limit" | "exclusive_extents_unstable" | "exclusive_extents_encoded";
   readonly observedAt?: Timestamp;
   readonly pressure: StoragePressureObservation;
   readonly reason?: "not_observed" | "missing" | "probe_failed" | "deleted";

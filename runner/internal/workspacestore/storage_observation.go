@@ -11,11 +11,13 @@ import (
 )
 
 type WorkspaceStorageObservation struct {
-	WorkspaceID    string
-	Generation     uint64
-	ObservedAt     time.Time
-	AllocatedBytes *int64
-	Reason         string
+	WorkspaceID     string
+	Generation      uint64
+	ObservedAt      time.Time
+	AllocatedBytes  *int64
+	ExclusiveBytes  *int64
+	ExclusiveReason string
+	Reason          string
 }
 
 // ObserveStorage visits at most limit directory entries per call. It reads
@@ -70,19 +72,31 @@ func (store *Store) observeWorkspaceStorage(workspaceID string) WorkspaceStorage
 		observation.Reason = workspaceObservationFailure(err)
 		return observation
 	}
-	info, err := os.Lstat(path)
+	// Pin both probes to the same inode without following a replaced symlink or
+	// blocking on a non-regular file. This does not acquire the compute writer.
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		observation.Reason = workspaceObservationFailure(err)
 		return observation
 	}
+	info, err := file.Stat()
+	if err != nil {
+		observation.Reason = workspaceObservationFailure(errors.Join(err, file.Close()))
+		return observation
+	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !info.Mode().IsRegular() || stat.Blocks < 0 {
+		_ = file.Close()
 		observation.Reason = "probe_failed"
 		return observation
 	}
 	// st_blocks counts 512-byte allocated blocks, including reflink-shared blocks.
 	allocated := stat.Blocks * 512
 	observation.AllocatedBytes = &allocated
+	observation.ExclusiveBytes, observation.ExclusiveReason = observeExclusiveBytes(file)
+	if err := file.Close(); err != nil {
+		observation.ExclusiveBytes, observation.ExclusiveReason = nil, "exclusive_probe_failed"
+	}
 	return observation
 }
 

@@ -795,7 +795,7 @@ func fileTerminalError(session runnercontrol.DataPlaneSession) error {
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED.String():
 		return nil
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_NOT_FOUND.String():
-		return ports.ErrSandboxNotFound
+		return ports.ErrWorkspaceFileNotFound
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_FENCED.String():
 		return ports.ErrGenerationFenced
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED.String():

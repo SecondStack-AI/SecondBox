@@ -15,6 +15,10 @@
 
 ### Added
 
+- Added bounded state and ID filters to Sandbox listings, atomic quota observations on Subject quota updates, and TypeScript tenant-controller management helpers.
+
+- Added optional `exclusiveBytes` to Workspace storage observations, measuring image extents unshared with templates, Snapshots, or other Workspaces. Allocated bytes remain available when FIEMAP is unsupported or exceeds the bounded scan, with a separate exclusive-measurement reason.
+
 - Added application-scoped quota headroom and retained Workspace storage observations, including allocated image blocks and admission-pressure freshness without exposing host identities. Platform operators can raise existing Tenant quotas without recreating retained resources.
 
 - Added `just qualify` for concurrent PR and release gates and `just release VERSION` for local qualification, artifact building, memory-capped parallel installer guests, and final staging, with per-stage logs and timings. Releases retain commit-exact evidence and require explicit publication.
@@ -31,6 +35,10 @@
 - Removed static application authorities: `SECONDBOX_APPLICATION_AUTHORITIES_JSON`, the `applications.application_authorities_file` manifest key, and every deployment, Compose, installer, diagnostics, and support-bundle surface that carried them. v0.6.0 is a clean-install boundary with no import, compatibility, fallback, or dual-source mode for v0.5.2 installations ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
 
 ### Fixed
+
+- Kept Workspace storage probes off the Runner heartbeat and command paths, bounded scans across reconnects, and omitted exclusive-byte measurements when unshared encoded extents prevent physical accounting.
+
+- Distinguished missing Workspace files from missing Sandbox compute in data-plane errors, preserving generation fencing for stopped Sandboxes.
 
 - Fixed port forwarding to bound every session by its granted Lease lifetime and keep individual connection failures from stopping other connections. Guided-install smoke runs now wait for Sandbox deletion to release capacity before starting the next run.
 - Fixed queued streaming stdin blocking the guest connection after an exec terminates, preserved command exit status when a program stops reading stdin before exiting, and allowed deadline outcomes to reach the streaming client.

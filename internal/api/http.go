@@ -548,7 +548,7 @@ func (apiHandler *handler) listSandboxes(writer http.ResponseWriter, request *ht
 	}
 	page, err := apiHandler.service.ListSandboxes(
 		request.Context(), requestPrincipal(request), limit,
-		request.URL.Query().Get("cursor"), metadata,
+		request.URL.Query().Get("cursor"), contracts.SandboxListFilter{Metadata: metadata, States: request.URL.Query()["state"], IDs: request.URL.Query()["id"]},
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -1073,6 +1073,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusForbidden, "authorization_failed", "Exposed port is not permitted", false
 	case errors.Is(err, runnercontrol.ErrFilePermission):
 		return http.StatusForbidden, "file_permission_denied", "File operation permission denied", false
+	case errors.Is(err, ports.ErrWorkspaceFileNotFound):
+		return http.StatusNotFound, "file_not_found", "Workspace file not found", false
 	case errors.Is(err, ports.ErrProfileNotFound),
 		errors.Is(err, ports.ErrRunnerPoolNotFound), errors.Is(err, ports.ErrRunnerNotFound),
 		errors.Is(err, ports.ErrSandboxNotFound), errors.Is(err, ports.ErrLeaseNotFound),

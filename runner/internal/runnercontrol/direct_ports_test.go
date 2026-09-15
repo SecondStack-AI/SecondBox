@@ -172,7 +172,7 @@ func TestRunnerDataPlaneListenerGatesReadinessAndAdvertisesOnlyItsAddress(t *tes
 	}
 
 	heartbeat := &threadSafeRunnerStream{}
-	if err := service.sendHeartbeat(heartbeat, "connection-1", bound); err != nil {
+	if err := service.sendHeartbeat(t.Context(), heartbeat, "connection-1", bound); err != nil {
 		t.Fatal(err)
 	}
 	if got := heartbeat.messages()[0].GetHeartbeat().GetDataPlaneAdvertisedAddress(); got != advertised {

@@ -658,16 +658,24 @@ func (store *PostgresControlPlaneStore) ListSandboxes(
 	subjectRef string,
 	limit int,
 	cursor string,
-	metadata map[string]string,
+	selection contracts.SandboxListFilter,
 ) (contracts.SandboxPage, error) {
-	filter, err := encodeSandboxMetadataFilter(metadata)
+	selection, err := selection.Normalize()
+	if err != nil {
+		return contracts.SandboxPage{}, errors.Join(ports.ErrInvalidRequest, err)
+	}
+	filter, err := encodeSandboxMetadataFilter(selection.Metadata)
 	if err != nil {
 		return contracts.SandboxPage{}, err
 	}
 	// The filter joins the cursor scope so a cursor issued for one filter can
 	// never be replayed against a different one.
+	encodedSelection, err := json.Marshal(selection)
+	if err != nil {
+		return contracts.SandboxPage{}, err
+	}
 	scope := "tenant=" + tenantRef + "\x1fsubject=" + subjectRef +
-		"\x1fmetadata=" + string(filter)
+		"\x1ffilter=" + string(encodedSelection)
 	boundary, err := store.resolvePostgresListCursor(
 		ctx,
 		sandboxListCursorResource,
@@ -689,10 +697,12 @@ func (store *PostgresControlPlaneStore) ListSandboxes(
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2
 		  AND (NOT $3 OR (sandbox.created_at,sandbox.id) > ($4,$5))
 		  AND ($7::jsonb IS NULL OR sandbox.metadata_json @> $7::jsonb)
+		  AND (cardinality($8::text[])=0 OR sandbox.state=ANY($8::text[]))
+		  AND (cardinality($9::text[])=0 OR sandbox.id=ANY($9::text[]))
 		ORDER BY sandbox.created_at,sandbox.id
 		LIMIT $6`,
 		tenantRef, subjectRef, boundary.Active, boundary.CreatedAt, boundary.ItemKey,
-		limit+1, filterArgument)
+		limit+1, filterArgument, append([]string{}, selection.States...), append([]string{}, selection.IDs...))
 	if err != nil {
 		return contracts.SandboxPage{}, fmt.Errorf("SecondBox Sandbox list failed: %w", err)
 	}
