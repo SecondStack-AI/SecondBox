@@ -879,12 +879,12 @@ func (broker *PostgresEffectBroker) queueStop(
 	if locked.Revision != claim.Revision {
 		return ports.ErrRevisionConflict
 	}
-	var assignmentID, instanceID, runnerID, operationID, requestID string
+	var assignmentID, instanceID, runnerID, operationID, requestID, assignmentState string
 	var generation int64
 	var fencingToken []byte
 	if err := tx.QueryRow(ctx, `
 		SELECT assignment.id,assignment.instance_id,assignment.runner_id,
-		       assignment.generation,assignment.fencing_token,
+		       assignment.generation,assignment.fencing_token,assignment.state,
 		       COALESCE((
 		         SELECT operation.id FROM secondbox.operations AS operation
 		         WHERE operation.sandbox_id=sandbox.id
@@ -901,12 +901,13 @@ func (broker *PostgresEffectBroker) queueStop(
 		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=assignment.sandbox_id
 		WHERE sandbox.id=$1 AND sandbox.reconcile_owner=$2
 		  AND sandbox.revision=$3 AND assignment.generation=sandbox.generation
-		  AND assignment.state IN ('assigned','accepted','starting','ready','uncertain','fencing')
+		  AND assignment.instance_id=sandbox.current_instance_id
+		  AND assignment.state IN ('assigned','accepted','starting','ready','uncertain','fencing','failed_terminal')
 		ORDER BY assignment.created_at DESC,assignment.id DESC LIMIT 1
 		FOR UPDATE OF assignment`,
 		claim.SandboxID, claim.WorkerID, claim.Revision,
 	).Scan(
-		&assignmentID, &instanceID, &runnerID, &generation, &fencingToken,
+		&assignmentID, &instanceID, &runnerID, &generation, &fencingToken, &assignmentState,
 		&operationID, &requestID,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -923,14 +924,21 @@ func (broker *PostgresEffectBroker) queueStop(
 		locked.Generation != generation {
 		return ports.ErrGenerationFenced
 	}
-	if workspace.Mutation.State == "" {
+	// An explicit retry may already hold a queued start for this failed
+	// generation. Its Operation survives the cleanup; finish_stop releases
+	// the mutation and the next start acquires it for the new generation.
+	replaceFailedStart := assignmentState == "failed_terminal" &&
+		workspace.Mutation.Kind == "start" && workspace.Mutation.State == "queued" &&
+		workspace.Mutation.ExpectedGeneration == generation &&
+		workspace.Mutation.TargetGeneration == generation
+	if workspace.Mutation.State == "" || replaceFailedStart {
 		tag, err := tx.Exec(ctx, `
 			UPDATE secondbox.workspaces
 			SET mutation_kind='stop',mutation_id=$2,mutation_effect_id=$2,
 			    mutation_operation_id=$2,mutation_expected_generation=$3,
 			    mutation_target_generation=$4,mutation_state='stopping',updated_at=$5
-			WHERE id=$1 AND mutation_state=''`,
-			workspace.ID, effectID, generation, generation+1, now.UTC(),
+			WHERE id=$1 AND (mutation_state='' OR $6)`,
+			workspace.ID, effectID, generation, generation+1, now.UTC(), replaceFailedStart,
 		)
 		if err != nil {
 			return fmt.Errorf("SecondBox lifecycle stop Workspace mutation acquisition failed: %w", err)

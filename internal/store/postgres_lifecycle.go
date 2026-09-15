@@ -677,11 +677,18 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		scheduled := nextReconcileAt.UTC()
 		scheduledAt = &scheduled
 	}
+	// Retiring an attributed generation normally parks its Sandbox. A pending
+	// explicit start belongs to the successor generation and must survive the
+	// cleanup of an earlier failed command.
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET state=$1,lifecycle_action=CASE WHEN $2='wait' THEN lifecycle_action ELSE $2 END,
 		    desired_state=CASE
-		      WHEN $2 IN ('drain','finish_stop') AND desired_state='running' AND EXISTS (
+		      WHEN $2 IN ('drain','finish_stop') AND desired_state='running' AND NOT EXISTS (
+		        SELECT 1 FROM secondbox.operations AS operation
+		        WHERE operation.sandbox_id=secondbox.sandboxes.id
+		          AND operation.kind='start' AND operation.state IN ('pending','running')
+		      ) AND EXISTS (
 		        SELECT 1 FROM secondbox.assignments AS assignment
 		        WHERE assignment.instance_id=secondbox.sandboxes.current_instance_id
 		          AND assignment.execution_authorization_ref IS NOT NULL

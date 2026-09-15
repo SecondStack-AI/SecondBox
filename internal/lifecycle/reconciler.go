@@ -46,6 +46,15 @@ type Decision struct {
 
 // Decide computes one restart-safe transition without performing side effects.
 func Decide(view View, now time.Time) Decision {
+	// A failed Instance still owns its generation. Recovery must obtain a
+	// Runner fence and local generation receipt before start or delete can
+	// reuse the Workspace, including after assignment retries are exhausted.
+	if view.Observed == contracts.SandboxStateFailed && view.HasInstance &&
+		(view.Desired == contracts.SandboxDesiredStateRunning ||
+			view.Desired == contracts.SandboxDesiredStateStopped ||
+			view.Desired == contracts.SandboxDesiredStateDeleted) {
+		return Decision{Action: ActionStopInstance, TerminationReason: requestedTerminationReason(view)}
+	}
 	if view.Desired == contracts.SandboxDesiredStateDeleted {
 		switch view.Observed {
 		case contracts.SandboxStateDeleted:

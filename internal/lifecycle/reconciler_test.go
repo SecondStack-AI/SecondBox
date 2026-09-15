@@ -176,3 +176,14 @@ func TestUnlimitedRuntimeKeepsActiveInterestBeyondFormerAgeDeadline(t *testing.T
 		t.Fatalf("idle after interest ends: %+v", got)
 	}
 }
+
+func TestFailedInstanceRetiresBeforeNextLifecycleIntent(t *testing.T) {
+	for _, desired := range []string{"running", "stopped", "deleted"} {
+		for _, liveness := range []string{"lost", "stopped", "starting"} {
+			view := View{Observed: "failed", Desired: desired, HasInstance: true, GuestLiveness: liveness}
+			if decision := Decide(view, time.Now()); decision.Action != ActionStopInstance {
+				t.Fatalf("view=%+v decision=%+v: failed generation must be retired", view, decision)
+			}
+		}
+	}
+}

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ReconcileStore owns durable claims and compare-and-swap transition commits.
@@ -97,19 +99,46 @@ func (reconciler Reconciler) RunBatch(
 	if len(claims) > reconciler.BatchSize {
 		return false, errors.New("SecondBox lifecycle batch claim exceeded its bound")
 	}
+	var retryErrors []error
 	for _, claim := range claims {
 		if _, err := reconciler.reconcileClaim(ctx, claim, clock().UTC()); err != nil {
-			return true, err
+			if ctx.Err() != nil || !IsRetryableReconcileError(err) {
+				return true, err
+			}
+			retryErrors = append(retryErrors, err)
 		}
 	}
-	return true, nil
+	return true, errors.Join(retryErrors...)
+}
+
+// IsRetryableReconcileError identifies claim races and transaction contention.
+// Unexpected dependency errors remain fatal even after an earlier claim raced.
+func IsRetryableReconcileError(err error) bool {
+	if errors.Is(err, ports.ErrRevisionConflict) ||
+		errors.Is(err, ports.ErrGenerationFenced) ||
+		errors.Is(err, ports.ErrWorkspaceMutation) ||
+		errors.Is(err, ports.ErrSerializationContention) {
+		return true
+	}
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) &&
+		(postgresError.Code == "40001" || postgresError.Code == "40P01")
 }
 
 func (reconciler Reconciler) reconcileClaim(
 	ctx context.Context,
 	claim ports.LifecycleReconcileClaim,
 	now time.Time,
-) (Decision, error) {
+) (result Decision, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("SecondBox lifecycle Sandbox %s: %w", claim.SandboxID, err)
+			if ctx.Err() == nil && IsRetryableReconcileError(err) {
+				slog.WarnContext(ctx, "SecondBox lifecycle claim deferred",
+					"sandboxId", claim.SandboxID, "error", err)
+			}
+		}
+	}()
 	view := View{
 		Observed: claim.ObservedState, Desired: claim.DesiredState,
 		StopEffectState:           claim.StopEffectState,
@@ -141,13 +170,11 @@ func (reconciler Reconciler) reconcileClaim(
 		if err := reconciler.Effects.ExecuteLifecycleEffect(
 			ctx, claim, decision, now, now.Add(reconciler.PollInterval),
 		); err != nil {
-			// Losing a serialization race is an ordinary outcome of concurrency,
-			// not a fault, so it defers exactly like Workspace contention does.
-			// Failing here ends the reconciler, and ending the reconciler stops
-			// the server: a burst of concurrent placements would take the whole
-			// control plane down.
-			if errors.Is(err, ports.ErrWorkspaceMutation) ||
-				errors.Is(err, ports.ErrSerializationContention) {
+			// Defer only while this claim still owns the row. If its revision
+			// changed, the caller backs off without overwriting newer intent.
+			if IsRetryableReconcileError(err) {
+				slog.WarnContext(ctx, "SecondBox lifecycle effect deferred",
+					"sandboxId", claim.SandboxID, "action", decision.Action, "error", err)
 				if waitErr := reconciler.Store.ApplyLifecycleAction(
 					ctx,
 					claim,
