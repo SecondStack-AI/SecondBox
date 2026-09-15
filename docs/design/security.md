@@ -14,7 +14,7 @@ Tenant-controller and application authorities use independent server-generated b
 
 Runner authority is separate. A Runner establishes an outbound TLS 1.3 connection, presents a CA-signed client identity, and proves the deployment-wide pre-shared Runner credential. The control plane compares the certificate identity, configured Runner identity, and protocol identity. HTTP tokens are never accepted on this channel, and Runner credentials are never accepted by the HTTP API.
 
-Browser-facing PTY and port-tunnel connections do not rely on caller-supplied tenancy. They use single-use, session-bound, expiring HMAC capability tokens carried in the WebSocket subprotocol. Generation, Lease, Assignment, and attachment checks still apply at admission.
+Exec and PTY WebSocket attachments repeat API authentication and the current Sandbox generation; PTYs also acquire an exclusive attachment identity. Port tunnels use a single-use, session-bound, expiring capability token carried in the WebSocket subprotocol. Each path checks its admitted ownership, Lease, and Assignment fence.
 
 One Port operation scope is a capability rather than an operation permission. `sandbox:ports:direct` grants the direct Port transport, whose endpoint names the home Runner's advertised data-plane address. It is denied by default, is never implied by `sandbox:ports`, and is the only way any caller learns a Runner address; every other authority receives the proxied WebSocket endpoint. The same single-use capability token authenticates either transport, and on the direct transport the home Runner rejects a mismatch locally in constant time before spending the token against PostgreSQL, which remains the single consumption authority.
 
@@ -40,7 +40,7 @@ durable operation receipts. Except for the bounded operator-initiated stopped-Sa
 paths. Loss of an unbacked home-Runner filesystem loses its Sandboxes and local
 Snapshots; PostgreSQL recovery alone is insufficient.
 
-All work is deadline- and size-bounded. Tenant aggregate and Subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success. On a direct Port connection, backpressure is TCP flow control on the caller leg and the retained guest-protocol credit window on the guest leg, so no unbounded buffer exists on either.
+Each admitted command and data-plane session has finite execution and buffer bounds; Sandbox runtime policy may be unlimited. Tenant aggregate and Subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success. On a direct Port connection, backpressure is TCP flow control on the caller leg and the retained guest-protocol credit window on the guest leg, so no unbounded buffer exists on either.
 
 Port evidence is transport independent. Both transports keep payload-free session accounting, terminal state, correlation, acknowledgement state, and admission replay until the session deadline. Both emit fixed-shape Runner evidence at admitted open and close, neither persists per-frame payloads, and payload reconstruction is outside the forensic boundary. No Port evidence record can contain a payload byte, a credential, a fencing token, or a Runner address.
 

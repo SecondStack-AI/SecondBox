@@ -1,8 +1,12 @@
 # Plan: Guided Single-Host Installation
 
+## Remaining work
+
+The installer is implemented and shipped. This plan remains open only for the Task 9 qualification assertions that lack a recorded result here, including interruption at each durable stage and the complete filesystem/refusal matrix. Later [automated release qualification](completed/2026-09-12-fast-qualification.md) records installer, reboot, and uninstall/resume coverage, but does not establish every original fault-injection claim. Use the [installation guide](../operations/guided-single-host-install.md) for current behavior, including updates and tenancy bootstrap.
+
 Build a release-backed `secondbox-deploy install` wizard that takes one qualified Linux amd64 host with systemd, Docker, and KVM from read-only capability checks to a successful `secondbox run durable-coding -- ...`. The installer must keep SecondBox's deployment authority explicit: it may propose detected values, generate development authority, and materialize a reviewed single-host topology, but every accepted identity, path, capacity, network, retention, and pinned asset must be written into the installation plan and `secondbox.toml` rather than becoming a runtime default.
 
-Implement [Polished Human-Facing CLI UI](2026-08-07-polished-cli-ui.md) first. This plan consumes its shared `internal/cliui` capability detection, Huh forms, phase rendering, progress, accessibility, and plain-output contracts rather than creating a second installer-specific terminal layer.
+Implement [Polished Human-Facing CLI UI](completed/2026-08-07-polished-cli-ui.md) first. This plan consumes its shared `internal/cliui` capability detection, Huh forms, phase rendering, progress, accessibility, and plain-output contracts rather than creating a second installer-specific terminal layer.
 
 The first version is intentionally limited to one loopback-only development deployment and one same-host Firecracker Runner. It does not add production or remote-Runner installation, arm64 Runner support, automatic physical-disk partitioning, distribution-specific package installation, daemonless execution, fallback compute backends, or automatic upgrades. An existing dedicated XFS/Btrfs filesystem remains the preferred workspace location; the portable alternative is a fully allocated, size-bounded Btrfs filesystem image mounted persistently by systemd. Ordinary uninstall must preserve all durable data.
 

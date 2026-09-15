@@ -13,12 +13,12 @@ unavailable status, never a null limit or zero estimate. Complete policy and quo
 require every dimension. An omitted optional creation policy inherits the pinned Profile;
 a partial configuration edit leaves omitted settings unchanged.
 
-SecondBox owns effective policy and enforces it. ControlTower owns installation desired
-configuration in General Config and explicitly deploys it through public SecondBox APIs.
-A CT administrator is necessary but not sufficient: a server-held tenant-controller
-credential must authorize the installation's Tenant. No platform token enters CT, no
-controller credential enters a browser or Agent, and the fleet token remains read-only.
-External mode without an explicitly supplied controller is read-only.
+SecondBox stores and enforces effective policy. A consuming service may keep its
+own desired configuration, but must apply it through the public management API
+using a server-held tenant-controller credential for the affected Tenant.
+Application authorities can read their own effective policy; they cannot change
+Subject quota or lifecycle selection. UI roles in a consuming product do not
+grant SecondBox authority.
 
 Profile defaults and allowed lifecycle ceilings are immutable. Subject lifecycle selections
 apply only at future Sandbox creation; the effective lifecycle is pinned with that Sandbox.
@@ -88,15 +88,15 @@ PID or CPU-share policy beyond its supported concrete resource enforcement.
 
 ## Retention and interest
 
-Agent Platform retains a Workspace until its conversation or compartment is explicitly
-deleted. Idle timeout stops compute and preserves files. Its settlement watch holds useful
-interest through model thinking between guest operations. Reads of inventory or policy
-neither touch activity nor create Leases, start compute, or reconcile configuration.
+Idle timeout stops compute and preserves the Workspace. Sandbox deletion and
+Subject cleanup remove retained Workspace state through acknowledged Runner
+operations. Consumers that need to keep compute active between guest operations
+must use the explicit Lease and useful-activity contract. Inventory and policy
+reads do not touch activity, create Leases, start compute, or apply configuration.
 
-CT shows lifecycle first, then Subject/Tenant quota restrictions and Profile execution/resource restrictions.
-A save shows its scope before deployment: future Sandboxes for lifecycle; immediate new
-admission for quotas. Desired values and SecondBox effective values remain distinct when
-application fails or the service has not received a compatible release.
+Lifecycle selections affect future Sandboxes; quota changes affect new admission
+immediately. Consumers should report the effective API response separately from
+unsaved or unapplied desired configuration.
 
 ## Public operations and validation
 

@@ -1,8 +1,12 @@
 # Plan: Polished Human-Facing CLI UI
 
+## Archive outcome
+
+The shared terminal UI is implemented in `internal/cliui` and both CLIs. The [output contract](../../operations/cli-output-contract.md) is the current reference. The unchecked aggregate handoff gate below has no separate result recorded in this plan.
+
 Give `secondbox` and `secondbox-deploy` one deliberate, accessible terminal presentation system without changing their command parsers or weakening their Unix contracts. Interactive terminals receive compact styled help, tables, summaries, forms, progress, and actionable errors; pipes, redirected output, explicit machine modes, guest streams, and subprocess exit statuses remain deterministic and free of presentation bytes.
 
-This plan is the UI prerequisite for [Guided Single-Host Installation](2026-08-07-guided-single-host-install.md). It covers only the two human-facing binaries. It does not move `secondboxd`, `secondbox-runner`, guest agents, release tools, generators, probes, or test drivers onto a TUI framework; add a full-screen application; migrate argument parsing to Cobra; style workspace/file payloads; or change public API schemas.
+This plan is the UI prerequisite for [Guided Single-Host Installation](../2026-08-07-guided-single-host-install.md). It covers only the two human-facing binaries. It does not move `secondboxd`, `secondbox-runner`, guest agents, release tools, generators, probes, or test drivers onto a TUI framework; add a full-screen application; migrate argument parsing to Cobra; style workspace/file payloads; or change public API schemas.
 
 Use the mutually compatible stable Charm v2 modules pinned in `go.mod`: Huh for forms, Lip Gloss for deterministic inline rendering, and Bubble Tea/Bubbles only for inline progress that needs an event loop. Retain the standard `flag` and existing explicit dispatch code for arguments.
 
@@ -126,3 +130,17 @@ Close the migration with realistic terminal tests and documentation that makes a
 - [ ] Run `just verify-generated`, `just lint`, `just test`, contract/deployment/Compose/SDK/CLI UI suites, `just test-non-kvm`, and `just test-scenario`; hand off raw-stream and PTY evidence with the implementation report.
 
 Validation note (2026-08-08): after the review hardening pass, every listed ordinary-CI, contract, deployment, Compose, SDK, CLI UI, PTY, `just test`, and `just test-non-kvm` gate passed. `just test-scenario` was re-attempted and correctly failed closed because this workstation has no configured KVM/TUN release bundle, trust anchor, or reflink workspace. The final checkbox remains open solely for that mandatory qualified-host evidence.
+
+## Release footprint measurement
+
+Recorded during the CLI UI implementation, comparing its pre-change `HEAD` and candidate with Go 1.25.12 on
+Linux amd64 (100 warm process starts, `version` redirected to `/dev/null`):
+
+| Binary | Before | With CLI UI | 100 starts before / after |
+|---|---:|---:|---:|
+| `secondbox` | 10,666,166 bytes | 13,634,533 bytes | 0.157 s / 0.174 s |
+| `secondbox-deploy` | 20,415,725 bytes | 21,789,391 bytes | 0.197 s / 0.214 s |
+
+The repository declares no release binary-size or cold-start budget. The
+temporary baseline checkout and binaries used for this measurement were removed
+afterward.

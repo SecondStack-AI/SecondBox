@@ -1,5 +1,9 @@
 # Plan: Host-First Mergeable gVisor Backend Spike
 
+## Archive outcome
+
+Merged in `29f9535` (#99); release distribution followed in `8e4e1f0` (#117). Host and pod qualification evidence is retained in [evidence](../evidence/). gVisor is now supported; use the [runtime guide](../../operations/gvisor-runtime.md) for current deployment instructions.
+
 Add gVisor as an explicitly selected experimental SecondBox compute backend alongside Firecracker
 and Microsandbox. The spike must run the same durable Sandbox and complete data-plane lifecycle on
 Linux hosts that have no KVM at all — first a plain Linux virtual machine, then a privileged,

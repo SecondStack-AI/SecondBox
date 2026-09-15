@@ -12,7 +12,7 @@ The guest agent runs inside each Instance: baked into the released Firecracker i
 
 ## Trust and network boundaries
 
-The control plane runs without KVM, TUN, host cgroups, host paths, container-engine access, or added Linux capabilities. It may run in Compose, Kubernetes, or another ordinary container platform. Kubernetes deployment manifests and Kubernetes-native sandbox backends are outside the v1 supported surface.
+The control plane runs without KVM, TUN, host cgroups, host paths, container-engine access, or added Linux capabilities. It may run in Compose, Kubernetes, or another ordinary container platform. The gVisor runner has a qualified privileged-pod reference manifest. Control-plane Kubernetes manifests and Kubernetes-native Sandbox scheduling remain operator-owned; see the [Kubernetes boundary](../operations/kubernetes-boundary.md).
 
 Runners dial the control plane. Direct data-plane clients also require reachability to the admitted runner listener; proxied clients do not. Runner identity comes from the CA-signed client certificate and matching deployment-wide Runner credential, not from a claimed message field. The HTTP platform token and Runner credential are separate authorities and are never interchangeable.
 
@@ -32,22 +32,5 @@ SecondBox does not own end-user identity, billing, an LLM runtime, application s
 ## Supported v1 shape
 
 Firecracker and gVisor are the supported v1 backends. They and the experimental Microsandbox backend use the same provider-neutral compute port with explicit runner-wide selection and no per-assignment selection or fallback. RunnerPools are homogeneous and privately sealed to one backend kind; backend identity never enters public resources.
-
-## Future smolvm adapter contract
-
-No smolvm backend or conditional branch exists in v1. Its current high-level
-`MachineSpec` owns creation of `storage.raw` and `overlay.raw`, while its guest
-layout assumes the root and workspace devices are `/dev/vda` and `/dev/vdb`.
-That is not compatible with SecondBox's WorkspaceStore authority.
-
-A future smolvm adapter must change that boundary before it can satisfy the
-compute conformance suite. The adapter must accept the mandatory externally
-supplied raw ext4 Workspace attachment and its generation/fence, attach that
-exact image through `krun_add_disk2`, and preserve the exclusive writer lock
-until all machine and host-side users have stopped. The guest must discover and
-mount the Workspace by filesystem label or UUID at `/workspace`, rather than
-depending on a fixed device number. The adapter may not ask `MachineSpec` to
-create or replace Workspace storage and may not add a copy, overlay, or
-provider-specific fallback.
 
 See [Domain and lifecycle](domain-lifecycle.md), [Profiles and authorization](profiles-and-authorization.md), [Customer-shared tenancy](customer-shared-tenancy.md), [Runner protocol](runner-protocol.md), [Guest-agent protocol](guest-agent-protocol.md), and [Security](security.md).

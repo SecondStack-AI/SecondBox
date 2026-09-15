@@ -471,7 +471,7 @@ whole deployment for ~57 seconds with every Workspace published and the runner
 idle. Assignment dispatch is gated per runner on no Workspace being in state
 `creating`, with no timeout, so one Workspace row left in that state blocks every
 assignment for that runner. Written up in
-[assignment-dispatch-stall.md](../../operations/assignment-dispatch-stall.md).
+[assignment-dispatch-stall.md](../evidence/assignment-dispatch-stall.md).
 
 **A correction to this plan's own reasoning.** The plan treated the driver's
 hard-coded 60-second `WaitSandbox` bound as a wall to be lifted, and Task 9

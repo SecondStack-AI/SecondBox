@@ -81,17 +81,3 @@ details. On a TTY stderr, `resources_exceed_profile` from `run` or `create`
 adds a hint naming the Profile, its ceiling, and resource flags to retry with.
 This does not add output to guest stdout or change the machine response path.
 Snapshot clone refusals retain the existing `state_conflict` problem.
-
-## Release footprint measurement
-
-Measured from the pre-change `HEAD` and this implementation with Go 1.25.12 on
-Linux amd64 (100 warm process starts, `version` redirected to `/dev/null`):
-
-| Binary | Before | With CLI UI | 100 starts before / after |
-|---|---:|---:|---:|
-| `secondbox` | 10,666,166 bytes | 13,634,533 bytes | 0.157 s / 0.174 s |
-| `secondbox-deploy` | 20,415,725 bytes | 21,789,391 bytes | 0.197 s / 0.214 s |
-
-The repository declares no release binary-size or cold-start budget. The
-temporary baseline checkout and binaries used for this measurement were removed
-afterward.

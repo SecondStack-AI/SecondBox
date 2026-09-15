@@ -1,20 +1,27 @@
 # Downstream release integration
 
-Replace `VERSION` below with the coordinated SemVer selected for integration. Read
-that release’s deployment boundary and bundle/trust-anchor notes first. Integrate
-vVERSION only after the stable GitHub Release is public. The release is the immutable `vVERSION` tag plus the locally built files attached to that release; the publishing workflow does not rebuild them. Do not use the retracted v0.7.0 or v0.8.0 Go module coordinates.
+Choose a published stable release, read its deployment boundary, and use that
+version consistently for binaries, SDKs, images, and standard bundles. In the
+examples below, replace `VERSION` with the chosen numeric version. The tag and
+attached files identify one release; the publishing workflow does not rebuild them.
+
+For [v0.14.0](../releases/v0.14.0.md), initialize a fresh database and separate
+Runner storage root. Existing databases fail the migration checksum check,
+including v0.13.0 state. [v0.12.0](../releases/v0.12.0.md) also changed the
+Firecracker bundle and trust anchor. Preserve the previous deployment as a
+complete rollback unit; the guided updater cannot cross these boundaries.
+The Go module's `retract` directives identify withdrawn versions.
 
 ## gVisor and the v6 artifact manifest
 
-v0.9.0 was tagged but retracted before publication; pin v0.9.1 or later. From v0.9.1 the artifact manifest uses schema `secondbox.release/artifact-manifest/v6`, and downstream consumers that deploy the gVisor backend track its `gvisor` section in addition to the Firecracker `microvm` bundle:
+The current artifact manifest uses schema `secondbox.release/artifact-manifest/v6`, and downstream consumers that deploy the gVisor backend track its `gvisor` section in addition to the Firecracker `microvm` bundle:
 
 - `ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:...` (`gvisor.runnerReference`), the runner image.
 - `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts@sha256:...` (`gvisor.imageReference`), the transport carrying the flat root, launch artifacts, verifiers, and materialization.
 - `secondbox-VERSION-gvisor-materialization.json` (`gvisor.materialization`), with `gvisor.materializationDigest` and `gvisor.flatRootDigest` as the identities a node materialization must reproduce, and `gvisor.runscRelease`.
-- `secondbox-VERSION-gvisor-qualification-evidence.json` and `secondbox-VERSION-gvisor-pod-qualification-evidence.json` (`gvisor.qualificationEvidence`, `gvisor.podQualificationEvidence`), the host and (for full releases) pod scenario evidence bound to the release commit.
+- `secondbox-VERSION-gvisor-qualification-evidence.json` and `secondbox-VERSION-gvisor-pod-qualification-evidence.json` (`gvisor.qualificationEvidence`, `gvisor.podQualificationEvidence`), the host evidence and, for a full release, pod evidence bound to the release commit. Default releases do not carry pod qualification; consumers requiring it must select a full release.
 
-Recorded v5 manifests of earlier releases remain readable by the v0.9.1 updater; a v0.9.1 or later release always ships v6.
-
+Recorded v5 manifests remain readable for legacy release verification. Schema readability alone does not imply update compatibility; check database, bundle, and protocol boundaries separately.
 
 Download the `secondbox-deploy_VERSION_OS_ARCH` binary and verify it against the public `SHA256SUMS`. Then verify the published artifact manifest and every HTTP release object it references:
 
@@ -34,7 +41,14 @@ secondbox-deploy compose /srv/secondbox/deployment/secondbox.toml up
 
 Select any explicit combination of `agent-compartment`, `durable-coding`, and `agent-compartment-isolated` in `[standard_resources]`; provide deployment inventory and only the gateway mappings required by the network-enabled selections. Do not copy their RunnerPool or Profile specifications. Reapplying the deployment validates the installed immutable lineage and appends only a missing release-owned revision.
 
-v0.10.0 introduced an attribution-enabled `agent-compartment` revision, permitting an explicit attributed start on the same Sandbox used for ordinary execution. It permits two concurrent connections through the Agent gateway. Configure that gateway's `attributed_socket` on the Runner host before admitting attributed commands. Existing Sandboxes retain their immutable older Profile revision and do not gain this permission; new Sandboxes must pin the attribution-enabled revision from the generated bundle. Resolve revision and spec digests from the selected release’s generated bundles; do not infer current revision numbers from historical releases. The isolated Profile has no attributed permission. Read the public API and Runner protocol windows from the selected manifest (v0.14.0 uses version 1 and `[4,4]`); attributed execution additionally requires the Runner's advertised `attributed-execution` capability.
+For attributed execution, select an `agent-compartment` revision that declares
+`attributedExecution`, and configure its gateway's `attributed_socket` on the
+Runner host. Existing Sandboxes retain their pinned revision. Read the actual
+revision and spec digest from the selected release's standard bundle rather
+than deriving revision numbers from a version. The isolated Profile has no
+attributed permission. Read the public API and Runner protocol windows from the selected manifest
+(v0.14.0 uses version 1 and `[4,4]`). Attributed execution also requires the advertised `attributed-execution`
+capability. See [Profiles and authorization](../design/profiles-and-authorization.md).
 
 After readiness, log in with the platform token, create each Tenant and its tenant-controller authority, log in with the returned controller token, then create the Subject and application authority. Capture each bearer token from its successful creation response; it cannot be retrieved later. The source-free CLI sequence is documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). The repository scenario harness uses this same sequence and creates a separate application authority for the optional `sandbox:ports:direct` grant.
 

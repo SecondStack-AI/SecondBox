@@ -4,7 +4,7 @@ Network policy is immutable ProfileRevision policy enforced by the Runner. A gue
 
 ## Outbound policy
 
-The default policy denies all outbound destinations. An explicit allow policy may name domains, destination CIDRs, ports, and protocols. Regardless of allow rules, v1 denies guest loopback escape, unspecified, multicast, private, link-local, carrier-grade NAT, cloud-metadata, Runner-host, control-plane management, and Runner management destinations unless a future separately reviewed policy kind states otherwise.
+A Profile must explicitly select its outbound policy. `deny_all` denies all outbound destinations. An explicit allow policy may name domains, destination CIDRs, ports, and protocols. Regardless of allow rules, v1 denies guest loopback escape, unspecified, multicast, private, link-local, carrier-grade NAT, cloud-metadata, Runner-host, control-plane management, and Runner management destinations except for an explicitly configured logical gateway mapping in the pinned Tenant egress context.
 
 The Runner owns the guest TAP, bridge forwarding rules, and policy-aware DNS proxy. Each assignment gets a separate nftables table keyed by a collision-resistant instance identity. The table permits established replies, runner DNS on the bridge address, and exact policy destinations, then drops all other guest egress and unsolicited traffic toward the TAP. Protected destination drops precede allow rules, so an overlapping allow cannot override them. The current Firecracker path uses per-TAP firewall isolation on the Runner bridge; it does not create a separate Linux network namespace per Sandbox.
 
@@ -44,6 +44,30 @@ proxy addresses free of conflicting host use. Per-Instance teardown removes the 
 and startup reconciliation sweeps any profile-scoped leftovers, including orphaned NAT-only
 tables. DNS pinning, protected-destination precedence, and the deny-all default are identical
 across both backends.
+
+## Tenant contexts and attributed execution
+
+A network-enabled Profile requires a Tenant egress context. Sandbox creation
+pins that logical context; admission requires its exact name among the home
+Runner's advertised mappings. The Runner resolves Profile gateway names only
+inside that context. A mapping permits the configured gateway address and port;
+it does not synthesize guest DNS or distribute proxy credentials or CA trust.
+Missing contexts fail admission without substituting another mapping.
+
+An attributed generation uses a separate path. The immutable Profile permits
+one named gateway, and the Runner resolves its operator-configured Unix socket
+inside the pinned context. Firecracker and gVisor forward admitted connections
+through generation-owned listeners and prepend `SBXATTR1` attribution derived
+from the assignment. Guest headers and source addresses are not identity
+claims. The receiving gateway must authenticate the Unix peer before accepting
+the preface. Ordinary gateway routing is not a fallback for attributed traffic.
+
+One attributed generation admits exactly one exec and its descendants. It
+rejects PTYs, Ports, writes through the file API, and another exec. Completion,
+expiry, cancellation, or connection loss retires its compute; the Runner closes
+listeners and active relays before releasing network resources. Only the
+Workspace carries forward. See [Profiles and authorization](profiles-and-authorization.md)
+and the [gateway deployment contract](../operations/deployment.md).
 
 ## DNS
 

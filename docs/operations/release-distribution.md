@@ -17,7 +17,7 @@ A SecondBox release is a SemVer Git tag plus the locally built files attached to
 | gVisor runner | `ghcr.io/secondstack-ai/secondbox/runner-gvisor:vVERSION` |
 | gVisor artifacts | `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts:vVERSION` |
 | gVisor materialization | `secondbox-VERSION-gvisor-materialization.json` |
-| gVisor qualification evidence | `secondbox-VERSION-gvisor-qualification-evidence.json`, `secondbox-VERSION-gvisor-pod-qualification-evidence.json` |
+| gVisor qualification evidence | `secondbox-VERSION-gvisor-qualification-evidence.json`; full releases also carry `secondbox-VERSION-gvisor-pod-qualification-evidence.json` |
 | CLI binary | `secondbox_VERSION_OS_ARCH` |
 | Deployment binary | `secondbox-deploy_VERSION_OS_ARCH` |
 | Guided-install bootstrap | versioned `releases/download/vVERSION/install.sh`; stable `releases/latest/download/install.sh` |
@@ -26,33 +26,47 @@ The release also includes checksums, the OpenAPI document, the Go module archive
 
 ## Supported platforms
 
-`secondbox` and `secondbox-deploy` ship for `linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64`. The guided installer, installer-tools image, Firecracker Runner, microVM artifacts, gVisor Runner, and gVisor artifacts support `linux/amd64`. The control-plane image supports `linux/amd64` and `linux/arm64`.
+`secondbox` and `secondbox-deploy` ship for `linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64`. The guided installer, installer-tools image, Firecracker Runner, microVM artifacts, gVisor Runner, and gVisor artifacts support `linux/amd64`. Default releases build the control-plane image for `linux/amd64`; `just release VERSION --full` also builds `linux/arm64`. Read the selected release manifest for its actual image platform matrix.
 
-## Publishing
+## Qualification and publication
 
-From clean `main` equal to fetched `origin/main` on the configured release host:
+Start from a clean checkout of `origin/main`, with the reviewed release-host
+configuration described in [release operator setup](release-operator-setup.md):
 
 ```sh
-just release VERSION        # lean amd64 release
-# Or: just release VERSION --full
-# After a gate-only failure: just release VERSION --resume
+just release VERSION
+# Or select the full matrix for this release:
+just release VERSION --full
+# After a gate-only failure with a successful build and scenarios:
+just release VERSION --resume
 ```
 
-The driver qualifies and builds concurrently, binds commit-exact scenario evidence
-into an installer candidate, qualifies that candidate, then stages the final
-release from the retained checksummed build. Lean releases require Firecracker
-and gVisor host evidence; full releases also require no-KVM pod evidence and all
-installer modes. Candidate manifests cannot be published.
+Choose the default or full tier for a new version; use `--resume` only to recover
+a gate-only failure with the retained build and commit-exact scenario evidence. The flow creates the local tag,
+qualifies the source, builds the artifacts, stages a non-publishable installer
+candidate, qualifies those bytes in disposable guests, and stages the final
+manifest. Publication remains an explicit continuation printed by the successful
+flow; do not independently tag or upload an unqualified build.
 
-Only after staging succeeds, execute the printed tag-push and
-`just release-upload VERSION OUTPUT_DIR` commands in order. Upload reads
-`docs/releases/vVERSION.md` from the tag when present, otherwise uses a placeholder.
-An optional third `NOTES_FILE` argument supplies an explicit body. It appends the
-fenced install and SDK footer, sets the draft body on creation or retry, and dispatches
-the publisher. Publication preserves that body and publishes the staged bytes
-with npm provenance; GitHub Actions does not rebuild or qualify them.
+The default tier qualifies Firecracker and local gVisor, builds amd64 images,
+and runs the Btrfs-image installer guest. The full tier adds the nightly scenario
+matrix, no-KVM gVisor pod evidence, the arm64 control-plane image, and all three
+installer modes. A default release does not claim the full tier's coverage.
 
-See [release operator setup](release-operator-setup.md) for setup, the user-service
-launch command, and the manual mechanics appendix for hosts without automation.
-Use the [release skill](../../.agents/skills/secondbox-release/SKILL.md) for release
-decisions, ownership checks, recovery and verification.
+Candidate and final staging require evidence for the selected tier and exact
+source commit. Installer evidence binds the candidate's qualification-subject
+digest to the final manifest. Staging rejects absent or mismatched evidence;
+the publisher rejects candidate manifests. GitHub Actions publishes the staged
+bytes and supplies npm provenance without rebuilding or qualifying them.
+
+Upload reads `docs/releases/vVERSION.md` from the tag when present, otherwise
+uses a placeholder. An optional third `NOTES_FILE` argument supplies the body.
+It appends the install and SDK footer, sets the draft body on creation or retry,
+and dispatches the publisher, which preserves that body.
+
+Use the [release skill](../../.agents/skills/secondbox-release/SKILL.md) for
+release decisions, recovery, and publication verification.
+
+See [scenario qualification](scenario-qualification.md) for the host contracts
+and [release operator setup](release-operator-setup.md) for logs, failed-run
+handling, and publication.

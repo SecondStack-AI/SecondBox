@@ -1,8 +1,9 @@
 # Backup and recovery
 
-SecondBox does not transport, catalog, or reconstruct runner-local Workspace
-images. A PostgreSQL recovery cannot recover a Sandbox whose home runner
-filesystem was lost.
+SecondBox does not provide a Workspace backup catalog or reconstruct lost
+runner-local images. Its explicit stopped-Sandbox relocation transfers one
+intact Workspace between Runners; it is not a backup. PostgreSQL recovery cannot
+recover a Sandbox whose home Runner filesystem was lost.
 
 `scripts/backup.sh` creates a quiescent control-plane recovery bundle containing
 the `secondbox` PostgreSQL schema and database fencing evidence. That schema

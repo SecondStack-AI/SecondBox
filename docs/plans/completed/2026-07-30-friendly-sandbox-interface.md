@@ -1,12 +1,16 @@
 ---
 title: Friendly Sandbox Interface
 date: 2026-07-30
-status: complete-except-scenario-gate
+status: implemented
 owner: SecondStack
 provenance: SecondBox client-ergonomics gap analysis against microsandbox, 2026-07-30
 ---
 
 # Plan: Friendly Sandbox Interface
+
+## Archive outcome
+
+Implemented in the CLI and Go SDK. The later [target Sandbox shape plan](2026-09-12-target-sandbox-shape.md) extends these verbs and records real CLI scenario coverage. The original scenario-gate status below is historical.
 
 ## Outcome
 

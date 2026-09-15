@@ -10,7 +10,7 @@ bodies, or response decoders.
 | --- | --- | --- | --- |
 | Validate a Profile | `Client.ValidateProfile` | `SecondBox.validateProfile` | Return only an enabled named Profile; preserve immutable revision identity. |
 | Create/adopt a Sandbox | `CreateSandbox`, `AdoptSandbox` | `createSandbox`, `adoptSandbox` | Return a caller-owned handle; never delete implicitly. |
-| List Sandboxes | `ListSandboxes` | `listSandboxes` | Typed bounded pagination and deterministic Metadata containment filters. |
+| List Sandboxes | `ListSandboxes` | `listSandboxes` | Typed bounded pagination with Metadata, state, and ID filters bound to the cursor. |
 | Replace Metadata | `SandboxHandle.UpdateMetadata` | `SandboxHandle.updateMetadata` | Fence against the handle's observed resource revision; never refresh and replay. |
 | Lifecycle | `Start`, `Drain`, `Stop`, `Relocate`, `Restore`, `Delete` | matching handle methods | Generate one idempotency key when absent and use the observed revision unless an explicit expected revision is supplied. |
 | Wait/poll | `Wait`, `WaitFor`, `WaitOperation` | matching methods | Require caller cancellation/deadline and bounded individual polls; surface terminal failures. |

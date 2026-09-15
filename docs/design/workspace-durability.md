@@ -3,12 +3,14 @@
 ## Storage observations
 
 The WorkspaceStore periodically reads current-image manifests and inode block
-counts without acquiring the compute writer lock, opening a compute attachment,
-mounting an image, or enumerating guest files. One Runner heartbeat visits at
-most 64 Workspace directories, continuing through the directory on subsequent
-heartbeats. It reports only logical identities, generation, measurement time,
-allocated bytes, and bounded failure reasons on the authenticated control
-channel. Pressure evidence reuses the backend's existing admission controller.
+counts and bounded extent metadata without acquiring the compute writer lock,
+opening a compute attachment, mounting an image, or enumerating guest files.
+One background scan visits at most 64 Workspace directories, continuing from
+its cursor on later scans. Heartbeats collect completed results and start at
+most one scan at a time; slow FIEMAP calls do not block heartbeat delivery.
+Reports contain logical identities, generation, measurement time, allocated
+bytes, optional exclusive bytes, and bounded failure reasons on the authenticated
+control channel. Pressure evidence reuses the backend's admission controller.
 
 PostgreSQL accepts measurements only from the Workspace's current home and for
 its current generation. Observation updates do not change Sandbox revision,

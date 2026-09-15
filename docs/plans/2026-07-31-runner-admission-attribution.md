@@ -8,6 +8,10 @@ provenance: Qualified lifecycle evidence through the 2026-08-02 bounded-claim ca
 
 # Plan: Runner Admission Attribution and Dispatch Batching
 
+## Remaining work
+
+Dispatch batching and timing attribution are implemented. The admission target remains open: the final recorded unsaturated `runner_admission` p95 is 50 ms against a 25 ms gate. The experiments below are historical evidence; do not reintroduce the rejected eager-dispatch path.
+
 ## Outcome
 
 Make the assignment-to-runner boundary truthful, remove avoidable scheduler
@@ -218,7 +222,7 @@ server shutdown. Commit `05bbd8e` removed that lock from placement, restored
 owner-side claims, made exhausted contention explicitly retryable, and added
 full-jitter backoff. Two independent ten-rung qualifications then admitted
 640/640 arrivals with no shutdown; 24 and 26 serialization failures were
-absorbed. See `docs/operations/assignment-dispatch-stall.md`.
+absorbed. See `docs/plans/evidence/assignment-dispatch-stall.md`.
 
 The race-safe current `main` was rebaselined with 30 fixed arrivals at 0.25/s,
 maximum in-flight 1, KVM, Btrfs Workspaces, and the same signed bundle. All 30
