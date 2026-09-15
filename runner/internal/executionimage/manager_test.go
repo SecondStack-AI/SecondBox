@@ -271,7 +271,7 @@ func TestImageDownloadStagesTemporaryLayersInCache(t *testing.T) {
 	root := t.TempDir()
 	archive := filepath.Join(root, "image.tar")
 	skopeo := filepath.Join(t.TempDir(), "skopeo")
-	script := "#!/bin/sh\nset -eu\ntest \"$TMPDIR\" = \"$1\"\nprintf layer > \"$TMPDIR/temporary-layer\"\nprintf archive > \"$1/image.tar\"\n"
+	script := "#!/bin/sh\nset -eu\ntest \"$1\" = --tmpdir\ntest \"$2\" = \"$3\"\nprintf layer > \"$2/temporary-layer\"\nprintf archive > \"$3/image.tar\"\n"
 	if err := os.WriteFile(skopeo, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

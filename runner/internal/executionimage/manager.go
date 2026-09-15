@@ -276,9 +276,8 @@ func (manager *Manager) reservePreparationCapacity(
 }
 
 func (manager *Manager) downloadArchive(ctx context.Context, archivePath string, args []string) ([]byte, error) {
-	command := exec.CommandContext(ctx, manager.skopeoPath, args...)
 	// Skopeo's temporary layers belong in the reserved cache staging area.
-	command.Env = append(os.Environ(), "TMPDIR="+filepath.Dir(archivePath))
+	command := exec.CommandContext(ctx, manager.skopeoPath, append([]string{"--tmpdir", filepath.Dir(archivePath)}, args...)...)
 	var output boundedLogWriter
 	command.Stdout = &output
 	command.Stderr = &output
