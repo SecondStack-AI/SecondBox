@@ -96,7 +96,7 @@ func TestSandboxRequestedResourcesHTTPAndQuota(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					response = lifecycleHTTPRequest(t, server.URL, credential, http.MethodPost, "/v1/sandboxes/"+sandbox.ID+":start", "resource-start-"+strconv.Itoa(index), strconv.FormatInt(sandbox.Revision, 10), "", nil)
+					response = lifecycleHTTPRequest(t, server.URL, credential, http.MethodPost, "/v1/sandboxes/"+sandbox.ID+":start", "resource-start-"+strconv.Itoa(index), strconv.FormatInt(sandbox.Revision, 10), "", contracts.StartSandboxRequest{Image: testExecutionImage()})
 					if response.StatusCode != http.StatusAccepted {
 						t.Fatalf("start status=%d body=%s", response.StatusCode, readResponse(t, response))
 					}

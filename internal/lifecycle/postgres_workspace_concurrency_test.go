@@ -83,11 +83,11 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
-			reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
+			lifecycle_request_metadata_json,reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
 		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-automatic-start'),
 			'sandbox-automatic-start','tenant','subject','profile-automatic-start',
 			'revision-automatic-start','stopped','running',2,
-			'workspace-automatic-start','','{}','{}','worker-automatic-start',$3,5,$2,$2
+			'workspace-automatic-start','','{}','{}','{"executionImageReference":"registry.example/secondbox/lifecycle-test:stable"}','worker-automatic-start',$3,5,$2,$2
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		string(specJSON),

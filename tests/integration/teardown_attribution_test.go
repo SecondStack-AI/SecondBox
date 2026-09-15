@@ -576,13 +576,15 @@ func (fixture *teardownFixture) completeAssignmentReady(t *testing.T, sandboxID 
 	fixture.recordEvent(t, runnercontrol.EventAssignment, &runnerv1.RunnerToControlPlane{
 		Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 			AssignmentResult: &runnerv1.AssignmentResult{
-				MessageId:        fmt.Sprintf("teardown-assignment-ready-%d", sequence),
-				Sequence:         sequence,
-				Fence:            proto.Clone(assignment.Fence).(*runnerv1.AssignmentFence),
-				Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
-				BackendKind:      "firecracker",
-				BackendReference: "compute-teardown-attribution",
-				Correlation:      proto.Clone(assignment.Correlation).(*runnerv1.Correlation),
+				MessageId:               fmt.Sprintf("teardown-assignment-ready-%d", sequence),
+				Sequence:                sequence,
+				Fence:                   proto.Clone(assignment.Fence).(*runnerv1.AssignmentFence),
+				Terminal:                runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+				BackendKind:             "firecracker",
+				BackendReference:        "compute-teardown-attribution",
+				RequestedImageReference: assignment.ExecutionImage.Reference,
+				ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				Correlation:             proto.Clone(assignment.Correlation).(*runnerv1.Correlation),
 			},
 		},
 	})

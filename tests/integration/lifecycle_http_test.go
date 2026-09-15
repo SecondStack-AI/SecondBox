@@ -112,7 +112,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	start := lifecycleHTTPRequest(
 		t, server.URL, credential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-start",
-		strconv.FormatInt(sandbox.Revision, 10), "", nil,
+		strconv.FormatInt(sandbox.Revision, 10), "", contracts.StartSandboxRequest{Image: testExecutionImage()},
 	)
 	if start.StatusCode != http.StatusAccepted || start.Header.Get("Idempotency-Replayed") != "false" {
 		t.Fatalf("start status=%d replay=%q body=%s", start.StatusCode, start.Header.Get("Idempotency-Replayed"), readResponse(t, start))
@@ -122,7 +122,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	replay := lifecycleHTTPRequest(
 		t, server.URL, credential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-start",
-		strconv.FormatInt(sandbox.Revision, 10), "", nil,
+		strconv.FormatInt(sandbox.Revision, 10), "", contracts.StartSandboxRequest{Image: testExecutionImage()},
 	)
 	if replay.StatusCode != http.StatusAccepted || replay.Header.Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("start replay status=%d replay=%q body=%s", replay.StatusCode, replay.Header.Get("Idempotency-Replayed"), readResponse(t, replay))
@@ -135,7 +135,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	isolated := lifecycleHTTPRequest(
 		t, server.URL, otherCredential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-isolated",
-		strconv.FormatInt(sandbox.Revision, 10), "", nil,
+		strconv.FormatInt(sandbox.Revision, 10), "", contracts.StartSandboxRequest{Image: testExecutionImage()},
 	)
 	assertProblem(t, isolated, http.StatusNotFound, "not_found")
 

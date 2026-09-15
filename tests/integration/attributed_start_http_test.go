@@ -71,10 +71,10 @@ func TestAttributedStartHTTPAdmissionAndReplay(t *testing.T) {
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 	for _, invalid := range []any{
-		map[string]any{"attributedExecution": nil},
-		map[string]any{"attributedExecution": map[string]any{}},
-		map[string]any{"gateway": "caller-selected"},
-		map[string]any{"attributedExecution": map[string]any{"authorizationRef": "command", "expiresAt": "2026-07-28T12:00:45Z", "gateway": "caller-selected"}},
+		map[string]any{"image": testExecutionImage(), "attributedExecution": nil},
+		map[string]any{"image": testExecutionImage(), "attributedExecution": map[string]any{}},
+		map[string]any{"image": testExecutionImage(), "gateway": "caller-selected"},
+		map[string]any{"image": testExecutionImage(), "attributedExecution": map[string]any{"authorizationRef": "command", "expiresAt": "2026-07-28T12:00:45Z", "gateway": "caller-selected"}},
 	} {
 		response := lifecycleHTTPRequest(t, server.URL, credential, http.MethodPost,
 			"/v1/sandboxes/"+sandbox.ID+":start", "attributed-http-invalid", strconv.FormatInt(sandbox.Revision, 10), "", invalid)
