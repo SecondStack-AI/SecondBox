@@ -7,3 +7,6 @@ node_modules/
 /runner/bin/
 /runner/tmp/
 /runner/releases/
+
+/.worklog/
+/.claude/worktrees/

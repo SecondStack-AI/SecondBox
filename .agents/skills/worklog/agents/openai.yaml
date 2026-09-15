@@ -1,0 +1,4 @@
+interface:
+  display_name: "Worklog"
+  short_description: "Read and append the shared session ledger in .worklog/"
+  default_prompt: "Use $worklog to record what this session did and what the next session must know."

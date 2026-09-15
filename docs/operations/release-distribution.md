@@ -30,26 +30,29 @@ The release also includes checksums, the OpenAPI document, the Go module archive
 
 ## Publishing
 
-From a clean checkout at the release tag:
+From clean `main` equal to fetched `origin/main` on the configured release host:
 
 ```sh
-just test-scenario
-# on the no-KVM qualification host at the same tag, per gvisor-runtime.md
-just test-scenario-gvisor
-just test-scenario-gvisor-pod
-export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE=... SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE=...
-just release-candidate VERSION CANDIDATE_OUTPUT_DIR
-just test-installer-qualified
-just release-stage VERSION OUTPUT_DIR
-just release-upload VERSION OUTPUT_DIR
+just release VERSION        # lean amd64 release
+# Or: just release VERSION --full
+# After a gate-only failure: just release VERSION --resume
 ```
 
-Candidate and final staging refuse to proceed without both gVisor evidence files; the [gVisor runtime](gvisor-runtime.md) qualification section is the complete procedure for producing them (build directory, workspace root, and pod placement inputs).
+The driver qualifies and builds concurrently, binds commit-exact scenario evidence
+into an installer candidate, qualifies that candidate, then stages the final
+release from the retained checksummed build. Lean releases require Firecracker
+and gVisor host evidence; full releases also require no-KVM pod evidence and all
+installer modes. Candidate manifests cannot be published.
 
-Run the scenario suite, build the non-publishable installer candidate, point `SECONDBOX_INSTALLER_RELEASE_DIRECTORY` at that candidate, and then run installer qualification on the qualified release host. The candidate contains the exact binaries, digest-pinned images, bundles, and protocol windows but no installer-evidence claim. Installer qualification records their shared qualification-subject digest. `release-stage` refuses absent, dirty, commit-mismatched, or release-mismatched evidence and emits the final publishable manifest; scenario evidence must name `HEAD` exactly. `release-publish` rejects candidate manifests.
+Only after staging succeeds, execute the printed tag-push and
+`just release-upload VERSION OUTPUT_DIR` commands in order. Upload reads
+`docs/releases/vVERSION.md` from the tag when present, otherwise uses a placeholder.
+An optional third `NOTES_FILE` argument supplies an explicit body. It appends the
+fenced install and SDK footer, sets the draft body on creation or retry, and dispatches
+the publisher. Publication preserves that body and publishes the staged bytes
+with npm provenance; GitHub Actions does not rebuild or qualify them.
 
-Installer qualification also requires the repository's `scripts/installer-qualification-driver`, the explicitly pinned Ubuntu image and SHA-256 documented in [scenario qualification](scenario-qualification.md), and a dedicated existing XFS/Btrfs host directory. The driver performs all guest mutation inside uniquely named disposable libvirt resources and uses a candidate-only local release transport. It does not publish candidate images or weaken the normal installer's HTTPS and immutable-registry requirements.
-
-The installer candidate is the only pre-final phase and cannot be published. There is no separate qualification-attestation or hosted finalization phase. GitHub Actions does not rebuild or qualify the release; it publishes the staged bytes and supplies npm provenance.
-
-See [release operator setup](release-operator-setup.md) for one-time permissions and the exact operator commands.
+See [release operator setup](release-operator-setup.md) for setup, the user-service
+launch command, and the manual mechanics appendix for hosts without automation.
+Use the [release skill](../../.agents/skills/secondbox-release/SKILL.md) for release
+decisions, ownership checks, recovery and verification.

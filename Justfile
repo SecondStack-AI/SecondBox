@@ -107,8 +107,8 @@ test-release-stage:
 test-release-workflow:
     scripts/test-release-workflow.sh
 
-release-upload version output_dir:
-    scripts/release-upload.sh "{{version}}" "{{output_dir}}"
+release-upload version output_dir notes_file="":
+    scripts/release-upload.sh "{{version}}" "{{output_dir}}" "{{notes_file}}"
 
 test-firecracker:
     scripts/test-firecracker.sh
@@ -197,6 +197,7 @@ preship: test-non-kvm
 qualify *args:
     scripts/qualify.sh {{args}}
 
+# --resume requalifies only the gates and continues from the retained build.
 release version *flags:
     scripts/release.sh "{{version}}" {{flags}}
 
