@@ -140,8 +140,25 @@ func TestStartupFailureCleanupRetriesAndFailsWithoutRunnerReceipt(t *testing.T) 
 }
 
 func TestExhaustedStopRecoveryRebindsStartBeforeProfileRejection(t *testing.T) {
+	for _, runnerLoss := range []bool{false, true} {
+		t.Run(fmt.Sprintf("runner_loss=%t", runnerLoss), func(t *testing.T) {
+			testExhaustedStopRecovery(t, runnerLoss)
+		})
+	}
+}
+
+func testExhaustedStopRecovery(t *testing.T, runnerLoss bool) {
+	t.Helper()
 	fixture := newRecoveryFixture(t, "ready")
 	fixture.step(t, lifecycle.ActionStopInstance)
+	if runnerLoss {
+		fixture.exec(t, `UPDATE secondbox.lifecycle_effects SET id='runner-loss-stop-assignment' WHERE sandbox_id='sandbox';
+			UPDATE secondbox.workspaces SET mutation_id='runner-loss-stop-assignment',mutation_effect_id='runner-loss-stop-assignment',
+			mutation_operation_id='runner-loss-stop-assignment',mutation_state='advancing' WHERE id='workspace';
+			UPDATE secondbox.assignments SET state='released' WHERE id='assignment';
+			UPDATE secondbox.instances SET state='stopped',guest_liveness='lost' WHERE id='instance';
+			UPDATE secondbox.runner_commands SET kind='local-workspace',assignment_id='runner-loss-stop-assignment',payload='receipt-command'::bytea;`)
+	}
 	fixture.step(t, lifecycle.ActionStopInstance)
 	fixture.step(t, lifecycle.ActionStopInstance)
 	fixture.step(t, lifecycle.ActionFail)
@@ -160,6 +177,13 @@ func TestExhaustedStopRecoveryRebindsStartBeforeProfileRejection(t *testing.T) {
 	}
 	if state != "queued" || retries != 2 || limit != 3 {
 		t.Fatalf("renewal state=%s retries=%d limit=%d", state, retries, limit)
+	}
+	var effectCount int
+	if err := fixture.pool.QueryRow(t.Context(), `SELECT count(*) FROM secondbox.lifecycle_effects WHERE sandbox_id='sandbox'`).Scan(&effectCount); err != nil {
+		t.Fatal(err)
+	}
+	if effectCount != 1 {
+		t.Fatalf("recovery created a second stop effect: %d", effectCount)
 	}
 	fixture.exec(t, `UPDATE secondbox.instances SET state='stopped',guest_liveness='stopped' WHERE id='instance';
 		UPDATE secondbox.assignments SET state='released' WHERE id='assignment';

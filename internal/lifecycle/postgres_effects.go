@@ -918,10 +918,25 @@ func (broker *PostgresEffectBroker) queueStop(
 	generationText := fmt.Sprintf("%d", generation)
 	effectID := stableEffectID("stop-effect", claim.SandboxID, generationText)
 	commandID := stableEffectID("stop-command", claim.SandboxID, generationText)
-	if locked.Workspace.Mutation.Kind == "stop" && locked.Workspace.Mutation.EffectID != "" {
-		// Runner-loss recovery can own the same generation boundary through
-		// an effect created by the Assignment reconciler.
-		effectID = locked.Workspace.Mutation.EffectID
+	// Retry exhaustion releases the Workspace mutation, but the existing
+	// effect still owns its command history and retry counter. Recover it from
+	// durable generation authority, including Assignment-created runner-loss
+	// effects, before acquiring a new mutation.
+	var mutationEffectID, existingEffectID string
+	if locked.Workspace.Mutation.Kind == "stop" {
+		mutationEffectID = locked.Workspace.Mutation.EffectID
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM secondbox.lifecycle_effects
+		WHERE sandbox_id=$1 AND generation=$2 AND assignment_id=$3 AND kind='stop'
+		  AND ($4='' OR id=$4)
+		ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE`,
+		claim.SandboxID, generation, assignmentID, mutationEffectID,
+	).Scan(&existingEffectID)
+	if err == nil {
+		effectID = existingEffectID
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("SecondBox lifecycle stop effect authority lookup failed: %w", err)
 	}
 	operationID, requestID = stopCorrelation(operationID, requestID, effectID)
 	workspace := locked.Workspace
