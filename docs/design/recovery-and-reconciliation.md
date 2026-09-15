@@ -114,9 +114,30 @@ revision:
   pending start or stop;
 - Snapshot delete may run while compute is active only when no restore references
   it;
-- start waits while stop or restore owns the slot;
-- delete dominates new start, Snapshot, restore, touch, and data-plane admission,
+- new start requests conflict while stop or restore owns the slot;
+- an accepted delete dominates new start, Snapshot, restore, touch, and data-plane admission,
   but remains pending while the home Runner is unavailable.
+
+Deletion dominance begins when its intent is accepted. A new DELETE cannot
+supersede or queue behind an existing stop mutation: it returns
+`409 workspace_mutation_conflict` without changing desired state or creating a
+delete Operation. The stop retains its stable effect, fence correlation, and
+mutation slot through local generation advance and `finish_stop`. An explicit
+stop Operation completes at that commit; it is not cancelled by a rejected
+DELETE. An automatic stop need not have a public stop Operation to poll.
+Clients re-read and retry within a bounded deadline as described in
+[API conventions](api-conventions.md#lifecycle-semantics).
+
+Delete may be accepted before stop acquires the slot, and its reconciliation
+then traverses the ordinary stop path. The existing create/clone exception also
+accepts delete intent while initial Workspace creation is outstanding; it does
+not discard that mutation or its receipt requirements. Neither case authorizes
+replacing an in-flight stop. Runner loss alone is not stop completion and cannot
+justify a tombstone without the required evidence. Stop delivery retry exhaustion
+records failure and releases the mutation slot, but retains the Instance and its
+generation. A subsequent recovery intent still retires that generation through
+the stop fence and receipt path before starting or deleting; it cannot bypass
+retirement because the slot is free.
 
 Runner-side Workspace locking independently enforces one writer. It is not
 weakened by a control-plane race or replica failure.
