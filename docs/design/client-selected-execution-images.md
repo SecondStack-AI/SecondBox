@@ -6,9 +6,10 @@ The application owns its userspace image and builds it with a pinned SecondBox b
 The signed bundle includes the existing guest agent, not the public `secondbox` CLI.
 SecondBox uses the existing signed manifest and guest handshake; it does not require matching builder and host release numbers.
 
-Create requires `image.reference`, a fully qualified OCI tag or digest.
-Start accepts an optional image.
-An omitted image reuses the Sandbox's pinned digest, resolved after idempotency replay inside the admission transaction.
+Create accepts an optional `image.reference`, a fully qualified OCI tag or digest.
+Omitting the image selects the Profile's fixed assets; an explicitly malformed image is rejected.
+Start also accepts an optional image.
+Omitting the image on start reuses the Sandbox's pinned digest, resolved after idempotency replay inside the admission transaction.
 Before the first preparation, it uses the explicit image recorded at creation.
 The first verified preparation establishes the initial digest pin, even if guest startup later fails.
 Persisted Sandboxes without a selected-image identity retain their original immutable Profile assets.
