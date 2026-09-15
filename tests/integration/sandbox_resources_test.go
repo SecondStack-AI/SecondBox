@@ -319,7 +319,7 @@ func TestSandboxFlexibleResourcesHTTPQuotaAndResume(t *testing.T) {
 	if _, _, err := controlPlane.ReviseProfileAtRevisionIdempotent(t.Context(), admin, profile.Name, "revise-snapshot-resume", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision); err != nil {
 		t.Fatal(err)
 	}
-	response = authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resume-refused", map[string]any{"profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"memoryBytes": 128 << 20}})
+	response = authenticatedJSONRequest(t, http.MethodPost, server.URL+"/v1/sandboxes", credential, "resume-refused", map[string]any{"image": testExecutionImage(), "profile": profile.Name, "metadata": map[string]string{}, "resources": map[string]int64{"memoryBytes": 128 << 20}})
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("resume status=%d body=%s", response.StatusCode, readResponse(t, response))
 	}
