@@ -25,8 +25,11 @@ The PR tier runs the ten non-KVM gates concurrently with Firecracker shards
 PR runs do not merge release evidence and may use a dirty working tree.
 The release tier requires a clean tree and runs gates alongside four-way
 Firecracker and local gVisor host suites. Configure
-`QUALIFY_GVISOR_HOST_BUILD_ROOT` with the pinned `bin/runsc` and `rootfs/`
-inputs; automation rebuilds the guest agent. gVisor uses systrap, so KVM may
+`QUALIFY_GVISOR_HOST_BUILD_ROOT` as a dedicated cache path; automation creates it,
+prepares pinned runsc and rootfs assets, and builds the guest agent from this
+checkout using the existing artifact builder. See the
+[gVisor preparation contract](gvisor-runtime.md#qualification-before-enrollment)
+for ownership, verification, and retention. gVisor uses systrap, so KVM may
 be present on this host. `QUALIFY_MAX_STACKS` (default 4, range 1..64) bounds
 simultaneous stacks across both backends, including teardown. Gates start first;
 `test` reserves one slot until it finishes. `QUALIFY_GATES_FIRST=1` instead waits

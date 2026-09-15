@@ -4,31 +4,25 @@ umask 077
 fail() { echo "SecondBox gVisor qualification: $*" >&2; exit 1; }
 
 if [[ "${1:-}" == --host ]]; then
-  : "${QUALIFY_GVISOR_HOST_BUILD_ROOT:?set QUALIFY_GVISOR_HOST_BUILD_ROOT}"
-  [[ "$QUALIFY_GVISOR_HOST_BUILD_ROOT" == /* && -d "$QUALIFY_GVISOR_HOST_BUILD_ROOT/rootfs" && -x "$QUALIFY_GVISOR_HOST_BUILD_ROOT/bin/runsc" && ! -L "$QUALIFY_GVISOR_HOST_BUILD_ROOT" ]] || fail 'invalid local gVisor build root'
   [[ "${SECONDBOX_RUNNER_WORKSPACE_ROOT:-}" == /* && -d "$SECONDBOX_RUNNER_WORKSPACE_ROOT" ]] || fail 'local gVisor workspace root must exist'
   for tool in docker go jq sha512sum findmnt flock; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
-  pinned="$(sed -n 's/^readonly RUNSC_SHA512="\([a-f0-9]\{128\}\)"$/\1/p' runner/scripts/fetch-runsc.sh)"
-  [[ -n "$pinned" && "$(sha512sum "$QUALIFY_GVISOR_HOST_BUILD_ROOT/bin/runsc" | cut -d' ' -f1)" == "$pinned" ]] || fail 'local runsc differs from the reviewed pin'
   filesystem="$(findmnt -n -o FSTYPE --target "$SECONDBOX_RUNNER_WORKSPACE_ROOT")"
   [[ "$filesystem" == xfs || "$filesystem" == btrfs ]] || fail 'local gVisor workspace must be XFS or Btrfs'
-  docker info >/dev/null || fail 'Docker unavailable'
-  if [[ "${2:-}" == --preflight ]]; then exit; fi
-  # All shards share immutable inputs. Serialize preparation before readers start.
-  exec 7>"$QUALIFY_GVISOR_HOST_BUILD_ROOT/qualify.lock"
-  flock 7
-  build_id="${QUALIFY_GVISOR_BUILD_ID:-$(git rev-parse HEAD)-$$}"
-  if [[ ! -f "$QUALIFY_GVISOR_HOST_BUILD_ROOT/qualify-build" || "$(cat "$QUALIFY_GVISOR_HOST_BUILD_ROOT/qualify-build")" != "$build_id" ]]; then
-    agent="$(mktemp "$QUALIFY_GVISOR_HOST_BUILD_ROOT/bin/guest-agent.XXXXXX")"
-    (cd runner && CGO_ENABLED=0 go build -trimpath -o "$agent" ./cmd/secondbox-guest-agent)
-    chmod 0755 "$agent"
-    mv "$agent" "$QUALIFY_GVISOR_HOST_BUILD_ROOT/bin/secondbox-guest-agent"
-    (cd runner && go run ./cmd/secondbox-prepare-gvisor-flat-root "$QUALIFY_GVISOR_HOST_BUILD_ROOT/rootfs")
-    echo "$build_id" >"$QUALIFY_GVISOR_HOST_BUILD_ROOT/qualify-build"
+  if [[ "${2:-}" == --preflight ]]; then
+    exec scripts/prepare-gvisor-qualification.sh --preflight
   fi
-  flock -u 7
-  export SECONDBOX_GVISOR_LINUX_BUILD="$QUALIFY_GVISOR_HOST_BUILD_ROOT"
-  exec scripts/test-scenario-gvisor.sh
+  build="$(scripts/prepare-gvisor-qualification.sh)"
+  # Preparation verified the exported materialization and preserved the numeric
+  # owners covered by its flat-root digest. Consume it without rewriting assets.
+  export SECONDBOX_SCENARIO_COMPUTE_BACKEND=gvisor
+  export SECONDBOX_SCENARIO_GVISOR_BUILD="$build"
+  export SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION="$build/materialization.json"
+  SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST="$(jq -er .materializationDigest "$build/identity.json")"
+  SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST="$(jq -er .key.runtimeManifestDigest "$build/materialization.json")"
+  SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST="$(jq -er .key.toolchainManifestDigest "$build/materialization.json")"
+  export SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST
+  export SECONDBOX_SCENARIO_ARTIFACT_MANIFEST_DIGEST="$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST"
+  exec scripts/test-scenario.sh
 fi
 
 vm_idle() {

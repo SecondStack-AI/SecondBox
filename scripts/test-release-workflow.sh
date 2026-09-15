@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+"$repo_root/scripts/test-prepare-gvisor-qualification.sh"
 workflow="$repo_root/.github/workflows/release.yml"
 stager="$repo_root/scripts/release-stage.sh"
 uploader="$repo_root/scripts/release-upload.sh"
