@@ -1023,6 +1023,8 @@ func recordDurableEvent(
 	now time.Time,
 ) error {
 	switch event.Kind {
+	case EventImagePreparation:
+		return recordImagePreparationResult(ctx, tx, event.RunnerID, event.Message.GetPrepareImageResult(), now.UTC())
 	case EventAssignment:
 		if err := recordAssignmentEvent(ctx, tx, event.RunnerID, event.Message, now.UTC()); err != nil {
 			return err
@@ -3703,8 +3705,7 @@ func recordAssignmentEvent(
 		}
 		if state == "ready" {
 			if result.Terminal != runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY ||
-				result.BackendKind == "" || result.BackendReference == "" ||
-				result.RequestedImageReference == "" || result.ResolvedImageDigest == "" {
+				result.BackendKind == "" || result.BackendReference == "" {
 				return ErrStaleAssignmentEvidence
 			}
 			var backendKind, backendReference, requestedImageReference, resolvedImageDigest string
@@ -3736,9 +3737,15 @@ func recordAssignmentEvent(
 			return err
 		}
 		if result.Terminal == runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY {
-			if result.BackendKind == "" || result.BackendReference == "" ||
-				result.RequestedImageReference == "" || result.ResolvedImageDigest == "" {
+			if result.BackendKind == "" || result.BackendReference == "" {
 				return errors.New("SecondBox runner ready AssignmentResult requires backend evidence")
+			}
+			if result.RequestedImageReference != "" {
+				if len(result.ResolvedImageDigest) != 71 || !strings.HasSuffix(result.RequestedImageReference, "@"+result.ResolvedImageDigest) {
+					return errors.New("SecondBox ready execution image does not match the assigned digest")
+				}
+			} else if result.ResolvedImageDigest != "" {
+				return errors.New("SecondBox fixed Profile assignment reported an unassigned execution image")
 			}
 			if _, err := tx.Exec(ctx, `
 				UPDATE secondbox.assignments
@@ -3762,6 +3769,10 @@ func recordAssignmentEvent(
 			}
 			if instanceUpdate.RowsAffected() != 1 {
 				return errors.New("SecondBox runner ready AssignmentResult changed the requested execution image")
+			}
+			if _, err := tx.Exec(ctx, `UPDATE secondbox.sandboxes SET execution_image_reference=$2,execution_image_digest=$3 WHERE id=$1`,
+				result.Fence.SandboxId, result.RequestedImageReference, result.ResolvedImageDigest); err != nil {
+				return fmt.Errorf("SecondBox ready Sandbox image pin update failed: %w", err)
 			}
 			command, err := tx.Exec(ctx, `
 				UPDATE secondbox.workspaces AS workspace

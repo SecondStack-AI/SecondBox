@@ -75,6 +75,7 @@ type Config struct {
 	NetworkPolicyEgressContexts          networkpolicy.EgressContextConfig
 	NetworkPolicyDNSUpstream             netip.AddrPort
 	ExecutionImageCacheRoot              string
+	ExecutionImageFetcherSocket          string
 	ExecutionImageRegistryAllowlist      []string
 	ExecutionImageRegistryCertificates   string
 	ExecutionImagePublicKeyPath          string
@@ -86,6 +87,9 @@ type Config struct {
 
 // VerifyMicroVMArtifactDirectory verifies one selected bundle against operator trust.
 func VerifyMicroVMArtifactDirectory(ctx context.Context, directory, publicKeyPath, publicKeySHA256 string) error {
+	if !filepath.IsAbs(publicKeyPath) || len(publicKeySHA256) != sha256.Size*2 {
+		return fmt.Errorf("SecondBox execution image verification requires an explicit signing key and fingerprint")
+	}
 	verification := &Config{
 		MicroVMKernelPath:          filepath.Join(directory, "kernel"),
 		MicroVMRootfsPath:          filepath.Join(directory, "rootfs.ext4"),

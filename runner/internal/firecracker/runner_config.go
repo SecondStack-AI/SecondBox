@@ -112,6 +112,10 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	executionImageFetcherSocket, err := required("SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET")
+	if err != nil {
+		return nil, err
+	}
 	executionImageRegistriesRaw, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES")
 	if err != nil {
 		return nil, err
@@ -335,6 +339,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		NetworkPolicyEgressContexts:                networkPolicyConfig.EgressContexts,
 		NetworkPolicyDNSUpstream:                   networkPolicyConfig.DNSUpstream,
 		ExecutionImageCacheRoot:                    executionImageCacheRoot,
+		ExecutionImageFetcherSocket:                executionImageFetcherSocket,
 		ExecutionImageRegistryAllowlist:            executionImageRegistries,
 		ExecutionImageRegistryCertificates:         executionImageRegistryCertificates,
 		ExecutionImagePublicKeyPath:                executionImagePublicKeyPath,

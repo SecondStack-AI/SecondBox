@@ -56,7 +56,7 @@ var firecrackerVersionLock string
 
 // Manager owns Firecracker-backed sandbox runtime instances.
 type executionImagePreparer interface {
-	Prepare(context.Context, string, *runnerprotocol.ExecutionImage, func(runnerprotocol.AssignmentProgressStage) error, executionimage.CapacityReservation) (executionimage.PreparedImage, error)
+	VerifyLocal(context.Context, *runnerprotocol.ExecutionImage, func(runnerprotocol.AssignmentProgressStage) error) (executionimage.PreparedImage, error)
 }
 
 type Manager struct {

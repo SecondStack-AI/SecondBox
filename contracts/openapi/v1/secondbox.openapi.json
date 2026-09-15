@@ -67,6 +67,40 @@
     }
   ],
   "paths": {
+    "/v1/images:prepare": {
+      "parameters": [
+        { "$ref": "#/components/parameters/TenantRef" },
+        { "$ref": "#/components/parameters/SubjectRef" }
+      ],
+      "post": {
+        "tags": ["Operations"],
+        "operationId": "prepareImage",
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/RequestID" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrepareImageRequest" } } }
+        },
+        "responses": {
+          "202": {
+            "description": "Image preparation accepted without allocating a Sandbox or VM.",
+            "headers": {
+              "X-Request-ID": { "$ref": "#/components/headers/RequestID" },
+              "Idempotency-Replayed": { "$ref": "#/components/headers/IdempotencyReplayed" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Operation" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
     "/v1/tenants": {
       "get": {
         "tags": [
@@ -7078,9 +7112,6 @@
       "StartSandboxRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "image"
-        ],
         "properties": {
           "image": {
             "$ref": "#/components/schemas/ExecutionImage"
@@ -7102,28 +7133,26 @@
             "minLength": 1,
             "maxLength": 512,
             "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*/[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}|@sha256:[a-f0-9]{64})$"
-          },
-          "pullCredentials": {
-            "$ref": "#/components/schemas/RegistryPullCredentials"
           }
         }
       },
-      "RegistryPullCredentials": {
+      "PrepareImageRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "token"
-        ],
+        "required": ["image"],
         "properties": {
-          "username": {
-            "type": "string",
-            "maxLength": 256
-          },
-          "token": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 8192
-          }
+          "image": { "$ref": "#/components/schemas/ExecutionImage" },
+          "profile": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "ImagePreparation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["image", "targetRunners", "preparedRunners"],
+        "properties": {
+          "image": { "$ref": "#/components/schemas/PublicExecutionImage" },
+          "targetRunners": { "type": "integer", "minimum": 0 },
+          "preparedRunners": { "type": "integer", "minimum": 0 }
         }
       },
       "PublicExecutionImage": {
@@ -8063,6 +8092,9 @@
           "lifecycle"
         ],
         "properties": {
+          "image": {
+            "$ref": "#/components/schemas/PublicExecutionImage"
+          },
           "id": {
             "$ref": "#/components/schemas/OpaqueID"
           },
@@ -8435,6 +8467,7 @@
       "OperationKind": {
         "type": "string",
         "enum": [
+          "prepare_image",
           "create",
           "start",
           "drain",
@@ -8471,6 +8504,7 @@
           "updatedAt"
         ],
         "properties": {
+          "imagePreparation": { "$ref": "#/components/schemas/ImagePreparation" },
           "id": {
             "$ref": "#/components/schemas/OpaqueID"
           },

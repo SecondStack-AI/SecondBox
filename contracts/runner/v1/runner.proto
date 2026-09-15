@@ -317,12 +317,27 @@ message AssignmentCommand {
 
 message ExecutionImage {
   string reference = 1;
-  RegistryPullCredentials pull_credentials = 2;
+  reserved 2;
 }
 
-message RegistryPullCredentials {
-  string username = 1;
-  string token = 2;
+message PrepareImageCommand {
+  string message_id = 1;
+  uint64 sequence = 2;
+  string operation_id = 3;
+  string tenant_ref = 4;
+  string reference = 5;
+  uint64 deadline_unix_ms = 6;
+}
+
+message PrepareImageResult {
+  string message_id = 1;
+  uint64 sequence = 2;
+  string operation_id = 3;
+  AssignmentProgressStage stage = 4;
+  string resolved_digest = 5;
+  bytes manifest = 6;
+  bytes signature = 7;
+  string failure = 8;
 }
 
 // Attribution is control-plane authority fixed before guest networking opens.
@@ -1078,6 +1093,7 @@ message RunnerToControlPlane {
     PortDirectConsume port_direct_consume = 18;
     DataPlaneDirectConsume data_plane_direct_consume = 19;
     WorkspaceTransferFrame workspace_transfer = 20;
+    PrepareImageResult prepare_image_result = 21;
   }
 }
 
@@ -1099,5 +1115,6 @@ message ControlPlaneToRunner {
     DataPlaneDirectAdmission data_plane_direct_admission = 16;
     DataPlaneCancelCommand data_plane_cancel = 17;
     WorkspaceTransferFrame workspace_transfer = 18;
+    PrepareImageCommand prepare_image = 19;
   }
 }

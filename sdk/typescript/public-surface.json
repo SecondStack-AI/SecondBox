@@ -393,9 +393,7 @@
     "required": [
       "reference"
     ],
-    "optional": [
-      "pullCredentials"
-    ]
+    "optional": []
   },
   "ExecutionPolicy": {
     "required": [
@@ -437,6 +435,14 @@
       "duration",
       "route",
       "statusClass"
+    ],
+    "optional": []
+  },
+  "ImagePreparation": {
+    "required": [
+      "image",
+      "preparedRunners",
+      "targetRunners"
     ],
     "optional": []
   },
@@ -511,6 +517,7 @@
     "optional": [
       "completedAt",
       "error",
+      "imagePreparation",
       "sandbox",
       "sandboxId",
       "snapshot",
@@ -588,6 +595,14 @@
     ],
     "optional": [
       "certificateSpkiSha256"
+    ]
+  },
+  "PrepareImageRequest": {
+    "required": [
+      "image"
+    ],
+    "optional": [
+      "profile"
     ]
   },
   "Problem": {
@@ -714,14 +729,6 @@
     ],
     "optional": []
   },
-  "RegistryPullCredentials": {
-    "required": [
-      "token"
-    ],
-    "optional": [
-      "username"
-    ]
-  },
   "RelocateSandboxRequest": {
     "required": [],
     "optional": [
@@ -841,6 +848,7 @@
     ],
     "optional": [
       "deletedAt",
+      "image",
       "instance",
       "lastActivityAt"
     ]
@@ -925,11 +933,10 @@
     ]
   },
   "StartSandboxRequest": {
-    "required": [
-      "image"
-    ],
+    "required": [],
     "optional": [
-      "attributedExecution"
+      "attributedExecution",
+      "image"
     ]
   },
   "StartupPolicy": {

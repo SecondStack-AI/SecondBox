@@ -342,7 +342,6 @@ export interface ExecTimingSummary {
 }
 
 export interface ExecutionImage {
-  readonly pullCredentials?: RegistryPullCredentials;
   readonly reference: string;
 }
 
@@ -381,6 +380,12 @@ export interface HTTPRouteTimingSummary {
   readonly duration: DurationPercentiles;
   readonly route: string;
   readonly statusClass: "1xx" | "2xx" | "3xx" | "4xx" | "5xx" | "other";
+}
+
+export interface ImagePreparation {
+  readonly image: PublicExecutionImage;
+  readonly preparedRunners: number;
+  readonly targetRunners: number;
 }
 
 export type InfrastructureFailureKind = "transport" | "admission" | "generation_fenced" | "lease_fenced" | "guest_agent" | "execution_node" | "service";
@@ -447,6 +452,7 @@ export interface Operation {
   readonly createdAt: Timestamp;
   readonly error?: Problem;
   readonly id: OpaqueID;
+  readonly imagePreparation?: ImagePreparation;
   readonly kind: OperationKind;
   readonly requestId: CorrelationID;
   readonly sandbox?: Sandbox;
@@ -457,7 +463,7 @@ export interface Operation {
   readonly updatedAt: Timestamp;
 }
 
-export type OperationKind = "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "subject_cleanup" | "cancel_exec" | "cancel_terminal";
+export type OperationKind = "prepare_image" | "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "subject_cleanup" | "cancel_exec" | "cancel_terminal";
 
 export interface OperationStageTiming {
   readonly cumulativeMilliseconds: number;
@@ -527,6 +533,11 @@ export interface PortSession {
 
 /** A finite positive policy ceiling, or explicit null for no ceiling at this scope. */
 export type PositivePolicyLimit = number | null;
+
+export interface PrepareImageRequest {
+  readonly image: ExecutionImage;
+  readonly profile?: string;
+}
 
 export interface Problem {
   readonly ceiling?: SandboxResourceRequest;
@@ -635,11 +646,6 @@ export interface QuotaUsage {
   readonly vcpuCount: number;
 }
 
-export interface RegistryPullCredentials {
-  readonly token: string;
-  readonly username?: string;
-}
-
 export interface RelocateSandboxRequest {
   readonly runnerPool?: ProfileName;
   readonly targetRunnerId?: RunnerID;
@@ -731,6 +737,7 @@ export interface Sandbox {
   readonly egressContext: EgressContextName | null;
   readonly generation: number;
   readonly id: OpaqueID;
+  readonly image?: PublicExecutionImage;
   readonly instance?: Instance;
   readonly lastActivityAt?: Timestamp;
   readonly lifecycle: LifecyclePolicy;
@@ -813,7 +820,7 @@ export type SpawnFailureKind = "not_found" | "permission_denied" | "invalid_cwd"
 
 export interface StartSandboxRequest {
   readonly attributedExecution?: AttributedExecutionRequest;
-  readonly image: ExecutionImage;
+  readonly image?: ExecutionImage;
 }
 
 /** cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot. */
@@ -1201,6 +1208,7 @@ export type OperationID =
   | "listTenantControllerAuthorities"
   | "listTenants"
   | "pingSandbox"
+  | "prepareImage"
   | "reactivateTenant"
   | "readEgressContextPreflight"
   | "readSandboxFile"
@@ -1292,6 +1300,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   listTenantControllerAuthorities: { method: "GET", path: "/v1/tenants/{tenantRef}/controller-authorities" },
   listTenants: { method: "GET", path: "/v1/tenants" },
   pingSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:ping" },
+  prepareImage: { method: "POST", path: "/v1/images:prepare", contentType: "application/json" },
   reactivateTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:reactivate" },
   readEgressContextPreflight: { method: "GET", path: "/v1/diagnostics/egress-contexts" },
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },

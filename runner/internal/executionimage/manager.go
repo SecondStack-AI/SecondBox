@@ -5,7 +5,6 @@ import (
 	"archive/tar"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +46,9 @@ type CapacityReservation func(context.Context, uint64) (func() error, error)
 var ErrCapacityAdmissionDenied = errors.New("SecondBox execution image capacity admission denied")
 
 type Manager struct {
+	fixedDirectory       string
+	fixedPublicKeyPath   string
+	fixedPublicKeySHA256 string
 	cacheRoot            string
 	registryAllowlist    []string
 	registryCertificates string
@@ -66,10 +68,6 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	if cfg == nil || !filepath.IsAbs(cfg.ExecutionImageCacheRoot) || len(cfg.ExecutionImageRegistryAllowlist) == 0 || !filepath.IsAbs(cfg.ExecutionImageRegistryCertificates) || cfg.ExecutionImageMaximumDownloadBytes <= 0 || cfg.ExecutionImageMaximumExpandedBytes <= 0 || cfg.ExecutionImageMaximumCacheBytes < cfg.ExecutionImageMaximumExpandedBytes {
 		return nil, errors.New("SecondBox execution image manager requires absolute cache and registry certificate roots, a registry allowlist, positive download and expansion limits, and a cache limit at least as large as the expansion limit")
 	}
-	skopeoPath, err := exec.LookPath("skopeo")
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox execution image manager requires skopeo: %w", err)
-	}
 	if err := os.MkdirAll(cfg.ExecutionImageCacheRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("SecondBox execution image cache creation failed: %w", err)
 	}
@@ -77,12 +75,14 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		return nil, fmt.Errorf("SecondBox execution image registry certificate directory creation failed: %w", err)
 	}
 	return &Manager{
+		fixedDirectory:       filepath.Dir(cfg.MicroVMKernelPath),
+		fixedPublicKeyPath:   cfg.MicroVMPublicKeyPath,
+		fixedPublicKeySHA256: cfg.MicroVMPublicKeySHA256,
 		cacheRoot:            cfg.ExecutionImageCacheRoot,
 		registryAllowlist:    append([]string(nil), cfg.ExecutionImageRegistryAllowlist...),
 		registryCertificates: cfg.ExecutionImageRegistryCertificates,
 		publicKeyPath:        cfg.ExecutionImagePublicKeyPath,
 		publicKeySHA256:      cfg.ExecutionImagePublicKeySHA256,
-		skopeoPath:           skopeoPath,
 		maximumDownloadBytes: cfg.ExecutionImageMaximumDownloadBytes,
 		maximumExpandedBytes: cfg.ExecutionImageMaximumExpandedBytes,
 		maximumCacheBytes:    cfg.ExecutionImageMaximumCacheBytes,
@@ -91,10 +91,11 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	}, nil
 }
 
-func (manager *Manager) Prepare(
+func (manager *Manager) Fetch(
 	ctx context.Context,
 	operationID string,
 	image *runnerprotocol.ExecutionImage,
+	authDocument []byte,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 	reserveCapacity CapacityReservation,
 ) (prepared PreparedImage, resultErr error) {
@@ -111,7 +112,7 @@ func (manager *Manager) Prepare(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_RESOLVE); err != nil {
 		return PreparedImage{}, err
 	}
-	authFile, cleanupAuth, err := manager.writeAuthFile(registry, image.PullCredentials)
+	authFile, cleanupAuth, err := manager.writeAuthFile(authDocument)
 	if err != nil {
 		return PreparedImage{}, err
 	}
@@ -127,6 +128,21 @@ func (manager *Manager) Prepare(
 		return PreparedImage{}, err
 	}
 	defer lock.Close()
+	defer func() {
+		if resultErr != nil || prepared.Directory == "" {
+			return
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			resultErr = errors.New("SecondBox image preparation requires a deadline")
+		} else {
+			resultErr = retainPreparedDirectory(prepared.Directory, deadline)
+		}
+		if resultErr != nil {
+			prepared.Release()
+			prepared = PreparedImage{}
+		}
+	}()
 	manager.cacheMu.RLock()
 	if _, err := os.Stat(cacheDirectory); err == nil {
 		artifacts, err := manager.verifyAndCaptureArtifacts(ctx, cacheDirectory)
@@ -351,8 +367,12 @@ func (manager *Manager) ensureCacheCapacity(target string) error {
 		if pinned {
 			continue
 		}
-		if err := os.RemoveAll(entry.path); err != nil {
-			return fmt.Errorf("SecondBox execution image cache eviction failed: %w", err)
+		removed, err := manager.evictCacheEntry(entry.path)
+		if err != nil {
+			return err
+		}
+		if !removed {
+			continue
 		}
 		total -= entry.size
 		available, err = manager.availableCacheBytes()
@@ -393,12 +413,44 @@ func (manager *Manager) evictOldestUnpinned(target string) (bool, error) {
 		if pinned {
 			continue
 		}
-		if err := os.RemoveAll(entry.path); err != nil {
-			return false, fmt.Errorf("SecondBox execution image cache eviction failed: %w", err)
+		removed, err := manager.evictCacheEntry(entry.path)
+		if err != nil {
+			return false, err
 		}
-		return true, nil
+		if removed {
+			return true, nil
+		}
 	}
 	return false, nil
+}
+
+func (manager *Manager) evictCacheEntry(path string) (bool, error) {
+	locks := filepath.Join(manager.cacheRoot, ".locks")
+	if err := os.MkdirAll(locks, 0o700); err != nil {
+		return false, err
+	}
+	lock, err := os.OpenFile(filepath.Join(locks, filepath.Base(path)+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return false, nil
+		}
+		return false, err
+	}
+	until, err := preparedDirectoryDeadline(path)
+	if err != nil {
+		return false, err
+	}
+	if until.After(time.Now()) {
+		return false, nil
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return false, fmt.Errorf("SecondBox execution image cache eviction failed: %w", err)
+	}
+	return true, nil
 }
 
 func preparationCapacityBytes(maximumDownloadBytes, maximumExpandedBytes int64) (uint64, error) {
@@ -599,24 +651,15 @@ func (manager *Manager) registryCertificateArgs(registry, flag string) []string 
 	return nil
 }
 
-func (manager *Manager) writeAuthFile(registry string, credentials *runnerprotocol.RegistryPullCredentials) (string, func(), error) {
-	if credentials == nil {
-		return "", func() {}, nil
-	}
-	if credentials.Token == "" {
-		return "", nil, errors.New("SecondBox execution image pull token is empty")
+func (manager *Manager) writeAuthFile(document []byte) (string, func(), error) {
+	if !json.Valid(document) {
+		return "", nil, errors.New("SecondBox execution image authentication document is invalid")
 	}
 	directory, err := os.MkdirTemp(manager.cacheRoot, ".registry-auth-")
 	if err != nil {
 		return "", nil, fmt.Errorf("SecondBox execution image auth staging failed: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(directory) }
-	auth := base64.StdEncoding.EncodeToString([]byte(credentials.Username + ":" + credentials.Token))
-	document, err := json.Marshal(map[string]any{"auths": map[string]any{registry: map[string]string{"auth": auth}}})
-	if err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("SecondBox execution image auth encoding failed: %w", err)
-	}
 	path := filepath.Join(directory, "auth.json")
 	if err := os.WriteFile(path, document, 0o600); err != nil {
 		cleanup()

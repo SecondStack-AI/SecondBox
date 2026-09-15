@@ -87,7 +87,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		) VALUES (1,1073741824,(SELECT logical_capacity_bytes FROM secondbox.workspaces WHERE id='workspace-automatic-start'),
 			'sandbox-automatic-start','tenant','subject','profile-automatic-start',
 			'revision-automatic-start','stopped','running',2,
-			'workspace-automatic-start','','{}','{}','{"executionImageReference":"registry.example/secondbox/lifecycle-test:stable"}','worker-automatic-start',$3,5,$2,$2
+			'workspace-automatic-start','','{}','{}','{}','worker-automatic-start',$3,5,$2,$2
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		string(specJSON),
@@ -225,7 +225,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		}
 		binding := contracts.AttributedExecutionRequest{AuthorizationRef: "command-authorization", ExpiresAt: now.Add(20 * time.Second)}
 		metadata, err := json.Marshal(contracts.MergeExecutionImageMetadata(
-			contracts.ExecutionImage{Reference: "registry.example/secondbox/lifecycle-test:stable"},
+			contracts.ExecutionImage{},
 			&binding,
 		))
 		if err != nil {

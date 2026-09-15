@@ -47,6 +47,8 @@
 "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": "172.30.0.1",
 "SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG": "/etc/secondbox/egress-contexts.json",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT": "/var/lib/secondbox-runner/execution-images",
+"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET": "/run/secondbox-image-fetcher/fetcher.sock",
+"SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR": "/etc/secondbox/image-registry",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES": "ghcr.io",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES": "/var/lib/secondbox-runner/registry-certificates",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY": "/opt/secondbox/execution-image-public.pem",

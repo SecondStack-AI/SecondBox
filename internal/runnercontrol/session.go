@@ -39,6 +39,7 @@ const (
 	EventDrain             EventKind = "drain"
 	EventEvidence          EventKind = "evidence"
 	EventLocalWorkspace    EventKind = "local_workspace"
+	EventImagePreparation  EventKind = "image_preparation"
 	EventExec              EventKind = "exec"
 	EventPty               EventKind = "pty"
 	EventFile              EventKind = "file"
@@ -727,6 +728,8 @@ func runnerEnvelope(message *runnerv1.RunnerToControlPlane) (string, uint64, err
 		return validateEnvelope(message.GetEvidence().MessageId, message.GetEvidence().Sequence)
 	case message.GetLocalWorkspaceResult() != nil:
 		return validateEnvelope(message.GetLocalWorkspaceResult().MessageId, message.GetLocalWorkspaceResult().Sequence)
+	case message.GetPrepareImageResult() != nil:
+		return validateEnvelope(message.GetPrepareImageResult().MessageId, message.GetPrepareImageResult().Sequence)
 	case message.GetInstanceTerminal() != nil:
 		return validateEnvelope(message.GetInstanceTerminal().MessageId, message.GetInstanceTerminal().Sequence)
 	case message.GetPortDirectConsume() != nil:
@@ -759,6 +762,8 @@ func classifyRunnerMessage(message *runnerv1.RunnerToControlPlane) EventKind {
 		return EventEvidence
 	case message.GetLocalWorkspaceResult() != nil:
 		return EventLocalWorkspace
+	case message.GetPrepareImageResult() != nil:
+		return EventImagePreparation
 	case message.GetInstanceTerminal() != nil:
 		return EventInstanceTerminal
 	case message.GetPortDirectConsume() != nil:

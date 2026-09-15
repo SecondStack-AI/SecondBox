@@ -13,7 +13,7 @@ const RunnerCapabilityAttributedExecution = "attributed-execution"
 
 type StartSandboxRequest struct {
 	AttributedExecution *AttributedExecutionRequest `json:"attributedExecution,omitempty"`
-	Image               ExecutionImage              `json:"image"`
+	Image               ExecutionImage              `json:"image,omitzero"`
 }
 
 func (request *StartSandboxRequest) UnmarshalJSON(data []byte) error {
@@ -27,16 +27,19 @@ func (request *StartSandboxRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	request.AttributedExecution = nil
-	if len(body.Image) == 0 || bytes.Equal(body.Image, []byte("null")) {
-		return errors.New("SecondBox start request requires an execution image")
-	}
-	decoder = json.NewDecoder(bytes.NewReader(body.Image))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request.Image); err != nil {
-		return err
-	}
-	if err := request.Image.Validate(); err != nil {
-		return err
+	request.Image = ExecutionImage{}
+	if len(body.Image) != 0 {
+		if bytes.Equal(body.Image, []byte("null")) {
+			return errors.New("SecondBox start execution image cannot be null")
+		}
+		decoder = json.NewDecoder(bytes.NewReader(body.Image))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request.Image); err != nil {
+			return err
+		}
+		if err := request.Image.Validate(); err != nil {
+			return err
+		}
 	}
 	if len(body.AttributedExecution) == 0 {
 		return nil

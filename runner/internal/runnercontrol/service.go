@@ -681,6 +681,8 @@ func (s *RunnerProtocolService) consumeCommands(
 	defer assignmentsInFlight.Wait()
 	var workspaceCreatesInFlight sync.WaitGroup
 	defer workspaceCreatesInFlight.Wait()
+	var imagePreparationsInFlight sync.WaitGroup
+	defer imagePreparationsInFlight.Wait()
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
 	assignmentSlots := make(
@@ -749,6 +751,19 @@ func (s *RunnerProtocolService) consumeCommands(
 			}
 			// Sequence acceptance above already ran in receive order, so a
 			// concurrent start cannot reorder the control command stream.
+			if preparation := frame.message.GetPrepareImage(); preparation != nil {
+				imagePreparationsInFlight.Add(1)
+				go func() {
+					defer imagePreparationsInFlight.Done()
+					if err := s.handleImagePreparation(connectionCtx, stream, preparation); err != nil {
+						select {
+						case asyncErrors <- err:
+						default:
+						}
+					}
+				}()
+				continue
+			}
 			if assignment := frame.message.GetAssignment(); assignment != nil {
 				workspaceCreatesInFlight.Wait()
 				select {
@@ -914,6 +929,9 @@ func (state *controlCommandState) accept(
 	case message.GetLocalWorkspace() != nil:
 		messageID = message.GetLocalWorkspace().MessageId
 		sequence = message.GetLocalWorkspace().Sequence
+	case message.GetPrepareImage() != nil:
+		messageID = message.GetPrepareImage().MessageId
+		sequence = message.GetPrepareImage().Sequence
 	case message.GetDataPlaneDirectOpen() != nil:
 		messageID = message.GetDataPlaneDirectOpen().MessageId
 		sequence = message.GetDataPlaneDirectOpen().Sequence

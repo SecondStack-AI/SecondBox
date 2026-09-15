@@ -522,25 +522,26 @@ type ActivitySession struct {
 
 // Sandbox is durable Project intent pinned to one immutable ProfileRevision.
 type Sandbox struct {
-	Lifecycle         LifecyclePolicy   `json:"lifecycle"`
-	Resources         SandboxResources  `json:"resources"`
-	ID                string            `json:"id"`
-	TenantRef         string            `json:"-"`
-	SubjectRef        string            `json:"-"`
-	EgressContext     *string           `json:"egressContext"`
-	Profile           string            `json:"profile"`
-	ProfileRevisionID string            `json:"profileRevisionId"`
-	State             string            `json:"state"`
-	DesiredState      string            `json:"desiredState"`
-	Generation        int64             `json:"generation"`
-	Workspace         Workspace         `json:"workspace"`
-	Instance          *Instance         `json:"instance,omitempty"`
-	Metadata          map[string]string `json:"metadata"`
-	LastActivityAt    *time.Time        `json:"lastActivityAt,omitempty"`
-	Revision          int64             `json:"revision"`
-	CreatedAt         time.Time         `json:"createdAt"`
-	UpdatedAt         time.Time         `json:"updatedAt"`
-	DeletedAt         *time.Time        `json:"deletedAt,omitempty"`
+	Image             *PublicExecutionImage `json:"image,omitempty"`
+	Lifecycle         LifecyclePolicy       `json:"lifecycle"`
+	Resources         SandboxResources      `json:"resources"`
+	ID                string                `json:"id"`
+	TenantRef         string                `json:"-"`
+	SubjectRef        string                `json:"-"`
+	EgressContext     *string               `json:"egressContext"`
+	Profile           string                `json:"profile"`
+	ProfileRevisionID string                `json:"profileRevisionId"`
+	State             string                `json:"state"`
+	DesiredState      string                `json:"desiredState"`
+	Generation        int64                 `json:"generation"`
+	Workspace         Workspace             `json:"workspace"`
+	Instance          *Instance             `json:"instance,omitempty"`
+	Metadata          map[string]string     `json:"metadata"`
+	LastActivityAt    *time.Time            `json:"lastActivityAt,omitempty"`
+	Revision          int64                 `json:"revision"`
+	CreatedAt         time.Time             `json:"createdAt"`
+	UpdatedAt         time.Time             `json:"updatedAt"`
+	DeletedAt         *time.Time            `json:"deletedAt,omitempty"`
 }
 
 // SandboxPage is one bounded stable Project Sandbox traversal page.
@@ -864,21 +865,22 @@ type TouchResult struct {
 
 // Operation is durable asynchronous mutation evidence.
 type Operation struct {
-	ID              string            `json:"id"`
-	TenantRef       string            `json:"-"`
-	SubjectRef      string            `json:"-"`
-	SandboxID       string            `json:"sandboxId,omitempty"`
-	Kind            string            `json:"kind"`
-	State           string            `json:"state"`
-	RequestID       string            `json:"requestId"`
-	RequestMetadata map[string]string `json:"-"`
-	Sandbox         *Sandbox          `json:"sandbox,omitempty"`
-	Snapshot        *Snapshot         `json:"snapshot,omitempty"`
-	Error           *Problem          `json:"error,omitempty"`
-	CreatedAt       time.Time         `json:"createdAt"`
-	StartedAt       *time.Time        `json:"startedAt,omitempty"`
-	CompletedAt     *time.Time        `json:"completedAt,omitempty"`
-	UpdatedAt       time.Time         `json:"updatedAt"`
+	ImagePreparation *ImagePreparation `json:"imagePreparation,omitempty"`
+	ID               string            `json:"id"`
+	TenantRef        string            `json:"-"`
+	SubjectRef       string            `json:"-"`
+	SandboxID        string            `json:"sandboxId,omitempty"`
+	Kind             string            `json:"kind"`
+	State            string            `json:"state"`
+	RequestID        string            `json:"requestId"`
+	RequestMetadata  map[string]string `json:"-"`
+	Sandbox          *Sandbox          `json:"sandbox,omitempty"`
+	Snapshot         *Snapshot         `json:"snapshot,omitempty"`
+	Error            *Problem          `json:"error,omitempty"`
+	CreatedAt        time.Time         `json:"createdAt"`
+	StartedAt        *time.Time        `json:"startedAt,omitempty"`
+	CompletedAt      *time.Time        `json:"completedAt,omitempty"`
+	UpdatedAt        time.Time         `json:"updatedAt"`
 }
 
 // DurationPercentiles is one bounded duration distribution.

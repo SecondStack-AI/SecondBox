@@ -306,6 +306,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
 			AssetCatalog:            multirunnerAssetCatalog{},
+			ExecutionImageAuthority: testExecutionImageAuthority(t),
 			SessionCanceller:        multirunnerSessionCanceller{},
 			NewID: func(prefix string) string {
 				idSequence++
@@ -752,6 +753,9 @@ func multirunnerRunLifecycle(
 	decision, found, err := reconciler.RunOnce(
 		t.Context(), now.UTC(), ports.LifecycleWakeTriggerNotify,
 	)
+	if err == nil && decision.Action == lifecycle.ActionStartInstance && completeTestImagePreparation(t, pool, sandboxID, now.UTC()) {
+		decision, found, err = reconciler.RunOnce(t.Context(), now.UTC(), ports.LifecycleWakeTriggerNotify)
+	}
 	if err != nil || !found || decision.Action != want {
 		t.Fatalf(
 			"lifecycle action for %s = %#v found=%t error=%v, want %s",

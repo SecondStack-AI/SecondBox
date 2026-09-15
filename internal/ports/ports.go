@@ -100,6 +100,14 @@ type AdminIdempotencyResult struct {
 	Replayed bool
 }
 
+type ImagePreparationInput struct {
+	Principal     contracts.Principal
+	Request       contracts.PrepareImageRequest
+	ProfileGrants []string
+	Operation     contracts.Operation
+	Idempotency   AdminIdempotencyInput
+}
+
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
 	Resources                *contracts.SandboxResourceRequest

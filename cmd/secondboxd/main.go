@@ -19,8 +19,8 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/api"
+	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	"github.com/SecondStack-AI/SecondBox/internal/config"
-	"github.com/SecondStack-AI/SecondBox/internal/imagecredentials"
 	"github.com/SecondStack-AI/SecondBox/internal/lifecycle"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/reconcile"
@@ -107,10 +107,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	// data-plane loops, so it is constructed before its first consumer.
 	workWakeups := worknotify.NewHub()
 	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
-	imageCredentialBroker, err := imagecredentials.NewBroker(service.SystemClock, processConfig.AssignmentDeadline)
-	if err != nil {
-		return err
-	}
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:         controlPlaneStore,
 		PlatformToken: processConfig.PlatformToken,
@@ -120,7 +116,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		IdempotencyRetention: processConfig.IdempotencyRetention,
 		LiveDataPlane:        liveDataPlane,
 		PortSessionStore:     dataPlaneStore, PublicBaseURL: processConfig.PublicBaseURL,
-		ImageCredentials: imageCredentialBroker,
 	})
 	if err != nil {
 		return err
@@ -166,6 +161,10 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	executionImageAuthority, err := assetcatalog.LoadExecutionImageAuthority(processConfig.ExecutionImagePublicKeyPath, processConfig.ExecutionImagePublicKeySHA256)
+	if err != nil {
+		return err
+	}
 	lifecycleEffects, err := lifecycle.NewPostgresEffectBroker(
 		processContext,
 		processConfig.DatabaseURL,
@@ -177,6 +176,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			RetryLimit:              processConfig.AssignmentRetryLimit,
 			SerializationRetryLimit: processConfig.SchedulerSerializationRetryLimit,
 			AssetCatalog:            signedAssetCatalog,
+			ExecutionImageAuthority: executionImageAuthority,
 			SessionCanceller:        dataPlaneStore,
 			NewID:                   service.NewOpaqueID,
 			NewFencingToken:         newLifecycleFencingToken,
@@ -236,7 +236,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		WorkspaceTransfers:  workspaceTransfers,
 		Now:                 service.SystemClock,
 		NewConnectionID:     func() string { return service.NewOpaqueID("rconn") },
-		CommandEnricher:     imageCredentialBroker.EnrichRunnerCommand,
 	})
 	if err != nil {
 		return err
@@ -301,7 +300,8 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		lifecycleErrors <- runLifecycleReconciler(
 			processContext,
 			lifecycle.Reconciler{
-				Store: controlPlaneStore, Effects: lifecycleEffects,
+				PrepareImages: lifecycleEffects.ReconcileImagePreparations,
+				Store:         controlPlaneStore, Effects: lifecycleEffects,
 				WorkerID:      service.NewOpaqueID("lifecycle-worker"),
 				ClaimDuration: processConfig.LifecycleReconcileClaimDuration,
 				PollInterval:  processConfig.LifecycleReconcilePollInterval,

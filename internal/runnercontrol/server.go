@@ -78,7 +78,6 @@ type ServerConfig struct {
 	WorkWakeups         worknotify.Source
 	Now                 func() time.Time
 	NewConnectionID     func() string
-	CommandEnricher     func(*runnerv1.ControlPlaneToRunner) error
 }
 
 // Server terminates the authenticated runner-initiated gRPC stream.
@@ -494,11 +493,6 @@ func (server *Server) sendNextOutboundFrame(
 	streamSendDurations := make([]time.Duration, len(deliveries))
 	for index := range deliveries {
 		delivery := &deliveries[index]
-		if server.config.CommandEnricher != nil {
-			if err := server.config.CommandEnricher(delivery.Message); err != nil {
-				return false, fmt.Errorf("SecondBox runner command enrichment: %w", err)
-			}
-		}
 		streamSendStartedAt := time.Now()
 		if err := stream.Send(delivery.Message); err != nil {
 			persistErr := server.config.StateStore.MarkCommandsDelivered(
@@ -578,7 +572,7 @@ func commandQueueDuration(createdAt, claimedAt time.Time) time.Duration {
 func durableRunnerEvent(kind EventKind) bool {
 	switch kind {
 	case EventAssignment, EventFence, EventDrain, EventEvidence,
-		EventInstanceTerminal, EventLocalWorkspace:
+		EventInstanceTerminal, EventLocalWorkspace, EventImagePreparation:
 		return true
 	default:
 		return false
@@ -603,6 +597,8 @@ func runnerEventSubtype(message *runnerv1.RunnerToControlPlane) string {
 		return "instance_terminal"
 	case message.GetLocalWorkspaceResult() != nil:
 		return "local_workspace_result"
+	case message.GetPrepareImageResult() != nil:
+		return "image_preparation"
 	default:
 		return "unknown"
 	}
@@ -733,7 +729,7 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 		_, err := server.config.StateStore.RecordHeartbeat(ctx, event.Heartbeat, receivedAt)
 		return err
 	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal,
-		EventLocalWorkspace:
+		EventLocalWorkspace, EventImagePreparation:
 		return errors.New("SecondBox runner durable event bypassed the persistence batch")
 	case EventExec, EventPty, EventFile:
 		if server.config.LiveDataPlane == nil {

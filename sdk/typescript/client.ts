@@ -1163,7 +1163,7 @@ export class SandboxHandle implements SandboxFilesystem {
 
   public start(options: LifecycleOptions & StartSandboxRequest): Promise<Operation> {
     const request: JSONValue = {
-      image: executionImageJSON(options.image),
+	  ...(options.image === undefined ? {} : { image: executionImageJSON(options.image) }),
       ...(options.attributedExecution === undefined
         ? {}
         : { attributedExecution: { ...options.attributedExecution } }),
@@ -1719,16 +1719,6 @@ export class SandboxHandle implements SandboxFilesystem {
 function executionImageJSON(image: ExecutionImage): JSONValue {
   return {
     reference: image.reference,
-    ...(image.pullCredentials === undefined
-      ? {}
-      : {
-          pullCredentials: {
-            token: image.pullCredentials.token,
-            ...(image.pullCredentials.username === undefined
-              ? {}
-              : { username: image.pullCredentials.username }),
-          },
-        }),
   };
 }
 

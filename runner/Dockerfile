@@ -15,7 +15,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
       -ldflags="-X main.releaseVersion=${RELEASE_VERSION} -X main.sourceCommit=${SOURCE_COMMIT}" \
       -o /out/secondbox-runner ./cmd/secondbox-runner \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
-      -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent
+      -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+      -o /out/secondbox-image-fetcher ./cmd/secondbox-image-fetcher
 
 FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c AS firecracker-release
 
@@ -58,6 +60,7 @@ LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondB
       ai.secondstack.secondbox.public-contract-digest="${PUBLIC_CONTRACT_DIGEST}"
 
 COPY --from=runner-builder /out/secondbox-runner /usr/local/bin/secondbox-runner
+COPY --from=runner-builder /out/secondbox-image-fetcher /usr/local/bin/secondbox-image-fetcher
 COPY --from=runner-builder /out/secondbox-guest-agent /usr/local/bin/secondbox-guest-agent
 COPY --from=firecracker-release /out-firecracker /usr/local/bin/firecracker
 COPY --from=firecracker-release /out-jailer /usr/local/bin/jailer

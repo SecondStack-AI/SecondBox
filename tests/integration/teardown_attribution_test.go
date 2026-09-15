@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -302,6 +302,7 @@ type teardownFixture struct {
 	stateStore   *runnercontrol.PostgresStateStore
 	reconciler   lifecycle.Reconciler
 	principal    contracts.Principal
+	credential   string
 	profileName  string
 	runnerID     string
 	connectionID string
@@ -409,6 +410,7 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
 			AssetCatalog:            teardownAssetCatalog{},
+			ExecutionImageAuthority: testExecutionImageAuthority(t),
 			SessionCanceller:        teardownSessionCanceller{},
 			NewID: func(prefix string) string {
 				idSequence++
@@ -427,7 +429,7 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 
 	handler, err := api.NewHandler(api.HandlerConfig{
 		Service: controlPlane, PlatformToken: testPlatformToken,
-		Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:                    slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		MaximumDataPlaneBodyBytes: 4 << 20,
 	})
 	if err != nil {
@@ -442,12 +444,14 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 		pool:         pool,
 		stateStore:   stateStore,
 		reconciler: lifecycle.Reconciler{
-			Store: databaseStore, Effects: effectBroker,
+			PrepareImages: effectBroker.ReconcileImagePreparations,
+			Store:         databaseStore, Effects: effectBroker,
 			WorkerID:      fmt.Sprintf("teardown-worker-%d", fixtureSequence),
 			ClaimDuration: time.Minute, PollInterval: teardownPollInterval,
 			BatchSize: 1,
 		},
 		principal:    principal,
+		credential:   credential,
 		profileName:  profile.Name,
 		runnerID:     runnerID,
 		connectionID: connectionID,
@@ -699,6 +703,9 @@ func (fixture *teardownFixture) runLifecycle(
 	decision, found, err := fixture.reconciler.RunOnce(
 		t.Context(), time.Now().UTC(), trigger,
 	)
+	if err == nil && decision.Action == lifecycle.ActionStartInstance && completeTestImagePreparation(t, fixture.pool, sandboxID, time.Now().UTC()) {
+		decision, found, err = fixture.reconciler.RunOnce(t.Context(), time.Now().UTC(), ports.LifecycleWakeTriggerNotify)
+	}
 	if err != nil || !found || decision.Action != want {
 		t.Fatalf(
 			"lifecycle action for %s = %#v found=%t error=%v, want %s",

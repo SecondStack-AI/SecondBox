@@ -2497,7 +2497,7 @@ func insertDeliveredAssignmentCommand(
 }
 
 const (
-	runnerControlTestExecutionImageReference = "registry.example/secondbox/runner-control-test:stable"
+	runnerControlTestExecutionImageReference = "registry.example/secondbox/runner-control-test@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	runnerControlTestExecutionImageDigest    = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
 

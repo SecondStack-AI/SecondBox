@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -107,6 +108,23 @@ func InitDevelopment(directory string) (string, error) {
 		return "", err
 	}
 	manifest := developmentManifest(postgresPassword, platformToken, runnerCredential)
+	imageKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return "", err
+	}
+	imagePublicKey, err := x509.MarshalPKIXPublicKey(&imageKey.PublicKey)
+	if err != nil {
+		return "", err
+	}
+	if err := writeAtomic(filepath.Join(secrets, "execution-image.pub"), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: imagePublicKey}), 0o644, false); err != nil {
+		return "", err
+	}
+	if err := writeAtomic(filepath.Join(secrets, "execution-image.key"), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(imageKey)}), 0o600, false); err != nil {
+		return "", err
+	}
+	imageFingerprint := sha256.Sum256(imagePublicKey)
+	manifest.Deployment.ExecutionImagePublicKey = "secrets/execution-image.pub"
+	manifest.Deployment.ExecutionImagePublicKeySHA256 = hex.EncodeToString(imageFingerprint[:])
 	encoded, err := encodeManifest(manifest)
 	if err != nil {
 		return "", err
@@ -302,6 +320,7 @@ func materializeProduction(manifest ManifestV1, sourcePath, directory string, re
 		return filepath.Clean(filepath.Join(sourceBase, reference))
 	}
 	manifest.Deployment.AssetCatalog = absoluteReference(manifest.Deployment.AssetCatalog)
+	manifest.Deployment.ExecutionImagePublicKey = absoluteReference(manifest.Deployment.ExecutionImagePublicKey)
 	if releaseBytes == nil {
 		manifest.StandardResources.ArtifactManifest = absoluteReference(manifest.StandardResources.ArtifactManifest)
 	} else {

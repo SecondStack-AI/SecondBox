@@ -32,21 +32,12 @@ type conformanceExecutionImagePreparer struct {
 	directory string
 }
 
-func (preparer conformanceExecutionImagePreparer) Prepare(
+func (preparer conformanceExecutionImagePreparer) VerifyLocal(
 	ctx context.Context,
-	_ string,
 	image *runnerprotocol.ExecutionImage,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
-	reserveCapacity executionimage.CapacityReservation,
 ) (executionimage.PreparedImage, error) {
-	releaseCapacity, err := reserveCapacity(ctx, 32<<30)
-	if err != nil {
-		return executionimage.PreparedImage{}, err
-	}
-	if err := releaseCapacity(); err != nil {
-		return executionimage.PreparedImage{}, err
-	}
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_RESOLVE); err != nil {
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
 		return executionimage.PreparedImage{}, err
 	}
 	return executionimage.PreparedImage{

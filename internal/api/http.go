@@ -152,6 +152,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("GET /v1/leases/{leaseID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getLease)))
 	mux.Handle("DELETE /v1/leases/{leaseID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.releaseLease)))
 	mux.Handle("POST /v1/leases/{leaseAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.renewLease)))
+	mux.Handle("POST /v1/images:prepare", apiHandler.authenticate(http.HandlerFunc(apiHandler.prepareImage)))
 	mux.Handle("GET /v1/operations/{operationID}", apiHandler.authenticateOperationInspection(http.HandlerFunc(apiHandler.getOperation)))
 	mux.Handle("GET /v1/operations/{operationID}/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOperationTiming)))
 	return apiHandler.withRequestID(mux), nil
@@ -591,20 +592,18 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 			}
 		}
 		if body == nil {
-			apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox start request requires an execution image")))
-			return
+			body = &contracts.StartSandboxRequest{}
 		}
 		apiHandler.mutateSandboxLifecycle(
 			writer, request, sandboxID, action,
 			contracts.MergeExecutionImageMetadata(body.Image, body.AttributedExecution),
-			body.Image.PullCredentials,
 		)
 	case "drain", "stop":
 		if err := requireEmptyBody(request); err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, nil, nil)
+		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, nil)
 	case "relocate":
 		var body contracts.RelocateSandboxRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
@@ -728,7 +727,6 @@ func (apiHandler *handler) mutateSandboxLifecycle(
 	sandboxID string,
 	action string,
 	metadata map[string]string,
-	pullCredentials *contracts.RegistryPullCredentials,
 ) {
 	expectedRevision, err := parseIfMatch(request)
 	if err != nil {
@@ -737,7 +735,7 @@ func (apiHandler *handler) mutateSandboxLifecycle(
 	}
 	operation, replayed, err := apiHandler.service.MutateSandbox(
 		request.Context(), requestPrincipal(request), sandboxID, action,
-		request.Header.Get("Idempotency-Key"), expectedRevision, metadata, pullCredentials,
+		request.Header.Get("Idempotency-Key"), expectedRevision, metadata,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -753,7 +751,7 @@ func (apiHandler *handler) deleteSandbox(writer http.ResponseWriter, request *ht
 		return
 	}
 	apiHandler.mutateSandboxLifecycle(
-		writer, request, request.PathValue("sandboxID"), "delete", nil, nil,
+		writer, request, request.PathValue("sandboxID"), "delete", nil,
 	)
 }
 

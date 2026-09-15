@@ -1393,6 +1393,7 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 func validTestRunner(id, placement string) (runner Runner) {
 	defer func() {
 		runner.ExecutionImageRegistries = "ghcr.io"
+		runner.ExecutionImageRegistryConfigDirectory = "/etc/secondbox/image-registry"
 		runner.ExecutionImagePublicKey = "/opt/secondbox/execution-image-public.pem"
 		runner.ExecutionImagePublicKeySHA256 = strings.Repeat("b", 64)
 		runner.ExecutionImageMaxDownloadBytes = integer(8 << 30)

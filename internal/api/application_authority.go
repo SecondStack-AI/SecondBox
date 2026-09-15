@@ -81,6 +81,7 @@ func applicationRequestScope(pattern string) string {
 		pattern == "GET /v1/operations/{operationID}/timings":
 		return applicationScopeSandboxRead
 	case pattern == "POST /v1/sandboxes",
+		pattern == "POST /v1/images:prepare",
 		pattern == "PUT /v1/sandboxes/{sandboxID}/metadata",
 		pattern == "DELETE /v1/sandboxes/{sandboxID}",
 		pattern == "POST /v1/sandboxes/{sandboxAction}",

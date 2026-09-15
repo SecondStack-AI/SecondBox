@@ -404,6 +404,9 @@ func setControlCommandEnvelope(
 	case message.GetLocalWorkspace() != nil:
 		message.GetLocalWorkspace().MessageId = messageID
 		message.GetLocalWorkspace().Sequence = sequence
+	case message.GetPrepareImage() != nil:
+		message.GetPrepareImage().MessageId = messageID
+		message.GetPrepareImage().Sequence = sequence
 	case message.GetDataPlaneDirectOpen() != nil:
 		message.GetDataPlaneDirectOpen().MessageId = messageID
 		message.GetDataPlaneDirectOpen().Sequence = sequence
@@ -435,6 +438,9 @@ func validateControlCommandEnvelope(
 	case message.GetLocalWorkspace() != nil:
 		actualMessageID = message.GetLocalWorkspace().MessageId
 		sequence = message.GetLocalWorkspace().Sequence
+	case message.GetPrepareImage() != nil:
+		actualMessageID = message.GetPrepareImage().MessageId
+		sequence = message.GetPrepareImage().Sequence
 	case message.GetDataPlaneDirectOpen() != nil:
 		actualMessageID = message.GetDataPlaneDirectOpen().MessageId
 		sequence = message.GetDataPlaneDirectOpen().Sequence

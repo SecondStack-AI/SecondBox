@@ -388,6 +388,8 @@ type HTTPRouteTimingSummary struct {
 	StatusClass string              `json:"statusClass"`
 }
 
+type ImagePreparation = contracts.ImagePreparation
+
 type InfrastructureFailureKind = string
 
 const (
@@ -470,6 +472,7 @@ type Operation = contracts.Operation
 type OperationKind = string
 
 const (
+	OperationKindPrepareImage    OperationKind = "prepare_image"
 	OperationKindCreate          OperationKind = "create"
 	OperationKindStart           OperationKind = "start"
 	OperationKindDrain           OperationKind = "drain"
@@ -536,6 +539,8 @@ type PortSession struct {
 
 // PositivePolicyLimit A finite positive policy ceiling, or explicit null for no ceiling at this scope.
 type PositivePolicyLimit = contracts.PositivePolicyLimit
+
+type PrepareImageRequest = contracts.PrepareImageRequest
 
 type Problem = contracts.Problem
 
@@ -649,8 +654,6 @@ type QuotaUsage struct {
 	Snapshots            int64 `json:"snapshots"`
 	VcpuCount            int64 `json:"vcpuCount"`
 }
-
-type RegistryPullCredentials = contracts.RegistryPullCredentials
 
 type RelocateSandboxRequest struct {
 	RunnerPool     *ProfileName `json:"runnerPool,omitempty"`

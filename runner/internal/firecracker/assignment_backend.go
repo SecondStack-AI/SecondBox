@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
@@ -465,9 +464,6 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if assignment == nil || assignment.Fence == nil || assignment.Requirements == nil {
 		return fmt.Errorf("SecondBox Firecracker assignment is incomplete")
 	}
-	if assignment.ExecutionImage == nil || assignment.ExecutionImage.Reference == "" {
-		return fmt.Errorf("SecondBox Firecracker assignment execution image is required")
-	}
 	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
 		return err
 	}
@@ -479,7 +475,7 @@ func (b *AssignmentBackend) ValidateAssignment(
 	b.mu.Unlock()
 	if alreadyActive {
 		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) &&
-			active.requestedImageReference == assignment.ExecutionImage.Reference {
+			active.requestedImageReference == assignment.GetExecutionImage().GetReference() {
 			return nil
 		}
 		return fmt.Errorf("SecondBox Firecracker assignment ID was reused with different fencing")
@@ -528,7 +524,7 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if _, err := b.validateAssignmentStartupMode(requirements.StartupMode); err != nil {
 		return err
 	}
-	if requirements.StartupMode != assignmentStartupModeColdBoot {
+	if assignment.ExecutionImage != nil && requirements.StartupMode != assignmentStartupModeColdBoot {
 		return fmt.Errorf("SecondBox Firecracker client-selected image requires cold_boot startup")
 	}
 	if int(requirements.VcpuCount) > b.manager.cfg.MicroVMVCPUs ||
@@ -612,7 +608,7 @@ func (b *AssignmentBackend) StartAssignment(
 	b.mu.Lock()
 	if active, ok := b.assignments[assignment.Fence.AssignmentId]; ok {
 		if runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) &&
-			active.requestedImageReference == assignment.ExecutionImage.Reference {
+			active.requestedImageReference == assignment.GetExecutionImage().GetReference() {
 			b.mu.Unlock()
 			return runnercontrol.BackendInstance{
 				BackendKind:             "firecracker",
@@ -667,37 +663,16 @@ func (b *AssignmentBackend) StartAssignment(
 			)
 		}
 	}()
-	imageReservationID := assignment.Fence.AssignmentId + "-execution-image-staging"
-	preparedImage, err := b.manager.executionImages.Prepare(
+	preparedImage, err := b.manager.executionImages.VerifyLocal(
 		ctx,
-		assignment.Correlation.OperationId,
 		assignment.ExecutionImage,
 		progress,
-		func(reservationContext context.Context, requestedBytes uint64) (func() error, error) {
-			if err := b.storagePressure.Reserve(reservationContext, imageReservationID, requestedBytes); err != nil {
-				if errors.Is(err, ErrStoragePressureAdmissionDenied) {
-					return nil, errors.Join(executionimage.ErrCapacityAdmissionDenied, err)
-				}
-				return nil, err
-			}
-			return func() error {
-				return b.storagePressure.Release(context.Background(), imageReservationID)
-			}, nil
-		},
 	)
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
 	if preparedImage.Release != nil {
 		defer preparedImage.Release()
-	}
-	manifest, err := loadSignedArtifactManifest(filepath.Join(preparedImage.Directory, "manifest.json"))
-	if err != nil {
-		return runnercontrol.BackendInstance{}, fmt.Errorf("SecondBox selected execution image manifest failed: %w", err)
-	}
-	assignment.Assets = selectedImageAssetReferences(manifest)
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
-		return runnercontrol.BackendInstance{}, err
 	}
 	const mib = uint64(1 << 20)
 	requirements := assignment.Requirements
@@ -975,25 +950,6 @@ func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerproto
 		ToolchainManifestDigest: manifest.ToolchainBundle.ManifestDigest,
 		MandatoryFeatures:       features,
 	}, nil
-}
-
-func selectedImageAssetReferences(manifest signedArtifactManifest) []*runnerprotocol.AssetReference {
-	return []*runnerprotocol.AssetReference{
-		{
-			ArtifactId:              manifest.RuntimeBundle.ArtifactID,
-			ManifestDigest:          manifest.RuntimeBundle.ManifestDigest,
-			Architecture:            manifest.Architecture,
-			GuestProtocolGeneration: manifest.GuestProtocol.Maximum,
-			MandatoryGuestFeatures:  append([]string(nil), manifest.RuntimeBundle.MandatoryGuestFeatures...),
-		},
-		{
-			ArtifactId:              manifest.ToolchainBundle.ArtifactID,
-			ManifestDigest:          manifest.ToolchainBundle.ManifestDigest,
-			Architecture:            manifest.Architecture,
-			GuestProtocolGeneration: manifest.GuestProtocol.Maximum,
-			MandatoryGuestFeatures:  append([]string(nil), manifest.ToolchainBundle.MandatoryGuestFeatures...),
-		},
-	}
 }
 
 func mergeUniqueStrings(groups ...[]string) []string {

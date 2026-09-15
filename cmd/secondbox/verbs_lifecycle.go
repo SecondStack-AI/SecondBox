@@ -97,7 +97,7 @@ func runLifecycleVerb(ctx context.Context, session cliSession, command string, a
 		return err
 	}
 	var image contracts.ExecutionImage
-	if command == "create" || command == "start" {
+	if command == "create" || command == "start" && imageFlags.reference != "" {
 		image, err = imageFlags.resolve()
 		if err != nil {
 			return err

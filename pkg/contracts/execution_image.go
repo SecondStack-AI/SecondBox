@@ -16,14 +16,18 @@ const (
 
 // ExecutionImage selects one signed OCI execution bundle for a lifecycle operation.
 type ExecutionImage struct {
-	Reference       string                   `json:"reference"`
-	PullCredentials *RegistryPullCredentials `json:"pullCredentials,omitempty"`
+	Reference string `json:"reference"`
 }
 
-// RegistryPullCredentials authorize one image pull and never enter durable records.
-type RegistryPullCredentials struct {
-	Username string `json:"username"`
-	Token    string `json:"token"`
+type PrepareImageRequest struct {
+	Image   ExecutionImage `json:"image"`
+	Profile string         `json:"profile,omitempty"`
+}
+
+type ImagePreparation struct {
+	Image           PublicExecutionImage `json:"image"`
+	TargetRunners   int                  `json:"targetRunners"`
+	PreparedRunners int                  `json:"preparedRunners"`
 }
 
 // PublicExecutionImage is the non-secret image identity returned by the API.
@@ -38,18 +42,22 @@ func (image ExecutionImage) Validate() error {
 		!executionImageReferencePattern.MatchString(image.Reference) {
 		return errors.New("SecondBox execution image requires a bounded fully qualified tag or sha256 digest reference")
 	}
-	if image.PullCredentials != nil {
-		if image.PullCredentials.Token == "" || len(image.PullCredentials.Token) > 8192 ||
-			len(image.PullCredentials.Username) > 256 ||
-			strings.TrimSpace(image.PullCredentials.Username) != image.PullCredentials.Username {
-			return errors.New("SecondBox execution image pull credentials are invalid")
-		}
-	}
 	return nil
 }
 
 func (image ExecutionImage) LifecycleMetadata() map[string]string {
+	if image.Reference == "" {
+		return map[string]string{}
+	}
 	return map[string]string{executionImageReferenceMetadata: image.Reference}
+}
+
+func ExecutionImageDigestReference(reference, digest string) string {
+	repository, _, _ := strings.Cut(reference, "@")
+	if separator := strings.LastIndex(repository, ":"); separator > strings.LastIndex(repository, "/") {
+		repository = repository[:separator]
+	}
+	return repository + "@" + digest
 }
 
 func MergeExecutionImageMetadata(image ExecutionImage, attributed *AttributedExecutionRequest) map[string]string {

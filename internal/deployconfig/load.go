@@ -181,6 +181,16 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	}
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH", catalog)
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", packagedAssetCatalogPath)
+	imageKey, err := resolveRegularReference(base, deployment.ExecutionImagePublicKey)
+	if err != nil {
+		return ResolvedDeployment{}, manifestError("deployment.execution_image_public_key", err)
+	}
+	if _, err := assetcatalog.LoadExecutionImageAuthority(imageKey, deployment.ExecutionImagePublicKeySHA256); err != nil {
+		return ResolvedDeployment{}, err
+	}
+	put("SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_HOST_PATH", imageKey)
+	put("SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY", "/etc/secondbox/execution-image.pub")
+	put("SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256", deployment.ExecutionImagePublicKeySHA256)
 
 	database := manifest.Database
 	databasePassword := ""
@@ -659,6 +669,10 @@ func validateRunner(prefix string, r Runner) error {
 	r = r.withPackagedPaths()
 	required := map[string]string{"pool_id": r.PoolID, "software_version": r.SoftwareVersion, "control_plane_address": r.ControlPlaneAddress, "control_plane_server_name": r.ControlPlaneServerName, "identity_directory": r.IdentityDirectory, "log_path": r.LogPath, "firecracker_path": r.FirecrackerPath, "firecracker_jailer_path": r.FirecrackerJailerPath, "firecracker_jail_root": r.FirecrackerJailRoot, "firecracker_cgroup_parent": r.FirecrackerCgroupParent, "firecracker_kernel_path": r.FirecrackerKernelPath, "firecracker_rootfs_path": r.FirecrackerRootFSPath, "firecracker_shared_image_path": r.FirecrackerSharedImagePath, "firecracker_kernel_args": r.FirecrackerKernelArgs, "firecracker_cpu_template": r.FirecrackerCPUTemplate, "firecracker_run_directory": r.FirecrackerRunDirectory, "firecracker_log_directory": r.FirecrackerLogDirectory, "snapshot_template_cache_root": r.SnapshotTemplateCacheRoot, "artifact_public_key": r.ArtifactPublicKey, "artifact_public_key_sha256": r.ArtifactPublicKeySHA256, "workspace_root": r.WorkspaceRoot, "sandbox_guest_ip": r.SandboxGuestIP, "sandbox_bridge_name": r.SandboxBridgeName, "sandbox_bridge_cidr": r.SandboxBridgeCIDR, "sandbox_guest_cidr": r.SandboxGuestCIDR, "sandbox_tap_prefix": r.SandboxTapPrefix, "sandbox_network_state_directory": r.SandboxNetworkStateDir, "network_policy_nft_path": r.NetworkPolicyNFTPath, "network_policy_max_dns_ttl": r.NetworkPolicyMaxDNSTTL, "network_policy_runner_addresses": r.NetworkPolicyRunnerAddresses, "network_policy_management_cidrs": r.NetworkPolicyManagementCIDRs, "egress_context_config_path": r.EgressContextConfigPath, "network_policy_dns_upstream": r.NetworkPolicyDNSUpstream, "guest_heartbeat_interval": r.GuestHeartbeatInterval, "data_plane_listen_address": r.DataPlaneListenAddress, "data_plane_advertised_address": r.DataPlaneAdvertisedAddress}
 	required["execution_image_registries"] = r.ExecutionImageRegistries
+	required["execution_image_registry_config_directory"] = r.ExecutionImageRegistryConfigDirectory
+	if !filepath.IsAbs(r.ExecutionImageRegistryConfigDirectory) || strings.ContainsAny(r.ExecutionImageRegistryConfigDirectory, "<>") {
+		return manifestError(prefix+".execution_image_registry_config_directory must be an absolute configured path", nil)
+	}
 	required["execution_image_public_key"] = r.ExecutionImagePublicKey
 	required["execution_image_public_key_sha256"] = r.ExecutionImagePublicKeySHA256
 	required["log_directory"] = r.LogDirectory
@@ -1112,6 +1126,8 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	r = r.withPackagedPaths()
 	env := map[string]string{"SECONDBOX_RUNNER_ID": r.RunnerID, "SECONDBOX_RUNNER_POOL_ID": r.PoolID, "SECONDBOX_RUNNER_SOFTWARE_VERSION": r.SoftwareVersion, "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": r.ControlPlaneAddress, "SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": r.ControlPlaneServerName, "SECONDBOX_RUNNER_CREDENTIAL": credential, "SECONDBOX_RUNNER_LOG_PATH": r.LogPath, "SECONDBOX_RUNNER_FIRECRACKER_PATH": r.FirecrackerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH": r.FirecrackerJailerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT": r.FirecrackerJailRoot, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT": r.FirecrackerCgroupParent, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH": r.FirecrackerKernelPath, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH": r.FirecrackerRootFSPath, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH": r.FirecrackerSharedImagePath, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS": r.FirecrackerKernelArgs, "SECONDBOX_RUNNER_FIRECRACKER_CPU_TEMPLATE": r.FirecrackerCPUTemplate, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR": r.FirecrackerRunDirectory, "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR": r.FirecrackerLogDirectory, "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT": r.SnapshotTemplateCacheRoot, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY": r.ArtifactPublicKey, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256": r.ArtifactPublicKeySHA256, "SECONDBOX_RUNNER_WORKSPACE_ROOT": r.WorkspaceRoot, "SECONDBOX_RUNNER_SANDBOX_GUEST_IP": r.SandboxGuestIP, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME": r.SandboxBridgeName, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR": r.SandboxBridgeCIDR, "SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR": r.SandboxGuestCIDR, "SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX": r.SandboxTapPrefix, "SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR": r.SandboxNetworkStateDir, "SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH": r.NetworkPolicyNFTPath, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL": r.NetworkPolicyMaxDNSTTL, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": r.NetworkPolicyRunnerAddresses, "SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS": r.NetworkPolicyManagementCIDRs, "SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG": r.EgressContextConfigPath, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM": r.NetworkPolicyDNSUpstream, "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL": r.GuestHeartbeatInterval, "SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS": r.DataPlaneListenAddress, "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS": r.DataPlaneAdvertisedAddress}
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"] = "/var/lib/secondbox-runner/execution-images"
+	env["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"] = "/run/secondbox-image-fetcher/fetcher.sock"
+	env["SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR"] = r.ExecutionImageRegistryConfigDirectory
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES"] = r.ExecutionImageRegistries
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES"] = "/var/lib/secondbox-runner/registry-certificates"
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY"] = r.ExecutionImagePublicKey

@@ -1,7 +1,13 @@
 package deployconfig
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
@@ -19,6 +25,17 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	imageKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageKeyDER, err := x509.MarshalPKIXPublicKey(&imageKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: imageKeyDER})
+	imageKeyDigest := sha256.Sum256(imageKeyDER)
+	release.MicroVM.SigningKeyFingerprint = "SHA256:" + strings.ToUpper(hex.EncodeToString(imageKeyDigest[:]))
 	releaseBytes, err := json.Marshal(release)
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +62,13 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 		t.Fatal(err)
 	}
 	keyID := strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:"))
-	verifiedArtifact := install.VerifiedArtifact{SigningKeyID: keyID, ManifestDigest: release.MicroVM.SignedManifestDigest, SigningPublicKeyPEM: []byte("unused after verified extraction")}
+	verifiedArtifact := install.VerifiedArtifact{SigningKeyID: keyID, ManifestDigest: release.MicroVM.SignedManifestDigest, SigningPublicKeyPEM: imageKeyPEM}
+	if err := os.MkdirAll(installPath(plan, "artifacts"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installPath(plan, "artifacts"), "signing.pub"), imageKeyPEM, 0644); err != nil {
+		t.Fatal(err)
+	}
 	planDigest, err := install.PlanDigest(plan)
 	if err != nil {
 		t.Fatal(err)
