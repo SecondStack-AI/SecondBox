@@ -8,76 +8,170 @@
 
 ### Fixed
 
-- Preserved release notes through draft upload, retries, and stable publication.
+- Preserved release notes through draft upload, retries, and stable publication, with the install and SDK footer rendered as code.
+- Backfilled changelog sections for 0.4.5 through 0.14.0, release notes for v0.10.0, v0.10.1, v0.11.0, and v0.13.0, and the GitHub release descriptions that the publisher had overwritten.
 
-## 0.5.0 to 0.14.0 (consolidated) - 2026-09-15
+## 0.14.0 - 2026-09-15
 
-Changes published across releases 0.5.0 through 0.14.0 that were never cut out
-of Unreleased at the time. Per-release details are in `docs/releases/`.
+Added exclusive Workspace storage accounting, Sandbox inventory filters, and controller SDK helpers, and fixed unlimited Snapshot retention.
 
-### Changed
-
-- Required a fresh database and separate Runner storage root for v0.14.0 because the unlimited Snapshot retention fix changes the initial migration checksum. See the [v0.14.0 release notes](docs/releases/v0.14.0.md).
-
-- Changed policy ceilings and quota dimensions to explicit integer-or-null values, with complete-object validation and nullable admission headroom. Added delegated Subject lifecycle selection for future Sandboxes; fresh Agent Profiles use unlimited maximum runtime while finite workloads retain age-based termination.
-
-- Rotated the Firecracker microVM bundle to `secondbox-0.12.0` with a new RSA-4096 trust anchor, shipping the guest port-credit and streaming-exec fixes from #127, #128, and #134. Existing deployments require reinstallation and resource recreation because the guided updater refuses bundle digest changes. See [v0.12.0 release notes](docs/releases/v0.12.0.md) for the fingerprint and bundle identity.
-
-- Added a lean release tier with sharded Firecracker and local gVisor qualification, amd64 images, and one installer guest. `just nightly` retains the full scenario matrix; `just release VERSION --full` also builds arm64 images and runs all installer modes. Manifests record built platforms and evidence remains commit-exact.
-
-- Required removal of duplicate ready Snapshot names per Sandbox before upgrading across migration `0024_snapshot_name_index.sql`. On the source release, list Snapshots with `snapshots list --path sandboxId=...` and delete unwanted duplicates by Snapshot identifier; duplicates block control-plane startup. See the deployment and guided-update procedures.
-- The gVisor backend is a supported backend for Linux amd64 hosts without KVM, Kubernetes nodes included. Every release now publishes `ghcr.io/secondstack-ai/secondbox/runner-gvisor` and `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts` (the prepared flat root, `runsc`, the guest agent, and the backend materialization, built from the repository and digest-pinned bases) plus the `secondbox-VERSION-gvisor-materialization.json` release file; the artifact manifest schema is `secondbox.release/artifact-manifest/v6` with a `gvisor` section recording both image digests, the materialization digest, the flat-root digest, and the `runsc` release, and gVisor host scenario evidence (full releases also carry pod evidence).
+Requires a fresh database and a separate Runner storage root: the unlimited Snapshot retention fix changes the initial migration checksum, so no existing installation, including v0.13.0, upgrades in place. The signed `secondbox-0.12.0` Firecracker bundle and its trust anchor are unchanged. See the [v0.14.0 release notes](docs/releases/v0.14.0.md).
 
 ### Added
 
-- Added bounded state and ID filters to Sandbox listings, atomic quota observations on Subject quota updates, and TypeScript tenant-controller management helpers.
-
-- Added optional `exclusiveBytes` to Workspace storage observations, measuring image extents unshared with templates, Snapshots, or other Workspaces. Allocated bytes remain available when FIEMAP is unsupported or exceeds the bounded scan, with a separate exclusive-measurement reason.
-
-- Added application-scoped quota headroom and retained Workspace storage observations, including allocated image blocks and admission-pressure freshness without exposing host identities. Platform operators can raise existing Tenant quotas without recreating retained resources.
-
-- Added `just qualify` for concurrent PR and release gates and `just release VERSION` for local qualification, artifact building, memory-capped parallel installer guests, and final staging, with per-stage logs and timings. Releases retain commit-exact evidence and require explicit publication.
-
-- Added friendly Sandbox lifecycle, file, port-forwarding, and Snapshot commands. `run` and `create` now accept size presets, explicit CPU/memory/Workspace requests bounded by optional Profile ceilings, quota, and Runner admission, and `--from sandbox/snapshot-name` or Snapshot identifiers. Memory and disk requests, Profile defaults, and finite ceilings require whole MiB. Requested disk capacity rounds up to a power of two, capped at a finite ceiling when the request fits; resume Profiles require their fixed size. An operator flexible-size Profile example removes CPU and memory ceilings while bounding disk at 256 GiB. Resolved resources appear in human Sandbox views, and an operator Profile example documents preparing dependencies with registry HTTPS access for golden Snapshots.
-- Added attributed command execution on Firecracker and gVisor: one command owns a fresh Sandbox generation, the Runner supplies authenticated connection identity to a local Unix gateway, and completion, cancellation or expiry retires compute. The `agent-compartment` Profile adds an opt-in attributed mode with two concurrent gateway connections while preserving ordinary execution and existing immutable revisions.
-- Added tenant-aware egress contexts so several SecondStack installations can share one RunnerPool without sharing gateway PKI, interception authority, egress policy, or credential custody. Every Profile network policy now explicitly requires or declines a Tenant context through the required `requiresTenantEgressContext` field, and opaque context names use one bounded provider-neutral syntax across public contracts, Runner protocol, persistence, audit, and diagnostics.
-- Added customer-shared tenancy: one customer-operated deployment serves multiple SecondStack installations in the same trust domain. The platform token delegates fixed-capability tenant-controller authorities; controllers manage Subjects and application authorities within tenant ceilings; PostgreSQL persists only public credential lookup identifiers and one-way verifiers, and revocation or expiry applies on the next request without a restart. Tenant aggregate and Subject quota reserve and release in one transaction under a single global lock order, Subject closure converges through one durable claim-fenced cleanup Operation with Runner-acknowledged workspace removal, and the `secondbox` CLI gains operator and controller management workflows with one-time bearer display ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
-- Added the release-owned `agent-compartment-isolated` standard Profile bundle: command, file, and workspace capabilities with `deny_all` networking. Runner DNS-forwarder admission is now keyed to compiled domain allow-lists, so network-disabled and CIDR-only Sandboxes receive no port-53 path ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
-- Added an experimental gVisor compute backend for Linux amd64 hosts without KVM. It runs each Sandbox under the `runsc` systrap platform with dedicated cgroup v2 limits, network and mount namespaces, fail-closed network policy, reflink-only Workspace durability, generation fencing, and the complete provider-neutral data plane. Operators must build and pin its launch artifacts locally, select it runner-wide, and use a dedicated homogeneous RunnerPool; it supports `cold_boot` only and does not replace or fall back from the supported Firecracker path ([#99](https://github.com/SecondStack-AI/SecondBox/pull/99)).
-
-### Removed
-
-- Removed static application authorities: `SECONDBOX_APPLICATION_AUTHORITIES_JSON`, the `applications.application_authorities_file` manifest key, and every deployment, Compose, installer, diagnostics, and support-bundle surface that carried them. v0.6.0 is a clean-install boundary with no import, compatibility, fallback, or dual-source mode for v0.5.2 installations ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
+- Added bounded state and ID filters to Sandbox listings, atomic quota observations on Subject quota updates, and TypeScript tenant-controller management helpers ([#143](https://github.com/SecondStack-AI/SecondBox/pull/143)).
+- Added optional `exclusiveBytes` to Workspace storage observations, measuring image extents unshared with templates, Snapshots, or other Workspaces. Allocated bytes remain available when FIEMAP is unsupported or exceeds the bounded scan, with a separate exclusive-measurement reason ([#143](https://github.com/SecondStack-AI/SecondBox/pull/143)).
 
 ### Fixed
 
 - Preserved unlimited Snapshot retention through persistence and Snapshot reads/lists, without assigning an expiry.
+- Kept Workspace storage probes off the Runner heartbeat and command paths, bounded scans across reconnects, and omitted exclusive-byte measurements when unshared encoded extents prevent physical accounting ([#143](https://github.com/SecondStack-AI/SecondBox/pull/143)).
+- Distinguished missing Workspace files from missing Sandbox compute in data-plane errors, preserving generation fencing for stopped Sandboxes ([#143](https://github.com/SecondStack-AI/SecondBox/pull/143)).
 
-- Kept Workspace storage probes off the Runner heartbeat and command paths, bounded scans across reconnects, and omitted exclusive-byte measurements when unshared encoded extents prevent physical accounting.
+## 0.13.0 - 2026-09-14
 
-- Distinguished missing Workspace files from missing Sandbox compute in data-plane errors, preserving generation fencing for stopped Sandboxes.
+Added configurable finite-or-unlimited policy limits, delegated Subject lifecycle selection, Tenant quota updates, and retained Workspace storage observations.
 
-- Fixed port forwarding to bound every session by its granted Lease lifetime and keep individual connection failures from stopping other connections. Guided-install smoke runs now wait for Sandbox deletion to release capacity before starting the next run.
-- Fixed queued streaming stdin blocking the guest connection after an exec terminates, preserved command exit status when a program stops reading stdin before exiting, and allowed deadline outcomes to reach the streaming client.
+Schema changes require a clean initialization; existing deployments and their Workspaces remain separate, with no state adoption. The tag was cut at `1645f10` on the branch of [#141](https://github.com/SecondStack-AI/SecondBox/pull/141) before that branch was rebased onto `main`, so `git log v0.13.0..main` lists re-landed commits under different hashes; the tagged tree is identical to `main`'s `24ac255`. Release notes were written after the fact: see the [v0.13.0 release notes](docs/releases/v0.13.0.md).
+
+### Added
+
+- Added application-scoped quota headroom and retained Workspace storage observations, including allocated image blocks and admission-pressure freshness without exposing host identities. Platform operators can raise existing Tenant quotas without recreating retained resources ([#141](https://github.com/SecondStack-AI/SecondBox/pull/141)).
+
+### Changed
+
+- Changed policy ceilings and quota dimensions to explicit integer-or-null values, with complete-object validation and nullable admission headroom. Added delegated Subject lifecycle selection for future Sandboxes; fresh Agent Profiles use unlimited maximum runtime while finite workloads retain age-based termination ([#141](https://github.com/SecondStack-AI/SecondBox/pull/141)).
+
+## 0.12.0 - 2026-09-13
+
+Rotated the Firecracker microVM bundle and its signing authority so Firecracker guests receive the port-credit and streaming-exec fixes, and introduced the lean release tier.
+
+Existing deployments must be reinstalled and their resources recreated; the guided updater refuses bundle digest changes. See the [v0.12.0 release notes](docs/releases/v0.12.0.md).
+
+### Changed
+
+- Rotated the Firecracker microVM bundle to `secondbox-0.12.0` with a new RSA-4096 trust anchor, shipping the guest port-credit and streaming-exec fixes from #127, #128, and #134. Existing deployments require reinstallation and resource recreation because the guided updater refuses bundle digest changes. See [v0.12.0 release notes](docs/releases/v0.12.0.md) for the fingerprint and bundle identity.
+- Added a lean release tier with sharded Firecracker and local gVisor qualification, amd64 images, and one installer guest. `just nightly` retains the full scenario matrix; `just release VERSION --full` also builds arm64 images and runs all installer modes. Manifests record built platforms and evidence remains commit-exact ([#135](https://github.com/SecondStack-AI/SecondBox/pull/135)).
+
+### Fixed
+
+- Fixed queued streaming stdin blocking the guest connection after an exec terminates, preserved command exit status when a program stops reading stdin before exiting, and allowed deadline outcomes to reach the streaming client ([#134](https://github.com/SecondStack-AI/SecondBox/pull/134)).
+
+## 0.11.0 - 2026-09-13
+
+Added one command per Sandbox intent (friendly verbs, size presets, golden Snapshots, and a guided install that runs a hello-world microVM) and one-command qualification and release tooling.
+
+The Firecracker bundle shipped with this release still predates the guest-side port-credit fixes below; they reach Firecracker guests with the v0.12.0 bundle. Release notes were written after the fact: see the [v0.11.0 release notes](docs/releases/v0.11.0.md).
+
+### Added
+
+- Added friendly Sandbox lifecycle, file, port-forwarding, and Snapshot commands. `run` and `create` now accept size presets, explicit CPU/memory/Workspace requests bounded by optional Profile ceilings, quota, and Runner admission, and `--from sandbox/snapshot-name` or Snapshot identifiers. Memory and disk requests, Profile defaults, and finite ceilings require whole MiB. Requested disk capacity rounds up to a power of two, capped at a finite ceiling when the request fits; resume Profiles require their fixed size. An operator flexible-size Profile example removes CPU and memory ceilings while bounding disk at 256 GiB. Resolved resources appear in human Sandbox views, and an operator Profile example documents preparing dependencies with registry HTTPS access for golden Snapshots ([#126](https://github.com/SecondStack-AI/SecondBox/pull/126)).
+- Added `just qualify` for concurrent PR and release gates and `just release VERSION` for local qualification, artifact building, memory-capped parallel installer guests, and final staging, with per-stage logs and timings. Releases retain commit-exact evidence and require explicit publication ([#131](https://github.com/SecondStack-AI/SecondBox/pull/131)).
+
+### Changed
+
+- Required removal of duplicate ready Snapshot names per Sandbox before upgrading across migration `0024_snapshot_name_index.sql`. On the source release, list Snapshots with `snapshots list --path sandboxId=...` and delete unwanted duplicates by Snapshot identifier; duplicates block control-plane startup. See the deployment and guided-update procedures ([#126](https://github.com/SecondStack-AI/SecondBox/pull/126)).
+- Simplified deployment settings: removed the seven unused deployment-level Subject quota defaults and the unenforced RunnerPool `capacityPolicy` from the public API, SDKs, resource documents, the CLI `--capacity` option, and deployment pool declarations (`max_sandboxes`, `max_vcpu_count`, `max_memory_bytes`); a forward migration drops its column. Packaged listeners, catalog location, same-host Runner paths, and the jail policy are derived; polling intervals become optional `[overrides]`. Retired fields are rejected ([#130](https://github.com/SecondStack-AI/SecondBox/pull/130)).
+
+### Fixed
+
+- Fixed port forwarding to bound every session by its granted Lease lifetime and keep individual connection failures from stopping other connections. Guided-install smoke runs now wait for Sandbox deletion to release capacity before starting the next run ([#126](https://github.com/SecondStack-AI/SecondBox/pull/126)).
+- Guest port forwarding now returns unused byte credit after short socket reads, bounds Runner adapter credit and read sizes, and keeps granting credit to guests that discard short-read remainders, preventing forwarding stalls ([#127](https://github.com/SecondStack-AI/SecondBox/pull/127), [#128](https://github.com/SecondStack-AI/SecondBox/pull/128), [#129](https://github.com/SecondStack-AI/SecondBox/pull/129)).
+
+## 0.10.1 - 2026-09-11
+
+Fixed attributed commands terminating after a single HTTP client connection closed.
+
+Preserves the v0.10.0 database, Runner protocol, and runtime/toolchain asset identities. See the [v0.10.1 release notes](docs/releases/v0.10.1.md).
+
+### Fixed
+
 - Fixed attributed commands terminating after an individual HTTP client reset or closed its connection. Subsequent requests retain their command authority, while gateway failure, cancellation, and expiry still stop forwarding ([#125](https://github.com/SecondStack-AI/SecondBox/pull/125)).
+
+## 0.10.0 - 2026-09-11
+
+Added attributed command execution with Runner-owned egress attribution.
+
+The public API stays at version 1 and the Runner protocol window at `[4,4]`; attributed execution additionally requires the Runner's advertised `attributed-execution` capability and a configured gateway `attributed_socket`. Applying the release resources appends an attribution-enabled `agent-compartment` revision; existing Sandboxes keep their immutable older revision. Release notes were written after the fact: see the [v0.10.0 release notes](docs/releases/v0.10.0.md).
+
+### Added
+
+- Added attributed command execution on Firecracker and gVisor: one command owns a fresh Sandbox generation, the Runner supplies authenticated connection identity to a local Unix gateway, and completion, cancellation or expiry retires compute. The `agent-compartment` Profile adds an opt-in attributed mode with two concurrent gateway connections while preserving ordinary execution and existing immutable revisions ([#123](https://github.com/SecondStack-AI/SecondBox/pull/123)).
+
+## 0.9.2 - 2026-09-04
+
+Repaired Workspace file reads that every release-owned Profile refused with `413 limit_exceeded`, and gave three data-plane refusals their own types.
+
+Guided Firecracker installations at v0.8.3 or newer upgrade in place; the bundle and trust anchor are unchanged from v0.6.0. See the [v0.9.2 release notes](docs/releases/v0.9.2.md).
+
+### Fixed
+
 - Workspace file reads no longer fail with `413 limit_exceeded` whenever a Profile's `maximumTransferBytes` exceeds the control-plane `SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES` cap. A read without a caller bound is now admitted with the smaller of the two ceilings instead of being refused before the Runner is contacted, which rejected every read (including 1 KB files) under the release-owned and gVisor Profiles. A file that is genuinely larger than the admitted bound now returns `413 limit_exceeded` from the Firecracker and gVisor backends instead of a `500` bridge failure ([#119](https://github.com/SecondStack-AI/SecondBox/issues/119)).
 - Data-plane requests whose `maximumOutputBytes` or streaming `windowBytes` exceed the pinned Profile execution policy now return `400 invalid_request` with a title naming the exceeded bound, and a payload larger than `maximumTransferBytes` returns `413 limit_exceeded`. Previously both surfaced as `429 quota_exceeded`, indistinguishable from concurrency refusals, and the bound was only checked after capacity, so a malformed request at a saturated Sandbox was still reported as a quota refusal ([#119](https://github.com/SecondStack-AI/SecondBox/issues/119)).
+
+## 0.9.1 - 2026-09-02
+
+Made the gVisor backend a supported backend for Linux amd64 hosts without KVM and distributed it with every release under the v6 artifact manifest.
+
+v0.9.0 was tagged but retracted before publication: its installer qualification driver still required the v5 artifact manifest ([#118](https://github.com/SecondStack-AI/SecondBox/pull/118)). See the [v0.9.1 release notes](docs/releases/v0.9.1.md).
+
+### Changed
+
+- The gVisor backend is a supported backend for Linux amd64 hosts without KVM, Kubernetes nodes included. Every release now publishes `ghcr.io/secondstack-ai/secondbox/runner-gvisor` and `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts` (the prepared flat root, `runsc`, the guest agent, and the backend materialization, built from the repository and digest-pinned bases) plus the `secondbox-VERSION-gvisor-materialization.json` release file; the artifact manifest schema is `secondbox.release/artifact-manifest/v6` with a `gvisor` section recording both image digests, the materialization digest, the flat-root digest, and the `runsc` release, and gVisor host scenario evidence (full releases also carry pod evidence) ([#117](https://github.com/SecondStack-AI/SecondBox/pull/117)).
+
+## 0.8.3 - 2026-09-01
+
+Added tenant-aware egress contexts so several SecondStack installations share one RunnerPool without sharing gateway PKI, interception authority, egress policy, or credential custody.
+
+This is a clean-recreation boundary from v0.7.2 and earlier; there is no in-place update. v0.8.0 through v0.8.2 were tagged but never published. See the [v0.8.3 release notes](docs/releases/v0.8.3.md).
+
+### Added
+
+- Added tenant-aware egress contexts so several SecondStack installations can share one RunnerPool without sharing gateway PKI, interception authority, egress policy, or credential custody. Every Profile network policy now explicitly requires or declines a Tenant context through the required `requiresTenantEgressContext` field, and opaque context names use one bounded provider-neutral syntax across public contracts, Runner protocol, persistence, audit, and diagnostics ([#113](https://github.com/SecondStack-AI/SecondBox/pull/113)).
+
+### Changed
+
+- Advanced the Runner protocol to generation 4 exactly for context-aware assignments. Control planes and Runners must be replaced together; generation 3 peers, mixed fleets, legacy global-gateway assignments, default contexts, and cross-context fallback are refused ([#113](https://github.com/SecondStack-AI/SecondBox/pull/113)).
+- Declared v0.7.2 to this release a clean-recreation boundary. Operators must quiesce applications, retire every old Sandbox, replace the deployment, and recreate resources under the new Profile and Runner contracts. A coordinated v0.7.2 backup is for complete rollback only; there is no historical Profile decoder, legacy assignment bridge, or Sandbox migration operation.
+- Experimental gVisor runners now require the generic network-policy bounds plus `SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG`, an absolute path to the strict context-indexed Runner-local gateway document. The legacy global `SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS` value is rejected. When upgrading an existing gVisor runner, stop it, prepare and repin its materialization, install the reviewed context file read-only, revise affected Profiles to the new execution-asset identity, and then restart the runner. Missing settings, unprepared roots, unsafe context files, and stale pins are rejected instead of falling back or failing later in `runsc` ([#113](https://github.com/SecondStack-AI/SecondBox/pull/113), [#114](https://github.com/SecondStack-AI/SecondBox/pull/114)).
+
+### Fixed
+
 - Retracted `v0.8.0` before publication because its root Go module required the unpublished Runner submodule, leaving the tagged module graph unresolvable for downstream consumers. No v0.8.0 GitHub Release or coordinated artifacts were published. Also retracted `v0.8.1` and `v0.8.2`, tagged before the release qualification-driver fixes landed and likewise never published; use v0.8.3.
-- Retracted the Go module version `v0.7.0`, which the public Go proxy cached from an intermediate release-preparation commit before final qualification fixes merged. Use `v0.7.1`; it includes the exact v0.6.0 quota and recorded-manifest guided-update bridges missing from the cached module while preserving the final v0.7.0 distribution's API, protocol, migration, and signed microVM bundle contracts.
-- Release qualification now preserves and validates the qualified Linux amd64 host platform in both scenario and installer evidence.
-- Recorded-release verification now recognizes the exact published v0.6.0 installer-qualification waiver only when authenticating that immutable release as a guided-update source. New scenario and installer evidence use v2 and require an explicit Linux amd64 host platform; valid v1 evidence remains readable without weakening current release staging.
-- Guided updates from the exact v0.6.0 release now recover its recorded Compose transport through the strict v0.6.0 deployment-manifest schema, including the source-era `max_cpu_millis` fields. This bridge is version-gated to authenticated v0.6.0 installer state; ordinary and newer deployment manifests remain on the current strict schema and reject legacy CPU fields.
-- Firecracker cold boots now install the runner-controlled DNS identity before readiness, including when using the unchanged v0.6.0 signed microVM bundle required by the v0.7.0 upgrade path.
-- Failed data-plane session setup (for example while a Runner reconnects after a control-plane restart) now releases its admitted concurrency reservation through the existing failure transitions instead of counting against tenant and Subject `maxConcurrentOperations` until retention cleanup ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
-- Management CLI commands now propagate API errors instead of rendering an empty result with exit success when a call fails ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
-- Added a resumable `secondbox-deploy update` workflow for completed v0.6.0 or newer guided single-host installations. v0.6.0 is a clean-install boundary that supersedes the earlier source minimum. The latest verified bootstrap authenticates immutable source Profile history without regenerating it from newer policy; admits staging only when Runner storage can retain its operational reserve; reclaims only the current update's validated interrupted extraction path; stages every compatible target release input before downtime; revalidates privileged Runner storage; requires every Tenant's Sandboxes and pending lifecycle intents to be stopped; fences control-plane admission before the forward-only boundary; keeps that admission fence closed when boundary persistence is ambiguous; shuts down through the source deployment's recorded Compose assets; rejects execution-bundle changes that would strand immutable Profile revisions; preserves PostgreSQL data, authority, Runner identity, Workspaces, Snapshots, topology, and Compose volumes; then advances the original plan and receipt with append-only release history after readiness and authenticated Runner qualification succeed.
+
+## 0.7.2 - 2026-08-28
+
+Removed the two operator workarounds that blocked normal SecondStack use of the experimental gVisor backend.
+
+Guided Firecracker installations upgrade in place from v0.6.0, v0.7.0, or v0.7.1; the bundle and trust anchor are unchanged from v0.6.0. See the [v0.7.2 release notes](docs/releases/v0.7.2.md).
+
+### Fixed
+
+- Experimental gVisor runners now consume the complete Runner network-policy contract, including explicit logical gateway authorization, and the Runner ships `secondbox-prepare-gvisor-flat-root`, which materializes and validates every required bind destination before the root identity is pinned. Existing gVisor deployments set all six network-policy variables, re-prepare and re-digest their flat root, repin, and revise affected Profiles ([#111](https://github.com/SecondStack-AI/SecondBox/pull/111)).
+
+## 0.7.1 - 2026-08-27
+
+Superseded v0.7.0 because the public Go module proxy cached the `v0.7.0` tag from an intermediate release-preparation commit.
+
+Every coordinated artifact is rebuilt from one immutable, qualified commit; the public API, migrations, protocol windows, deployment topology, standard resources, and signed bundle match the final v0.7.0 distribution. See the [v0.7.1 release notes](docs/releases/v0.7.1.md).
+
+### Fixed
+
+- Retracted the Go module version `v0.7.0`, which the public Go proxy cached from an intermediate release-preparation commit before final qualification fixes merged. Use `v0.7.1`; it includes the exact v0.6.0 quota and recorded-manifest guided-update bridges missing from the cached module while preserving the final v0.7.0 distribution's API, protocol, migration, and signed microVM bundle contracts ([#110](https://github.com/SecondStack-AI/SecondBox/pull/110)).
+
+## 0.7.0 - 2026-08-26
+
+Made the Runner compute boundary concrete across three implementations, stated CPU in whole vCPUs, and advanced the Runner protocol to generation 3.
+
+Upgrading from v0.6.0 requires a verified PostgreSQL backup: migration `0019` is forward-only. Guided v0.6.0 installations update through the v0.7.x bootstrap; operator-managed fleets stop every Runner, upgrade the control plane, then start generation-3 Runners. The Go module coordinate `v0.7.0` is retracted; use v0.7.1. See the [v0.7.0 release notes](docs/releases/v0.7.0.md).
+
+### Added
+
+- Added an experimental gVisor compute backend for Linux amd64 hosts without KVM. It runs each Sandbox under the `runsc` systrap platform with dedicated cgroup v2 limits, network and mount namespaces, fail-closed network policy, reflink-only Workspace durability, generation fencing, and the complete provider-neutral data plane. Operators must build and pin its launch artifacts locally, select it runner-wide, and use a dedicated homogeneous RunnerPool; it supports `cold_boot` only and does not replace or fall back from the supported Firecracker path ([#99](https://github.com/SecondStack-AI/SecondBox/pull/99)).
 - Added an experimental Microsandbox compute backend behind the provider-neutral runner compute port. A Runner selects exactly one backend at startup, RunnerPools seal privately to one backend kind, and backend identity never enters public resources. Firecracker remains the only supported production backend ([#96](https://github.com/SecondStack-AI/SecondBox/pull/96)).
 
 ### Changed
 
-- Advanced the Runner protocol to generation 4 exactly for context-aware assignments. Control planes and Runners must be replaced together; generation 3 peers, mixed fleets, legacy global-gateway assignments, default contexts, and cross-context fallback are refused.
-- Declared v0.7.2 to this release a clean-recreation boundary. Operators must quiesce applications, retire every old Sandbox, replace the deployment, and recreate resources under the new Profile and Runner contracts. A coordinated v0.7.2 backup is for complete rollback only; there is no historical Profile decoder, legacy assignment bridge, or Sandbox migration operation.
-- Experimental gVisor runners now require the generic network-policy bounds plus `SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG`, an absolute path to the strict context-indexed Runner-local gateway document. The legacy global `SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS` value is rejected. When upgrading an existing gVisor runner, stop it, prepare and repin its materialization, install the reviewed context file read-only, revise affected Profiles to the new execution-asset identity, and then restart the runner. Missing settings, unprepared roots, unsafe context files, and stale pins are rejected instead of falling back or failing later in `runsc` ([#111](https://github.com/SecondStack-AI/SecondBox/pull/111)).
 - Sandbox CPU is now stated in whole vCPUs everywhere: Profile resources use `vcpuCount` instead of `cpuMillis`, subject and tenant aggregate quotas use `maxVcpuCount` instead of `maxCpuMillis`, and the API, SDKs, and CLI carry the vCPU representation. Database migration `0019` converts stored quotas, Profile revisions, and runner capacity documents automatically on the first control-plane start, rounding milli-unit values up to the whole vCPU that already covered them, so no converted allowance shrinks below its recorded usage; a zero quota stays zero, and only Profile resources floor at one vCPU so revisions remain schedulable. Because rounding is per row, a subject whose fractional Profile allowances each round up can transiently sit at or above its converted quota: running work is never stopped, but new starts are refused until usage drains or the quota is widened, so review converted quotas after upgrading. Take a database backup before upgrading: this migration is forward-only, and rolling back to a pre-upgrade binary afterward requires restoring that backup ([#96](https://github.com/SecondStack-AI/SecondBox/pull/96)).
 - Guided-deployment manifest keys follow the vCPU representation: `max_cpu_millis` is now `max_vcpu_count` and `default_subject_max_cpu_millis` is now `default_subject_max_vcpu_count`, both holding whole vCPUs. Regenerate or edit operator-maintained manifests when upgrading; the previous keys are rejected ([#96](https://github.com/SecondStack-AI/SecondBox/pull/96)).
 - The signed-asset catalog no longer records a per-asset `signatureKeyId`: execution-asset identity is provider-neutral and Firecracker keeps its trust anchor in backend configuration. Guided updates accept both catalog forms from supported source deployments, but manually authored catalogs that still state `signatureKeyId` are rejected at control-plane startup and must be regenerated before activating this release ([#96](https://github.com/SecondStack-AI/SecondBox/pull/96)).
@@ -86,26 +180,88 @@ of Unreleased at the time. Per-release details are in `docs/releases/`.
 ### Removed
 
 - Removed the Profile `processLimit` resource field. Guest process counts are not host PIDs; the Firecracker backend bounds its jailer and VMM workers with a backend-owned host PID ceiling (32 slots plus two per vCPU) and no guest PID limit is promised. Profile specs that state `processLimit` are rejected; remove the field before upgrading ([#96](https://github.com/SecondStack-AI/SecondBox/pull/96)).
-- Removed the application Artifact resource, its API/SDK/CLI surfaces, S3-compatible storage integration, quotas, retention, garbage collection, and bundled object-store deployment ([#88](https://github.com/SecondStack-AI/SecondBox/pull/88)).
+
+### Fixed
+
+- Firecracker cold boots now install the runner-controlled DNS identity before readiness, including when using the unchanged v0.6.0 signed microVM bundle required by the v0.7.0 upgrade path ([#105](https://github.com/SecondStack-AI/SecondBox/pull/105)).
+- Release qualification now preserves and validates the qualified Linux amd64 host platform in both scenario and installer evidence ([#106](https://github.com/SecondStack-AI/SecondBox/pull/106)).
+- Recorded-release verification now recognizes the exact published v0.6.0 installer-qualification waiver only when authenticating that immutable release as a guided-update source. New scenario and installer evidence use v2 and require an explicit Linux amd64 host platform; valid v1 evidence remains readable without weakening current release staging ([#107](https://github.com/SecondStack-AI/SecondBox/pull/107)).
+- Guided updates from the exact v0.6.0 release now recover its recorded Compose transport through the strict v0.6.0 deployment-manifest schema, including the source-era `max_cpu_millis` fields. This bridge is version-gated to authenticated v0.6.0 installer state; ordinary and newer deployment manifests remain on the current strict schema and reject legacy CPU fields ([#109](https://github.com/SecondStack-AI/SecondBox/pull/109)).
+
+## 0.6.0 - 2026-08-26
+
+Added customer-shared tenancy: one customer-operated deployment serves multiple SecondStack installations in the same trust domain.
+
+This is a clean-install boundary: a v0.5.2 manifest or deployment carrying the retired static application-authority surface is refused. See the [v0.6.0 release notes](docs/releases/v0.6.0.md).
+
+### Added
+
+- Added customer-shared tenancy: one customer-operated deployment serves multiple SecondStack installations in the same trust domain. The platform token delegates fixed-capability tenant-controller authorities; controllers manage Subjects and application authorities within tenant ceilings; PostgreSQL persists only public credential lookup identifiers and one-way verifiers, and revocation or expiry applies on the next request without a restart. Tenant aggregate and Subject quota reserve and release in one transaction under a single global lock order, Subject closure converges through one durable claim-fenced cleanup Operation with Runner-acknowledged workspace removal, and the `secondbox` CLI gains operator and controller management workflows with one-time bearer display ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
+- Added the release-owned `agent-compartment-isolated` standard Profile bundle: command, file, and workspace capabilities with `deny_all` networking. Runner DNS-forwarder admission is now keyed to compiled domain allow-lists, so network-disabled and CIDR-only Sandboxes receive no port-53 path ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
+- Added a resumable `secondbox-deploy update` workflow for completed v0.6.0 or newer guided single-host installations. v0.6.0 is a clean-install boundary that supersedes the earlier source minimum. The latest verified bootstrap authenticates immutable source Profile history without regenerating it from newer policy; admits staging only when Runner storage can retain its operational reserve; reclaims only the current update's validated interrupted extraction path; stages every compatible target release input before downtime; revalidates privileged Runner storage; requires every Tenant's Sandboxes and pending lifecycle intents to be stopped; fences control-plane admission before the forward-only boundary; keeps that admission fence closed when boundary persistence is ambiguous; shuts down through the source deployment's recorded Compose assets; rejects execution-bundle changes that would strand immutable Profile revisions; preserves PostgreSQL data, authority, Runner identity, Workspaces, Snapshots, topology, and Compose volumes; then advances the original plan and receipt with append-only release history after readiness and authenticated Runner qualification succeed ([#95](https://github.com/SecondStack-AI/SecondBox/pull/95)).
+
+### Removed
+
+- Removed static application authorities: `SECONDBOX_APPLICATION_AUTHORITIES_JSON`, the `applications.application_authorities_file` manifest key, and every deployment, Compose, installer, diagnostics, and support-bundle surface that carried them. v0.6.0 is a clean-install boundary with no import, compatibility, fallback, or dual-source mode for v0.5.2 installations ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
+
+### Fixed
+
+- Failed data-plane session setup (for example while a Runner reconnects after a control-plane restart) now releases its admitted concurrency reservation through the existing failure transitions instead of counting against tenant and Subject `maxConcurrentOperations` until retention cleanup ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
+- Management CLI commands now propagate API errors instead of rendering an empty result with exit success when a call fails ([#100](https://github.com/SecondStack-AI/SecondBox/pull/100)).
+
+## 0.5.2 - 2026-08-20
+
+Fixed large File API writes that exceeded gRPC's default 4 MiB receive limit between the Runner and guest. Compatible with v0.5.0 and v0.5.1. See the [v0.5.2 release notes](docs/releases/v0.5.2.md).
 
 ### Fixed
 
 - Runner-to-guest file writes now stream bounded 64 KiB frames instead of placing the complete file in one gRPC message. Files larger than gRPC's 4 MiB default receive limit now remain usable up to SecondBox's configured transfer limit, and a failed file operation no longer leaves subsequent file or Exec operations on that guest protocol stream unusable ([#97](https://github.com/SecondStack-AI/SecondBox/pull/97)).
+
+## 0.5.1 - 2026-08-10
+
+Fixed interactive CLI sessions that could forward terminal capability replies into a Sandbox shell as input. Compatible with v0.5.0. See the [v0.5.1 release notes](docs/releases/v0.5.1.md).
+
+### Fixed
+
 - Interactive CLI progress no longer emits terminal capability queries or changes keyboard and paste modes. Terminal replies could remain unread on standard input and later be forwarded byte-for-byte into an interactive Sandbox shell, where `/bin/sh` interpreted their semicolon-delimited fragments as commands. The replacement activity renderer never reads standard input, emits only cursor-positioning output, remains bounded across terminal resizes, and preserves canonical Exec spawn-failure reasons in the Go SDK ([#93](https://github.com/SecondStack-AI/SecondBox/pull/93)).
+
+## 0.5.0 - 2026-08-09
+
+Removed the application Artifact resource and the control plane's S3-compatible object-store dependency, and fixed long-running HTTP operations that completed on the server after the client connection was cut.
+
+A deliberate clean break for the pre-production contract: recreate PostgreSQL from the v0.5.0 baseline and render a fresh `secondbox.toml`; there is no in-place upgrade from v0.4.7. The Runner protocol, guest protocol, bundle, and trust anchor are unchanged. See the [v0.5.0 release notes](docs/releases/v0.5.0.md).
+
+### Removed
+
+- Removed the application Artifact resource, its API/SDK/CLI surfaces, S3-compatible storage integration, quotas, retention, garbage collection, and bundled object-store deployment ([#88](https://github.com/SecondStack-AI/SecondBox/pull/88)).
+
+### Fixed
+
 - Buffered Exec and other long-running HTTP responses now remain connected for their operation-defined lifetime. The control plane previously applied its 30-second connection timeout as a server-wide response write deadline, so a valid command could complete and persist its result while the SDK received only `EOF` or `fetch failed` ([#90](https://github.com/SecondStack-AI/SecondBox/pull/90)).
-- Guided installation now inspects existing Docker IPAM allocations and chooses a separate, reviewed RFC1918 `/24` for the Compose backend network. Compose startup no longer depends on Docker's finite automatic address pools, and both the Firecracker guest network and Compose network are rejected when they overlap each other, a host route, or an allocated Docker network. A receipt-compatible v0.4.4 through v0.4.6 operation can use the v0.4.7 bootstrap to validate and stop its exact partial Compose project, journal a retry from the pre-Compose boundary, replace the conflicting network, and resume without downloading the release again.
-- Guided installation now validates both reviewed CLI binary destinations and the CLI configuration destination before pulling images or extracting the microVM bundle. Existing executables are upgraded atomically only when their embedded Go build identities are exactly the corresponding SecondBox CLIs, and an existing configuration is upgraded only when it is a protected, strictly decoded SecondBox session document. Unrelated files remain untouched and stop the operation before expensive release materialization; interrupted binary upgrades adopt only the release's exact digest on resume.
-- Guided installation now searches every RFC1918 `/24` for an unused guest bridge network while preserving its established preferred subnets. The former selector tried only `172.30.0.0/24` and `172.31.0.0/24`, so hosts with Docker, VPN, or other routes covering both failed before plan review even when other private networks were free.
-- Installer purge now validates every remaining user resource and the complete privileged mount boundary before deleting Compose volumes, artifacts, or host storage. Btrfs-image purge previously let systemd hide an unrecorded nested mount by unmounting its parent before recursive deletion reached the guard, and its Runner identity allowlist rejected the generated public CA certificate's intentional `0644` mode after earlier resources had already been removed.
-- Guided installation now gives Runner process logs and root-owned Firecracker instance logs separate reviewed directories. The generated manifest previously pointed both policies at `state/logs`; the container entrypoint consequently changed the receipt-owned Runner log directory from `10001:10001, 0750` to `root:root, 0700`, and an ordinary uninstall could not resume the deployment it had just preserved.
-- Guided installation now records and reviews the vendor-neutral Firecracker CPU template (`None`) in the accepted plan and materializes that exact choice into the Runner manifest. The former hidden `T2` literal was Intel-only, so an otherwise-qualified AMD host reached the first smoke Sandbox and then Firecracker rejected it with `CpuVendorMismatched`.
-- Installer-created Btrfs Runner storage now permits executable files and device nodes, which Firecracker's jail requires after it enters the per-Instance chroot. Existing XFS/Btrfs choices with `noexec` or `nodev` are no longer offered and are rejected again during privileged apply if their mount flags change; the Runner container also fails startup immediately instead of advertising readiness and timing out each Sandbox. The accepted plan now records the shortened jail directory itself so purge owns the path the Runner actually uses.
-- Installer-generated Runner manifests now keep the Firecracker jail root short enough for maximum-length Instance IDs and validate the resulting API socket path before deployment. The single-root storage correction had placed the jail beneath an extra `state` segment, so the first installed microVM reached a 112-byte Unix socket path and failed Linux's 108-byte limit even though Runner readiness was green.
-- The Compose contract test now creates and removes an explicit isolated `/24` instead of consuming Docker's finite default-address pools, so a host with many unrelated networks can run the required gate without deleting them.
-- Same-host Compose now binds the reviewed Runner storage root once instead of overlaying its Workspace child with a second bind mount. Linux reports hard links across distinct bind mounts as `EXDEV`, so the former container topology still failed when the Firecracker jailer linked a Workspace image into its jail even after host-side artifact, state, and Workspace paths had been colocated. Deployment validation now requires one dedicated storage filesystem and the fixed `state` and `workspaces` child layout.
-- Guided installation now places verified microVM assets, Runner run/jail/cache state, and Workspace storage beneath one operation-specific root on the selected reflink-capable filesystem. Host apply proves an asset-to-run `FICLONE` and a matching Workspace filesystem identity before materializing the release; resume rechecks the topology. The former layout mounted only the Workspace on Btrfs/XFS, so every installed Sandbox reached Firecracker and then failed while cloning its rootfs across filesystems with `operation not supported`. Purge verifies and journals the colocated assets before removing the privileged storage root.
-- Installer readiness now accepts the public `pre_shared` credential state emitted for a ready, authenticated Runner instead of waiting for the nonexistent `active` projection until its five-minute deadline expired.
-- Single-host capacity planning now reserves all 16 concurrent operations required by each selected `durable-coding` Sandbox, and installer readiness verifies the exact pool, scheduling capabilities, and operation capacity before attempting its smoke Sandbox. The former plan advertised at most eight operations while the Profile required 16, then reported the incompatible Runner as ready and failed the first Sandbox with `home_runner_unavailable`.
+
+## 0.4.7 - 2026-08-09
+
+Made guided single-host installation independent of Docker's finite automatic address pools. See the [v0.4.7 release notes](docs/releases/v0.4.7.md).
+
+### Fixed
+
+- Guided installation now inspects existing Docker IPAM allocations and chooses a separate, reviewed RFC1918 `/24` for the Compose backend network. Compose startup no longer depends on Docker's finite automatic address pools, and both the Firecracker guest network and Compose network are rejected when they overlap each other, a host route, or an allocated Docker network. A receipt-compatible v0.4.4 through v0.4.6 operation can use the v0.4.7 bootstrap to validate and stop its exact partial Compose project, journal a retry from the pre-Compose boundary, replace the conflicting network, and resume without downloading the release again ([#89](https://github.com/SecondStack-AI/SecondBox/pull/89)).
+
+## 0.4.6 - 2026-08-09
+
+Let the guided single-host installer safely upgrade an older SecondBox CLI installation. See the [v0.4.6 release notes](docs/releases/v0.4.6.md).
+
+### Fixed
+
+- Guided installation now validates both reviewed CLI binary destinations and the CLI configuration destination before pulling images or extracting the microVM bundle. Existing executables are upgraded atomically only when their embedded Go build identities are exactly the corresponding SecondBox CLIs, and an existing configuration is upgraded only when it is a protected, strictly decoded SecondBox session document. Unrelated files remain untouched and stop the operation before expensive release materialization; interrupted binary upgrades adopt only the release's exact digest on resume ([#87](https://github.com/SecondStack-AI/SecondBox/pull/87)).
+
+## 0.4.5 - 2026-08-09
+
+Repaired automatic guest-network selection in the guided single-host installer. See the [v0.4.5 release notes](docs/releases/v0.4.5.md).
+
+### Fixed
+
+- Guided installation now searches every RFC1918 `/24` for an unused guest bridge network while preserving its established preferred subnets. The former selector tried only `172.30.0.0/24` and `172.31.0.0/24`, so hosts with Docker, VPN, or other routes covering both failed before plan review even when other private networks were free ([#86](https://github.com/SecondStack-AI/SecondBox/pull/86)).
 
 ## 0.4.4 - 2026-08-08
 
@@ -123,6 +279,16 @@ Superseded the unpublished v0.4.3 tag after the first installer qualification VM
 - The privileged runtime qualification allocates an explicit isolated Compose backend subnet instead of depending on Docker's finite default address pools, so a host with many unrelated Docker networks can still qualify without deleting them ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
 - Installer-owned Runner enrollment, Compose lifecycle, and diagnostics now consume the private host helper's accepted root-path verification instead of repeating same-host preflight as the unprivileged operator. Root-only Runner state remains inaccessible to the invoking user without blocking installation after deployment materialization ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
 - Installer qualification now attributes every driver and guest-shell failure to its mode and source line, and includes the bounded guest serial tail for driver-side failures instead of silently cleaning the only diagnostic state ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Installer purge now validates every remaining user resource and the complete privileged mount boundary before deleting Compose volumes, artifacts, or host storage. Btrfs-image purge previously let systemd hide an unrecorded nested mount by unmounting its parent before recursive deletion reached the guard, and its Runner identity allowlist rejected the generated public CA certificate's intentional `0644` mode after earlier resources had already been removed ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Guided installation now gives Runner process logs and root-owned Firecracker instance logs separate reviewed directories. The generated manifest previously pointed both policies at `state/logs`; the container entrypoint consequently changed the receipt-owned Runner log directory from `10001:10001, 0750` to `root:root, 0700`, and an ordinary uninstall could not resume the deployment it had just preserved ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Guided installation now records and reviews the vendor-neutral Firecracker CPU template (`None`) in the accepted plan and materializes that exact choice into the Runner manifest. The former hidden `T2` literal was Intel-only, so an otherwise-qualified AMD host reached the first smoke Sandbox and then Firecracker rejected it with `CpuVendorMismatched` ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Installer-created Btrfs Runner storage now permits executable files and device nodes, which Firecracker's jail requires after it enters the per-Instance chroot. Existing XFS/Btrfs choices with `noexec` or `nodev` are no longer offered and are rejected again during privileged apply if their mount flags change; the Runner container also fails startup immediately instead of advertising readiness and timing out each Sandbox. The accepted plan now records the shortened jail directory itself so purge owns the path the Runner actually uses ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Installer-generated Runner manifests now keep the Firecracker jail root short enough for maximum-length Instance IDs and validate the resulting API socket path before deployment. The single-root storage correction had placed the jail beneath an extra `state` segment, so the first installed microVM reached a 112-byte Unix socket path and failed Linux's 108-byte limit even though Runner readiness was green ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- The Compose contract test now creates and removes an explicit isolated `/24` instead of consuming Docker's finite default-address pools, so a host with many unrelated networks can run the required gate without deleting them ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Same-host Compose now binds the reviewed Runner storage root once instead of overlaying its Workspace child with a second bind mount. Linux reports hard links across distinct bind mounts as `EXDEV`, so the former container topology still failed when the Firecracker jailer linked a Workspace image into its jail even after host-side artifact, state, and Workspace paths had been colocated. Deployment validation now requires one dedicated storage filesystem and the fixed `state` and `workspaces` child layout ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Guided installation now places verified microVM assets, Runner run/jail/cache state, and Workspace storage beneath one operation-specific root on the selected reflink-capable filesystem. Host apply proves an asset-to-run `FICLONE` and a matching Workspace filesystem identity before materializing the release; resume rechecks the topology. The former layout mounted only the Workspace on Btrfs/XFS, so every installed Sandbox reached Firecracker and then failed while cloning its rootfs across filesystems with `operation not supported`. Purge verifies and journals the colocated assets before removing the privileged storage root ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Installer readiness now accepts the public `pre_shared` credential state emitted for a ready, authenticated Runner instead of waiting for the nonexistent `active` projection until its five-minute deadline expired ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Single-host capacity planning now reserves all 16 concurrent operations required by each selected `durable-coding` Sandbox, and installer readiness verifies the exact pool, scheduling capabilities, and operation capacity before attempting its smoke Sandbox. The former plan advertised at most eight operations while the Profile required 16, then reported the incompatible Runner as ready and failed the first Sandbox with `home_runner_unavailable` ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
 
 ## 0.4.3 - 2026-08-08
 

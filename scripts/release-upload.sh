@@ -31,7 +31,18 @@ else
     printf 'Publishing locally built artifacts.\n' >"$notes"
   fi
 fi
-printf '\n\nGuided Linux amd64 install: curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh | sh. SDK: npm install @secondstack-ai/secondbox@%s\n' "$version" >>"$notes"
+cat >>"$notes" <<FOOTER
+
+## Install
+
+Guided Linux amd64 install:
+
+\`\`\`sh
+curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/download/$tag/install.sh | sh
+\`\`\`
+
+SDKs: \`npm install @secondstack-ai/secondbox@$version\` and \`go get github.com/SecondStack-AI/SecondBox@$tag\`
+FOOTER
 
 gh auth status >/dev/null
 if gh release view "$tag" --json isDraft >/dev/null 2>&1; then

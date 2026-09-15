@@ -82,7 +82,7 @@ it. Prepare a reviewable result before requesting any missing authorization.
    routine close-out. Locate the dispatched `release.yml` run for this version
    (do not assume the newest run is yours) and watch its ID with `--exit-status`.
 8. Verify `gh release view vX.Y.Z --json isDraft,isPrerelease,body,assets`: stable,
-   expected notes plus install/SDK footer, complete assets matching the staged
+   expected notes plus fenced install and SDK footer, complete assets matching the staged
    manifest. Historical counts were 29 lean / 30 full; derive expectations from
    this release instead of treating those counts as permanent. Check
    `npm view @secondstack-ai/secondbox@X.Y.Z version`, and use a fresh temporary

@@ -48,7 +48,7 @@ Only after staging succeeds, execute the printed tag-push and
 `just release-upload VERSION OUTPUT_DIR` commands in order. Upload reads
 `docs/releases/vVERSION.md` from the tag when present, otherwise uses a placeholder.
 An optional third `NOTES_FILE` argument supplies an explicit body. It appends the
-install and SDK footer, sets the draft body on creation or retry, and dispatches
+fenced install and SDK footer, sets the draft body on creation or retry, and dispatches
 the publisher. Publication preserves that body and publishes the staged bytes
 with npm provenance; GitHub Actions does not rebuild or qualify them.
 

@@ -116,7 +116,8 @@ export PATH="$fixture/bin:$PATH"
   "$uploader" 1.2.3 "$fixture/output"
   rg -q '^# Tagged notes$' "$RELEASE_TEST_STATE/body"
   ! rg -q 'uncommitted wrong notes' "$RELEASE_TEST_STATE/body"
-  rg -q 'SDK: npm install @secondstack-ai/secondbox@1.2.3' "$RELEASE_TEST_STATE/body"
+  rg -q -F 'releases/download/v1.2.3/install.sh | sh' "$RELEASE_TEST_STATE/body"
+  rg -q -F '`npm install @secondstack-ai/secondbox@1.2.3`' "$RELEASE_TEST_STATE/body"
   cp "$RELEASE_TEST_STATE/body" "$fixture/expected"
   "$uploader" 1.2.3 "$fixture/output"
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
@@ -142,6 +143,6 @@ export PATH="$fixture/bin:$PATH"
   printf "checkout-only notes\n" >docs/releases/v1.2.4.md
   "$uploader" 1.2.4 "$fixture/output" ""
   rg -q '^Publishing locally built artifacts.$' "$RELEASE_TEST_STATE/body"
-  rg -q 'SDK: npm install @secondstack-ai/secondbox@1.2.4' "$RELEASE_TEST_STATE/body"
+  rg -q -F '`npm install @secondstack-ai/secondbox@1.2.4`' "$RELEASE_TEST_STATE/body"
 )
 echo 'Release upload and publication notes regression checks passed.'
