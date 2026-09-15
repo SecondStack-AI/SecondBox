@@ -177,7 +177,7 @@ just release-upload 0.10.1 /protected/releases/secondbox-0.10.1
 ```
 
 `test-scenario` writes `.tmp/scenario-qualification-evidence.json` only after the full suite and cleanup pass. Its `sourceCommit` must equal `HEAD`, so run it after the release pull request merges and before staging; do not reuse evidence from the review branch. `release-candidate` then builds an explicitly non-publishable manifest with the reviewed, digest-pinned bundled-service images and no installer-qualification claim. The repository-owned QEMU/libvirt driver tests that candidate and writes `.tmp/installer-qualification-evidence.json` after its clean-host, reboot, resume, uninstall, purge, and real-microVM assertions pass. The helper downloads the pinned Ubuntu qualification image only when the target path is absent and prints its reviewed SHA-256 for the explicit driver input; retain that image for subsequent releases or choose a new absent target after the repository pin changes. The candidate and final manifest share a qualification-subject digest: every final manifest field participates except the candidate marker and installer-evidence reference. `release-stage` requires both evidence documents, rejects evidence for different release bytes, and emits the publishable final manifest. `release-upload` creates a draft with notes from `docs/releases/vVERSION.md` at
-the tag (or an explicit third `NOTES_FILE` argument), appends the install/SDK
+the tag (or an explicit third `NOTES_FILE` argument), appends the fenced install and SDK
 footer, and dispatches the GitHub workflow. Retries refresh the draft body;
 the publisher preserves it; the workflow does not rebuild or qualify anything.
 

@@ -352,9 +352,10 @@ Open, with recommendation:
   release never freezes the checkout you develop in. Recommended; today's run froze the
   primary checkout for 15 minutes. If adopted, `release.env` names it in a comment and
   the skill checks it.
-- **D4 Changelog backfill** (resolved 2026-09-15): one consolidated
-  `## 0.5.0 to 0.14.0 (consolidated)` section absorbing everything since 0.4.4, with
-  per-release detail left to `docs/releases/`; 0.15.0 is cut from `Unreleased` normally.
+- **D4 Changelog backfill** (resolved 2026-09-15): full backfill. Every release from
+  0.4.5 to 0.14.0 has its own dated section, the four missing notes files were written
+  after the fact, and the GitHub release bodies the publisher had overwritten were
+  regenerated from the sections with a fenced install footer.
 - **D6 Notes-only PRs**: merge on green CI without waiting for Dark Review
   (recommended; SecondStack's rule) vs always wait.
 - **D7 SecondStack link direction**: flip its four `.claude`-canonical skills to
