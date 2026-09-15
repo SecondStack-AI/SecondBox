@@ -100,6 +100,7 @@ services:
           create_host_path: false
       - runner-config-runtime:/run/secondbox-runner-config:ro
       - image-fetcher-socket:/run/secondbox-image-fetcher
+      - "${SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_HOST_PATH:?set SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_HOST_PATH}:/run/secondbox-image-trust/public.pem:ro"
       - type: bind
         source: ${SECONDBOX_RUNNER_ARTIFACT_HOST_DIR:?set SECONDBOX_RUNNER_ARTIFACT_HOST_DIR}
         target: /opt/secondbox-artifacts

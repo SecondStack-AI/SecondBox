@@ -83,6 +83,7 @@ func TestSameHostDerivedPathsMatchComposeMounts(t *testing.T) {
 		"SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR":           "/var/lib/secondbox-runner/state/firecracker-logs",
 		"SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT":  "/var/lib/secondbox-runner/state/snapshot-template-cache",
 		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY":           "/opt/secondbox-artifacts/signing.pub",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY":    "/run/secondbox-image-trust/public.pem",
 		"SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR":     "/var/lib/secondbox-runner/state/network",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH":       "/usr/sbin/nft",
 		"SECONDBOX_RUNNER_CLIENT_CERTIFICATE":            "/run/secondbox-runner-identity/runner.crt",
