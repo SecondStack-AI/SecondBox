@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
@@ -25,6 +26,26 @@ import (
 
 func TestAssignmentBackendComputeConformance(t *testing.T) {
 	conformance.Run(t, newFirecrackerConformanceFixture)
+}
+
+type conformanceExecutionImagePreparer struct {
+	directory string
+}
+
+func (preparer conformanceExecutionImagePreparer) Prepare(
+	_ context.Context,
+	_ string,
+	image *runnerprotocol.ExecutionImage,
+	progress func(runnerprotocol.AssignmentProgressStage) error,
+) (executionimage.PreparedImage, error) {
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_RESOLVE); err != nil {
+		return executionimage.PreparedImage{}, err
+	}
+	return executionimage.PreparedImage{
+		Directory:          preparer.directory,
+		RequestedReference: image.Reference,
+		ResolvedDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}, nil
 }
 
 func TestAssignmentBackendRequiresWorkspaceStore(t *testing.T) {
@@ -190,11 +211,12 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			NetworkPolicyMaximumDNSPins:                4,
 			NetworkPolicyMaximumDNSTTL:                 time.Minute,
 		},
-		instances:     map[string]*instance{},
-		pendingSpawns: map[runtimeInstanceKey]int{},
-		guestIPs:      map[string]string{},
-		networkPolicy: &recordingHostNetworkPolicyEnforcer{},
-		runnerID:      "runner-1",
+		instances:       map[string]*instance{},
+		pendingSpawns:   map[runtimeInstanceKey]int{},
+		guestIPs:        map[string]string{},
+		networkPolicy:   &recordingHostNetworkPolicyEnforcer{},
+		runnerID:        "runner-1",
+		executionImages: conformanceExecutionImagePreparer{directory: artifactDir},
 	}
 	workspacePath := filepath.Join(t.TempDir(), "workspace.raw")
 	if err := os.WriteFile(workspacePath, make([]byte, 4096), 0o600); err != nil {
@@ -312,6 +334,7 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			)
 		},
 		Assignment: &runnerprotocol.AssignmentCommand{
+			ExecutionImage: &runnerprotocol.ExecutionImage{Reference: "registry.example/secondbox/conformance:stable"},
 			Fence: &runnerprotocol.AssignmentFence{
 				AssignmentId:      "assignment-1",
 				SandboxId:         "sandbox-1",

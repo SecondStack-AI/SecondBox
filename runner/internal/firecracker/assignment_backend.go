@@ -324,6 +324,7 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 			},
 			SnapshotResumeReady:      snapshotResumeReady,
 			AttributedExecutionReady: b.manager.cfg.NetworkPolicyEgressContexts.HasAttributedGateway(),
+			ClientSelectedImageReady: true,
 		},
 		BackendKind:      runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 		Materializations: materializations,

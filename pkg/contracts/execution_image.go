@@ -9,8 +9,9 @@ import (
 var executionImageReferencePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]*/[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}|@sha256:[a-f0-9]{64})$`)
 
 const (
-	executionImageReferenceMetadata = "executionImageReference"
-	maximumExecutionImageReference  = 512
+	executionImageReferenceMetadata     = "executionImageReference"
+	maximumExecutionImageReference      = 512
+	RunnerCapabilityClientSelectedImage = "client-selected-image"
 )
 
 // ExecutionImage selects one signed OCI execution bundle for a lifecycle operation.

@@ -193,11 +193,13 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 		name                     string
 		snapshotResumeReady      bool
 		attributedExecutionReady bool
+		clientSelectedImageReady bool
 	}{
-		{"cold boot only", false, false},
-		{"snapshot resume ready", true, false},
-		{"attributed execution ready", false, true},
-		{"both ready", true, true},
+		{"cold boot only", false, false, false},
+		{"snapshot resume ready", true, false, false},
+		{"attributed execution ready", false, true, false},
+		{"client-selected image ready", false, false, true},
+		{"all ready", true, true, true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			runnerID := task4ID("runner")
@@ -215,6 +217,7 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 			registration.SupportedEgressContexts = []string{"tenant-blue", "tenant-green"}
 			registration.Capabilities.SnapshotResumeReady = testCase.snapshotResumeReady
 			registration.Capabilities.AttributedExecutionReady = testCase.attributedExecutionReady
+			registration.Capabilities.ClientSelectedImageReady = testCase.clientSelectedImageReady
 			if duplicate, err := stateStore.RecordRegistration(
 				t.Context(), registration, now,
 			); err != nil || duplicate {
@@ -241,6 +244,9 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 			advertised := slices.Contains(capabilities, contracts.RunnerCapabilitySnapshotResume)
 			if slices.Contains(capabilities, contracts.RunnerCapabilityAttributedExecution) != testCase.attributedExecutionReady {
 				t.Fatalf("wrong attributed-execution capability: %v", capabilities)
+			}
+			if slices.Contains(capabilities, contracts.RunnerCapabilityClientSelectedImage) != testCase.clientSelectedImageReady {
+				t.Fatalf("wrong client-selected-image capability: %v", capabilities)
 			}
 			if advertised != testCase.snapshotResumeReady {
 				t.Fatalf(

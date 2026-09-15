@@ -86,6 +86,7 @@ message RunnerCapabilities {
   // a prerequisite: a runner without it stays fully eligible for cold boot.
   bool snapshot_resume_ready = 12;
   bool attributed_execution_ready = 13;
+  bool client_selected_image_ready = 14;
 }
 
 enum ComputeBackendKind {

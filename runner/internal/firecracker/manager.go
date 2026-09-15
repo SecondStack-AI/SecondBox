@@ -23,6 +23,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
+	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
@@ -54,6 +55,10 @@ const reservedRunDirBudget = 80
 var firecrackerVersionLock string
 
 // Manager owns Firecracker-backed sandbox runtime instances.
+type executionImagePreparer interface {
+	Prepare(context.Context, string, *runnerprotocol.ExecutionImage, func(runnerprotocol.AssignmentProgressStage) error) (executionimage.PreparedImage, error)
+}
+
 type Manager struct {
 	cfg                  *config.Config
 	mu                   sync.Mutex
@@ -76,7 +81,7 @@ type Manager struct {
 	evidence             runnerevidence.Sink
 	runnerID             string
 	workspaceStore       workspacestore.WorkspaceStore
-	executionImages      *executionimage.Manager
+	executionImages      executionImagePreparer
 }
 
 // SetWorkspaceStore binds the provider-neutral local workspace authority before

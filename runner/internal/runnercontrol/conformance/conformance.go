@@ -51,6 +51,7 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 			t.Fatalf("start assignment: %v", err)
 		}
 		wantStages := []runnerprotocol.AssignmentProgressStage{
+			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_IMAGE_RESOLVE,
 			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY,
 			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH,
 			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP,
