@@ -129,6 +129,13 @@ func (m *Manager) validateTrustAnchorForLaunch() error {
 }
 
 func (m *Manager) prepareLaunchImage(dir string, image microVMImageSelection) (microVMImageSelection, error) {
+	if image.VerifiedExecutionImage {
+		artifacts, err := captureMicroVMImageArtifacts(image)
+		if err != nil {
+			return microVMImageSelection{}, err
+		}
+		return stageTrustedLaunchImageFiles(dir, image, artifacts)
+	}
 	if m == nil || m.cfg == nil || strings.TrimSpace(m.cfg.MicroVMPublicKeyPath) == "" {
 		sourceRootfs := m.microVMImageSourceRootfs(image)
 		image.RootfsPath = filepath.Join(dir, rootfsName)
@@ -154,6 +161,24 @@ func (m *Manager) prepareLaunchImage(dir string, image microVMImageSelection) (m
 		return stageTrustedLaunchImageFiles(dir, image, artifacts)
 	}
 	return m.stageTrustedLaunchImage(dir, image)
+}
+
+func captureMicroVMImageArtifacts(image microVMImageSelection) (*trustedMicroVMArtifacts, error) {
+	paths := []trustedMicroVMArtifactFile{
+		{label: "kernel", path: image.KernelPath},
+		{label: "rootfs", path: image.RootfsPath},
+	}
+	if strings.TrimSpace(image.SharedImagePath) != "" {
+		paths = append(paths, trustedMicroVMArtifactFile{label: "shared image", path: image.SharedImagePath})
+	}
+	for i := range paths {
+		identity, err := trustedMicroVMArtifactIdentityFor(paths[i].path)
+		if err != nil {
+			return nil, fmt.Errorf("record selected microVM %s identity: %w", paths[i].label, err)
+		}
+		paths[i].identity = identity
+	}
+	return &trustedMicroVMArtifacts{files: paths}, nil
 }
 
 func (m *Manager) microVMImageSourceRootfs(image microVMImageSelection) string {
@@ -397,10 +422,11 @@ func (m *Manager) microVMImageForStart(opts runtimemanager.StartOpts) (microVMIm
 	case runtimemanager.RuntimeClassToolExecutor:
 		if opts.ExecutionImageDirectory != "" {
 			return microVMImageSelection{
-				RuntimeClass:    runtimeClass,
-				KernelPath:      filepath.Join(opts.ExecutionImageDirectory, "kernel"),
-				RootfsPath:      filepath.Join(opts.ExecutionImageDirectory, "rootfs.ext4"),
-				SharedImagePath: filepath.Join(opts.ExecutionImageDirectory, "shared.img"),
+				RuntimeClass:           runtimeClass,
+				KernelPath:             filepath.Join(opts.ExecutionImageDirectory, "kernel"),
+				RootfsPath:             filepath.Join(opts.ExecutionImageDirectory, "rootfs.ext4"),
+				SharedImagePath:        filepath.Join(opts.ExecutionImageDirectory, "shared.img"),
+				VerifiedExecutionImage: true,
 			}, nil
 		}
 		rootfsPath := firstNonEmpty(m.cfg.MicroVMToolRootfsPath, m.cfg.MicroVMRootfsPath)

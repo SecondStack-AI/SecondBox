@@ -170,10 +170,11 @@ type firecrackerLaunch struct {
 }
 
 type microVMImageSelection struct {
-	RuntimeClass    runtimemanager.RuntimeClass
-	KernelPath      string
-	RootfsPath      string
-	SharedImagePath string
+	RuntimeClass           runtimemanager.RuntimeClass
+	KernelPath             string
+	RootfsPath             string
+	SharedImagePath        string
+	VerifiedExecutionImage bool
 }
 
 type trustedMicroVMArtifacts struct {

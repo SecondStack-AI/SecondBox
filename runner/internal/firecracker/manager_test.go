@@ -311,6 +311,36 @@ func TestStageTrustedLaunchImageFilesUsesStagedPaths(t *testing.T) {
 	}
 }
 
+func TestPrepareLaunchImageUsesVerifiedExecutionImageTrust(t *testing.T) {
+	sourceDir := t.TempDir()
+	image := microVMImageSelection{
+		RuntimeClass:           runtimemanager.RuntimeClassToolExecutor,
+		KernelPath:             filepath.Join(sourceDir, "kernel"),
+		RootfsPath:             filepath.Join(sourceDir, "rootfs.ext4"),
+		SharedImagePath:        filepath.Join(sourceDir, "shared.img"),
+		VerifiedExecutionImage: true,
+	}
+	for _, path := range []string{image.KernelPath, image.RootfsPath, image.SharedImagePath} {
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := &Manager{cfg: &config.Config{
+		MicroVMPublicKeyPath: "/fixed-release-authority/public.pem",
+		MicroVMKernelPath:    "/fixed-release-bundle/kernel",
+	}}
+	staged, err := manager.prepareLaunchImage(t.TempDir(), image)
+	if err != nil {
+		if strings.Contains(err.Error(), "reflink rootfs") {
+			t.Skipf("filesystem does not support rootfs reflinks: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if staged.KernelPath == image.KernelPath || staged.RootfsPath == image.RootfsPath {
+		t.Fatalf("verified execution image was not staged: %#v", staged)
+	}
+}
+
 func TestManagerInstanceMapConcurrentAccess(t *testing.T) {
 	m := &Manager{}
 	const n = 64
