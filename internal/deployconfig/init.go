@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -107,6 +108,23 @@ func InitDevelopment(directory string) (string, error) {
 		return "", err
 	}
 	manifest := developmentManifest(postgresPassword, platformToken, runnerCredential)
+	imageKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return "", err
+	}
+	imagePublicKey, err := x509.MarshalPKIXPublicKey(&imageKey.PublicKey)
+	if err != nil {
+		return "", err
+	}
+	if err := writeAtomic(filepath.Join(secrets, "execution-image.pub"), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: imagePublicKey}), 0o644, false); err != nil {
+		return "", err
+	}
+	if err := writeAtomic(filepath.Join(secrets, "execution-image.key"), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(imageKey)}), 0o600, false); err != nil {
+		return "", err
+	}
+	imageFingerprint := sha256.Sum256(imagePublicKey)
+	manifest.Deployment.ExecutionImagePublicKey = "secrets/execution-image.pub"
+	manifest.Deployment.ExecutionImagePublicKeySHA256 = hex.EncodeToString(imageFingerprint[:])
 	encoded, err := encodeManifest(manifest)
 	if err != nil {
 		return "", err
@@ -120,8 +138,8 @@ func InitDevelopment(directory string) (string, error) {
 }
 
 func developmentManifest(postgresPassword, platformToken, runnerCredential string) ManifestV1 {
-	pool := StandardRunnerPool{Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: []string{"compute", "evidence", "exec-streaming", "file-streaming", "local-workspace", "port-proxy", "pty"}, State: "ready"}
-	return ManifestV1{SchemaVersion: 1, Deployment: Deployment{Mode: "development", ComposeProjectName: DefaultComposeProjectName, PublicBaseURL: "http://127.0.0.1:8080", TLSTermination: "development-loopback", ControlPlaneImage: "secondbox-control-plane:development", RunnerImage: "secondbox-runner:development", PostgresImage: "docker.io/library/postgres:18.4-bookworm", APIBindIP: "127.0.0.1", APIPublishedPort: integer(8080), RunnerBindIP: "127.0.0.1", RunnerPublishedPort: integer(9443), LogPath: "/var/log/secondbox/control-plane.jsonl", AssetCatalog: "secrets/development-signed-assets.json", DevelopmentWaitSeconds: integer(180)}, Database: Database{Mode: "bundled", BindIP: "127.0.0.1", PublishedPort: integer(5432), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword}, RunnerTrust: RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: "secrets/runner-pki/runner-ca.crt", CAPrivateKeyFile: "secrets/runner-pki/runner-ca.key", ServerCertificateFile: "secrets/runner-pki/server.crt", ServerPrivateKeyFile: "secrets/runner-pki/server.key", ServerName: "control-plane", CertificateLifetimeDays: integer(825)}, Applications: Applications{PlatformTokenFile: platformToken}, StandardResources: StandardResources{ArtifactManifest: "development-artifact-manifest.json", Bundles: standardresources.BundleNames(), RunnerPools: []StandardRunnerPool{pool}, ApplyWaitSeconds: integer(180)}, Policy: Policy{DataPlaneRetentionSeconds: integer(86400), RunnerEnabledFeatures: "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy"}}
+	pool := StandardRunnerPool{Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: []string{"client-selected-image", "compute", "evidence", "exec-streaming", "file-streaming", "local-workspace", "port-proxy", "pty"}, State: "ready"}
+	return ManifestV1{SchemaVersion: 1, Deployment: Deployment{Mode: "development", ComposeProjectName: DefaultComposeProjectName, PublicBaseURL: "http://127.0.0.1:8080", TLSTermination: "development-loopback", ControlPlaneImage: "secondbox-control-plane:development", RunnerImage: "secondbox-runner:development", PostgresImage: "docker.io/library/postgres:18.4-bookworm", APIBindIP: "127.0.0.1", APIPublishedPort: integer(8080), RunnerBindIP: "127.0.0.1", RunnerPublishedPort: integer(9443), LogPath: "/var/log/secondbox/control-plane.jsonl", AssetCatalog: "secrets/development-signed-assets.json", DevelopmentWaitSeconds: integer(180)}, Database: Database{Mode: "bundled", BindIP: "127.0.0.1", PublishedPort: integer(5432), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword}, RunnerTrust: RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: "secrets/runner-pki/runner-ca.crt", CAPrivateKeyFile: "secrets/runner-pki/runner-ca.key", ServerCertificateFile: "secrets/runner-pki/server.crt", ServerPrivateKeyFile: "secrets/runner-pki/server.key", ServerName: "control-plane", CertificateLifetimeDays: integer(825)}, Applications: Applications{PlatformTokenFile: platformToken}, StandardResources: StandardResources{ArtifactManifest: "development-artifact-manifest.json", Bundles: standardresources.BundleNames(), RunnerPools: []StandardRunnerPool{pool}, ApplyWaitSeconds: integer(180)}, Policy: Policy{DataPlaneRetentionSeconds: integer(86400), RunnerEnabledFeatures: "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy,client-selected-image"}}
 }
 
 func developmentReleaseManifest() (releasecontract.ArtifactManifest, error) {
@@ -302,6 +320,7 @@ func materializeProduction(manifest ManifestV1, sourcePath, directory string, re
 		return filepath.Clean(filepath.Join(sourceBase, reference))
 	}
 	manifest.Deployment.AssetCatalog = absoluteReference(manifest.Deployment.AssetCatalog)
+	manifest.Deployment.ExecutionImagePublicKey = absoluteReference(manifest.Deployment.ExecutionImagePublicKey)
 	if releaseBytes == nil {
 		manifest.StandardResources.ArtifactManifest = absoluteReference(manifest.StandardResources.ArtifactManifest)
 	} else {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func testSnapshotTemplateKey() SnapshotTemplateKey {
@@ -404,6 +405,9 @@ func TestSnapshotTemplateStableIdentityFailsAfterRewrite(t *testing.T) {
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("close rewritten template memory file: %v", err)
+	}
+	if err := os.Chtimes(memoryPath, time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("advance rewritten template modification time: %v", err)
 	}
 	if err := template.VerifyStableIdentity(); err == nil {
 		t.Fatal("a template memory file rewritten in place passed the per-start identity check")

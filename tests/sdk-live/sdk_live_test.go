@@ -20,6 +20,7 @@ func TestGoSDKLiveControlPlaneContract(t *testing.T) {
 	profile := fixture.profile
 
 	handle, operation, err := applicationClient.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{
+		Image:    secondboxclient.ExecutionImage{Reference: "registry.example/secondbox/sdk-live:stable"},
 		Profile:  profile.Name,
 		Metadata: secondboxclient.Metadata{"sdk": "go", "purpose": "live-contract"},
 	}, "go-create-sandbox")

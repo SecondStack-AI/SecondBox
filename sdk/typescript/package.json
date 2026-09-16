@@ -34,7 +34,7 @@
     }
   },
   "dependencies": {
-    "ws": "^8.21.2"
+    "ws": "8.21.2"
   },
   "peerDependencies": {
     "@flue/runtime": "^2.0.0"

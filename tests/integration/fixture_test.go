@@ -341,7 +341,7 @@ func seedFixtureHomeRunner(t *testing.T, poolName string, runnerID string) {
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			$1,$2,$1,'ready','["amd64"]',
-			'["compute","network-policy","storage","cleanup","local-workspace"]',
+			'["compute","network-policy","storage","cleanup","local-workspace","client-selected-image"]',
 			'{"VCPUCount":1000,"MemoryBytes":1099511627776,"DiskBytes":10995116277760,
 			  "Instances":1000,"Operations":1000}',
 			'[3]',1,1,'fixture','fixture-connection',1,'active',

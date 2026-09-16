@@ -40,6 +40,8 @@ services:
       SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT: "3"
       SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS: ${SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS:?SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS is required}
       SECONDBOX_SIGNED_ASSET_CATALOG_PATH: /opt/secondbox/signed-assets.json
+      SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY: /opt/secondbox/pki/execution-image.pub
+      SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256:?execution image publisher fingerprint is required}
       SECONDBOX_LISTEN_ADDR: "0.0.0.0:8080"
       SECONDBOX_PUBLIC_BASE_URL: "http://127.0.0.1:${SECONDBOX_SCENARIO_API_PORT:?SECONDBOX_SCENARIO_API_PORT is required}"
       SECONDBOX_LOG_PATH: /tmp/secondbox-scenario.log
@@ -49,7 +51,7 @@ services:
       SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE: "16"
       SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS: "2"
       SECONDBOX_RUNNER_CREDENTIAL: ${SECONDBOX_SCENARIO_RUNNER_CREDENTIAL:?SECONDBOX_SCENARIO_RUNNER_CREDENTIAL is required}
-      SECONDBOX_RUNNER_ENABLED_FEATURES: exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy
+      SECONDBOX_RUNNER_ENABLED_FEATURES: exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy,client-selected-image
       SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS: "1000"
       SECONDBOX_RUNNER_LISTEN_ADDR: "0.0.0.0:9443"
       SECONDBOX_RUNNER_SERVER_CERTIFICATE: /opt/secondbox/pki/server.crt
@@ -143,6 +145,15 @@ services:
       SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT: /w/snapshot-templates
       SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY: /opt/secondbox-artifact-public-key.pem
       SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256: ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 is required}
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY: /opt/secondbox-artifact-public-key.pem
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256: ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 is required}
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /w/execution-images
+      SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET: /run/secondbox-image-fetcher/fetcher.sock
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY:?SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY is required}
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES: /var/lib/secondbox-runner/execution-image-certificates
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES: "17179869184"
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES: "17179869184"
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES: "68719476736"
       SECONDBOX_RUNNER_WORKSPACE_ROOT: /w
       SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT: ${SECONDBOX_SCENARIO_STORAGE_RECOVERY_PERCENT:?SECONDBOX_SCENARIO_STORAGE_RECOVERY_PERCENT is required}
       SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT: ${SECONDBOX_SCENARIO_STORAGE_WARNING_PERCENT:?SECONDBOX_SCENARIO_STORAGE_WARNING_PERCENT is required}
@@ -187,6 +198,7 @@ services:
       - ${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR is required}:/opt/secondbox-artifacts:ro
       - ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is required}:/opt/secondbox-artifact-public-key.pem:ro
       - scenario-egress-context-config:/etc/secondbox-runner:ro
+      - scenario-image-fetcher-socket:/run/secondbox-image-fetcher
       - ${SECONDBOX_SCENARIO_STATE_DIR:?SECONDBOX_SCENARIO_STATE_DIR is required}:/var/lib/secondbox-runner:rshared
       - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?SECONDBOX_SCENARIO_WORKSPACE_DIR is required}:/w:rshared
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
@@ -249,6 +261,53 @@ services:
       - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?SECONDBOX_SCENARIO_WORKSPACE_DIR is required}:/w:rshared
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
 
+  image-fetcher-init:
+    profiles: [image-preparation]
+    image: ${SECONDBOX_SCENARIO_RUNNER_IMAGE:?scenario runner image is required}
+    user: "0:0"
+    entrypoint: ["/bin/bash", "-euc"]
+    command:
+      - chown -R 10002:10002 /cache /socket /registry; chmod 0700 /cache /socket /registry
+    network_mode: none
+    volumes:
+      - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?scenario workspace is required}/execution-images:/cache
+      - scenario-image-fetcher-socket:/socket
+      - ${SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY:?scenario registry directory is required}:/registry
+
+  image-fetcher:
+    profiles: [image-preparation]
+    image: ${SECONDBOX_SCENARIO_RUNNER_IMAGE:?scenario runner image is required}
+    user: "10002:10002"
+    entrypoint: ["/usr/local/bin/secondbox-image-fetcher"]
+    depends_on:
+      image-fetcher-init:
+        condition: service_completed_successfully
+    environment:
+      SECONDBOX_IMAGE_FETCHER_SOCKET: /run/secondbox-image-fetcher/fetcher.sock
+      SECONDBOX_IMAGE_FETCHER_TENANTS: /run/image-registry/tenants.json
+      SECONDBOX_IMAGE_FETCHER_CACHE_ROOT: /cache
+      SECONDBOX_IMAGE_FETCHER_REGISTRIES: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY:?scenario registry is required}
+      SECONDBOX_IMAGE_FETCHER_CERTIFICATES: /run/image-registry/certificates
+      SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY: /run/image-trust/public.pem
+      SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY_SHA256: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256:?execution image publisher fingerprint is required}
+      SECONDBOX_IMAGE_FETCHER_MAX_DOWNLOAD_BYTES: "17179869184"
+      SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES: "17179869184"
+      SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES: "68719476736"
+    volumes:
+      - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?scenario workspace is required}/execution-images:/cache
+      - scenario-image-fetcher-socket:/run/secondbox-image-fetcher
+      - ${SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY:?scenario registry directory is required}:/run/image-registry:ro
+      - ${SECONDBOX_SCENARIO_PKI_DIR:?scenario PKI is required}/execution-image.pub:/run/image-trust/public.pem:ro
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/secondbox-image-fetcher/fetcher.sock"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
 networks:
   default:
     ipam:
@@ -258,3 +317,4 @@ networks:
 
 volumes:
   scenario-egress-context-config:
+  scenario-image-fetcher-socket:

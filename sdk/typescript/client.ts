@@ -15,6 +15,8 @@ import {
   type ExecOutcome,
   type ExecStreamFrame,
   type ExecStreamSession,
+  type ExecutionImage,
+  type PrepareImageRequest,
   type FileExistsResult,
   type FileStat,
   type FileWriteResult,
@@ -74,6 +76,9 @@ export type {
   BufferedExecRequest,
   Command,
   ExecStreamFrame,
+  ExecutionImage,
+  PrepareImageRequest,
+  ImagePreparation,
   FileStat,
   Lease,
   Metadata,
@@ -325,6 +330,17 @@ export class SecondBox {
     }
   }
 
+  public prepareImage(
+    request: PrepareImageRequest,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<Operation> {
+    return this.requestJSON<Operation>("prepareImage", {
+      headers: { "Idempotency-Key": options.idempotencyKey ?? idempotencyKey() },
+      body: encodeJSONBody({ image: executionImageJSON(request.image), ...(request.profile === undefined ? {} : { profile: request.profile }) }),
+      signal: options.signal,
+    });
+  }
+
   public sandbox(snapshot: Sandbox, leaseID?: string): SandboxHandle {
     return new SandboxHandle(this, snapshot, leaseID);
   }
@@ -494,6 +510,7 @@ export class SecondBox {
     const operation = await this.requestJSON<Operation>("createSandbox", {
       headers: { "Idempotency-Key": request.idempotencyKey ?? idempotencyKey() },
       body: encodeJSONBody({
+        image: request.image,
         profile: request.profile,
         metadata: request.metadata ?? {},
         ...(request.resources === undefined ? {} : { resources: request.resources }),
@@ -524,6 +541,7 @@ export class SecondBox {
     requirePositiveInteger(request.maximumOutputBytes, "run maximumOutputBytes");
     requirePositiveInteger(request.readyTimeoutMilliseconds, "run readyTimeoutMilliseconds");
     const { handle } = await this.createSandbox({
+      image: request.image,
       profile: request.profile,
       ...(request.metadata === undefined ? {} : { metadata: request.metadata }),
       ...(request.resources === undefined ? {} : { resources: request.resources }),
@@ -1158,9 +1176,12 @@ export class SandboxHandle implements SandboxFilesystem {
   }
 
   public start(options: LifecycleOptions & StartSandboxRequest): Promise<Operation> {
-    const request: JSONValue = options.attributedExecution === undefined
-      ? {}
-      : { attributedExecution: { ...options.attributedExecution } };
+    const request: JSONValue = {
+	  ...(options.image === undefined ? {} : { image: executionImageJSON(options.image) }),
+      ...(options.attributedExecution === undefined
+        ? {}
+        : { attributedExecution: { ...options.attributedExecution } }),
+    };
     return this.lifecycle("startSandbox", options, request);
   }
 
@@ -1709,7 +1730,14 @@ export class SandboxHandle implements SandboxFilesystem {
   }
 }
 
+function executionImageJSON(image: ExecutionImage): JSONValue {
+  return {
+    reference: image.reference,
+  };
+}
+
 export interface CreateSandboxOptions {
+  readonly image?: ExecutionImage;
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
@@ -1724,6 +1752,7 @@ export interface WaitForOptions {
 }
 
 export interface RunRequest extends Omit<BufferedExecRequest, "environment"> {
+  readonly image?: ExecutionImage;
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;

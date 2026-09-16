@@ -125,6 +125,7 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT,
+				runnerprotocol.RunnerFeature_RUNNER_FEATURE_CLIENT_SELECTED_IMAGE,
 			},
 		}, GRPCConnectorConfig{
 			Address:           address,

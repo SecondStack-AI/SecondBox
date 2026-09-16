@@ -67,6 +67,40 @@
     }
   ],
   "paths": {
+    "/v1/images:prepare": {
+      "parameters": [
+        { "$ref": "#/components/parameters/TenantRef" },
+        { "$ref": "#/components/parameters/SubjectRef" }
+      ],
+      "post": {
+        "tags": ["Operations"],
+        "operationId": "prepareImage",
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/RequestID" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrepareImageRequest" } } }
+        },
+        "responses": {
+          "202": {
+            "description": "Image preparation accepted without allocating a Sandbox or VM.",
+            "headers": {
+              "X-Request-ID": { "$ref": "#/components/headers/RequestID" },
+              "Idempotency-Replayed": { "$ref": "#/components/headers/IdempotencyReplayed" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Operation" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
     "/v1/tenants": {
       "get": {
         "tags": [
@@ -7079,8 +7113,61 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "image": {
+            "$ref": "#/components/schemas/ExecutionImage"
+          },
           "attributedExecution": {
             "$ref": "#/components/schemas/AttributedExecutionRequest"
+          }
+        }
+      },
+      "ExecutionImage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reference"
+        ],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*/[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}|@sha256:[a-f0-9]{64})$"
+          }
+        }
+      },
+      "PrepareImageRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["image"],
+        "properties": {
+          "image": { "$ref": "#/components/schemas/ExecutionImage" },
+          "profile": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "ImagePreparation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["image", "targetRunners", "preparedRunners"],
+        "properties": {
+          "image": { "$ref": "#/components/schemas/PublicExecutionImage" },
+          "targetRunners": { "type": "integer", "minimum": 0 },
+          "preparedRunners": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "PublicExecutionImage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestedReference"
+        ],
+        "properties": {
+          "requestedReference": {
+            "type": "string"
+          },
+          "resolvedDigest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
           }
         }
       },
@@ -8005,6 +8092,9 @@
           "lifecycle"
         ],
         "properties": {
+          "image": {
+            "$ref": "#/components/schemas/PublicExecutionImage"
+          },
           "id": {
             "$ref": "#/components/schemas/OpaqueID"
           },
@@ -8079,6 +8169,9 @@
         "properties": {
           "profile": {
             "$ref": "#/components/schemas/ProfileName"
+          },
+          "image": {
+            "$ref": "#/components/schemas/ExecutionImage"
           },
           "metadata": {
             "$ref": "#/components/schemas/Metadata"
@@ -8318,6 +8411,7 @@
           "generation",
           "state",
           "guestLiveness",
+          "image",
           "createdAt",
           "updatedAt"
         ],
@@ -8338,6 +8432,9 @@
           },
           "guestLiveness": {
             "$ref": "#/components/schemas/GuestLiveness"
+          },
+          "image": {
+            "$ref": "#/components/schemas/PublicExecutionImage"
           },
           "guestFeatures": {
             "type": "array",
@@ -8369,6 +8466,7 @@
       "OperationKind": {
         "type": "string",
         "enum": [
+          "prepare_image",
           "create",
           "start",
           "drain",
@@ -8405,6 +8503,7 @@
           "updatedAt"
         ],
         "properties": {
+          "imagePreparation": { "$ref": "#/components/schemas/ImagePreparation" },
           "id": {
             "$ref": "#/components/schemas/OpaqueID"
           },
@@ -8476,6 +8575,9 @@
         "type": "string",
         "enum": [
           "runner_admission",
+          "image_resolve",
+          "image_download",
+          "image_extract",
           "artifact_verify",
           "workspace_attach",
           "network_setup",

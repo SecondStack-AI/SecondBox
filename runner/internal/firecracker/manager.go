@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
+	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
@@ -53,6 +55,10 @@ const reservedRunDirBudget = 80
 var firecrackerVersionLock string
 
 // Manager owns Firecracker-backed sandbox runtime instances.
+type executionImagePreparer interface {
+	VerifyLocal(context.Context, *runnerprotocol.ExecutionImage, func(runnerprotocol.AssignmentProgressStage) error) (executionimage.PreparedImage, error)
+}
+
 type Manager struct {
 	cfg                  *config.Config
 	mu                   sync.Mutex
@@ -75,6 +81,7 @@ type Manager struct {
 	evidence             runnerevidence.Sink
 	runnerID             string
 	workspaceStore       workspacestore.WorkspaceStore
+	executionImages      executionImagePreparer
 }
 
 // SetWorkspaceStore binds the provider-neutral local workspace authority before
@@ -163,10 +170,12 @@ type firecrackerLaunch struct {
 }
 
 type microVMImageSelection struct {
-	RuntimeClass    runtimemanager.RuntimeClass
-	KernelPath      string
-	RootfsPath      string
-	SharedImagePath string
+	RuntimeClass           runtimemanager.RuntimeClass
+	KernelPath             string
+	RootfsPath             string
+	SharedImagePath        string
+	VerifiedExecutionImage bool
+	VerifiedArtifacts      []runtimemanager.VerifiedExecutionImageArtifact
 }
 
 type trustedMicroVMArtifacts struct {
@@ -276,6 +285,10 @@ func New(cfg *config.Config) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verify microVM trust anchor: %w", err)
 	}
+	executionImages, err := executionimage.NewManager(cfg)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.MicroVMAllowUnjailed {
 		if relocated, ok := relocateRunDirForUnixSockets(cfg.MicroVMRunDir); ok {
 			originalRunDir := cfg.MicroVMRunDir
@@ -304,6 +317,7 @@ func New(cfg *config.Config) (*Manager, error) {
 		jailerUIDs:        map[int]string{},
 		network:           IPTapConfigurer{},
 		trustedArtifacts:  trustedArtifacts,
+		executionImages:   executionImages,
 		snapshotTemplates: snapshotTemplates,
 		evidence:          runnerevidence.SlogSink{},
 		signalInstance:    signalFirecrackerByID,
@@ -1055,10 +1069,10 @@ func (m *Manager) registerLaunchedInstance(
 		memoryMiB:           m.requestedMemoryMiB(opts),
 	}
 	m.registerStartingInstance(inst, onRegisteredLocked)
+	host.transferOwnership()
 	// Start the reaper before a forwarding failure can request teardown.
 	go m.reap(inst)
 	if inst.executionForwarder != nil {
-		host.transferOwnership()
 		go func() {
 			if err := inst.executionForwarder.Wait(); !errors.Is(err, context.Canceled) {
 				m.handleNetworkPolicyFailure(inst.id, err)
@@ -1068,7 +1082,7 @@ func (m *Manager) registerLaunchedInstance(
 	host.timer.mark("instance_registered")
 	if opts.StartupProgress != nil {
 		if progressErr := opts.StartupProgress(runtimemanager.StartupStageComputeStarted); progressErr != nil {
-			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			cleanupErr := m.stopFailedStartup(inst)
 			return nil, errors.Join(
 				fmt.Errorf("report compute-started startup stage: %w", progressErr),
 				cleanupErr,
@@ -1076,6 +1090,12 @@ func (m *Manager) registerLaunchedInstance(
 		}
 	}
 	return inst, nil
+}
+
+func (m *Manager) stopFailedStartup(inst *instance) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return m.stopInstance(cleanupCtx, inst, true)
 }
 
 // completeInstanceStartup is the epilogue both start paths share: the
@@ -1095,7 +1115,7 @@ func (m *Manager) completeInstanceStartup(
 	cancelNegotiation()
 	if err != nil {
 		diagnostics := inst.logTailDiagnostics(120)
-		cleanupErr := m.stopInstance(setupCtx, inst, true)
+		cleanupErr := m.stopFailedStartup(inst)
 		return errors.Join(
 			fmt.Errorf("negotiate guest protocol: %w%s", err, diagnostics),
 			cleanupErr,
@@ -1104,7 +1124,7 @@ func (m *Manager) completeInstanceStartup(
 	timer.mark("guest_protocol_negotiated")
 	if opts.StartupProgress != nil {
 		if progressErr := opts.StartupProgress(runtimemanager.StartupStageGuestNegotiated); progressErr != nil {
-			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			cleanupErr := m.stopFailedStartup(inst)
 			return errors.Join(
 				fmt.Errorf("report guest-negotiated startup stage: %w", progressErr),
 				cleanupErr,
@@ -1112,7 +1132,7 @@ func (m *Manager) completeInstanceStartup(
 		}
 	}
 	if err := m.deliverStartupSecrets(setupCtx, inst, sandboxID, opts, timer); err != nil {
-		cleanupErr := m.stopInstance(setupCtx, inst, true)
+		cleanupErr := m.stopFailedStartup(inst)
 		return errors.Join(fmt.Errorf("deliver runtime startup secrets: %w", err), cleanupErr)
 	}
 	timer.mark("microvm_ready")
@@ -1131,7 +1151,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		return "", err
 	}
 	opts.CompartmentID = compartmentID
-	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Minute)
+	setupCtx, cancelSetup := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancelSetup()
 
 	host, err := m.reserveInstanceHost(ctx, setupCtx, sandboxID, compartmentID, opts)
@@ -1236,21 +1256,19 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		cancelControl()
 		if controlErr != nil {
 			diagnostics := inst.logTailDiagnostics(120)
-			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			cleanupErr := m.stopFailedStartup(inst)
 			return "", errors.Join(
 				fmt.Errorf("wait for template guest control plane: %w%s", controlErr, diagnostics),
 				cleanupErr,
 			)
 		}
 		timer.mark("template_control_plane_ready")
-		host.transferOwnership()
 		slog.Info("started identity-neutral template microVM", "instance", id, "elapsedMs", timer.elapsedMs(), "log", host.logPath)
 		return id, nil
 	}
 	if err := m.completeInstanceStartup(setupCtx, inst, sandboxID, opts, timer); err != nil {
 		return "", err
 	}
-	host.transferOwnership() // ownership transfers to the running instance
 	slog.Info("started firecracker microVM", "sandbox", sandboxID, "compartment", compartmentID, "instance", id, "elapsedMs", timer.elapsedMs(), "log", host.logPath)
 	return id, nil
 }

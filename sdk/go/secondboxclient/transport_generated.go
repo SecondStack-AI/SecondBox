@@ -224,6 +224,13 @@ var operations = map[string]OperationMetadata{
 	"pingSandbox": {
 		OperationID: "pingSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:ping",
 	},
+	"prepareImage": {
+		OperationID: "prepareImage", Method: "POST", PathTemplate: "/v1/images:prepare",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "PrepareImageRequest"},
+		},
+		RequestBodyRequired: true,
+	},
 	"reactivateTenant": {
 		OperationID: "reactivateTenant", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}:reactivate",
 	},

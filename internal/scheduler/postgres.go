@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -383,9 +384,10 @@ func (store *PostgresStore) scheduleOnce(
 	orderedWrites.Queue(`
 		INSERT INTO secondbox.instances (
 			id,sandbox_id,generation,state,guest_liveness,termination_reason,created_at,updated_at,
-			ready_at,stopped_at
-		) VALUES ($1,$2,$3,'starting','starting','',$4,$4,NULL,NULL)`,
+			ready_at,stopped_at,requested_image_reference,resolved_image_digest
+		) VALUES ($1,$2,$3,'starting','starting','',$4,$4,NULL,NULL,$5,'')`,
 		assignment.InstanceID, assignment.SandboxID, generation, placementAt,
+		request.AssignmentCommand.GetExecutionImage().GetReference(),
 	)
 	orderedWrites.Queue(`
 		INSERT INTO secondbox.assignments (
@@ -532,6 +534,14 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		command.Correlation.SandboxGeneration != command.Fence.SandboxGeneration ||
 		command.DeadlineUnixMs == 0 {
 		return errors.New("SecondBox scheduler Assignment command does not match durable assignment authority")
+	}
+	if command.ExecutionImage != nil {
+		if err := (contracts.ExecutionImage{Reference: command.ExecutionImage.Reference}).Validate(); err != nil {
+			return fmt.Errorf("SecondBox scheduler Assignment execution image is invalid: %w", err)
+		}
+		if !strings.Contains(command.ExecutionImage.Reference, "@sha256:") {
+			return errors.New("SecondBox assignment image must be resolved before scheduling")
+		}
 	}
 	if request.Requirements.EgressContext == nil {
 		if command.Requirements.RequiresTenantEgressContext || command.EgressContext != "" {

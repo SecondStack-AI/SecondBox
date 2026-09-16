@@ -15,6 +15,8 @@ runner_bind_ip = '127.0.0.1'
 runner_published_port = 9443
 log_path = '/var/log/secondbox/control-plane.jsonl'
 signed_asset_catalog = 'secrets/development-signed-assets.json'
+execution_image_public_key = ''
+execution_image_public_key_sha256 = ''
 development_prepare_wait_timeout_seconds = 180
 
 [database]
@@ -41,7 +43,7 @@ platform_token_file = 'secrets/platform-token'
 [policy]
 # Data-plane session, result, and idempotency retention deadline.
 data_plane_retention_seconds = 86400
-runner_enabled_features = 'exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy'
+runner_enabled_features = 'exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy,client-selected-image'
 
 [standard_resources]
 artifact_manifest = 'development-artifact-manifest.json'
@@ -51,7 +53,7 @@ apply_wait_seconds = 180
 [[standard_resources.runner_pools]]
 name = 'standard-amd64'
 architectures = ['amd64']
-capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
+capabilities = ['client-selected-image', 'compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
 state = 'ready'
 
 [overrides]

@@ -16,13 +16,14 @@ func TestConfiguredRunnerFeaturesRequireLocalWorkspace(t *testing.T) {
 		!strings.Contains(err.Error(), "require local-workspace") {
 		t.Fatalf("portable-only runner feature config error = %v", err)
 	}
-	features, err := configuredRunnerFeatures([]string{"evidence", "local-workspace"})
+	features, err := configuredRunnerFeatures([]string{"evidence", "local-workspace", "client-selected-image"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(features) != 3 ||
+	if len(features) != 4 ||
 		features[1] != runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE ||
-		features[2] != runnerv1.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT {
+		features[2] != runnerv1.RunnerFeature_RUNNER_FEATURE_CLIENT_SELECTED_IMAGE ||
+		features[3] != runnerv1.RunnerFeature_RUNNER_FEATURE_TENANT_EGRESS_CONTEXT {
 		t.Fatalf("configured features = %v", features)
 	}
 }

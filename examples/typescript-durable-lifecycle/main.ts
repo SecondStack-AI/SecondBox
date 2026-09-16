@@ -13,6 +13,7 @@ const api = new SecondBox(new SecondBoxClient(
 
 await api.validateProfile("durable-coding");
 const { handle } = await api.createSandbox({
+  image: { reference: required("SECONDBOX_IMAGE") },
   profile: "durable-coding",
   metadata: { example: "typescript" },
 });

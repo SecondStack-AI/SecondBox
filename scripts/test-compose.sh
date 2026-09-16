@@ -57,6 +57,9 @@ openssl x509 -req \
   -extfile "$pki_dir/server.ext" >/dev/null 2>&1
 chmod 0600 "$pki_dir/runner-ca.key" "$pki_dir/server.key"
 chmod 0644 "$pki_dir/runner-ca.crt" "$pki_dir/server.crt"
+openssl pkey -in "$pki_dir/runner-ca.key" -pubout -out "$pki_dir/image-publisher.pub"
+export SECONDBOX_COMPOSE_TEST_IMAGE_KEY_SHA256
+SECONDBOX_COMPOSE_TEST_IMAGE_KEY_SHA256="$(openssl pkey -pubin -in "$pki_dir/image-publisher.pub" -outform DER | sha256sum | awk '{print $1}')"
 
 compose() {
   docker compose --project-name "$project_name" --file "$compose_file" "$@"

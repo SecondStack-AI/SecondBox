@@ -226,7 +226,14 @@ fi
 
 cp "$kernel_path" "$out_dir/kernel"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-git_commit="$(git -C "$repo_root" rev-parse HEAD)"
+git_commit="${SECONDBOX_RUNNER_MICROVM_SOURCE_COMMIT-}"
+if [ -z "$git_commit" ]; then
+    git_commit="$(git -C "$repo_root" rev-parse HEAD)"
+fi
+if ! printf '%s\n' "$git_commit" | grep -Eq '^[0-9a-f]{40}$'; then
+    echo "SECONDBOX_RUNNER_MICROVM_SOURCE_COMMIT must be a 40-character lowercase Git commit" >&2
+    exit 2
+fi
 rootfs_provenance_dir="$rootfs_source_dir/usr/share/secondbox/image-provenance"
 for provenance_file in \
     rootfs-source-manifest.json \

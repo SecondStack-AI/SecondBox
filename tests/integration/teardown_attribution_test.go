@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -302,6 +302,7 @@ type teardownFixture struct {
 	stateStore   *runnercontrol.PostgresStateStore
 	reconciler   lifecycle.Reconciler
 	principal    contracts.Principal
+	credential   string
 	profileName  string
 	runnerID     string
 	connectionID string
@@ -409,6 +410,7 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
 			AssetCatalog:            teardownAssetCatalog{},
+			ExecutionImageAuthority: testExecutionImageAuthority(t),
 			SessionCanceller:        teardownSessionCanceller{},
 			NewID: func(prefix string) string {
 				idSequence++
@@ -427,7 +429,7 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 
 	handler, err := api.NewHandler(api.HandlerConfig{
 		Service: controlPlane, PlatformToken: testPlatformToken,
-		Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:                    slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		MaximumDataPlaneBodyBytes: 4 << 20,
 	})
 	if err != nil {
@@ -442,12 +444,14 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 		pool:         pool,
 		stateStore:   stateStore,
 		reconciler: lifecycle.Reconciler{
-			Store: databaseStore, Effects: effectBroker,
+			PrepareImages: effectBroker.ReconcileImagePreparations,
+			Store:         databaseStore, Effects: effectBroker,
 			WorkerID:      fmt.Sprintf("teardown-worker-%d", fixtureSequence),
 			ClaimDuration: time.Minute, PollInterval: teardownPollInterval,
 			BatchSize: 1,
 		},
 		principal:    principal,
+		credential:   credential,
 		profileName:  profile.Name,
 		runnerID:     runnerID,
 		connectionID: connectionID,
@@ -470,7 +474,7 @@ func (fixture *teardownFixture) createReadySandbox(t *testing.T) (string, string
 	operation, created, err := fixture.controlPlane.CreateSandboxOperation(
 		t.Context(), fixture.principal,
 		fmt.Sprintf("teardown-create-%d", integrationIdentitySequence.Add(1)),
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  fixture.profileName,
 			Metadata: map[string]string{"fixture": "teardown-attribution"},
 		},
@@ -488,11 +492,19 @@ func (fixture *teardownFixture) createReadySandbox(t *testing.T) (string, string
 		t.Context(), fixture.principal, sandboxID,
 		fmt.Sprintf("teardown-start-%d", integrationIdentitySequence.Add(1)),
 		current.Revision,
+		contracts.ExecutionImage{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.runLifecycle(t, sandboxID, lifecycle.ActionStartInstance)
+	pinned, err := fixture.controlPlane.GetSandbox(t.Context(), fixture.principal, sandboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.Image == nil || pinned.Image.ResolvedDigest != "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" {
+		t.Fatalf("initial image was not pinned before guest readiness: %+v", pinned.Image)
+	}
 	fixture.completeAssignmentReady(t, sandboxID)
 	return sandboxID, startOperation.ID
 }
@@ -575,13 +587,15 @@ func (fixture *teardownFixture) completeAssignmentReady(t *testing.T, sandboxID 
 	fixture.recordEvent(t, runnercontrol.EventAssignment, &runnerv1.RunnerToControlPlane{
 		Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 			AssignmentResult: &runnerv1.AssignmentResult{
-				MessageId:        fmt.Sprintf("teardown-assignment-ready-%d", sequence),
-				Sequence:         sequence,
-				Fence:            proto.Clone(assignment.Fence).(*runnerv1.AssignmentFence),
-				Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
-				BackendKind:      "firecracker",
-				BackendReference: "compute-teardown-attribution",
-				Correlation:      proto.Clone(assignment.Correlation).(*runnerv1.Correlation),
+				MessageId:               fmt.Sprintf("teardown-assignment-ready-%d", sequence),
+				Sequence:                sequence,
+				Fence:                   proto.Clone(assignment.Fence).(*runnerv1.AssignmentFence),
+				Terminal:                runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+				BackendKind:             "firecracker",
+				BackendReference:        "compute-teardown-attribution",
+				RequestedImageReference: assignment.ExecutionImage.Reference,
+				ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				Correlation:             proto.Clone(assignment.Correlation).(*runnerv1.Correlation),
 			},
 		},
 	})
@@ -696,6 +710,9 @@ func (fixture *teardownFixture) runLifecycle(
 	decision, found, err := fixture.reconciler.RunOnce(
 		t.Context(), time.Now().UTC(), trigger,
 	)
+	if err == nil && decision.Action == lifecycle.ActionStartInstance && completeTestImagePreparation(t, fixture.pool, sandboxID, time.Now().UTC()) {
+		decision, found, err = fixture.reconciler.RunOnce(t.Context(), time.Now().UTC(), ports.LifecycleWakeTriggerNotify)
+	}
 	if err != nil || !found || decision.Action != want {
 		t.Fatalf(
 			"lifecycle action for %s = %#v found=%t error=%v, want %s",

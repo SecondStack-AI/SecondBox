@@ -568,7 +568,7 @@ func (m *Manager) createAndStartResume(
 
 	if err := m.resumeInstanceGuest(setupCtx, inst, opts, launch, timer); err != nil {
 		diagnostics := inst.logTailDiagnostics(120)
-		cleanupErr := m.stopInstance(setupCtx, inst, true)
+		cleanupErr := m.stopFailedStartup(inst)
 		return "", errors.Join(
 			fmt.Errorf("%w: %w%s", ErrSnapshotTemplateUnavailable, err, diagnostics),
 			cleanupErr,
@@ -577,7 +577,6 @@ func (m *Manager) createAndStartResume(
 	if err := m.completeInstanceStartup(setupCtx, inst, sandboxID, opts, timer); err != nil {
 		return "", err
 	}
-	host.transferOwnership() // ownership transfers to the running instance
 	slog.Info(
 		"resumed firecracker microVM from snapshot template",
 		"sandbox", sandboxID,

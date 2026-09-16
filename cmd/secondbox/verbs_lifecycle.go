@@ -60,15 +60,20 @@ func runLifecycleVerb(ctx context.Context, session cliSession, command string, a
 	}
 	flags := verbFlags(command)
 	var resourceFlags resourceOptions
+	var imageFlags executionImageOptions
 	var name, source, cursor string
 	var metadata repeatedValues
 	var noWait, force bool
 	var limit int
 	if command == "create" {
 		resourceFlags.register(flags)
+		imageFlags.register(flags)
 		flags.StringVar(&name, "name", "", "reserved Sandbox name")
 		flags.StringVar(&source, "from", "", "Snapshot identifier or sandbox/name")
 		flags.Var(&metadata, "metadata", "metadata key=value; repeatable")
+	}
+	if command == "start" {
+		imageFlags.register(flags)
 	}
 	if command == "start" || command == "stop" || command == "rm" {
 		flags.BoolVar(&noWait, "no-wait", false, "return the admitted Operation without waiting")
@@ -90,6 +95,13 @@ func runLifecycleVerb(ctx context.Context, session cliSession, command string, a
 	resources, err := resourceFlags.resolve(flags)
 	if err != nil {
 		return err
+	}
+	var image contracts.ExecutionImage
+	if command == "create" || command == "start" && imageFlags.reference != "" {
+		image, err = imageFlags.resolve()
+		if err != nil {
+			return err
+		}
 	}
 	client, err := verbClient(session, transport)
 	if err != nil {
@@ -127,7 +139,7 @@ func runLifecycleVerb(ctx context.Context, session cliSession, command string, a
 				return err
 			}
 		}
-		_, operation, err := client.CreateSandbox(capture("createSandbox"), sb.CreateSandboxRequest{Profile: operand, Metadata: values, SourceSnapshotID: source, Resources: resources}, "")
+		_, operation, err := client.CreateSandbox(capture("createSandbox"), sb.CreateSandboxRequest{Profile: operand, Metadata: values, SourceSnapshotID: source, Resources: resources, Image: image}, "")
 		if err != nil {
 			return &sandboxCreationError{cause: err, profile: operand}
 		}
@@ -154,7 +166,7 @@ func runLifecycleVerb(ctx context.Context, session cliSession, command string, a
 	var target sb.SandboxState
 	switch command {
 	case "start":
-		operation, err = handle.Start(capture("startSandbox"), sb.StartSandboxRequest{}, sb.LifecycleOptions{})
+		operation, err = handle.Start(capture("startSandbox"), sb.StartSandboxRequest{Image: image}, sb.LifecycleOptions{})
 		target = sb.SandboxStateReady
 	case "stop":
 		operation, err = handle.Stop(capture("stopSandbox"), sb.LifecycleOptions{})

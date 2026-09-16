@@ -29,6 +29,7 @@ enum RunnerFeature {
   // assignment payloads land with the generation-4 placement contract; older
   // generations are never negotiated as a fallback.
   RUNNER_FEATURE_TENANT_EGRESS_CONTEXT = 8;
+  RUNNER_FEATURE_CLIENT_SELECTED_IMAGE = 9;
 }
 
 message RunnerHello {
@@ -85,6 +86,7 @@ message RunnerCapabilities {
   // a prerequisite: a runner without it stays fully eligible for cold boot.
   bool snapshot_resume_ready = 12;
   bool attributed_execution_ready = 13;
+  bool client_selected_image_ready = 14;
 }
 
 enum ComputeBackendKind {
@@ -310,6 +312,32 @@ message AssignmentCommand {
   // exactly when requirements.requires_tenant_egress_context is false.
   string egress_context = 12;
   AttributedExecution attributed_execution = 13;
+  ExecutionImage execution_image = 14;
+}
+
+message ExecutionImage {
+  string reference = 1;
+  reserved 2;
+}
+
+message PrepareImageCommand {
+  string message_id = 1;
+  uint64 sequence = 2;
+  string operation_id = 3;
+  string tenant_ref = 4;
+  string reference = 5;
+  uint64 deadline_unix_ms = 6;
+}
+
+message PrepareImageResult {
+  string message_id = 1;
+  uint64 sequence = 2;
+  string operation_id = 3;
+  AssignmentProgressStage stage = 4;
+  string resolved_digest = 5;
+  bytes manifest = 6;
+  bytes signature = 7;
+  string failure = 8;
 }
 
 // Attribution is control-plane authority fixed before guest networking opens.
@@ -353,6 +381,9 @@ enum AssignmentProgressStage {
   ASSIGNMENT_PROGRESS_STAGE_READY = 6;
   ASSIGNMENT_PROGRESS_STAGE_TEARDOWN = 7;
   ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION = 8;
+  ASSIGNMENT_PROGRESS_STAGE_IMAGE_RESOLVE = 9;
+  ASSIGNMENT_PROGRESS_STAGE_IMAGE_DOWNLOAD = 10;
+  ASSIGNMENT_PROGRESS_STAGE_IMAGE_EXTRACT = 11;
 }
 
 message AssignmentProgress {
@@ -388,6 +419,8 @@ message AssignmentResult {
   string backend_reference = 6;
   string safe_detail = 7;
   Correlation correlation = 8;
+  string requested_image_reference = 10;
+  string resolved_image_digest = 11;
 }
 
 enum FenceReason {
@@ -1060,6 +1093,7 @@ message RunnerToControlPlane {
     PortDirectConsume port_direct_consume = 18;
     DataPlaneDirectConsume data_plane_direct_consume = 19;
     WorkspaceTransferFrame workspace_transfer = 20;
+    PrepareImageResult prepare_image_result = 21;
   }
 }
 
@@ -1081,5 +1115,6 @@ message ControlPlaneToRunner {
     DataPlaneDirectAdmission data_plane_direct_admission = 16;
     DataPlaneCancelCommand data_plane_cancel = 17;
     WorkspaceTransferFrame workspace_transfer = 18;
+    PrepareImageCommand prepare_image = 19;
   }
 }

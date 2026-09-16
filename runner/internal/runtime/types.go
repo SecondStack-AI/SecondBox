@@ -41,6 +41,8 @@ type StartOpts struct {
 	GuestBuildID            string
 	ImageManifestDigest     string
 	ToolchainManifestDigest string
+	ExecutionImageDirectory string
+	ExecutionImageArtifacts []VerifiedExecutionImageArtifact
 	MandatoryGuestFeatures  []string
 	RuntimeClass            RuntimeClass
 	SandboxPolicy           *SandboxRuntimePolicy

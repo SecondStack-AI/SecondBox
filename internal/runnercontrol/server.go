@@ -572,7 +572,7 @@ func commandQueueDuration(createdAt, claimedAt time.Time) time.Duration {
 func durableRunnerEvent(kind EventKind) bool {
 	switch kind {
 	case EventAssignment, EventFence, EventDrain, EventEvidence,
-		EventInstanceTerminal, EventLocalWorkspace:
+		EventInstanceTerminal, EventLocalWorkspace, EventImagePreparation:
 		return true
 	default:
 		return false
@@ -597,6 +597,8 @@ func runnerEventSubtype(message *runnerv1.RunnerToControlPlane) string {
 		return "instance_terminal"
 	case message.GetLocalWorkspaceResult() != nil:
 		return "local_workspace_result"
+	case message.GetPrepareImageResult() != nil:
+		return "image_preparation"
 	default:
 		return "unknown"
 	}
@@ -727,7 +729,7 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 		_, err := server.config.StateStore.RecordHeartbeat(ctx, event.Heartbeat, receivedAt)
 		return err
 	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal,
-		EventLocalWorkspace:
+		EventLocalWorkspace, EventImagePreparation:
 		return errors.New("SecondBox runner durable event bypassed the persistence batch")
 	case EventExec, EventPty, EventFile:
 		if server.config.LiveDataPlane == nil {

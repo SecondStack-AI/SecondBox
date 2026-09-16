@@ -113,6 +113,7 @@ func TestParkedSandboxWakesOnStartIntent(t *testing.T) {
 	if _, err := fixture.controlPlane.StartSandbox(
 		t.Context(), fixture.principal, sandboxID,
 		"quiescence-start-intent", current.Revision,
+		testExecutionImage(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +318,7 @@ func startSandboxToStarting(t *testing.T, fixture *teardownFixture) (string, str
 	operation, created, err := fixture.controlPlane.CreateSandboxOperation(
 		t.Context(), fixture.principal,
 		"quiescence-create-"+strconv.FormatInt(integrationIdentitySequence.Add(1), 10),
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  fixture.profileName,
 			Metadata: map[string]string{"fixture": "lifecycle-quiescence"},
 		},
@@ -334,6 +335,7 @@ func startSandboxToStarting(t *testing.T, fixture *teardownFixture) (string, str
 	startOperation, err := fixture.controlPlane.StartSandbox(
 		t.Context(), fixture.principal, sandboxID,
 		"quiescence-start-"+sandboxID, current.Revision,
+		testExecutionImage(),
 	)
 	if err != nil {
 		t.Fatal(err)

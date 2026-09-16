@@ -242,6 +242,27 @@ func TestAttachedTerminalCheckpointsOnDataPlanePollInterval(t *testing.T) {
 	<-stream.checkpointDone
 }
 
+func TestTerminalOutcomeOwnsItsFinalSequenceCheckpoint(t *testing.T) {
+	relay := &terminalCheckpointProofRelay{}
+	stream := &SandboxTerminalStream{
+		service:      &ControlPlaneService{dataPlaneStore: relay, now: time.Now},
+		session:      runnercontrol.DataPlaneSession{ID: "terminal-final", NextInboundSequence: 1},
+		attachmentID: "attachment", nextRecv: 1, version: 1, terminal: true,
+	}
+	if _, err := stream.checkpoint(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if relay.checkpoints != 0 {
+		t.Fatal("Periodic checkpoint consumed the terminal outcome sequence before its outcome was persisted")
+	}
+	if _, err := stream.checkpoint(t.Context(), &runnerv1.ExecTerminal{Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED}); err != nil {
+		t.Fatal(err)
+	}
+	if relay.checkpoints != 1 {
+		t.Fatalf("Terminal outcome checkpoints = %d, want 1", relay.checkpoints)
+	}
+}
+
 type queuedDataPlaneStream struct {
 	receive []*runnerv1.RunnerToControlPlane
 }

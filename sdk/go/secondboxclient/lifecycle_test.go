@@ -16,7 +16,7 @@ import (
 )
 
 func TestSandboxStartSendsAttributedExecution(t *testing.T) {
-	request := StartSandboxRequest{AttributedExecution: &AttributedExecutionRequest{
+	request := StartSandboxRequest{Image: ExecutionImage{Reference: "registry.example/agents/coding:stable"}, AttributedExecution: &AttributedExecutionRequest{
 		AuthorizationRef: "command-sdk", ExpiresAt: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC),
 	}}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
@@ -25,7 +25,8 @@ func TestSandboxStartSendsAttributedExecution(t *testing.T) {
 			t.Errorf("start request = %s %s, headers = %v", incoming.Method, incoming.URL.Path, incoming.Header)
 		}
 		var actual StartSandboxRequest
-		if err := json.NewDecoder(incoming.Body).Decode(&actual); err != nil || actual.AttributedExecution == nil || *actual.AttributedExecution != *request.AttributedExecution {
+		if err := json.NewDecoder(incoming.Body).Decode(&actual); err != nil || actual.AttributedExecution == nil ||
+			*actual.AttributedExecution != *request.AttributedExecution || actual.Image.Reference != request.Image.Reference {
 			t.Errorf("start binding = %+v, error = %v", actual, err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -671,6 +672,7 @@ func TestCreateSandboxReturnsHandleForTheCreatedResource(t *testing.T) {
 		_, _ = io.WriteString(writer, sandboxJSON("sandbox-1", "creating"))
 	})
 	handle, operation, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Image:   ExecutionImage{Reference: "registry.example/secondbox/sdk-test:stable"},
 		Profile: "durable-coding", Resources: resources, Metadata: Metadata{},
 	}, "")
 	if err != nil {
@@ -692,6 +694,7 @@ func TestCreateSandboxRejectsOperationWithoutSandboxReference(t *testing.T) {
 			"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
 	})
 	_, _, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Image:   ExecutionImage{Reference: "registry.example/secondbox/sdk-test:stable"},
 		Profile: "durable-coding", Metadata: Metadata{},
 	}, "")
 	if err == nil || !strings.Contains(err.Error(), "no Sandbox reference") {

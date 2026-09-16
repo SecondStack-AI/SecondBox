@@ -107,7 +107,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		t.Context(),
 		principal,
 		"multirunner-create-a",
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  profile.Name,
 			Metadata: map[string]string{"fixture": "runner-a"},
 		},
@@ -158,7 +158,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		t.Context(),
 		principal,
 		"multirunner-create-b",
-		contracts.CreateSandboxRequest{
+		contracts.CreateSandboxRequest{Image: testExecutionImage(),
 			Profile:  profile.Name,
 			Metadata: map[string]string{"fixture": "runner-b"},
 		},
@@ -216,6 +216,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		sandboxA.ID,
 		"multirunner-start-draining-home",
 		currentA.Revision,
+		testExecutionImage(),
 	); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		t.Fatalf("start on draining home error = %v, want ErrHomeRunnerUnavailable", err)
 	}
@@ -242,6 +243,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		sandboxA.ID,
 		"multirunner-start-offline-home",
 		currentA.Revision,
+		testExecutionImage(),
 	); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		t.Fatalf("start on offline home error = %v, want ErrHomeRunnerUnavailable", err)
 	}
@@ -270,6 +272,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		sandboxA.ID,
 		"multirunner-start-returned-home",
 		currentA.Revision,
+		testExecutionImage(),
 	)
 	if err != nil {
 		t.Fatalf("start after same home runner returned: %v", err)
@@ -303,6 +306,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
 			AssetCatalog:            multirunnerAssetCatalog{},
+			ExecutionImageAuthority: testExecutionImageAuthority(t),
 			SessionCanceller:        multirunnerSessionCanceller{},
 			NewID: func(prefix string) string {
 				idSequence++
@@ -353,12 +357,14 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		&runnerv1.RunnerToControlPlane{
 			Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 				AssignmentResult: &runnerv1.AssignmentResult{
-					MessageId:        "multirunner-assignment-ready",
-					Sequence:         2,
-					Fence:            proto.Clone(assignment.Fence).(*runnerv1.AssignmentFence),
-					Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
-					BackendKind:      "firecracker",
-					BackendReference: "fc-multirunner-routing",
+					MessageId:               "multirunner-assignment-ready",
+					Sequence:                2,
+					Fence:                   proto.Clone(assignment.Fence).(*runnerv1.AssignmentFence),
+					Terminal:                runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+					BackendKind:             "firecracker",
+					BackendReference:        "fc-multirunner-routing",
+					RequestedImageReference: assignment.ExecutionImage.Reference,
+					ResolvedImageDigest:     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 					Correlation: proto.Clone(
 						assignment.Correlation,
 					).(*runnerv1.Correlation),
@@ -747,6 +753,9 @@ func multirunnerRunLifecycle(
 	decision, found, err := reconciler.RunOnce(
 		t.Context(), now.UTC(), ports.LifecycleWakeTriggerNotify,
 	)
+	if err == nil && decision.Action == lifecycle.ActionStartInstance && completeTestImagePreparation(t, pool, sandboxID, now.UTC()) {
+		decision, found, err = reconciler.RunOnce(t.Context(), now.UTC(), ports.LifecycleWakeTriggerNotify)
+	}
 	if err != nil || !found || decision.Action != want {
 		t.Fatalf(
 			"lifecycle action for %s = %#v found=%t error=%v, want %s",

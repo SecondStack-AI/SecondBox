@@ -234,6 +234,8 @@ func TestTrustedMicroVMArtifactsDetectsSameSizeRestoredMtimeMutation(t *testing.
 		path:     path,
 		identity: identity,
 	}}}
+	// Some qualified Runner filesystems expose ctime at one-second resolution.
+	time.Sleep(1100 * time.Millisecond)
 	if err := os.WriteFile(path, []byte("after!"), 0o600); err != nil {
 		t.Fatalf("mutate artifact: %v", err)
 	}
@@ -308,6 +310,67 @@ func TestStageTrustedLaunchImageFilesUsesStagedPaths(t *testing.T) {
 		if string(data) != want {
 			t.Fatalf("staged %s = %q, want %q", path, data, want)
 		}
+	}
+}
+
+func TestPrepareLaunchImageUsesVerifiedExecutionImageTrust(t *testing.T) {
+	sourceDir := t.TempDir()
+	image := microVMImageSelection{
+		RuntimeClass:           runtimemanager.RuntimeClassToolExecutor,
+		KernelPath:             filepath.Join(sourceDir, "kernel"),
+		RootfsPath:             filepath.Join(sourceDir, "rootfs.ext4"),
+		SharedImagePath:        filepath.Join(sourceDir, "shared.img"),
+		VerifiedExecutionImage: true,
+	}
+	for _, path := range []string{image.KernelPath, image.RootfsPath, image.SharedImagePath} {
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, artifact := range []struct{ label, path string }{{"kernel", image.KernelPath}, {"rootfs", image.RootfsPath}, {"shared image", image.SharedImagePath}} {
+		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, artifact.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		image.VerifiedArtifacts = append(image.VerifiedArtifacts, identity)
+	}
+	manager := &Manager{cfg: &config.Config{
+		MicroVMPublicKeyPath: "/fixed-release-authority/public.pem",
+		MicroVMKernelPath:    "/fixed-release-bundle/kernel",
+	}}
+	staged, err := manager.prepareLaunchImage(t.TempDir(), image)
+	if err != nil {
+		if strings.Contains(err.Error(), "reflink rootfs") {
+			t.Skipf("filesystem does not support rootfs reflinks: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if staged.KernelPath == image.KernelPath || staged.RootfsPath == image.RootfsPath {
+		t.Fatalf("verified execution image was not staged: %#v", staged)
+	}
+}
+
+func TestPrepareLaunchImageRejectsChangedVerifiedExecutionImage(t *testing.T) {
+	sourceDir := t.TempDir()
+	image := microVMImageSelection{
+		KernelPath: filepath.Join(sourceDir, "kernel"), RootfsPath: filepath.Join(sourceDir, "rootfs.ext4"),
+		SharedImagePath: filepath.Join(sourceDir, "shared.img"), VerifiedExecutionImage: true,
+	}
+	for _, artifact := range []struct{ label, path string }{{"kernel", image.KernelPath}, {"rootfs", image.RootfsPath}, {"shared image", image.SharedImagePath}} {
+		if err := os.WriteFile(artifact.path, []byte(artifact.label), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, artifact.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		image.VerifiedArtifacts = append(image.VerifiedArtifacts, identity)
+	}
+	if err := os.WriteFile(image.KernelPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Manager{}).prepareLaunchImage(t.TempDir(), image); err == nil || !strings.Contains(err.Error(), "changed before staging") {
+		t.Fatalf("prepare changed verified execution image = %v", err)
 	}
 }
 
@@ -830,6 +893,12 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	jailerUID := os.Getuid()
+	jailerGID := os.Getgid()
+	if jailerUID == 0 {
+		jailerUID = 10001
+		jailerGID = 10001
+	}
 
 	m := &Manager{cfg: &config.Config{
 		FirecrackerPath:            filepath.Join(dir, "firecracker"),
@@ -837,9 +906,9 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMKernelPath:          kernel,
 		MicroVMSharedImagePath:     shared,
 		MicroVMJailerChrootBaseDir: filepath.Join(dir, "jailer-root"),
-		MicroVMJailerUIDStart:      os.Getuid(),
+		MicroVMJailerUIDStart:      jailerUID,
 		MicroVMJailerUIDCount:      1,
-		MicroVMJailerGID:           os.Getgid(),
+		MicroVMJailerGID:           jailerGID,
 		MicroVMJailerCgroupVersion: 2,
 		MicroVMJailerParentCgroup:  "secondbox-runner-test",
 		MicroVMMemoryMiB:           512,
@@ -849,7 +918,7 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	}}
 	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512}
 	attachment := managerTestAttachment(t, workspace)
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, attachment, shared, "agfc123", "", os.Getuid(), false, policy)
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, attachment, shared, "agfc123", "", jailerUID, false, policy)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
