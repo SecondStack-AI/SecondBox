@@ -60,13 +60,16 @@ Failed verification does not select another image.
 It requires lifecycle authority and uses the intersection of Tenant and application Profile grants.
 Admission captures a finite set of ready eligible Runners; a Profile narrows that set.
 The service resolves the reference once, verifies signed metadata, and sends that digest to compatible members of the captured set.
+Resolution runs on the captured Runner with the widest architecture coverage, and that fetch counts as its own preparation, so no Runner retrieves the same digest twice.
 Fleet members added later are not silently added to the Operation.
 
 The initial bounds are 16 target Runners and a 30-minute deadline.
-A request above the target bound must select a narrower Profile.
+An eligible Runner set above the target bound is rejected as an invalid request that must select a narrower Profile, because waiting cannot reduce that set.
 Preparation consumes the existing Tenant and Subject concurrent-operation quota but allocates no Sandbox, Workspace, or VM.
-Operation inspection reports the image digest and target/completion counts.
-A failed target or expired deadline fails the Operation rather than claiming complete coverage.
+Operation inspection reports the image digest and target/completion counts, including the captured target count before the reference resolves.
+Every target reports before the Operation decides.
+It succeeds only when all targets prepared the digest, and otherwise fails naming the Runners that did not, while the counts still report which Runners hold the image.
+An expired deadline fails the Operation rather than claiming complete coverage.
 
 ## Cache and storage
 

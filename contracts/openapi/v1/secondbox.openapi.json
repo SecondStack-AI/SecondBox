@@ -10337,6 +10337,8 @@
           "workspace_relocation_snapshots_present",
           "workspace_relocation_target_unavailable",
           "quota_exceeded",
+          "image_preparation_targets_exceeded",
+          "image_preparation_failed",
           "resources_exceed_profile",
           "resources_fixed_by_profile",
           "limit_exceeded",

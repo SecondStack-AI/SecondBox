@@ -864,8 +864,14 @@ func getOperationWithQuerier(
 	}
 	if operation.Kind == "prepare_image" {
 		preparation := contracts.ImagePreparation{Image: contracts.PublicExecutionImage{RequestedReference: operation.RequestMetadata["executionImageReference"]}}
-		if err := querier.QueryRow(ctx, `SELECT count(*) FILTER (WHERE payload_json->>'role'='prepare'),count(*) FILTER (WHERE payload_json->>'role'='prepare' AND state='completed'),COALESCE(max(evidence_json->>'resolved_digest') FILTER (WHERE payload_json->>'role'='resolve'),'') FROM secondbox.lifecycle_effects WHERE assignment_id=$1 AND kind='prepare_image'`, operation.ID).Scan(&preparation.TargetRunners, &preparation.PreparedRunners, &preparation.Image.ResolvedDigest); err != nil {
+		// Admission captures the target set on the resolve effect, so a poll
+		// before resolution reports that count instead of an empty preparation.
+		var capturedTargets int
+		if err := querier.QueryRow(ctx, `SELECT count(*) FILTER (WHERE payload_json->>'role'='prepare'),count(*) FILTER (WHERE payload_json->>'role'='prepare' AND state='completed'),COALESCE(max(evidence_json->>'resolved_digest') FILTER (WHERE payload_json->>'role'='resolve'),''),COALESCE(max(jsonb_array_length(payload_json->'targets')) FILTER (WHERE payload_json->>'role'='resolve'),0) FROM secondbox.lifecycle_effects WHERE assignment_id=$1 AND kind='prepare_image'`, operation.ID).Scan(&preparation.TargetRunners, &preparation.PreparedRunners, &preparation.Image.ResolvedDigest, &capturedTargets); err != nil {
 			return contracts.Operation{}, err
+		}
+		if preparation.TargetRunners == 0 {
+			preparation.TargetRunners = capturedTargets
 		}
 		operation.ImagePreparation = &preparation
 	}

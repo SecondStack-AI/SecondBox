@@ -3770,9 +3770,13 @@ func recordAssignmentEvent(
 			if instanceUpdate.RowsAffected() != 1 {
 				return errors.New("SecondBox runner ready AssignmentResult changed the requested execution image")
 			}
-			if _, err := tx.Exec(ctx, `UPDATE secondbox.sandboxes SET execution_image_reference=$2,execution_image_digest=$3 WHERE id=$1`,
-				result.Fence.SandboxId, result.RequestedImageReference, result.ResolvedImageDigest); err != nil {
-				return fmt.Errorf("SecondBox ready Sandbox image pin update failed: %w", err)
+			if result.RequestedImageReference != "" {
+				if err := pinReadySandboxExecutionImage(
+					ctx, tx, result.Fence.SandboxId,
+					result.Correlation.OperationId, result.ResolvedImageDigest,
+				); err != nil {
+					return err
+				}
 			}
 			command, err := tx.Exec(ctx, `
 				UPDATE secondbox.workspaces AS workspace

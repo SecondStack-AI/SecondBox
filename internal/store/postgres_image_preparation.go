@@ -81,12 +81,12 @@ func (store *PostgresControlPlaneStore) PrepareImage(ctx context.Context, input 
 		return contracts.Operation{}, false, ports.ErrRunnerPoolUnavailable
 	}
 	if len(targets) > imagepreparation.MaximumTargets {
-		return contracts.Operation{}, false, fmt.Errorf("%w: SecondBox image preparation exceeds the target bound; select a narrower Profile", ports.ErrQuotaExceeded)
+		return contracts.Operation{}, false, fmt.Errorf("%w of %d; select a narrower Profile", ports.ErrImagePreparationTargetsExceeded, imagepreparation.MaximumTargets)
 	}
 	if err := insertOperation(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Operation); err != nil {
 		return contracts.Operation{}, false, err
 	}
-	if err := imagepreparation.Queue(ctx, tx, input.Operation.ID+"-resolve", input.Operation.ID, input.Principal.TenantRef, input.Request.Image.Reference, targets[0].RunnerID, imagepreparation.Payload{Role: "resolve", Targets: targets}, now, now.Add(imagepreparation.Deadline)); err != nil {
+	if err := imagepreparation.Queue(ctx, tx, input.Operation.ID+"-resolve", input.Operation.ID, input.Principal.TenantRef, input.Request.Image.Reference, imagepreparation.ResolveTarget(targets).RunnerID, imagepreparation.Payload{Role: "resolve", Targets: targets}, now, now.Add(imagepreparation.Deadline)); err != nil {
 		return contracts.Operation{}, false, err
 	}
 	if _, err := insertAdminIdempotency(ctx, tx, input.Idempotency, input.Operation); err != nil {

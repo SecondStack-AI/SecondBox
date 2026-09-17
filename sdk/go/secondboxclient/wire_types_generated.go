@@ -575,6 +575,8 @@ const (
 	ProblemCodeWorkspaceRelocationSnapshotsPresent  ProblemCode = "workspace_relocation_snapshots_present"
 	ProblemCodeWorkspaceRelocationTargetUnavailable ProblemCode = "workspace_relocation_target_unavailable"
 	ProblemCodeQuotaExceeded                        ProblemCode = "quota_exceeded"
+	ProblemCodeImagePreparationTargetsExceeded      ProblemCode = "image_preparation_targets_exceeded"
+	ProblemCodeImagePreparationFailed               ProblemCode = "image_preparation_failed"
 	ProblemCodeResourcesExceedProfile               ProblemCode = "resources_exceed_profile"
 	ProblemCodeResourcesFixedByProfile              ProblemCode = "resources_fixed_by_profile"
 	ProblemCodeLimitExceeded                        ProblemCode = "limit_exceeded"
