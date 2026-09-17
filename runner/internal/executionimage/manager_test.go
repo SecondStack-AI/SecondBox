@@ -3,7 +3,10 @@ package executionimage
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
@@ -354,5 +358,57 @@ func TestRegistryCertificateArgsRequireExplicitCA(t *testing.T) {
 	copyWant := []string{"--src-cert-dir", directory}
 	if args := manager.registryCertificateArgs("registry.example:5443", "--src-cert-dir"); !slices.Equal(args, copyWant) {
 		t.Fatalf("copy certificate arguments = %#v, want %#v", args, copyWant)
+	}
+}
+
+// Preparation of a digest that is already cached copies nothing, so it must not
+// hold a staging reservation against the cache filesystem while it verifies.
+func TestWarmCacheHitReservesNoStagingCapacity(t *testing.T) {
+	cacheRoot := t.TempDir()
+	digest := "sha256:" + strings.Repeat("ab", 32)
+	publicKeyPath, publicKeySHA256 := writeSignedBundleFixture(t, filepath.Join(cacheRoot, strings.TrimPrefix(digest, "sha256:")))
+	manager := &Manager{
+		cacheRoot:            cacheRoot,
+		registryAllowlist:    []string{"registry.example"},
+		publicKeyPath:        publicKeyPath,
+		publicKeySHA256:      publicKeySHA256,
+		maximumDownloadBytes: 1 << 20,
+		maximumExpandedBytes: 1 << 20,
+		maximumCacheBytes:    4 << 20,
+		coldPreparationGate:  make(chan struct{}, 1),
+		pins:                 map[string]int{},
+	}
+	const reference = "registry.example/agent:v1"
+	const operationID = "operation-warm-cache"
+	operationHash := sha256.Sum256([]byte(operationID))
+	if err := os.MkdirAll(filepath.Join(cacheRoot, ".resolutions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := json.Marshal(operationResolution{Reference: reference, Digest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheRoot, ".resolutions", fmt.Sprintf("%x.json", operationHash[:])), resolution, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(time.Minute))
+	defer cancel()
+	prepared, err := manager.Fetch(ctx, operationID,
+		&runnerprotocol.ExecutionImage{Reference: reference}, []byte("{}"),
+		func(runnerprotocol.AssignmentProgressStage) error { return nil },
+		func(context.Context, uint64) (func() error, error) {
+			t.Error("warm cache hit reserved staging capacity")
+			return func() error { return nil }, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Release()
+	if prepared.ResolvedDigest != digest || len(prepared.Artifacts) != 3 {
+		t.Fatalf("warm preparation = %q with %d artifacts", prepared.ResolvedDigest, len(prepared.Artifacts))
+	}
+	if _, err := os.Stat(filepath.Join(prepared.Directory, ".prepare-until")); err != nil {
+		t.Fatalf("warm preparation retention marker: %v", err)
 	}
 }

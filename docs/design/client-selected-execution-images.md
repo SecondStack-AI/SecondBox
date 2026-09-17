@@ -83,9 +83,10 @@ Preparation is not a permanent cache-residency promise.
 
 Operator limits bound compressed download size, expanded bundle size, and retained cache size.
 Cold retrieval is serialized and can evict unpinned least-recently-used entries.
-The Runner conservatively reserves worst-case staging capacity before each fetch request, including warm requests, through the same pressure controller used by Workspace and Instance storage.
-Consequently a warm preparation can be refused under storage pressure even if its bytes are present.
-This avoids a second allocator or an unaccounted cold-pull race across the process boundary.
+The fetcher alone admits staging capacity, because only it knows whether a tag resolves to cached bytes, and it measures the cache filesystem that receives them.
+A cold retrieval reserves the worst-case staging size and evicts unpinned entries other than its own digest until the cache filesystem admits it.
+A warm preparation reserves nothing and cannot be refused for capacity.
+The Runner therefore charges Workspace and Instance storage pressure for Sandbox disks only.
 
 ## Backend and workspace behavior
 
