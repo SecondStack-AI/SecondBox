@@ -304,6 +304,7 @@ type teardownFixture struct {
 	principal    contracts.Principal
 	credential   string
 	profileName  string
+	poolName     string
 	runnerID     string
 	connectionID string
 	server       string
@@ -453,6 +454,7 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 		principal:    principal,
 		credential:   credential,
 		profileName:  profile.Name,
+		poolName:     poolName,
 		runnerID:     runnerID,
 		connectionID: connectionID,
 		server:       server.URL,
@@ -630,17 +632,49 @@ func (fixture *teardownFixture) recordEvent(
 	message *runnerv1.RunnerToControlPlane,
 ) {
 	t.Helper()
+	fixture.recordRunnerEvent(t, fixture.runnerID, fixture.connectionID, kind, message)
+}
+
+// recordRunnerEvent carries evidence from one named Runner, so a fixture with
+// several eligible Runners keeps each Runner's own reporting authority.
+func (fixture *teardownFixture) recordRunnerEvent(
+	t *testing.T,
+	runnerID string,
+	connectionID string,
+	kind runnercontrol.EventKind,
+	message *runnerv1.RunnerToControlPlane,
+) {
+	t.Helper()
 	duplicate, err := fixture.stateStore.RecordEvent(
 		t.Context(),
 		runnercontrol.Event{
-			Kind: kind, RunnerID: fixture.runnerID,
-			ConnectionID: fixture.connectionID, Message: message,
+			Kind: kind, RunnerID: runnerID,
+			ConnectionID: connectionID, Message: message,
 		},
 		time.Now().UTC(),
 	)
 	if err != nil || duplicate {
 		t.Fatalf("record %s event duplicate=%t error=%v", kind, duplicate, err)
 	}
+}
+
+// addEligibleRunner enrolls one more ready Runner in the fixture pool so image
+// preparation admission captures more than one target.
+func (fixture *teardownFixture) addEligibleRunner(t *testing.T, suffix string) (string, string) {
+	t.Helper()
+	runnerID := fixture.runnerID + "-" + suffix
+	seedFixtureHomeRunner(t, fixture.poolName, runnerID)
+	connectionID := "connection-" + runnerID
+	if err := fixture.stateStore.OpenConnection(
+		t.Context(),
+		runnercontrol.RunnerIdentity{
+			RunnerID: runnerID, CredentialSerial: "credential-" + runnerID,
+		},
+		connectionID, 1, time.Now().UTC(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	return runnerID, connectionID
 }
 
 func (fixture *teardownFixture) pendingLocalWorkspaceCommand(

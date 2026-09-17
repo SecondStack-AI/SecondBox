@@ -60,6 +60,7 @@ Failed verification does not select another image.
 It requires lifecycle authority and uses the intersection of Tenant and application Profile grants.
 Admission captures a finite set of ready eligible Runners; a Profile narrows that set.
 The service resolves the reference once, verifies signed metadata, and sends that digest to compatible members of the captured set.
+Resolution runs on the captured Runner with the widest architecture coverage, and that fetch counts as its own preparation, so no Runner retrieves the same digest twice.
 Fleet members added later are not silently added to the Operation.
 
 The initial bounds are 16 target Runners and a 30-minute deadline.

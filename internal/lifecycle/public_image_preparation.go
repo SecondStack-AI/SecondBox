@@ -74,9 +74,9 @@ func (broker *PostgresEffectBroker) reconcileImagePreparation(ctx context.Contex
 	if !deadline.After(now) {
 		return fail("Image preparation deadline expired")
 	}
-	var state string
+	var state, resolveRunner string
 	var encoded, payload []byte
-	if err := tx.QueryRow(ctx, `SELECT state,evidence_json,payload_json FROM secondbox.lifecycle_effects WHERE id=$1`, id+"-resolve").Scan(&state, &encoded, &payload); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT state,runner_id,evidence_json,payload_json FROM secondbox.lifecycle_effects WHERE id=$1`, id+"-resolve").Scan(&state, &resolveRunner, &encoded, &payload); err != nil {
 		return false, err
 	}
 	if state == "failed" {
@@ -106,18 +106,28 @@ func (broker *PostgresEffectBroker) reconcileImagePreparation(ctx context.Contex
 	if len(targets) == 0 {
 		return fail("Image architecture has no authorized preparation target")
 	}
-	var queued int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM secondbox.lifecycle_effects WHERE assignment_id=$1 AND kind='prepare_image' AND payload_json->>'role'='prepare'`, id).Scan(&queued); err != nil {
+	var preparations int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM secondbox.lifecycle_effects WHERE assignment_id=$1 AND kind='prepare_image' AND payload_json->>'role'='prepare'`, id).Scan(&preparations); err != nil {
 		return false, err
 	}
-	if queued == 0 {
+	changed := false
+	if preparations == 0 {
 		for index, target := range targets {
-			if err := imagepreparation.Queue(ctx, tx, fmt.Sprintf("%s-prepare-%d", id, index), id, tenant, contracts.ExecutionImageDigestReference(reference, resolved.ResolvedDigest), target.RunnerID, imagepreparation.Payload{Role: "prepare"}, now, deadline); err != nil {
+			effectID := fmt.Sprintf("%s-prepare-%d", id, index)
+			if target.RunnerID == resolveRunner {
+				if err := imagepreparation.RecordResolvedPreparation(ctx, tx, effectID, id, target.RunnerID, encoded, now, deadline); err != nil {
+					return false, err
+				}
+				continue
+			}
+			if err := imagepreparation.Queue(ctx, tx, effectID, id, tenant, contracts.ExecutionImageDigestReference(reference, resolved.ResolvedDigest), target.RunnerID, imagepreparation.Payload{Role: "prepare"}, now, deadline); err != nil {
 				return false, err
 			}
 		}
-		_, err := tx.Exec(ctx, `UPDATE secondbox.operations SET state='running',started_at=COALESCE(started_at,$2),updated_at=$2 WHERE id=$1`, id, now)
-		return true, err
+		if _, err := tx.Exec(ctx, `UPDATE secondbox.operations SET state='running',started_at=COALESCE(started_at,$2),updated_at=$2 WHERE id=$1`, id, now); err != nil {
+			return false, err
+		}
+		changed = true
 	}
 	rows, err := tx.Query(ctx, `SELECT state,evidence_json FROM secondbox.lifecycle_effects WHERE assignment_id=$1 AND kind='prepare_image' AND payload_json->>'role'='prepare' ORDER BY id`, id)
 	if err != nil {
@@ -156,7 +166,7 @@ func (broker *PostgresEffectBroker) reconcileImagePreparation(ctx context.Contex
 		return fail("Image preparation failed on an authorized target")
 	}
 	if complete != len(targets) {
-		return false, nil
+		return changed, nil
 	}
 	_, err = tx.Exec(ctx, `UPDATE secondbox.operations SET state='succeeded',completed_at=$2,updated_at=$2 WHERE id=$1`, id, now)
 	return true, err

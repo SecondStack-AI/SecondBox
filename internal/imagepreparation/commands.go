@@ -23,6 +23,34 @@ type Payload struct {
 	Targets []Target `json:"targets,omitempty"`
 }
 
+// ResolveTarget selects the captured Runner that resolves and verifies the
+// reference. Its fetch also prepares that Runner, so the widest architecture
+// coverage is chosen: a Runner outside the resolved image's architecture keeps
+// no prepared bytes the Operation can count.
+func ResolveTarget(targets []Target) Target {
+	chosen := targets[0]
+	for _, target := range targets[1:] {
+		if len(target.Architectures) > len(chosen.Architectures) {
+			chosen = target
+		}
+	}
+	return chosen
+}
+
+// RecordResolvedPreparation counts the resolve Runner's completed fetch as that
+// Runner's preparation. It carries the resolve evidence and sends no second
+// command, so one Runner never retrieves the same digest twice.
+func RecordResolvedPreparation(ctx context.Context, tx pgx.Tx, effectID, operationID, runner string, evidence []byte, now, deadline time.Time) error {
+	metadata, err := json.Marshal(Payload{Role: "prepare"})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO secondbox.lifecycle_effects
+	 (id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,command_id,storage_object_id,fencing_token,retry_count,retry_limit,effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,payload_json,evidence_json,created_at,updated_at)
+	 VALUES ($1,'',0,'prepare_image','completed',$2,'',$3,'','','',0,0,$4,'',$5,'','',$6,$7,$5,$5)`, effectID, operationID, runner, deadline, now, metadata, evidence)
+	return err
+}
+
 func Queue(ctx context.Context, tx pgx.Tx, effectID, operationID, tenant, reference, runner string, payload Payload, now, deadline time.Time) error {
 	metadata, err := json.Marshal(payload)
 	if err != nil {
