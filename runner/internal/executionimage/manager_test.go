@@ -420,3 +420,75 @@ func TestCacheCapacityKeepsThePreparedDigestAndPinnedEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestCacheEvictionRemovesTheDigestLockFile(t *testing.T) {
+	manager := &Manager{cacheRoot: t.TempDir(), pins: map[string]int{}}
+	digest := strings.Repeat("d", 64)
+	directory := filepath.Join(manager.cacheRoot, digest)
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := manager.lockDigest(t.Context(), "sha256:"+digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := lock.Name()
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	evicted, err := manager.evictCacheEntry(directory)
+	if err != nil || !evicted {
+		t.Fatalf("eviction evicted=%v err=%v", evicted, err)
+	}
+	for _, path := range []string{directory, lockPath} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("eviction retained %s: %v", filepath.Base(path), err)
+		}
+	}
+}
+
+// Eviction unlinks a lock file that a concurrent preparation may already have
+// open, so an acquired lock counts only while it is the file at its path.
+func TestDigestLockIdentityFollowsTheLockFilePath(t *testing.T) {
+	manager := &Manager{cacheRoot: t.TempDir(), pins: map[string]int{}}
+	lock, err := manager.lockDigest(t.Context(), strings.Repeat("e", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	held, err := lockFileStillAtPath(lock, lock.Name())
+	if err != nil || !held {
+		t.Fatalf("live lock file held=%v err=%v", held, err)
+	}
+	if err := os.Remove(lock.Name()); err != nil {
+		t.Fatal(err)
+	}
+	held, err = lockFileStillAtPath(lock, lock.Name())
+	if err != nil || held {
+		t.Fatalf("evicted lock file held=%v err=%v", held, err)
+	}
+}
+
+func TestOperationResolutionsArePrunedAfterTheirRetention(t *testing.T) {
+	directory := t.TempDir()
+	stale := filepath.Join(directory, strings.Repeat("a", 64)+".json")
+	fresh := filepath.Join(directory, strings.Repeat("b", 64)+".json")
+	for _, path := range []string{stale, fresh} {
+		if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aged := time.Now().Add(-operationResolutionRetention - time.Minute)
+	if err := os.Chtimes(stale, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneOperationResolutions(directory, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale resolution survived pruning: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("live resolution was pruned: %v", err)
+	}
+}

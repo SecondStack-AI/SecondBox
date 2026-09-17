@@ -80,6 +80,8 @@ Cross-process digest locks serialize publication and prevent eviction during loc
 Only complete, verified directories enter the cache.
 Prepared entries retain a bounded expiry marker until the preparation deadline to close the preparation-to-launch eviction window.
 Preparation is not a permanent cache-residency promise.
+Eviction removes a digest lock with its bytes, and a lock acquired on an unlinked file is taken again, so cache metadata does not outlive the cache.
+A recorded tag resolution expires one day after its Operation, which cannot be replayed beyond its deadline.
 
 Operator limits bound compressed download size, expanded bundle size, and retained cache size.
 Cold retrieval is serialized and can evict unpinned least-recently-used entries.
