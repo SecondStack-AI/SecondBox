@@ -305,6 +305,9 @@ func New(cfg *config.Config) (*Manager, error) {
 			return nil, fmt.Errorf("create microVM dir %q: %w", dir, err)
 		}
 	}
+	if err := validateExecutionImageCacheFilesystem(cfg.ExecutionImageCacheRoot, cfg.MicroVMRunDir); err != nil {
+		return nil, err
+	}
 	snapshotTemplates, err := NewSnapshotTemplateCache(cfg.MicroVMSnapshotTemplateCacheRoot)
 	if err != nil {
 		return nil, err

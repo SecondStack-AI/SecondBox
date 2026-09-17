@@ -50,6 +50,8 @@ The control plane verifies the existing bundle signature with its configured pub
 The assignment contains a digest reference and authorized identities, never a mutable tag or pull credentials.
 
 The Runner independently verifies local bundle bytes and checks the assigned component identities before guest negotiation.
+Full verification hashes gigabytes, so the Runner verifies each bundle once and then admits later starts of the same bundle on the recorded filesystem identity of every verified file.
+Changed metadata forces one re-verification, and a Runner restart re-verifies each bundle it starts, the fixed Profile bundle included.
 A materialization report cannot overwrite assignment authority.
 Captured-file identity checks reject replacement between verification and Firecracker staging.
 Failed verification does not select another image.
@@ -74,16 +76,20 @@ An expired deadline fails the Operation rather than claiming complete coverage.
 ## Cache and storage
 
 The shared cache is keyed by digest, but access remains Tenant-authorized.
+It must share a filesystem with the microVM run directory, which the Runner checks at startup, because a start stages the selected rootfs by reflink and image bytes are never copied.
 Cross-process digest locks serialize publication and prevent eviction during local verification and launch.
 Only complete, verified directories enter the cache.
 Prepared entries retain a bounded expiry marker until the preparation deadline to close the preparation-to-launch eviction window.
 Preparation is not a permanent cache-residency promise.
+Eviction removes a digest lock with its bytes, and a lock acquired on an unlinked file is taken again, so cache metadata does not outlive the cache.
+A recorded tag resolution expires one day after its Operation, which cannot be replayed beyond its deadline.
 
 Operator limits bound compressed download size, expanded bundle size, and retained cache size.
 Cold retrieval is serialized and can evict unpinned least-recently-used entries.
-The Runner conservatively reserves worst-case staging capacity before each fetch request, including warm requests, through the same pressure controller used by Workspace and Instance storage.
-Consequently a warm preparation can be refused under storage pressure even if its bytes are present.
-This avoids a second allocator or an unaccounted cold-pull race across the process boundary.
+The fetcher alone admits staging capacity, because only it knows whether a tag resolves to cached bytes, and it measures the cache filesystem that receives them.
+A cold retrieval reserves the worst-case staging size and evicts unpinned entries other than its own digest until the cache filesystem admits it.
+A warm preparation reserves nothing and cannot be refused for capacity.
+The Runner therefore charges Workspace and Instance storage pressure for Sandbox disks only.
 
 ## Backend and workspace behavior
 

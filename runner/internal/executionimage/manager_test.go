@@ -3,7 +3,10 @@ package executionimage
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
@@ -42,38 +46,6 @@ func TestVerifiedArtifactsRetainIdentityAcrossPublication(t *testing.T) {
 	}
 	if _, err := relocateVerifiedArtifacts(published, artifacts); err == nil || !strings.Contains(err.Error(), "changed during cache publication") {
 		t.Fatalf("replacement identity error = %v", err)
-	}
-}
-
-func TestStoragePressureReclaimsOnlyUnusedImages(t *testing.T) {
-	manager := &Manager{cacheRoot: t.TempDir(), pins: make(map[string]int)}
-	for _, letter := range []string{"a", "b", "c"} {
-		directory := filepath.Join(manager.cacheRoot, strings.Repeat(letter, 64))
-		if err := os.Mkdir(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if letter == "b" {
-			if err := retainPreparedDirectory(directory, time.Now().Add(time.Minute)); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	results := make(chan error, 16)
-	for range cap(results) {
-		go func() {
-			results <- manager.reclaimUnusedImages("registry.example/agent@sha256:" + strings.Repeat("c", 64))
-		}()
-	}
-	for range cap(results) {
-		if err := <-results; err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, letter := range []string{"a", "b", "c"} {
-		_, err := os.Stat(filepath.Join(manager.cacheRoot, strings.Repeat(letter, 64)))
-		if letter == "a" && !errors.Is(err, os.ErrNotExist) || letter != "a" && err != nil {
-			t.Fatalf("cache entry %s after reclamation: %v", letter, err)
-		}
 	}
 }
 
@@ -354,5 +326,169 @@ func TestRegistryCertificateArgsRequireExplicitCA(t *testing.T) {
 	copyWant := []string{"--src-cert-dir", directory}
 	if args := manager.registryCertificateArgs("registry.example:5443", "--src-cert-dir"); !slices.Equal(args, copyWant) {
 		t.Fatalf("copy certificate arguments = %#v, want %#v", args, copyWant)
+	}
+}
+
+// Preparation of a digest that is already cached copies nothing, so it must not
+// hold a staging reservation against the cache filesystem while it verifies.
+func TestWarmCacheHitReservesNoStagingCapacity(t *testing.T) {
+	cacheRoot := t.TempDir()
+	digest := "sha256:" + strings.Repeat("ab", 32)
+	publicKeyPath, publicKeySHA256 := writeSignedBundleFixture(t, filepath.Join(cacheRoot, strings.TrimPrefix(digest, "sha256:")))
+	manager := &Manager{
+		cacheRoot:            cacheRoot,
+		registryAllowlist:    []string{"registry.example"},
+		publicKeyPath:        publicKeyPath,
+		publicKeySHA256:      publicKeySHA256,
+		maximumDownloadBytes: 1 << 20,
+		maximumExpandedBytes: 1 << 20,
+		maximumCacheBytes:    4 << 20,
+		coldPreparationGate:  make(chan struct{}, 1),
+		pins:                 map[string]int{},
+	}
+	const reference = "registry.example/agent:v1"
+	const operationID = "operation-warm-cache"
+	operationHash := sha256.Sum256([]byte(operationID))
+	if err := os.MkdirAll(filepath.Join(cacheRoot, ".resolutions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := json.Marshal(operationResolution{Reference: reference, Digest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheRoot, ".resolutions", fmt.Sprintf("%x.json", operationHash[:])), resolution, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(time.Minute))
+	defer cancel()
+	prepared, err := manager.Fetch(ctx, operationID,
+		&runnerprotocol.ExecutionImage{Reference: reference}, []byte("{}"),
+		func(runnerprotocol.AssignmentProgressStage) error { return nil },
+		func(context.Context, uint64) (func() error, error) {
+			t.Error("warm cache hit reserved staging capacity")
+			return func() error { return nil }, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Release()
+	if prepared.ResolvedDigest != digest || len(prepared.Artifacts) != 3 {
+		t.Fatalf("warm preparation = %q with %d artifacts", prepared.ResolvedDigest, len(prepared.Artifacts))
+	}
+	if _, err := os.Stat(filepath.Join(prepared.Directory, ".prepare-until")); err != nil {
+		t.Fatalf("warm preparation retention marker: %v", err)
+	}
+}
+
+// Cache eviction runs while a digest is being prepared, so it must keep that
+// digest and every digest a launch or verification holds pinned.
+func TestCacheCapacityKeepsThePreparedDigestAndPinnedEntries(t *testing.T) {
+	root := t.TempDir()
+	manager := &Manager{
+		cacheRoot:            root,
+		pins:                 map[string]int{},
+		maximumDownloadBytes: 1 << 10,
+		maximumExpandedBytes: 1 << 10,
+		maximumCacheBytes:    3 << 10,
+	}
+	entries := map[string]string{}
+	for index, letter := range []string{"a", "b", "c"} {
+		directory := filepath.Join(root, strings.Repeat(letter, 64))
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "rootfs.ext4"), make([]byte, 1<<10), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		modified := time.Now().Add(time.Duration(index) * time.Minute)
+		if err := os.Chtimes(directory, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		entries[letter] = directory
+	}
+	manager.pins[entries["b"]] = 1
+	if err := manager.ensureCacheCapacity(entries["c"]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(entries["a"]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest unpinned entry survived eviction: %v", err)
+	}
+	for _, letter := range []string{"b", "c"} {
+		if _, err := os.Stat(entries[letter]); err != nil {
+			t.Fatalf("protected cache entry %s was evicted: %v", letter, err)
+		}
+	}
+}
+
+func TestCacheEvictionRemovesTheDigestLockFile(t *testing.T) {
+	manager := &Manager{cacheRoot: t.TempDir(), pins: map[string]int{}}
+	digest := strings.Repeat("d", 64)
+	directory := filepath.Join(manager.cacheRoot, digest)
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := manager.lockDigest(t.Context(), "sha256:"+digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := lock.Name()
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	evicted, err := manager.evictCacheEntry(directory)
+	if err != nil || !evicted {
+		t.Fatalf("eviction evicted=%v err=%v", evicted, err)
+	}
+	for _, path := range []string{directory, lockPath} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("eviction retained %s: %v", filepath.Base(path), err)
+		}
+	}
+}
+
+// Eviction unlinks a lock file that a concurrent preparation may already have
+// open, so an acquired lock counts only while it is the file at its path.
+func TestDigestLockIdentityFollowsTheLockFilePath(t *testing.T) {
+	manager := &Manager{cacheRoot: t.TempDir(), pins: map[string]int{}}
+	lock, err := manager.lockDigest(t.Context(), strings.Repeat("e", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	held, err := lockFileStillAtPath(lock, lock.Name())
+	if err != nil || !held {
+		t.Fatalf("live lock file held=%v err=%v", held, err)
+	}
+	if err := os.Remove(lock.Name()); err != nil {
+		t.Fatal(err)
+	}
+	held, err = lockFileStillAtPath(lock, lock.Name())
+	if err != nil || held {
+		t.Fatalf("evicted lock file held=%v err=%v", held, err)
+	}
+}
+
+func TestOperationResolutionsArePrunedAfterTheirRetention(t *testing.T) {
+	directory := t.TempDir()
+	stale := filepath.Join(directory, strings.Repeat("a", 64)+".json")
+	fresh := filepath.Join(directory, strings.Repeat("b", 64)+".json")
+	for _, path := range []string{stale, fresh} {
+		if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aged := time.Now().Add(-operationResolutionRetention - time.Minute)
+	if err := os.Chtimes(stale, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneOperationResolutions(directory, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale resolution survived pruning: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("live resolution was pruned: %v", err)
 	}
 }

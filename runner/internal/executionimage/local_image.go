@@ -14,8 +14,7 @@ import (
 func (manager *Manager) VerifyLocal(ctx context.Context, image *runnerprotocol.ExecutionImage, progress func(runnerprotocol.AssignmentProgressStage) error) (PreparedImage, error) {
 	if image == nil {
 		// Persisted pre-selection Sandboxes retain their immutable Profile assets.
-		fixed := &Manager{publicKeyPath: manager.fixedPublicKeyPath, publicKeySHA256: manager.fixedPublicKeySHA256}
-		artifacts, err := fixed.verifyAndCaptureArtifacts(ctx, manager.fixedDirectory)
+		artifacts, err := manager.verifiedBundleArtifacts(ctx, manager.fixedDirectory, manager.fixedPublicKeyPath, manager.fixedPublicKeySHA256)
 		if err != nil {
 			return PreparedImage{}, err
 		}
@@ -33,7 +32,7 @@ func (manager *Manager) VerifyLocal(ctx context.Context, image *runnerprotocol.E
 		return PreparedImage{}, err
 	}
 	directory := filepath.Join(manager.cacheRoot, strings.TrimPrefix(digest, "sha256:"))
-	artifacts, err := manager.verifyAndCaptureArtifacts(ctx, directory)
+	artifacts, err := manager.verifiedBundleArtifacts(ctx, directory, manager.publicKeyPath, manager.publicKeySHA256)
 	if err != nil {
 		_ = lock.Close()
 		return PreparedImage{}, err

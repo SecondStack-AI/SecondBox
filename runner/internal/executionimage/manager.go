@@ -62,6 +62,8 @@ type Manager struct {
 	cacheMu              sync.RWMutex
 	pinMu                sync.Mutex
 	pins                 map[string]int
+	verificationMu       sync.Mutex
+	verifications        map[string]bundleVerification
 }
 
 func NewManager(cfg *config.Config) (*Manager, error) {
@@ -88,6 +90,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		maximumCacheBytes:    cfg.ExecutionImageMaximumCacheBytes,
 		coldPreparationGate:  make(chan struct{}, 1),
 		pins:                 make(map[string]int),
+		verifications:        make(map[string]bundleVerification),
 	}, nil
 }
 
@@ -145,7 +148,7 @@ func (manager *Manager) Fetch(
 	}()
 	manager.cacheMu.RLock()
 	if _, err := os.Stat(cacheDirectory); err == nil {
-		artifacts, err := manager.verifyAndCaptureArtifacts(ctx, cacheDirectory)
+		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256)
 		if err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
@@ -173,7 +176,7 @@ func (manager *Manager) Fetch(
 	manager.cacheMu.RUnlock()
 	if cacheErr == nil {
 		manager.cacheMu.RLock()
-		artifacts, err := manager.verifyAndCaptureArtifacts(ctx, cacheDirectory)
+		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256)
 		if err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
@@ -235,7 +238,7 @@ func (manager *Manager) Fetch(
 	if err := extractDockerArchive(ctx, archivePath, candidate, manager.maximumDownloadBytes, manager.maximumExpandedBytes); err != nil {
 		return PreparedImage{}, err
 	}
-	artifacts, err := manager.verifyAndCaptureArtifacts(ctx, candidate)
+	artifacts, err := manager.verifyAndCaptureArtifacts(ctx, candidate, manager.publicKeyPath, manager.publicKeySHA256)
 	if err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image signature verification failed: %w", err)
 	}
@@ -455,38 +458,12 @@ func (manager *Manager) evictOldestUnpinned(target string) (bool, error) {
 	return false, nil
 }
 
-// Storage pressure requests one pass over expired, unlocked cache entries.
-func (manager *Manager) reclaimUnusedImages(reference string) error {
-	manager.cacheMu.Lock()
-	defer manager.cacheMu.Unlock()
-	entries, _, err := manager.cacheEntries()
-	if err != nil {
-		return err
-	}
-	_, digest, _ := strings.Cut(reference, "@")
-	for _, entry := range entries {
-		if filepath.Base(entry.path) == strings.TrimPrefix(digest, "sha256:") {
-			continue
-		}
-		manager.pinMu.Lock()
-		pinned := manager.pins[entry.path] > 0
-		manager.pinMu.Unlock()
-		if pinned {
-			continue
-		}
-		if _, err := manager.evictCacheEntry(entry.path); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (manager *Manager) evictCacheEntry(path string) (bool, error) {
-	locks := filepath.Join(manager.cacheRoot, ".locks")
-	if err := os.MkdirAll(locks, 0o700); err != nil {
+	lockPath, err := manager.digestLockPath(filepath.Base(path))
+	if err != nil {
 		return false, err
 	}
-	lock, err := os.OpenFile(filepath.Join(locks, filepath.Base(path)+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return false, err
 	}
@@ -506,6 +483,11 @@ func (manager *Manager) evictCacheEntry(path string) (bool, error) {
 	}
 	if err := os.RemoveAll(path); err != nil {
 		return false, fmt.Errorf("SecondBox execution image cache eviction failed: %w", err)
+	}
+	// The lock file outlives its digest otherwise. lockDigest refuses a lock it
+	// acquired on an unlinked file, so removing this one while held is safe.
+	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("SecondBox execution image cache lock eviction failed: %w", err)
 	}
 	return true, nil
 }
@@ -556,7 +538,7 @@ func (manager *Manager) cacheEntries() ([]cacheEntry, int64, error) {
 	return entries, total, nil
 }
 
-func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory, publicKeyPath, publicKeySHA256 string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 	artifacts := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, 3)
 	for _, artifact := range []struct{ label, name string }{{"kernel", "kernel"}, {"rootfs", "rootfs.ext4"}, {"shared image", "shared.img"}} {
 		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, filepath.Join(directory, artifact.name))
@@ -565,7 +547,7 @@ func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory
 		}
 		artifacts = append(artifacts, identity)
 	}
-	if err := config.VerifyMicroVMArtifactDirectory(ctx, directory, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
+	if err := config.VerifyMicroVMArtifactDirectory(ctx, directory, publicKeyPath, publicKeySHA256); err != nil {
 		return nil, err
 	}
 	for _, artifact := range artifacts {
@@ -637,6 +619,9 @@ func (manager *Manager) resolveOperationDigest(ctx context.Context, operationID,
 	if err := os.MkdirAll(resolutionDirectory, 0o700); err != nil {
 		return "", fmt.Errorf("SecondBox execution image resolution directory failed: %w", err)
 	}
+	if err := pruneOperationResolutions(resolutionDirectory, time.Now()); err != nil {
+		return "", err
+	}
 	operationHash := sha256.Sum256([]byte(operationID))
 	path := filepath.Join(resolutionDirectory, fmt.Sprintf("%x.json", operationHash[:]))
 	if document, err := os.ReadFile(path); err == nil {
@@ -677,6 +662,34 @@ func (manager *Manager) resolveOperationDigest(ctx context.Context, operationID,
 		return "", fmt.Errorf("SecondBox execution image resolution publication failed: %w", err)
 	}
 	return digest, nil
+}
+
+// A resolution only replays a live preparation Operation, whose deadline is at
+// most an hour away, so the directory stays bounded by one day of preparations
+// instead of every preparation the host ever ran.
+const operationResolutionRetention = 24 * time.Hour
+
+func pruneOperationResolutions(directory string, now time.Time) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return fmt.Errorf("SecondBox execution image resolution read failed: %w", err)
+	}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			continue // A concurrent preparation pruned the same entry.
+		}
+		if err != nil {
+			return fmt.Errorf("SecondBox execution image resolution inspection failed: %w", err)
+		}
+		if now.Sub(info.ModTime()) <= operationResolutionRetention {
+			continue
+		}
+		if err := os.Remove(filepath.Join(directory, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("SecondBox execution image resolution pruning failed: %w", err)
+		}
+	}
+	return nil
 }
 
 func (manager *Manager) resolveDigest(ctx context.Context, reference, authFile string, certificateArgs []string) (string, error) {
@@ -725,31 +738,61 @@ func (manager *Manager) writeAuthFile(document []byte) (string, func(), error) {
 	return path, cleanup, nil
 }
 
-func (manager *Manager) lockDigest(ctx context.Context, digest string) (*os.File, error) {
+func (manager *Manager) digestLockPath(digest string) (string, error) {
 	lockDirectory := filepath.Join(manager.cacheRoot, ".locks")
 	if err := os.MkdirAll(lockDirectory, 0o700); err != nil {
-		return nil, fmt.Errorf("SecondBox execution image lock directory failed: %w", err)
+		return "", fmt.Errorf("SecondBox execution image lock directory failed: %w", err)
 	}
-	lock, err := os.OpenFile(filepath.Join(lockDirectory, strings.TrimPrefix(digest, "sha256:")+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	return filepath.Join(lockDirectory, strings.TrimPrefix(digest, "sha256:")+".lock"), nil
+}
+
+func (manager *Manager) lockDigest(ctx context.Context, digest string) (*os.File, error) {
+	path, err := manager.digestLockPath(digest)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox execution image lock open failed: %w", err)
+		return nil, err
 	}
 	for {
-		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return lock, nil
+		lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("SecondBox execution image lock open failed: %w", err)
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+		flockErr := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if flockErr == nil {
+			// Eviction removes the lock file with its digest, so a lock acquired
+			// on an unlinked file guards nothing and is taken again at the path.
+			held, err := lockFileStillAtPath(lock, path)
+			if err != nil {
+				_ = lock.Close()
+				return nil, err
+			}
+			if held {
+				return lock, nil
+			}
+		} else if !errors.Is(flockErr, syscall.EWOULDBLOCK) && !errors.Is(flockErr, syscall.EAGAIN) {
 			_ = lock.Close()
-			return nil, fmt.Errorf("SecondBox execution image lock failed: %w", err)
+			return nil, fmt.Errorf("SecondBox execution image lock failed: %w", flockErr)
 		}
+		_ = lock.Close()
 		select {
 		case <-ctx.Done():
-			_ = lock.Close()
 			return nil, context.Cause(ctx)
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func lockFileStillAtPath(lock *os.File, path string) (bool, error) {
+	var held, current syscall.Stat_t
+	if err := syscall.Fstat(int(lock.Fd()), &held); err != nil {
+		return false, fmt.Errorf("SecondBox execution image lock inspection failed: %w", err)
+	}
+	if err := syscall.Stat(path, &current); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("SecondBox execution image lock inspection failed: %w", err)
+	}
+	return held.Dev == current.Dev && held.Ino == current.Ino, nil
 }
 
 func extractDockerArchive(ctx context.Context, archivePath, target string, maximumArchiveBytes, maximumExpandedBytes int64) error {

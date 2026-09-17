@@ -24,16 +24,14 @@ type FetchRequest struct {
 	TenantRef   string    `json:"tenantRef"`
 	Reference   string    `json:"reference"`
 	Deadline    time.Time `json:"deadline"`
-	ReclaimOnly bool      `json:"reclaimOnly,omitempty"`
 }
 
 type FetchResult struct {
-	Stage          string `json:"stage,omitempty"`
-	Digest         string `json:"digest,omitempty"`
-	Manifest       []byte `json:"manifest,omitempty"`
-	Signature      []byte `json:"signature,omitempty"`
-	Error          string `json:"error,omitempty"`
-	CacheReclaimed bool   `json:"cacheReclaimed,omitempty"`
+	Stage     string `json:"stage,omitempty"`
+	Digest    string `json:"digest,omitempty"`
+	Manifest  []byte `json:"manifest,omitempty"`
+	Signature []byte `json:"signature,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // FetchService streams one bounded request through a host-private Unix socket.
@@ -88,14 +86,6 @@ func (service *FetchService) ServeHTTP(writer http.ResponseWriter, request *http
 	key := hex.EncodeToString(keyBytes[:])
 	writer.Header().Set("Content-Type", "application/x-ndjson")
 	encoder := json.NewEncoder(writer)
-	if input.ReclaimOnly {
-		if err := service.manager.reclaimUnusedImages(input.Reference); err != nil {
-			writeFetchResult(ctx, encoder, FetchResult{Error: "SecondBox image cache reclamation failed"})
-			return
-		}
-		writeFetchResult(ctx, encoder, FetchResult{CacheReclaimed: true})
-		return
-	}
 	prepared, err := service.manager.Fetch(ctx, key, &runnerprotocol.ExecutionImage{Reference: input.Reference}, authDocument,
 		func(stage runnerprotocol.AssignmentProgressStage) error {
 			if err := encoder.Encode(FetchResult{Stage: stage.String()}); err != nil {
