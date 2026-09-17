@@ -49,38 +49,6 @@ func TestVerifiedArtifactsRetainIdentityAcrossPublication(t *testing.T) {
 	}
 }
 
-func TestStoragePressureReclaimsOnlyUnusedImages(t *testing.T) {
-	manager := &Manager{cacheRoot: t.TempDir(), pins: make(map[string]int)}
-	for _, letter := range []string{"a", "b", "c"} {
-		directory := filepath.Join(manager.cacheRoot, strings.Repeat(letter, 64))
-		if err := os.Mkdir(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if letter == "b" {
-			if err := retainPreparedDirectory(directory, time.Now().Add(time.Minute)); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	results := make(chan error, 16)
-	for range cap(results) {
-		go func() {
-			results <- manager.reclaimUnusedImages("registry.example/agent@sha256:" + strings.Repeat("c", 64))
-		}()
-	}
-	for range cap(results) {
-		if err := <-results; err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, letter := range []string{"a", "b", "c"} {
-		_, err := os.Stat(filepath.Join(manager.cacheRoot, strings.Repeat(letter, 64)))
-		if letter == "a" && !errors.Is(err, os.ErrNotExist) || letter != "a" && err != nil {
-			t.Fatalf("cache entry %s after reclamation: %v", letter, err)
-		}
-	}
-}
-
 func TestPreparationCapacityBytesRejectsOverflow(t *testing.T) {
 	if got, err := preparationCapacityBytes(8<<30, 16<<30); err != nil || got != 32<<30 {
 		t.Fatalf("preparation capacity = %d, %v", got, err)
@@ -410,5 +378,45 @@ func TestWarmCacheHitReservesNoStagingCapacity(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(prepared.Directory, ".prepare-until")); err != nil {
 		t.Fatalf("warm preparation retention marker: %v", err)
+	}
+}
+
+// Cache eviction runs while a digest is being prepared, so it must keep that
+// digest and every digest a launch or verification holds pinned.
+func TestCacheCapacityKeepsThePreparedDigestAndPinnedEntries(t *testing.T) {
+	root := t.TempDir()
+	manager := &Manager{
+		cacheRoot:            root,
+		pins:                 map[string]int{},
+		maximumDownloadBytes: 1 << 10,
+		maximumExpandedBytes: 1 << 10,
+		maximumCacheBytes:    3 << 10,
+	}
+	entries := map[string]string{}
+	for index, letter := range []string{"a", "b", "c"} {
+		directory := filepath.Join(root, strings.Repeat(letter, 64))
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "rootfs.ext4"), make([]byte, 1<<10), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		modified := time.Now().Add(time.Duration(index) * time.Minute)
+		if err := os.Chtimes(directory, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		entries[letter] = directory
+	}
+	manager.pins[entries["b"]] = 1
+	if err := manager.ensureCacheCapacity(entries["c"]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(entries["a"]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest unpinned entry survived eviction: %v", err)
+	}
+	for _, letter := range []string{"b", "c"} {
+		if _, err := os.Stat(entries[letter]); err != nil {
+			t.Fatalf("protected cache entry %s was evicted: %v", letter, err)
+		}
 	}
 }

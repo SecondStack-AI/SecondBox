@@ -458,32 +458,6 @@ func (manager *Manager) evictOldestUnpinned(target string) (bool, error) {
 	return false, nil
 }
 
-// Storage pressure requests one pass over expired, unlocked cache entries.
-func (manager *Manager) reclaimUnusedImages(reference string) error {
-	manager.cacheMu.Lock()
-	defer manager.cacheMu.Unlock()
-	entries, _, err := manager.cacheEntries()
-	if err != nil {
-		return err
-	}
-	_, digest, _ := strings.Cut(reference, "@")
-	for _, entry := range entries {
-		if filepath.Base(entry.path) == strings.TrimPrefix(digest, "sha256:") {
-			continue
-		}
-		manager.pinMu.Lock()
-		pinned := manager.pins[entry.path] > 0
-		manager.pinMu.Unlock()
-		if pinned {
-			continue
-		}
-		if _, err := manager.evictCacheEntry(entry.path); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (manager *Manager) evictCacheEntry(path string) (bool, error) {
 	locks := filepath.Join(manager.cacheRoot, ".locks")
 	if err := os.MkdirAll(locks, 0o700); err != nil {
