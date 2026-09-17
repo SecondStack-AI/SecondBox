@@ -50,6 +50,8 @@ The control plane verifies the existing bundle signature with its configured pub
 The assignment contains a digest reference and authorized identities, never a mutable tag or pull credentials.
 
 The Runner independently verifies local bundle bytes and checks the assigned component identities before guest negotiation.
+Full verification hashes gigabytes, so the Runner verifies each bundle once and then admits later starts of the same bundle on the recorded filesystem identity of every verified file.
+Changed metadata forces one re-verification, and a Runner restart re-verifies each bundle it starts, the fixed Profile bundle included.
 A materialization report cannot overwrite assignment authority.
 Captured-file identity checks reject replacement between verification and Firecracker staging.
 Failed verification does not select another image.

@@ -62,6 +62,8 @@ type Manager struct {
 	cacheMu              sync.RWMutex
 	pinMu                sync.Mutex
 	pins                 map[string]int
+	verificationMu       sync.Mutex
+	verifications        map[string]bundleVerification
 }
 
 func NewManager(cfg *config.Config) (*Manager, error) {
@@ -88,6 +90,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		maximumCacheBytes:    cfg.ExecutionImageMaximumCacheBytes,
 		coldPreparationGate:  make(chan struct{}, 1),
 		pins:                 make(map[string]int),
+		verifications:        make(map[string]bundleVerification),
 	}, nil
 }
 
@@ -145,7 +148,7 @@ func (manager *Manager) Fetch(
 	}()
 	manager.cacheMu.RLock()
 	if _, err := os.Stat(cacheDirectory); err == nil {
-		artifacts, err := manager.verifyAndCaptureArtifacts(ctx, cacheDirectory)
+		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256)
 		if err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
@@ -173,7 +176,7 @@ func (manager *Manager) Fetch(
 	manager.cacheMu.RUnlock()
 	if cacheErr == nil {
 		manager.cacheMu.RLock()
-		artifacts, err := manager.verifyAndCaptureArtifacts(ctx, cacheDirectory)
+		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256)
 		if err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
@@ -235,7 +238,7 @@ func (manager *Manager) Fetch(
 	if err := extractDockerArchive(ctx, archivePath, candidate, manager.maximumDownloadBytes, manager.maximumExpandedBytes); err != nil {
 		return PreparedImage{}, err
 	}
-	artifacts, err := manager.verifyAndCaptureArtifacts(ctx, candidate)
+	artifacts, err := manager.verifyAndCaptureArtifacts(ctx, candidate, manager.publicKeyPath, manager.publicKeySHA256)
 	if err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image signature verification failed: %w", err)
 	}
@@ -556,7 +559,7 @@ func (manager *Manager) cacheEntries() ([]cacheEntry, int64, error) {
 	return entries, total, nil
 }
 
-func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory, publicKeyPath, publicKeySHA256 string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 	artifacts := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, 3)
 	for _, artifact := range []struct{ label, name string }{{"kernel", "kernel"}, {"rootfs", "rootfs.ext4"}, {"shared image", "shared.img"}} {
 		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, filepath.Join(directory, artifact.name))
@@ -565,7 +568,7 @@ func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory
 		}
 		artifacts = append(artifacts, identity)
 	}
-	if err := config.VerifyMicroVMArtifactDirectory(ctx, directory, manager.publicKeyPath, manager.publicKeySHA256); err != nil {
+	if err := config.VerifyMicroVMArtifactDirectory(ctx, directory, publicKeyPath, publicKeySHA256); err != nil {
 		return nil, err
 	}
 	for _, artifact := range artifacts {

@@ -135,7 +135,7 @@ func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(strings.Repeat("a", 65537)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyChecksums(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "at most") {
+		if err := verifyChecksums(t.Context(), dir, newArtifactDigestCache()); err == nil || !strings.Contains(err.Error(), "at most") {
 			t.Fatalf("unbounded checksum metadata: %v", err)
 		}
 	})
@@ -144,13 +144,13 @@ func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(strings.Repeat("a b\n", 129)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyChecksums(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "128 entries") {
+		if err := verifyChecksums(t.Context(), dir, newArtifactDigestCache()); err == nil || !strings.Contains(err.Error(), "128 entries") {
 			t.Fatalf("unbounded checksum entries: %v", err)
 		}
 	})
 	t.Run("good", func(t *testing.T) {
 		dir := checksumFixture(t)
-		if err := verifyChecksums(t.Context(), dir); err != nil {
+		if err := verifyChecksums(t.Context(), dir, newArtifactDigestCache()); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -160,7 +160,7 @@ func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
 		if err := os.Remove(filepath.Join(dir, "rootfs.ext4")); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyChecksums(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "rootfs.ext4") {
+		if err := verifyChecksums(t.Context(), dir, newArtifactDigestCache()); err == nil || !strings.Contains(err.Error(), "rootfs.ext4") {
 			t.Fatalf("missing-file checksum error = %v", err)
 		}
 	})
@@ -170,7 +170,7 @@ func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "kernel"), []byte("altered"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyChecksums(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "checksum mismatch for kernel") {
+		if err := verifyChecksums(t.Context(), dir, newArtifactDigestCache()); err == nil || !strings.Contains(err.Error(), "checksum mismatch for kernel") {
 			t.Fatalf("altered-content checksum error = %v", err)
 		}
 	})
@@ -285,4 +285,28 @@ func checksumFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// One verification pass hashes kernel, rootfs and shared image once, although
+// both the checksum list and the signed manifest cover them.
+func TestArtifactDigestCacheHashesEachFileOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rootfs.ext4")
+	if err := os.WriteFile(path, []byte("verified bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache := newArtifactDigestCache()
+	first, err := cache.hex(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("substituted!!!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := cache.hex(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second || len(cache.digests) != 1 {
+		t.Fatalf("digest cache re-read the file: %s then %s across %d entries", first, second, len(cache.digests))
+	}
 }

@@ -149,6 +149,48 @@ func readPublicKey(path string) (*rsa.PublicKey, []byte, error) {
 	return rsaPublicKey, der, nil
 }
 
+// SignedArtifactFileNames lists every file a signed bundle verification reads.
+var SignedArtifactFileNames = []string{
+	"kernel",
+	"rootfs.ext4",
+	"shared.img",
+	"kernel-provenance.json",
+	"rootfs-source-manifest.json",
+	"secondbox-rootfs-contract.json",
+	"rootfs-debian-packages.lock",
+	"rootfs-python.freeze",
+	"rootfs-debian-license-inventory.json",
+	"rootfs-python-license-inventory.json",
+	"runtime-manifest.json",
+	"toolchain-manifest.json",
+	"manifest.json",
+	"SHA256SUMS",
+	"manifest.sig",
+}
+
+// artifactDigestCache hashes each file once per verification pass. The checksum
+// list and the signed manifest cover the same multi-gigabyte kernel, rootfs and
+// shared image.
+type artifactDigestCache struct {
+	digests map[string]string
+}
+
+func newArtifactDigestCache() *artifactDigestCache {
+	return &artifactDigestCache{digests: map[string]string{}}
+}
+
+func (cache *artifactDigestCache) hex(ctx context.Context, path string) (string, error) {
+	if digest, recorded := cache.digests[path]; recorded {
+		return digest, nil
+	}
+	digest, err := fileSHA256Hex(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	cache.digests[path] = digest
+	return digest, nil
+}
+
 func verifyArtifactSet(ctx context.Context, cfg *Config, publicKey *rsa.PublicKey) error {
 	if cfg.MicroVMToolRootfsPath != "" && cfg.MicroVMToolRootfsPath != cfg.MicroVMRootfsPath {
 		return fmt.Errorf("SecondBox Runner tool rootfs must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set")
@@ -172,29 +214,13 @@ func verifyArtifactSet(ctx context.Context, cfg *Config, publicKey *rsa.PublicKe
 			return fmt.Errorf("SecondBox Runner artifact path %s must name %s", path, name)
 		}
 	}
-	required := []string{
-		"kernel",
-		"rootfs.ext4",
-		"shared.img",
-		"kernel-provenance.json",
-		"rootfs-source-manifest.json",
-		"secondbox-rootfs-contract.json",
-		"rootfs-debian-packages.lock",
-		"rootfs-python.freeze",
-		"rootfs-debian-license-inventory.json",
-		"rootfs-python-license-inventory.json",
-		"runtime-manifest.json",
-		"toolchain-manifest.json",
-		"manifest.json",
-		"SHA256SUMS",
-		"manifest.sig",
-	}
-	for _, name := range required {
+	for _, name := range SignedArtifactFileNames {
 		if _, err := os.Stat(filepath.Join(artifactDir, name)); err != nil {
 			return fmt.Errorf("signed SecondBox Runner artifact %s: %w", name, err)
 		}
 	}
-	if err := verifyChecksums(ctx, artifactDir); err != nil {
+	digests := newArtifactDigestCache()
+	if err := verifyChecksums(ctx, artifactDir, digests); err != nil {
 		return err
 	}
 	manifest, err := ReadArtifactMetadata(filepath.Join(artifactDir, "manifest.json"), MaximumArtifactManifestBytes)
@@ -209,7 +235,7 @@ func verifyArtifactSet(ctx context.Context, cfg *Config, publicKey *rsa.PublicKe
 	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature); err != nil {
 		return fmt.Errorf("verify SecondBox Runner manifest signature: %w", err)
 	}
-	if err := verifySignedManifestArtifacts(ctx, artifactDir, manifest); err != nil {
+	if err := verifySignedManifestArtifacts(ctx, artifactDir, manifest, digests); err != nil {
 		return err
 	}
 	return verifySecondBoxRootfsContract(artifactDir)
@@ -236,7 +262,7 @@ type artifactManifestEntry struct {
 	SHA256 string `json:"sha256"`
 }
 
-func verifySignedManifestArtifacts(ctx context.Context, artifactDir string, manifestData []byte) error {
+func verifySignedManifestArtifacts(ctx context.Context, artifactDir string, manifestData []byte, digests *artifactDigestCache) error {
 	var manifest artifactManifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		return fmt.Errorf("parse SecondBox Runner manifest: %w", err)
@@ -258,7 +284,7 @@ func verifySignedManifestArtifacts(ctx context.Context, artifactDir string, mani
 		if signed.entry.Path != signed.path {
 			return fmt.Errorf("SecondBox Runner manifest %s path must be %s, got %s", label, signed.path, signed.entry.Path)
 		}
-		actual, err := fileSHA256Hex(ctx, filepath.Join(artifactDir, signed.entry.Path))
+		actual, err := digests.hex(ctx, filepath.Join(artifactDir, signed.entry.Path))
 		if err != nil {
 			return err
 		}
@@ -277,7 +303,7 @@ func verifySignedManifestArtifacts(ctx context.Context, artifactDir string, mani
 			!strings.HasPrefix(component.entry.ManifestDigest, "sha256:") {
 			return fmt.Errorf("SecondBox Runner manifest missing %s path or digest", label)
 		}
-		actual, err := fileSHA256Hex(ctx, filepath.Join(artifactDir, component.path))
+		actual, err := digests.hex(ctx, filepath.Join(artifactDir, component.path))
 		if err != nil {
 			return err
 		}
@@ -309,7 +335,7 @@ func safeManifestPath(path string) bool {
 	return path != "" && path != "." && !filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.HasPrefix(path, ".."+string(os.PathSeparator)) && path != ".."
 }
 
-func verifyChecksums(ctx context.Context, artifactDir string) error {
+func verifyChecksums(ctx context.Context, artifactDir string, digests *artifactDigestCache) error {
 	data, err := ReadArtifactMetadata(filepath.Join(artifactDir, "SHA256SUMS"), 64<<10)
 	if err != nil {
 		return fmt.Errorf("read SecondBox Runner checksums: %w", err)
@@ -341,7 +367,7 @@ func verifyChecksums(ctx context.Context, artifactDir string) error {
 		if expected == "" {
 			return fmt.Errorf("SHA256SUMS missing %s", name)
 		}
-		actual, err := fileSHA256Hex(ctx, filepath.Join(artifactDir, name))
+		actual, err := digests.hex(ctx, filepath.Join(artifactDir, name))
 		if err != nil {
 			return err
 		}
