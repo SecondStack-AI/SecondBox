@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/imagepreparation"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"google.golang.org/protobuf/proto"
@@ -151,6 +153,32 @@ func (preparation *preparationFixture) effectRunner(t *testing.T, effectID strin
 	return runnerID
 }
 
+type queuedPreparation struct {
+	effectID string
+	runnerID string
+}
+
+func (preparation *preparationFixture) queuedPreparations(t *testing.T, operationID string) []queuedPreparation {
+	t.Helper()
+	rows, err := preparation.fixture.pool.Query(t.Context(), `SELECT id,runner_id FROM secondbox.lifecycle_effects WHERE assignment_id=$1 AND kind='prepare_image' AND state='queued' ORDER BY id`, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var queued []queuedPreparation
+	for rows.Next() {
+		var entry queuedPreparation
+		if err := rows.Scan(&entry.effectID, &entry.runnerID); err != nil {
+			t.Fatal(err)
+		}
+		queued = append(queued, entry)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return queued
+}
+
 func (preparation *preparationFixture) report(t *testing.T, runnerID, connectionID, effectID, failure string) {
 	t.Helper()
 	sequence := preparation.fixture.nextSequence()
@@ -231,5 +259,69 @@ func TestPrepareImageFetchesEachTargetRunnerOnce(t *testing.T) {
 		prepared.ImagePreparation.PreparedRunners != 2 ||
 		prepared.ImagePreparation.Image.ResolvedDigest == "" {
 		t.Fatalf("prepared Operation: %s %+v", prepared.State, prepared.ImagePreparation)
+	}
+}
+
+func TestPrepareImageReportsPerTargetPreparation(t *testing.T) {
+	preparation := newPreparationFixture(t)
+	fixture := preparation.fixture
+	connections := map[string]string{fixture.runnerID: fixture.connectionID}
+	for _, suffix := range []string{"second", "third"} {
+		runnerID, connectionID := fixture.addEligibleRunner(t, suffix)
+		connections[runnerID] = connectionID
+	}
+	request := contracts.PrepareImageRequest{Image: contracts.ExecutionImage{Reference: "registry.example/secondbox/integration-agent:stable"}}
+	response := authenticatedJSONRequest(t, http.MethodPost, fixture.server+"/v1/images:prepare", fixture.credential, "prepare-per-target", request)
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("prepare: %d %s", response.StatusCode, readResponse(t, response))
+	}
+	var operation contracts.Operation
+	decodeResponseJSON(t, response, &operation)
+	// Admission captured the target set, so the first poll already reports it.
+	early := preparation.operation(t, operation.ID)
+	if early.State != contracts.OperationStatePending || early.ImagePreparation == nil ||
+		early.ImagePreparation.TargetRunners != 3 || early.ImagePreparation.PreparedRunners != 0 {
+		t.Fatalf("early preparation poll: %s %+v", early.State, early.ImagePreparation)
+	}
+	resolveRunner := preparation.effectRunner(t, operation.ID+"-resolve")
+	preparation.report(t, resolveRunner, connections[resolveRunner], operation.ID+"-resolve", "")
+	remaining := preparation.queuedPreparations(t, operation.ID)
+	if len(remaining) != 2 {
+		t.Fatalf("queued preparations = %v", remaining)
+	}
+	failedEffect, failedRunner := remaining[0].effectID, remaining[0].runnerID
+	preparation.report(t, failedRunner, connections[failedRunner], failedEffect, "registry rejected the digest")
+	// One failed target must not decide the Operation while another is pending.
+	waiting := preparation.operation(t, operation.ID)
+	if waiting.State != contracts.OperationStateRunning {
+		t.Fatalf("Operation decided before every target reported: %s %+v", waiting.State, waiting.Error)
+	}
+	preparation.report(t, remaining[1].runnerID, connections[remaining[1].runnerID], remaining[1].effectID, "")
+	decided := preparation.operation(t, operation.ID)
+	if decided.State != "failed" || decided.Error == nil ||
+		decided.ImagePreparation.TargetRunners != 3 || decided.ImagePreparation.PreparedRunners != 2 {
+		t.Fatalf("partially prepared Operation: %s %+v %+v", decided.State, decided.Error, decided.ImagePreparation)
+	}
+	if !strings.Contains(decided.Error.Title, failedRunner) {
+		t.Fatalf("Operation error does not name the failed Runner: %q", decided.Error.Title)
+	}
+}
+
+func TestPrepareImageRejectsEligibleRunnerSetAboveItsLimit(t *testing.T) {
+	preparation := newPreparationFixture(t)
+	fixture := preparation.fixture
+	for index := 0; index < imagepreparation.MaximumTargets; index++ {
+		seedFixtureHomeRunner(t, fixture.poolName, fmt.Sprintf("%s-bulk-%02d", fixture.runnerID, index))
+	}
+	request := contracts.PrepareImageRequest{Image: contracts.ExecutionImage{Reference: "registry.example/secondbox/integration-agent:stable"}}
+	response := authenticatedJSONRequest(t, http.MethodPost, fixture.server+"/v1/images:prepare", fixture.credential, "prepare-above-limit", request)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("prepare above the target limit: %d %s", response.StatusCode, readResponse(t, response))
+	}
+	var problem contracts.Problem
+	decodeResponseJSON(t, response, &problem)
+	if problem.Code != "image_preparation_targets_exceeded" || problem.Retryable ||
+		!strings.Contains(strings.ToLower(problem.Title), "profile") {
+		t.Fatalf("problem = %+v", problem)
 	}
 }

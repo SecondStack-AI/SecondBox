@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -25,8 +26,7 @@ func (broker *PostgresEffectBroker) ReconcileImagePreparations(ctx context.Conte
 	 FROM secondbox.operations operation WHERE operation.kind='prepare_image' AND operation.state IN ('pending','running')
 	 AND (operation.created_at<=$1
 	 OR (operation.state='pending' AND EXISTS (SELECT 1 FROM secondbox.lifecycle_effects effect WHERE effect.id=operation.id||'-resolve' AND effect.state IN ('completed','failed')))
-	 OR (operation.state='running' AND (NOT EXISTS (SELECT 1 FROM secondbox.lifecycle_effects effect WHERE effect.assignment_id=operation.id AND effect.kind='prepare_image' AND effect.state='queued')
-	 OR EXISTS (SELECT 1 FROM secondbox.lifecycle_effects effect WHERE effect.assignment_id=operation.id AND effect.kind='prepare_image' AND effect.state='failed'))))
+	 OR (operation.state='running' AND NOT EXISTS (SELECT 1 FROM secondbox.lifecycle_effects effect WHERE effect.assignment_id=operation.id AND effect.kind='prepare_image' AND effect.state='queued')))
 	 ORDER BY operation.created_at,operation.id LIMIT 16 FOR UPDATE OF operation SKIP LOCKED`, now.Add(-imagepreparation.Deadline))
 	if err != nil {
 		return false, err
@@ -129,44 +129,50 @@ func (broker *PostgresEffectBroker) reconcileImagePreparation(ctx context.Contex
 		}
 		changed = true
 	}
-	rows, err := tx.Query(ctx, `SELECT state,evidence_json FROM secondbox.lifecycle_effects WHERE assignment_id=$1 AND kind='prepare_image' AND payload_json->>'role'='prepare' ORDER BY id`, id)
+	rows, err := tx.Query(ctx, `SELECT runner_id,state,evidence_json FROM secondbox.lifecycle_effects WHERE assignment_id=$1 AND kind='prepare_image' AND payload_json->>'role'='prepare' ORDER BY id`, id)
 	if err != nil {
 		return false, err
 	}
-	complete := 0
-	failed := false
+	prepared := 0
+	pending := 0
+	var failedRunners []string
 	for rows.Next() {
+		var runner string
 		var evidence []byte
-		if err := rows.Scan(&state, &evidence); err != nil {
+		if err := rows.Scan(&runner, &state, &evidence); err != nil {
 			rows.Close()
 			return false, err
 		}
-		if state == "failed" {
-			failed = true
+		switch state {
+		case "failed":
+			failedRunners = append(failedRunners, runner)
+		case "completed":
+			var result runnerv1.PrepareImageResult
+			if err := json.Unmarshal(evidence, &result); err != nil {
+				rows.Close()
+				return false, err
+			}
+			if result.ResolvedDigest != resolved.ResolvedDigest || !bytes.Equal(result.Manifest, resolved.Manifest) || !bytes.Equal(result.Signature, resolved.Signature) {
+				failedRunners = append(failedRunners, runner)
+				continue
+			}
+			prepared++
+		default:
+			pending++
 		}
-		if state != "completed" {
-			continue
-		}
-		var result runnerv1.PrepareImageResult
-		if err := json.Unmarshal(evidence, &result); err != nil {
-			rows.Close()
-			return false, err
-		}
-		if result.ResolvedDigest != resolved.ResolvedDigest || !bytes.Equal(result.Manifest, resolved.Manifest) || !bytes.Equal(result.Signature, resolved.Signature) {
-			failed = true
-		}
-		complete++
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return false, err
 	}
-	if failed {
-		return fail("Image preparation failed on an authorized target")
-	}
-	if complete != len(targets) {
+	// Every target reports before the Operation decides, so one failed Runner
+	// neither hides nor discards the preparations the other Runners completed.
+	if pending > 0 {
 		return changed, nil
+	}
+	if len(failedRunners) > 0 {
+		return fail(fmt.Sprintf("Image preparation failed on %d of %d target Runners: %s; %d prepared the image", len(failedRunners), len(targets), strings.Join(failedRunners, ", "), prepared))
 	}
 	_, err = tx.Exec(ctx, `UPDATE secondbox.operations SET state='succeeded',completed_at=$2,updated_at=$2 WHERE id=$1`, id, now)
 	return true, err

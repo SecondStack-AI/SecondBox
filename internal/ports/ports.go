@@ -44,13 +44,17 @@ var (
 	ErrIdempotencyConflict           = errors.New("SecondBox idempotency key payload conflict")
 	ErrCredentialResponseUnavailable = errors.New("SecondBox credential response is unavailable")
 	ErrQuotaExceeded                 = errors.New("SecondBox quota exceeded")
-	ErrRevisionConflict              = errors.New("SecondBox resource revision conflict")
-	ErrLifecycleUnavailable          = errors.New("SecondBox lifecycle unavailable without a runner assignment")
-	ErrHomeRunnerUnavailable         = errors.New("SecondBox Sandbox home runner is unavailable")
-	ErrWorkspaceMutation             = errors.New("SecondBox Workspace has a conflicting local mutation")
-	ErrSandboxNotStopped             = errors.New("SecondBox Workspace relocation requires a stopped Sandbox")
-	ErrRelocationTargetUnavailable   = errors.New("SecondBox Workspace relocation target is unavailable or incompatible")
-	ErrRelocationSnapshotsPresent    = errors.New("SecondBox Workspace relocation requires all Snapshots to be deleted")
+	// ErrImagePreparationTargetsExceeded reports that more eligible Runners than
+	// one preparation Operation may carry answered admission. Waiting cannot help:
+	// the request must select a Profile that narrows the eligible Runner set.
+	ErrImagePreparationTargetsExceeded = errors.New("SecondBox image preparation eligible Runner set exceeds its target limit")
+	ErrRevisionConflict                = errors.New("SecondBox resource revision conflict")
+	ErrLifecycleUnavailable            = errors.New("SecondBox lifecycle unavailable without a runner assignment")
+	ErrHomeRunnerUnavailable           = errors.New("SecondBox Sandbox home runner is unavailable")
+	ErrWorkspaceMutation               = errors.New("SecondBox Workspace has a conflicting local mutation")
+	ErrSandboxNotStopped               = errors.New("SecondBox Workspace relocation requires a stopped Sandbox")
+	ErrRelocationTargetUnavailable     = errors.New("SecondBox Workspace relocation target is unavailable or incompatible")
+	ErrRelocationSnapshotsPresent      = errors.New("SecondBox Workspace relocation requires all Snapshots to be deleted")
 	// ErrSerializationContention reports that a transaction lost a serialization
 	// race and the caller should try again later. It is an ordinary outcome of
 	// serializable isolation under concurrency, not a fault: a caller that treats

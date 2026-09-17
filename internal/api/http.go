@@ -1128,6 +1128,9 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusBadRequest, "resources_fixed_by_profile", "Requested resources differ from the fixed Profile size", false
 	case errors.Is(err, ports.ErrResourcesExceedProfile):
 		return http.StatusBadRequest, "resources_exceed_profile", "Requested resources exceed the Profile ceiling", false
+	case errors.Is(err, ports.ErrImagePreparationTargetsExceeded):
+		return http.StatusBadRequest, "image_preparation_targets_exceeded",
+			"Eligible execution node set exceeds the image preparation limit; select a narrower Profile", false
 	case errors.Is(err, ports.ErrQuotaExceeded):
 		return http.StatusTooManyRequests, "quota_exceeded", "Quota exceeded", false
 	case errors.Is(err, ports.ErrPortBackpressure):

@@ -81,7 +81,7 @@ func (store *PostgresControlPlaneStore) PrepareImage(ctx context.Context, input 
 		return contracts.Operation{}, false, ports.ErrRunnerPoolUnavailable
 	}
 	if len(targets) > imagepreparation.MaximumTargets {
-		return contracts.Operation{}, false, fmt.Errorf("%w: SecondBox image preparation exceeds the target bound; select a narrower Profile", ports.ErrQuotaExceeded)
+		return contracts.Operation{}, false, fmt.Errorf("%w of %d; select a narrower Profile", ports.ErrImagePreparationTargetsExceeded, imagepreparation.MaximumTargets)
 	}
 	if err := insertOperation(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Operation); err != nil {
 		return contracts.Operation{}, false, err
