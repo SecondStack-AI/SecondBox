@@ -147,7 +147,9 @@ services:
       SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256: ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 is required}
       SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY: /opt/secondbox-artifact-public-key.pem
       SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256: ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 is required}
-      SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /w/execution-images
+      # The image cache must share a filesystem with the run dir, because a
+      # start stages the selected rootfs into the run dir by reflink.
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /var/lib/secondbox-runner/execution-images
       SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET: /run/secondbox-image-fetcher/fetcher.sock
       SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY:?SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY is required}
       SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES: /var/lib/secondbox-runner/execution-image-certificates
@@ -270,7 +272,7 @@ services:
       - chown -R 10002:10002 /cache /socket /registry; chmod 0700 /cache /socket /registry
     network_mode: none
     volumes:
-      - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?scenario workspace is required}/execution-images:/cache
+      - ${SECONDBOX_SCENARIO_STATE_DIR:?scenario runner state is required}/execution-images:/cache
       - scenario-image-fetcher-socket:/socket
       - ${SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY:?scenario registry directory is required}:/registry
 
@@ -294,7 +296,7 @@ services:
       SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES: "17179869184"
       SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES: "68719476736"
     volumes:
-      - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?scenario workspace is required}/execution-images:/cache
+      - ${SECONDBOX_SCENARIO_STATE_DIR:?scenario runner state is required}/execution-images:/cache
       - scenario-image-fetcher-socket:/run/secondbox-image-fetcher
       - ${SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY:?scenario registry directory is required}:/run/image-registry:ro
       - ${SECONDBOX_SCENARIO_PKI_DIR:?scenario PKI is required}/execution-image.pub:/run/image-trust/public.pem:ro

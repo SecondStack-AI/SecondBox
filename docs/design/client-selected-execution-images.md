@@ -76,6 +76,7 @@ An expired deadline fails the Operation rather than claiming complete coverage.
 ## Cache and storage
 
 The shared cache is keyed by digest, but access remains Tenant-authorized.
+It must share a filesystem with the microVM run directory, which the Runner checks at startup, because a start stages the selected rootfs by reflink and image bytes are never copied.
 Cross-process digest locks serialize publication and prevent eviction during local verification and launch.
 Only complete, verified directories enter the cache.
 Prepared entries retain a bounded expiry marker until the preparation deadline to close the preparation-to-launch eviction window.

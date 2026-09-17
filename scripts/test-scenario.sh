@@ -561,7 +561,7 @@ chmod 0600 "$pki_dir/runner-ca.key" "$pki_dir/server.key"
 chmod 0644 "$pki_dir/runner-ca.crt" "$pki_dir/server.crt"
 
 export SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY="$run_dir/image-registry"
-mkdir -p "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/certificates" "$scenario_workspace_dir/execution-images"
+mkdir -p "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/certificates" "$state_dir/execution-images"
 if [[ "$scenario_backend" == "firecracker" ]]; then
   cp "$public_key" "$pki_dir/execution-image.pub"
   cp -a "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/." "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/"
