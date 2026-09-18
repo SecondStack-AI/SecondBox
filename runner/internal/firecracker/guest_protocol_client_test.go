@@ -211,7 +211,7 @@ func assertPTYOverTransport(t *testing.T, session *GuestProtocolSession) {
 			"assignment-pty",
 			&guestv1.ExecRequest{
 				Command: &guestv1.ExecRequest_Shell{
-					Shell: "stty size; stty raw -echo; dd bs=1 count=4 2>/dev/null | od -An -t x1; stty size",
+					Shell: "stty raw -echo; stty size; dd bs=1 count=4 2>/dev/null | od -An -t x1; stty size",
 				},
 				OutputLimitBytes: 1024,
 				Streaming:        true,
@@ -249,6 +249,10 @@ normalPTY:
 		case value := <-output:
 			received.Write(value)
 		case result := <-completed:
+			// ExecutePTY has finished all callbacks, but select can leave output buffered.
+			for len(output) > 0 {
+				received.Write(<-output)
+			}
 			if result.err != nil {
 				t.Fatalf("execute Firecracker guest PTY: %v", result.err)
 			}
