@@ -2,12 +2,23 @@
 
 ## Unreleased
 
+## 0.15.0 - 2026-09-18
+
+Applications can select and prepare signed execution images while retaining durable Workspaces.
+This release uses Runner protocol generation 5 and preserves the signed v0.12.0 fixed-Profile bundle.
+Upgrade the control plane, Runners, and image fetchers together; see the [v0.15.0 release notes](docs/releases/v0.15.0.md).
+
 ### Added
 
+- Added optional signed execution images on Sandbox create and start, tenant-scoped registry retrieval through an isolated image fetcher, and `images:prepare` to warm eligible Runners before first use.
 - Added `just release VERSION --resume`, which reuses a retained checksummed build and commit-exact scenario evidence after a gate-only failure, requalifies the gates, and continues from the installer candidate.
 
 ### Fixed
 
+- Preserved the exact published v0.14.0 migration baseline during forward upgrades without rewriting its recorded history.
+- Preserved the requested image reference and successful digest pin across image replacement, and corrected preparation progress and Runner selection.
+- Avoided repeated full-image hashing on warm starts, protected active image cache entries from eviction, bounded cache metadata, and validated reflink storage placement at startup.
+- Recovered lifecycle operations after terminal startup failure and retained revisions during unchanged effect waits.
 - Preserved release notes through draft upload, retries, and stable publication, with the install and SDK footer rendered as code.
 - Backfilled changelog sections for 0.4.5 through 0.14.0, release notes for v0.10.0, v0.10.1, v0.11.0, and v0.13.0, and the GitHub release descriptions that the publisher had overwritten.
 

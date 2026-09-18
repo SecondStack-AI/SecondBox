@@ -1,14 +1,14 @@
 # Deployment and runtime operations
 
-## Clean initialization boundary
+## Release upgrade boundary
 
-The configurable-limits contract requires a fresh database and a separate Runner storage
-root. It does not provide in-place migration or adoption of earlier deployment state;
-recorded migration checksum mismatches fail startup. Keep an existing deployment, its
-database, Runner storage, signed assets, and credentials together until its owners
-explicitly retire their Sandboxes. A new database cannot recover those Workspaces.
-Rollback means running the previous release with its original state, not attaching that
-state to the new deployment or resetting migration records.
+v0.15.0 accepts the exact migration baseline published by v0.14.0 and applies forward migrations while preserving its ledger and Workspaces.
+Stop active Sandboxes, take a coordinated backup, and update the control plane and all Runners together to protocol generation 5.
+The fixed-Profile signed guest bundle does not change.
+Other checksum mismatches remain errors; do not reset migration records to bypass them.
+See the target release notes for older clean-install boundaries.
+A new database cannot recover another deployment's Workspaces.
+Rollback after migration restores the previous release with its coordinated database, Runner storage, signed assets, and credentials.
 
 Each Runner selects one compute backend explicitly. RunnerPool backend homogeneity is control-plane-private and is sealed by the first healthy registration; operators cannot mutate or reset it. Profiles and public resources continue to name only the RunnerPool.
 
