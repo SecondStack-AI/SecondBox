@@ -42,10 +42,10 @@ To fetch the small published bootstrap and run the wizard:
 curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh | sh
 ```
 
-**v0.14.0 requires a fresh database and separate Runner storage root**, including
-when coming from v0.13.0. Do not use the update command to cross that boundary.
-Retain the old deployment with its original state for rollback; see the
-[v0.14.0 release notes](docs/releases/v0.14.0.md).
+**v0.15.0 supports forward migration from v0.14.0 and requires a coordinated control-plane and Runner update to protocol generation 5.**
+Stop active Sandboxes and retain a database and Runner-storage backup before updating.
+The signed fixed-Profile guest bundle remains unchanged; see the [v0.15.0 release notes](docs/releases/v0.15.0.md).
+Earlier release boundaries still apply when installing v0.14.0 itself.
 
 To update a compatible completed guided deployment after stopping every Sandbox, pass its recorded operation directory to the latest bootstrap:
 

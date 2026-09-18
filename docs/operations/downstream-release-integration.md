@@ -5,11 +5,10 @@ version consistently for binaries, SDKs, images, and standard bundles. In the
 examples below, replace `VERSION` with the chosen numeric version. The tag and
 attached files identify one release; the publishing workflow does not rebuild them.
 
-For [v0.14.0](../releases/v0.14.0.md), initialize a fresh database and separate
-Runner storage root. Existing databases fail the migration checksum check,
-including v0.13.0 state. [v0.12.0](../releases/v0.12.0.md) also changed the
-Firecracker bundle and trust anchor. Preserve the previous deployment as a
-complete rollback unit; the guided updater cannot cross these boundaries.
+For [v0.15.0](../releases/v0.15.0.md), a v0.14.0 database can migrate forward without recreating resources or Workspaces.
+Stop active Sandboxes, take a coordinated backup, and update all control-plane and Runner processes to protocol generation 5.
+The fixed-Profile bundle and trust anchor remain those of [v0.12.0](../releases/v0.12.0.md).
+Older bundle and clean-install boundaries still require the procedure in their target release notes.
 The Go module's `retract` directives identify withdrawn versions.
 
 ## gVisor and the v6 artifact manifest
@@ -47,7 +46,7 @@ Runner host. Existing Sandboxes retain their pinned revision. Read the actual
 revision and spec digest from the selected release's standard bundle rather
 than deriving revision numbers from a version. The isolated Profile has no
 attributed permission. Read the public API and Runner protocol windows from the selected manifest
-(v0.14.0 uses version 1 and `[4,4]`). Attributed execution also requires the advertised `attributed-execution`
+(v0.15.0 uses version 1 and `[5,5]`). Attributed execution also requires the advertised `attributed-execution`
 capability. See [Profiles and authorization](../design/profiles-and-authorization.md).
 
 After readiness, log in with the platform token, create each Tenant and its tenant-controller authority, log in with the returned controller token, then create the Subject and application authority. Capture each bearer token from its successful creation response; it cannot be retrieved later. The source-free CLI sequence is documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). The repository scenario harness uses this same sequence and creates a separate application authority for the optional `sandbox:ports:direct` grant.
