@@ -93,11 +93,13 @@ domains="$(virsh -c qemu:///system list --all --name)"
 guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-16384}"
 [[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 8192 && guest_memory <= 1048576)) || fail 'QUALIFY_GUEST_MEMORY_MIB must be 8192..1048576'
 available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
-((available_mib >= guest_memory+16384)) || fail 'insufficient memory for qualification and an installer guest'
-# Conservative reserves for OCI builds/candidates and three disposable guests.
+((available_mib >= guest_memory+8192)) || fail 'insufficient memory for an installer guest and 8 GiB host reserve'
+# Lean qualification uses one installer guest; full qualification uses three.
+required_disk_gib=100
+! $full || required_disk_gib=200
 for path in "$RELEASE_OUTPUT_ROOT" "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT"; do
   available_kib="$(df -Pk "$path" | awk 'NR==2 {print $4}')"
-  ((available_kib >= 200*1024*1024)) || fail "less than 200 GiB free at $path"
+  ((available_kib >= required_disk_gib*1024*1024)) || fail "less than $required_disk_gib GiB free at $path"
 done
 export QUALIFY_ENV_FILE="$config"
 scripts/qualify.sh --tier "$tier" --preflight
@@ -111,7 +113,6 @@ mkdir -m 700 "$directory"
 echo "Release run: $run ($source_commit); logs: $directory"
 ! $resume || echo "Resuming from retained build $build: requalifying gates only"
 started=$SECONDS
-jobs=()
 stage() {
   local name="$1" start=$SECONDS status=0; shift
   "$@" >"$directory/$name.log" 2>&1 || status=$?
@@ -121,7 +122,6 @@ stage() {
 finish() {
   local status=$? name code elapsed result
   trap - EXIT
-  for job in "${jobs[@]}"; do wait "$job" || status=1; done
   {
     printf '| Stage | Result | Wall clock |\n|---|---|---|\n'
     for file in "$directory"/*.status; do
@@ -139,12 +139,8 @@ trap finish EXIT
 if $resume; then
   stage qualification /usr/bin/just qualify --tier "$tier" --only gates || fail "gate requalification failed; inspect $directory"
 else
-  stage qualification /usr/bin/just qualify --tier "$tier" & jobs+=("$!")
-  stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only "$version" "$build" & jobs+=("$!")
-  status=0
-  for job in "${jobs[@]}"; do wait "$job" || status=1; done
-  jobs=()
-  ((status == 0)) || fail "qualification/build failed; inspect $directory"
+  stage qualification /usr/bin/just qualify --tier "$tier" || fail "qualification failed; inspect $directory"
+  stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only "$version" "$build" || fail "build failed; inspect $directory"
 fi
 stage candidate scripts/release-stage.sh --candidate --from-build "$build" "$version" "$candidate"
 export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
