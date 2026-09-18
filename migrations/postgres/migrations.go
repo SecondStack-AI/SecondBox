@@ -233,7 +233,12 @@ func recordedMigrationPrefixLength(
 				embeddedItem.version,
 			)
 		}
-		if recordedItem.checksum != embeddedItem.sha256 {
+		// v0.14.0 shipped nullable retention in 0001; 0028 now makes both published
+		// baselines converge. Keep the original ledger bytes and reject every other drift.
+		publishedV014RetentionBaseline := recordedItem.version == "0001_secondbox" &&
+			recordedItem.checksum == "1f7903ecc3f6d3e1a2c2a27af7cc4c87a3863187cde20efb8d6e795a4dd1bc42" &&
+			embeddedItem.sha256 == "e3e4f2180225d979f03d254503c24b79402f9914ed5f8a471f562e3359e1e8d6"
+		if recordedItem.checksum != embeddedItem.sha256 && !publishedV014RetentionBaseline {
 			return 0, fmt.Errorf(
 				"SecondBox PostgreSQL migration checksum drift: version=%s recorded=%s embedded=%s",
 				recordedItem.version,
