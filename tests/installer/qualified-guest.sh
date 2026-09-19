@@ -93,6 +93,42 @@ microvm-artifacts microvm-artifacts.oci.tar $(jq -er .microvm.imageReference "$m
 EOF
 }
 
+configure_candidate_fetcher_registry() {
+  # The candidate is unpublished. Give the isolated fetcher access to the same
+  # TLS registry fixture as the host without changing the candidate assets.
+  cat >"$qualification_root/registry-compose.yml" <<EOF
+services:
+  image-fetcher:
+    environment:
+      SECONDBOX_IMAGE_FETCHER_CERTIFICATES: /run/qualification-registry-ca
+    extra_hosts:
+      - "ghcr.io:host-gateway"
+    volumes:
+      - /etc/docker/certs.d:/run/qualification-registry-ca:ro
+EOF
+  sudo tee /usr/local/bin/docker >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+arguments=("$@")
+if [[ "${1:-}" == compose ]]; then
+  candidate=false
+  insert_at=0
+  for ((index=1; index<${#arguments[@]}; index++)); do
+    if [[ "${arguments[index]}" == --file ]]; then
+      ((index+=1))
+      if grep -q '^  image-fetcher:$' "${arguments[index]}"; then candidate=true; fi
+      insert_at=$((index+1))
+    fi
+  done
+  if $candidate; then
+    arguments=("${arguments[@]:0:insert_at}" --file "$HOME/.secondbox-installer-qualification/registry-compose.yml" "${arguments[@]:insert_at}")
+  fi
+fi
+exec /usr/bin/docker "${arguments[@]}"
+EOF
+  sudo chmod 0755 /usr/local/bin/docker
+}
+
 create_qualification_workload() {
   local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5" egress_context="${6:-}"
   local platform_config="$root/platform.json" controller_config="$root/controller.json" application_config="$root/application.json"
@@ -289,6 +325,7 @@ if [[ "$phase" == install ]]; then
     printf 'PURGE %s\n' "$source_operation_id" | "$source_deploy" --accessible uninstall --purge "$source_operation" >"$qualification_root/purge-source-${mode}.log" 2>&1
     jq -e '.status == "purged"' "$source_operation/install-receipt.json" >/dev/null
 
+    configure_candidate_fetcher_registry
     install_log="$qualification_root/install-candidate-${mode}.log"
     printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
     operation=''
@@ -302,11 +339,13 @@ if [[ "$phase" == install ]]; then
     update_attempt='refused_then_recreated'
   elif [[ "$mode" == btrfs_image ]]; then
     setup_candidate_registry
+    configure_candidate_fetcher_registry
     install_log="$qualification_root/install-${mode}.log"
     printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
     operation="$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)"
   else
     setup_candidate_registry
+    configure_candidate_fetcher_registry
     install_log="$qualification_root/install-${mode}.log"
     setsid bash -c 'printf "1\ny\ny\n1\ny\ny\n" | "$1" --accessible install --candidate-directory "$2"' bash "$deploy" "$release_directory" >"$install_log" 2>&1 &
     install_pid=$!
