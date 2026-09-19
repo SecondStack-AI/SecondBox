@@ -37,7 +37,8 @@ if [[ ! -e "$root" ]]; then
   initial="$(mktemp -d "$(dirname "$root")/.secondbox-gvisor-owner.XXXXXXXX")"
   printf '%s\n' "$owner" >"$initial/.owner"
   touch "$initial/prepare.lock"
-  mv -T -n -- "$initial" "$root"
+  # Some coreutils versions return failure when a concurrent initializer wins.
+  mv -T -n -- "$initial" "$root" || check_root
   if [[ -d "$initial" ]]; then rm -rf -- "$initial"; fi
 fi
 check_root

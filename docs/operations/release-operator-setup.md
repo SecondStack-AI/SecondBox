@@ -71,8 +71,11 @@ just release VERSION --resume # recover a gate-only failure using the retained b
 
 Release preflight checks source, tag identity, inputs, the pinned Go/protoc and
 `/usr/bin/just` toolchain, libvirt availability, absence of `sbq-` domains, and
-headroom (200 GiB free in each output/workspace filesystem and enough available
-memory for a guest plus 16 GiB). It creates a local tag only when absent and
+headroom (100 GiB free in each output/workspace filesystem for a lean release,
+200 GiB for `--full`, and enough available memory for a guest plus 8 GiB).
+An 8 GiB guest therefore requires 16 GiB available host memory.
+Set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` to limit scenario concurrency on smaller hosts without omitting scenarios.
+It creates a local tag only when absent and
 never pushes it. Existing tags must identify HEAD. All three versioned output
 directories must be absent; failed output is retained for diagnosis, so archive
 or remove only your own failed run's directories before starting a fresh run.
@@ -80,7 +83,8 @@ When only a gate failed after the build and every scenario stage passed,
 `--resume` reuses `VERSION-build` and its commit-exact evidence, reruns the gates,
 and continues from candidate staging.
 
-Qualification and the unbound artifact build run concurrently. Once both pass,
+Qualification, the unbound artifact build, and installer qualification run sequentially so their memory demands do not overlap.
+Once qualification and the build pass,
 staging binds commit-exact Firecracker and gVisor evidence into the candidate.
 The default lean release builds amd64 images and tests one `btrfs_image` guest:
 the wizard, reboot recovery, and hello-world microVM. The driver removes the
