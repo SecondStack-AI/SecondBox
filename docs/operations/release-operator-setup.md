@@ -72,8 +72,9 @@ just release VERSION --resume # recover a gate-only failure using the retained b
 Release preflight checks source, tag identity, inputs, the pinned Go/protoc and
 `/usr/bin/just` toolchain, libvirt availability, absence of `sbq-` domains, and
 headroom (100 GiB free in each output/workspace filesystem for a lean release,
-200 GiB for `--full`, and enough available memory for a guest plus 8 GiB).
-An 8 GiB guest therefore requires 16 GiB available host memory.
+200 GiB for `--full`, and enough available memory for a guest plus 4 GiB).
+The installer requires 12 GiB of usable guest RAM; configure at least 13312 MiB to allow for kernel reservations.
+A 13 GiB guest therefore requires 17 GiB available host memory.
 Set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` to limit scenario concurrency on smaller hosts without omitting scenarios.
 It creates a local tag only when absent and
 never pushes it. Existing tags must identify HEAD. All three versioned output
@@ -97,7 +98,7 @@ built image platforms; CLI and deploy binaries retain all four host platforms.
 Local gVisor host inputs use `QUALIFY_GVISOR_HOST_BUILD_ROOT`; KVM presence is
 allowed for host evidence. Pod evidence is required only by full releases.
 `QUALIFY_GUEST_MEMORY_MIB` defaults to 16384; concurrency is at most three and is
-capped by available memory after an 8 GiB host reserve. The final stage reuses
+capped by available memory after a 4 GiB host reserve. The final stage reuses
 the checksummed build and requires installer evidence for exactly those release
 bytes. Unbound builds cannot be published.
 
