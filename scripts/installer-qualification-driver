@@ -435,7 +435,7 @@ jq -s --argjson modes "$modes_json" --arg schemaVersion 'secondbox.install.quali
   ([ $assertions[] | select(.passed == true) | .id ] | sort) as $passed |
   {
     schemaVersion: $schemaVersion,
-    passed: (($required - $passed) | length == 0) and (all($assertions[]; .passed == true)),
+    passed: ((($required - $passed) | length == 0) and all($assertions[]; .passed == true)),
     rebootPassed: (all(.[]; .rebootPassed == true)),
     releaseManifestDigest: $subject,
     filesystemIdentity: ([.[].filesystemIdentity] | join(",")),
