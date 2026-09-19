@@ -101,6 +101,9 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 		t.Fatalf("release-backed deployment = %#v", manifest.Deployment)
 	}
 	runner := manifest.Runners[0].withPackagedPaths()
+	if !slices.Contains(strings.Split(manifest.Policy.RunnerEnabledFeatures, ","), "client-selected-image") {
+		t.Fatal("guided installation cannot negotiate the Runner's mandatory client-selected-image feature")
+	}
 	if runner.RunnerID != result.RunnerID || runner.IdentityHostDirectory != result.RunnerIdentityDirectory || runner.workspaceHostDirectory() != plan.Storage.WorkspacePath || runner.ArtifactHostDirectory != installPath(plan, "artifacts") || runner.StateHostDirectory != installPath(plan, "runner-storage") || runner.FirecrackerCPUTemplate != plan.Compute.FirecrackerCPUTemplate || runner.FirecrackerJailerUIDStart == nil || *runner.FirecrackerJailerUIDStart != plan.Network.JailerUIDRange.Start || runner.MaxConcurrentOperationsGlobal == nil || *runner.MaxConcurrentOperationsGlobal != plan.Capacity.ConcurrentOperations || *runner.MaxConcurrentOperationsGlobal < install.DurableCodingConcurrentOperations || runner.NetworkPolicyDNSUpstream != "[2001:db8::53]:53" || runner.DataPlaneAdvertisedAddress != plan.Network.DataPlaneAddress || runner.ArtifactPublicKeySHA256 != keyID {
 		t.Fatalf("Runner does not match accepted plan: %#v", runner)
 	}
