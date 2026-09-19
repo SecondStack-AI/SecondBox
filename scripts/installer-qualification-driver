@@ -71,10 +71,10 @@ virsh -c "$connection" uri >/dev/null
 jq -e '.schemaVersion == "secondbox.install.vm-scenario/v1" and (.requiredAssertions | type == "array" and length > 0)' "$scenario" >/dev/null
 
 guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-16384}"
-[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 8192 && guest_memory <= 1048576)) || { echo 'QUALIFY_GUEST_MEMORY_MIB must be 8192..1048576' >&2; exit 1; }
+[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 13312 && guest_memory <= 1048576)) || { echo 'QUALIFY_GUEST_MEMORY_MIB must be 13312..1048576 (installer requires 12 GiB usable RAM)' >&2; exit 1; }
 available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
-# Leave 8 GiB available for the host and QEMU overhead.
-guest_parallelism=$(((available_mib-8192)/guest_memory))
+# Installer qualification runs after builds and scenarios, leaving 4 GiB for the host and QEMU.
+guest_parallelism=$(((available_mib-4096)/guest_memory))
 ((guest_parallelism > 0)) || { echo 'insufficient memory for installer qualification' >&2; exit 1; }
 ((guest_parallelism <= 3)) || guest_parallelism=3
 echo "Installer guests: memory=${guest_memory} MiB, parallelism=$guest_parallelism"

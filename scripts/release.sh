@@ -91,9 +91,9 @@ virsh -c qemu:///system uri >/dev/null
 domains="$(virsh -c qemu:///system list --all --name)"
 ! grep -q '^sbq-' <<<"$domains" || fail 'libvirt has sbq- domains; wait for their owner'
 guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-16384}"
-[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 8192 && guest_memory <= 1048576)) || fail 'QUALIFY_GUEST_MEMORY_MIB must be 8192..1048576'
+[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 13312 && guest_memory <= 1048576)) || fail 'QUALIFY_GUEST_MEMORY_MIB must be 13312..1048576 (installer requires 12 GiB usable RAM)'
 available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
-((available_mib >= guest_memory+8192)) || fail 'insufficient memory for an installer guest and 8 GiB host reserve'
+((available_mib >= guest_memory+4096)) || fail 'insufficient memory for an installer guest and 4 GiB host reserve'
 # Lean qualification uses one installer guest; full qualification uses three.
 required_disk_gib=100
 ! $full || required_disk_gib=200

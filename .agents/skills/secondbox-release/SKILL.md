@@ -53,7 +53,7 @@ it. Prepare a reviewable result before requesting any missing authorization.
    **key names** in `release.env` with `deploy/release.env.example` without
    printing secrets; verify the public anchor's DER SHA-256 against the notes;
    inspect `df` (100 GiB free per output/workspace filesystem for lean releases,
-   200 GiB for `--full`) and MemAvailable (guest plus 8 GiB).
+   200 GiB for `--full`) and MemAvailable (guest plus 4 GiB, guest at least 13312 MiB).
    On smaller hosts, set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` to bound scenario concurrency.
    Check dependencies match the lockfile; provision with
    `npm ci --ignore-scripts` before launch if needed. For `--full`, reserve the

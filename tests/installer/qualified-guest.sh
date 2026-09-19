@@ -10,7 +10,7 @@ report_qualified_guest_failure() {
     while IFS= read -r -d '' log; do
       echo "qualified guest log tail: $(basename "$log")" >&2
       tail -n 100 -- "$log" >&2
-    done < <(find "$qualification_root" -maxdepth 1 -type f -name '*.log' -print0 | sort -z)
+    done < <(find "$qualification_root" -maxdepth 1 -type f \( -name '*.log' -o -name 'preflight-*.json' \) -print0 | sort -z)
   fi
   return "$status"
 }
