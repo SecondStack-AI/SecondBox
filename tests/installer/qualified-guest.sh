@@ -388,7 +388,7 @@ mapfile -t running_services < <(
   docker ps --filter "label=com.docker.compose.project=$compose_project" \
     --format '{{.Label "com.docker.compose.service"}}' | sort
 )
-[[ "${running_services[*]}" == 'control-plane postgres same-host-runner' ]]
+[[ "${running_services[*]}" == 'control-plane image-fetcher postgres same-host-runner' ]]
 jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerState == "ready"' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 expected_runner_id="runner-${operation_id#install_}"
