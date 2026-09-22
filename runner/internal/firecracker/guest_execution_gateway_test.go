@@ -149,13 +149,43 @@ func TestRunnerGatewaysRequireCanonicalNameAndUnicastEndpoint(t *testing.T) {
 		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.AddrPort{}},
 		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("10.210.2.10:0")},
 		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("127.0.0.1:443")},
-		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("[2001:db8::1]:443")},
+		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("[::1]:443")},
+		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("[::ffff:10.210.2.10]:443")},
 		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("224.0.0.1:443")},
+		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("[ff02::1]:443")},
 	} {
 		request := GuestProtocolNegotiation{RunnerGateways: []networkpolicy.LogicalGatewayEndpoint{gateway}}
 		if _, err := NegotiateGuestProtocol(context.Background(), request); err == nil || !strings.Contains(err.Error(), "Runner gateway") {
 			t.Fatalf("invalid Runner gateway %+v accepted: %v", gateway, err)
 		}
+	}
+}
+
+// An operator may map a logical gateway to an IPv6 address; the egress-context
+// loader, the policy compiler and the host firewall all accept one, so guest
+// publication must not reduce that to IPv4.
+func TestRunnerGatewaysPublishIPv6Endpoints(t *testing.T) {
+	gatewayAddress := netip.MustParseAddr("fd00:2026:9::10")
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode: networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{
+			{Protocol: networkpolicy.ProtocolHTTPS, Domain: "agent-gateway.secondbox.internal", Port: 443},
+		},
+	}, networkpolicy.CompileOptions{
+		MaximumPins: 64, MaximumTTL: time.Minute,
+		RunnerAddresses: []netip.Addr{gatewayAddress},
+		RunnerGateways:  map[string]netip.Addr{"agent-gateway.secondbox.internal": gatewayAddress},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoints := compiled.LogicalGatewayEndpoints()
+	if err := validateRunnerGateways(endpoints); err != nil {
+		t.Fatal(err)
+	}
+	want := "agent-gateway.secondbox.internal=[fd00:2026:9::10]:443"
+	if got := formatRunnerGateways(endpoints); got != want {
+		t.Fatalf("SECONDBOX_RUNNER_GATEWAYS = %q, want %q", got, want)
 	}
 }
 
