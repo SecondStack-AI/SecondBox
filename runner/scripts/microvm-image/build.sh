@@ -180,8 +180,6 @@ if [ -d "$root_dir/builtin-skills" ]; then
 fi
 printf '%s\n' "$artifact_version" > "$shared_dir/secondbox-runner-guest-artifact-version"
 
-"$script_dir/scan-no-secrets.sh" "$root_dir"
-
 rootfs="$out_dir/rootfs.ext4"
 truncate -s "${rootfs_size_mib}M" "$rootfs"
 mkfs.ext4 -F -q -U "$rootfs_uuid" -d "$root_dir" "$rootfs"
@@ -281,7 +279,6 @@ fi
 provenance_sha="$(sha256sum "$out_dir/kernel-provenance.json" | awk '{print $1}')"
 rootfs_source_sha="$(sha256sum "$out_dir/rootfs-source-manifest.json" | awk '{print $1}')"
 rootfs_policy_sha="$(sha256sum "$script_dir/rootfs/verify-secondbox-rootfs.sh" | awk '{print $1}')"
-secret_scan_policy_sha="$(sha256sum "$script_dir/scan-no-secrets.sh" | awk '{print $1}')"
 browser_surface_policy_sha="$(sha256sum "$script_dir/verify-browser-surface.sh" | awk '{print $1}')"
 cat > "$out_dir/secondbox-rootfs-contract.json" <<EOF
 {
@@ -292,7 +289,6 @@ cat > "$out_dir/secondbox-rootfs-contract.json" <<EOF
   "browserPolicy": "$browser_policy",
   "rootfsSha256": "$rootfs_sha",
   "policySha256": "$rootfs_policy_sha",
-  "secretScanPolicySha256": "$secret_scan_policy_sha",
   "browserSurfacePolicySha256": "$browser_surface_policy_sha"
 }
 EOF

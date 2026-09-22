@@ -80,7 +80,7 @@ func writeSignedArtifactFixture(t *testing.T, directory string) releasecontract.
 		"shared.img":                           []byte("shared"),
 	}
 	rootfsDigest := fixtureChecksum(files["rootfs.ext4"])
-	contract, err := json.Marshal(map[string]any{"schemaVersion": 1, "contract": "secondbox-guest-rootfs", "state": "verified", "surfaceContract": "qualified", "browserPolicy": "forbid", "rootfsSha256": rootfsDigest, "policySha256": strings.Repeat("1", 64), "secretScanPolicySha256": strings.Repeat("2", 64), "browserSurfacePolicySha256": strings.Repeat("3", 64)})
+	contract, err := json.Marshal(map[string]any{"schemaVersion": 1, "contract": "secondbox-guest-rootfs", "state": "verified", "surfaceContract": "qualified", "browserPolicy": "forbid", "rootfsSha256": rootfsDigest, "policySha256": strings.Repeat("1", 64), "browserSurfacePolicySha256": strings.Repeat("3", 64)})
 	if err != nil {
 		t.Fatal(err)
 	}

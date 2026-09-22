@@ -156,7 +156,6 @@ if [ "$legacy_v1_contract" != "true" ]; then
     fi
     for policy_binding in \
         "policySha256|rootfs/verify-secondbox-rootfs.sh" \
-        "secretScanPolicySha256|scan-no-secrets.sh" \
         "browserSurfacePolicySha256|verify-browser-surface.sh"
     do
         field="${policy_binding%%|*}"

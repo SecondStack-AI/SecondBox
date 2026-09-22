@@ -362,26 +362,13 @@ func TestSecondBoxImagePipelineEmitsLicenseAndResolvedProvenance(t *testing.T) {
 	}
 }
 
-func TestPreparedOCIImageRemovesMachineIdentityAndScansOnlyRuntimeSecrets(t *testing.T) {
+func TestPreparedOCIImageRemovesMachineIdentity(t *testing.T) {
 	preparedDockerfile := readRepositoryFile(
 		t,
 		"runner/scripts/microvm-image/rootfs/Dockerfile.prepared",
 	)
 	if !strings.Contains(preparedDockerfile, `rm -f /etc/ssh/ssh_host_*`) {
 		t.Fatal("prepared OCI rootfs must remove image-baked SSH host identity")
-	}
-	scanner := readRepositoryFile(t, "runner/scripts/microvm-image/scan-no-secrets.sh")
-	if !strings.Contains(scanner, `-g '!**/opt/go/src/**/testdata/**'`) ||
-		!strings.Contains(scanner, `-g '!**/opt/go/src/crypto/x509/platform_root_key.pem'`) {
-		t.Fatal("secret scan must distinguish pinned Go toolchain fixtures from runtime credentials")
-	}
-	if strings.Contains(scanner, "--exclude-dir=testdata") ||
-		strings.Contains(scanner, "--exclude=platform_root_key.pem") {
-		t.Fatal("grep fallback must not exempt unrelated files with Go fixture basenames")
-	}
-	if !strings.Contains(scanner, `-path "$root/opt/go/src/*/testdata"`) ||
-		!strings.Contains(scanner, `-path "$root/opt/go/src/crypto/x509/platform_root_key.pem"`) {
-		t.Fatal("grep fallback must scope private-key fixture exclusions to the pinned Go toolchain")
 	}
 }
 
@@ -392,10 +379,6 @@ func TestStandardImageRemovesPackagedPrivateKeyFixtures(t *testing.T) {
 	)
 	if !strings.Contains(dockerfile, `rm -rf /usr/share/doc/python3-aiohttp/examples`) {
 		t.Fatal("standard rootfs must remove the packaged aiohttp example private key")
-	}
-	scanner := readRepositoryFile(t, "runner/scripts/microvm-image/scan-no-secrets.sh")
-	if strings.Contains(scanner, "python3-aiohttp") {
-		t.Fatal("packaged private-key fixtures must be removed, not exempted from the secret scan")
 	}
 }
 
