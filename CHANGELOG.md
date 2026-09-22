@@ -4,7 +4,7 @@
 
 ### Removed
 
-- Removed the microVM rootfs secret scan and its `secretScanPolicySha256` provenance field; the golden rootfs is built only from Docker layers and never receives per-Sandbox runtime secrets.
+- Removed the microVM rootfs secret scan and stopped emitting its `secretScanPolicySha256` provenance field; the golden rootfs is built only from Docker layers and never receives per-Sandbox runtime secrets. Existing signed bundles that still carry the field keep verifying.
 
 ## 0.15.0 - 2026-09-18
 

@@ -248,6 +248,8 @@ func validateRootfsContract(directory, rootfsDigest string) error {
 		RootfsSHA256               string `json:"rootfsSha256"`
 		PolicySHA256               string `json:"policySha256"`
 		BrowserSurfacePolicySHA256 string `json:"browserSurfacePolicySha256"`
+		// Bundles signed before the rootfs secret scan was removed carry this field. It is accepted and ignored.
+		SecretScanPolicySHA256 string `json:"secretScanPolicySha256"`
 	}
 	if err := decodeStrict(content, &contract); err != nil {
 		return installerError("decode rootfs contract", err)
