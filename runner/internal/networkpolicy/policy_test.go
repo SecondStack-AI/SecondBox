@@ -495,3 +495,59 @@ func TestDNSPinsAreBoundedAndTTLIsExplicit(t *testing.T) {
 		t.Fatalf("capacity decision = %#v", decision)
 	}
 }
+
+func TestLogicalGatewayEndpointsProjectResolvedGatewaysWithoutExecutionListener(t *testing.T) {
+	gatewayAddress := netip.MustParseAddr("198.18.43.10")
+	options := CompileOptions{
+		MaximumPins:        64,
+		MaximumTTL:         time.Minute,
+		ManagementPrefixes: []netip.Prefix{netip.MustParsePrefix("198.18.43.0/24")},
+		RunnerGateways: map[string]netip.Addr{
+			"platform-gateway.secondbox.internal": gatewayAddress,
+			"agent-gateway.secondbox.internal":    gatewayAddress,
+			"unreferenced.secondbox.internal":     gatewayAddress,
+		},
+	}
+	compiled, err := Compile(Policy{
+		Mode: ModeAllowList,
+		Destinations: []Destination{
+			{Protocol: ProtocolHTTPS, Domain: "platform-gateway.secondbox.internal", Port: 443},
+			{Protocol: ProtocolHTTPS, Domain: "AGENT-GATEWAY.SecondBox.Internal.", Port: 8443},
+			{Protocol: ProtocolHTTP, Domain: "agent-gateway.secondbox.internal", Port: 443},
+			{Protocol: ProtocolHTTPS, Domain: "agent-gateway.secondbox.internal", Port: 443},
+			{Protocol: ProtocolHTTPS, Domain: "example.com", Port: 443},
+			{Protocol: ProtocolTCP, Prefix: netip.MustParsePrefix("8.8.8.0/24"), Port: 443},
+		},
+	}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []LogicalGatewayEndpoint{
+		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("198.18.43.10:443")},
+		{LogicalName: "agent-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("198.18.43.10:8443")},
+		{LogicalName: "platform-gateway.secondbox.internal", Endpoint: netip.MustParseAddrPort("198.18.43.10:443")},
+	}
+	got := compiled.LogicalGatewayEndpoints()
+	if len(got) != len(want) {
+		t.Fatalf("logical gateway endpoints = %#v", got)
+	}
+	for index, endpoint := range want {
+		if got[index] != endpoint {
+			t.Fatalf("logical gateway endpoint %d = %#v, want %#v", index, got[index], endpoint)
+		}
+	}
+	listener, err := CompileExecutionListener(netip.MustParseAddrPort("169.254.104.1:41000"), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoints := listener.LogicalGatewayEndpoints(); len(endpoints) != 0 {
+		t.Fatalf("execution listener published logical gateway endpoints: %#v", endpoints)
+	}
+	denyAll, err := Compile(Policy{Mode: ModeDenyAll}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoints := denyAll.LogicalGatewayEndpoints(); len(endpoints) != 0 {
+		t.Fatalf("deny-all policy published logical gateway endpoints: %#v", endpoints)
+	}
+}

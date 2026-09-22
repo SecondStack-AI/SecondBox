@@ -492,6 +492,21 @@ Data-plane helpers bind the handle's observed generation and optional Lease ID.
 Poll intervals, deadlines, and output limits remain explicit.
 The full operation matrix is in [Consumer operation matrix](../design/consumer-operation-matrix.md).
 
+## Runner gateway endpoints
+
+A network-enabled Profile reaches its logical gateway names through the Sandbox's pinned egress context, and SecondBox does not synthesize guest DNS for those names. On the Firecracker and gVisor backends the Runner therefore resolves them on the Runner host and publishes the result to every guest execution as `SECONDBOX_RUNNER_GATEWAYS`: space-separated `logicalName=address:port` entries, sorted by logical name and then port, without a URL scheme. An IPv6 address appears in brackets. The variable is absent when the Profile resolves no logical gateway. Select the entry the command needs and configure the proxy variables explicitly, for example in its shell wrapper:
+
+```sh
+for entry in $SECONDBOX_RUNNER_GATEWAYS; do
+  case "$entry" in
+    agent-gateway.secondbox.internal=*) HTTP_PROXY="http://${entry#*=}" ;;
+  esac
+done
+export HTTP_PROXY HTTPS_PROXY="$HTTP_PROXY"
+```
+
+The entries are routing information. They contain no credentials and convey no authority by themselves. On those backends, caller-supplied values for this reserved name are rejected before dispatch, including whitespace-normalized names. The experimental Microsandbox backend does not use the Runner guest protocol, so it neither publishes nor reserves this name.
+
 ## Attributed commands
 
 Create the Sandbox with a Profile revision that permits attributed execution. Stop its ordinary Instance explicitly before starting an attributed generation. With the TypeScript SDK, call `handle.start({ ...options, image: { reference: executionImageReference }, attributedExecution: { authorizationRef, expiresAt } })`, where `authorizationRef` is the application's bounded non-secret authorization reference and `expiresAt` is an absolute UTC timestamp within the Profile execution limit. Wait for the start Operation before executing one command. The application retains credential selection and authorization; SecondBox supplies the generation identity.
@@ -504,7 +519,7 @@ export HTTPS_PROXY="$HTTP_PROXY"
 exec integration-cli read
 ```
 
-The variable is routing information. It contains no credentials and conveys no authority by itself. Caller-supplied values for this reserved name are rejected in ordinary and attributed execs, including whitespace-normalized names. Ordinary execs receive no injected value. Attributed generations have only the declared forwarder route; they cannot use ordinary gateway or direct egress. Completion, cancellation or expiry destroys compute before confirming the command result. Buffered result delivery allows a separate bounded teardown interval after the execution deadline; the command's deadline and credential expiry do not extend. The next command needs a new explicit attributed start, while the Workspace persists.
+The variable is routing information. It contains no credentials and conveys no authority by itself. Caller-supplied values for this reserved name are rejected in ordinary and attributed execs, including whitespace-normalized names. Ordinary execs receive no injected value. Attributed generations have only the declared forwarder route; they cannot use ordinary gateway or direct egress, so they resolve no logical gateway and receive no `SECONDBOX_RUNNER_GATEWAYS`. Completion, cancellation or expiry destroys compute before confirming the command result. Buffered result delivery allows a separate bounded teardown interval after the execution deadline; the command's deadline and credential expiry do not extend. The next command needs a new explicit attributed start, while the Workspace persists.
 
 ## Flue adapter
 

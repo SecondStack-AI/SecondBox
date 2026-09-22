@@ -77,7 +77,7 @@ func (s *GuestProtocolSession) ExecutePTY(
 	}
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
-	request, err := s.prepareExecutionGateway(request)
+	request, err := s.prepareReservedGuestEnvironment(request)
 	if err != nil {
 		return GuestPTYResult{}, err
 	}

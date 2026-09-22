@@ -55,12 +55,15 @@ func dnsAddressForProfile(profile uint32) string {
 
 type instanceNetwork struct {
 	executionForwarder *egressforwarder.ExecutionForwarder
-	index              uint32
-	namespaceName      string
-	hostVeth           string
-	guestVeth          string
-	hostAddress        string
-	guestAddress       string
+	// runnerGateways are the logical gateway endpoints the installed compiled
+	// policy resolved, published to the guest at protocol negotiation.
+	runnerGateways []networkpolicy.LogicalGatewayEndpoint
+	index          uint32
+	namespaceName  string
+	hostVeth       string
+	guestVeth      string
+	hostAddress    string
+	guestAddress   string
 }
 
 func (network instanceNetwork) namespacePath() string {
