@@ -247,8 +247,9 @@ func validateRootfsContract(directory, rootfsDigest string) error {
 		BrowserPolicy              string `json:"browserPolicy"`
 		RootfsSHA256               string `json:"rootfsSha256"`
 		PolicySHA256               string `json:"policySha256"`
-		SecretScanPolicySHA256     string `json:"secretScanPolicySha256"`
 		BrowserSurfacePolicySHA256 string `json:"browserSurfacePolicySha256"`
+		// Bundles signed before the rootfs secret scan was removed carry this field. It is accepted and ignored.
+		SecretScanPolicySHA256 string `json:"secretScanPolicySha256"`
 	}
 	if err := decodeStrict(content, &contract); err != nil {
 		return installerError("decode rootfs contract", err)
@@ -256,7 +257,7 @@ func validateRootfsContract(directory, rootfsDigest string) error {
 	if contract.SchemaVersion != 1 || contract.Contract != "secondbox-guest-rootfs" || contract.State != "verified" || contract.SurfaceContract == "" || (contract.BrowserPolicy != "allow" && contract.BrowserPolicy != "forbid") || contract.RootfsSHA256 != rootfsDigest {
 		return installerError("rootfs contract identity or rootfs digest is invalid", nil)
 	}
-	for _, digest := range []string{contract.PolicySHA256, contract.SecretScanPolicySHA256, contract.BrowserSurfacePolicySHA256} {
+	for _, digest := range []string{contract.PolicySHA256, contract.BrowserSurfacePolicySHA256} {
 		if !checksumPattern.MatchString(digest) {
 			return installerError("rootfs contract policy digest is invalid", nil)
 		}

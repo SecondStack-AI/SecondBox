@@ -86,10 +86,9 @@ make_artifact_dir() {
 	printf '{"schemaVersion":1,"source":{"browserPolicy":"%s"}}\n' "$browser_policy" > "$artifact_dir/rootfs-source-manifest.json"
 	rootfs_sha="$(sha256sum "$artifact_dir/rootfs.ext4" | awk '{print $1}')"
 	rootfs_policy_sha="$(sha256sum "$script_dir/rootfs/verify-secondbox-rootfs.sh" | awk '{print $1}')"
-	secret_scan_policy_sha="$(sha256sum "$script_dir/scan-no-secrets.sh" | awk '{print $1}')"
 	browser_surface_policy_sha="$(sha256sum "$script_dir/verify-browser-surface.sh" | awk '{print $1}')"
-	printf '{"schemaVersion":1,"contract":"secondbox-guest-rootfs","state":"verified","surfaceContract":"standard-tools","browserPolicy":"%s","rootfsSha256":"%s","policySha256":"%s","secretScanPolicySha256":"%s","browserSurfacePolicySha256":"%s"}\n' \
-		"$browser_policy" "$rootfs_sha" "$rootfs_policy_sha" "$secret_scan_policy_sha" "$browser_surface_policy_sha" \
+	printf '{"schemaVersion":1,"contract":"secondbox-guest-rootfs","state":"verified","surfaceContract":"standard-tools","browserPolicy":"%s","rootfsSha256":"%s","policySha256":"%s","browserSurfacePolicySha256":"%s"}\n' \
+		"$browser_policy" "$rootfs_sha" "$rootfs_policy_sha" "$browser_surface_policy_sha" \
 		> "$artifact_dir/secondbox-rootfs-contract.json"
 	printf 'base-files:all=1\n' > "$artifact_dir/rootfs-debian-packages.lock"
 	printf 'pip==1\n' > "$artifact_dir/rootfs-python.freeze"

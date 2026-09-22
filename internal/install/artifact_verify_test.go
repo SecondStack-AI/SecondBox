@@ -29,6 +29,23 @@ func TestVerifyArtifactDirectoryAuthenticatesCompleteReleaseIdentity(t *testing.
 	}
 }
 
+// Bundles signed before the rootfs secret scan was removed still carry secretScanPolicySha256.
+func TestVerifyArtifactDirectoryAcceptsRootfsContractWithOrWithoutTheSecretScanPolicyDigest(t *testing.T) {
+	tests := map[string][]map[string]string{
+		"contract built before the secret scan was removed": {{"secretScanPolicySha256": strings.Repeat("2", 64)}},
+		"contract built after the secret scan was removed":  nil,
+	}
+	for name, extraContractFields := range tests {
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			release := writeSignedArtifactFixture(t, directory, extraContractFields...)
+			if _, err := VerifyArtifactDirectory(directory, release); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestVerifyArtifactDirectoryRejectsExtraSubstitutedAndSymlinkedEntries(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -64,7 +81,7 @@ func TestVerifyArtifactDirectoryRejectsExtraSubstitutedAndSymlinkedEntries(t *te
 	}
 }
 
-func writeSignedArtifactFixture(t *testing.T, directory string) releasecontract.ArtifactManifest {
+func writeSignedArtifactFixture(t *testing.T, directory string, extraContractFields ...map[string]string) releasecontract.ArtifactManifest {
 	t.Helper()
 	files := map[string][]byte{
 		"kernel":                               []byte("kernel"),
@@ -80,7 +97,13 @@ func writeSignedArtifactFixture(t *testing.T, directory string) releasecontract.
 		"shared.img":                           []byte("shared"),
 	}
 	rootfsDigest := fixtureChecksum(files["rootfs.ext4"])
-	contract, err := json.Marshal(map[string]any{"schemaVersion": 1, "contract": "secondbox-guest-rootfs", "state": "verified", "surfaceContract": "qualified", "browserPolicy": "forbid", "rootfsSha256": rootfsDigest, "policySha256": strings.Repeat("1", 64), "secretScanPolicySha256": strings.Repeat("2", 64), "browserSurfacePolicySha256": strings.Repeat("3", 64)})
+	contractFields := map[string]any{"schemaVersion": 1, "contract": "secondbox-guest-rootfs", "state": "verified", "surfaceContract": "qualified", "browserPolicy": "forbid", "rootfsSha256": rootfsDigest, "policySha256": strings.Repeat("1", 64), "browserSurfacePolicySha256": strings.Repeat("3", 64)}
+	for _, extra := range extraContractFields {
+		for field, value := range extra {
+			contractFields[field] = value
+		}
+	}
+	contract, err := json.Marshal(contractFields)
 	if err != nil {
 		t.Fatal(err)
 	}
