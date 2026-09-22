@@ -107,6 +107,7 @@ type runtimeInstanceKey struct {
 type instance struct {
 	executionForwarder     instanceExecutionForwarder
 	attributedExecution    *runtimemanager.AttributedExecutionGuard
+	runnerGateways         []networkpolicy.LogicalGatewayEndpoint
 	id                     string
 	sandboxID              string
 	sandboxGeneration      uint64
@@ -776,6 +777,7 @@ type instanceHostReservation struct {
 	jailerUID          int
 	guestIP            string
 	tapName            string
+	runnerGateways     []networkpolicy.LogicalGatewayEndpoint
 	dir                string
 	logPath            string
 	logFile            *os.File
@@ -878,6 +880,7 @@ func (m *Manager) reserveInstanceHost(
 				fmt.Errorf("microVM default-deny network policy is unavailable"),
 			)
 		}
+		host.runnerGateways = policy.LogicalGatewayEndpoints()
 		if err := m.networkPolicy.Install(setupCtx, PolicyNetworkConfig{
 			InstanceID: id,
 			TapName:    tapName,
@@ -1042,6 +1045,7 @@ func (m *Manager) registerLaunchedInstance(
 	inst := &instance{
 		executionForwarder:  host.executionForwarder,
 		attributedExecution: opts.AttributedExecution,
+		runnerGateways:      host.runnerGateways,
 		id:                  host.id,
 		sandboxID:           sandboxID,
 		sandboxGeneration:   opts.SandboxGeneration,

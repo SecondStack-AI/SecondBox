@@ -54,13 +54,25 @@ inside that context. A mapping permits the configured gateway address and port;
 it does not synthesize guest DNS or distribute proxy credentials or CA trust.
 Missing contexts fail admission without substituting another mapping.
 
+Because there is no guest DNS for these names, the Runner publishes the
+resolved endpoints instead. Every guest execution receives the reserved
+`SECONDBOX_RUNNER_GATEWAYS` environment variable, which holds space-separated
+`logicalName=address:port` entries sorted by logical name and then port, one
+entry for each resolved logical gateway in the assignment's compiled policy.
+The variable is absent when the policy resolves none. The published endpoints
+are routing information only, so application wrappers still choose the proxy
+variables and the HTTP semantics, and the application host no longer carries a
+Runner-host address in its own deployment configuration.
+
 An attributed generation uses a separate path. The immutable Profile permits
 one named gateway, and the Runner resolves its operator-configured Unix socket
 inside the pinned context. Firecracker and gVisor forward admitted connections
 through generation-owned listeners and prepend `SBXATTR1` attribution derived
 from the assignment. Guest headers and source addresses are not identity
 claims. The receiving gateway must authenticate the Unix peer before accepting
-the preface. Ordinary gateway routing is not a fallback for attributed traffic.
+the preface. Ordinary gateway routing is not a fallback for attributed traffic,
+so an attributed generation resolves no logical gateway and receives only
+`SECONDBOX_EXECUTION_GATEWAY`.
 
 One attributed generation admits exactly one exec and its descendants. It
 rejects PTYs, Ports, writes through the file API, and another exec. Completion,

@@ -103,7 +103,7 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 	if s.attributedExecution != nil && request.Pty != nil {
 		return BufferedGuestExecResult{}, fmt.Errorf("attributed execution forbids PTY exec")
 	}
-	request, err := s.prepareExecutionGateway(request)
+	request, err := s.prepareReservedGuestEnvironment(request)
 	if err != nil {
 		return BufferedGuestExecResult{}, err
 	}

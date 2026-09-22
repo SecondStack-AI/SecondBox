@@ -887,6 +887,7 @@ func (backend *AssignmentBackend) negotiateSession(
 	return firecracker.NegotiateGuestProtocol(negotiateCtx, firecracker.GuestProtocolNegotiation{
 		AttributedExecution:             active.attributedExecution,
 		ExecutionGateway:                executionGateway,
+		RunnerGateways:                  active.network.runnerGateways,
 		UDSPath:                         filepath.Join(active.instanceDir, "sockets", "protocol.sock"),
 		DirectUnixSocket:                true,
 		InstanceID:                      assignment.Fence.InstanceId,
@@ -987,6 +988,7 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 			return instanceNetwork{}, nil, infrastructureAssignment(errors.Join(err, teardown))
 		}
 	}
+	network.runnerGateways = compiled.LogicalGatewayEndpoints()
 	if err := backend.enforcer.Install(ctx, firecracker.PolicyNetworkConfig{
 		InstanceID: assignment.Fence.InstanceId,
 		TapName:    network.hostVeth,

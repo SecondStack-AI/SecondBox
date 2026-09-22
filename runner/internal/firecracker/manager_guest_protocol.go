@@ -95,6 +95,7 @@ func (m *Manager) negotiateInstanceGuest(
 	session, err := NegotiateGuestProtocol(ctx, GuestProtocolNegotiation{
 		AttributedExecution:             inst.attributedExecution,
 		ExecutionGateway:                executionGateway,
+		RunnerGateways:                  inst.runnerGateways,
 		UDSPath:                         inst.vsockUDS,
 		Port:                            inst.guestProtocolPort,
 		InstanceID:                      inst.compartmentID,

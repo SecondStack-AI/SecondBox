@@ -146,6 +146,47 @@ func (policy *CompiledPolicy) RunnerGatewayDestinations() []RunnerGatewayDestina
 	return result
 }
 
+// LogicalGatewayEndpoint is one resolved logical gateway address the guest may
+// reach through this policy.
+type LogicalGatewayEndpoint struct {
+	LogicalName string
+	Endpoint    netip.AddrPort
+}
+
+// LogicalGatewayEndpoints projects the logical gateways this policy resolved
+// inside the Sandbox's pinned egress context, sorted by logical name then port
+// and free of duplicates. The attributed execution listener carries no logical
+// name and is excluded: the Runner publishes it under its own reserved guest
+// environment name.
+func (policy *CompiledPolicy) LogicalGatewayEndpoints() []LogicalGatewayEndpoint {
+	if policy == nil {
+		return nil
+	}
+	seen := make(map[LogicalGatewayEndpoint]struct{}, len(policy.runnerGateways))
+	endpoints := make([]LogicalGatewayEndpoint, 0, len(policy.runnerGateways))
+	for _, gateway := range policy.RunnerGatewayDestinations() {
+		if gateway.Destination.Domain == "" {
+			continue
+		}
+		endpoint := LogicalGatewayEndpoint{
+			LogicalName: gateway.Destination.Domain,
+			Endpoint:    netip.AddrPortFrom(normalizeAddress(gateway.Address), gateway.Destination.Port),
+		}
+		if _, duplicate := seen[endpoint]; duplicate {
+			continue
+		}
+		seen[endpoint] = struct{}{}
+		endpoints = append(endpoints, endpoint)
+	}
+	sort.Slice(endpoints, func(left, right int) bool {
+		if endpoints[left].LogicalName != endpoints[right].LogicalName {
+			return endpoints[left].LogicalName < endpoints[right].LogicalName
+		}
+		return endpoints[left].Endpoint.Port() < endpoints[right].Endpoint.Port()
+	})
+	return endpoints
+}
+
 // Destinations returns the validated immutable destination rules used by host
 // enforcement. The returned slice does not share storage with the policy.
 func (policy *CompiledPolicy) Destinations() []Destination {
