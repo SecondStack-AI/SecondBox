@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.16.0 - 2026-09-22
+
+Firecracker and gVisor guest executions receive the resolved Runner gateway endpoints in `SECONDBOX_RUNNER_GATEWAYS`.
+This release keeps Runner protocol generation 5, the v0.15.0 database schema, and the signed v0.12.0 fixed-Profile bundle, so v0.15.0 deployments update in place; see the [v0.16.0 release notes](docs/releases/v0.16.0.md).
+
 ### Added
 
 - Added `SECONDBOX_RUNNER_GATEWAYS` to the Firecracker and gVisor guest execution environment, publishing each logical gateway the Sandbox's pinned egress context resolved as a sorted `logicalName=address:port` entry, so applications no longer configure a Runner-host address themselves.

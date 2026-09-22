@@ -2,6 +2,7 @@
 
 ## Release upgrade boundary
 
+v0.16.0 adds no migration and keeps Runner protocol generation 5, so a v0.15.0 deployment updates in place.
 v0.15.0 accepts the exact migration baseline published by v0.14.0 and applies forward migrations while preserving its ledger and Workspaces.
 Stop active Sandboxes, take a coordinated backup, and update the control plane and all Runners together to protocol generation 5.
 The fixed-Profile signed guest bundle does not change.
