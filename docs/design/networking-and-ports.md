@@ -55,14 +55,16 @@ it does not synthesize guest DNS or distribute proxy credentials or CA trust.
 Missing contexts fail admission without substituting another mapping.
 
 Because there is no guest DNS for these names, the Runner publishes the
-resolved endpoints instead. Every guest execution receives the reserved
-`SECONDBOX_RUNNER_GATEWAYS` environment variable, which holds space-separated
-`logicalName=address:port` entries sorted by logical name and then port, one
-entry for each resolved logical gateway in the assignment's compiled policy.
-The variable is absent when the policy resolves none. The published endpoints
-are routing information only, so application wrappers still choose the proxy
-variables and the HTTP semantics, and the application host no longer carries a
-Runner-host address in its own deployment configuration.
+resolved endpoints instead. On the Firecracker and gVisor backends every guest
+execution receives the reserved `SECONDBOX_RUNNER_GATEWAYS` environment
+variable, which holds space-separated `logicalName=address:port` entries sorted
+by logical name and then port, one entry for each resolved logical gateway in
+the assignment's compiled policy. The variable is absent when the policy
+resolves none. The experimental Microsandbox backend does not use the Runner
+guest protocol, so it neither publishes nor reserves the name. The published
+endpoints are routing information only, so application wrappers still choose
+the proxy variables and the HTTP semantics, and the application host no longer
+carries a Runner-host address in its own deployment configuration.
 
 An attributed generation uses a separate path. The immutable Profile permits
 one named gateway, and the Runner resolves its operator-configured Unix socket

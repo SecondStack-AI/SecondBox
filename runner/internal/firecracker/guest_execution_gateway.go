@@ -43,12 +43,12 @@ func validateRunnerGateways(gateways []networkpolicy.LogicalGatewayEndpoint) err
 		if name != gateway.LogicalName {
 			return fmt.Errorf("Runner gateway logical name %q is not canonical", gateway.LogicalName)
 		}
-		// Ordinary gateway mappings are IPv4 or IPv6; only the attributed
-		// listener is bound to the IPv4 bridge address.
+		// Publication admits every address the egress-context loader and the
+		// policy compiler admit; address-class policy belongs to the loader.
+		// Only the attributed listener is restricted, to its IPv4 bridge address.
 		address := gateway.Endpoint.Addr()
-		if !address.IsValid() || address.Is4In6() ||
-			!(address.IsGlobalUnicast() || address.IsLinkLocalUnicast()) || gateway.Endpoint.Port() == 0 {
-			return fmt.Errorf("Runner gateway %q requires a unicast IP endpoint with a nonzero port", gateway.LogicalName)
+		if !address.IsValid() || address.Is4In6() || gateway.Endpoint.Port() == 0 {
+			return fmt.Errorf("Runner gateway %q requires a valid unmapped IP endpoint with a nonzero port", gateway.LogicalName)
 		}
 	}
 	return nil

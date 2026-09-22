@@ -494,7 +494,7 @@ The full operation matrix is in [Consumer operation matrix](../design/consumer-o
 
 ## Runner gateway endpoints
 
-A network-enabled Profile reaches its logical gateway names through the Sandbox's pinned egress context, and SecondBox does not synthesize guest DNS for those names. The Runner therefore resolves them on the Runner host and publishes the result to every guest execution as `SECONDBOX_RUNNER_GATEWAYS`: space-separated `logicalName=address:port` entries, sorted by logical name and then port, without a URL scheme. An IPv6 address appears in brackets. The variable is absent when the Profile resolves no logical gateway. Select the entry the command needs and configure the proxy variables explicitly, for example in its shell wrapper:
+A network-enabled Profile reaches its logical gateway names through the Sandbox's pinned egress context, and SecondBox does not synthesize guest DNS for those names. On the Firecracker and gVisor backends the Runner therefore resolves them on the Runner host and publishes the result to every guest execution as `SECONDBOX_RUNNER_GATEWAYS`: space-separated `logicalName=address:port` entries, sorted by logical name and then port, without a URL scheme. An IPv6 address appears in brackets. The variable is absent when the Profile resolves no logical gateway. Select the entry the command needs and configure the proxy variables explicitly, for example in its shell wrapper:
 
 ```sh
 for entry in $SECONDBOX_RUNNER_GATEWAYS; do
@@ -505,7 +505,7 @@ done
 export HTTP_PROXY HTTPS_PROXY="$HTTP_PROXY"
 ```
 
-The entries are routing information. They contain no credentials and convey no authority by themselves. Caller-supplied values for this reserved name are rejected before dispatch, including whitespace-normalized names.
+The entries are routing information. They contain no credentials and convey no authority by themselves. On those backends, caller-supplied values for this reserved name are rejected before dispatch, including whitespace-normalized names. The experimental Microsandbox backend does not use the Runner guest protocol, so it neither publishes nor reserves this name.
 
 ## Attributed commands
 

@@ -2,12 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Added `SECONDBOX_RUNNER_GATEWAYS` to the Firecracker and gVisor guest execution environment, publishing each logical gateway the Sandbox's pinned egress context resolved as a sorted `logicalName=address:port` entry, so applications no longer configure a Runner-host address themselves.
+
 ### Removed
 
 - Removed the microVM rootfs secret scan and stopped emitting its `secretScanPolicySha256` provenance field; the golden rootfs is built only from Docker layers and never receives per-Sandbox runtime secrets. Existing signed bundles that still carry the field keep verifying.
-### Added
-
-- Added `SECONDBOX_RUNNER_GATEWAYS` to the guest execution environment, publishing each logical gateway the Sandbox's pinned egress context resolved as a sorted `logicalName=address:port` entry, so applications no longer configure a Runner-host address themselves.
 
 ## 0.15.0 - 2026-09-18
 
