@@ -3724,6 +3724,9 @@
           },
           "413": {
             "$ref": "#/components/responses/LimitExceeded"
+          },
+          "507": {
+            "$ref": "#/components/responses/WorkspaceFull"
           }
         }
       }
@@ -3915,6 +3918,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "507": {
+            "$ref": "#/components/responses/WorkspaceFull"
           }
         }
       },
@@ -3976,6 +3982,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "507": {
+            "$ref": "#/components/responses/WorkspaceFull"
           }
         }
       }
@@ -5660,6 +5669,9 @@
       "ServiceUnavailable": {
         "$ref": "#/components/responses/Problem503"
       },
+      "WorkspaceFull": {
+        "$ref": "#/components/responses/Problem507"
+      },
       "Problem400": {
         "description": "Invalid request.",
         "headers": {
@@ -5803,6 +5815,21 @@
           },
           "Retry-After": {
             "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Problem507": {
+        "description": "Workspace storage or quota is exhausted.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestID"
           }
         },
         "content": {

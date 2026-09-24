@@ -831,7 +831,15 @@ fn write_file_terminal(
 
 fn classify_file_error(error: &str) -> u32 {
     let value = error.to_ascii_lowercase();
-    if value.contains("workspace-relative path") || value.contains("symbolic link") {
+    if value.contains("enospc")
+        || value.contains("edquot")
+        || value.contains("no space left on device")
+        || value.contains("disk quota exceeded")
+        || value.contains("os error 28")
+        || value.contains("os error 122")
+    {
+        10
+    } else if value.contains("workspace-relative path") || value.contains("symbolic link") {
         3
     } else if value.contains("enoent")
         || value.contains("not found")
@@ -847,6 +855,27 @@ fn classify_file_error(error: &str) -> u32 {
         4
     } else {
         9
+    }
+}
+
+#[cfg(test)]
+mod file_error_tests {
+    use super::classify_file_error;
+
+    #[test]
+    fn workspace_exhaustion_is_distinct_from_missing_files() {
+        assert_eq!(
+            classify_file_error("No space left on device (os error 28)"),
+            10
+        );
+        assert_eq!(
+            classify_file_error("Disk quota exceeded (os error 122)"),
+            10
+        );
+        assert_eq!(
+            classify_file_error("No such file or directory (os error 2)"),
+            2
+        );
     }
 }
 
