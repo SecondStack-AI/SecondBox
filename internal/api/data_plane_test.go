@@ -1,9 +1,11 @@
 package api
 
 import (
-	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"net/http"
 	"testing"
+
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 )
 
 func TestRequireBinaryContentType(t *testing.T) {
@@ -31,18 +33,20 @@ func TestRequireBinaryContentType(t *testing.T) {
 
 func TestDataPlaneAbsenceCodesAreDistinct(t *testing.T) {
 	for _, test := range []struct {
-		err  error
-		code string
+		err    error
+		code   string
+		status int
 	}{
-		{ports.ErrWorkspaceFileNotFound, "file_not_found"},
-		{ports.ErrSandboxNotFound, "not_found"},
-		{ports.ErrLifecycleUnavailable, "execution_node_unavailable"},
-		{ports.ErrGenerationFenced, "generation_fenced"},
-		{ports.ErrLeaseInactive, "lease_fenced"},
+		{ports.ErrWorkspaceFileNotFound, "file_not_found", http.StatusNotFound},
+		{ports.ErrSandboxNotFound, "not_found", http.StatusNotFound},
+		{ports.ErrLifecycleUnavailable, "execution_node_unavailable", http.StatusConflict},
+		{ports.ErrGenerationFenced, "generation_fenced", http.StatusConflict},
+		{ports.ErrLeaseInactive, "lease_fenced", http.StatusConflict},
+		{runnercontrol.ErrWorkspaceFull, "workspace_full", http.StatusInsufficientStorage},
 	} {
-		_, code, _, _ := classifyError(test.err)
-		if code != test.code {
-			t.Fatalf("%v code = %q, want %q", test.err, code, test.code)
+		status, code, _, _ := classifyError(test.err)
+		if code != test.code || status != test.status {
+			t.Fatalf("%v = (%d, %q), want (%d, %q)", test.err, status, code, test.status, test.code)
 		}
 	}
 }

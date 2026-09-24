@@ -416,3 +416,10 @@ func TestMissingFileTerminalIsNotMissingSandbox(t *testing.T) {
 		t.Fatalf("missing file terminal = %v", err)
 	}
 }
+
+func TestWorkspaceFullFileTerminalIsDistinctFromPermission(t *testing.T) {
+	err := fileTerminalError(runnercontrol.DataPlaneSession{TerminalKind: runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_WORKSPACE_FULL.String()})
+	if !errors.Is(err, runnercontrol.ErrWorkspaceFull) || errors.Is(err, runnercontrol.ErrFilePermission) {
+		t.Fatalf("workspace full terminal = %v", err)
+	}
+}

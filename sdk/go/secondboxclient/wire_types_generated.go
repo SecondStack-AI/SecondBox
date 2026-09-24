@@ -588,6 +588,7 @@ const (
 	ProblemCodeWaitExpired                          ProblemCode = "wait_expired"
 	ProblemCodeProfilePolicyCeilingExceeded         ProblemCode = "profile_policy_ceiling_exceeded"
 	ProblemCodeFileNotFound                         ProblemCode = "file_not_found"
+	ProblemCodeWorkspaceFull                        ProblemCode = "workspace_full"
 )
 
 type ProblemDetail struct {

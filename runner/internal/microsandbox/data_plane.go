@@ -291,7 +291,8 @@ func translateFileEvents(events []*microsandboxprotocol.Envelope) (runnercontrol
 				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED,
 				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED,
 				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FENCED,
-				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FAILED:
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FAILED,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_WORKSPACE_FULL:
 			default:
 				return runnercontrol.FileOperationResult{}, fmt.Errorf("SecondBox Microsandbox File returned unknown terminal kind %d", terminal.FileTerminalKind)
 			}

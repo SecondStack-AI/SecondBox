@@ -10349,7 +10349,8 @@
           "terminal_replay_evicted",
           "wait_expired",
           "profile_policy_ceiling_exceeded",
-          "file_not_found"
+          "file_not_found",
+          "workspace_full"
         ]
       },
       "ProblemDetail": {

@@ -32,6 +32,7 @@ var (
 	ErrTerminalDetached      = errors.New("SecondBox Terminal attachment is inactive")
 	ErrTerminalReplayEvicted = errors.New("SecondBox Terminal replay sequence was evicted")
 	ErrFilePermission        = errors.New("SecondBox File operation permission denied")
+	ErrWorkspaceFull         = errors.New("SecondBox Workspace is full")
 	ErrFileChecksum          = errors.New("SecondBox File checksum mismatch")
 )
 
