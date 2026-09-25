@@ -802,6 +802,8 @@ func fileTerminalError(session runnercontrol.DataPlaneSession) error {
 		return runnercontrol.ErrDataPlaneSessionLimit
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED.String():
 		return runnercontrol.ErrFilePermission
+	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_WORKSPACE_FULL.String():
+		return runnercontrol.ErrWorkspaceFull
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CHECKSUM_MISMATCH.String():
 		return runnercontrol.ErrFileChecksum
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String():

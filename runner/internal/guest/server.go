@@ -878,63 +878,77 @@ func (s Server) executeExists(req toolExecRequest) toolExecResponse {
 }
 
 func (s Server) executeMkdir(req toolExecRequest) toolExecResponse {
-	root, target, err := s.toolWorkspacePath(req.Path)
-	if err != nil {
-		return toolExecResponse{Error: err.Error()}
-	}
-	if req.Recursive {
-		directory, openErr := openOrCreateWorkspaceDirectory(root, target)
-		if openErr != nil {
-			return toolExecResponse{Error: openErr.Error()}
-		}
-		if closeErr := directory.Close(); closeErr != nil {
-			return toolExecResponse{Error: closeErr.Error()}
-		}
-		return toolExecResponse{}
-	}
-	parent, err := openWorkspaceParent(root, target, false)
-	if err != nil {
-		return toolExecResponse{Error: err.Error()}
-	}
-	defer parent.close()
-	if err := rejectWorkspaceSymlinkAt(parent.parentFD, parent.base); err != nil {
-		return toolExecResponse{Error: err.Error()}
-	}
-	if err := unix.Mkdirat(parent.parentFD, parent.base, 0o755); err != nil {
-		return toolExecResponse{Error: err.Error()}
-	}
-	if err := unix.Fsync(parent.parentFD); err != nil {
+	if err := s.mkdirWorkspace(req); err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
 	return toolExecResponse{}
 }
 
-func (s Server) executeRm(req toolExecRequest) toolExecResponse {
+func (s Server) mkdirWorkspace(req toolExecRequest) error {
 	root, target, err := s.toolWorkspacePath(req.Path)
 	if err != nil {
+		return err
+	}
+	if req.Recursive {
+		directory, openErr := openOrCreateWorkspaceDirectory(root, target)
+		if openErr != nil {
+			return openErr
+		}
+		if closeErr := directory.Close(); closeErr != nil {
+			return closeErr
+		}
+		return nil
+	}
+	parent, err := openWorkspaceParent(root, target, false)
+	if err != nil {
+		return err
+	}
+	defer parent.close()
+	if err := rejectWorkspaceSymlinkAt(parent.parentFD, parent.base); err != nil {
+		return err
+	}
+	if err := unix.Mkdirat(parent.parentFD, parent.base, 0o755); err != nil {
+		return err
+	}
+	if err := unix.Fsync(parent.parentFD); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s Server) executeRm(req toolExecRequest) toolExecResponse {
+	if err := s.removeWorkspace(req); err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
+	return toolExecResponse{}
+}
+
+func (s Server) removeWorkspace(req toolExecRequest) error {
+	root, target, err := s.toolWorkspacePath(req.Path)
+	if err != nil {
+		return err
+	}
 	if target == root {
-		return toolExecResponse{Error: "refusing to remove workspace root"}
+		return errors.New("refusing to remove workspace root")
 	}
 	parent, err := openWorkspaceParent(root, target, false)
 	if err != nil {
 		if req.Force && os.IsNotExist(err) {
-			return toolExecResponse{}
+			return nil
 		}
-		return toolExecResponse{Error: err.Error()}
+		return err
 	}
 	defer parent.close()
 	if err := removeWorkspaceEntryAt(parent.parentFD, parent.base, req.Recursive); err != nil {
 		if req.Force && os.IsNotExist(err) {
-			return toolExecResponse{}
+			return nil
 		}
-		return toolExecResponse{Error: err.Error()}
+		return err
 	}
 	if err := unix.Fsync(parent.parentFD); err != nil {
-		return toolExecResponse{Error: err.Error()}
+		return err
 	}
-	return toolExecResponse{}
+	return nil
 }
 
 type RestoreHardenInput struct {

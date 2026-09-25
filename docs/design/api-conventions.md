@@ -127,7 +127,8 @@ Ordinary Subject reads omit this mutation observation. Both SDKs offer typed
 Subject and application-authority management helpers with revision and idempotency
 headers; the transport must be configured with tenant-controller authority.
 
-A missing Workspace file returns `file_not_found`. A missing owned resource
+A full Workspace returns HTTP 507 `workspace_full` for file mutations; the caller can
+delete files and retry. A missing Workspace file returns `file_not_found`. A missing owned resource
 returns `not_found`; an existing Sandbox without current compute returns
 `execution_node_unavailable`, or `generation_fenced` if the request names an old
 generation. Inactive Leases return `lease_fenced`. A file miss does not require a
