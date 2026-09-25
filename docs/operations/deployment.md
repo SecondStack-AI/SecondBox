@@ -2,14 +2,9 @@
 
 ## Release upgrade boundary
 
-v0.16.0 adds no migration and keeps Runner protocol generation 5, so a v0.15.0 deployment updates in place.
-v0.15.0 accepts the exact migration baseline published by v0.14.0 and applies forward migrations while preserving its ledger and Workspaces.
-Stop active Sandboxes, take a coordinated backup, and update the control plane and all Runners together to protocol generation 5.
-The fixed-Profile signed guest bundle does not change.
-Other checksum mismatches remain errors; do not reset migration records to bypass them.
-See the target release notes for older clean-install boundaries.
-A new database cannot recover another deployment's Workspaces.
-Rollback after migration restores the previous release with its coordinated database, Runner storage, signed assets, and credentials.
+v0.17.0 ships a new signed Firecracker bundle. Its runtime and toolchain component digests change, so the guided updater refuses an in-place update. Retire Sandboxes, retain a coordinated backup, then reinstall with a fresh database and separate Runner storage root; recreate resources against the new signed asset catalog. A new database cannot recover another deployment's Workspaces. Keep the old database, storage, signed assets, and credentials together for rollback. See the [v0.17.0 release notes](../releases/v0.17.0.md).
+
+Historically, v0.16.0 allowed a v0.15.0 deployment to update in place because its bundle and migration baseline were unchanged. v0.15.0 accepted the exact v0.14.0 migration baseline and applied forward migrations. Other checksum mismatches remain errors; do not reset migration records to bypass them. See each target release's notes for its boundary.
 
 Each Runner selects one compute backend explicitly. RunnerPool backend homogeneity is control-plane-private and is sealed by the first healthy registration; operators cannot mutate or reset it. Profiles and public resources continue to name only the RunnerPool.
 
