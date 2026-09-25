@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,11 @@ import (
 
 func newScenarioAttributedSandbox(t *testing.T) (scenarioFixture, *secondboxclient.SandboxHandle, *net.UnixListener) {
 	t.Helper()
+	return newScenarioAttributedSandboxForProfile(t, "scenario-attributed")
+}
+
+func newScenarioAttributedSandboxForProfile(t *testing.T, profileName string) (scenarioFixture, *secondboxclient.SandboxHandle, *net.UnixListener) {
+	t.Helper()
 	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
 		t.Skip("Microsandbox does not support attributed execution")
 	}
@@ -29,7 +35,7 @@ func newScenarioAttributedSandbox(t *testing.T) (scenarioFixture, *secondboxclie
 	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateStopped)
 	*spec.Network.RequiresTenantEgressContext = true
 	spec.AttributedExecution = &contracts.AttributedExecutionPolicy{Gateway: "execution.secondbox.internal", MaximumConnections: 2}
-	profile := createScenarioProfile(t, fixture, "scenario-attributed", spec)
+	profile := createScenarioProfile(t, fixture, profileName, spec)
 	handle, created := createScenarioSandbox(t, fixture, profile, "attributed")
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
@@ -344,5 +350,168 @@ func TestScenarioStartupFailureLifecycleRecovery(t *testing.T) {
 				t.Fatalf("retired Sandbox still has an Instance: %+v", recovered)
 			}
 		})
+	}
+}
+
+func TestScenarioAttributedConnectionPolicyAdoptsNextGeneration(t *testing.T) {
+	const profileName = "scenario-attributed-connections"
+	fixture, handle, gateway := newScenarioAttributedSandboxForProfile(t, profileName)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	stopped := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateStopped)
+	pinned := stopped.ProfileRevisionID
+	profile, err := fixture.admin.GetProfile(ctx, profileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := profile.CurrentRevision.Spec
+	permission := *spec.AttributedExecution
+	permission.MaximumConnections = 128
+	spec.AttributedExecution = &permission
+	spec.AttributedExecutionCeiling = contracts.AttributedExecutionConnectionLimits{MaximumConnections: 4096}
+	if _, err := fixture.admin.ReviseProfile(ctx, profile.Name, profile.Revision, secondboxclient.ReviseProfileRequest{Spec: spec}, uniqueScenarioKey(t, "connection-grant")); err != nil {
+		t.Fatal(err)
+	}
+	tenant, subject := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TENANT_REF"), requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_SUBJECT_REF")
+	credential, err := fixture.admin.CreateTenantControllerAuthority(ctx, tenant, secondboxclient.CreateTenantControllerAuthorityRequest{ExpiresAt: time.Now().Add(time.Hour), Metadata: map[string]string{}}, uniqueScenarioKey(t, "connection-controller"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := secondboxclient.NewSecondBoxTenantControllerClient(fixture.baseURL, credential.BearerToken, fixture.httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := controller.GetSubjectSandboxPolicy(ctx, subject, profile.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := contracts.SubjectSandboxPolicy{Profile: profile.Name, Lifecycle: contracts.SandboxLifecycleLimits{IdleSeconds: policy.Effective.IdleSeconds, MaximumDurationSeconds: policy.Effective.MaximumDurationSeconds}}
+	// Each command holds the selected number of streams open, verifies that one
+	// extra stream is refused, then exchanges bytes on every admitted stream.
+	for _, count := range []int{8, 3} {
+		selection.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: int64(count)}
+		policy, err = controller.UpdateSubjectSandboxPolicy(ctx, subject, selection, policy.Revision, uniqueScenarioKey(t, "connection-selection"))
+		if err != nil || policy.AttributedExecution.MaximumConnections != int64(count) {
+			t.Fatalf("connection selection: %+v %v", policy, err)
+		}
+		expiry := time.Now().Add(45 * time.Second)
+		reference := fmt.Sprintf("connections-%d", count)
+		operation := requestScenarioLifecycle(t, ctx, handle, "connection-start", func(options secondboxclient.LifecycleOptions) (contracts.Operation, error) {
+			return handle.Start(ctx, secondboxclient.StartSandboxRequest{AttributedExecution: &contracts.AttributedExecutionRequest{AuthorizationRef: reference, ExpiresAt: expiry}}, options)
+		})
+		waitForScenarioOperation(t, ctx, fixture.subject, operation)
+		ready := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
+		if ready.ProfileRevisionID != pinned {
+			t.Fatal("numeric policy changed Sandbox pin")
+		}
+		if err := gateway.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		result := make(chan error, 1)
+		go func() {
+			var conns []*net.UnixConn
+			defer func() {
+				for _, conn := range conns {
+					conn.Close()
+				}
+			}()
+			for i := 0; i < count; i++ {
+				conn, err := gateway.AcceptUnix()
+				if err != nil {
+					result <- err
+					return
+				}
+				conns = append(conns, conn)
+				if err := conn.SetDeadline(expiry); err != nil {
+					result <- err
+					return
+				}
+				actual, err := egressattribution.ReadRunnerExecutionAttribution(conn, 0, expiry)
+				if err != nil {
+					result <- err
+					return
+				}
+				if actual.SandboxID != ready.ID || actual.Generation != ready.Generation || actual.AuthorizationRef != reference || actual.TenantRef != tenant || actual.SubjectRef != subject {
+					result <- fmt.Errorf("connection attribution crossed generation: %+v", actual)
+					return
+				}
+			}
+			for _, conn := range conns {
+				if _, err := conn.Write([]byte("ready\n")); err != nil {
+					result <- err
+					return
+				}
+			}
+			for _, conn := range conns {
+				// The guest sends this only after the bounded excess-connection
+				// probe finishes. Refusal must not revoke admitted streams.
+				ping := make([]byte, len("ping"))
+				if _, err := io.ReadFull(conn, ping); err != nil || string(ping) != "ping" {
+					result <- fmt.Errorf("admitted stream after refusal: %q, %v", ping, err)
+					return
+				}
+			}
+			// Netcat variants differ in stdin EOF handling. Independently prove
+			// that the extra connection never reached the gateway.
+			if err := gateway.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				result <- err
+				return
+			}
+			extra, err := gateway.AcceptUnix()
+			if err == nil {
+				extra.Close()
+				result <- errors.New("connection above selected limit reached gateway")
+				return
+			}
+			var timeout net.Error
+			if !errors.As(err, &timeout) || !timeout.Timeout() {
+				result <- fmt.Errorf("excess gateway connection check: %w", err)
+				return
+			}
+			for _, conn := range conns {
+				if _, err := conn.Write([]byte("ok\n")); err != nil {
+					result <- err
+					return
+				}
+				conn.Close()
+			}
+			result <- nil
+		}()
+		script := fmt.Sprintf(`set -eu
+endpoint=$SECONDBOX_EXECUTION_GATEWAY
+work=$(mktemp -d)
+pids=""
+trap 'for pid in $pids; do kill "$pid" 2>/dev/null || :; done; rm -rf "$work"' EXIT
+wait_line() {
+  for attempt in $(seq 1 100); do
+    if grep -qx "$1" "$2"; then return 0; fi
+    sleep 0.05
+  done
+  return 1
+}
+for i in $(seq 1 %d); do
+  mkfifo "$work/in-$i"
+  exec 3<>"$work/in-$i"
+  timeout 20 nc "${endpoint%%%%:*}" "${endpoint##*:}" <&3 >"$work/out-$i" &
+  pids="$pids $!"
+  exec 3>&-
+done
+for i in $(seq 1 %[1]d); do
+  wait_line ready "$work/out-$i"
+done
+timeout 3 nc "${endpoint%%%%:*}" "${endpoint##*:}" </dev/null >"$work/extra-out"
+test ! -s "$work/extra-out"
+for i in $(seq 1 %[1]d); do printf ping >"$work/in-$i"; done
+for i in $(seq 1 %[1]d); do wait_line ok "$work/out-$i"; printf ok; done`, count)
+		outcome := executeScenarioCommand(t, ctx, handle, script, 1024, "connection-exec")
+		if err := <-result; err != nil {
+			t.Fatal(err)
+		}
+		assertScenarioExited(t, outcome, 0, strings.Repeat("ok", count), "")
+		waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateStopped)
+	}
+	selection.AttributedExecution = nil
+	if _, err := controller.UpdateSubjectSandboxPolicy(ctx, subject, selection, policy.Revision, uniqueScenarioKey(t, "connection-inherit")); err != nil {
+		t.Fatal(err)
 	}
 }

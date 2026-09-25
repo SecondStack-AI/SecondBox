@@ -7133,6 +7133,9 @@
           },
           "lifecycleCeiling": {
             "$ref": "#/components/schemas/SandboxLifecycleLimits"
+          },
+          "attributedExecutionCeiling": {
+            "$ref": "#/components/schemas/AttributedExecutionConnectionLimits"
           }
         }
       },
@@ -10539,6 +10542,7 @@
         }
       },
       "SubjectSandboxPolicy": {
+        "description": "Complete replacement. Unchanged lifecycle or attributed blocks may retain stored desired values for the same Profile after grant tightening; effective policy still enforces current grants. New or changed blocks and Profile switches validate current grants. Lifecycle is required; omitted or null attributedExecution clears that selection.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -10551,6 +10555,17 @@
           },
           "lifecycle": {
             "$ref": "#/components/schemas/SandboxLifecycleLimits"
+          },
+          "attributedExecution": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttributedExecutionConnectionLimits"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omitted or null inherits the Profile default. PUT replaces the complete selection."
           }
         }
       },
@@ -10570,7 +10585,8 @@
           "retention",
           "quota",
           "tenantQuota",
-          "observedAt"
+          "observedAt",
+          "attributedExecution"
         ],
         "properties": {
           "subjectRef": {
@@ -10623,6 +10639,16 @@
           },
           "observedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "attributedExecution": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttributedExecutionConnectionObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -10703,6 +10729,52 @@
             ]
           }
         }
+      },
+      "AttributedExecutionConnectionLimits": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "maximumConnections"
+        ],
+        "properties": {
+          "maximumConnections": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 4096
+          }
+        },
+        "description": "Finite simultaneous open TCP connection selection or operator ceiling for attributed execution."
+      },
+      "AttributedExecutionConnectionObservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "defaultMaximumConnections",
+          "maximumConnections",
+          "maximumConnectionsCeiling"
+        ],
+        "properties": {
+          "defaultMaximumConnections": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 4096
+          },
+          "maximumConnections": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 4096
+          },
+          "maximumConnectionsCeiling": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 4096
+          }
+        },
+        "description": "Prospective numeric policy for the next attributed Assignment; existing Assignments retain their admitted limit."
       }
     }
   }

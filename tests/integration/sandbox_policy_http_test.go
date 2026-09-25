@@ -37,7 +37,7 @@ func TestSandboxPolicyHTTPPinsFutureLifecycleAndDelegatedBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	tenantRequest := persistedHTTPTenantRequest(name)
-	tenantRequest.AllowedProfileGrants = []string{name}
+	tenantRequest.AllowedProfileGrants = []string{name, name + "-other"}
 	tenant, err := operator.CreateTenant(t.Context(), tenantRequest, name)
 	if err != nil {
 		t.Fatal(err)
@@ -122,4 +122,161 @@ func TestSandboxPolicyHTTPPinsFutureLifecycleAndDelegatedBounds(t *testing.T) {
 		t.Fatalf("application effective policy = %+v", observed)
 	}
 	assertHTTPStatusAndClose(t, applicationRequest(t, http.MethodPut, server.URL+"/v1/subjects/"+name+"/sandbox-policy", app.BearerToken, name, name, "unauthorized", selection), http.StatusUnauthorized)
+	// Extend the same management contract without altering lifecycle pins.
+	profile, err := operator.GetProfile(t.Context(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.Network.RequiresTenantEgressContext = new(bool)
+	*spec.Network.RequiresTenantEgressContext = true
+	spec.AttributedExecution = &contracts.AttributedExecutionPolicy{Gateway: "gateway", MaximumConnections: 128}
+	spec.AttributedExecutionCeiling = contracts.AttributedExecutionConnectionLimits{MaximumConnections: 4096}
+	profile, err = operator.ReviseProfile(t.Context(), name, profile.Revision, secondboxclient.ReviseProfileRequest{Spec: spec}, name+"-connections")
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err = controller.GetSubjectSandboxPolicy(t.Context(), name, name)
+	if err != nil || initial.AttributedExecution == nil || initial.AttributedExecution.MaximumConnections != 128 || initial.AttributedExecution.MaximumConnectionsCeiling != 4096 {
+		t.Fatalf("inherited numeric policy: %+v %v", initial, err)
+	}
+	selection.Lifecycle = selected.Desired.Lifecycle
+	selection.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 256}
+	selected, err = controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, initial.Revision, name+"-numeric")
+	if err != nil || selected.AttributedExecution.MaximumConnections != 256 {
+		t.Fatalf("selected numeric policy: %+v %v", selected, err)
+	}
+	replay, err = controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, initial.Revision, name+"-numeric")
+	if err != nil || replay.Revision != selected.Revision || *replay.AttributedExecution != *selected.AttributedExecution {
+		t.Fatalf("numeric replay: %+v %v", replay, err)
+	}
+	selection.AttributedExecution.MaximumConnections = 512
+	if _, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, initial.Revision, name+"-numeric"); secondboxclient.ProblemCodeOf(err) != "idempotency_conflict" {
+		t.Fatalf("changed replay = %v", err)
+	}
+	spec.AttributedExecutionCeiling.MaximumConnections = 128
+	if _, err := operator.ReviseProfile(t.Context(), name, profile.Revision, secondboxclient.ReviseProfileRequest{Spec: spec}, name+"-tighten"); err != nil {
+		t.Fatal(err)
+	}
+	response = applicationRequest(t, http.MethodGet, server.URL+"/v1/subject-policy?profile="+name, app.BearerToken, name, name, "", nil)
+	decodeResponseJSON(t, response, &observed)
+	if observed.AttributedExecution.MaximumConnections != 128 || observed.Desired.AttributedExecution.MaximumConnections != 256 {
+		t.Fatalf("tightened observation: %+v %v", observed, err)
+	}
+	if _, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, selected.Revision, name+"-ceiling-denied"); secondboxclient.ProblemCodeOf(err) != "profile_policy_ceiling_exceeded" {
+		t.Fatalf("numeric ceiling error=%v", err)
+	}
+	for _, invalid := range []int64{0, -1, 4097} {
+		selection.AttributedExecution.MaximumConnections = invalid
+		if _, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, selected.Revision, fmt.Sprintf("%s-invalid-%d", name, invalid)); secondboxclient.ProblemCodeOf(err) != "invalid_request" {
+			t.Fatalf("numeric %d accepted: %v", invalid, err)
+		}
+	}
+	selection.AttributedExecution = nil
+	reset, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, selected.Revision, name+"-inherit")
+	if err != nil || reset.Desired.AttributedExecution != nil || reset.AttributedExecution.MaximumConnections != 128 {
+		t.Fatalf("numeric inheritance reset: %+v %v", reset, err)
+	}
+
+	assertSandboxPolicyPreservesUnchangedBlocks(t, operator, controller, name, spec, reset)
+
+}
+
+func assertSandboxPolicyPreservesUnchangedBlocks(t *testing.T, operator, controller *secondboxclient.Client, name string, spec contracts.ProfileRevisionSpec, current contracts.SubjectSandboxPolicyObservation) {
+	t.Helper()
+	sequence := 0
+	publish := func(profileName string, spec contracts.ProfileRevisionSpec) {
+		t.Helper()
+		profile, err := operator.GetProfile(t.Context(), profileName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sequence++
+		if _, err := operator.ReviseProfile(t.Context(), profileName, profile.Revision, secondboxclient.ReviseProfileRequest{Spec: spec}, fmt.Sprintf("%s-preserve-revision-%d", name, sequence)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply := func(selection contracts.SubjectSandboxPolicy) contracts.SubjectSandboxPolicyObservation {
+		t.Helper()
+		sequence++
+		result, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, current.Revision, fmt.Sprintf("%s-preserve-%d", name, sequence))
+		if err != nil {
+			t.Fatal(err)
+		}
+		current = result
+		return result
+	}
+	refuse := func(selection contracts.SubjectSandboxPolicy, code string) {
+		t.Helper()
+		sequence++
+		if _, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, current.Revision, fmt.Sprintf("%s-refuse-%d", name, sequence)); secondboxclient.ProblemCodeOf(err) != code {
+			t.Fatalf("want %s, got %v", code, err)
+		}
+	}
+	selection := contracts.SubjectSandboxPolicy{Profile: name, Lifecycle: contracts.SandboxLifecycleLimits{IdleSeconds: 300, MaximumDurationSeconds: 240}, AttributedExecution: &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 64}}
+	apply(selection)
+	spec.Lifecycle.IdleSeconds = 60
+	spec.Lifecycle.MaximumDurationSeconds = 120
+	spec.LifecycleCeiling = &contracts.SandboxLifecycleLimits{IdleSeconds: 60, MaximumDurationSeconds: 120}
+	publish(name, spec)
+	// A connection edit preserves both lifecycle values above their new ceilings.
+	selection.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 96}
+	priorRevision := current.Revision
+	selected := apply(selection)
+	if selected.Desired.Lifecycle != selection.Lifecycle || selected.Effective.IdleSeconds != 60 || selected.Effective.MaximumDurationSeconds != 120 || selected.AttributedExecution.MaximumConnections != 96 {
+		t.Fatalf("lifecycle preservation: %+v", selected)
+	}
+	replay, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, priorRevision, fmt.Sprintf("%s-preserve-%d", name, sequence))
+	if err != nil || replay.Revision != selected.Revision || replay.Desired.Lifecycle != selection.Lifecycle {
+		t.Fatalf("preservation replay: %+v %v", replay, err)
+	}
+	if _, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, priorRevision, name+"-preserve-stale"); secondboxclient.ProblemCodeOf(err) != "precondition_failed" {
+		t.Fatalf("stale preservation: %v", err)
+	}
+	changed := selection
+	changed.Lifecycle.IdleSeconds = 301
+	refuse(changed, "profile_policy_ceiling_exceeded")
+	// Switching Profile cannot carry either block's prior exception with it.
+	otherSpec := spec
+	otherSpec.AttributedExecution = &contracts.AttributedExecutionPolicy{Gateway: "gateway", MaximumConnections: 32}
+	otherSpec.AttributedExecutionCeiling = contracts.AttributedExecutionConnectionLimits{MaximumConnections: 32}
+	if _, err := operator.CreateProfile(t.Context(), secondboxclient.CreateProfileRequest{Name: name + "-other", Spec: otherSpec}, name+"-other"); err != nil {
+		t.Fatal(err)
+	}
+	changed = selection
+	changed.Profile = name + "-other"
+	refuse(changed, "profile_policy_ceiling_exceeded")
+	// A lifecycle edit can likewise preserve a now-above-ceiling connection value.
+	spec.AttributedExecution = &contracts.AttributedExecutionPolicy{Gateway: "gateway", MaximumConnections: 32}
+	spec.AttributedExecutionCeiling = contracts.AttributedExecutionConnectionLimits{MaximumConnections: 32}
+	publish(name, spec)
+	selection.Lifecycle = contracts.SandboxLifecycleLimits{IdleSeconds: 30, MaximumDurationSeconds: 60}
+	selected = apply(selection)
+	if selected.Desired.AttributedExecution.MaximumConnections != 96 || selected.AttributedExecution.MaximumConnections != 32 || selected.Effective.IdleSeconds != 30 {
+		t.Fatalf("connection preservation: %+v", selected)
+	}
+	changed = selection
+	changed.Profile = name + "-other"
+	refuse(changed, "profile_policy_ceiling_exceeded")
+	changed = selection
+	changed.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 95}
+	refuse(changed, "profile_policy_ceiling_exceeded")
+	// Removal of the head grant still allows preservation, but no changed value.
+	spec.AttributedExecution = nil
+	spec.AttributedExecutionCeiling = contracts.AttributedExecutionConnectionLimits{}
+	publish(name, spec)
+	selection.Lifecycle.IdleSeconds = 20
+	selected = apply(selection)
+	if selected.AttributedExecution != nil || selected.Desired.AttributedExecution.MaximumConnections != 96 {
+		t.Fatalf("removed grant preservation: %+v", selected)
+	}
+	changed = selection
+	changed.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 1}
+	refuse(changed, "invalid_request")
+	selection.AttributedExecution = nil
+	selected = apply(selection)
+	if selected.Desired.AttributedExecution != nil {
+		t.Fatal("omission did not clear desired connection policy")
+	}
+	selection.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 96}
+	refuse(selection, "invalid_request")
 }

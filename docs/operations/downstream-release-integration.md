@@ -62,3 +62,26 @@ npm install @secondstack-ai/secondbox@VERSION
 Production configuration must retain the digest-pinned control-plane and Runner image references and the installed verified artifact manifest. The independently configured microVM trust and asset identity must remain consistent with that manifest. Never replace release facts with version tags, `latest`, local builds, a source checkout, copied SDK files, copied Compose files, or consumer-owned standard-resource reconciliation.
 
 After publication, record the stable release and artifact-manifest URLs, the `SHA256SUMS` and artifact-manifest digests, npm integrity, OCI digests, binary checksums, standard Profile revision/spec digests, platform matrix, and protocol windows. Those immutable values are the canonical inputs to downstream SecondStack Agent Platform and Agent Claude integration work.
+
+### Attributed connection policy adoption
+
+Deploy a control plane and client with the delegated Subject connection contract,
+then explicitly apply the updated standard `agent-compartment` bundle. Its appended
+revision grants default 128 and ceiling 4096. Code deployment alone cannot raise an
+operator-owned grant. Existing attributed Sandboxes, including old two-connection
+pins, adopt the new numeric default on their next Assignment without recreation;
+their pinned gateway and all other authority remain unchanged. Active Assignments
+retain their admitted limit. The existing runner protocol already transports the
+finite numeric bound; retain normal compatible control-plane/runner release pins.
+
+CT writes the complete Subject Sandbox policy, preserving lifecycle and connection
+selections when editing either. Its first compatible upstream release must include
+the unchanged-block allowance for both lifecycle and attributed selections: a saved
+value for the same Profile remains valid in a complete PUT after operator tightening
+or removal of attributed permission. Effective resolution still enforces the grant.
+CT must not discard the saved desired value by clamping it before PUT.
+It can display prospective default, effective value,
+and ceiling from the policy read response, but must not label that value as active
+generation state. Downstream proxy limits are independent. No release version,
+artifact digest, or capacity claim is implied by this contract; use the actual
+published and verified release when updating downstream pins.

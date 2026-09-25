@@ -57,17 +57,17 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fresh.Results) != 8 || fresh.Results[1].Action != resourceapply.ActionCreate || fresh.Results[2].Action != resourceapply.ActionAppend || fresh.Results[3].Action != resourceapply.ActionAppend {
+	if len(fresh.Results) != 9 || fresh.Results[1].Action != resourceapply.ActionCreate || fresh.Results[2].Action != resourceapply.ActionAppend || fresh.Results[3].Action != resourceapply.ActionAppend {
 		t.Fatalf("fresh results = %#v", fresh.Results)
 	}
 	agent, err := client.GetProfile(t.Context(), standardresources.AgentCompartment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agent.Revisions) != 4 || agent.Revisions[0].Spec.Execution.MaximumDeadlineMilliseconds != 120000 || agent.CurrentRevision.Number != 4 || agent.CurrentRevision.Spec.Execution.MaximumDeadlineMilliseconds != 900000 {
+	if len(agent.Revisions) != 5 || agent.Revisions[0].Spec.Execution.MaximumDeadlineMilliseconds != 120000 || agent.CurrentRevision.Number != 5 || agent.CurrentRevision.Spec.Execution.MaximumDeadlineMilliseconds != 900000 {
 		t.Fatalf("fresh agent-compartment lineage = %#v", agent)
 	}
-	if policy := agent.CurrentRevision.Spec.AttributedExecution; policy == nil || policy.Gateway != standardresources.AgentGateway || policy.MaximumConnections != 2 {
+	if policy := agent.CurrentRevision.Spec.AttributedExecution; policy == nil || policy.Gateway != standardresources.AgentGateway || policy.MaximumConnections != 128 {
 		t.Fatalf("fresh agent-compartment attributed policy = %#v", policy)
 	}
 	isolated, err := client.GetProfile(t.Context(), standardresources.AgentCompartmentIsolated)

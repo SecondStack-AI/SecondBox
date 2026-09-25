@@ -29,6 +29,11 @@ func (service *ControlPlaneService) UpdateSubjectSandboxPolicy(ctx context.Conte
 	if err := request.Lifecycle.Validate(); err != nil {
 		return contracts.SubjectSandboxPolicyObservation{}, false, invalidRequest(err)
 	}
+	if request.AttributedExecution != nil {
+		if err := request.AttributedExecution.Validate(); err != nil {
+			return contracts.SubjectSandboxPolicyObservation{}, false, invalidRequest(err)
+		}
+	}
 	now := service.now().UTC()
 	input, err := service.adminIdempotency(principal, "subject.sandbox_policy.update", subjectRef, key, struct {
 		Revision int64

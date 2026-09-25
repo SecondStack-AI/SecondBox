@@ -52,7 +52,7 @@ Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:e
 
 ## Profile and revision
 
-A Profile is a stable operator-chosen name with an enabled state and current revision. Creation and each revision operation produce an immutable ProfileRevision. Updating the Profile only changes the revision selected by future Sandbox creation. Existing Sandboxes remain pinned; there is no silent migration.
+A Profile is a stable operator-chosen name with an enabled state and current revision. Creation and each revision operation produce an immutable ProfileRevision. Updating the Profile changes the revision selected by future Sandbox creation. Existing Sandboxes remain pinned. Only the attributed connection numeric default and ceiling follow the current head at each new Assignment, as described below.
 
 Every ProfileRevision contains:
 
@@ -70,7 +70,7 @@ An optional `attributedExecution` block permits a single-command generation thro
 
 An attributed start supplies an application authorization reference and an absolute expiry within the Profile execution limit. Admission requires stopped compute and an attributed-capable home Runner. The binding is stored with lifecycle intent and travels in the assignment under the Sandbox's Tenant and Subject. Firecracker and gVisor advertise this capability only with configured attributed routing. Routing and termination semantics are documented in [Networking and ports](networking-and-ports.md).
 
-The release-owned `agent-compartment` appends this permission to its existing ordinary policy, with the same logical Agent gateway and a limit of two simultaneous attributed connections per generation. This is the limit exercised by backend and public scenario qualification. Use the generated bundle identity: the attributed revision is 3 for baseline assets, 4 after a nonbaseline ordinary asset revision, and 2 for development. Earlier revisions remain immutable; existing Sandboxes keep their pinned revision. The isolated Profile retains `deny_all` networking and no attributed permission.
+The latest release-owned `agent-compartment` revision explicitly sets 128 simultaneous attributed TCP connections and an `attributedExecutionCeiling.maximumConnections` of 4096. Historical revisions, including the two-connection revisions, remain immutable. Existing attributed Sandboxes adopt the current numeric grant on their next Assignment; their pinned gateway and other authority do not change. The isolated Profile retains `deny_all` networking and no attributed permission. See [Configurable limits](configurable-limits.md#attributed-connection-policy) for delegation and fallback semantics.
 
 The assignment retains the execution binding and its one admitted exec session ID. Result cleanup cannot reopen that allowance, and changing lifecycle intent cannot remove the active assignment's restriction. Control-plane admission and the Runner permit bounded read-only files but refuse PTYs, ports, file writes, and another exec.
 

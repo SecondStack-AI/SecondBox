@@ -20,27 +20,30 @@ func (limits *SandboxLifecycleLimits) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// SubjectSandboxPolicy selects lifecycle policy for future Sandboxes of one Profile.
+// SubjectSandboxPolicy selects lifecycle for future Sandboxes and connection
+// policy for future attributed Assignments of one Profile.
 type SubjectSandboxPolicy struct {
-	Profile   string                 `json:"profile"`
-	Lifecycle SandboxLifecycleLimits `json:"lifecycle"`
+	Profile             string                               `json:"profile"`
+	Lifecycle           SandboxLifecycleLimits               `json:"lifecycle"`
+	AttributedExecution *AttributedExecutionConnectionLimits `json:"attributedExecution,omitempty"`
 }
 
 type SubjectSandboxPolicyObservation struct {
-	SubjectRef        string                 `json:"subjectRef"`
-	Revision          int64                  `json:"revision"`
-	Profile           string                 `json:"profile"`
-	ProfileRevisionID string                 `json:"profileRevisionId"`
-	Desired           *SubjectSandboxPolicy  `json:"desired"`
-	Effective         LifecyclePolicy        `json:"effective"`
-	Ceiling           SandboxLifecycleLimits `json:"ceiling"`
-	Resources         ResourcePolicy         `json:"resources"`
-	ResourceCeiling   ProfileResourceCeiling `json:"resourceCeiling,omitzero"`
-	Execution         ExecutionPolicy        `json:"execution"`
-	Retention         RetentionPolicy        `json:"retention"`
-	Quota             QuotaLimits            `json:"quota"`
-	TenantQuota       TenantQuota            `json:"tenantQuota"`
-	ObservedAt        time.Time              `json:"observedAt"`
+	SubjectRef          string                                    `json:"subjectRef"`
+	Revision            int64                                     `json:"revision"`
+	Profile             string                                    `json:"profile"`
+	ProfileRevisionID   string                                    `json:"profileRevisionId"`
+	Desired             *SubjectSandboxPolicy                     `json:"desired"`
+	Effective           LifecyclePolicy                           `json:"effective"`
+	Ceiling             SandboxLifecycleLimits                    `json:"ceiling"`
+	Resources           ResourcePolicy                            `json:"resources"`
+	ResourceCeiling     ProfileResourceCeiling                    `json:"resourceCeiling,omitzero"`
+	Execution           ExecutionPolicy                           `json:"execution"`
+	Retention           RetentionPolicy                           `json:"retention"`
+	Quota               QuotaLimits                               `json:"quota"`
+	TenantQuota         TenantQuota                               `json:"tenantQuota"`
+	ObservedAt          time.Time                                 `json:"observedAt"`
+	AttributedExecution *AttributedExecutionConnectionObservation `json:"attributedExecution"`
 }
 
 func (limits SandboxLifecycleLimits) Validate() error {

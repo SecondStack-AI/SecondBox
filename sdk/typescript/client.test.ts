@@ -1270,3 +1270,17 @@ test("Sandbox list forwards state and ID sets without losing metadata", async ()
   assert.deepEqual(url?.searchParams.getAll("metadata"), ["owner=agent"]);
   assert.throws(() => api.listSandboxes({ ids: Array(65).fill("sandbox-a") }));
 });
+
+test("Subject connection policy preserves finite selection, null inheritance and observation", async () => {
+  for (const selection of [{ maximumConnections: 256 }, null, undefined]) {
+    const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "controller", async (input, init) => {
+      const request = new Request(input, init);
+      const body = await request.json();
+      assert.deepEqual(body.attributedExecution, selection);
+      return Response.json({ revision: 8, attributedExecution: { defaultMaximumConnections: 128, maximumConnections: selection?.maximumConnections ?? 128, maximumConnectionsCeiling: 4096 } });
+    }, "tenant", "subject", "tenant_controller"));
+    const result = await api.updateSubjectSandboxPolicy("subject", 7, { profile: "agent", lifecycle: { idleSeconds: 60, maximumDurationSeconds: null }, attributedExecution: selection }, "connections");
+    assert.equal(result.attributedExecution?.maximumConnections, selection?.maximumConnections ?? 128);
+    assert.equal(result.attributedExecution?.maximumConnectionsCeiling, 4096);
+  }
+});

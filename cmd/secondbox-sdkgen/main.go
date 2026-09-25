@@ -27,6 +27,8 @@ var goContractSchemas = stringSet([]string{
 	"PositivePolicyLimit",
 	"AcquireLeaseRequest",
 	"AttributedExecutionPolicy",
+	"AttributedExecutionConnectionLimits",
+	"AttributedExecutionConnectionObservation",
 	"AttributedExecutionRequest",
 	"BootStageTiming",
 	"BootTiming",

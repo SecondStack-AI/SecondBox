@@ -88,6 +88,8 @@ export type {
   ProfilePage,
   ProfileRevisionSpec,
   AttributedExecutionRequest,
+  AttributedExecutionConnectionLimits,
+  AttributedExecutionConnectionObservation,
   StartSandboxRequest,
   Problem,
   RelocateSandboxRequest,

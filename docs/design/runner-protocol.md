@@ -135,3 +135,9 @@ Operator drain prevents new Sandbox homes, new Instance assignments, and new ope
 Heartbeat expiry marks the Runner unavailable and makes its Sandboxes unavailable. It never authorizes Workspace reassignment. Recovery requires the same stable Runner identity and local WorkspaceStore to return; see [Recovery and reconciliation](recovery-and-reconciliation.md).
 
 See [Service boundaries](service-boundaries.md), [Guest-agent protocol](guest-agent-protocol.md), and [Security](security.md).
+
+Attributed Assignment `maximum_connections` is resolved from the operator numeric
+grant and delegated Subject selection when the control plane durably creates the
+Assignment. Only this numeric bound follows current policy; gateway and other
+execution authority stay pinned to the Sandbox revision. Replay and reconnection
+reuse the admitted command, and policy edits never resize a running forwarder.

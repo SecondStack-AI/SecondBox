@@ -64,6 +64,12 @@ type ArgvCommand struct {
 	Mode       string   `json:"mode"`
 }
 
+// AttributedExecutionConnectionLimits Finite simultaneous open TCP connection selection or operator ceiling for attributed execution.
+type AttributedExecutionConnectionLimits = contracts.AttributedExecutionConnectionLimits
+
+// AttributedExecutionConnectionObservation Prospective numeric policy for the next attributed Assignment; existing Assignments retain their admitted limit.
+type AttributedExecutionConnectionObservation = contracts.AttributedExecutionConnectionObservation
+
 // AttributedExecutionPolicy Permits one isolated exec through the named installation gateway. Requires the Tenant egress context; it does not extend ordinary generation network policy.
 type AttributedExecutionPolicy = contracts.AttributedExecutionPolicy
 
@@ -889,6 +895,7 @@ type SubjectQuota struct {
 	MaxVcpuCount            PolicyLimit `json:"maxVcpuCount"`
 }
 
+// SubjectSandboxPolicy Complete replacement. Unchanged lifecycle or attributed blocks may retain stored desired values for the same Profile after grant tightening; effective policy still enforces current grants. New or changed blocks and Profile switches validate current grants. Lifecycle is required; omitted or null attributedExecution clears that selection.
 type SubjectSandboxPolicy = contracts.SubjectSandboxPolicy
 
 type SubjectSandboxPolicyObservation = contracts.SubjectSandboxPolicyObservation

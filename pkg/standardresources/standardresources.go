@@ -133,6 +133,14 @@ func ProfileLineage(name, runtimeDigest, toolchainDigest string) (resourceapply.
 		current.LifecycleCeiling = &secondboxclient.SandboxLifecycleLimits{IdleSeconds: secondboxclient.Unlimited, MaximumDurationSeconds: secondboxclient.Unlimited}
 		specs = append(specs, current)
 	}
+	if name == AgentCompartment {
+		current := specs[len(specs)-1]
+		attributed := *current.AttributedExecution
+		attributed.MaximumConnections = 128
+		current.AttributedExecution = &attributed
+		current.AttributedExecutionCeiling = secondboxclient.AttributedExecutionConnectionLimits{MaximumConnections: 4096}
+		specs = append(specs, current)
+	}
 	return profileFromSpecs(name, specs)
 }
 
@@ -158,6 +166,14 @@ func DevelopmentProfileLineage(name, runtimeDigest, toolchainDigest string) (res
 		current := specs[len(specs)-1]
 		current.Lifecycle.MaximumDurationSeconds = secondboxclient.Unlimited
 		current.LifecycleCeiling = &secondboxclient.SandboxLifecycleLimits{IdleSeconds: secondboxclient.Unlimited, MaximumDurationSeconds: secondboxclient.Unlimited}
+		specs = append(specs, current)
+	}
+	if name == AgentCompartment {
+		current := specs[len(specs)-1]
+		attributed := *current.AttributedExecution
+		attributed.MaximumConnections = 128
+		current.AttributedExecution = &attributed
+		current.AttributedExecutionCeiling = secondboxclient.AttributedExecutionConnectionLimits{MaximumConnections: 4096}
 		specs = append(specs, current)
 	}
 	return profileFromSpecs(name, specs)
