@@ -59,9 +59,25 @@ func readSubjectSandboxPolicy(ctx context.Context, tx pgx.Tx, tenantRef, subject
 		return result, fmt.Errorf("%w: %w", ports.ErrProfilePolicyCeilingExceeded, err)
 	}
 	spec := profile.CurrentRevision.Spec
+	attributed, err := spec.AttributedConnectionGrant()
+	if err != nil {
+		return result, err
+	}
+	if attributed != nil {
+		var requested *contracts.AttributedExecutionConnectionLimits
+		if selection != nil {
+			requested = selection.AttributedExecution
+		}
+		resolved, err := attributed.Resolve(requested)
+		if err != nil {
+			return result, err
+		}
+		attributed = &resolved
+	}
 	return contracts.SubjectSandboxPolicyObservation{
 		SubjectRef: subjectRef, Revision: subject.Revision, Profile: profileName, ProfileRevisionID: profile.CurrentRevision.ID,
-		Desired: selection, Effective: effective, Ceiling: spec.LifecycleCeilings(), Resources: spec.Resources, ResourceCeiling: spec.ResourceCeiling,
+		AttributedExecution: attributed,
+		Desired:             selection, Effective: effective, Ceiling: spec.LifecycleCeilings(), Resources: spec.Resources, ResourceCeiling: spec.ResourceCeiling,
 		Execution: spec.Execution, Retention: spec.Retention, Quota: subject.Quota, TenantQuota: tenant.AggregateQuota, ObservedAt: now.UTC(),
 	}, nil
 }
@@ -111,8 +127,39 @@ func (store *PostgresControlPlaneStore) UpdateSubjectSandboxPolicy(ctx context.C
 	if profile.State != "enabled" {
 		return result, receipt, ports.ErrProfileDisabled
 	}
-	if err := profile.CurrentRevision.Spec.ValidateLifecycleSelection(selection.Lifecycle); err != nil {
-		return result, receipt, fmt.Errorf("%w: %w", ports.ErrProfilePolicyCeilingExceeded, err)
+	previous, err := readSubjectSandboxSelection(ctx, tx, tenantRef, subjectRef, selection.Profile)
+	if err != nil {
+		return result, receipt, err
+	}
+	if err := selection.Lifecycle.Validate(); err != nil {
+		return result, receipt, fmt.Errorf("%w: %w", ports.ErrInvalidRequest, err)
+	}
+	// A complete PUT can preserve an unchanged desired block after an operator
+	// tightens its grant. The other block remains editable; effective resolution
+	// still enforces current ceilings. A different Profile has no prior selection.
+	if previous == nil || previous.Lifecycle != selection.Lifecycle {
+		if err := profile.CurrentRevision.Spec.ValidateLifecycleSelection(selection.Lifecycle); err != nil {
+			return result, receipt, fmt.Errorf("%w: %w", ports.ErrProfilePolicyCeilingExceeded, err)
+		}
+	}
+	if selection.AttributedExecution != nil {
+		if err := selection.AttributedExecution.Validate(); err != nil {
+			return result, receipt, fmt.Errorf("%w: %w", ports.ErrInvalidRequest, err)
+		}
+		unchanged := previous != nil && previous.AttributedExecution != nil &&
+			*previous.AttributedExecution == *selection.AttributedExecution
+		if !unchanged {
+			grant, err := profile.CurrentRevision.Spec.AttributedConnectionGrant()
+			if err != nil {
+				return result, receipt, err
+			}
+			if grant == nil {
+				return result, receipt, fmt.Errorf("%w: SecondBox Profile does not permit attributed execution", ports.ErrInvalidRequest)
+			}
+			if selection.AttributedExecution.MaximumConnections > grant.MaximumConnectionsCeiling {
+				return result, receipt, fmt.Errorf("%w: SecondBox attributed execution maximumConnections exceeds Profile ceiling", ports.ErrProfilePolicyCeilingExceeded)
+			}
+		}
 	}
 	encoded, err := json.Marshal(selection)
 	if err != nil {

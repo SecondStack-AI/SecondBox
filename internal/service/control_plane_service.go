@@ -1273,6 +1273,9 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	if spec.Network.RequiresTenantEgressContext == nil {
 		return invalidRequest(errors.New("SecondBox Profile network policy must explicitly state requiresTenantEgressContext"))
 	}
+	if _, err := spec.AttributedConnectionGrant(); err != nil {
+		return invalidRequest(err)
+	}
 	if policy := spec.AttributedExecution; policy != nil {
 		gateway, err := networkpolicycontract.NormalizeLogicalGatewayName(policy.Gateway)
 		if err != nil || gateway != policy.Gateway {

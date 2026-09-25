@@ -54,6 +54,18 @@ export interface ArgvCommand {
   readonly mode: "argv";
 }
 
+/** Finite simultaneous open TCP connection selection or operator ceiling for attributed execution. */
+export interface AttributedExecutionConnectionLimits {
+  readonly maximumConnections: number;
+}
+
+/** Prospective numeric policy for the next attributed Assignment; existing Assignments retain their admitted limit. */
+export interface AttributedExecutionConnectionObservation {
+  readonly defaultMaximumConnections: number;
+  readonly maximumConnections: number;
+  readonly maximumConnectionsCeiling: number;
+}
+
 /** Permits one isolated exec through the named installation gateway. Requires the Tenant egress context; it does not extend ordinary generation network policy. */
 export interface AttributedExecutionPolicy {
   readonly gateway: string;
@@ -595,6 +607,7 @@ export interface ProfileRevision {
 export interface ProfileRevisionSpec {
   readonly architecture: "amd64" | "arm64";
   readonly attributedExecution?: AttributedExecutionPolicy;
+  readonly attributedExecutionCeiling?: AttributedExecutionConnectionLimits;
   readonly execution: ExecutionPolicy;
   readonly lifecycle: LifecyclePolicy;
   readonly lifecycleCeiling?: SandboxLifecycleLimits;
@@ -925,12 +938,15 @@ export interface SubjectQuota {
   readonly maxVcpuCount: PolicyLimit;
 }
 
+/** Complete replacement. Unchanged lifecycle or attributed blocks may retain stored desired values for the same Profile after grant tightening; effective policy still enforces current grants. New or changed blocks and Profile switches validate current grants. Lifecycle is required; omitted or null attributedExecution clears that selection. */
 export interface SubjectSandboxPolicy {
+  readonly attributedExecution?: AttributedExecutionConnectionLimits | null;
   readonly lifecycle: SandboxLifecycleLimits;
   readonly profile: ProfileName;
 }
 
 export interface SubjectSandboxPolicyObservation {
+  readonly attributedExecution: AttributedExecutionConnectionObservation | null;
   readonly ceiling: SandboxLifecycleLimits;
   readonly desired: SubjectSandboxPolicy | null;
   readonly effective: LifecyclePolicy;

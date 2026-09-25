@@ -549,6 +549,8 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		assignmentCommand.EgressContext = *plan.egressContext
 	}
 	if plan.attributed != nil {
+		// The scheduler resolves only MaximumConnections from current numeric
+		// policy when it commits a new Assignment. Every other field stays pinned.
 		assignmentCommand.AttributedExecution = &runnerv1.AttributedExecution{
 			TenantRef: plan.tenantRef, SubjectRef: plan.subjectRef,
 			AuthorizationRef:   plan.attributed.AuthorizationRef,

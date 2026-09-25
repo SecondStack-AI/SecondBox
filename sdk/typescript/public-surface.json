@@ -49,6 +49,20 @@
     ],
     "optional": []
   },
+  "AttributedExecutionConnectionLimits": {
+    "required": [
+      "maximumConnections"
+    ],
+    "optional": []
+  },
+  "AttributedExecutionConnectionObservation": {
+    "required": [
+      "defaultMaximumConnections",
+      "maximumConnections",
+      "maximumConnectionsCeiling"
+    ],
+    "optional": []
+  },
   "AttributedExecutionPolicy": {
     "required": [
       "gateway",
@@ -681,6 +695,7 @@
     ],
     "optional": [
       "attributedExecution",
+      "attributedExecutionCeiling",
       "lifecycleCeiling",
       "resourceCeiling"
     ]
@@ -1067,10 +1082,13 @@
       "lifecycle",
       "profile"
     ],
-    "optional": []
+    "optional": [
+      "attributedExecution"
+    ]
   },
   "SubjectSandboxPolicyObservation": {
     "required": [
+      "attributedExecution",
       "ceiling",
       "desired",
       "effective",

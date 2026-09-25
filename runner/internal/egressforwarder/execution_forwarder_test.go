@@ -260,3 +260,32 @@ func TestExecutionForwarderGatewayLossClosesExistingRelays(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutionForwarderAdmitsConfiguredConnectionsAboveTwo(t *testing.T) {
+	gateway := testForwarderGateway(t)
+	attribution := forwarderTestAttribution()
+	address, cancel, done := startTestForwarder(t, gateway.Addr().String(), attribution, 8)
+	guests := make([]*net.TCPConn, 8)
+	upstreams := make([]*net.UnixConn, 8)
+	for i := range guests {
+		guests[i] = dialTestForwarder(t, address)
+		upstreams[i] = acceptForwarderAttribution(t, gateway, attribution)
+	}
+	excess := dialTestForwarder(t, address)
+	if n, err := excess.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+		t.Fatalf("capacity refusal=%d %v", n, err)
+	}
+	for i := range guests {
+		if _, err := guests[i].Write([]byte{byte(i)}); err != nil {
+			t.Fatal(err)
+		}
+		var b [1]byte
+		if _, err := io.ReadFull(upstreams[i], b[:]); err != nil || b[0] != byte(i) {
+			t.Fatalf("admitted stream %d: %v %v", i, b, err)
+		}
+	}
+	cancel()
+	if err := waitTestForwarder(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}

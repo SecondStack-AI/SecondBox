@@ -1,7 +1,9 @@
 # Configurable limits
 
 This contract targets clean initialization and newly created resources.
-There is no old-state adoption, Profile mutation, workspace resize, or live hardware update.
+The attributed connection limit is the narrow exception: existing attributed Sandboxes
+adopt current numeric policy on their next Assignment. There is no Profile mutation,
+workspace resize, or live hardware update.
 See the [deployment transition boundary](../operations/deployment.md#clean-initialization-boundary)
 before changing a deployment that already owns Workspaces.
 
@@ -72,7 +74,7 @@ Profiles and every Tenant/Subject quota are explicitly operator-selected.
 | `retention.snapshotRetentionSeconds` | seconds | Profile per Snapshot / 3600 | null means no automatic expiry | Snapshot creation and expiry worker | operator / new Sandbox, future Snapshot |
 | `ports[].maximumSessions` | count per named Sandbox port | Profile / no exposed ports | null | admission under Tenant/Subject locks | operator / new Sandbox |
 | `ports[].maximumSessionSeconds` | seconds | Profile / no exposed ports | unsupported: sessions require absolute expiry and renewable bound lease | port admission and runtime authority | operator / new Sandbox |
-| `attributedExecution.maximumConnections` | simultaneous connections | Profile generation / 2 | no: forwarder has explicit 1–4096 bound | attributed Runner forwarder | operator / new Sandbox |
+| `attributedExecution.maximumConnections` | simultaneous open TCP connections | attributed generation / 128 | no: finite 1–4096 | attributed Runner forwarder | operator default/ceiling, delegated Subject selection / next Assignment |
 | `quota.maxSandboxes` | durable Sandbox count | Tenant + Subject / explicit | null | create admission; stopped Workspaces retain charge | platform / controller; immediate admission |
 | `quota.maxActiveInstances`, `maxVcpuCount`, `maxMemoryBytes` | count / CPUs / bytes | Tenant + Subject / explicit | null | accepted running intent and Instance admission | platform / controller; immediate admission |
 | `quota.maxSnapshots`, `maxPortSessions`, `maxConcurrentOperations` | count | Tenant + Subject / explicit | null | Snapshot, unexpired port and operation admission | platform / controller; immediate admission |
@@ -108,6 +110,15 @@ for that Subject and Profile. PUT requires the complete `{profile,lifecycle}` ob
 A Subject has one selected Profile policy; creation with another granted Profile inherits
 that Profile's defaults. Reads do not apply desired configuration.
 
+A complete PUT may preserve an unchanged desired lifecycle or attributed-connection
+block for the same selected Profile, even after its operator ceiling tightens or
+attributed permission is removed. Equality compares all numeric values in that
+block. New or changed blocks must satisfy current grants; switching Profiles cannot
+carry this exception across. Both effective resolvers still enforce current grants,
+so retaining desired values adds no execution authority. Subject revision checks and
+idempotency still apply. Lifecycle remains required; omission or null clears only
+the optional attributed selection. Once cleared, reintroducing it is a new selection.
+
 `GET /v1/subject-usage` returns finite or null `available` per dimension and
 `constrainingScopes` (`subject`, `tenant`, `tenant_and_subject`, or `none`). It exposes no
 peer identities. Expired port sessions do not consume observed admission headroom.
@@ -116,10 +127,73 @@ fit the implementation's duration clock. These representation bounds are not unl
 
 The latest standard `agent-compartment` and `agent-compartment-isolated` revisions use
 60-second idle shutdown, null maximum runtime, and null delegated lifecycle ceilings.
-Published historical revision identities remain immutable. No existing Sandbox changes
-its pinned policy when those standard bundles are published.
+Published historical revision identities remain immutable. Existing Sandboxes retain their pinned lifecycle and execution authority. The latest
+`agent-compartment` revision additionally sets attributed connection default 128 and
+ceiling 4096, effective for existing attributed pins on their next Assignment.
 
 A newly requested finite lifecycle selection above its current Profile ceiling is rejected
 with `profile_policy_ceiling_exceeded`. If an operator subsequently publishes a tighter
 Profile ceiling, future effective policy is the minimum of the stored selection and that
 ceiling. Existing Sandboxes still retain their creation policy.
+
+## Attributed connection policy
+
+Controller policy PUT extends the complete lifecycle selection with an optional
+numeric selection. It retains the Subject revision (`If-Match: "revision-8"`),
+`Idempotency-Key`, existing audit, and Tenant Profile grants:
+
+```json
+{
+  "profile": "agent-compartment",
+  "lifecycle": {"idleSeconds": 60, "maximumDurationSeconds": null},
+  "attributedExecution": {"maximumConnections": 256}
+}
+```
+
+The optional object accepts only `maximumConnections`, an integer from 1 through
+4096. Omitting the object or sending `null` resets it to inheritance. PUT replaces
+the complete selection, so clients must preserve a saved connection selection when
+editing lifecycle alone. A gateway selector, null numeric value, or unlimited value
+is invalid. A new selection above the current Profile ceiling returns
+`profile_policy_ceiling_exceeded`; a new or changed selection without current attributed permission
+returns `invalid_request`. An unchanged stored selection may be preserved as above. Subject selection still applies to only its selected Profile.
+
+Both controller and application policy reads add nullable `attributedExecution`:
+
+```json
+{
+  "defaultMaximumConnections": 128,
+  "maximumConnections": 256,
+  "maximumConnectionsCeiling": 4096
+}
+```
+
+This projects the next Assignment's policy from the current Profile head; it does
+not report an active Assignment. It is null when that head has no attributed
+permission. Existing `effective` and `ceiling` fields continue to describe lifecycle.
+`desired` preserves the stored selection, including a value above a newly tightened
+ceiling, while the effective numeric value clamps to the ceiling.
+
+Operators may add `attributedExecutionCeiling: {"maximumConnections": 4096}` to a
+Profile revision. It requires attributed permission, a finite value from 1 through
+4096, and a ceiling at least the default in `attributedExecution.maximumConnections`.
+Omission makes that revision's default its ceiling; explicit null is invalid. The
+latest standard Agent revision supplies default 128 and ceiling 4096 explicitly.
+Custom Profiles have no implicit 128 floor. These policy bounds are not throughput
+or capacity qualifications.
+
+A new attributed Assignment must retain permission and gateway from its Sandbox's
+pinned revision. Only the numeric grant is read from the current head of the same
+Profile. If that head no longer permits attribution, the pinned default supplies
+both default and ceiling. One rule then applies: no matching selection uses the
+grant's default; a selection uses the minimum of its value and the grant's ceiling.
+For example, an old two-connection pin with a current 128/4096 grant inherits 128.
+If the head removes permission, a saved selection of 1 resolves to 1, and a saved
+selection of 128 resolves to 2. A non-attributed pin never gains permission.
+
+Resolution and command persistence share the scheduler's serializable transaction
+and retry mechanism. Replaying an existing Assignment uses its persisted command.
+Changes affect the next Assignment, including a pending start not yet assigned;
+concurrent updates and scheduling may serialize in either order. Policy updates do
+not resize active listeners, terminate connections, or change pinned gateway,
+network, assets, deadlines, lifecycle, resources, or execution authority.

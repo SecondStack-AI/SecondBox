@@ -328,6 +328,11 @@ func (store *PostgresStore) scheduleOnce(
 		},
 	}
 	controlMessage.GetAssignment().MessageId = ""
+	if attribution := controlMessage.GetAssignment().AttributedExecution; attribution != nil {
+		if err := resolveAttributedConnections(ctx, tx, locked, attribution); err != nil {
+			return DurableAssignment{}, false, err
+		}
+	}
 	controlMessage.GetAssignment().Sequence = 0
 	controlMessage.GetAssignment().Correlation.SandboxId = request.SandboxID
 	controlMessage.GetAssignment().Correlation.InstanceId = request.InstanceID

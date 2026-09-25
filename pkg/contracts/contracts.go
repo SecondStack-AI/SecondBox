@@ -156,6 +156,8 @@ type ProfileRevisionSpec struct {
 	Network               NetworkPolicy              `json:"network"`
 	Ports                 []PortPolicy               `json:"ports"`
 	AttributedExecution   *AttributedExecutionPolicy `json:"attributedExecution,omitempty"`
+	// Zero represents omission; field decoding rejects explicit zero and null.
+	AttributedExecutionCeiling AttributedExecutionConnectionLimits `json:"attributedExecutionCeiling,omitzero"`
 }
 
 // AttributedExecutionPolicy permits one isolated exec through a Runner-owned

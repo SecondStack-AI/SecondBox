@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"path/filepath"
 	"sync"
@@ -38,6 +39,7 @@ func ForwardAttributedExecution(parent context.Context, listener *net.TCPListene
 	var relays sync.WaitGroup
 	defer relays.Wait()
 	slots := make(chan struct{}, maxConnections)
+	refusalLogged := false
 	for {
 		guest, err := listener.AcceptTCP()
 		if err != nil {
@@ -55,6 +57,12 @@ func ForwardAttributedExecution(parent context.Context, listener *net.TCPListene
 		default:
 			// Capacity refusal closes the new connection without acquiring authority.
 			_ = guest.Close()
+			if !refusalLogged {
+				refusalLogged = true
+				slog.Warn("SecondBox attributed execution connection limit reached",
+					"maximum_connections", maxConnections, "sandbox_id", attribution.SandboxID,
+					"assignment_id", attribution.AssignmentID, "generation", attribution.Generation)
+			}
 			continue
 		}
 		relays.Add(1)

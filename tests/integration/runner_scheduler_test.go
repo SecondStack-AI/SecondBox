@@ -331,6 +331,19 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	if _, err := contextPool.Exec(t.Context(), `UPDATE secondbox.runners SET capabilities_json=capabilities_json || '["attributed-execution"]'::jsonb WHERE id=$1`, runnerID); err != nil {
 		t.Fatal(err)
 	}
+	// The Sandbox keeps its old gateway and two-connection pin while only the
+	// current head's numeric policy changes for the next Assignment.
+	if _, err := contextPool.Exec(t.Context(), `
+        INSERT INTO secondbox.profile_revisions(id,profile_name,revision_number,spec_json,created_at)
+        VALUES($1,'task4-profile',1,'{"attributedExecution":{"gateway":"gateway","maximumConnections":2}}',$3),
+              ($2,'task4-profile',2,'{"attributedExecution":{"gateway":"changed-gateway","maximumConnections":128},"attributedExecutionCeiling":{"maximumConnections":4096}}',$3);
+        INSERT INTO secondbox.profiles(name,state,current_revision_id,revision,created_at,updated_at)
+        VALUES('task4-profile','enabled',$2,2,$3,$3);
+        INSERT INTO secondbox.subjects(tenant_ref,ref,state,cleanup_state,cleanup_operation_id,quota_json,metadata_json,revision,created_at,updated_at)
+        VALUES('task4-project','task4-subject','active','none','','{}','{}',1,$3,$3)
+        ON CONFLICT (tenant_ref,ref) DO NOTHING`, pgx.QueryExecModeSimpleProtocol, profileRevisionID, profileRevisionID+"-head", now); err != nil {
+		t.Fatal(err)
+	}
 	firstScheduler, err := scheduler.NewPostgresStore(
 		t.Context(), scheduler.PostgresStoreConfig{
 			DatabaseURL: integrationDatabaseURL,
@@ -474,6 +487,30 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	if executionReference != "scheduler-command" || !executionExpiry.Equal(now.Add(2*time.Minute)) {
 		t.Fatalf("durable execution binding = %q %s", executionReference, executionExpiry)
+	}
+	var originalPayload []byte
+	if err := contextPool.QueryRow(t.Context(), "SELECT payload FROM secondbox.runner_commands WHERE assignment_id=$1", durableAssignment.ID).Scan(&originalPayload); err != nil {
+		t.Fatal(err)
+	}
+	var persisted runnerv1.ControlPlaneToRunner
+	if err := proto.Unmarshal(originalPayload, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if got := persisted.GetAssignment(); got.AttributedExecution.MaximumConnections != 128 || got.AttributedExecution.Gateway != "gateway" || got.ProfileRevisionId != profileRevisionID {
+		t.Fatalf("numeric adoption crossed pin: %v", got)
+	}
+	if _, err := contextPool.Exec(t.Context(), `UPDATE secondbox.subjects SET sandbox_policy_json='{"profile":"task4-profile","lifecycle":{"idleSeconds":60,"maximumDurationSeconds":null},"attributedExecution":{"maximumConnections":1}}' WHERE tenant_ref='task4-project' AND ref='task4-subject'`); err != nil {
+		t.Fatal(err)
+	}
+	if replay, created, err := firstScheduler.Schedule(t.Context(), admittedRequest); err != nil || created || replay.ID != durableAssignment.ID {
+		t.Fatalf("replay = %+v %t %v", replay, created, err)
+	}
+	var replayPayload []byte
+	if err := contextPool.QueryRow(t.Context(), "SELECT payload FROM secondbox.runner_commands WHERE assignment_id=$1", durableAssignment.ID).Scan(&replayPayload); err != nil {
+		t.Fatal(err)
+	}
+	if string(originalPayload) != string(replayPayload) {
+		t.Fatal("policy change rewrote admitted command")
 	}
 	admittedRequest.AssignmentCommand = proto.Clone(admittedRequest.AssignmentCommand).(*runnerv1.AssignmentCommand)
 	admittedRequest.AssignmentCommand.AttributedExecution.AuthorizationRef = "different-command"

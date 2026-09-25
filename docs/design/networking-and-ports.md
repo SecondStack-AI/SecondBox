@@ -45,6 +45,14 @@ and startup reconciliation sweeps any profile-scoped leftovers, including orphan
 tables. DNS pinning, protected-destination precedence, and the deny-all default are identical
 across both backends.
 
+At its admitted connection limit, the forwarder closes newly accepted sockets before
+connecting to the gateway or sending bytes. Clients can observe an immediate EOF.
+This finite safety bound counts open TCP streams, including idle persistent streams;
+it does not parse HTTP requests or produce HTTP status codes. The first capacity
+refusal per generation emits a bounded diagnostic. Existing relays remain usable and
+release their slots when closed. Subject policy changes apply only to the next
+Assignment; see [connection policy](configurable-limits.md#attributed-connection-policy).
+
 ## Tenant contexts and attributed execution
 
 A network-enabled Profile requires a Tenant egress context. Sandbox creation

@@ -96,7 +96,7 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 		}
 		wantRevisions := 1
 		if profile.Name == AgentCompartment {
-			wantRevisions = 4
+			wantRevisions = 5
 		}
 		if profile.Name == AgentCompartmentIsolated {
 			wantRevisions = 2
@@ -129,12 +129,13 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 		t.Fatalf("agent-compartment revision 2 changed more than its deadline: %#v", agent.Revisions)
 	}
 	currentAgent := agent.Revisions[len(agent.Revisions)-1].Spec
-	wantAttributed := &secondboxclient.AttributedExecutionPolicy{Gateway: AgentGateway, MaximumConnections: 2}
+	wantAttributed := &secondboxclient.AttributedExecutionPolicy{Gateway: AgentGateway, MaximumConnections: 128}
 	if !reflect.DeepEqual(currentAgent.AttributedExecution, wantAttributed) {
 		t.Fatalf("agent-compartment attributed policy = %#v", currentAgent.AttributedExecution)
 	}
 	previousAgent = agent.Revisions[1].Spec
 	previousAgent.AttributedExecution = wantAttributed
+	previousAgent.AttributedExecutionCeiling = secondboxclient.AttributedExecutionConnectionLimits{MaximumConnections: 4096}
 	previousAgent.Lifecycle.MaximumDurationSeconds = secondboxclient.Unlimited
 	previousAgent.LifecycleCeiling = &secondboxclient.SandboxLifecycleLimits{IdleSeconds: secondboxclient.Unlimited, MaximumDurationSeconds: secondboxclient.Unlimited}
 	if !reflect.DeepEqual(previousAgent, currentAgent) {
@@ -153,6 +154,7 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 	networkAgent := currentAgent
 	networkAgent.Network = isolatedSpec.Network
 	networkAgent.AttributedExecution = nil
+	networkAgent.AttributedExecutionCeiling = secondboxclient.AttributedExecutionConnectionLimits{}
 	if !reflect.DeepEqual(networkAgent, isolatedSpec) {
 		t.Fatalf("isolated Profile changed more than network policy: agent=%#v isolated=%#v", currentAgent, isolatedSpec)
 	}
@@ -199,7 +201,7 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agent.Revisions) != 5 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 3 {
+	if len(agent.Revisions) != 6 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 3 {
 		t.Fatalf("changed-bundle lineage = agent %#v coding %#v isolated %#v", agent.Revisions, coding.Revisions, isolated.Revisions)
 	}
 	priorAssetRevision := agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000)
@@ -230,7 +232,7 @@ func TestDevelopmentProfileLineageUsesOnlySyntheticAssets(t *testing.T) {
 		}
 		wantRevisions := 1
 		if name == AgentCompartment {
-			wantRevisions = 3
+			wantRevisions = 4
 		}
 		if name == AgentCompartmentIsolated {
 			wantRevisions = 2
@@ -244,6 +246,35 @@ func TestDevelopmentProfileLineageUsesOnlySyntheticAssets(t *testing.T) {
 		}
 		if spec.RuntimeBundleDigest != runtimeDigest || spec.ToolchainBundleDigest != toolchainDigest {
 			t.Fatalf("development %s assets = %#v", name, spec)
+		}
+	}
+}
+
+func TestAttributedConnectionRevisionPreservesHistoricalPrefix(t *testing.T) {
+	for _, development := range []bool{false, true} {
+		build := ProfileLineage
+		if development {
+			build = DevelopmentProfileLineage
+		}
+		profile, err := build(AgentCompartment, v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, revision := range profile.Revisions[:len(profile.Revisions)-1] {
+			if revision.Spec.AttributedExecutionCeiling != (secondboxclient.AttributedExecutionConnectionLimits{}) {
+				t.Fatal("rewrote historical ceiling")
+			}
+			if permission := revision.Spec.AttributedExecution; permission != nil && permission.MaximumConnections != 2 {
+				t.Fatal("rewrote historical default through shared pointer")
+			}
+		}
+		latest := profile.Revisions[len(profile.Revisions)-1].Spec
+		permission := *latest.AttributedExecution
+		permission.MaximumConnections = 2
+		latest.AttributedExecution = &permission
+		latest.AttributedExecutionCeiling = secondboxclient.AttributedExecutionConnectionLimits{}
+		if !reflect.DeepEqual(latest, profile.Revisions[len(profile.Revisions)-2].Spec) {
+			t.Fatal("connection revision changed unrelated policy")
 		}
 	}
 }
