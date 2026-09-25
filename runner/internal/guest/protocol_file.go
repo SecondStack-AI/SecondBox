@@ -159,16 +159,16 @@ func (c *protocolConnection) runProtocolFileRequest(state *protocolFileState) {
 	case guestv1.FileOperation_FILE_OPERATION_EXISTS:
 		c.existsProtocolPath(state)
 	case guestv1.FileOperation_FILE_OPERATION_MKDIR:
-		resp := c.service.server.executeMkdir(toolExecRequest{
+		err := c.service.server.mkdirWorkspace(toolExecRequest{
 			Path: state.request.WorkspaceRelativePath, Recursive: state.request.Recursive,
 		})
-		c.sendLegacyFileResponse(state, resp)
+		c.sendProtocolFileMutationResult(state, err)
 	case guestv1.FileOperation_FILE_OPERATION_REMOVE:
-		resp := c.service.server.executeRm(toolExecRequest{
+		err := c.service.server.removeWorkspace(toolExecRequest{
 			Path:      state.request.WorkspaceRelativePath,
 			Recursive: state.request.Recursive, Force: state.request.Force,
 		})
-		c.sendLegacyFileResponse(state, resp)
+		c.sendProtocolFileMutationResult(state, err)
 	default:
 		c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_INVALID_PATH, "file operation is unsupported")
 	}
@@ -294,21 +294,21 @@ func (c *protocolConnection) commitProtocolFileWrite(state *protocolFileState) {
 	}
 	if err := tmp.Chmod(mode); err != nil {
 		c.closeProtocolFile("close guest file temporary descriptor", tmp)
-		c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED, "file mode could not be applied")
+		c.sendFileTerminalRecorded(state, protocolFileErrorKind(err), "file mode could not be applied")
 		return
 	}
 	if _, err := tmp.Write(state.data); err != nil {
 		c.closeProtocolFile("close guest file temporary descriptor", tmp)
-		c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED, "file could not be written")
+		c.sendFileTerminalRecorded(state, protocolFileErrorKind(err), "file could not be written")
 		return
 	}
 	if err := tmp.Sync(); err != nil {
 		c.closeProtocolFile("close guest file temporary descriptor", tmp)
-		c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED, "file could not be synced")
+		c.sendFileTerminalRecorded(state, protocolFileErrorKind(err), "file could not be synced")
 		return
 	}
 	if err := tmp.Close(); err != nil {
-		c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED, "file could not be closed")
+		c.sendFileTerminalRecorded(state, protocolFileErrorKind(err), "file could not be closed")
 		return
 	}
 	if err := commitWorkspaceTemp(parent, tmpName); err != nil {
@@ -432,9 +432,9 @@ func (c *protocolConnection) existsProtocolPath(state *protocolFileState) {
 	}
 }
 
-func (c *protocolConnection) sendLegacyFileResponse(state *protocolFileState, response toolExecResponse) {
-	if response.Error != "" {
-		c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED, response.Error)
+func (c *protocolConnection) sendProtocolFileMutationResult(state *protocolFileState, err error) {
+	if err != nil {
+		c.sendFileTerminalRecorded(state, protocolFileErrorKind(err), "workspace mutation failed")
 		return
 	}
 	c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED, "")
@@ -455,7 +455,7 @@ func (c *protocolConnection) closeProtocolFile(action string, file *os.File) {
 }
 
 func (c *protocolConnection) sendProtocolFileOpenError(state *protocolFileState, err error) error {
-	kind := guestv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED
+	kind := protocolFileErrorKind(err)
 	detail := "workspace path could not be opened"
 	switch {
 	case errors.Is(err, errUnsafeWorkspacePath), errors.Is(err, unix.ELOOP):
@@ -466,6 +466,17 @@ func (c *protocolConnection) sendProtocolFileOpenError(state *protocolFileState,
 		detail = "workspace path was not found"
 	}
 	return c.sendFileTerminal(state, kind, detail)
+}
+
+func protocolFileErrorKind(err error) guestv1.FileTerminalKind {
+	switch {
+	case errors.Is(err, unix.ENOSPC), errors.Is(err, unix.EDQUOT):
+		return guestv1.FileTerminalKind_FILE_TERMINAL_KIND_WORKSPACE_FULL
+	case errors.Is(err, unix.EACCES), errors.Is(err, unix.EPERM):
+		return guestv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED
+	default:
+		return guestv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED
+	}
 }
 
 func (c *protocolConnection) sendFileTerminal(state *protocolFileState, kind guestv1.FileTerminalKind, detail string) error {

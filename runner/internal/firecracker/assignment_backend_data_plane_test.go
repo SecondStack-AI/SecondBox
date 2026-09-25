@@ -89,6 +89,7 @@ func TestRunnerFileTerminalMappings(t *testing.T) {
 		guestv1.FileTerminalKind_FILE_TERMINAL_KIND_CHECKSUM_MISMATCH: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CHECKSUM_MISMATCH,
 		guestv1.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED:    runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED,
 		guestv1.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED:         runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED,
+		guestv1.FileTerminalKind_FILE_TERMINAL_KIND_WORKSPACE_FULL:    runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_WORKSPACE_FULL,
 	}
 	for guest, want := range tests {
 		if got := runnerFileTerminalKind(guest); got != want {

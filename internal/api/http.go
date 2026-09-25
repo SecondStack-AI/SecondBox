@@ -1076,6 +1076,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusForbidden, "authorization_failed", "Exposed port is not permitted", false
 	case errors.Is(err, runnercontrol.ErrFilePermission):
 		return http.StatusForbidden, "file_permission_denied", "File operation permission denied", false
+	case errors.Is(err, runnercontrol.ErrWorkspaceFull):
+		return http.StatusInsufficientStorage, "workspace_full", "Workspace has no free space", false
 	case errors.Is(err, ports.ErrWorkspaceFileNotFound):
 		return http.StatusNotFound, "file_not_found", "Workspace file not found", false
 	case errors.Is(err, ports.ErrProfileNotFound),
