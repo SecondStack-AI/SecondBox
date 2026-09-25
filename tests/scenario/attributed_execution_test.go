@@ -492,14 +492,14 @@ wait_line() {
 for i in $(seq 1 %d); do
   mkfifo "$work/in-$i"
   exec 3<>"$work/in-$i"
-  timeout 20 nc "${endpoint%%%%:*}" "${endpoint##*:}" <&3 >"$work/out-$i" &
+  timeout 20 nc "${endpoint%%%%:*}" "${endpoint##*:}" <&3 >"$work/out-$i" 2>/dev/null &
   pids="$pids $!"
   exec 3>&-
 done
 for i in $(seq 1 %[1]d); do
   wait_line ready "$work/out-$i"
 done
-timeout 3 nc "${endpoint%%%%:*}" "${endpoint##*:}" </dev/null >"$work/extra-out"
+timeout 3 nc "${endpoint%%%%:*}" "${endpoint##*:}" </dev/null >"$work/extra-out" 2>/dev/null
 test ! -s "$work/extra-out"
 for i in $(seq 1 %[1]d); do printf ping >"$work/in-$i"; done
 for i in $(seq 1 %[1]d); do wait_line ok "$work/out-$i"; printf ok; done`, count)
