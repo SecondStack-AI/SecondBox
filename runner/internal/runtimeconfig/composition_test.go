@@ -112,6 +112,10 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS":   "10.211.0.0/16,192.168.50.0/24",
 		"SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG":             writeRuntimeContextConfig(t),
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM":       "10.201.0.10:53",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT":        "/var/lib/secondbox-runner/execution-images",
+		"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET":              "/run/secondbox-image-fetcher/fetcher.sock",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY":        "/etc/secondbox/execution-image-public.pem",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256": strings.Repeat("b", 64),
 	}
 	for name, value := range complete {
 		t.Setenv(name, value)
@@ -135,7 +139,11 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		len(composition.NetworkPolicy.CompileOptions.RunnerAddresses) != 2 ||
 		len(composition.NetworkPolicy.CompileOptions.ManagementPrefixes) != 2 ||
 		strings.Join(composition.NetworkPolicy.ContextNames(), ",") != "tenant-a,tenant-b" ||
-		composition.NetworkPolicy.DNSUpstream.String() != "10.201.0.10:53" {
+		composition.NetworkPolicy.DNSUpstream.String() != "10.201.0.10:53" ||
+		composition.ExecutionImageCacheRoot != complete["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"] ||
+		composition.ExecutionImageFetcherSocket != complete["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"] ||
+		composition.ExecutionImagePublicKeyPath != complete["SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY"] ||
+		composition.ExecutionImagePublicKeySHA256 != complete["SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256"] {
 		t.Fatalf("gVisor composition = %#v templateBytes=%d", composition, templateBytes)
 	}
 	t.Run("network profile", func(t *testing.T) {
@@ -161,6 +169,10 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS",
 		"SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT",
+		"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256",
 	} {
 		t.Run(required, func(t *testing.T) {
 			t.Setenv(required, "")

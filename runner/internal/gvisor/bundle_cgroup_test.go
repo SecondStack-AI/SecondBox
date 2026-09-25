@@ -101,3 +101,37 @@ func TestInstanceBundleRendersPidCeiling(t *testing.T) {
 		t.Fatalf("rendered pids limit = %+v, want %d", decoded.Linux.Resources.Pids, instancePidCeiling(4))
 	}
 }
+
+// TestInstanceBundleRootWritabilityFollowsItsSource proves the fixed flat root
+// stays read-only to the guest while a client-selected image root, like its
+// Firecracker boot, takes writes into runsc's in-memory overlay.
+func TestInstanceBundleRootWritabilityFollowsItsSource(t *testing.T) {
+	for _, writable := range []bool{false, true} {
+		dir := t.TempDir()
+		bundle := instanceBundle{
+			BundleDir: dir, FlatRootPath: filepath.Join(dir, "root"), RootWritable: writable,
+			AgentBinaryPath: filepath.Join(dir, "agent"), WorkspaceMountpoint: filepath.Join(dir, "mnt"),
+			SocketDirectory: filepath.Join(dir, "sockets"), RuntimePrivateDir: filepath.Join(dir, "private"),
+			InstanceID: "ins_1", SandboxID: "sbx_1", SandboxGeneration: 1,
+			GuestBuildID: "build", ImageDigest: "sha256:a", ToolchainDigest: "sha256:b",
+			VCPUCount: 1, MemoryBytes: 1 << 30, CgroupsPath: "/x/y",
+			NetworkNamespacePath: filepath.Join(dir, "netns"), ResolvConfPath: filepath.Join(dir, "resolv.conf"),
+		}
+		if err := writeInstanceBundle(bundle); err != nil {
+			t.Fatal(err)
+		}
+		spec, err := os.ReadFile(filepath.Join(dir, "config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct {
+			Root ociRoot `json:"root"`
+		}
+		if err := json.Unmarshal(spec, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Root.Path != bundle.FlatRootPath || decoded.Root.Readonly == writable {
+			t.Fatalf("root for writable=%v = %+v", writable, decoded.Root)
+		}
+	}
+}

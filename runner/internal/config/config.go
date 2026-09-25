@@ -402,3 +402,20 @@ func (reader contextReader) Read(buffer []byte) (int, error) {
 	}
 	return reader.reader.Read(buffer)
 }
+
+// VerifyPublicKeyFingerprint proves at startup that a configured signing key
+// parses and matches its independently pinned DER SHA-256 fingerprint.
+func VerifyPublicKeyFingerprint(path, fingerprint string) error {
+	if !filepath.IsAbs(path) || len(fingerprint) != sha256.Size*2 {
+		return fmt.Errorf("SecondBox signing key verification requires an absolute key path and a 64-hex fingerprint")
+	}
+	_, der, err := readPublicKey(path)
+	if err != nil {
+		return fmt.Errorf("SecondBox signing key %q: %w", path, err)
+	}
+	actual := sha256.Sum256(der)
+	if hex.EncodeToString(actual[:]) != fingerprint {
+		return fmt.Errorf("SecondBox signing key %q does not match its pinned fingerprint", path)
+	}
+	return nil
+}

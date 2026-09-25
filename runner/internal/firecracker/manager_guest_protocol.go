@@ -41,7 +41,7 @@ func (m *Manager) NegotiateAssignmentGuest(
 	ctx context.Context,
 	backendReference string,
 	assignmentID string,
-	start assignmentGuestProtocolStart,
+	start SignedBundleGuestStart,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -71,13 +71,9 @@ func (m *Manager) negotiateInstanceGuest(
 	inst *instance,
 	opts runtimemanager.StartOpts,
 ) error {
-	mandatory := make([]guestv1.GuestFeature, 0, len(opts.MandatoryGuestFeatures))
-	for _, name := range opts.MandatoryGuestFeatures {
-		feature, err := guestFeatureFromContractName(name)
-		if err != nil {
-			return err
-		}
-		mandatory = append(mandatory, feature)
+	mandatory, err := GuestFeaturesFromContractNames(opts.MandatoryGuestFeatures)
+	if err != nil {
+		return err
 	}
 	requested, err := requestedGuestProtocolFeatures()
 	if err != nil {

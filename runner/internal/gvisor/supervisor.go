@@ -30,6 +30,8 @@ const (
 	workspaceDescriptorIndex = 3
 	controlDescriptorIndex   = 4
 	statusDescriptorIndex    = 5
+	// Descriptor 6 is the Workspace writer-lock duplicate the child only holds.
+	rootImageDescriptorIndex = 7
 )
 
 // Control bytes the parent writes; closing the pipe acts as forced kill.
@@ -40,6 +42,7 @@ const (
 
 const (
 	workspaceMountFlags   = unix.MS_NOSUID | unix.MS_NODEV
+	rootImageMountFlags   = unix.MS_NOSUID | unix.MS_NODEV
 	statusLineByteBound   = 4096
 	ext4SuperblockOffset  = 1024
 	ext4UUIDWithinSB      = 0x68
@@ -55,6 +58,9 @@ type MountSupervisorPlan struct {
 	Mountpoint    string
 	ExpectedUUID  string
 	CapacityBytes int64
+	// RootMountpoint, when set, receives the inherited client-selected
+	// rootfs clone as the sandbox root; empty keeps the fixed flat root.
+	RootMountpoint string
 	// Hold keeps the attachment mounted with no compute; the runsc fields
 	// are then unused. This is the attachment-suite test mode.
 	Hold        bool
@@ -71,6 +77,9 @@ func (plan MountSupervisorPlan) arguments() []string {
 		"-mountpoint", plan.Mountpoint,
 		"-expected-uuid", plan.ExpectedUUID,
 		"-capacity-bytes", strconv.FormatInt(plan.CapacityBytes, 10),
+	}
+	if plan.RootMountpoint != "" {
+		arguments = append(arguments, "-root-mountpoint", plan.RootMountpoint)
 	}
 	if plan.Hold {
 		return append(arguments, "-hold")
@@ -132,19 +141,24 @@ func ignoreClosed(err error) error {
 
 // StartMountSupervisor launches the runner's own binary as the supervisor
 // child in a fresh mount namespace, passing the already-open workspace image
-// as an inherited descriptor. The parent keeps supervising: the child dies
-// with the parent, and the whole runsc tree dies with the child.
+// and any client-selected root image as inherited descriptors. The parent
+// keeps supervising: the child dies with the parent, and the whole runsc tree
+// dies with the child.
 func StartMountSupervisor(
 	selfExecutable string,
 	plan MountSupervisorPlan,
 	workspaceImage *os.File,
 	writerLock *os.File,
+	rootImage *os.File,
 ) (*SupervisorHandles, error) {
 	if err := plan.validate(); err != nil {
 		return nil, err
 	}
 	if workspaceImage == nil || writerLock == nil {
 		return nil, errors.New("SecondBox gVisor mount supervisor requires the workspace and writer-lock descriptors")
+	}
+	if (rootImage == nil) != (plan.RootMountpoint == "") {
+		return nil, errors.New("SecondBox gVisor mount supervisor root image and root mountpoint must be supplied together")
 	}
 	controlRead, controlWrite, err := os.Pipe()
 	if err != nil {
@@ -162,6 +176,9 @@ func StartMountSupervisor(
 	// descriptor closes. The supervisor never uses the descriptor; holding
 	// it is the point.
 	command.ExtraFiles = []*os.File{workspaceImage, controlRead, statusWrite, writerLock}
+	if rootImage != nil {
+		command.ExtraFiles = append(command.ExtraFiles, rootImage)
+	}
 	command.SysProcAttr = &syscall.SysProcAttr{
 		Unshareflags: syscall.CLONE_NEWNS,
 		Pdeathsig:    syscall.SIGKILL,
@@ -233,6 +250,7 @@ func parseMountSupervisorPlan(arguments []string) (MountSupervisorPlan, error) {
 	flags.StringVar(&plan.Mountpoint, "mountpoint", "", "workspace mountpoint")
 	flags.StringVar(&plan.ExpectedUUID, "expected-uuid", "", "expected ext4 UUID, 32 hex digits")
 	flags.Int64Var(&plan.CapacityBytes, "capacity-bytes", 0, "declared image capacity")
+	flags.StringVar(&plan.RootMountpoint, "root-mountpoint", "", "client-selected root image mountpoint")
 	flags.BoolVar(&plan.Hold, "hold", false, "hold the attachment without compute")
 	flags.StringVar(&plan.RunscPath, "runsc", "", "pinned runsc binary")
 	flags.StringVar(&plan.StateRoot, "state-root", "", "runsc state root")
@@ -264,8 +282,15 @@ func RunMountSupervisor(arguments []string) error {
 	if workspace == nil || control == nil || status == nil {
 		return errors.New("SecondBox gVisor mount supervisor descriptors are missing")
 	}
+	var rootImage *os.File
+	if plan.RootMountpoint != "" {
+		rootImage = os.NewFile(rootImageDescriptorIndex, "secondbox-gvisor-root-image")
+		if rootImage == nil {
+			return errors.New("SecondBox gVisor mount supervisor root image descriptor is missing")
+		}
+	}
 
-	if err := runSupervisedAttachment(plan, workspace, control, status); err != nil {
+	if err := runSupervisedAttachment(plan, workspace, rootImage, control, status); err != nil {
 		emitStatus(status, "terminal", "outcome=supervisor-failure", "detail="+boundToken(err.Error()))
 		return err
 	}
@@ -274,7 +299,7 @@ func RunMountSupervisor(arguments []string) error {
 
 func runSupervisedAttachment(
 	plan MountSupervisorPlan,
-	workspace, control, status *os.File,
+	workspace, rootImage, control, status *os.File,
 ) error {
 	// The namespace was unshared at exec; making the view recursively
 	// private keeps every attachment mount invisible to the host table.
@@ -303,6 +328,14 @@ func runSupervisedAttachment(
 	if err := probeWorkspaceReadWrite(plan.Mountpoint); err != nil {
 		return errors.Join(err, detachMount(plan.Mountpoint, loopFile))
 	}
+	var rootLoopFile *os.File
+	if rootImage != nil {
+		rootLoopFile, err = attachSelectedRoot(rootImage, plan.RootMountpoint)
+		if err != nil {
+			return errors.Join(err, detachMount(plan.Mountpoint, loopFile))
+		}
+		defer rootLoopFile.Close()
+	}
 	emitStatus(status, "ready",
 		"loop_device="+loopDevice, "pid="+strconv.Itoa(os.Getpid()), "rw_probe=ok")
 
@@ -313,11 +346,50 @@ func runSupervisedAttachment(
 		computeErr = superviseRunsc(plan, control, status)
 	}
 	detachErr := detachMount(plan.Mountpoint, loopFile)
+	if rootLoopFile != nil {
+		detachErr = errors.Join(detachErr, detachMount(plan.RootMountpoint, rootLoopFile))
+	}
 	if computeErr != nil || detachErr != nil {
 		return errors.Join(computeErr, detachErr)
 	}
 	emitStatus(status, "detached", "loop_device="+loopDevice)
 	return nil
+}
+
+// attachSelectedRoot mounts the unnamed client-selected rootfs clone as the
+// sandbox root. The clone belongs to this Instance alone, so the supervisor
+// may create the absent gVisor mount targets in it under the flat-root
+// contract before remounting it read-only; a root that violates the contract
+// fails the start instead of being repaired.
+func attachSelectedRoot(image *os.File, mountpoint string) (*os.File, error) {
+	if err := verifyExt4Magic(image); err != nil {
+		return nil, fmt.Errorf("client-selected root image: %w", err)
+	}
+	loopDevice, loopFile, err := attachLoopDescriptor(image)
+	if err != nil {
+		return nil, fmt.Errorf("client-selected root image: %w", err)
+	}
+	if err := os.MkdirAll(mountpoint, 0o700); err != nil {
+		return nil, errors.Join(fmt.Errorf("create root mountpoint: %w", err), clearLoop(loopFile))
+	}
+	if err := unix.Mount(loopDevice, mountpoint, "ext4", rootImageMountFlags, ""); err != nil {
+		return nil, errors.Join(fmt.Errorf("mount client-selected root image: %w", err), clearLoop(loopFile))
+	}
+	if err := PrepareFlatRoot(mountpoint); err != nil {
+		return nil, errors.Join(err, detachMount(mountpoint, loopFile), loopFile.Close())
+	}
+	if err := unix.Mount("", mountpoint, "", unix.MS_REMOUNT|unix.MS_RDONLY|rootImageMountFlags, ""); err != nil {
+		return nil, errors.Join(fmt.Errorf("remount client-selected root read-only: %w", err), detachMount(mountpoint, loopFile), loopFile.Close())
+	}
+	return loopFile, nil
+}
+
+func clearLoop(loopFile *os.File) error {
+	err := unix.IoctlSetInt(int(loopFile.Fd()), unix.LOOP_CLR_FD, 0)
+	if errors.Is(err, unix.ENXIO) {
+		err = nil
+	}
+	return errors.Join(err, loopFile.Close())
 }
 
 // probeWorkspaceReadWrite proves the mounted Workspace accepts durable
@@ -444,12 +516,8 @@ func verifyImageIdentity(image *os.File, expectedUUID string, capacityBytes int6
 		return fmt.Errorf("workspace image size %d differs from declared capacity %d",
 			info.Size(), capacityBytes)
 	}
-	magic := make([]byte, 2)
-	if _, err := image.ReadAt(magic, ext4SuperblockOffset+ext4MagicWithinSB); err != nil {
-		return fmt.Errorf("read ext4 magic: %w", err)
-	}
-	if uint16(magic[0])|uint16(magic[1])<<8 != ext4MagicLittleEndian {
-		return errors.New("workspace image is not an ext4 filesystem")
+	if err := verifyExt4Magic(image); err != nil {
+		return fmt.Errorf("workspace image: %w", err)
 	}
 	uuid := make([]byte, 16)
 	if _, err := image.ReadAt(uuid, ext4UUIDReadOffset); err != nil {
@@ -459,6 +527,17 @@ func verifyImageIdentity(image *os.File, expectedUUID string, capacityBytes int6
 	expected := strings.ToLower(strings.ReplaceAll(expectedUUID, "-", ""))
 	if actual != expected {
 		return fmt.Errorf("workspace image UUID %s differs from declared identity %s", actual, expected)
+	}
+	return nil
+}
+
+func verifyExt4Magic(image *os.File) error {
+	magic := make([]byte, 2)
+	if _, err := image.ReadAt(magic, ext4SuperblockOffset+ext4MagicWithinSB); err != nil {
+		return fmt.Errorf("read ext4 magic: %w", err)
+	}
+	if uint16(magic[0])|uint16(magic[1])<<8 != ext4MagicLittleEndian {
+		return errors.New("image is not an ext4 filesystem")
 	}
 	return nil
 }

@@ -23,6 +23,8 @@ func TestMountSupervisorPlanRoundTrip(t *testing.T) {
 		BundleDir:     "/run/secondbox/gvisor/instance-1/bundle",
 		ContainerID:   "sbx-instance-1",
 		RunscGlobal:   []string{"--network=sandbox", "--host-uds=all"},
+		// A client-selected image adds its root mountpoint to the plan.
+		RootMountpoint: "/run/secondbox/gvisor/instance-1/root",
 	}
 	arguments := plan.arguments()
 	if arguments[0] != MountSupervisorInvocation {
@@ -64,6 +66,28 @@ func TestMountSupervisorPlanValidation(t *testing.T) {
 	if err := incomplete.validate(); err == nil ||
 		!strings.Contains(err.Error(), "complete runsc launch identity") {
 		t.Fatalf("incomplete compute plan error = %v", err)
+	}
+}
+
+func TestStartMountSupervisorRequiresRootImageAndMountpointTogether(t *testing.T) {
+	descriptor, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer descriptor.Close()
+	plan := MountSupervisorPlan{
+		Mountpoint: "/run/mnt", ExpectedUUID: "31e40cd45f5a4b54a06e0123456789ab", CapacityBytes: 1 << 20, Hold: true,
+	}
+	withoutMountpoint := plan
+	if _, err := StartMountSupervisor("/nonexistent", withoutMountpoint, descriptor, descriptor, descriptor); err == nil ||
+		!strings.Contains(err.Error(), "must be supplied together") {
+		t.Fatalf("root image without mountpoint error = %v", err)
+	}
+	withoutImage := plan
+	withoutImage.RootMountpoint = "/run/root"
+	if _, err := StartMountSupervisor("/nonexistent", withoutImage, descriptor, descriptor, nil); err == nil ||
+		!strings.Contains(err.Error(), "must be supplied together") {
+		t.Fatalf("root mountpoint without image error = %v", err)
 	}
 }
 

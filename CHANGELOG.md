@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+gVisor Runners launch client-selected execution images, so applications that select a signed image on every create and start run without KVM. Every gVisor Runner now requires the image fetcher, a reflink-capable execution image cache, and the publisher key.
+
+### Added
+
+- Added client-selected execution images to the gVisor backend. The Runner verifies the same signed OCI artifact Firecracker consumes through the shared verifier, reflinks its `rootfs.ext4` into an unnamed per-Instance clone, and mounts it read-only as the sandbox root while its pinned `runsc` and guest agent launch it. gVisor Runners advertise `client-selected-image` readiness and serve `images:prepare`; the runner protocol is unchanged.
+- Added the unprivileged image fetcher and Skopeo to the `runner-gvisor` image, and an `image-fetcher` container with a node-local cache and per-Tenant registry Secret to the reference gVisor pod.
+
+### Changed
+
+- gVisor Runners require `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256`. The cache must support reflink and be disjoint from `SECONDBOX_GVISOR_RUNTIME_DIR`; a Runner without them, or whose cache cannot reflink, does not start. Deploy the fetcher beside each gVisor Runner before upgrading.
+
 ## 0.17.0 - 2026-09-25
 
 Delegated attributed connection limits and accurate full-Workspace file errors ship with a newly signed Firecracker bundle. The bundle changes the pinned runtime and toolchain identities, so existing deployments must reinstall and recreate resources; see the [v0.17.0 release notes](docs/releases/v0.17.0.md).

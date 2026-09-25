@@ -3,10 +3,11 @@ FROM docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5
 # The gVisor scenario runner needs the ext4 toolchain for the WorkspaceStore,
 # iproute2 for per-Instance network namespaces, and nftables for the
 # inet-family policy rendering. runsc, the guest agent, and the flat root
-# arrive as digest-verified bind mounts rather than baked layers.
+# arrive as digest-verified bind mounts rather than baked layers. The same
+# image runs the unprivileged image fetcher, which needs skopeo.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      ca-certificates e2fsprogs iproute2 nftables procps \
+      ca-certificates e2fsprogs iproute2 nftables procps skopeo \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 secondbox-runner \
     && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/secondbox-runner --create-home --shell /usr/sbin/nologin secondbox-runner \
@@ -17,6 +18,7 @@ RUN apt-get update \
     && test ! -e /sbin/agetty
 
 COPY --from=scenario /secondbox-runner /usr/local/bin/secondbox-runner
+COPY --from=scenario /secondbox-image-fetcher /usr/local/bin/secondbox-image-fetcher
 COPY LICENSE /usr/share/licenses/secondbox-runner/LICENSE
 
 USER 0:0

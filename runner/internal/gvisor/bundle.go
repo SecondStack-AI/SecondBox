@@ -15,8 +15,10 @@ import (
 )
 
 // The backend templates minimal OCI bundles directly: the pinned flat root is
-// the read-only rootfs (runsc's in-memory overlay supplies writability), and
-// every mutable surface enters through an explicit bind.
+// the read-only rootfs, and every mutable surface enters through an explicit
+// bind. A client-selected image root is instead writable to the guest, as the
+// image's Firecracker boot is: runsc's in-memory overlay absorbs every write,
+// and the host mount beneath it stays read-only.
 
 const (
 	guestWorkspacePath      = "/workspace"
@@ -94,6 +96,7 @@ type ociMemory struct {
 type instanceBundle struct {
 	BundleDir            string
 	FlatRootPath         string
+	RootWritable         bool
 	AgentBinaryPath      string
 	WorkspaceMountpoint  string
 	SocketDirectory      string
@@ -282,7 +285,7 @@ func writeInstanceBundle(bundle instanceBundle) error {
 			Env: []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 			Cwd: "/",
 		},
-		Root: ociRoot{Path: bundle.FlatRootPath, Readonly: true},
+		Root: ociRoot{Path: bundle.FlatRootPath, Readonly: !bundle.RootWritable},
 		Mounts: []ociMount{
 			{Destination: "/proc", Type: "proc", Source: "proc"},
 			{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs"},

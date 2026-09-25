@@ -95,6 +95,7 @@ Authenticate to the output registry before publication and push the exact refere
 The signing private key stays outside the OCI image.
 The Runner receives only the public key and its DER SHA-256 fingerprint.
 The output image is a distribution artifact, not a normal Linux process image.
+Firecracker Runners boot its kernel and rootfs; gVisor Runners use only its signed `rootfs.ext4` as the sandbox root with their own pinned guest agent.
 
 ## Release distribution and host materialization
 

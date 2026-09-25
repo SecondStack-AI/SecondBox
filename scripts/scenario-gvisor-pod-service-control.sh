@@ -29,7 +29,12 @@ for name in \
   SECONDBOX_SCENARIO_WORKSPACE_DIR \
   SECONDBOX_SCENARIO_RELOCATION_IDENTITY_DIR \
   SECONDBOX_SCENARIO_RELOCATION_STATE_DIR \
-  SECONDBOX_SCENARIO_RELOCATION_WORKSPACE_DIR; do
+  SECONDBOX_SCENARIO_RELOCATION_WORKSPACE_DIR \
+  SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR \
+  SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256 \
+  SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY \
+  SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY \
+  SECONDBOX_SCENARIO_PKI_DIR; do
   [[ -n "${!name:-}" ]] || fail "$name is required"
 done
 
@@ -109,13 +114,65 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: $service
+  annotations:
+    # Logs, exec, and diagnostics address the runner, not the fetcher sidecar.
+    kubectl.kubernetes.io/default-container: runner
   labels:
     app.kubernetes.io/name: $service
     org.secondbox.runner.qualification: scenario-suite
 spec:
   restartPolicy: Always
   terminationGracePeriodSeconds: 45
+  # The unprivileged fetcher owns the shared execution image cache.
+  initContainers:
+    - name: image-cache-owner
+      image: docker.io/library/$SECONDBOX_SCENARIO_RUNNER_IMAGE:latest
+      imagePullPolicy: Never
+      command: ["/bin/chown", "-R", "10002:10002", "/cache", "/registry"]
+      volumeMounts:
+        - name: execution-images
+          mountPath: /cache
+        - name: image-registry
+          mountPath: /registry
   containers:
+    - name: image-fetcher
+      image: docker.io/library/$SECONDBOX_SCENARIO_RUNNER_IMAGE:latest
+      imagePullPolicy: Never
+      command: ["/usr/local/bin/secondbox-image-fetcher"]
+      securityContext:
+        runAsUser: 10002
+        runAsGroup: 10002
+        runAsNonRoot: true
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      env:
+$(emit_env \
+  "SECONDBOX_IMAGE_FETCHER_SOCKET=/run/secondbox-image-fetcher/fetcher.sock" \
+  "SECONDBOX_IMAGE_FETCHER_TENANTS=/run/image-registry/tenants.json" \
+  "SECONDBOX_IMAGE_FETCHER_CACHE_ROOT=/cache" \
+  "SECONDBOX_IMAGE_FETCHER_REGISTRIES=$SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY" \
+  "SECONDBOX_IMAGE_FETCHER_CERTIFICATES=/run/image-registry/certificates" \
+  "SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY=/run/image-trust/public.pem" \
+  "SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY_SHA256=$SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256" \
+  "SECONDBOX_IMAGE_FETCHER_MAX_DOWNLOAD_BYTES=17179869184" \
+  "SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES=17179869184" \
+  "SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES=68719476736" \
+)
+      volumeMounts:
+        - name: execution-images
+          mountPath: /cache
+        - name: image-fetcher-socket
+          mountPath: /run/secondbox-image-fetcher
+        - name: image-registry
+          mountPath: /run/image-registry
+          readOnly: true
+        - name: execution-image-key
+          mountPath: /run/image-trust/public.pem
+          readOnly: true
+        - name: image-fetcher-tmp
+          mountPath: /tmp
     - name: runner
       image: docker.io/library/$SECONDBOX_SCENARIO_RUNNER_IMAGE:latest
       imagePullPolicy: Never
@@ -194,6 +251,10 @@ $(emit_env \
   "SECONDBOX_GVISOR_MAXIMUM_OPERATIONS=$SECONDBOX_SCENARIO_MAX_CONCURRENT_OPERATIONS_GLOBAL" \
   "SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=$SECONDBOX_SCENARIO_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES" \
   "SECONDBOX_GVISOR_NETWORK_PROFILE=$service_network_profile" \
+  "SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT=/var/lib/secondbox-execution-images" \
+  "SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET=/run/secondbox-image-fetcher/fetcher.sock" \
+  "SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY=/opt/secondbox-execution-image-public-key.pem" \
+  "SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256=$SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256" \
 )
       volumeMounts:
         - name: entrypoint
@@ -218,6 +279,13 @@ $(emit_env \
         - name: egress-contexts
           mountPath: /etc/secondbox-runner/egress-contexts.json
           subPath: egress-contexts.json
+          readOnly: true
+        - name: execution-images
+          mountPath: /var/lib/secondbox-execution-images
+        - name: image-fetcher-socket
+          mountPath: /run/secondbox-image-fetcher
+        - name: execution-image-key
+          mountPath: /opt/secondbox-execution-image-public-key.pem
           readOnly: true
   volumes:
     - name: entrypoint
@@ -252,6 +320,25 @@ $(emit_env \
       configMap:
         name: $service-egress-contexts
         defaultMode: 0o400
+    # Both scenario runner pods share one cache on the reflink filesystem.
+    - name: execution-images
+      hostPath:
+        path: $SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR
+        type: Directory
+    - name: image-fetcher-socket
+      emptyDir: {}
+    - name: image-registry
+      hostPath:
+        path: $SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY
+        type: Directory
+    - name: execution-image-key
+      hostPath:
+        path: $SECONDBOX_SCENARIO_PKI_DIR/execution-image.pub
+        type: File
+    - name: image-fetcher-tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Mi
 POD
   local timeout="${wait_timeout:-300}"
   kubectl wait --for=condition=Ready "pod/$service" --timeout="${timeout}s" >/dev/null ||

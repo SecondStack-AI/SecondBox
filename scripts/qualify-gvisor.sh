@@ -8,9 +8,16 @@ if [[ "${1:-}" == --host ]]; then
   for tool in docker go jq sha512sum findmnt flock; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
   filesystem="$(findmnt -n -o FSTYPE --target "$SECONDBOX_RUNNER_WORKSPACE_ROOT")"
   [[ "$filesystem" == xfs || "$filesystem" == btrfs ]] || fail 'local gVisor workspace must be XFS or Btrfs'
+  # The selected-image scenario launches the same release-signed microVM
+  # artifact as the Firecracker scenario, so that publisher key admits it.
+  [[ -n "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:-}" && -d "${SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG:-}" ]] ||
+    fail 'the gVisor selected-image scenario requires SECONDBOX_SCENARIO_EXECUTION_IMAGE and SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG'
+  [[ "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:-}" == /* && -f "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY" ]] ||
+    fail 'the gVisor selected-image scenario requires the release publisher key in SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY'
   if [[ "${2:-}" == --preflight ]]; then
     exec scripts/prepare-gvisor-qualification.sh --preflight
   fi
+  export SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY="$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"
   build="$(scripts/prepare-gvisor-qualification.sh)"
   # Preparation verified the exported materialization and preserved the numeric
   # owners covered by its flat-root digest. Consume it without rewriting assets.

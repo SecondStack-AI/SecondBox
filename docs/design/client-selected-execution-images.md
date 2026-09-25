@@ -53,7 +53,7 @@ The Runner independently verifies local bundle bytes and checks the assigned com
 Full verification hashes gigabytes, so the Runner verifies each bundle once and then admits later starts of the same bundle on the recorded filesystem identity of every verified file.
 Changed metadata forces one re-verification, and a Runner restart re-verifies each bundle it starts, the fixed Profile bundle included.
 A materialization report cannot overwrite assignment authority.
-Captured-file identity checks reject replacement between verification and Firecracker staging.
+Captured-file identity checks reject replacement between verification and backend staging.
 Failed verification does not select another image.
 
 ## Preparation without compute
@@ -76,7 +76,8 @@ An expired deadline fails the Operation rather than claiming complete coverage.
 ## Cache and storage
 
 The shared cache is keyed by digest, but access remains Tenant-authorized.
-It must share a filesystem with the microVM run directory, which the Runner checks at startup, because a start stages the selected rootfs by reflink and image bytes are never copied.
+A Firecracker cache must share a filesystem with the microVM run directory, which the Runner checks at startup, because a start stages the selected rootfs by reflink and image bytes are never copied.
+A gVisor Runner proves at startup that its cache filesystem can reflink into an unnamed file, for the same reason.
 Cross-process digest locks serialize publication and prevent eviction during local verification and launch.
 Only complete, verified directories enter the cache.
 Prepared entries retain a bounded expiry marker until the preparation deadline to close the preparation-to-launch eviction window.
@@ -93,9 +94,43 @@ The Runner therefore charges Workspace and Instance storage pressure for Sandbox
 
 ## Backend and workspace behavior
 
-The qualified selected-image backend is cold Firecracker on Linux amd64.
+The qualified selected-image backends are cold Firecracker and gVisor on Linux amd64.
 Only a supporting Runner advertises `client-selected-image`.
-Snapshot-resume Profiles, gVisor, and Microsandbox reject selected-image assignments until their materialization paths are implemented and qualified.
+Snapshot-resume Profiles and Microsandbox reject selected-image assignments until their materialization paths are implemented and qualified.
+
+## gVisor materialization
+
+gVisor consumes the same signed OCI artifact as Firecracker; applications publish one image for both backends.
+Retrieval, registry allowlist, Tenant authorization, signature and fingerprint checks, the cache, and its limits are the shared implementation above.
+The runner protocol does not change.
+Generation 5 already carries `RUNNER_FEATURE_CLIENT_SELECTED_IMAGE`, and a gVisor Runner reports `client-selected-image` readiness like Firecracker, which admits it to `images:prepare` targets and selected-image placement.
+Every gVisor Runner requires the image fetcher, cache root, and publisher key; there is no fixed-assets-only gVisor mode.
+
+The image supplies userspace only.
+The Runner uses the signed `rootfs.ext4` as the sandbox root and ignores the signed kernel, `shared.img`, `/init`, and the guest agent embedded in the image.
+The Runner's pinned materialization still supplies `runsc` and the guest agent, which runs as PID 1 exactly as with fixed assets.
+An assignment's runtime and toolchain assets must equal the image's signed components, the materialization agent must speak the assigned guest protocol generation, and it must implement every mandatory guest feature.
+The guest handshake reports the image's signed component digests and the materialization's build identity.
+
+A start verifies local bytes under the digest lock through the shared memoized verifier.
+The Runner then opens `rootfs.ext4`, requires the open file to match the verified identity, reflinks it into an unnamed inode on the cache filesystem, and releases the digest lock.
+Cache eviction after that point cannot affect the Instance.
+The mount supervisor attaches the clone to an auto-clearing loop device in its private mount namespace and mounts it `nosuid,nodev`.
+It creates only absent gVisor mount targets under the flat-root contract, then remounts the root read-only.
+`runsc` serves it read-only behind the same in-memory overlay as the fixed flat root.
+A root that violates the flat-root contract, such as a symlinked `/etc/resolv.conf`, fails the start; the Runner never repairs it.
+Teardown unmounts the root after the Workspace detaches.
+The unnamed clone is freed with its last descriptor, so a crashed Runner leaves no named staging file to sweep.
+
+A warm start costs one metadata identity check, one reflink, and one loop mount; a cold start first runs the existing preparation effect.
+The clone shares extents with the cache entry, and only mount metadata and created targets diverge.
+It is not charged against Workspace capacity.
+Guest writes to the root go to the sentry's memory overlay, which the Instance memory limit bounds.
+
+The trust boundary equals Firecracker's: the same publisher key, allowlist, and Tenant authorization admit the same bytes.
+One difference remains: the host kernel parses the signed ext4 root, where Firecracker leaves that to the guest kernel.
+The gVisor backend already mounts each guest-writable Workspace ext4 image in the host kernel, so a signed, verified, private, read-only root adds no new parser class.
+The guest reaches the root only through the gofer.
 
 An image change boots a new Instance against the same Workspace disk.
 The caller stops active compute before requesting another image.

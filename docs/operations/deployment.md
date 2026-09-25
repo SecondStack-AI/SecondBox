@@ -250,6 +250,7 @@ Run `secondbox-image-fetcher` as a separate unprivileged user with Skopeo, acces
 It must have no access to Workspaces, host devices, or the Docker socket.
 Configure its explicit `SECONDBOX_IMAGE_FETCHER_*` environment as shown in `deploy/compose.same-host-runner.yml`.
 The same-host package provisions this separate service and its mounts.
+A gVisor Runner uses the same fetcher, cache, socket, and publisher-key settings, but needs no run directory: its cache must itself support reflink; see [gVisor runtime](gvisor-runtime.md#client-selected-execution-images).
 
 ### Tenant registry access
 
