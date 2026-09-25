@@ -163,7 +163,9 @@ selected-image placement.
 
 A selected-image start verifies the cached signed bundle, reflinks its `rootfs.ext4` into an
 unnamed file, and mounts that clone read-only as the sandbox root inside the mount supervisor's
-private namespace. The supervisor creates only absent gVisor mount targets in the clone. An image
+private namespace. The supervisor creates only absent gVisor mount targets in the clone. As under
+Firecracker, the guest may write anywhere in that root: `runsc`'s in-memory overlay absorbs the
+writes, which count against the Instance memory limit and vanish when the Instance stops. An image
 whose root symlinks one of those targets, such as `/etc/resolv.conf`, fails the start. The signed
 kernel and `shared.img` are verified but not attached. The image's guest agent is ignored: the
 materialization's agent must speak the image's guest protocol generation and every mandatory guest

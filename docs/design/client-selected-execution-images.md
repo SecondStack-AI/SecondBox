@@ -117,7 +117,8 @@ The Runner then opens `rootfs.ext4`, requires the open file to match the verifie
 Cache eviction after that point cannot affect the Instance.
 The mount supervisor attaches the clone to an auto-clearing loop device in its private mount namespace and mounts it `nosuid,nodev`.
 It creates only absent gVisor mount targets under the flat-root contract, then remounts the root read-only.
-`runsc` serves it read-only behind the same in-memory overlay as the fixed flat root.
+The guest sees a writable root, as it does under Firecracker: `runsc` layers its in-memory overlay over the read-only mount, so writes never reach the clone.
+The fixed flat root stays read-only to the guest.
 A root that violates the flat-root contract, such as a symlinked `/etc/resolv.conf`, fails the start; the Runner never repairs it.
 Teardown unmounts the root after the Workspace detaches.
 The unnamed clone is freed with its last descriptor, so a crashed Runner leaves no named staging file to sweep.

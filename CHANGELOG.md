@@ -6,7 +6,7 @@ gVisor Runners launch client-selected execution images, so applications that sel
 
 ### Added
 
-- Added client-selected execution images to the gVisor backend. The Runner verifies the same signed OCI artifact Firecracker consumes through the shared verifier, reflinks its `rootfs.ext4` into an unnamed per-Instance clone, and mounts it read-only as the sandbox root while its pinned `runsc` and guest agent launch it. gVisor Runners advertise `client-selected-image` readiness and serve `images:prepare`; the runner protocol is unchanged.
+- Added client-selected execution images to the gVisor backend. The Runner verifies the same signed OCI artifact Firecracker consumes through the shared verifier, reflinks its `rootfs.ext4` into an unnamed per-Instance clone, and mounts it read-only as the sandbox root while its pinned `runsc` and guest agent launch it. As under Firecracker, guests may write to that root; the writes stay in `runsc`'s in-memory overlay. gVisor Runners advertise `client-selected-image` readiness and serve `images:prepare`; the runner protocol is unchanged.
 - Added the unprivileged image fetcher and Skopeo to the `runner-gvisor` image, and an `image-fetcher` container with a node-local cache and per-Tenant registry Secret to the reference gVisor pod.
 
 ### Changed
