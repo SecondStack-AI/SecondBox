@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.17.0 - 2026-09-25
+
+Delegated attributed connection limits and accurate full-Workspace file errors ship with a newly signed Firecracker bundle. The bundle changes the pinned runtime and toolchain identities, so existing deployments must reinstall and recreate resources; see the [v0.17.0 release notes](docs/releases/v0.17.0.md).
+
+### Added
+
+- Added a finite attributed TCP connection default and ceiling to Profile revisions and optional Subject selection. The latest standard `agent-compartment` revision grants a default of 128 and a ceiling of 4096. The numeric policy resolves on each new Assignment; active connections and pinned gateway authority remain unchanged ([#169](https://github.com/SecondStack-AI/SecondBox/pull/169)).
+
+### Fixed
+
+- Returned HTTP 507 `workspace_full` when a file mutation reaches Workspace capacity, including guest `ENOSPC` and `EDQUOT`, so clients can remove files and retry ([#168](https://github.com/SecondStack-AI/SecondBox/pull/168)).
+
 ## 0.16.0 - 2026-09-22
 
 Firecracker and gVisor guest executions receive the resolved Runner gateway endpoints in `SECONDBOX_RUNNER_GATEWAYS`.

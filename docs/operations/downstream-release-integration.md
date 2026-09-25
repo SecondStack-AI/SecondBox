@@ -5,11 +5,9 @@ version consistently for binaries, SDKs, images, and standard bundles. In the
 examples below, replace `VERSION` with the chosen numeric version. The tag and
 attached files identify one release; the publishing workflow does not rebuild them.
 
-For [v0.16.0](../releases/v0.16.0.md), a v0.15.0 deployment updates in place: the release adds no migration and keeps protocol generation 5.
-For [v0.15.0](../releases/v0.15.0.md), a v0.14.0 database can migrate forward without recreating resources or Workspaces.
-Stop active Sandboxes, take a coordinated backup, and update all control-plane and Runner processes to protocol generation 5.
-The fixed-Profile bundle and trust anchor remain those of [v0.12.0](../releases/v0.12.0.md).
-Older bundle and clean-install boundaries still require the procedure in their target release notes.
+For [v0.17.0](../releases/v0.17.0.md), the new signed Firecracker bundle changes runtime and toolchain identities. The guided updater refuses an in-place update. Retire Sandboxes, retain a coordinated backup, reinstall with a fresh database and separate Runner storage root, and recreate resources against the new bundle and standard revisions. The RSA trust anchor from v0.12.0 is retained. The release keeps Runner protocol generation 5 and the v0.15.0 migration baseline.
+
+Historically, [v0.16.0](../releases/v0.16.0.md) allowed v0.15.0 to update in place, and [v0.15.0](../releases/v0.15.0.md) accepted the exact v0.14.0 migration baseline. Other clean-install boundaries still require the procedure in their target release notes.
 The Go module's `retract` directives identify withdrawn versions.
 
 ## gVisor and the v6 artifact manifest
@@ -43,11 +41,11 @@ Select any explicit combination of `agent-compartment`, `durable-coding`, and `a
 
 For attributed execution, select an `agent-compartment` revision that declares
 `attributedExecution`, and configure its gateway's `attributed_socket` on the
-Runner host. Existing Sandboxes retain their pinned revision. Read the actual
+Runner host. Existing Sandboxes retain their pinned revision; an attributed generation resolves the numeric connection grant from the current Profile head on its next Assignment. Read the actual
 revision and spec digest from the selected release's standard bundle rather
 than deriving revision numbers from a version. The isolated Profile has no
 attributed permission. Read the public API and Runner protocol windows from the selected manifest
-(v0.16.0 uses version 1 and `[5,5]`). Attributed execution also requires the advertised `attributed-execution`
+(v0.17.0 uses version 1 and `[5,5]`). Attributed execution also requires the advertised `attributed-execution`
 capability. See [Profiles and authorization](../design/profiles-and-authorization.md).
 
 After readiness, log in with the platform token, create each Tenant and its tenant-controller authority, log in with the returned controller token, then create the Subject and application authority. Capture each bearer token from its successful creation response; it cannot be retrieved later. The source-free CLI sequence is documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). The repository scenario harness uses this same sequence and creates a separate application authority for the optional `sandbox:ports:direct` grant.
