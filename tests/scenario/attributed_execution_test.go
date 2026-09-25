@@ -386,8 +386,8 @@ func TestScenarioAttributedConnectionPolicyAdoptsNextGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	selection := contracts.SubjectSandboxPolicy{Profile: profile.Name, Lifecycle: contracts.SandboxLifecycleLimits{IdleSeconds: policy.Effective.IdleSeconds, MaximumDurationSeconds: policy.Effective.MaximumDurationSeconds}}
-	// Each command holds all its TCP streams open until the gateway has observed
-	// them all. The old two-connection bound cannot satisfy this handshake.
+	// Each command holds the selected number of streams open, verifies that one
+	// extra stream is refused, then exchanges bytes on every admitted stream.
 	for _, count := range []int{8, 3} {
 		selection.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: int64(count)}
 		policy, err = controller.UpdateSubjectSandboxPolicy(ctx, subject, selection, policy.Revision, uniqueScenarioKey(t, "connection-selection"))
@@ -422,6 +422,10 @@ func TestScenarioAttributedConnectionPolicyAdoptsNextGeneration(t *testing.T) {
 					return
 				}
 				conns = append(conns, conn)
+				if err := conn.SetDeadline(expiry); err != nil {
+					result <- err
+					return
+				}
 				actual, err := egressattribution.ReadRunnerExecutionAttribution(conn, 0, expiry)
 				if err != nil {
 					result <- err
@@ -433,14 +437,72 @@ func TestScenarioAttributedConnectionPolicyAdoptsNextGeneration(t *testing.T) {
 				}
 			}
 			for _, conn := range conns {
-				if _, err := conn.Write([]byte("ok")); err != nil {
+				if _, err := conn.Write([]byte("ready\n")); err != nil {
 					result <- err
 					return
 				}
 			}
+			for _, conn := range conns {
+				// The guest sends this only after the bounded excess-connection
+				// probe finishes. Refusal must not revoke admitted streams.
+				ping := make([]byte, len("ping"))
+				if _, err := io.ReadFull(conn, ping); err != nil || string(ping) != "ping" {
+					result <- fmt.Errorf("admitted stream after refusal: %q, %v", ping, err)
+					return
+				}
+			}
+			// Netcat variants differ in stdin EOF handling. Independently prove
+			// that the extra connection never reached the gateway.
+			if err := gateway.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				result <- err
+				return
+			}
+			extra, err := gateway.AcceptUnix()
+			if err == nil {
+				extra.Close()
+				result <- errors.New("connection above selected limit reached gateway")
+				return
+			}
+			var timeout net.Error
+			if !errors.As(err, &timeout) || !timeout.Timeout() {
+				result <- fmt.Errorf("excess gateway connection check: %w", err)
+				return
+			}
+			for _, conn := range conns {
+				if _, err := conn.Write([]byte("ok\n")); err != nil {
+					result <- err
+					return
+				}
+				conn.Close()
+			}
 			result <- nil
 		}()
-		script := fmt.Sprintf(`endpoint=$SECONDBOX_EXECUTION_GATEWAY; for i in $(seq 1 %d); do nc -w 25 "${endpoint%%:*}" "${endpoint##*:}" & done; wait`, count)
+		script := fmt.Sprintf(`set -eu
+endpoint=$SECONDBOX_EXECUTION_GATEWAY
+work=$(mktemp -d)
+pids=""
+trap 'for pid in $pids; do kill "$pid" 2>/dev/null || :; done; rm -rf "$work"' EXIT
+wait_line() {
+  for attempt in $(seq 1 100); do
+    if grep -qx "$1" "$2"; then return 0; fi
+    sleep 0.05
+  done
+  return 1
+}
+for i in $(seq 1 %d); do
+  mkfifo "$work/in-$i"
+  exec 3<>"$work/in-$i"
+  timeout 20 nc "${endpoint%%%%:*}" "${endpoint##*:}" <&3 >"$work/out-$i" &
+  pids="$pids $!"
+  exec 3>&-
+done
+for i in $(seq 1 %[1]d); do
+  wait_line ready "$work/out-$i"
+done
+timeout 3 nc "${endpoint%%%%:*}" "${endpoint##*:}" </dev/null >"$work/extra-out"
+test ! -s "$work/extra-out"
+for i in $(seq 1 %[1]d); do printf ping >"$work/in-$i"; done
+for i in $(seq 1 %[1]d); do wait_line ok "$work/out-$i"; printf ok; done`, count)
 		outcome := executeScenarioCommand(t, ctx, handle, script, 1024, "connection-exec")
 		if err := <-result; err != nil {
 			t.Fatal(err)
