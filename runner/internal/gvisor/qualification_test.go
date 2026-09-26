@@ -118,7 +118,7 @@ func TestAttachmentHoldRoundTripPreservesContentAndIdentity(t *testing.T) {
 		ExpectedUUID:  qualificationUUID,
 		CapacityBytes: 128 << 20,
 		Hold:          true,
-	}, image, writerLock)
+	}, image, writerLock, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestAttachmentSupervisorCrashAutoclearsAndRecovers(t *testing.T) {
 		ExpectedUUID:  qualificationUUID,
 		CapacityBytes: 128 << 20,
 		Hold:          true,
-	}, image, writerLock)
+	}, image, writerLock, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestAttachmentRejectsWrongIdentity(t *testing.T) {
 		ExpectedUUID:  "00000000-0000-0000-0000-000000000000",
 		CapacityBytes: 128 << 20,
 		Hold:          true,
-	}, image, writerLock)
+	}, image, writerLock, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

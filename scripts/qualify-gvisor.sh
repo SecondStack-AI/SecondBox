@@ -8,9 +8,16 @@ if [[ "${1:-}" == --host ]]; then
   for tool in docker go jq sha512sum findmnt flock; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
   filesystem="$(findmnt -n -o FSTYPE --target "$SECONDBOX_RUNNER_WORKSPACE_ROOT")"
   [[ "$filesystem" == xfs || "$filesystem" == btrfs ]] || fail 'local gVisor workspace must be XFS or Btrfs'
+  # The selected-image scenario launches the same release-signed microVM
+  # artifact as the Firecracker scenario, so that publisher key admits it.
+  [[ -n "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:-}" && -d "${SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG:-}" ]] ||
+    fail 'the gVisor selected-image scenario requires SECONDBOX_SCENARIO_EXECUTION_IMAGE and SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG'
+  [[ "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:-}" == /* && -f "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY" ]] ||
+    fail 'the gVisor selected-image scenario requires the release publisher key in SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY'
   if [[ "${2:-}" == --preflight ]]; then
     exec scripts/prepare-gvisor-qualification.sh --preflight
   fi
+  export SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY="$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"
   build="$(scripts/prepare-gvisor-qualification.sh)"
   # Preparation verified the exported materialization and preserved the numeric
   # owners covered by its flat-root digest. Consume it without rewriting assets.
@@ -39,6 +46,7 @@ vm_idle() {
 # This entry point runs in the dedicated VM, under a root systemd service.
 if [[ "${1:-}" == --guest ]]; then
   source "$2"
+  export SECONDBOX_SCENARIO_EXECUTION_IMAGE SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY
   export HOME=/root GOPATH=/root/go KUBECACHEDIR=/root/.kube/cache
   export PATH=/usr/local/bin/go/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
   export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
@@ -81,6 +89,12 @@ for key in QUALIFY_GVISOR_VM_DIR QUALIFY_GVISOR_REPO QUALIFY_GVISOR_BUILD_ROOT Q
   # Restrict remote paths to shell-safe absolute paths; no eval of operator values.
   [[ "${!key:-}" =~ ^/[a-zA-Z0-9_./-]+$ && "${!key}" != / && "${!key}" != *'/../'* ]] || fail "$key must be an absolute path without shell metacharacters"
 done
+# The pod placement launches the same release-signed selected image as the
+# host placement; its inputs travel into the VM with the source bundle.
+[[ -n "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:-}" && -f "${SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG:-}/tenants.json" ]] ||
+  fail 'the gVisor pod selected-image scenario requires SECONDBOX_SCENARIO_EXECUTION_IMAGE and SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG'
+[[ "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:-}" == /* && -f "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY" ]] ||
+  fail 'the gVisor pod selected-image scenario requires the release publisher key in SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY'
 [[ "${QUALIFY_GVISOR_SSH_PORT:-}" =~ ^[1-9][0-9]*$ ]] && ((QUALIFY_GVISOR_SSH_PORT <= 65535)) || fail 'invalid VM SSH port'
 [[ "${QUALIFY_GVISOR_SSH_USER:-}" =~ ^[a-z_][a-z0-9_-]*$ ]] || fail 'invalid VM SSH user'
 for file in disk.qcow2 seed.img id_ed25519 known_hosts; do
@@ -94,6 +108,9 @@ if [[ "${1:-}" == --preflight ]]; then
   if (echo >/dev/tcp/127.0.0.1/"$QUALIFY_GVISOR_SSH_PORT") 2>/dev/null; then
     { declare -f vm_idle; echo vm_idle; } | ssh_vm bash -s
     ssh_vm "test ! -e /dev/kvm && sudo -n true && test -d $QUALIFY_GVISOR_REPO/.git && test -x $QUALIFY_GVISOR_BUILD_ROOT/bin/runsc && test -d $QUALIFY_GVISOR_BUILD_ROOT/rootfs && test -f $QUALIFY_GVISOR_REFLINK_IMAGE && test -d $QUALIFY_GVISOR_REFLINK_MOUNT && sudo -n docker info >/dev/null && sudo -n k3s kubectl get nodes >/dev/null" || fail 'VM prerequisites failed'
+    # A cold selected-image fetch reserves 48 GiB of staging beside the cached image.
+    ssh_vm "mountpoint -q $QUALIFY_GVISOR_REFLINK_MOUNT || sudo -n mount -o loop $QUALIFY_GVISOR_REFLINK_IMAGE $QUALIFY_GVISOR_REFLINK_MOUNT; test \$(df --output=avail -B1G $QUALIFY_GVISOR_REFLINK_MOUNT | tail -n 1) -ge 64" ||
+      fail 'the VM reflink volume needs at least 64 GiB free for the selected-image scenario'
   fi
   exit
 fi
@@ -125,8 +142,13 @@ $ready || fail 'VM SSH did not become ready'
 git bundle create "$directory/source.bundle" HEAD
 ssh_vm "mkdir -m 700 $remote"
 scp "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$directory/source.bundle" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/source.bundle"
+scp -r "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/image-registry"
+scp "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/execution-image.pub"
 {
-  declare -p QUALIFY_GVISOR_REPO QUALIFY_GVISOR_BUILD_ROOT QUALIFY_GVISOR_REFLINK_IMAGE QUALIFY_GVISOR_REFLINK_MOUNT QUALIFY_GVISOR_SSH_USER run remote source_commit
+  SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG="$remote/image-registry"
+  SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY="$remote/execution-image.pub"
+  declare -p QUALIFY_GVISOR_REPO QUALIFY_GVISOR_BUILD_ROOT QUALIFY_GVISOR_REFLINK_IMAGE QUALIFY_GVISOR_REFLINK_MOUNT QUALIFY_GVISOR_SSH_USER run remote source_commit \
+    SECONDBOX_SCENARIO_EXECUTION_IMAGE SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY
 } >"$directory/guest.env"
 scp "${ssh_options[@]}" -P "$QUALIFY_GVISOR_SSH_PORT" "$directory/guest.env" "$QUALIFY_GVISOR_SSH_USER@127.0.0.1:$remote/guest.env"
 # The remote lock covers checkout and the complete chain, including other hosts.

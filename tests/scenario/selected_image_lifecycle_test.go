@@ -12,8 +12,10 @@ import (
 )
 
 func TestScenarioSelectedImagePreservesDigestAndWorkspace(t *testing.T) {
-	if requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "firecracker" {
-		t.Skip("Selected execution images require the Firecracker backend")
+	switch requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_COMPUTE_BACKEND") {
+	case "firecracker", "gvisor":
+	default:
+		t.Skip("Selected execution images require the Firecracker or gVisor backend")
 	}
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)
@@ -42,6 +44,9 @@ func TestScenarioSelectedImagePreservesDigestAndWorkspace(t *testing.T) {
 		requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_APPLICATION_TOKEN"),
 		requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TENANT_REF"),
 		requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_SUBJECT_REF"))
+	// Every signed execution image carries the builder's guest entrypoint; no
+	// fixed gVisor flat root does, so this proves the image supplies the root.
+	cli.success(t, ctx, "exec", ready.ID, "--", "/bin/sh", "-c", "test -x /usr/local/bin/secondbox-runner-guest-entrypoint")
 	cli.success(t, ctx, "exec", ready.ID, "--", "/bin/sh", "-c", "printf selected-image-persisted > /workspace/selected-image.txt")
 	scenarioCLITransition(t, ctx, cli, fixture, handle, ready.ID, "stop", sb.SandboxStateStopped)
 	scenarioCLITransition(t, ctx, cli, fixture, handle, ready.ID, "start", sb.SandboxStateReady)

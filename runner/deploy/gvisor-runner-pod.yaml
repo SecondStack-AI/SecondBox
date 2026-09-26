@@ -13,16 +13,26 @@
 #   volume; Workspace mounts stay inside the pod's mount namespaces;
 # - the data plane is proxied through the control plane by default. The
 #   optional hostPort below is the qualified direct-transport path; delete it
-#   to stay proxied-only.
+#   to stay proxied-only;
+# - client-selected execution images arrive through an unprivileged image
+#   fetcher container sharing the runner image; its cache is a node-local
+#   directory on a reflink-capable filesystem, because each start reflinks the
+#   signed rootfs out of it.
 apiVersion: v1
 kind: Pod
 metadata:
   name: secondbox-gvisor-runner
+  annotations:
+    kubectl.kubernetes.io/default-container: runner
   labels:
     app.kubernetes.io/name: secondbox-gvisor-runner
 spec:
   restartPolicy: Always
   terminationGracePeriodSeconds: 45
+  # Group-readable projected Secret and ConfigMap files for the fetcher; the
+  # fetcher refuses world-readable registry credentials.
+  securityContext:
+    fsGroup: 10002
   # Pin to one node of a dedicated pool: each runner owns its node's sandbox
   # budget, loop devices, and workspace volume.
   nodeName: OPERATOR_NODE_NAME
@@ -30,6 +40,15 @@ spec:
     - key: secondbox.ai/gvisor-runner
       operator: Exists
       effect: NoSchedule
+  # The unprivileged fetcher owns the execution image cache.
+  initContainers:
+    - name: image-cache-owner
+      image: ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:RELEASE_IMAGE_DIGEST
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/chown", "10002:10002", "/cache"]
+      volumeMounts:
+        - name: execution-images
+          mountPath: /cache
   containers:
     - name: runner
       image: ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:RELEASE_IMAGE_DIGEST
@@ -140,6 +159,16 @@ spec:
         # spaces, and link names.
         - name: SECONDBOX_GVISOR_NETWORK_PROFILE
           value: "0"
+        # Client-selected execution images: the shared cache, the fetcher's
+        # pod-local socket, and the independently pinned publisher key.
+        - name: SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT
+          value: /var/lib/secondbox-execution-images
+        - name: SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET
+          value: /run/secondbox-image-fetcher/fetcher.sock
+        - name: SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY
+          value: /etc/secondbox-execution-image-trust/public.pem
+        - name: SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256
+          value: "OPERATOR_EXECUTION_IMAGE_PUBLIC_KEY_SHA256"
       volumeMounts:
         - name: identity
           mountPath: /opt/secondbox-runner-identity
@@ -155,6 +184,62 @@ spec:
           mountPath: /etc/secondbox-runner/egress-contexts.json
           subPath: egress-contexts.json
           readOnly: true
+        - name: execution-images
+          mountPath: /var/lib/secondbox-execution-images
+        - name: image-fetcher-socket
+          mountPath: /run/secondbox-image-fetcher
+        - name: execution-image-trust
+          mountPath: /etc/secondbox-execution-image-trust
+          readOnly: true
+    # Retrieves and verifies client-selected images with no Workspace mounts,
+    # host devices, or privileges. Registry credentials reach only this
+    # container, never the runner or a sandbox.
+    - name: image-fetcher
+      image: ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:RELEASE_IMAGE_DIGEST
+      imagePullPolicy: IfNotPresent
+      command: ["/usr/local/bin/secondbox-image-fetcher"]
+      securityContext:
+        runAsUser: 10002
+        runAsGroup: 10002
+        runAsNonRoot: true
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      env:
+        - name: SECONDBOX_IMAGE_FETCHER_SOCKET
+          value: /run/secondbox-image-fetcher/fetcher.sock
+        - name: SECONDBOX_IMAGE_FETCHER_TENANTS
+          value: /etc/secondbox-image-registry/tenants.json
+        - name: SECONDBOX_IMAGE_FETCHER_CACHE_ROOT
+          value: /cache
+        - name: SECONDBOX_IMAGE_FETCHER_REGISTRIES
+          value: "OPERATOR_REGISTRY_HOSTS"
+        - name: SECONDBOX_IMAGE_FETCHER_CERTIFICATES
+          value: /etc/secondbox-image-registry/certificates
+        - name: SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY
+          value: /etc/secondbox-execution-image-trust/public.pem
+        - name: SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY_SHA256
+          value: "OPERATOR_EXECUTION_IMAGE_PUBLIC_KEY_SHA256"
+        - name: SECONDBOX_IMAGE_FETCHER_MAX_DOWNLOAD_BYTES
+          value: "OPERATOR_MAXIMUM_DOWNLOAD_BYTES"
+        - name: SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES
+          value: "OPERATOR_MAXIMUM_EXPANDED_BYTES"
+        - name: SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES
+          value: "OPERATOR_MAXIMUM_CACHE_BYTES"
+      volumeMounts:
+        - name: execution-images
+          mountPath: /cache
+        - name: image-fetcher-socket
+          mountPath: /run/secondbox-image-fetcher
+        - name: image-registry
+          mountPath: /etc/secondbox-image-registry
+          readOnly: true
+        - name: execution-image-trust
+          mountPath: /etc/secondbox-execution-image-trust
+          readOnly: true
+        - name: image-fetcher-tmp
+          mountPath: /tmp
   volumes:
     # Per-runner identity: the mTLS keypair and CA. The runner credential
     # rides the same Secret as its own key.
@@ -183,3 +268,26 @@ spec:
       configMap:
         name: secondbox-gvisor-runner-egress-contexts
         defaultMode: 0o400
+    # Node-local execution image cache on a reflink-capable (Btrfs/XFS)
+    # filesystem. The runner refuses to start when it cannot reflink here.
+    - name: execution-images
+      hostPath:
+        path: /var/lib/secondbox-execution-images
+        type: DirectoryOrCreate
+    - name: image-fetcher-socket
+      emptyDir: {}
+    # Per-Tenant registry authentication (tenants.json) and optional private
+    # registry CAs under certificates/<registry-host>/ca.crt.
+    - name: image-registry
+      secret:
+        secretName: secondbox-gvisor-runner-image-registry
+        defaultMode: 0o440
+    # The publisher public key only; the signing key never reaches the node.
+    - name: execution-image-trust
+      configMap:
+        name: secondbox-gvisor-runner-execution-image-trust
+        defaultMode: 0o440
+    - name: image-fetcher-tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Mi

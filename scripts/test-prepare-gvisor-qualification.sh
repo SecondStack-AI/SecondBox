@@ -126,11 +126,22 @@ set -euo pipefail
 [[ "$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION" == "$SECONDBOX_SCENARIO_GVISOR_BUILD/materialization.json" ]]
 [[ "$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST" == "$(jq -er .materializationDigest "$SECONDBOX_SCENARIO_GVISOR_BUILD/identity.json")" ]]
 [[ "$SECONDBOX_SCENARIO_ARTIFACT_MANIFEST_DIGEST" == "$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST" ]]
+[[ "$SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY" == "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY" ]]
 SCENARIO
 chmod +x "$temporary/bin/findmnt" scripts/test-scenario.sh
 export QUALIFY_GVISOR_HOST_BUILD_ROOT="$temporary/dispatch"
 export SECONDBOX_RUNNER_WORKSPACE_ROOT="$temporary/workspaces"
 mkdir "$SECONDBOX_RUNNER_WORKSPACE_ROOT"
+# The selected-image scenario inputs are required before preparation starts.
+export SECONDBOX_SCENARIO_EXECUTION_IMAGE=registry.example/secondbox/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000
+export SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG="$temporary/image-registry"
+export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$temporary/publisher.pem"
+if env -u SECONDBOX_SCENARIO_EXECUTION_IMAGE scripts/qualify-gvisor.sh --host --preflight 2>/dev/null; then
+  echo 'gVisor qualification accepted a missing selected image' >&2
+  exit 1
+fi
+mkdir "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG"
+: >"$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"
 scripts/qualify-gvisor.sh --host --preflight
 [[ ! -e "$QUALIFY_GVISOR_HOST_BUILD_ROOT" ]]
 scripts/qualify-gvisor.sh --host

@@ -272,7 +272,7 @@ services:
       - chown -R 10002:10002 /cache /socket /registry; chmod 0700 /cache /socket /registry
     network_mode: none
     volumes:
-      - ${SECONDBOX_SCENARIO_STATE_DIR:?scenario runner state is required}/execution-images:/cache
+      - ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR:?scenario execution image cache is required}:/cache
       - scenario-image-fetcher-socket:/socket
       - ${SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY:?scenario registry directory is required}:/registry
 
@@ -296,7 +296,7 @@ services:
       SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES: "17179869184"
       SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES: "68719476736"
     volumes:
-      - ${SECONDBOX_SCENARIO_STATE_DIR:?scenario runner state is required}/execution-images:/cache
+      - ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR:?scenario execution image cache is required}:/cache
       - scenario-image-fetcher-socket:/run/secondbox-image-fetcher
       - ${SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY:?scenario registry directory is required}:/run/image-registry:ro
       - ${SECONDBOX_SCENARIO_PKI_DIR:?scenario PKI is required}/execution-image.pub:/run/image-trust/public.pem:ro

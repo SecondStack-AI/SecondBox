@@ -900,24 +900,34 @@ func fenceTerminationEvidenceDigest(fence *runnerprotocol.AssignmentFence) strin
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-type assignmentGuestProtocolStart struct {
+// SignedBundleGuestStart is what one verified signed bundle grants an
+// assignment: its build identity, the component digests its guest reports,
+// and the mandatory guest features of both components.
+type SignedBundleGuestStart struct {
 	GuestBuildID            string
 	ImageManifestDigest     string
 	ToolchainManifestDigest string
 	MandatoryFeatures       []string
 }
 
-func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (assignmentGuestProtocolStart, error) {
+func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (SignedBundleGuestStart, error) {
 	if artifactDirectory == "" {
 		artifactDirectory = filepath.Dir(b.manager.cfg.MicroVMKernelPath)
 	}
+	return ResolveSignedBundleGuestStart(assignment, artifactDirectory)
+}
+
+// ResolveSignedBundleGuestStart matches an assignment's runtime and toolchain
+// assets to the signed manifest of an already verified bundle directory. Every
+// backend that launches a signed bundle's userspace shares this check.
+func ResolveSignedBundleGuestStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (SignedBundleGuestStart, error) {
 	manifestPath := filepath.Join(artifactDirectory, "manifest.json")
 	manifest, err := loadSignedArtifactManifest(manifestPath)
 	if err != nil {
-		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker assignment signed compatibility metadata: %w", err)
+		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle compatibility metadata: %w", err)
 	}
 	if len(assignment.Assets) != 2 {
-		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker assignment must select exactly runtime and toolchain assets")
+		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle assignment must select exactly runtime and toolchain assets")
 	}
 	runtimeAsset, err := matchAssignmentComponent(
 		assignment.Assets,
@@ -925,7 +935,7 @@ func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerproto
 		manifest,
 	)
 	if err != nil {
-		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker runtime asset: %w", err)
+		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle runtime asset: %w", err)
 	}
 	toolchainAsset, err := matchAssignmentComponent(
 		assignment.Assets,
@@ -933,20 +943,20 @@ func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerproto
 		manifest,
 	)
 	if err != nil {
-		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker toolchain asset: %w", err)
+		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle toolchain asset: %w", err)
 	}
 	if runtimeAsset == toolchainAsset {
-		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker runtime and toolchain assets must be distinct")
+		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle runtime and toolchain assets must be distinct")
 	}
 	if assignment.Assets[runtimeAsset].GuestProtocolGeneration !=
 		assignment.Assets[toolchainAsset].GuestProtocolGeneration {
-		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker runtime and toolchain guest generations differ")
+		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle runtime and toolchain guest generations differ")
 	}
 	features := mergeUniqueStrings(
 		manifest.RuntimeBundle.MandatoryGuestFeatures,
 		manifest.ToolchainBundle.MandatoryGuestFeatures,
 	)
-	return assignmentGuestProtocolStart{
+	return SignedBundleGuestStart{
 		GuestBuildID:            manifest.ArtifactVersion,
 		ImageManifestDigest:     manifest.RuntimeBundle.ManifestDigest,
 		ToolchainManifestDigest: manifest.ToolchainBundle.ManifestDigest,

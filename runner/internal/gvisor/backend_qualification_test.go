@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage/executionimagetest"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	runnerconformance "github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
@@ -67,10 +68,13 @@ func qualificationBuild(t *testing.T) (runsc, agent, rootfs string) {
 }
 
 type qualificationFixture struct {
-	backend  *AssignmentBackend
-	fence    *runnerprotocol.AssignmentFence
-	command  *runnerprotocol.AssignmentCommand
-	evidence *qualificationEvidenceSink
+	backend   *AssignmentBackend
+	fence     *runnerprotocol.AssignmentFence
+	command   *runnerprotocol.AssignmentCommand
+	evidence  *qualificationEvidenceSink
+	publisher *executionimagetest.Publisher
+	rootfs    string
+	imageRoot string
 }
 
 func newQualificationFixture(t *testing.T, suffix string) qualificationFixture {
@@ -152,6 +156,8 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+	publisher := executionimagetest.NewPublisher(t)
+	imageRoot := filepath.Join(qualificationRoot, "execution-images")
 	backend, err := NewAssignmentBackend(Config{
 		RunscPath: runsc, AgentPath: agent, FlatRootPath: rootfs,
 		MaterializationPath: manifestPath, MaterializationDigest: manifestDigest,
@@ -161,6 +167,10 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 		MaximumVCPUs:   2, MaximumMemoryBytes: 1 << 30,
 		MaximumDiskBytes: uint64(backendQualificationWorkspaceBytes),
 		MaximumInstances: 1, MaximumOperations: 8, WorkspaceStore: store,
+		ExecutionImageCacheRoot:       imageRoot,
+		ExecutionImageFetcherSocket:   filepath.Join(runtimeDir, "unused-fetcher.sock"),
+		ExecutionImagePublicKeyPath:   publisher.PublicKeyPath,
+		ExecutionImagePublicKeySHA256: publisher.PublicKeySHA256,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +212,10 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 		Correlation:    &runnerprotocol.Correlation{RequestId: "gvisor-request", OperationId: "gvisor-operation", LeaseId: "gvisor-lease"},
 		NetworkPolicy:  &runnerprotocol.NetworkPolicy{Mode: runnerprotocol.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL},
 	}
-	return qualificationFixture{backend: backend, fence: fence, command: command, evidence: evidence}
+	return qualificationFixture{
+		backend: backend, fence: fence, command: command, evidence: evidence,
+		publisher: publisher, rootfs: rootfs, imageRoot: imageRoot,
+	}
 }
 
 // TestQualifiedGVisorBackendBootsAgentAndWorkspace proves the complete

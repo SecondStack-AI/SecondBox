@@ -13,14 +13,15 @@ import (
 	"runtime"
 	"strings"
 
+	runnerconfig "github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 // Config is the complete, explicit immutable backend composition. A gVisor
-// runner requires no KVM, jailer, TAP, bridge, signature-key, or trust-anchor
-// configuration.
+// runner requires no KVM, jailer, TAP, or bridge configuration; its only
+// signature trust is the client-selected execution image publisher key.
 type Config struct {
 	RunscPath             string
 	AgentPath             string
@@ -41,6 +42,12 @@ type Config struct {
 	MaximumInstances   uint32
 	MaximumOperations  uint32
 	WorkspaceStore     *workspacestore.Store
+	// Client-selected images arrive through the host-private image fetcher
+	// into this cache; the backend only verifies and reflinks them.
+	ExecutionImageCacheRoot       string
+	ExecutionImageFetcherSocket   string
+	ExecutionImagePublicKeyPath   string
+	ExecutionImagePublicKeySHA256 string
 }
 
 type validatedConfig struct {
@@ -61,8 +68,9 @@ const maximumRuntimeDirLength = 107 - len("/0123456789abcdef/sockets/protocol.so
 // validateRuntimeDir refuses runtime directories whose startup reconciliation
 // - which removes every child - could destroy durable or unrelated data: the
 // filesystem root, symlinked paths, and any path that contains or is
-// contained by the WorkspaceStore root or the immutable flat root.
-func validateRuntimeDir(runtimeDir, workspaceRoot, flatRoot string) error {
+// contained by the WorkspaceStore root, the immutable flat root, or the
+// execution image cache.
+func validateRuntimeDir(runtimeDir, workspaceRoot, flatRoot, executionImageCacheRoot string) error {
 	if runtimeDir == "/" || filepath.Dir(runtimeDir) == "/" {
 		return fmt.Errorf("SecondBox gVisor runtime directory must be at least two levels below the filesystem root")
 	}
@@ -112,8 +120,9 @@ func validateRuntimeDir(runtimeDir, workspaceRoot, flatRoot string) error {
 		}
 	}
 	for name, protected := range map[string]string{
-		"WorkspaceStore root": workspaceRoot,
-		"flat root":           flatRoot,
+		"WorkspaceStore root":        workspaceRoot,
+		"flat root":                  flatRoot,
+		"execution image cache root": executionImageCacheRoot,
 	} {
 		// Overlap is checked on the configured spelling and on the fully
 		// resolved path: a protected root reachable through a symlink
@@ -151,13 +160,19 @@ func validateConfig(config Config) (validatedConfig, error) {
 		"runtime directory":        config.RuntimeDir,
 		"workspace root":           config.WorkspaceRoot,
 		"runner executable":        config.SelfExecutable,
+		"execution image cache":    config.ExecutionImageCacheRoot,
+		"image fetcher socket":     config.ExecutionImageFetcherSocket,
+		"execution image key":      config.ExecutionImagePublicKeyPath,
 	} {
 		if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
 			return validatedConfig{}, fmt.Errorf("SecondBox gVisor %s path must be clean and absolute", name)
 		}
 	}
-	if err := validateRuntimeDir(config.RuntimeDir, config.WorkspaceRoot, config.FlatRootPath); err != nil {
+	if err := validateRuntimeDir(config.RuntimeDir, config.WorkspaceRoot, config.FlatRootPath, config.ExecutionImageCacheRoot); err != nil {
 		return validatedConfig{}, err
+	}
+	if err := runnerconfig.VerifyPublicKeyFingerprint(config.ExecutionImagePublicKeyPath, config.ExecutionImagePublicKeySHA256); err != nil {
+		return validatedConfig{}, fmt.Errorf("SecondBox gVisor execution image publisher key: %w", err)
 	}
 	if config.MaximumVCPUs == 0 || config.MaximumMemoryBytes == 0 || config.MaximumDiskBytes == 0 ||
 		config.MaximumInstances == 0 || config.MaximumOperations == 0 {

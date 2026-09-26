@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
@@ -52,6 +53,9 @@ type activeAssignment struct {
 	instanceDir         string
 	reservation         capacityReservation
 	backendRef          string
+	// identity is the guest identity negotiated at launch and, for a
+	// client-selected image, the image the Instance reports.
+	identity guestLaunchIdentity
 	// launched closes when the claimed start finishes (successfully
 	// registered or removed after failure); nil on a completed assignment.
 	launched       chan struct{}
@@ -100,6 +104,7 @@ type AssignmentBackend struct {
 	networkSlots      map[uint32]bool
 	nftPath           string
 	enforcer          *firecracker.NFTablesNetworkPolicyEnforcer
+	executionImages   *executionimage.Manager
 }
 
 type cleanupStack struct {
@@ -196,8 +201,18 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox gVisor network enforcement requires nft: %w", err)
 	}
+	executionImages, err := executionimage.NewVerifier(
+		validated.ExecutionImageCacheRoot, validated.ExecutionImagePublicKeyPath, validated.ExecutionImagePublicKeySHA256,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox gVisor execution images: %w", err)
+	}
+	if err := executionImages.ProbeRootfsCloning(); err != nil {
+		return nil, fmt.Errorf("SecondBox gVisor execution images: %w", err)
+	}
 	dnsListen := netip.MustParseAddr(dnsAddressForProfile(config.NetworkProfile))
 	return &AssignmentBackend{
+		executionImages:   executionImages,
 		config:            validated,
 		nftPath:           nftPath,
 		assignments:       make(map[string]*activeAssignment),
@@ -343,6 +358,7 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 			},
 			SnapshotResumeReady:      false,
 			AttributedExecutionReady: backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
+			ClientSelectedImageReady: true,
 		},
 		BackendKind: runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR,
 		Materializations: []*runnerprotocol.BackendMaterializationEvidence{{
@@ -392,7 +408,8 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	// begun; the claiming start passes its own claim through.
 	backend.mu.Lock()
 	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
-		same := active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment)
+		same := active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) &&
+			active.identity.requestedReference == assignment.GetExecutionImage().GetReference()
 		fenced := active != nil && active.fenced
 		backend.mu.Unlock()
 		if same {
@@ -422,8 +439,9 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 		return capacityAssignment(fmt.Errorf("SecondBox gVisor assignment exceeds immutable local capacity"))
 	}
 	supported := map[string]bool{
-		"attributed-execution": backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
-		"cleanup":              true, "evidence": true, "gvisor": true, "local-workspace": true,
+		"attributed-execution":  backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
+		"client-selected-image": true,
+		"cleanup":               true, "evidence": true, "gvisor": true, "local-workspace": true,
 		"network-policy": true, "storage": true,
 	}
 	for _, capability := range requirements.RequiredCapabilities {
@@ -436,7 +454,11 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 			return incompatibleAssignment(err)
 		}
 	}
-	if err := backend.validateAssignmentMaterialization(assignment); err != nil {
+	if assignment.ExecutionImage != nil {
+		if err := backend.validateSelectedImageAssignment(assignment); err != nil {
+			return artifactAssignment(err)
+		}
+	} else if err := backend.validateAssignmentMaterialization(assignment); err != nil {
 		return artifactAssignment(err)
 	}
 	if _, err := validateConfig(backend.config.Config); err != nil {
@@ -489,7 +511,8 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignmentID := assignment.Fence.AssignmentId
 	backend.mu.Lock()
 	if existing, exists := backend.assignments[assignmentID]; exists {
-		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, existing.executionBinding, assignment) {
+		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, existing.executionBinding, assignment) ||
+			existing.identity.requestedReference != assignment.GetExecutionImage().GetReference() {
 			backend.mu.Unlock()
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment ID was reused with different fencing"))
 		}
@@ -499,6 +522,7 @@ func (backend *AssignmentBackend) StartAssignment(
 		}
 		pendingLaunch := existing.launched
 		reference := existing.backendRef
+		identity := existing.identity
 		var guestFeatures []string
 		if existing.session != nil {
 			guestFeatures = existing.session.NegotiatedFeatureNames()
@@ -515,12 +539,13 @@ func (backend *AssignmentBackend) StartAssignment(
 			if current, still := backend.assignments[assignmentID]; still && current != nil &&
 				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, current.executionBinding, assignment) && !current.fenced {
 				reference = current.backendRef
+				identity = current.identity
 				guestFeatures = current.session.NegotiatedFeatureNames()
 			}
 			backend.mu.Unlock()
 		}
 		if reference != "" {
-			return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: reference, GuestFeatures: guestFeatures}, nil
+			return backendInstance(reference, guestFeatures, identity), nil
 		}
 		return result, infrastructureAssignment(fmt.Errorf("SecondBox gVisor replayed start observed a failed launch"))
 	}
@@ -535,6 +560,7 @@ func (backend *AssignmentBackend) StartAssignment(
 		fence: cloneFence(assignment.Fence), launched: launched, done: make(chan struct{}),
 		egressContext:    assignment.EgressContext,
 		executionBinding: proto.CloneOf(assignment.AttributedExecution),
+		identity:         guestLaunchIdentity{requestedReference: assignment.GetExecutionImage().GetReference()},
 	}
 	claim.launchDone = sync.OnceFunc(func() { close(launched) })
 	backend.assignments[assignmentID] = claim
@@ -588,8 +614,21 @@ func (backend *AssignmentBackend) StartAssignment(
 			resultErr = errors.Join(resultErr, cleanup.run())
 		}
 	}()
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
-		return result, err
+	identity := backend.fixedGuestIdentity()
+	var rootImage *os.File
+	if assignment.ExecutionImage == nil {
+		if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
+			return result, err
+		}
+	} else {
+		var err error
+		rootImage, identity, err = backend.stageSelectedImage(ctx, assignment, progress)
+		if err != nil {
+			return result, err
+		}
+		// The supervisor inherits its own descriptor; the loop device then
+		// holds the clone for exactly as long as the root stays mounted.
+		defer func() { resultErr = errors.Join(resultErr, rootImage.Close()) }()
 	}
 	workspace, err := backend.config.WorkspaceStore.Open(ctx, assignment.WorkspaceId, assignment.Fence.SandboxGeneration)
 	if err != nil {
@@ -629,7 +668,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_COMPUTE_LAUNCH); err != nil {
 		return result, err
 	}
-	active, err := backend.launchInstance(ctx, assignment, workspace, network, supervisorProcess)
+	active, err := backend.launchInstance(ctx, assignment, workspace, network, supervisorProcess, rootImage, identity)
 	if err != nil {
 		return result, infrastructureAssignment(err)
 	}
@@ -694,7 +733,14 @@ func (backend *AssignmentBackend) StartAssignment(
 	active.launched = nil
 	backend.mu.Unlock()
 	cleanup.clear()
-	return runnercontrol.BackendInstance{BackendKind: "gvisor", BackendReference: active.backendRef, GuestFeatures: session.NegotiatedFeatureNames()}, nil
+	return backendInstance(active.backendRef, session.NegotiatedFeatureNames(), active.identity), nil
+}
+
+func backendInstance(reference string, guestFeatures []string, identity guestLaunchIdentity) runnercontrol.BackendInstance {
+	return runnercontrol.BackendInstance{
+		BackendKind: "gvisor", BackendReference: reference, GuestFeatures: guestFeatures,
+		RequestedImageReference: identity.requestedReference, ResolvedImageDigest: identity.resolvedDigest,
+	}
 }
 
 // launchInstance builds the per-Instance runtime area and starts the mount
@@ -706,6 +752,8 @@ func (backend *AssignmentBackend) launchInstance(
 	workspace workspacestore.ComputeAttachment,
 	network instanceNetwork,
 	supervisorProcess *atomic.Pointer[os.Process],
+	rootImage *os.File,
+	identity guestLaunchIdentity,
 ) (*activeAssignment, error) {
 	var attributedExecution *runtimemanager.AttributedExecutionGuard
 	if execution := assignment.AttributedExecution; execution != nil {
@@ -728,6 +776,13 @@ func (backend *AssignmentBackend) launchInstance(
 		"runtime-private": filepath.Join(instanceDir, "runtime-private"),
 		"mnt":             filepath.Join(instanceDir, "mnt"),
 	}
+	rootPath := backend.config.FlatRootPath
+	rootMountpoint := ""
+	if rootImage != nil {
+		// The supervisor creates and mounts this in its private namespace.
+		rootMountpoint = filepath.Join(instanceDir, "root")
+		rootPath = rootMountpoint
+	}
 	for _, directory := range directories {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, errors.Join(fmt.Errorf("create instance directory: %w", err), os.RemoveAll(instanceDir))
@@ -737,10 +792,10 @@ func (backend *AssignmentBackend) launchInstance(
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(instanceDir))
 	}
-	manifest := backend.config.manifest
 	if err := writeInstanceBundle(instanceBundle{
 		BundleDir:            directories["bundle"],
-		FlatRootPath:         backend.config.FlatRootPath,
+		FlatRootPath:         rootPath,
+		RootWritable:         rootImage != nil,
 		AgentBinaryPath:      backend.config.AgentPath,
 		WorkspaceMountpoint:  directories["mnt"],
 		SocketDirectory:      directories["sockets"],
@@ -748,9 +803,9 @@ func (backend *AssignmentBackend) launchInstance(
 		InstanceID:           assignment.Fence.InstanceId,
 		SandboxID:            assignment.Fence.SandboxId,
 		SandboxGeneration:    assignment.Fence.SandboxGeneration,
-		GuestBuildID:         manifest.BackendBuildID,
-		ImageDigest:          manifest.Key.RuntimeManifestDigest,
-		ToolchainDigest:      manifest.Key.ToolchainManifestDigest,
+		GuestBuildID:         identity.buildID,
+		ImageDigest:          identity.imageDigest,
+		ToolchainDigest:      identity.toolchainDigest,
 		VCPUCount:            assignment.Requirements.VcpuCount,
 		MemoryBytes:          assignment.Requirements.MemoryBytes,
 		CgroupsPath:          instanceCgroupPath(backend.config.NetworkProfile, assignment.Fence.InstanceId),
@@ -760,17 +815,18 @@ func (backend *AssignmentBackend) launchInstance(
 		return nil, errors.Join(err, os.RemoveAll(instanceDir))
 	}
 	handles, err := StartMountSupervisor(backend.config.SelfExecutable, MountSupervisorPlan{
-		Mountpoint:    directories["mnt"],
-		ExpectedUUID:  workspace.FilesystemUUID(),
-		CapacityBytes: workspace.CapacityBytes(),
-		RunscPath:     backend.config.RunscPath,
-		StateRoot:     directories["state"],
-		BundleDir:     directories["bundle"],
-		ContainerID:   "secondbox-" + assignment.Fence.InstanceId,
+		Mountpoint:     directories["mnt"],
+		ExpectedUUID:   workspace.FilesystemUUID(),
+		CapacityBytes:  workspace.CapacityBytes(),
+		RootMountpoint: rootMountpoint,
+		RunscPath:      backend.config.RunscPath,
+		StateRoot:      directories["state"],
+		BundleDir:      directories["bundle"],
+		ContainerID:    "secondbox-" + assignment.Fence.InstanceId,
 		RunscGlobal: []string{
 			"--network=sandbox", "--platform=systrap", "--host-uds=all", "--overlay2=root:memory",
 		},
-	}, workspace.Descriptor(), workspace.LockDescriptor())
+	}, workspace.Descriptor(), workspace.LockDescriptor(), rootImage)
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(instanceDir))
 	}
@@ -786,6 +842,7 @@ func (backend *AssignmentBackend) launchInstance(
 		network:             network,
 		instanceDir:         instanceDir,
 		backendRef:          fmt.Sprintf("gvisor:%d", handles.Command.Process.Pid),
+		identity:            identity,
 		operations:          make(map[uint64]context.CancelFunc),
 		nextOperation:       1,
 		done:                make(chan struct{}),
@@ -815,7 +872,7 @@ func (backend *AssignmentBackend) launchInstance(
 			return
 		}
 		if status.Kind != "ready" || status.Fields["rw_probe"] != "ok" {
-			ready <- fmt.Errorf("supervisor reported %q instead of ready", status.Kind)
+			ready <- fmt.Errorf("supervisor reported %q instead of ready: %s", status.Kind, status.Fields["detail"])
 			return
 		}
 		ready <- nil
@@ -872,7 +929,6 @@ func (backend *AssignmentBackend) negotiateSession(
 	assignment *runnerprotocol.AssignmentCommand,
 	active *activeAssignment,
 ) (*firecracker.GuestProtocolSession, error) {
-	manifest := backend.config.manifest
 	negotiateCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	var executionGateway netip.AddrPort
@@ -893,9 +949,9 @@ func (backend *AssignmentBackend) negotiateSession(
 		InstanceID:                      assignment.Fence.InstanceId,
 		SandboxID:                       assignment.Fence.SandboxId,
 		SandboxGeneration:               assignment.Fence.SandboxGeneration,
-		ExpectedGuestBuildID:            manifest.BackendBuildID,
-		ExpectedImageManifestDigest:     manifest.Key.RuntimeManifestDigest,
-		ExpectedToolchainManifestDigest: manifest.Key.ToolchainManifestDigest,
+		ExpectedGuestBuildID:            active.identity.buildID,
+		ExpectedImageManifestDigest:     active.identity.imageDigest,
+		ExpectedToolchainManifestDigest: active.identity.toolchainDigest,
 		RequestedFeatures: []guestv1.GuestFeature{
 			guestv1.GuestFeature_GUEST_FEATURE_EXEC_INPUT_RECOVERY,
 			guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
@@ -904,12 +960,7 @@ func (backend *AssignmentBackend) negotiateSession(
 			guestv1.GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS,
 			guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY,
 		},
-		MandatoryFeatures: []guestv1.GuestFeature{
-			guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
-			guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
-			guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM,
-			guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY,
-		},
+		MandatoryFeatures: active.identity.mandatoryFeatures,
 	})
 }
 

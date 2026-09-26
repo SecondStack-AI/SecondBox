@@ -13,6 +13,9 @@ import (
 // VerifyLocal admits only local signed bytes. It performs no registry I/O.
 func (manager *Manager) VerifyLocal(ctx context.Context, image *runnerprotocol.ExecutionImage, progress func(runnerprotocol.AssignmentProgressStage) error) (PreparedImage, error) {
 	if image == nil {
+		if manager.fixedDirectory == "" {
+			return PreparedImage{}, errors.New("SecondBox execution image verifier has no fixed signed bundle")
+		}
 		// Persisted pre-selection Sandboxes retain their immutable Profile assets.
 		artifacts, err := manager.verifiedBundleArtifacts(ctx, manager.fixedDirectory, manager.fixedPublicKeyPath, manager.fixedPublicKeySHA256)
 		if err != nil {

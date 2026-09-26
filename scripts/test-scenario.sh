@@ -38,6 +38,12 @@ if [[ "$runner_placement" == "pod" && "$scenario_backend" != "gvisor" ]]; then
   echo "SecondBox scenario pod placement is qualified only for the gvisor backend" >&2
   exit 1
 fi
+# Both supported backends launch a retrievable signed client-selected image,
+# the gVisor pod placement included.
+selected_image_scenario=false
+if [[ "$scenario_backend" == firecracker || "$scenario_backend" == gvisor ]]; then
+  selected_image_scenario=true
+fi
 runner_external=false
 if [[ "$native_macos" == "true" || "$runner_placement" == "pod" ]]; then
   runner_external=true
@@ -342,13 +348,21 @@ else
   fi
   workspace_device="$(stat -c %d "$workspace_root")"
 fi
-if [[ "$scenario_backend" == "firecracker" ]]; then
-	: "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:?Firecracker scenario requires a retrievable signed SECONDBOX_SCENARIO_EXECUTION_IMAGE}"
+if [[ "$selected_image_scenario" == true ]]; then
+	: "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:?the selected-image scenario requires a retrievable signed SECONDBOX_SCENARIO_EXECUTION_IMAGE}"
 	[[ "$SECONDBOX_SCENARIO_EXECUTION_IMAGE" == */* ]] ||
 		fail "SECONDBOX_SCENARIO_EXECUTION_IMAGE must contain a registry host"
 	export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY="${SECONDBOX_SCENARIO_EXECUTION_IMAGE%%/*}"
-	: "${SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG:?Firecracker scenario requires an operator Tenant registry configuration directory}"
+	: "${SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG:?the selected-image scenario requires an operator Tenant registry configuration directory}"
 	[[ -f "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/tenants.json" ]] || fail "scenario registry configuration must contain tenants.json"
+fi
+if [[ "$scenario_backend" == gvisor && "$selected_image_scenario" == true ]]; then
+	# The gVisor Runner's own artifact key slot carries its materialization, so
+	# the selected image's publisher key is a separate explicit input.
+	: "${SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY:?the gVisor selected-image scenario requires the image publisher key}"
+	[[ -f "$SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY" ]] || fail "SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY must be a file"
+fi
+if [[ "$scenario_backend" == "firecracker" ]]; then
 	artifacts_device="$(stat -c %d "$artifacts_dir")"
   checkout_device="$(stat -c %d "$repo_root")"
   [[ "$workspace_device" == "$artifacts_device" && "$workspace_device" == "$checkout_device" ]] ||
@@ -462,8 +476,11 @@ if [[ "$scenario_backend" != "firecracker" && "$native_macos" != "true" ]]; then
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
       -trimpath -buildvcs=false -o "$scenario_build_dir/secondbox-runner" \
       ./cmd/secondbox-runner
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+      -trimpath -buildvcs=false -o "$scenario_build_dir/secondbox-image-fetcher" \
+      ./cmd/secondbox-image-fetcher
   )
-  chmod 0755 "$scenario_build_dir/secondbox-runner"
+  chmod 0755 "$scenario_build_dir/secondbox-runner" "$scenario_build_dir/secondbox-image-fetcher"
   runner_dockerfile="$repo_root/runner/Dockerfile.microsandbox-scenario"
   if [[ "$scenario_backend" == "gvisor" ]]; then
     runner_dockerfile="$repo_root/runner/Dockerfile.gvisor-scenario"
@@ -509,6 +526,14 @@ mkdir -p "$state_dir/execution-image-certificates"
 scenario_workspace_dir="$(mktemp -d "$workspace_root/secondbox-scenario.XXXXXX")"
 relocation_workspace_dir="$(mktemp -d "$workspace_root/secondbox-scenario-relocation.XXXXXX")"
 mkdir -p "$scenario_workspace_dir/jailer-root"
+# A gVisor start reflinks the selected rootfs out of this cache, so the cache
+# lives on the reflink workspace filesystem; both gVisor runners share it.
+if [[ "$scenario_backend" == gvisor ]]; then
+  execution_image_dir="$(mktemp -d "$workspace_root/secondbox-scenario-images.XXXXXX")"
+else
+  execution_image_dir="$state_dir/execution-images"
+fi
+export SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR="$execution_image_dir"
 
 reserve_port() {
   python3 -c \
@@ -561,9 +586,12 @@ chmod 0600 "$pki_dir/runner-ca.key" "$pki_dir/server.key"
 chmod 0644 "$pki_dir/runner-ca.crt" "$pki_dir/server.crt"
 
 export SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY="$run_dir/image-registry"
-mkdir -p "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/certificates" "$state_dir/execution-images"
+mkdir -p "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/certificates" "$execution_image_dir"
 if [[ "$scenario_backend" == "firecracker" ]]; then
   cp "$public_key" "$pki_dir/execution-image.pub"
+  cp -a "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/." "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/"
+elif [[ "$selected_image_scenario" == true ]]; then
+  cp "$SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY" "$pki_dir/execution-image.pub"
   cp -a "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/." "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/"
 else
   openssl pkey -in "$pki_dir/runner-ca.key" -pubout -out "$pki_dir/execution-image.pub" 2>/dev/null
@@ -831,7 +859,7 @@ cleanup() {
       failure_logs=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs --tail 200 control-plane secondbox-runner postgres)
     else
       failure_logs=(compose logs --tail 200 control-plane secondbox-runner postgres)
-      if [[ "$scenario_backend" == "firecracker" ]]; then
+      if [[ "$selected_image_scenario" == true ]]; then
         failure_logs+=(image-fetcher)
       fi
     fi
@@ -898,7 +926,7 @@ cleanup() {
     status=1
   fi
   if [[ "$native_macos" != "true" ]]; then
-    for directory in "$state_dir" "$relocation_state_dir" "$scenario_workspace_dir" "$relocation_workspace_dir" "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY"; do
+    for directory in "$state_dir" "$relocation_state_dir" "$scenario_workspace_dir" "$relocation_workspace_dir" "$execution_image_dir" "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY"; do
       if [[ -d "$directory" ]] &&
          ! docker run --rm \
            --entrypoint /bin/chown \
@@ -920,6 +948,10 @@ cleanup() {
   fi
   if [[ -d "$relocation_workspace_dir" ]] && ! rm -rf -- "$relocation_workspace_dir"; then
     echo "SecondBox scenario relocation Workspace cleanup failed: $relocation_workspace_dir" >&2
+    status=1
+  fi
+  if [[ -d "$execution_image_dir" ]] && ! rm -rf -- "$execution_image_dir"; then
+    echo "SecondBox scenario execution image cache cleanup failed: $execution_image_dir" >&2
     status=1
   fi
   if [[ -d "$run_dir" ]] && ! rm -rf -- "$run_dir"; then
@@ -1137,7 +1169,7 @@ fi
 if [[ "$runner_external" == "true" ]]; then
   "$SECONDBOX_SCENARIO_SERVICE_CONTROL" up --detach --wait --wait-timeout 300 secondbox-runner
 else
-  if [[ "$scenario_backend" == "firecracker" ]]; then
+  if [[ "$selected_image_scenario" == true ]]; then
     compose --profile image-preparation up --detach --wait --wait-timeout 120 image-fetcher
   fi
   compose up --detach --wait --wait-timeout 300 secondbox-runner

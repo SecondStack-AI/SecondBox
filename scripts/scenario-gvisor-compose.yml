@@ -13,6 +13,14 @@ x-gvisor-environment: &gvisor-environment
   SECONDBOX_GVISOR_MAXIMUM_INSTANCES: ${SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL:?SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL is required}
   SECONDBOX_GVISOR_MAXIMUM_OPERATIONS: ${SECONDBOX_SCENARIO_MAX_CONCURRENT_OPERATIONS_GLOBAL:?SECONDBOX_SCENARIO_MAX_CONCURRENT_OPERATIONS_GLOBAL is required}
   SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES: ${SECONDBOX_SCENARIO_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES:?SECONDBOX_SCENARIO_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES is required}
+  # The base artifact key slot carries the materialization for gVisor, so the
+  # client-selected image publisher key has its own mount.
+  SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY: /opt/secondbox-execution-image-public-key.pem
+  SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256:?execution image publisher fingerprint is required}
+  # Starts reflink selected rootfs images out of this cache, so it lives on the
+  # reflink workspace filesystem. It is mounted beside, not inside, the rshared
+  # state directory so the bind cannot propagate back to the host.
+  SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /var/lib/secondbox-execution-images
 
 services:
   secondbox-runner:
@@ -27,6 +35,8 @@ services:
       - /dev:/dev
       - ${SECONDBOX_SCENARIO_GVISOR_BUILD:?SECONDBOX_SCENARIO_GVISOR_BUILD is required}:/opt/secondbox-gvisor:ro
       - ${SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION:?SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION is required}:/opt/secondbox-gvisor-materialization.json:ro
+      - ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR:?scenario execution image cache is required}:/var/lib/secondbox-execution-images
+      - ${SECONDBOX_SCENARIO_PKI_DIR:?scenario PKI is required}/execution-image.pub:/opt/secondbox-execution-image-public-key.pem:ro
 
   secondbox-runner-relocation:
     extends:
@@ -55,3 +65,5 @@ services:
       - ${SECONDBOX_SCENARIO_RELOCATION_WORKSPACE_DIR:?SECONDBOX_SCENARIO_RELOCATION_WORKSPACE_DIR is required}:/w:rshared
       - ${SECONDBOX_SCENARIO_GVISOR_BUILD:?SECONDBOX_SCENARIO_GVISOR_BUILD is required}:/opt/secondbox-gvisor:ro
       - ${SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION:?SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION is required}:/opt/secondbox-gvisor-materialization.json:ro
+      - ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR:?scenario execution image cache is required}:/var/lib/secondbox-execution-images
+      - ${SECONDBOX_SCENARIO_PKI_DIR:?scenario PKI is required}/execution-image.pub:/opt/secondbox-execution-image-public-key.pem:ro

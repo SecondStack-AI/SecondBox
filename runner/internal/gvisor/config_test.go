@@ -11,7 +11,7 @@ import (
 
 // TestValidateRuntimeDirRefusesDestructivePaths proves the runtime directory
 // - whose startup reconciliation removes every child - can never point at the
-// filesystem root, a symlinked path, a Workspace or flat-root overlap, or a
+// filesystem root, a symlinked path, a Workspace, flat-root, or execution image cache overlap, or a
 // path long enough to push per-Instance socket paths past the Unix limit.
 func TestValidateRuntimeDirRefusesDestructivePaths(t *testing.T) {
 	// The socket-path bound makes long paths invalid by design, so the test
@@ -23,6 +23,7 @@ func TestValidateRuntimeDirRefusesDestructivePaths(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	workspaceRoot := filepath.Join(root, "workspaces")
 	flatRoot := filepath.Join(root, "flat")
+	imageCache := filepath.Join(root, "images")
 	for name, runtimeDir := range map[string]string{
 		"filesystem root":         "/",
 		"first level":             "/run",
@@ -30,9 +31,11 @@ func TestValidateRuntimeDirRefusesDestructivePaths(t *testing.T) {
 		"workspace root ancestor": root,
 		"workspace descendant":    filepath.Join(workspaceRoot, "runtime"),
 		"flat root descendant":    filepath.Join(flatRoot, "runtime"),
+		"image cache itself":      imageCache,
+		"image cache descendant":  filepath.Join(imageCache, "runtime"),
 		"socket path overflow":    filepath.Join(root, strings.Repeat("r", maximumRuntimeDirLength)),
 	} {
-		if err := validateRuntimeDir(runtimeDir, workspaceRoot, flatRoot); err == nil {
+		if err := validateRuntimeDir(runtimeDir, workspaceRoot, flatRoot, imageCache); err == nil {
 			t.Errorf("%s runtime directory %q was accepted", name, runtimeDir)
 		}
 	}
@@ -44,7 +47,7 @@ func TestValidateRuntimeDirRefusesDestructivePaths(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "real"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateRuntimeDir(linked, workspaceRoot, flatRoot); err == nil {
+	if err := validateRuntimeDir(linked, workspaceRoot, flatRoot, imageCache); err == nil {
 		t.Error("symlinked runtime directory was accepted")
 	}
 
@@ -56,7 +59,7 @@ func TestValidateRuntimeDirRefusesDestructivePaths(t *testing.T) {
 	if err := os.Symlink(aliasedWorkspace, workspaceLink); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateRuntimeDir(filepath.Join(aliasedWorkspace, "runtime"), workspaceLink, flatRoot); err == nil {
+	if err := validateRuntimeDir(filepath.Join(aliasedWorkspace, "runtime"), workspaceLink, flatRoot, imageCache); err == nil {
 		t.Error("runtime directory beneath a symlink-aliased workspace root was accepted")
 	}
 
@@ -64,13 +67,13 @@ func TestValidateRuntimeDirRefusesDestructivePaths(t *testing.T) {
 	if err := os.Mkdir(valid, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateRuntimeDir(valid, workspaceRoot, flatRoot); err != nil {
+	if err := validateRuntimeDir(valid, workspaceRoot, flatRoot, imageCache); err != nil {
 		t.Errorf("disjoint runtime directory rejected: %v", err)
 	}
-	if err := validateRuntimeDir(filepath.Join(root, "absent"), workspaceRoot, flatRoot); err != nil {
+	if err := validateRuntimeDir(filepath.Join(root, "absent"), workspaceRoot, flatRoot, imageCache); err != nil {
 		t.Errorf("not-yet-created runtime directory rejected: %v", err)
 	}
-	if err := validateRuntimeDir(filepath.Join(linked, "absent", "runtime"), workspaceRoot, flatRoot); err == nil {
+	if err := validateRuntimeDir(filepath.Join(linked, "absent", "runtime"), workspaceRoot, flatRoot, imageCache); err == nil {
 		t.Error("nonexistent runtime directory beneath a symlinked ancestor was accepted")
 	}
 }
