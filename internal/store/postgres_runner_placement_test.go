@@ -85,6 +85,48 @@ func TestConcurrentHomePlacementDoesNotOversubscribeOneRunner(t *testing.T) {
 	}
 }
 
+func TestPhysicalStorageAdmissionIgnoresRetainedLogicalWorkspaceCapacity(t *testing.T) {
+	store := openStoreTest(t)
+	now := time.Date(2026, 8, 4, 12, 15, 0, 0, time.UTC)
+	spec := placementTestSpec("pool-placement-physical-storage")
+	runnerID := "runner-placement-physical-storage"
+	seedPlacementRunner(t, store, spec.Pool, runnerID, now)
+	seedPlacementProfileRevision(t, store, "revision-placement-physical-storage", spec, now)
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.runners
+		SET capabilities_json=capabilities_json || '["physical-storage-admission"]'::jsonb,
+		    reserved_capacity_json='{"DiskBytes":1073741824}'
+		WHERE id=$1`, runnerID); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertPlacementReservation(t, first, "physical", "revision-placement-physical-storage", runnerID, spec.Resources.WorkspaceBytes, now)
+	if err := first.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Rollback(t.Context())
+	selected, err := selectInitialHomeRunner(t.Context(), second, spec)
+	if err != nil || selected != runnerID {
+		t.Fatalf("physical storage placement selected=%q error=%v", selected, err)
+	}
+	if _, err := second.Exec(t.Context(), `
+		UPDATE secondbox.runners
+		SET capacity_json=jsonb_set(jsonb_set(capacity_json,'{DiskBytes}','2147483648'::jsonb),'{Instances}','4'::jsonb)
+		WHERE id=$1`, runnerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selectInitialHomeRunner(t.Context(), second, spec); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+		t.Fatalf("physical admission exceeded Firecracker per-Instance disk ceiling: %v", err)
+	}
+}
+
 func TestDurableHomeReservationIsDiskOnlyAndReportedComputeStillApplies(t *testing.T) {
 	store := openStoreTest(t)
 	now := time.Date(2026, 8, 4, 12, 30, 0, 0, time.UTC)

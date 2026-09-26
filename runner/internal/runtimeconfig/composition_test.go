@@ -124,6 +124,24 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("physical storage admission", func(t *testing.T) {
+		t.Setenv("SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE", "physical")
+		t.Setenv("SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT", "70")
+		t.Setenv("SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT", "80")
+		t.Setenv("SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT", "90")
+		physical, _, err := loadGVisorComposition()
+		if err != nil || physical.StorageAdmissionMode != "physical" || physical.StorageDenyPercent != 90 {
+			t.Fatalf("physical composition = %#v, %v", physical, err)
+		}
+		t.Setenv("SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT", "80")
+		if _, _, err := loadGVisorComposition(); err == nil {
+			t.Fatal("invalid physical storage thresholds were accepted")
+		}
+		t.Setenv("SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE", "none")
+		if _, _, err := loadGVisorComposition(); err == nil {
+			t.Fatal("invalid storage admission mode was accepted")
+		}
+	})
 	if composition.RunscPath != complete["SECONDBOX_GVISOR_RUNSC_PATH"] ||
 		composition.RuntimeDir != complete["SECONDBOX_GVISOR_RUNTIME_DIR"] ||
 		composition.AgentPath != complete["SECONDBOX_GVISOR_AGENT_PATH"] ||

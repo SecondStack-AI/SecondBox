@@ -162,6 +162,40 @@ type relocationImport struct {
 	created bool
 }
 
+// ReplayRelocationImport verifies a completed import without allocating staging
+// storage, so Runner admission can preserve committed replays under pressure.
+func (store *Store) ReplayRelocationImport(
+	ctx context.Context,
+	request RelocationImportRequest,
+) (Receipt, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, false, err
+	}
+	if request.Generation == 0 || request.CapacityBytes < legacyMinimumExt4Bytes {
+		return Receipt{}, false, ErrStorageIncompatible
+	}
+	if err := validateMutation(request.Mutation); err != nil {
+		return Receipt{}, false, err
+	}
+	digest, err := inputDigest(request, request.FencingToken)
+	if err != nil {
+		return Receipt{}, false, err
+	}
+	receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptRelocationImport)
+	if !found || err != nil {
+		return Receipt{}, found, err
+	}
+	manifest, err := store.readCurrentManifest(request.WorkspaceID)
+	if err != nil || manifest.Generation != request.Generation ||
+		manifest.CapacityBytes != request.CapacityBytes || manifest.RelocationSealed {
+		return Receipt{}, false, fmt.Errorf("%w: relocation import receipt lacks its image", ErrCorruptState)
+	}
+	if err := store.validateImage(request.WorkspaceID, manifest.Image, request.CapacityBytes); err != nil {
+		return Receipt{}, false, err
+	}
+	return receipt, true, nil
+}
+
 func (store *Store) BeginRelocationImport(
 	ctx context.Context,
 	request RelocationImportRequest,

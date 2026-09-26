@@ -341,6 +341,9 @@ storage_pressure_recovery_percent = 0
 storage_pressure_warning_percent = 0
 # Storage-pressure admission-deny threshold; positive, above warning, and below 100.
 storage_pressure_admission_deny_percent = 0
+# Admission accounting: logical reserves full Workspace limits;
+# physical checks measured filesystem usage only. Firecracker or gVisor Runner.
+storage_admission_mode = '<replace-with-logical-or-physical>'
 
 # Firecracker
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/local/bin/firecracker.

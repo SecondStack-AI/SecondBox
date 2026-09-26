@@ -221,6 +221,13 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	}).Validate(); err != nil {
 		return nil, fmt.Errorf("SecondBox Firecracker config: %w", err)
 	}
+	storageAdmissionMode := strings.TrimSpace(os.Getenv("SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"))
+	if storageAdmissionMode == "" {
+		storageAdmissionMode = "logical"
+	}
+	if storageAdmissionMode != "logical" && storageAdmissionMode != "physical" {
+		return nil, fmt.Errorf("SecondBox Firecracker config requires SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE to be logical or physical")
+	}
 	guestIP, err := required("SECONDBOX_RUNNER_SANDBOX_GUEST_IP")
 	if err != nil {
 		return nil, err
@@ -320,6 +327,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMStoragePressureRecoveryPercent:      storagePressureRecoveryPercent,
 		MicroVMStoragePressureWarningPercent:       storagePressureWarningPercent,
 		MicroVMStoragePressureAdmissionDenyPercent: storagePressureAdmissionDenyPercent,
+		MicroVMStorageAdmissionMode:                storageAdmissionMode,
 		MicroVMAllowUnjailed:                       allowUnjailed,
 		MicroVMSnapshotTemplateCacheRoot:           snapshotTemplateCacheRoot,
 		MicroVMGuestIP:                             guestIP,

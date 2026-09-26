@@ -52,6 +52,7 @@ type Config struct {
 	MicroVMStoragePressureRecoveryPercent      int
 	MicroVMStoragePressureWarningPercent       int
 	MicroVMStoragePressureAdmissionDenyPercent int
+	MicroVMStorageAdmissionMode                string
 	MicroVMAllowUnjailed                       bool
 	// MicroVMSnapshotTemplateCacheRoot is the operator-owned runner-local root
 	// for immutable snapshot-resume templates. It is required, so an operator

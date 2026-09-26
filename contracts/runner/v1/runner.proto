@@ -87,6 +87,9 @@ message RunnerCapabilities {
   bool snapshot_resume_ready = 12;
   bool attributed_execution_ready = 13;
   bool client_selected_image_ready = 14;
+  // Physical storage admission measures filesystem use without reserving the
+  // full logical capacities of retained or active Workspace images.
+  bool physical_storage_admission_ready = 15;
 }
 
 enum ComputeBackendKind {

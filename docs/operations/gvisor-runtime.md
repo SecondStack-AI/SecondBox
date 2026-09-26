@@ -113,6 +113,10 @@ path, identity, capacity, and credential for the actual installation.
 ```sh
 export SECONDBOX_COMPUTE_BACKEND=gvisor
 export SECONDBOX_RUNNER_WORKSPACE_ROOT=/var/lib/secondbox/workspaces
+export SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE=physical
+export SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT=70
+export SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT=80
+export SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT=90
 export SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS=256
 export SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL=5m
 export SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES=10.210.2.1
@@ -262,12 +266,19 @@ never copied from a document.
    | `SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS` / `..._WORKSPACE_CREATES` | Admission concurrency bounds. |
    | `SECONDBOX_RUNNER_LOG_DIR` / `SECONDBOX_RUNNER_LOG_PATH` | Operator-owned log directory and JSONL file. |
    | `SECONDBOX_RUNNER_WORKSPACE_ROOT` | The reflink-capable WorkspaceStore root. |
+   | `SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE` / `SECONDBOX_RUNNER_STORAGE_PRESSURE_*` | `logical` or `physical`; physical mode requires explicit recovery, warning, and deny percentages for the Workspace filesystem. |
    | `SECONDBOX_RUNNER_NETWORK_POLICY_*` plus `SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG` | Explicit generic enforcement bounds, protected Runner and management destinations, the strict context-indexed logical-gateway file, and the IPv4 DNS upstream. |
    | `SECONDBOX_GVISOR_*` (all values from the environment block above) | The backend block, including capacity maxima, the materialization pin, the runtime directory, and the network profile. |
    | `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT` / `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET` / `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY` / `..._SHA256` | The reflink-capable image cache shared with the fetcher, the fetcher's socket, and the independently pinned publisher key. |
 
-   Instance capacity and per-Instance ceilings come only from the `SECONDBOX_GVISOR_MAXIMUM_*`
-   values; the `SECONDBOX_RUNNER_SANDBOX_*`, storage-pressure, file-transfer, and remaining
+   Instance capacity and per-Instance ceilings come from the `SECONDBOX_GVISOR_MAXIMUM_*`
+   values. With `SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE=physical`, aggregate logical disk
+   reservations do not block home placement or assignment starts. The Runner checks measured
+   use of the Workspace filesystem at creation, start, and readiness; it denies admission at
+   the configured threshold and reopens at recovery. Probe failures deny admission. Per-Instance
+   disk ceilings, CPU, memory, instance limits, and Sandbox-count quotas still apply. The
+   default mode is `logical`, which retains aggregate disk reservations without a gVisor
+   filesystem-pressure gate. The `SECONDBOX_RUNNER_SANDBOX_*`, file-transfer, and remaining
    concurrency variables are Firecracker-only and ignored by this backend. Readiness is
    observable:
 

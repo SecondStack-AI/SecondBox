@@ -355,18 +355,27 @@ func (b *AssignmentBackend) BeginWorkspaceRelocationImport(
 			fmt.Errorf("SecondBox Firecracker WorkspaceStore relocation import is unavailable"),
 		)
 	}
-	importer, err := b.manager.workspaceStore.BeginRelocationImport(
-		ctx,
-		workspacestore.RelocationImportRequest{
-			Mutation: workspacestore.Mutation{
-				OperationID:  frame.OperationId,
-				WorkspaceID:  frame.WorkspaceId,
-				FencingToken: append([]byte(nil), frame.GetOpen().FencingToken...),
-			},
-			Generation:    frame.Generation,
-			CapacityBytes: int64(frame.GetOpen().LogicalCapacityBytes),
+	request := workspacestore.RelocationImportRequest{
+		Mutation: workspacestore.Mutation{
+			OperationID:  frame.OperationId,
+			WorkspaceID:  frame.WorkspaceId,
+			FencingToken: append([]byte(nil), frame.GetOpen().FencingToken...),
 		},
-	)
+		Generation:    frame.Generation,
+		CapacityBytes: int64(frame.GetOpen().LogicalCapacityBytes),
+	}
+	if b.manager.cfg != nil && b.manager.cfg.MicroVMStorageAdmissionMode == "physical" {
+		_, found, err := b.manager.workspaceStore.ReplayRelocationImport(ctx, request)
+		if err != nil {
+			return nil, localWorkspaceFailure(err)
+		}
+		if !found {
+			if err := b.storagePressure.CheckAdmission(ctx, frame.GetOpen().LogicalCapacityBytes); err != nil {
+				return nil, localWorkspaceFailure(fmt.Errorf("SecondBox Firecracker relocation storage pressure: %w", err))
+			}
+		}
+	}
+	importer, err := b.manager.workspaceStore.BeginRelocationImport(ctx, request)
 	if err != nil {
 		return nil, localWorkspaceFailure(err)
 	}

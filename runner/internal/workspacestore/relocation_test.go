@@ -91,14 +91,20 @@ func TestWorkspaceRelocationSealsTransfersImportsAndDeletesSource(t *testing.T) 
 	if importReceipt.Checksum != checksum || importReceipt.RecordedAt.IsZero() {
 		t.Fatalf("import receipt = %#v", importReceipt)
 	}
+	replayedReceipt, found, err := target.ReplayRelocationImport(t.Context(), RelocationImportRequest{
+		Mutation: testMutation(operationID, workspaceID), Generation: 1, CapacityBytes: capacity,
+	})
+	if err != nil || !found || replayedReceipt.Checksum != checksum {
+		t.Fatalf("preflight replay receipt = %#v, found = %t, error = %v", replayedReceipt, found, err)
+	}
 	replayedImport, err := target.BeginRelocationImport(t.Context(), RelocationImportRequest{
 		Mutation: testMutation(operationID, workspaceID), Generation: 1, CapacityBytes: capacity,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayedReceipt, completed := replayedImport.CompletedReceipt(); !completed || replayedReceipt.Checksum != checksum {
-		t.Fatalf("replayed import receipt = %#v, completed = %t", replayedReceipt, completed)
+	if completedReceipt, completed := replayedImport.CompletedReceipt(); !completed || completedReceipt.Checksum != checksum {
+		t.Fatalf("replayed import receipt = %#v, completed = %t", completedReceipt, completed)
 	}
 	if err := export.Close(); err != nil {
 		t.Fatal(err)

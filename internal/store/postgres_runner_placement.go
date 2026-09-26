@@ -189,9 +189,12 @@ func lockRunnerPlacementCandidate(
 	if err != nil {
 		return "", false, false, fmt.Errorf("%s candidate lock failed: %w", options.errorPrefix, err)
 	}
-	durableReserved, err := durableHomeReservation(ctx, tx, candidate.id)
-	if err != nil {
-		return "", true, false, fmt.Errorf("%s durable reservation failed: %w", options.errorPrefix, err)
+	var durableReserved runnerCapacity
+	if !contains(candidate.capabilities, contracts.RunnerCapabilityPhysicalStorageAdmission) {
+		durableReserved, err = durableHomeReservation(ctx, tx, candidate.id)
+		if err != nil {
+			return "", true, false, fmt.Errorf("%s durable reservation failed: %w", options.errorPrefix, err)
+		}
 	}
 	effectiveReserved := maxRunnerPlacementCapacity(
 		candidate.reportedReserved,
@@ -290,9 +293,16 @@ func runnerPlacementCompatible(
 	if !placementHasMaterialization(candidate, spec) {
 		return false
 	}
+	physicalStorage := contains(candidate.capabilities, contracts.RunnerCapabilityPhysicalStorageAdmission)
+	individualDiskLimit := candidate.allocatable.DiskBytes
+	if physicalStorage && candidate.backendKind == "firecracker" && candidate.allocatable.Instances > 0 {
+		// Firecracker advertises one Workspace ceiling per concurrent Instance.
+		individualDiskLimit /= candidate.allocatable.Instances
+	}
 	return candidate.allocatable.VCPUCount-reserved.VCPUCount >= spec.Resources.VCPUCount &&
 		candidate.allocatable.MemoryBytes-reserved.MemoryBytes >= spec.Resources.MemoryBytes &&
-		candidate.allocatable.DiskBytes-reserved.DiskBytes >= spec.Resources.WorkspaceBytes &&
+		((physicalStorage && individualDiskLimit >= spec.Resources.WorkspaceBytes) ||
+			(!physicalStorage && candidate.allocatable.DiskBytes-reserved.DiskBytes >= spec.Resources.WorkspaceBytes)) &&
 		candidate.allocatable.Instances-reserved.Instances >= 1 &&
 		candidate.allocatable.Operations-reserved.Operations >= spec.Resources.ConcurrentOperations
 }

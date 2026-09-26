@@ -4,7 +4,59 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
+
+func TestPhysicalStorageAdmissionSkipsOnlyDiskCapacity(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	requirements := Requirements{
+		PoolName: "general", Architecture: "amd64",
+		GuestProtocolGeneration:  1,
+		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Instances: 1},
+		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+	}
+	runner := RunnerSnapshot{
+		ID: "home", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
+		Capabilities: readyCapabilities(), Allocatable: Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Instances: 1},
+		Reserved:   Capacity{DiskBytes: 2 << 30},
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
+	}
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("logical admission error = %v", err)
+	}
+	runner.Capabilities[contracts.RunnerCapabilityPhysicalStorageAdmission] = true
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); err != nil {
+		t.Fatalf("physical admission error = %v", err)
+	}
+	runner.Allocatable.DiskBytes = 1 << 30
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("individual disk ceiling error = %v", err)
+	}
+	runner.Allocatable.DiskBytes = 2 << 30
+	runner.Allocatable.Instances = 2
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("Firecracker per-Instance disk ceiling error = %v", err)
+	}
+	runner.Allocatable.Instances = 1
+	runner.BackendKind = "gvisor"
+	runner.Materializations[0].BackendKind = "gvisor"
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); err != nil {
+		t.Fatalf("gVisor physical admission error = %v", err)
+	}
+	runner.Allocatable.DiskBytes = 1 << 30
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("gVisor individual disk ceiling error = %v", err)
+	}
+	runner.BackendKind = "firecracker"
+	runner.Materializations[0].BackendKind = "firecracker"
+	runner.Allocatable.DiskBytes = 2 << 30
+	runner.Allocatable.MemoryBytes = 0
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("memory admission error = %v", err)
+	}
+}
 
 func TestSelectRunnerFiltersCompatibilityCapacityHealthAndDrain(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)

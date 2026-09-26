@@ -190,18 +190,27 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 	t.Cleanup(databasePool.Close)
 
 	for _, testCase := range []struct {
-		name                     string
-		snapshotResumeReady      bool
-		attributedExecutionReady bool
-		clientSelectedImageReady bool
+		name                          string
+		snapshotResumeReady           bool
+		attributedExecutionReady      bool
+		clientSelectedImageReady      bool
+		physicalStorageAdmissionReady bool
+		gvisor                        bool
 	}{
-		{"cold boot only", false, false, false},
-		{"snapshot resume ready", true, false, false},
-		{"attributed execution ready", false, true, false},
-		{"client-selected image ready", false, false, true},
-		{"all ready", true, true, true},
+		{"cold boot only", false, false, false, false, false},
+		{"snapshot resume ready", true, false, false, false, false},
+		{"attributed execution ready", false, true, false, false, false},
+		{"client-selected image ready", false, false, true, false, false},
+		{"physical storage admission ready", false, false, false, true, false},
+		{"gvisor physical storage admission ready", false, false, false, true, true},
+		{"all ready", true, true, true, true, false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			registrationPool := poolName
+			if testCase.gvisor {
+				registrationPool = task4ID("gvisor-pool")
+				task4InsertRunnerPool(t, registrationPool, now)
+			}
 			runnerID := task4ID("runner")
 			connectionID := task4ID("connection")
 			issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
@@ -213,11 +222,19 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 			); err != nil {
 				t.Fatal(err)
 			}
-			registration := task4Registration(runnerID, connectionID, poolName)
+			registration := task4Registration(runnerID, connectionID, registrationPool)
+			if testCase.gvisor {
+				registration.BackendKind = runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR
+				registration.Materializations[0].BackendKind = registration.BackendKind
+				registration.Materializations[0].SourceOciManifestDigest = "sha256:" + strings.Repeat("d", 64)
+				registration.Materializations[0].FlatRootDigest = "sha256:" + strings.Repeat("e", 64)
+				registration.Materializations[0].HelperBuildId = "runsc-test"
+			}
 			registration.SupportedEgressContexts = []string{"tenant-blue", "tenant-green"}
 			registration.Capabilities.SnapshotResumeReady = testCase.snapshotResumeReady
 			registration.Capabilities.AttributedExecutionReady = testCase.attributedExecutionReady
 			registration.Capabilities.ClientSelectedImageReady = testCase.clientSelectedImageReady
+			registration.Capabilities.PhysicalStorageAdmissionReady = testCase.physicalStorageAdmissionReady
 			if duplicate, err := stateStore.RecordRegistration(
 				t.Context(), registration, now,
 			); err != nil || duplicate {
@@ -247,6 +264,9 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 			}
 			if slices.Contains(capabilities, contracts.RunnerCapabilityClientSelectedImage) != testCase.clientSelectedImageReady {
 				t.Fatalf("wrong client-selected-image capability: %v", capabilities)
+			}
+			if slices.Contains(capabilities, contracts.RunnerCapabilityPhysicalStorageAdmission) != testCase.physicalStorageAdmissionReady {
+				t.Fatalf("wrong physical-storage-admission capability: %v", capabilities)
 			}
 			if advertised != testCase.snapshotResumeReady {
 				t.Fatalf(

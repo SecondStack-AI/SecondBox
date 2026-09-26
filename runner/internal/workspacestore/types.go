@@ -367,6 +367,7 @@ type WorkspaceStore interface {
 	AbortRestore(context.Context, RestoreMutation) (Receipt, error)
 	DeleteWorkspace(context.Context, DeleteWorkspaceRequest) (Receipt, error)
 	OpenRelocationExport(context.Context, RelocationExportRequest) (RelocationExport, error)
+	ReplayRelocationImport(context.Context, RelocationImportRequest) (Receipt, bool, error)
 	BeginRelocationImport(context.Context, RelocationImportRequest) (RelocationImport, error)
 	AbortRelocation(context.Context, RelocationExportRequest) (Receipt, error)
 	Inspect(context.Context, string) (WorkspaceInspection, error)

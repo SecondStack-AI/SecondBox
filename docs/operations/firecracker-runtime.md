@@ -59,6 +59,7 @@ SECONDBOX_RUNNER_WORKSPACE_ROOT
 SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT
 SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT
 SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT
+SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE
 SECONDBOX_RUNNER_SANDBOX_MAX_VCPUS
 SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB
 SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB
@@ -245,7 +246,9 @@ hard-link Workspace images into its jail. Operators must back up the Workspace
 child together with the stable Runner identity; it is authoritative durable
 state, not expendable cache.
 
-The recovery, warning, and admission-denial percentages are required integers satisfying `0 < recovery < warning < admission deny < 100`. One storage-pressure controller combines measured consumption with atomic reservations for accepted-but-not-yet-materialized assignment disks. It emits bounded `storage_pressure` evidence on warning, admission denial, probe failure, and recovery. Warning does not reject work. Admission denial occurs before workspace progress or allocation, remains latched while utilization is above the recovery threshold, and makes readiness fail closed. Probe errors also fail readiness and admission rather than returning partial success.
+The recovery, warning, and admission-denial percentages are required integers satisfying `0 < recovery < warning < admission deny < 100`. `SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE=logical` retains full-capacity Workspace reservations at home placement and charges each active assignment's disk limit against storage pressure. `physical` skips both logical disk admission checks: retained Workspace limits do not block placement, and active assignment limits do not increase projected filesystem utilization. Reported logical disk capacity and reservations remain diagnostic evidence. The Runner still probes actual filesystem usage and refuses admission at the configured denial threshold; Tenant and Subject Sandbox-count quotas also still apply. A full filesystem can therefore interrupt guest writes even though individual Workspace limits have not been reached. The default for existing Runner environments is `logical`; a deployment manifest can select `physical` for one Runner. gVisor Runners use the same mode through their explicit environment; see [gVisor operations](gvisor-runtime.md).
+
+The storage-pressure controller emits bounded `storage_pressure` evidence on warning, admission denial, probe failure, and recovery. Warning does not reject work. Admission denial occurs before workspace progress or allocation, remains latched while utilization is above the recovery threshold, and makes readiness fail closed. Probe errors also fail readiness and admission rather than returning partial success.
 
 Cleanup is explicit, operation-scoped, and generation-fenced. Restore abort may remove only pre-swap staged files. After a swap, the previous image and rollback manifest remain until PostgreSQL commits the matching generation and sends finalize. Snapshot and Workspace deletion validate exact logical paths and persist receipts before acknowledgement. Storage pressure never authorizes deletion of a Sandbox Workspace or Snapshot; admission remains closed until explicit deletion or operator capacity work returns utilization to the recovery threshold.
 
