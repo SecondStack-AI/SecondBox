@@ -282,8 +282,6 @@ services:
     image: ${SECONDBOX_SCENARIO_RUNNER_IMAGE:?scenario runner image is required}
     user: "10002:10002"
     entrypoint: ["/usr/local/bin/secondbox-image-fetcher"]
-    dns:
-      - ${SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS:?scenario image fetcher DNS address is required}
     depends_on:
       image-fetcher-init:
         condition: service_completed_successfully

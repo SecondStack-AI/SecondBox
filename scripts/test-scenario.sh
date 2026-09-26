@@ -76,7 +76,9 @@ if [[ -z "${SECONDBOX_SCENARIO_SHARD:-}" ]]; then
 fi
 compose_file="$repo_root/scripts/scenario-compose.yml"
 compose_override_file=""
-if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
+if [[ "$scenario_backend" == "firecracker" ]]; then
+  compose_override_file="$repo_root/scripts/scenario-firecracker-compose.yml"
+elif [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
   compose_override_file="$repo_root/scripts/scenario-microsandbox-compose.yml"
 elif [[ "$scenario_backend" == "gvisor" ]]; then
   compose_override_file="$repo_root/scripts/scenario-gvisor-compose.yml"
