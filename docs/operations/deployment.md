@@ -2,7 +2,9 @@
 
 ## Release upgrade boundary
 
-v0.17.0 ships a new signed Firecracker bundle. Its runtime and toolchain component digests change, so the guided updater refuses an in-place update. Retire Sandboxes, retain a coordinated backup, then reinstall with a fresh database and separate Runner storage root; recreate resources against the new signed asset catalog. A new database cannot recover another deployment's Workspaces. Keep the old database, storage, signed assets, and credentials together for rollback. See the [v0.17.0 release notes](../releases/v0.17.0.md).
+v0.18.0 retains the v0.17.0 signed Firecracker bundle, Runner protocol generation 5, and the migration baseline, so a v0.17.0 deployment updates in place. It is breaking for gVisor Runners: each now requires the image fetcher, a reflink-capable execution image cache, registry configuration, and the publisher key before it starts. See the [v0.18.0 release notes](../releases/v0.18.0.md).
+
+v0.17.0 shipped a new signed Firecracker bundle. Its runtime and toolchain component digests changed, so the guided updater refuses an in-place update from earlier releases. Retire Sandboxes, retain a coordinated backup, then reinstall with a fresh database and separate Runner storage root; recreate resources against the new signed asset catalog. A new database cannot recover another deployment's Workspaces. Keep the old database, storage, signed assets, and credentials together for rollback. See the [v0.17.0 release notes](../releases/v0.17.0.md).
 
 Historically, v0.16.0 allowed a v0.15.0 deployment to update in place because its bundle and migration baseline were unchanged. v0.15.0 accepted the exact v0.14.0 migration baseline and applied forward migrations. Other checksum mismatches remain errors; do not reset migration records to bypass them. See each target release's notes for its boundary.
 

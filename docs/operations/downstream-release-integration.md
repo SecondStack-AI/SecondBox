@@ -5,6 +5,8 @@ version consistently for binaries, SDKs, images, and standard bundles. In the
 examples below, replace `VERSION` with the chosen numeric version. The tag and
 attached files identify one release; the publishing workflow does not rebuild them.
 
+For [v0.18.0](../releases/v0.18.0.md), a v0.17.0 deployment updates in place: the Firecracker bundle, trust anchor, Runner protocol generation 5, and migration baseline are unchanged. gVisor consumers must deploy the image fetcher, a reflink-capable execution image cache, registry configuration, and the publisher key beside every gVisor Runner before updating; see the release notes for the settings.
+
 For [v0.17.0](../releases/v0.17.0.md), the new signed Firecracker bundle changes runtime and toolchain identities. The guided updater refuses an in-place update. Retire Sandboxes, retain a coordinated backup, reinstall with a fresh database and separate Runner storage root, and recreate resources against the new bundle and standard revisions. The RSA trust anchor from v0.12.0 is retained. The release keeps Runner protocol generation 5 and the v0.15.0 migration baseline.
 
 Historically, [v0.16.0](../releases/v0.16.0.md) allowed v0.15.0 to update in place, and [v0.15.0](../releases/v0.15.0.md) accepted the exact v0.14.0 migration baseline. Other clean-install boundaries still require the procedure in their target release notes.
@@ -14,7 +16,7 @@ The Go module's `retract` directives identify withdrawn versions.
 
 The current artifact manifest uses schema `secondbox.release/artifact-manifest/v6`, and downstream consumers that deploy the gVisor backend track its `gvisor` section in addition to the Firecracker `microvm` bundle:
 
-- `ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:...` (`gvisor.runnerReference`), the runner image.
+- `ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:...` (`gvisor.runnerReference`), the runner image. Since v0.18.0 it also runs the unprivileged `secondbox-image-fetcher` container that every gVisor Runner requires.
 - `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts@sha256:...` (`gvisor.imageReference`), the transport carrying the flat root, launch artifacts, verifiers, and materialization.
 - `secondbox-VERSION-gvisor-materialization.json` (`gvisor.materialization`), with `gvisor.materializationDigest` and `gvisor.flatRootDigest` as the identities a node materialization must reproduce, and `gvisor.runscRelease`.
 - `secondbox-VERSION-gvisor-qualification-evidence.json` and `secondbox-VERSION-gvisor-pod-qualification-evidence.json` (`gvisor.qualificationEvidence`, `gvisor.podQualificationEvidence`), the host evidence and, for a full release, pod evidence bound to the release commit. Default releases do not carry pod qualification; consumers requiring it must select a full release.
@@ -45,7 +47,7 @@ Runner host. Existing Sandboxes retain their pinned revision; an attributed gene
 revision and spec digest from the selected release's standard bundle rather
 than deriving revision numbers from a version. The isolated Profile has no
 attributed permission. Read the public API and Runner protocol windows from the selected manifest
-(v0.17.0 uses version 1 and `[5,5]`). Attributed execution also requires the advertised `attributed-execution`
+(v0.18.0 uses version 1 and `[5,5]`). Attributed execution also requires the advertised `attributed-execution`
 capability. See [Profiles and authorization](../design/profiles-and-authorization.md).
 
 After readiness, log in with the platform token, create each Tenant and its tenant-controller authority, log in with the returned controller token, then create the Subject and application authority. Capture each bearer token from its successful creation response; it cannot be retrieved later. The source-free CLI sequence is documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). The repository scenario harness uses this same sequence and creates a separate application authority for the optional `sandbox:ports:direct` grant.
