@@ -355,6 +355,7 @@ if [[ "$selected_image_scenario" == true ]]; then
 	export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY="${SECONDBOX_SCENARIO_EXECUTION_IMAGE%%/*}"
 	: "${SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG:?the selected-image scenario requires an operator Tenant registry configuration directory}"
 	[[ -f "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/tenants.json" ]] || fail "scenario registry configuration must contain tenants.json"
+	: "${SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS:?the selected-image scenario requires an image fetcher DNS address reachable from its Docker network}"
 fi
 if [[ "$scenario_backend" == gvisor && "$selected_image_scenario" == true ]]; then
 	# The gVisor Runner's own artifact key slot carries its materialization, so

@@ -10,6 +10,7 @@ Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` and revie
 all paths, signing-key fingerprints, component digests, and dedicated VM inputs.
 Set `SECONDBOX_SCENARIO_EXECUTION_IMAGE` to a signed digest reference that every Firecracker scenario Runner can retrieve.
 Set `SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG` to an operator configuration directory containing `tenants.json`, credential files when needed, and `certificates/`.
+Set `SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS` to a DNS server address reachable from the scenario image fetcher's isolated Docker network. The scenario does not rely on the host's stub resolver, which may be unreachable from that network.
 Grant the selected repository to `scenario-tenant`; paths in the configuration use the fetcher's `/run/image-registry` mount.
 The harness copies this configuration into its private run directory and starts an unprivileged fetcher with only the cache, socket, publisher key, and registry configuration.
 Supply `SECONDBOX_TEST_DATABASE_URL` for a disposable PostgreSQL database and
