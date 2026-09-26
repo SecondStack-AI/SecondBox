@@ -32,19 +32,23 @@ type Composition struct {
 // materialization manifest, integer capacity bounds, and the client-selected
 // execution image cache, fetcher socket, and publisher key.
 type GVisorComposition struct {
-	RunscPath             string
-	RuntimeDir            string
-	AgentPath             string
-	FlatRootPath          string
-	MaterializationPath   string
-	MaterializationDigest string
-	MaximumVCPUs          uint32
-	MaximumMemoryBytes    uint64
-	MaximumDiskBytes      uint64
-	MaximumInstances      uint32
-	MaximumOperations     uint32
-	NetworkProfile        uint32
-	NetworkPolicy         networkpolicy.RunnerConfig
+	RunscPath              string
+	RuntimeDir             string
+	AgentPath              string
+	FlatRootPath           string
+	MaterializationPath    string
+	MaterializationDigest  string
+	MaximumVCPUs           uint32
+	MaximumMemoryBytes     uint64
+	MaximumDiskBytes       uint64
+	MaximumInstances       uint32
+	MaximumOperations      uint32
+	StorageAdmissionMode   string
+	StorageRecoveryPercent int
+	StorageWarningPercent  int
+	StorageDenyPercent     int
+	NetworkProfile         uint32
+	NetworkPolicy          networkpolicy.RunnerConfig
 	// The same generic execution image settings the Firecracker Runner uses.
 	ExecutionImageCacheRoot       string
 	ExecutionImageFetcherSocket   string
@@ -134,6 +138,33 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 }
 
 func loadGVisorComposition() (GVisorComposition, int64, error) {
+	storageMode := strings.TrimSpace(os.Getenv("SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"))
+	if storageMode == "" {
+		storageMode = "logical"
+	}
+	if storageMode != "logical" && storageMode != "physical" {
+		return GVisorComposition{}, 0, fmt.Errorf("SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE must be logical or physical")
+	}
+	var recovery, warning, deny int
+	if storageMode == "physical" {
+		for _, setting := range []struct {
+			name  string
+			value *int
+		}{
+			{"SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT", &recovery},
+			{"SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT", &warning},
+			{"SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT", &deny},
+		} {
+			value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(setting.name)))
+			if err != nil {
+				return GVisorComposition{}, 0, fmt.Errorf("%s must be an integer: %w", setting.name, err)
+			}
+			*setting.value = value
+		}
+		if recovery < 1 || recovery >= warning || warning >= deny || deny >= 100 {
+			return GVisorComposition{}, 0, fmt.Errorf("gVisor storage pressure thresholds must satisfy 0 < recovery < warning < admission deny < 100")
+		}
+	}
 	values := map[string]string{}
 	for _, name := range []string{
 		"SECONDBOX_GVISOR_RUNSC_PATH",
@@ -215,6 +246,7 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		MaterializationDigest: digest,
 		MaximumVCPUs:          uint32(vcpus), MaximumMemoryBytes: memory, MaximumDiskBytes: disk,
 		MaximumInstances: uint32(instances), MaximumOperations: uint32(operations),
+		StorageAdmissionMode: storageMode, StorageRecoveryPercent: recovery, StorageWarningPercent: warning, StorageDenyPercent: deny,
 		NetworkProfile: uint32(networkProfile), NetworkPolicy: networkPolicyConfig,
 		ExecutionImageCacheRoot:       values["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"],
 		ExecutionImageFetcherSocket:   values["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"],

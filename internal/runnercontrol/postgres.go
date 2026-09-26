@@ -325,6 +325,9 @@ func (store *PostgresStateStore) RecordRegistration(
 	if backendKind == "" {
 		return false, ErrRunnerPrerequisites
 	}
+	if registration.Capabilities != nil && registration.Capabilities.PhysicalStorageAdmissionReady && backendKind != "firecracker" && backendKind != "gvisor" {
+		return false, ErrRunnerPrerequisites
+	}
 	prerequisites := map[string]bool{
 		"compute-backend": registration.Capabilities != nil && registration.Capabilities.ComputeBackendVersion != "",
 		"hypervisor":      registration.Capabilities != nil && registration.Capabilities.HypervisorReady,
@@ -372,6 +375,9 @@ func (store *PostgresStateStore) RecordRegistration(
 	}
 	if registration.Capabilities.ClientSelectedImageReady {
 		capabilities = append(capabilities, contracts.RunnerCapabilityClientSelectedImage)
+	}
+	if registration.Capabilities.PhysicalStorageAdmissionReady {
+		capabilities = append(capabilities, contracts.RunnerCapabilityPhysicalStorageAdmission)
 	}
 	architecturesJSON, err := json.Marshal([]string{registration.Capabilities.Architecture})
 	if err != nil {

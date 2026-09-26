@@ -32,16 +32,20 @@ type Config struct {
 	// NetworkProfile separates runners sharing one host network namespace:
 	// it selects the DNS proxy address, the link-local /30 slot space, and
 	// the veth and namespace name spaces. Single-runner hosts keep 0.
-	NetworkProfile     uint32
-	WorkspaceRoot      string
-	SelfExecutable     string
-	NetworkPolicy      networkpolicy.RunnerConfig
-	MaximumVCPUs       uint32
-	MaximumMemoryBytes uint64
-	MaximumDiskBytes   uint64
-	MaximumInstances   uint32
-	MaximumOperations  uint32
-	WorkspaceStore     *workspacestore.Store
+	NetworkProfile         uint32
+	WorkspaceRoot          string
+	SelfExecutable         string
+	NetworkPolicy          networkpolicy.RunnerConfig
+	MaximumVCPUs           uint32
+	MaximumMemoryBytes     uint64
+	MaximumDiskBytes       uint64
+	MaximumInstances       uint32
+	MaximumOperations      uint32
+	StorageAdmissionMode   string
+	StorageRecoveryPercent int
+	StorageWarningPercent  int
+	StorageDenyPercent     int
+	WorkspaceStore         *workspacestore.Store
 	// Client-selected images arrive through the host-private image fetcher
 	// into this cache; the backend only verifies and reflinks them.
 	ExecutionImageCacheRoot       string
@@ -177,6 +181,9 @@ func validateConfig(config Config) (validatedConfig, error) {
 	if config.MaximumVCPUs == 0 || config.MaximumMemoryBytes == 0 || config.MaximumDiskBytes == 0 ||
 		config.MaximumInstances == 0 || config.MaximumOperations == 0 {
 		return validatedConfig{}, fmt.Errorf("SecondBox gVisor capacity bounds must be positive")
+	}
+	if config.StorageAdmissionMode != "" && config.StorageAdmissionMode != "logical" && config.StorageAdmissionMode != "physical" {
+		return validatedConfig{}, fmt.Errorf("SecondBox gVisor storage admission mode must be logical or physical")
 	}
 	if config.WorkspaceStore == nil {
 		return validatedConfig{}, fmt.Errorf("SecondBox gVisor backend requires the runner WorkspaceStore")

@@ -2111,8 +2111,11 @@ type RunnerCapabilities struct {
 	SnapshotResumeReady      bool `protobuf:"varint,12,opt,name=snapshot_resume_ready,json=snapshotResumeReady,proto3" json:"snapshot_resume_ready,omitempty"`
 	AttributedExecutionReady bool `protobuf:"varint,13,opt,name=attributed_execution_ready,json=attributedExecutionReady,proto3" json:"attributed_execution_ready,omitempty"`
 	ClientSelectedImageReady bool `protobuf:"varint,14,opt,name=client_selected_image_ready,json=clientSelectedImageReady,proto3" json:"client_selected_image_ready,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// Physical storage admission measures filesystem use without reserving the
+	// full logical capacities of retained or active Workspace images.
+	PhysicalStorageAdmissionReady bool `protobuf:"varint,15,opt,name=physical_storage_admission_ready,json=physicalStorageAdmissionReady,proto3" json:"physical_storage_admission_ready,omitempty"`
+	unknownFields                 protoimpl.UnknownFields
+	sizeCache                     protoimpl.SizeCache
 }
 
 func (x *RunnerCapabilities) Reset() {
@@ -2239,6 +2242,13 @@ func (x *RunnerCapabilities) GetAttributedExecutionReady() bool {
 func (x *RunnerCapabilities) GetClientSelectedImageReady() bool {
 	if x != nil {
 		return x.ClientSelectedImageReady
+	}
+	return false
+}
+
+func (x *RunnerCapabilities) GetPhysicalStorageAdmissionReady() bool {
+	if x != nil {
+		return x.PhysicalStorageAdmissionReady
 	}
 	return false
 }
@@ -9374,7 +9384,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\tinstances\x18\x04 \x01(\rR\tinstances\x12\x1e\n" +
 	"\n" +
 	"operations\x18\x05 \x01(\rR\n" +
-	"operations\"\xdf\x05\n" +
+	"operations\"\xa8\x06\n" +
 	"\x12RunnerCapabilities\x12\"\n" +
 	"\farchitecture\x18\x01 \x01(\tR\farchitecture\x12%\n" +
 	"\x0ekernel_release\x18\x02 \x01(\tR\rkernelRelease\x126\n" +
@@ -9390,7 +9400,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x10data_plane_ready\x18\v \x01(\bR\x0edataPlaneReady\x122\n" +
 	"\x15snapshot_resume_ready\x18\f \x01(\bR\x13snapshotResumeReady\x12<\n" +
 	"\x1aattributed_execution_ready\x18\r \x01(\bR\x18attributedExecutionReady\x12=\n" +
-	"\x1bclient_selected_image_ready\x18\x0e \x01(\bR\x18clientSelectedImageReady\"\xb8\x05\n" +
+	"\x1bclient_selected_image_ready\x18\x0e \x01(\bR\x18clientSelectedImageReady\x12G\n" +
+	" physical_storage_admission_ready\x18\x0f \x01(\bR\x1dphysicalStorageAdmissionReady\"\xb8\x05\n" +
 	"\x1eBackendMaterializationEvidence\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12J\n" +
 	"\fbackend_kind\x18\x02 \x01(\x0e2'.secondbox.runner.v1.ComputeBackendKindR\vbackendKind\x12-\n" +

@@ -32,6 +32,7 @@ type storagePressurePolicy struct {
 	RecoveryPercent      int
 	WarningPercent       int
 	AdmissionDenyPercent int
+	PhysicalOnly         bool
 }
 
 func (p storagePressurePolicy) Validate() error {
@@ -97,10 +98,14 @@ func newConfiguredStoragePressureController(
 	if cfg == nil {
 		return nil, fmt.Errorf("storage pressure configuration is required")
 	}
+	if cfg.MicroVMStorageAdmissionMode != "" && cfg.MicroVMStorageAdmissionMode != "logical" && cfg.MicroVMStorageAdmissionMode != "physical" {
+		return nil, fmt.Errorf("storage admission mode must be logical or physical")
+	}
 	policy := storagePressurePolicy{
 		RecoveryPercent:      cfg.MicroVMStoragePressureRecoveryPercent,
 		WarningPercent:       cfg.MicroVMStoragePressureWarningPercent,
 		AdmissionDenyPercent: cfg.MicroVMStoragePressureAdmissionDenyPercent,
+		PhysicalOnly:         cfg.MicroVMStorageAdmissionMode == "physical",
 	}
 	probe := &ext4StoragePressureProbe{workspaceDir: cfg.RunnerWorkspaceRoot}
 	return newStoragePressureController(policy, probe, emit)
@@ -122,6 +127,9 @@ func (c *storagePressureController) CheckAdmission(ctx context.Context, requeste
 	sample, err := c.sampleLocked(ctx)
 	if err != nil {
 		return err
+	}
+	if c.policy.PhysicalOnly {
+		requestedBytes = 0
 	}
 	reservedBytes, err := addStorageBytes(c.reservedBytesLocked(), requestedBytes)
 	if err != nil {
@@ -161,7 +169,11 @@ func (c *storagePressureController) Reserve(
 	if err != nil {
 		return err
 	}
-	reservedBytes, err := addStorageBytes(c.reservedBytesLocked(), requestedBytes)
+	admissionBytes := requestedBytes
+	if c.policy.PhysicalOnly {
+		admissionBytes = 0
+	}
+	reservedBytes, err := addStorageBytes(c.reservedBytesLocked(), admissionBytes)
 	if err != nil {
 		return err
 	}
@@ -199,6 +211,9 @@ func (c *storagePressureController) ReservedBytes() uint64 {
 }
 
 func (c *storagePressureController) reservedBytesLocked() uint64 {
+	if c.policy.PhysicalOnly {
+		return 0
+	}
 	var total uint64
 	for _, bytes := range c.reservations {
 		total += bytes

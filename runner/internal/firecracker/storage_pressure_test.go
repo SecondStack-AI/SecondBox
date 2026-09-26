@@ -3,6 +3,7 @@ package firecracker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -101,6 +102,36 @@ func TestStoragePressureReservationsAreAtomicAndReleasedForRecovery(t *testing.T
 	}
 	if got := terminalKinds[len(terminalKinds)-1]; got != "storage_pressure_recovered" {
 		t.Fatalf("release evidence terminal kind = %q", got)
+	}
+}
+
+func TestPhysicalStorageAdmissionUsesMeasuredBytesWithoutLogicalReservations(t *testing.T) {
+	probe := &mutableStoragePressureProbe{sample: storagePressureSample{
+		Backend: "ext4", TotalBytes: 200 << 30, UsedBytes: 1 << 30,
+	}}
+	controller, err := newStoragePressureController(
+		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90, PhysicalOnly: true},
+		probe,
+		func(context.Context, string) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 101; i++ {
+		if err := controller.Reserve(t.Context(), fmt.Sprintf("assignment-%d", i), 2<<30); err != nil {
+			t.Fatalf("physical admission at assignment %d: %v", i, err)
+		}
+	}
+	if got := controller.ReservedBytes(); got != 0 {
+		t.Fatalf("logical bytes charged in physical mode: %d", got)
+	}
+	probe.sample.UsedBytes = 180 << 30
+	if err := controller.CheckAdmission(t.Context(), 2<<30); !errors.Is(err, ErrStoragePressureAdmissionDenied) {
+		t.Fatalf("measured storage denial = %v", err)
+	}
+	probe.err = errors.New("simulated probe failure")
+	if err := controller.CheckAdmission(t.Context(), 2<<30); !errors.Is(err, ErrStoragePressureProbe) {
+		t.Fatalf("physical admission after probe failure = %v", err)
 	}
 }
 

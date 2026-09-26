@@ -192,7 +192,7 @@ func compatible(
 	free := freeCapacity(runner)
 	return free.VCPUCount >= requirements.Capacity.VCPUCount &&
 		free.MemoryBytes >= requirements.Capacity.MemoryBytes &&
-		free.DiskBytes >= requirements.Capacity.DiskBytes &&
+		(runner.Capabilities[contracts.RunnerCapabilityPhysicalStorageAdmission] || free.DiskBytes >= requirements.Capacity.DiskBytes) &&
 		free.Instances >= requirements.Capacity.Instances &&
 		free.Operations >= requirements.Capacity.Operations
 }

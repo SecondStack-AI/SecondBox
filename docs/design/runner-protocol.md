@@ -33,6 +33,7 @@ Registration reports:
 - the bounded set of egress-context names supported for the lifetime of this connection;
 - locally present, revalidated backend materializations keyed by backend kind, architecture, runtime digest, and toolchain digest;
 - allocatable and currently reserved vCPU, memory, disk, Instance, and operation capacity;
+- whether Firecracker or gVisor storage admission uses measured filesystem pressure without logical Workspace reservations;
 - the advertised caller-facing Port data-plane address.
 
 The runner performs prerequisite and trust validation before advertising schedulable capacity. Instance capacity and concurrent data-plane operation capacity are independent bounds; Profile operation limits reserve the latter while a Sandbox Instance is active. Missing backend prerequisites, required network controls, backend-specific trust anchors, storage health, cleanup capability, or a bound caller-facing data-plane listener make it unready. Registration transactionally seals an unsealed RunnerPool to the first healthy Runner's backend kind; every later mismatch is rejected and there is no reset operation.

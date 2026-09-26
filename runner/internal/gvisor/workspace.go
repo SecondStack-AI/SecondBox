@@ -41,6 +41,33 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 		FencingToken: append([]byte(nil), command.FencingToken...),
 	}
 	store := backend.config.WorkspaceStore
+	if backend.storagePressure != nil && (command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
+		command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT) {
+		if command.LogicalCapacityBytes > math.MaxInt64 {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(fmt.Errorf("SecondBox gVisor local-workspace capacity exceeds Runner bounds"))
+		}
+		var replayed workspacestore.Receipt
+		var found bool
+		var replayErr error
+		if command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE {
+			replayed, found, replayErr = store.ReplayCreate(ctx, workspacestore.CreateWorkspaceRequest{
+				Mutation: mutation, CapacityBytes: int64(command.LogicalCapacityBytes),
+			})
+		} else {
+			replayed, found, replayErr = store.ReplayCloneFromSnapshot(ctx, workspacestore.CloneWorkspaceRequest{
+				Mutation: mutation, SourceSnapshot: command.SnapshotId, CapacityBytes: int64(command.LogicalCapacityBytes),
+			})
+		}
+		if replayErr != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(replayErr)
+		}
+		if found {
+			return workspaceReceiptEvidence(replayed), nil
+		}
+		if err := backend.storagePressure.admit(ctx); err != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(fmt.Errorf("SecondBox gVisor local-workspace storage pressure: %w", err))
+		}
+	}
 	var receipt workspacestore.Receipt
 	var err error
 	switch command.Kind {

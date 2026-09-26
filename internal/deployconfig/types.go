@@ -148,6 +148,7 @@ type Runner struct {
 	StorageRecoveryPercent                *int64                `toml:"storage_pressure_recovery_percent"`
 	StorageWarningPercent                 *int64                `toml:"storage_pressure_warning_percent"`
 	StorageAdmissionDenyPercent           *int64                `toml:"storage_pressure_admission_deny_percent"`
+	StorageAdmissionMode                  string                `toml:"storage_admission_mode"`
 	SandboxMaxVCPUs                       *int64                `toml:"sandbox_max_vcpus"`
 	SandboxMaxMemoryMiB                   *int64                `toml:"sandbox_max_memory_mib"`
 	SandboxMaxDiskMiB                     *int64                `toml:"sandbox_max_disk_mib"`

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -105,6 +106,7 @@ type AssignmentBackend struct {
 	nftPath           string
 	enforcer          *firecracker.NFTablesNetworkPolicyEnforcer
 	executionImages   *executionimage.Manager
+	storagePressure   *physicalStoragePressure
 }
 
 type cleanupStack struct {
@@ -210,9 +212,17 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 	if err := executionImages.ProbeRootfsCloning(); err != nil {
 		return nil, fmt.Errorf("SecondBox gVisor execution images: %w", err)
 	}
+	var storagePressure *physicalStoragePressure
+	if config.StorageAdmissionMode == "physical" {
+		storagePressure, err = newPhysicalStoragePressure(config)
+		if err != nil {
+			return nil, err
+		}
+	}
 	dnsListen := netip.MustParseAddr(dnsAddressForProfile(config.NetworkProfile))
 	return &AssignmentBackend{
 		executionImages:   executionImages,
+		storagePressure:   storagePressure,
 		config:            validated,
 		nftPath:           nftPath,
 		assignments:       make(map[string]*activeAssignment),
@@ -320,6 +330,11 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox gVisor readiness materialization: %w", err)
 	}
+	if backend.storagePressure != nil {
+		if err := backend.storagePressure.admit(ctx); err != nil {
+			return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox gVisor readiness storage pressure: %w", err)
+		}
+	}
 	if err := backend.probePlatform(ctx); err != nil {
 		return runnercontrol.BackendReadiness{}, err
 	}
@@ -356,9 +371,10 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 				Minimum: manifest.AgentProtocolGeneration,
 				Maximum: manifest.AgentProtocolGeneration,
 			},
-			SnapshotResumeReady:      false,
-			AttributedExecutionReady: backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
-			ClientSelectedImageReady: true,
+			SnapshotResumeReady:           false,
+			AttributedExecutionReady:      backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
+			ClientSelectedImageReady:      true,
+			PhysicalStorageAdmissionReady: backend.storagePressure != nil,
 		},
 		BackendKind: runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR,
 		Materializations: []*runnerprotocol.BackendMaterializationEvidence{{
@@ -438,6 +454,14 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 		requirements.DiskBytes > backend.config.MaximumDiskBytes {
 		return capacityAssignment(fmt.Errorf("SecondBox gVisor assignment exceeds immutable local capacity"))
 	}
+	if backend.storagePressure != nil {
+		if err := backend.storagePressure.admit(ctx); err != nil {
+			if errors.Is(err, errPhysicalStoragePressure) {
+				return capacityAssignment(fmt.Errorf("SecondBox gVisor assignment storage pressure: %w", err))
+			}
+			return infrastructureAssignment(fmt.Errorf("SecondBox gVisor assignment storage pressure probe: %w", err))
+		}
+	}
 	supported := map[string]bool{
 		"attributed-execution":  backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
 		"client-selected-image": true,
@@ -481,9 +505,11 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 			return incompatibleAssignment(fmt.Errorf("SecondBox gVisor Sandbox already has an unfenced assignment"))
 		}
 	}
+	diskOverflows := requirements.DiskBytes > math.MaxUint64-backend.reserved.disk
+	diskExceedsLimit := backend.storagePressure == nil && backend.reserved.disk > backend.config.MaximumDiskBytes-requirements.DiskBytes
 	if backend.reserved.vcpus+requirements.VcpuCount > backend.config.MaximumVCPUs ||
 		backend.reserved.memory+requirements.MemoryBytes > backend.config.MaximumMemoryBytes ||
-		backend.reserved.disk+requirements.DiskBytes > backend.config.MaximumDiskBytes ||
+		diskOverflows || diskExceedsLimit ||
 		backend.reserved.instances+1 > backend.config.MaximumInstances {
 		return capacityAssignment(fmt.Errorf("SecondBox gVisor assignment capacity is unavailable"))
 	}
@@ -1327,9 +1353,12 @@ func (backend *AssignmentBackend) Shutdown(ctx context.Context) error {
 func (backend *AssignmentBackend) reserve(request capacityReservation) error {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
+	diskOverflows := request.disk > math.MaxUint64-backend.reserved.disk
+	diskExceedsLimit := backend.storagePressure == nil &&
+		(request.disk > backend.config.MaximumDiskBytes || backend.reserved.disk > backend.config.MaximumDiskBytes-request.disk)
 	if backend.reserved.vcpus+request.vcpus > backend.config.MaximumVCPUs ||
 		backend.reserved.memory+request.memory > backend.config.MaximumMemoryBytes ||
-		backend.reserved.disk+request.disk > backend.config.MaximumDiskBytes ||
+		diskOverflows || diskExceedsLimit ||
 		backend.reserved.instances+request.instances > backend.config.MaximumInstances {
 		return fmt.Errorf("SecondBox gVisor assignment capacity is unavailable")
 	}

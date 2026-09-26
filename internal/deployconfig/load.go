@@ -766,6 +766,9 @@ func validateRunner(prefix string, r Runner) error {
 	if r.StorageAdmissionDenyPercent != nil && *r.StorageAdmissionDenyPercent >= 100 {
 		return manifestError(prefix+" storage pressure thresholds must satisfy 0 < recovery < warning < admission deny < 100", nil)
 	}
+	if r.StorageAdmissionMode != "" && r.StorageAdmissionMode != "logical" && r.StorageAdmissionMode != "physical" {
+		return manifestError(prefix+".storage_admission_mode must be logical or physical", nil)
+	}
 	if r.MaxConcurrentStarts != nil && r.MaxConcurrentGlobal != nil && *r.MaxConcurrentStarts > *r.MaxConcurrentGlobal {
 		return manifestError(prefix+".max_concurrent_starts must not exceed max_concurrent_global", nil)
 	}
@@ -1136,6 +1139,10 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxExpandedBytes)
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxCacheBytes)
 	env["SECONDBOX_COMPUTE_BACKEND"] = "firecracker"
+	env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] = r.StorageAdmissionMode
+	if env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] == "" {
+		env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] = "logical"
+	}
 	env["SECONDBOX_RUNNER_LOG_DIR"] = r.LogDirectory
 	env["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"] = filepath.Join(r.IdentityDirectory, "runner.crt")
 	env["SECONDBOX_RUNNER_CLIENT_KEY"] = filepath.Join(r.IdentityDirectory, "runner.key")
