@@ -38,11 +38,10 @@ if [[ "$runner_placement" == "pod" && "$scenario_backend" != "gvisor" ]]; then
   echo "SecondBox scenario pod placement is qualified only for the gvisor backend" >&2
   exit 1
 fi
-export SECONDBOX_SCENARIO_RUNNER_PLACEMENT="$runner_placement"
-# Both supported backends launch a retrievable signed client-selected image in
-# the host placement; the pod placement's node lacks capacity for one.
+# Both supported backends launch a retrievable signed client-selected image,
+# the gVisor pod placement included.
 selected_image_scenario=false
-if [[ "$scenario_backend" == firecracker || ( "$scenario_backend" == gvisor && "$runner_placement" == compose ) ]]; then
+if [[ "$scenario_backend" == firecracker || "$scenario_backend" == gvisor ]]; then
   selected_image_scenario=true
 fi
 runner_external=false

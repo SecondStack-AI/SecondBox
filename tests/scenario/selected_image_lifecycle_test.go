@@ -13,11 +13,7 @@ import (
 
 func TestScenarioSelectedImagePreservesDigestAndWorkspace(t *testing.T) {
 	switch requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_COMPUTE_BACKEND") {
-	case "firecracker":
-	case "gvisor":
-		if requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_RUNNER_PLACEMENT") != "compose" {
-			t.Skip("The gVisor pod qualification node has no capacity for a signed execution image; the host placement qualifies selected images")
-		}
+	case "firecracker", "gvisor":
 	default:
 		t.Skip("Selected execution images require the Firecracker or gVisor backend")
 	}

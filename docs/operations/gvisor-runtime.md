@@ -439,8 +439,11 @@ just test-scenario-gvisor
 
 `scripts/qualify-gvisor.sh --host` supplies the release publisher key from
 `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY`, because its selected image is the release-signed microVM
-artifact the Firecracker scenario also launches. The pod placement runs the fetcher sidecar but
-skips the selected-image scenario: the qualification node has no capacity for a signed image.
+artifact the Firecracker scenario also launches. The pod placement runs the same selected-image
+scenario through the reference pod's fetcher container; the nightly VM path copies the image,
+registry configuration, and publisher key into the VM. A cold fetch reserves twice the download
+limit plus the expanded limit (48 GiB in the scenario) beside the cached image, so the pod
+qualification node's reflink volume needs at least 64 GiB free.
 
 For the pod placement, qualify the mechanisms and the identical scenario suite on the target
 node class: a no-KVM Kubernetes node, as root, with node-local `kubectl` (both wrappers default
