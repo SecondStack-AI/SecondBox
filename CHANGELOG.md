@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-gVisor Runners launch client-selected execution images, so applications that select a signed image on every create and start run without KVM. Every gVisor Runner now requires the image fetcher, a reflink-capable execution image cache, and the publisher key.
+## 0.18.0 - 2026-09-26
+
+gVisor Runners launch client-selected execution images, so applications that select a signed image on every create and start run without KVM. Every gVisor Runner now requires the image fetcher, a reflink-capable execution image cache, and the publisher key. The v0.17.0 Firecracker bundle, protocol generation 5, and the migration baseline are unchanged, so Firecracker deployments update in place; see the [v0.18.0 release notes](docs/releases/v0.18.0.md).
 
 ### Added
 
-- Added client-selected execution images to the gVisor backend. The Runner verifies the same signed OCI artifact Firecracker consumes through the shared verifier, reflinks its `rootfs.ext4` into an unnamed per-Instance clone, and mounts it read-only as the sandbox root while its pinned `runsc` and guest agent launch it. As under Firecracker, guests may write to that root; the writes stay in `runsc`'s in-memory overlay. gVisor Runners advertise `client-selected-image` readiness and serve `images:prepare`; the runner protocol is unchanged.
+- Added client-selected execution images to the gVisor backend. The Runner verifies the same signed OCI artifact Firecracker consumes through the shared verifier, reflinks its `rootfs.ext4` into an unnamed per-Instance clone, and mounts it read-only as the sandbox root ([#173](https://github.com/SecondStack-AI/SecondBox/pull/173)) while its pinned `runsc` and guest agent launch it. As under Firecracker, guests may write to that root; the writes stay in `runsc`'s in-memory overlay. gVisor Runners advertise `client-selected-image` readiness and serve `images:prepare`; the runner protocol is unchanged.
 - Added the unprivileged image fetcher and Skopeo to the `runner-gvisor` image, and an `image-fetcher` container with a node-local cache and per-Tenant registry Secret to the reference gVisor pod.
 
 ### Changed
