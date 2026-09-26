@@ -3,6 +3,8 @@
 # postgres and the control plane, and the runner-protocol port must be
 # reachable from the pod network, so it publishes beyond loopback. The API port
 # stays loopback-only for the suite on the node.
+# The image fetcher runs in the Kubernetes Pod; its DNS is set in
+# scenario-gvisor-pod-service-control.sh rather than in this Compose overlay.
 services:
   control-plane:
     ports: !override

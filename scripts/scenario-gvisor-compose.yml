@@ -23,6 +23,10 @@ x-gvisor-environment: &gvisor-environment
   SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /var/lib/secondbox-execution-images
 
 services:
+  image-fetcher:
+    dns:
+      - ${SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS:?scenario image fetcher DNS address is required}
+
   secondbox-runner:
     environment: *gvisor-environment
     # A privileged container reaches every host device it needs (loop

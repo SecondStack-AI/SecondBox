@@ -1,0 +1,6 @@
+# Only selected-image scenarios launch the image fetcher. Keep its DNS input
+# outside the base Compose file so Microsandbox scenarios need no fetcher DNS.
+services:
+  image-fetcher:
+    dns:
+      - ${SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS:?scenario image fetcher DNS address is required}

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.18.1 - 2026-09-26
+
+Firecracker and gVisor Runners can opt into physical Workspace storage admission. Logical Workspace limits can exceed the Runner's aggregate advertised disk capacity while individual Workspace ceilings, other capacity limits, and filesystem pressure checks remain active. This release retains protocol generation 5, the v0.15.0 migration baseline, standard Profile revisions, and the v0.17.0 signed Firecracker bundle; see the [v0.18.1 release notes](docs/releases/v0.18.1.md).
+
+### Added
+
+- Added explicit `logical` or `physical` storage admission for Firecracker and gVisor Runners, including the reference Kubernetes pod. Physical mode admits against measured Workspace filesystem use with warning, denial, recovery, and probe-failure behavior, without charging aggregate logical Workspace reservations ([#175](https://github.com/SecondStack-AI/SecondBox/pull/175)).
+
+### Fixed
+
+- Kept each backend's individual Workspace size ceiling during physical-mode placement, checked fresh relocation imports before staging storage, and preserved committed command and import replay under pressure ([#175](https://github.com/SecondStack-AI/SecondBox/pull/175)).
+- Made the scenario image fetcher's DNS server explicit so isolated Docker networks can resolve the signed selected-image registry on hosts whose local resolver is unreachable from those networks.
+
 ## 0.18.0 - 2026-09-26
 
 gVisor Runners launch client-selected execution images, so applications that select a signed image on every create and start run without KVM. Every gVisor Runner now requires the image fetcher, a reflink-capable execution image cache, and the publisher key. The v0.17.0 Firecracker bundle, protocol generation 5, and the migration baseline are unchanged, so Firecracker deployments update in place; see the [v0.18.0 release notes](docs/releases/v0.18.0.md).
