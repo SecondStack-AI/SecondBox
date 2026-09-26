@@ -33,10 +33,13 @@ for name in \
   SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR \
   SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256 \
   SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY \
+  SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS \
   SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY \
   SECONDBOX_SCENARIO_PKI_DIR; do
   [[ -n "${!name:-}" ]] || fail "$name is required"
 done
+[[ "$SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS" =~ ^[0-9A-Fa-f:.]+$ ]] ||
+  fail 'SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS must be an IP address'
 
 kubectl_command=(${SECONDBOX_SCENARIO_POD_KUBECTL:-k3s kubectl})
 # kubectl writes its discovery cache under $HOME; pin it outside the
@@ -123,6 +126,11 @@ metadata:
 spec:
   restartPolicy: Always
   terminationGracePeriodSeconds: 45
+  # The fetcher is a sidecar, so Compose's DNS override cannot reach it.
+  dnsPolicy: None
+  dnsConfig:
+    nameservers:
+      - "$SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS"
   # The unprivileged fetcher owns the shared execution image cache.
   initContainers:
     - name: image-cache-owner
