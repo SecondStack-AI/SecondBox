@@ -228,13 +228,25 @@ func (backend *AssignmentBackend) BeginWorkspaceRelocationImport(
 		frame.GetOpen() == nil || frame.GetOpen().LogicalCapacityBytes > math.MaxInt64 {
 		return nil, localWorkspaceFailure(fmt.Errorf("SecondBox gVisor Workspace relocation import is unavailable"))
 	}
-	importer, err := backend.config.WorkspaceStore.BeginRelocationImport(ctx, workspacestore.RelocationImportRequest{
+	request := workspacestore.RelocationImportRequest{
 		Mutation: workspacestore.Mutation{
 			OperationID: frame.OperationId, WorkspaceID: frame.WorkspaceId,
 			FencingToken: append([]byte(nil), frame.GetOpen().FencingToken...),
 		},
 		Generation: frame.Generation, CapacityBytes: int64(frame.GetOpen().LogicalCapacityBytes),
-	})
+	}
+	if backend.storagePressure != nil {
+		_, found, err := backend.config.WorkspaceStore.ReplayRelocationImport(ctx, request)
+		if err != nil {
+			return nil, localWorkspaceFailure(err)
+		}
+		if !found {
+			if err := backend.storagePressure.admit(ctx); err != nil {
+				return nil, localWorkspaceFailure(fmt.Errorf("SecondBox gVisor relocation storage pressure: %w", err))
+			}
+		}
+	}
+	importer, err := backend.config.WorkspaceStore.BeginRelocationImport(ctx, request)
 	if err != nil {
 		return nil, localWorkspaceFailure(err)
 	}

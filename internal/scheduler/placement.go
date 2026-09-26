@@ -190,9 +190,16 @@ func compatible(
 		}
 	}
 	free := freeCapacity(runner)
+	physicalStorage := runner.Capabilities[contracts.RunnerCapabilityPhysicalStorageAdmission]
+	individualDiskLimit := runner.Allocatable.DiskBytes
+	if physicalStorage && runner.BackendKind == "firecracker" && runner.Allocatable.Instances > 0 {
+		// Firecracker advertises one Workspace ceiling per concurrent Instance.
+		individualDiskLimit /= runner.Allocatable.Instances
+	}
 	return free.VCPUCount >= requirements.Capacity.VCPUCount &&
 		free.MemoryBytes >= requirements.Capacity.MemoryBytes &&
-		(runner.Capabilities[contracts.RunnerCapabilityPhysicalStorageAdmission] || free.DiskBytes >= requirements.Capacity.DiskBytes) &&
+		((physicalStorage && individualDiskLimit >= requirements.Capacity.DiskBytes) ||
+			(!physicalStorage && free.DiskBytes >= requirements.Capacity.DiskBytes)) &&
 		free.Instances >= requirements.Capacity.Instances &&
 		free.Operations >= requirements.Capacity.Operations
 }

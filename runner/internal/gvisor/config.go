@@ -45,7 +45,7 @@ type Config struct {
 	StorageRecoveryPercent int
 	StorageWarningPercent  int
 	StorageDenyPercent     int
-	WorkspaceStore         *workspacestore.Store
+	WorkspaceStore         workspacestore.WorkspaceStore
 	// Client-selected images arrive through the host-private image fetcher
 	// into this cache; the backend only verifies and reflinks them.
 	ExecutionImageCacheRoot       string

@@ -18,7 +18,8 @@ func TestPhysicalStorageAdmissionSkipsOnlyDiskCapacity(t *testing.T) {
 	}
 	runner := RunnerSnapshot{
 		ID: "home", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
-		Capabilities: readyCapabilities(), Allocatable: Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 1, Instances: 1},
+		Capabilities: readyCapabilities(), Allocatable: Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Instances: 1},
+		Reserved:   Capacity{DiskBytes: 2 << 30},
 		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
 		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 	}
@@ -29,6 +30,28 @@ func TestPhysicalStorageAdmissionSkipsOnlyDiskCapacity(t *testing.T) {
 	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); err != nil {
 		t.Fatalf("physical admission error = %v", err)
 	}
+	runner.Allocatable.DiskBytes = 1 << 30
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("individual disk ceiling error = %v", err)
+	}
+	runner.Allocatable.DiskBytes = 2 << 30
+	runner.Allocatable.Instances = 2
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("Firecracker per-Instance disk ceiling error = %v", err)
+	}
+	runner.Allocatable.Instances = 1
+	runner.BackendKind = "gvisor"
+	runner.Materializations[0].BackendKind = "gvisor"
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); err != nil {
+		t.Fatalf("gVisor physical admission error = %v", err)
+	}
+	runner.Allocatable.DiskBytes = 1 << 30
+	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("gVisor individual disk ceiling error = %v", err)
+	}
+	runner.BackendKind = "firecracker"
+	runner.Materializations[0].BackendKind = "firecracker"
+	runner.Allocatable.DiskBytes = 2 << 30
 	runner.Allocatable.MemoryBytes = 0
 	if _, err := SelectHomeRunner(runner.ID, requirements, []RunnerSnapshot{runner}, now, time.Minute); !errors.Is(err, ErrHomeRunnerUnavailable) {
 		t.Fatalf("memory admission error = %v", err)

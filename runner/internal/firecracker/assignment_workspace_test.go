@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
@@ -15,6 +16,70 @@ type replayWorkspaceStore struct {
 	workspacestore.WorkspaceStore
 	receipt      workspacestore.Receipt
 	createCalled bool
+}
+
+type relocationPressureWorkspaceStore struct {
+	workspacestore.WorkspaceStore
+	replayed    bool
+	beginCalled bool
+	beginErr    error
+}
+
+func (store *relocationPressureWorkspaceStore) ReplayRelocationImport(
+	context.Context, workspacestore.RelocationImportRequest,
+) (workspacestore.Receipt, bool, error) {
+	return workspacestore.Receipt{}, store.replayed, nil
+}
+
+func (store *relocationPressureWorkspaceStore) BeginRelocationImport(
+	context.Context, workspacestore.RelocationImportRequest,
+) (workspacestore.RelocationImport, error) {
+	store.beginCalled = true
+	return nil, store.beginErr
+}
+
+func TestPhysicalStorageRelocationImportChecksPressureBeforeAllocation(t *testing.T) {
+	probe := &mutableStoragePressureProbe{sample: storagePressureSample{
+		Backend: "ext4", TotalBytes: 100 << 20, UsedBytes: 95 << 20,
+	}}
+	controller, err := newStoragePressureController(
+		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90, PhysicalOnly: true},
+		probe, func(context.Context, string) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &relocationPressureWorkspaceStore{beginErr: errors.New("replayed import reached")}
+	backend := &AssignmentBackend{
+		manager:         &Manager{cfg: &config.Config{MicroVMStorageAdmissionMode: "physical"}, workspaceStore: store},
+		storagePressure: controller,
+	}
+	frame := &runnerprotocol.WorkspaceTransferFrame{
+		OperationId: "relocate-target", WorkspaceId: "target", Generation: 1,
+		Payload: &runnerprotocol.WorkspaceTransferFrame_Open{Open: &runnerprotocol.WorkspaceTransferOpen{
+			LogicalCapacityBytes: 64 << 20, FencingToken: []byte("fencing-token"),
+		}},
+	}
+	if _, err := backend.BeginWorkspaceRelocationImport(t.Context(), frame); !errors.Is(err, ErrStoragePressureAdmissionDenied) {
+		t.Fatalf("relocation pressure denial = %v", err)
+	}
+	if store.beginCalled {
+		t.Fatal("relocation importer opened under pressure")
+	}
+	probe.err = errors.New("probe failed")
+	if _, err := backend.BeginWorkspaceRelocationImport(t.Context(), frame); !errors.Is(err, ErrStoragePressureProbe) {
+		t.Fatalf("relocation probe failure = %v", err)
+	}
+	if store.beginCalled {
+		t.Fatal("relocation importer opened after failed probe")
+	}
+	store.replayed = true
+	if _, err := backend.BeginWorkspaceRelocationImport(t.Context(), frame); !errors.Is(err, store.beginErr) {
+		t.Fatalf("completed import replay = %v", err)
+	}
+	if !store.beginCalled {
+		t.Fatal("completed import did not reach WorkspaceStore")
+	}
 }
 
 func (store *replayWorkspaceStore) ReplayCreate(

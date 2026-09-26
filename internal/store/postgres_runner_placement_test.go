@@ -116,6 +116,15 @@ func TestPhysicalStorageAdmissionIgnoresRetainedLogicalWorkspaceCapacity(t *test
 	if err != nil || selected != runnerID {
 		t.Fatalf("physical storage placement selected=%q error=%v", selected, err)
 	}
+	if _, err := second.Exec(t.Context(), `
+		UPDATE secondbox.runners
+		SET capacity_json=jsonb_set(jsonb_set(capacity_json,'{DiskBytes}','2147483648'::jsonb),'{Instances}','4'::jsonb)
+		WHERE id=$1`, runnerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selectInitialHomeRunner(t.Context(), second, spec); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+		t.Fatalf("physical admission exceeded Firecracker per-Instance disk ceiling: %v", err)
+	}
 }
 
 func TestDurableHomeReservationIsDiskOnlyAndReportedComputeStillApplies(t *testing.T) {
