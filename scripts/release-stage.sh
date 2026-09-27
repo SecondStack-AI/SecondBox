@@ -346,7 +346,7 @@ else
   [[ "$(go -C "$repo_root/runner" run ./cmd/secondbox-materialization-digest "$output_dir/secondbox-${version}-gvisor-materialization.json")" == "$gvisor_materialization_digest" ]] || { echo "gVisor materialization digest differs from the transport identity" >&2; exit 1; }
 fi
 
-go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$microvm_manifest_digest" "$microvm_runtime_digest" "$microvm_toolchain_digest" "$output_dir"
+go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$output_dir"
 
 jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
 jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"

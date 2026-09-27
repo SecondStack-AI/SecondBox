@@ -17,8 +17,6 @@ type runtimeInputs struct {
 	baseURL          string
 	platformToken    string
 	applicationToken string
-	runtimeDigest    string
-	toolchainDigest  string
 	sourceCommit     string
 	goVersion        string
 	artifactManifest string
@@ -78,7 +76,6 @@ func runMain(arguments []string) error {
 	}
 	driver := &stressDriver{
 		config: config, admin: clients.Admin, client: clients.Subject,
-		runtimeDigest: inputs.runtimeDigest, toolchainDigest: inputs.toolchainDigest,
 		guestCIDR: inputs.guestCIDR, bootStages: make(map[string][]time.Duration),
 	}
 	switch *mode {
@@ -182,12 +179,6 @@ func readRuntimeInputs(mode string) (runtimeInputs, error) {
 		return runtimeInputs{}, err
 	}
 	if inputs.applicationToken, err = required("SECONDBOX_SCENARIO_APPLICATION_TOKEN"); err != nil {
-		return runtimeInputs{}, err
-	}
-	if inputs.runtimeDigest, err = required("SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"); err != nil {
-		return runtimeInputs{}, err
-	}
-	if inputs.toolchainDigest, err = required("SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"); err != nil {
 		return runtimeInputs{}, err
 	}
 	if inputs.guestCIDR, err = required("SECONDBOX_SCENARIO_GUEST_CIDR"); err != nil {

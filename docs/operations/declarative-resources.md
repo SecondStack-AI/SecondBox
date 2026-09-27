@@ -13,6 +13,8 @@ Both commands return structured per-resource actions. `check` performs no mutati
 
 A Profile declaration contains its complete ordered lineage. Every revision carries its canonical SHA-256 spec digest. On install, the engine verifies every installed historical revision against the declared prefix and then appends missing revisions sequentially. Gaps, changed historical specs, disabled heads, unknown future heads, incompatible architecture/capability drift, and update races fail explicitly.
 
+Documents written before v0.19.0 carry `runtimeBundleDigest` and `toolchainBundleDigest` in every revision spec. Delete both fields from each revision, keep the revision numbers, and replace each `specDigest` with the value `secondbox resources check` reports as `spec is sha256:…` for that revision. Migration `0031_profile_execution_assets_unpinned` removes the same fields from installed revisions, so the updated document converges on the installed history without new revisions.
+
 The release owns three amd64 standard bundles:
 
 - `agent-compartment` defaults to 60-second idle shutdown and unlimited maximum runtime, has no public Ports or Snapshots, and can reach only `agent-gateway.secondbox.internal` over HTTPS.
@@ -24,7 +26,7 @@ apply at new Sandbox creation; existing Sandboxes keep their pinned lifecycle. S
 [configurable limits](../design/configurable-limits.md) for `lifecycleCeiling` omission and
 explicit-null semantics. Individual commands and ownership leases remain bounded.
 
-The bundle resolver takes runtime/toolchain identity from the verified release artifact manifest. Standard documents contain no tokens, application authorities, runner credentials, host paths, or storage keys.
+Standard Profiles name no execution bundle; each Instance boots the signed bundle its home Runner has installed. Standard documents contain no tokens, application authorities, runner credentials, host paths, or storage keys.
 
 ## Deployment selection
 

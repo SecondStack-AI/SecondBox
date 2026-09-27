@@ -36,15 +36,7 @@ func TestPrepareImageHTTPResolvesOnceAndWarmsWithoutSandbox(t *testing.T) {
 			}
 			var operation contracts.Operation
 			decodeResponseJSON(t, response, &operation)
-			spec := testProfileSpec(1)
-			runtime, err := (multirunnerAssetCatalog{}).Resolve(spec.RuntimeBundleDigest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			toolchain, err := (multirunnerAssetCatalog{}).Resolve(spec.ToolchainBundleDigest)
-			if err != nil {
-				t.Fatal(err)
-			}
+			runtime, toolchain := selectedImageComponents()
 			manifest, err := json.Marshal(map[string]any{"architecture": "amd64", "guestProtocol": map[string]int{"minimum": 1, "maximum": 1}, "runtimeBundle": runtime, "toolchainBundle": toolchain})
 			if err != nil {
 				t.Fatal(err)
@@ -117,15 +109,7 @@ func newPreparationFixture(t *testing.T) *preparationFixture {
 	if _, err := fixture.pool.Exec(t.Context(), `UPDATE secondbox.tenants SET allowed_profile_grants_json=jsonb_build_array($2::text) WHERE ref=$1`, fixture.tenantRef, fixture.profileName); err != nil {
 		t.Fatal(err)
 	}
-	spec := testProfileSpec(1)
-	runtime, err := (multirunnerAssetCatalog{}).Resolve(spec.RuntimeBundleDigest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	toolchain, err := (multirunnerAssetCatalog{}).Resolve(spec.ToolchainBundleDigest)
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime, toolchain := selectedImageComponents()
 	manifest, err := json.Marshal(map[string]any{"architecture": "amd64", "guestProtocol": map[string]int{"minimum": 1, "maximum": 1}, "runtimeBundle": runtime, "toolchainBundle": toolchain})
 	if err != nil {
 		t.Fatal(err)

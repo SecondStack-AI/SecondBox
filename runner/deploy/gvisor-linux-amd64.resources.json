@@ -15,12 +15,10 @@
       "revisions": [
         {
           "number": 1,
-          "specDigest": "sha256:ceae1348e11724ca9ca17628c568b2d8a883d31b9b27eacd0f98d75bf7bcc28e",
+          "specDigest": "sha256:6a81e18b66185f4cc734872fd91b052b0a8a273dca4b00494b2d78d4c960c77e",
           "spec": {
             "pool": "experimental-gvisor-amd64",
             "architecture": "amd64",
-            "runtimeBundleDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
-            "toolchainBundleDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
             "resources": {
               "vcpuCount": 2,
               "memoryBytes": 2147483648,

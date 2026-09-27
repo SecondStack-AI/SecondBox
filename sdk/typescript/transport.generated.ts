@@ -617,9 +617,7 @@ export interface ProfileRevisionSpec {
   readonly resourceCeiling?: ProfileResourceCeiling;
   readonly resources: ResourcePolicy;
   readonly retention: RetentionPolicy;
-  readonly runtimeBundleDigest: string;
   readonly startup: StartupPolicy;
-  readonly toolchainBundleDigest: string;
 }
 
 export type ProfileState = "enabled" | "disabled";

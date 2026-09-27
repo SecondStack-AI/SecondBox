@@ -7,7 +7,7 @@ services:
     depends_on:
       runner-pki-init:
         condition: service_completed_successfully
-      asset-catalog-init:
+      control-plane-assets-init:
         condition: service_completed_successfully
     environment:
       SECONDBOX_LISTEN_ADDR: ${SECONDBOX_LISTEN_ADDR:?set SECONDBOX_LISTEN_ADDR}
@@ -21,7 +21,6 @@ services:
       SECONDBOX_RUNNER_CA_CERTIFICATE: ${SECONDBOX_RUNNER_CA_CERTIFICATE:?set SECONDBOX_RUNNER_CA_CERTIFICATE}
       SECONDBOX_RUNNER_CREDENTIAL: ${SECONDBOX_RUNNER_CREDENTIAL:?set SECONDBOX_RUNNER_CREDENTIAL}
       SECONDBOX_DATA_PLANE_RETENTION_SECONDS: ${SECONDBOX_DATA_PLANE_RETENTION_SECONDS:?set SECONDBOX_DATA_PLANE_RETENTION_SECONDS}
-      SECONDBOX_SIGNED_ASSET_CATALOG_PATH: ${SECONDBOX_SIGNED_ASSET_CATALOG_PATH:?set SECONDBOX_SIGNED_ASSET_CATALOG_PATH}
       SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY: ${SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY:?set SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY}
       SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256: ${SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256:?set SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256}
       SECONDBOX_RUNNER_ENABLED_FEATURES: ${SECONDBOX_RUNNER_ENABLED_FEATURES:?set SECONDBOX_RUNNER_ENABLED_FEATURES}
@@ -82,16 +81,14 @@ services:
     security_opt: [no-new-privileges:true]
     networks: [secondbox-backend]
 
-  asset-catalog-init:
+  control-plane-assets-init:
     image: ${SECONDBOX_CONTROL_PLANE_IMAGE:?set SECONDBOX_CONTROL_PLANE_IMAGE}
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        install -m 644 -o 65532 -g 65532 /source/signed-assets.json /target/signed-assets.json
         install -m 644 -o 65532 -g 65532 /source/execution-image.pub /target/execution-image.pub
     volumes:
-      - "${SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH:?set SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH}:/source/signed-assets.json:ro"
       - "${SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_HOST_PATH:?set SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_HOST_PATH}:/source/execution-image.pub:ro"
       - control-plane-assets:/target
     read_only: true

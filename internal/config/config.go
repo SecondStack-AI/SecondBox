@@ -63,7 +63,6 @@ type Config struct {
 	RunnerHeartbeatTimeout           time.Duration
 	AssignmentRetryLimit             int64
 	SchedulerSerializationRetryLimit int
-	AssetCatalogPath                 string
 	ExecutionImagePublicKeyPath      string
 	ExecutionImagePublicKeySHA256    string
 	RunnerEnabledFeatures            []string
@@ -198,10 +197,6 @@ func FromEnvironment() (Config, error) {
 	if int64(schedulerSerializationRetryLimitInt) != schedulerSerializationRetryLimit {
 		return Config{}, errorsForEnvironment("scheduler serialization retry limit exceeds process integer range")
 	}
-	signedAssetCatalogPath, err := requiredAbsolutePath("SECONDBOX_SIGNED_ASSET_CATALOG_PATH")
-	if err != nil {
-		return Config{}, err
-	}
 	executionImagePublicKeyPath, err := requiredAbsolutePath("SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY")
 	if err != nil {
 		return Config{}, err
@@ -240,7 +235,6 @@ func FromEnvironment() (Config, error) {
 		RunnerHeartbeatTimeout:           time.Duration(runnerHeartbeatTimeoutMilliseconds) * time.Millisecond,
 		AssignmentRetryLimit:             assignmentRetryLimit,
 		SchedulerSerializationRetryLimit: schedulerSerializationRetryLimitInt,
-		AssetCatalogPath:                 signedAssetCatalogPath,
 		ExecutionImagePublicKeyPath:      executionImagePublicKeyPath,
 		ExecutionImagePublicKeySHA256:    executionImagePublicKeySHA256,
 		RunnerEnabledFeatures:            runnerEnabledFeatures,

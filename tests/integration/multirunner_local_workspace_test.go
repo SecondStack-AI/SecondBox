@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -305,7 +306,6 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 			HeartbeatTimeout:        time.Minute,
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
-			AssetCatalog:            multirunnerAssetCatalog{},
 			ExecutionImageAuthority: testExecutionImageAuthority(t),
 			SessionCanceller:        multirunnerSessionCanceller{},
 			NewID: func(prefix string) string {
@@ -913,20 +913,16 @@ func multirunnerRecordEvent(
 	}
 }
 
-type multirunnerAssetCatalog struct{}
-
-func (multirunnerAssetCatalog) Resolve(digest string) (lifecycle.Asset, error) {
-	if digest == "" {
-		return lifecycle.Asset{}, errors.New("empty fixture asset digest")
+// selectedImageComponents returns the signed runtime and toolchain components a
+// fixture execution image manifest binds.
+func selectedImageComponents() (map[string]any, map[string]any) {
+	component := func(name, fill string) map[string]any {
+		return map[string]any{
+			"artifactId": name, "manifestDigest": "sha256:" + strings.Repeat(fill, 64),
+			"mandatoryGuestFeatures": []string{},
+		}
 	}
-	return lifecycle.Asset{
-		ArtifactID:     "asset-" + digest[len(digest)-8:],
-		ManifestDigest: digest,
-
-		Architecture:            "amd64",
-		GuestProtocolGeneration: 1,
-		MandatoryGuestFeatures:  []string{},
-	}, nil
+	return component("selected-runtime", "a"), component("selected-toolchain", "b")
 }
 
 type multirunnerSessionCanceller struct{}

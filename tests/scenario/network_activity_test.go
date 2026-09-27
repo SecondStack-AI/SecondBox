@@ -503,15 +503,13 @@ func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *te
 	startScenarioNetworkTarget(t, gatewayAddress, gatewayContext)
 	startScenarioNetworkTarget(t, managementAddress, "management-network")
 
-	runtimeDigest := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST")
-	toolchainDigest := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST")
-	isolatedLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated, runtimeDigest, toolchainDigest)
+	isolatedLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated)
 	if err != nil {
 		t.Fatal(err)
 	}
 	isolatedProfile := createScenarioProfile(t, fixture, standardresources.AgentCompartmentIsolated, isolatedLineage.Revisions[len(isolatedLineage.Revisions)-1].Spec)
 
-	networkLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartment, runtimeDigest, toolchainDigest)
+	networkLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartment)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,11 +49,14 @@ func TestDirectoryFetcherAcceptsOnlyExactCandidateObjects(t *testing.T) {
 	}
 }
 
-func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
+// TestManifestObjectsBindStandardBundleDocumentsByDigest proves bundle
+// documents are bound by manifest digest alone, so an updater authenticates a
+// release published under an earlier bundle schema.
+func TestManifestObjectsBindStandardBundleDocumentsByDigest(t *testing.T) {
 	signed := "sha256:" + strings.Repeat("a", 64)
 	runtimeDigest := "sha256:" + strings.Repeat("b", 64)
 	toolchainDigest := "sha256:" + strings.Repeat("c", 64)
-	documents, err := standardresources.Documents(signed, runtimeDigest, toolchainDigest)
+	documents, err := standardresources.Documents()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,42 +117,50 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Name: document.Name, Document: releasecontract.Reference{Location: location, Digest: releasecontract.Digest(data)}, Profiles: profiles})
 	}
 	manifest := releasecontract.ArtifactManifest{Identity: releasecontract.Identity{SourceCommit: sourceCommit}, OpenAPI: releasecontract.OpenAPIArtifact{Reference: baseReference}, GoSDK: releasecontract.SDKArtifact{Package: baseReference}, TypeScriptSDK: releasecontract.SDKArtifact{Package: baseReference}, InstallBootstrap: baseReference, SourceFreeSuite: baseReference, QualificationEvidence: evidenceReference, InstallerQualificationEvidence: installerEvidenceReference, MicroVM: releasecontract.MicroVMArtifact{SignedManifestDigest: signed, RuntimeBundle: releasecontract.SignedComponent{ManifestDigest: runtimeDigest}, ToolchainBundle: releasecontract.SignedComponent{ManifestDigest: toolchainDigest}}, StandardBundles: bundles}
-	qualificationSubject, err := manifest.InstallerQualificationSubjectDigest()
-	if err != nil {
-		t.Fatal(err)
+	// The installer evidence binds the whole manifest, so every manifest edit
+	// below must be requalified before its objects are verified.
+	requalify := func() {
+		t.Helper()
+		qualificationSubject, err := manifest.InstallerQualificationSubjectDigest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		installerEvidence.ReleaseManifestDigest = qualificationSubject
+		installerEvidenceData, err := json.Marshal(installerEvidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		objects[installerEvidenceLocation] = installerEvidenceData
+		manifest.InstallerQualificationEvidence.Digest = releasecontract.Digest(installerEvidenceData)
 	}
-	installerEvidence.ReleaseManifestDigest = qualificationSubject
-	installerEvidenceData, err = json.Marshal(installerEvidence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	objects[installerEvidenceLocation] = installerEvidenceData
-	manifest.InstallerQualificationEvidence.Digest = releasecontract.Digest(installerEvidenceData)
+	requalify()
 	fetchCalls := map[string]int{}
 	fetch := func(_ context.Context, location string) ([]byte, error) {
 		fetchCalls[location]++
 		return objects[location], nil
 	}
-	if err := verifyManifestObjects(t.Context(), manifest, fetch, false); err != nil {
+	if err := verifyManifestObjects(t.Context(), manifest, fetch); err != nil {
 		t.Fatal(err)
 	}
 	if fetchCalls[evidenceLocation] != 1 || fetchCalls[installerEvidenceLocation] != 1 {
 		t.Fatalf("qualification evidence fetches = scenario %d installer %d", fetchCalls[evidenceLocation], fetchCalls[installerEvidenceLocation])
 	}
-	manifest.MicroVM.RuntimeBundle.ManifestDigest = "sha256:" + strings.Repeat("d", 64)
-	qualificationSubject, err = manifest.InstallerQualificationSubjectDigest()
+	recorded, err := os.ReadFile(filepath.Join("..", "standardresources", "testdata", "v0.18.1", "durable-coding.standard-bundle.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	installerEvidence.ReleaseManifestDigest = qualificationSubject
-	installerEvidenceData, err = json.Marshal(installerEvidence)
-	if err != nil {
-		t.Fatal(err)
+	bundle := &manifest.StandardBundles[1]
+	if bundle.Name != standardresources.DurableCoding {
+		t.Fatalf("standard bundle order = %#v", manifest.StandardBundles)
 	}
-	objects[installerEvidenceLocation] = installerEvidenceData
-	manifest.InstallerQualificationEvidence.Digest = releasecontract.Digest(installerEvidenceData)
-	if err := verifyManifestObjects(t.Context(), manifest, fetch, false); err == nil || !strings.Contains(err.Error(), "identity mismatch") {
-		t.Fatalf("component substitution error = %v", err)
+	objects[bundle.Document.Location] = recorded
+	if err := verifyManifestObjects(t.Context(), manifest, fetch); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("substituted bundle document error = %v", err)
+	}
+	bundle.Document.Digest = releasecontract.Digest(recorded)
+	requalify()
+	if err := verifyManifestObjects(t.Context(), manifest, fetch); err != nil {
+		t.Fatalf("recorded v3 bundle document bound by digest: %v", err)
 	}
 }
 

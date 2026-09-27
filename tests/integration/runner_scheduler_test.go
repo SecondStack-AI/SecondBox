@@ -403,7 +403,6 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			instanceID := task4IDForIndex("instance", index)
 			fencingToken := []byte("01234567890123456789012345678901")
 			runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-			toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 			request := scheduler.ScheduleRequest{
 				AssignmentID: assignmentID, AssignmentCommandID: task4IDForIndex("assignment-command", index),
 				InstanceID: instanceID, SandboxID: sandboxID, ProfileRevisionID: profileRevisionID,
@@ -414,12 +413,10 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 						"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution,
 						contracts.RunnerCapabilityClientSelectedImage,
 					},
-					GuestProtocolGeneration: 1,
 					Capacity: scheduler.Capacity{
 						VCPUCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
 						Instances: 1, Operations: 1,
 					},
-					PreferredArtifactDigests: []string{runtimeDigest, toolchainDigest},
 				},
 				AssignmentCommand: &runnerv1.AssignmentCommand{
 					ExecutionImage: &runnerv1.ExecutionImage{Reference: testExecutionImage().Reference},

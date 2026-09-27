@@ -35,8 +35,8 @@ func TestExecutionImageManifestAuthority(t *testing.T) {
 	}
 	manifest, err := json.Marshal(map[string]any{
 		"architecture": "amd64", "guestProtocol": map[string]int{"minimum": 1, "maximum": 1},
-		"runtimeBundle":   Asset{ArtifactID: "runtime", ManifestDigest: "sha256:" + strings.Repeat("a", 64)},
-		"toolchainBundle": Asset{ArtifactID: "toolchain", ManifestDigest: "sha256:" + strings.Repeat("b", 64)},
+		"runtimeBundle":   signedImageComponent{ArtifactID: "runtime", ManifestDigest: "sha256:" + strings.Repeat("a", 64)},
+		"toolchainBundle": signedImageComponent{ArtifactID: "toolchain", ManifestDigest: "sha256:" + strings.Repeat("b", 64)},
 	})
 	if err != nil {
 		t.Fatal(err)

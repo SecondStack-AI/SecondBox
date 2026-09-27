@@ -468,10 +468,6 @@ func terminalPathAssignment(
 			Architecture: "amd64", StartupMode: "cold_boot",
 			MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 		},
-		Assets: []*runnerprotocol.AssetReference{{
-			ArtifactId: "runtime", Architecture: "amd64", GuestProtocolGeneration: 1,
-			ManifestDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		}},
 		DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()),
 		Correlation: &runnerprotocol.Correlation{
 			RequestId: "request-terminal", OperationId: "operation-terminal",

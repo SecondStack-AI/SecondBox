@@ -7068,8 +7068,6 @@
         "required": [
           "pool",
           "architecture",
-          "runtimeBundleDigest",
-          "toolchainBundleDigest",
           "resources",
           "startup",
           "lifecycle",
@@ -7091,14 +7089,6 @@
               "amd64",
               "arm64"
             ]
-          },
-          "runtimeBundleDigest": {
-            "type": "string",
-            "pattern": "^sha256:[a-f0-9]{64}$"
-          },
-          "toolchainBundleDigest": {
-            "type": "string",
-            "pattern": "^sha256:[a-f0-9]{64}$"
           },
           "resources": {
             "$ref": "#/components/schemas/ResourcePolicy"

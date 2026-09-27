@@ -18,7 +18,6 @@ var requiredControlPlaneEnvironment = map[string]string{
 	"SECONDBOX_RUNNER_SERVER_CERTIFICATE":         "/tmp/server.crt",
 	"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY":         "/tmp/server.key",
 	"SECONDBOX_RUNNER_CA_CERTIFICATE":             "/tmp/ca.crt",
-	"SECONDBOX_SIGNED_ASSET_CATALOG_PATH":         "/tmp/assets.json",
 	"SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY":        "/tmp/execution-image.pub",
 	"SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256": strings.Repeat("a", 64),
 	"SECONDBOX_DATA_PLANE_RETENTION_SECONDS":      "86400",

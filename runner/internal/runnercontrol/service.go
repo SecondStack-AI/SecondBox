@@ -1817,8 +1817,10 @@ func validateResolvedAssignment(assignment *runnerprotocol.AssignmentCommand) er
 		requirements.MaximumOutputBytes == 0 {
 		return fmt.Errorf("SecondBox runner assignment has incomplete immutable profile requirements")
 	}
-	if len(assignment.Assets) == 0 {
-		return fmt.Errorf("SecondBox runner assignment has no immutable assets")
+	// A default-image assignment boots this Runner's installed bundle and names
+	// no assets; a client-selected image names its signed components.
+	if (assignment.ExecutionImage == nil) != (len(assignment.Assets) == 0) {
+		return fmt.Errorf("SecondBox runner assignment assets must accompany exactly a client-selected image")
 	}
 	for _, asset := range assignment.Assets {
 		if asset == nil ||

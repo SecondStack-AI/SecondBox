@@ -47,7 +47,6 @@ type Deployment struct {
 	RunnerBindIP                  string `toml:"runner_bind_ip"`
 	RunnerPublishedPort           *int64 `toml:"runner_published_port"`
 	LogPath                       string `toml:"log_path"`
-	AssetCatalog                  string `toml:"signed_asset_catalog"`
 	ExecutionImagePublicKey       string `toml:"execution_image_public_key"`
 	ExecutionImagePublicKeySHA256 string `toml:"execution_image_public_key_sha256"`
 	DevelopmentWaitSeconds        *int64 `toml:"development_prepare_wait_timeout_seconds"`

@@ -1348,14 +1348,6 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 			MaximumOperationMs: 30_000,
 			MaximumOutputBytes: 8 << 20,
 		},
-		Assets: []*runnerprotocol.AssetReference{
-			{
-				ArtifactId:              "secondbox-rootfs-1",
-				ManifestDigest:          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-				Architecture:            "amd64",
-				GuestProtocolGeneration: 1,
-			},
-		},
 		DeadlineUnixMs: 4_102_444_800_000,
 		Correlation: &runnerprotocol.Correlation{
 			RequestId:   "request-1",
@@ -1724,4 +1716,33 @@ func findAssignmentResult(messages []*runnerprotocol.RunnerToControlPlane) *runn
 		}
 	}
 	return nil
+}
+
+// TestResolvedAssignmentNamesAssetsOnlyForSelectedImages pins the upgrade
+// property: a default-image assignment boots this Runner's installed bundle and
+// names no assets, while a client-selected image names its signed components.
+func TestResolvedAssignmentNamesAssetsOnlyForSelectedImages(t *testing.T) {
+	asset := &runnerprotocol.AssetReference{
+		ArtifactId: "selected-runtime", Architecture: "amd64", GuestProtocolGeneration: 1,
+		ManifestDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+	image := &runnerprotocol.ExecutionImage{Reference: "registry.example/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+	for name, test := range map[string]struct {
+		image  *runnerprotocol.ExecutionImage
+		assets []*runnerprotocol.AssetReference
+		valid  bool
+	}{
+		"default image without assets":  {valid: true},
+		"default image with assets":     {assets: []*runnerprotocol.AssetReference{asset}},
+		"selected image with assets":    {image: image, assets: []*runnerprotocol.AssetReference{asset}, valid: true},
+		"selected image without assets": {image: image},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assignment := resolvedAssignmentCommand()
+			assignment.ExecutionImage, assignment.Assets = test.image, test.assets
+			if err := validateResolvedAssignment(assignment); (err == nil) != test.valid {
+				t.Fatalf("validation error = %v, want valid %t", err, test.valid)
+			}
+		})
+	}
 }

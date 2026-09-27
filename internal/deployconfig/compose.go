@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 type ComposeExecutor interface {
@@ -196,12 +198,48 @@ func RecordedInstallerComposeSubject(manifestPath, environmentPath string) (stri
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// recordedInstallerTopology is the part of a source-era installer manifest that
+// selects its Compose assets. That manifest was written by an earlier release,
+// so it may carry keys this release has retired; only these fields are read.
+type recordedInstallerTopology struct {
+	Deployment struct {
+		Mode               string `toml:"mode"`
+		ComposeProjectName string `toml:"compose_project_name"`
+		ComposeBackendCIDR string `toml:"compose_backend_cidr"`
+	} `toml:"deployment"`
+	Database struct {
+		Mode string `toml:"mode"`
+	} `toml:"database"`
+	Runners []struct {
+		Placement string `toml:"placement"`
+	} `toml:"runners"`
+}
+
+func readRecordedInstallerTopology(path string) (recordedInstallerTopology, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return recordedInstallerTopology{}, manifestError("open recorded installer manifest", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return recordedInstallerTopology{}, manifestError("recorded installer manifest must be a regular non-symbolic-link file", nil)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return recordedInstallerTopology{}, manifestError("read recorded installer manifest", err)
+	}
+	var manifest recordedInstallerTopology
+	if err := toml.Unmarshal(data, &manifest); err != nil {
+		return recordedInstallerTopology{}, manifestError("decode recorded installer manifest", err)
+	}
+	return manifest, nil
+}
+
 func recordedInstallerComposeIdentity(manifestPath string) (string, string, []string, error) {
 	absolute, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return "", "", nil, err
 	}
-	manifest, err := ReadManifest(absolute)
+	manifest, err := readRecordedInstallerTopology(absolute)
 	if err != nil {
 		return "", "", nil, err
 	}

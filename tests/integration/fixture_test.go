@@ -418,8 +418,6 @@ func completeFixtureSandboxCreation(t *testing.T, sandboxID string) {
 func testProfileSpec(vcpuCount int64) contracts.ProfileRevisionSpec {
 	return contracts.ProfileRevisionSpec{
 		Pool: "default-pool", Architecture: "amd64",
-		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
-		ToolchainBundleDigest: "sha256:" + strings.Repeat("b", 64),
 		Resources: contracts.ResourcePolicy{
 			VCPUCount: vcpuCount, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
 			ConcurrentOperations: 4,

@@ -29,7 +29,7 @@ func TestDurableCodingRegistriesOperatorDocument(t *testing.T) {
 		t.Fatalf("operator Profile = %+v", profile)
 	}
 	revision := profile.Revisions[0]
-	base, err := ProfileLineage(DurableCoding, revision.Spec.RuntimeBundleDigest, revision.Spec.ToolchainBundleDigest)
+	base, err := ProfileLineage(DurableCoding)
 	if err != nil {
 		t.Fatal(err)
 	}

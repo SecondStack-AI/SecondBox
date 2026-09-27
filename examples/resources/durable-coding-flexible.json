@@ -29,12 +29,10 @@
       "revisions": [
         {
           "number": 1,
-          "specDigest": "sha256:a3e300b6d03cf93328a00f4dce5a6a8604ca181c20fc0fb1284c477e80b164cb",
+          "specDigest": "sha256:fda20e997a9c306f4c246b146112bfff2b39a0f2e9649e733c5088dbb74dff2b",
           "spec": {
             "pool": "standard-amd64",
             "architecture": "amd64",
-            "runtimeBundleDigest": "sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335",
-            "toolchainBundleDigest": "sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4",
             "resources": {
               "vcpuCount": 4,
               "memoryBytes": 8589934592,

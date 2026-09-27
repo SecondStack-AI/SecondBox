@@ -27,11 +27,9 @@ const (
 	AgentGateway    = "agent-gateway.secondbox.internal"
 	PlatformGateway = "platform-gateway.secondbox.internal"
 
-	v030RuntimeBundleDigest   = "sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335"
-	v030ToolchainBundleDigest = "sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4"
-	developmentVersion        = "0.0.0-development"
-	developmentTag            = "v0.0.0-development"
-	developmentSourceCommit   = "dddddddddddddddddddddddddddddddddddddddd"
+	developmentVersion      = "0.0.0-development"
+	developmentTag          = "v0.0.0-development"
+	developmentSourceCommit = "dddddddddddddddddddddddddddddddddddddddd"
 )
 
 type PoolBinding struct {
@@ -51,8 +49,8 @@ func BundleNames() []string {
 	return []string{AgentCompartment, DurableCoding, AgentCompartmentIsolated}
 }
 
-// Build resolves execution asset digests only from the already-validated
-// artifact manifest. Consumer repositories never copy release digests.
+// Build returns the code-owned Profile lineages of the selected bundles after
+// proving they are the lineages the validated artifact manifest released.
 func Build(manifest releasecontract.ArtifactManifest, selection Selection) (resourceapply.Document, error) {
 	if err := manifest.Validate(); err != nil {
 		return resourceapply.Document{}, err
@@ -93,37 +91,32 @@ func Build(manifest releasecontract.ArtifactManifest, selection Selection) (reso
 
 func profileLineageForManifest(manifest releasecontract.ArtifactManifest, name string) (resourceapply.Profile, error) {
 	if manifest.Version == developmentVersion && manifest.Tag == developmentTag && manifest.SourceCommit == developmentSourceCommit {
-		return DevelopmentProfileLineage(name, manifest.MicroVM.RuntimeBundle.ManifestDigest, manifest.MicroVM.ToolchainBundle.ManifestDigest)
+		return DevelopmentProfileLineage(name)
 	}
-	return ProfileLineage(name, manifest.MicroVM.RuntimeBundle.ManifestDigest, manifest.MicroVM.ToolchainBundle.ManifestDigest)
+	return ProfileLineage(name)
 }
 
 // ProfileLineage returns the complete ordered lineage for one architecture-qualified standard Profile.
-func ProfileLineage(name, runtimeDigest, toolchainDigest string) (resourceapply.Profile, error) {
+func ProfileLineage(name string) (resourceapply.Profile, error) {
 	var specs []secondboxclient.ProfileRevisionSpec
+	// Standard Profile history is append-only. Keep every shipped spec here in
+	// revision order so an existing deployment can prove its immutable prefix.
+	// The revision that follows each bundle's first spec once moved it off the
+	// v0.3.0 execution bundle; Profiles no longer name bundles, so it repeats
+	// its predecessor and remains only to keep installed revision numbers.
 	switch name {
 	case AgentCompartment:
-		// Standard Profile history is append-only. Keep every shipped spec here in
-		// revision order so an existing deployment can prove its immutable prefix.
 		specs = []secondboxclient.ProfileRevisionSpec{
-			agentSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest, 120000),
+			agentSpec(PoolAMD64, 120000),
 			// Callers may request a command deadline up to the Sandbox's outer lifetime.
-			agentSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest, 900000),
+			agentSpec(PoolAMD64, 900000),
+			agentSpec(PoolAMD64, 900000),
+			attributedAgentSpec(PoolAMD64),
 		}
-		if runtimeDigest != v030RuntimeBundleDigest || toolchainDigest != v030ToolchainBundleDigest {
-			specs = append(specs, agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000))
-		}
-		specs = append(specs, attributedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest))
 	case DurableCoding:
-		specs = []secondboxclient.ProfileRevisionSpec{codingSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest)}
-		if runtimeDigest != v030RuntimeBundleDigest || toolchainDigest != v030ToolchainBundleDigest {
-			specs = append(specs, codingSpec(PoolAMD64, runtimeDigest, toolchainDigest))
-		}
+		specs = []secondboxclient.ProfileRevisionSpec{codingSpec(PoolAMD64), codingSpec(PoolAMD64)}
 	case AgentCompartmentIsolated:
-		specs = []secondboxclient.ProfileRevisionSpec{isolatedAgentSpec(PoolAMD64, v030RuntimeBundleDigest, v030ToolchainBundleDigest)}
-		if runtimeDigest != v030RuntimeBundleDigest || toolchainDigest != v030ToolchainBundleDigest {
-			specs = append(specs, isolatedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest))
-		}
+		specs = []secondboxclient.ProfileRevisionSpec{isolatedAgentSpec(PoolAMD64), isolatedAgentSpec(PoolAMD64)}
 	default:
 		return resourceapply.Profile{}, fmt.Errorf("SecondBox standard bundle %q is unknown", name)
 	}
@@ -144,21 +137,20 @@ func ProfileLineage(name, runtimeDigest, toolchainDigest string) (resourceapply.
 	return profileFromSpecs(name, specs)
 }
 
-// DevelopmentProfileLineage returns a synthetic lineage for the
-// explicit local development release identity. It never imports published
-// history whose signed component assets are absent from the development catalog.
-func DevelopmentProfileLineage(name, runtimeDigest, toolchainDigest string) (resourceapply.Profile, error) {
+// DevelopmentProfileLineage returns the shorter lineage the explicit local
+// development release identity has always recorded, without published history.
+func DevelopmentProfileLineage(name string) (resourceapply.Profile, error) {
 	var specs []secondboxclient.ProfileRevisionSpec
 	switch name {
 	case AgentCompartment:
 		specs = []secondboxclient.ProfileRevisionSpec{
-			agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000),
-			attributedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest),
+			agentSpec(PoolAMD64, 900000),
+			attributedAgentSpec(PoolAMD64),
 		}
 	case DurableCoding:
-		specs = []secondboxclient.ProfileRevisionSpec{codingSpec(PoolAMD64, runtimeDigest, toolchainDigest)}
+		specs = []secondboxclient.ProfileRevisionSpec{codingSpec(PoolAMD64)}
 	case AgentCompartmentIsolated:
-		specs = []secondboxclient.ProfileRevisionSpec{isolatedAgentSpec(PoolAMD64, runtimeDigest, toolchainDigest)}
+		specs = []secondboxclient.ProfileRevisionSpec{isolatedAgentSpec(PoolAMD64)}
 	default:
 		return resourceapply.Profile{}, fmt.Errorf("SecondBox standard bundle %q is unknown", name)
 	}
@@ -222,10 +214,10 @@ func appendOrValidatePool(pools []resourceapply.RunnerPool, binding PoolBinding)
 	return append(pools, resourceapply.RunnerPool{Name: binding.Name, Architectures: binding.Architectures, Capabilities: binding.Capabilities, State: binding.State, MutableFields: []string{"state"}}), nil
 }
 
-func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilliseconds int64) secondboxclient.ProfileRevisionSpec {
+func agentSpec(pool string, maximumDeadlineMilliseconds int64) secondboxclient.ProfileRevisionSpec {
 	requiresTenantEgressContext := true
 	return secondboxclient.ProfileRevisionSpec{
-		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
+		Pool: pool, Architecture: ArchitectureAMD64,
 		Resources: secondboxclient.ResourcePolicy{VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 2 << 30, ConcurrentOperations: 4},
 		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 10, IdleSeconds: 60, MaximumDurationSeconds: 900, LeaseSeconds: 60},
@@ -236,23 +228,23 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilli
 	}
 }
 
-func attributedAgentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
-	spec := agentSpec(pool, runtimeDigest, toolchainDigest, 900000)
+func attributedAgentSpec(pool string) secondboxclient.ProfileRevisionSpec {
+	spec := agentSpec(pool, 900000)
 	spec.AttributedExecution = &secondboxclient.AttributedExecutionPolicy{Gateway: AgentGateway, MaximumConnections: 2}
 	return spec
 }
 
-func isolatedAgentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
-	spec := agentSpec(pool, runtimeDigest, toolchainDigest, 900000)
+func isolatedAgentSpec(pool string) secondboxclient.ProfileRevisionSpec {
+	spec := agentSpec(pool, 900000)
 	requiresTenantEgressContext := false
 	spec.Network = secondboxclient.NetworkPolicy{Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{}, RequiresTenantEgressContext: &requiresTenantEgressContext}
 	return spec
 }
 
-func codingSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
+func codingSpec(pool string) secondboxclient.ProfileRevisionSpec {
 	requiresTenantEgressContext := true
 	return secondboxclient.ProfileRevisionSpec{
-		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
+		Pool: pool, Architecture: ArchitectureAMD64,
 		Resources: secondboxclient.ResourcePolicy{VCPUCount: DurableCodingVCPUCount, MemoryBytes: DurableCodingMemoryBytes, WorkspaceBytes: DurableCodingWorkspaceBytes, ConcurrentOperations: DurableCodingConcurrentOperations},
 		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 120, IdleSeconds: 28800, MaximumDurationSeconds: 604800, LeaseSeconds: 300},

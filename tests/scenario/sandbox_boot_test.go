@@ -190,46 +190,6 @@ func TestScenarioSandboxRejectsUnsupportedArchitectureBeforeCompute(t *testing.T
 	}
 }
 
-func TestScenarioSandboxRejectsUncachedLogicalMaterializationTuple(t *testing.T) {
-	fixture := newScenarioFixture(t)
-	ensureScenarioRunnerPool(t, fixture)
-	runnerBefore := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
-	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
-	spec.RuntimeBundleDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-	profile := createScenarioProfile(t, fixture, "scenario-uncached-materialization", spec)
-
-	// Home placement requires an exact materialization of the Profile's
-	// pinned execution assets, so a tuple no Runner holds is refused before
-	// a Sandbox or any compute exists.
-	var operation contracts.Operation
-	err := fixture.subject.RequestJSON(
-		context.Background(),
-		"createSandbox",
-		secondboxclient.CallOptions{
-			Headers: scenarioHeaders(uniqueScenarioKey(t, "uncached-materialization")),
-			Body: scenarioBody(t, contracts.CreateSandboxRequest{
-				Profile:  profile.Name,
-				Metadata: map[string]string{"scenario": "uncached-materialization"},
-			}),
-		},
-		&operation,
-	)
-	var apiError *secondboxclient.APIError
-	if !errors.As(err, &apiError) ||
-		apiError.Problem == nil ||
-		apiError.Problem.Code != "home_runner_unavailable" {
-		t.Fatalf("SecondBox scenario uncached materialization admission = %#v, raw error=%v", apiError, err)
-	}
-	runnerAfter := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
-	if runnerAfter.SandboxStartSampleCount != runnerBefore.SandboxStartSampleCount {
-		t.Fatalf(
-			"SecondBox uncached materialization reached compute: start samples %d -> %d",
-			runnerBefore.SandboxStartSampleCount,
-			runnerAfter.SandboxStartSampleCount,
-		)
-	}
-}
-
 func waitForScenarioRunnerStartupTimingSettled(
 	t *testing.T,
 	fixture scenarioFixture,

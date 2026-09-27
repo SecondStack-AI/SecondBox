@@ -25,7 +25,6 @@ const defaultIdempotencyRetention = 24 * time.Hour
 
 var (
 	profileNamePattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,79}$`)
-	digestPattern         = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 	idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._~:+/=-]+$`)
 )
 
@@ -1191,9 +1190,6 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	}
 	if spec.Architecture != "amd64" && spec.Architecture != "arm64" {
 		return invalidRequest(errors.New("SecondBox Profile architecture must be amd64 or arm64"))
-	}
-	if !digestPattern.MatchString(spec.RuntimeBundleDigest) || !digestPattern.MatchString(spec.ToolchainBundleDigest) {
-		return invalidRequest(errors.New("SecondBox Profile immutable artifact references must be sha256 digests"))
 	}
 	if spec.Resources.VCPUCount < 1 || spec.Resources.MemoryBytes < 1 || spec.Resources.WorkspaceBytes < 1 ||
 		spec.Resources.ConcurrentOperations < 1 {

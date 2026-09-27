@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Sandboxes survive execution bundle upgrades. Profiles no longer pin runtime and toolchain digests; every Instance boots the signed bundle its home Runner has installed, so a release with a new bundle updates in place and existing Sandboxes keep their Workspaces.
+
+### Changed
+
+- Removed `runtimeBundleDigest` and `toolchainBundleDigest` from `ProfileRevisionSpec`. Requests that still send them are rejected; migration `0031_profile_execution_assets_unpinned` removes them from recorded revisions. Client-selected images keep their signed component identities.
+- Default-image Assignments carry no asset references, and placement requires a verified materialization for the Runner's backend rather than exact bundle digests. The guided updater no longer refuses updates that change the Firecracker bundle; it refuses sources older than the v0.14.0 migration baseline before activation.
+- Standard bundle documents moved to `secondbox.standard-bundle/v4` without bundle digests. Standard Profile lineages keep their revision numbers, so installed histories from v0.14.0 onward converge after migration; their spec digests change. `secondbox resources check` reports the computed digest of a mismatched revision. Release verification binds bundle documents by digest, which lets the updater authenticate releases published under the older schema.
+
+### Removed
+
+- Removed the control-plane signed-asset catalog: `SECONDBOX_SIGNED_ASSET_CATALOG_PATH`, the `deployment.signed_asset_catalog` manifest key, the Compose catalog mount, and the installer-written `signed-assets.json`. Delete the key from operator manifests; an existing installation's catalog file is left for purge.
+
 ## 0.18.1 - 2026-09-26
 
 Firecracker and gVisor Runners can opt into physical Workspace storage admission. Logical Workspace limits can exceed the Runner's aggregate advertised disk capacity while individual Workspace ceilings, other capacity limits, and filesystem pressure checks remain active. This release retains protocol generation 5, the v0.15.0 migration baseline, standard Profile revisions, and the v0.17.0 signed Firecracker bundle; see the [v0.18.1 release notes](docs/releases/v0.18.1.md).

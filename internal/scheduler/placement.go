@@ -31,13 +31,11 @@ type Capacity struct {
 
 // Requirements are immutable ProfileRevision placement constraints.
 type Requirements struct {
-	PoolName                 string
-	Architecture             string
-	RequiredCapabilities     []string
-	Capacity                 Capacity
-	GuestProtocolGeneration  uint32
-	PreferredArtifactDigests []string
-	EgressContext            *string
+	PoolName             string
+	Architecture         string
+	RequiredCapabilities []string
+	Capacity             Capacity
+	EgressContext        *string
 }
 
 // MaterializationSnapshot is one revalidated local backend composition.
@@ -60,25 +58,20 @@ type RunnerSnapshot struct {
 	Reserved                Capacity
 	DrainPhase              string
 	LastHeartbeatAt         time.Time
-	ArtifactDigests         []string
 	Materializations        []MaterializationSnapshot
 	SupportedEgressContexts []string
 	GuestProtocolMinimum    uint32
 	GuestProtocolMaximum    uint32
 }
 
-// SelectRunner applies hard compatibility before locality and stable identity ordering.
+// SelectRunner applies hard compatibility before free capacity and stable identity ordering.
 func SelectRunner(
 	requirements Requirements,
 	runners []RunnerSnapshot,
 	now time.Time,
 	heartbeatTimeout time.Duration,
 ) (RunnerSnapshot, error) {
-	type rankedRunner struct {
-		runner           RunnerSnapshot
-		artifactLocality int
-	}
-	ranked := make([]rankedRunner, 0, len(runners))
+	ranked := make([]RunnerSnapshot, 0, len(runners))
 	contextMismatch := false
 	for _, runner := range runners {
 		if !compatible(requirements, runner, now, heartbeatTimeout) {
@@ -89,10 +82,7 @@ func SelectRunner(
 			contextMismatch = true
 			continue
 		}
-		ranked = append(ranked, rankedRunner{
-			runner:           runner,
-			artifactLocality: intersectionCount(runner.ArtifactDigests, requirements.PreferredArtifactDigests),
-		})
+		ranked = append(ranked, runner)
 	}
 	if len(ranked) == 0 {
 		if contextMismatch {
@@ -101,11 +91,8 @@ func SelectRunner(
 		return RunnerSnapshot{}, ErrNoCompatibleRunner
 	}
 	sort.Slice(ranked, func(left, right int) bool {
-		if ranked[left].artifactLocality != ranked[right].artifactLocality {
-			return ranked[left].artifactLocality > ranked[right].artifactLocality
-		}
-		leftFree := freeCapacity(ranked[left].runner)
-		rightFree := freeCapacity(ranked[right].runner)
+		leftFree := freeCapacity(ranked[left])
+		rightFree := freeCapacity(ranked[right])
 		if leftFree.Instances != rightFree.Instances {
 			return leftFree.Instances > rightFree.Instances
 		}
@@ -115,9 +102,9 @@ func SelectRunner(
 		if leftFree.MemoryBytes != rightFree.MemoryBytes {
 			return leftFree.MemoryBytes > rightFree.MemoryBytes
 		}
-		return ranked[left].runner.ID < ranked[right].runner.ID
+		return ranked[left].ID < ranked[right].ID
 	})
-	return ranked[0].runner, nil
+	return ranked[0], nil
 }
 
 // SelectHomeRunner admits only the current authoritative home Runner. Compatible
@@ -164,17 +151,10 @@ func compatible(
 	if runner.BackendKind == "" || !runner.Capabilities["compute"] {
 		return false
 	}
-	if len(requirements.PreferredArtifactDigests) != 2 {
-		return false
-	}
-	// Selected images are prepared and verified before placement, outside the fixed release catalog.
+	// A default-image start boots whichever signed bundle the Runner has
+	// verified. Selected images are prepared and verified before placement.
 	if !slices.Contains(requirements.RequiredCapabilities, contracts.RunnerCapabilityClientSelectedImage) &&
-		!hasMaterialization(runner, requirements.PreferredArtifactDigests[0], requirements.PreferredArtifactDigests[1]) {
-		return false
-	}
-	if requirements.GuestProtocolGeneration == 0 ||
-		requirements.GuestProtocolGeneration < runner.GuestProtocolMinimum ||
-		requirements.GuestProtocolGeneration > runner.GuestProtocolMaximum {
+		!hasMaterialization(runner) {
 		return false
 	}
 	for _, capability := range requirements.RequiredCapabilities {
@@ -204,10 +184,10 @@ func compatible(
 		free.Operations >= requirements.Capacity.Operations
 }
 
-func hasMaterialization(runner RunnerSnapshot, runtimeDigest, toolchainDigest string) bool {
+func hasMaterialization(runner RunnerSnapshot) bool {
 	for _, candidate := range runner.Materializations {
 		if candidate.BackendKind == runner.BackendKind && candidate.Architecture == runner.Architecture &&
-			candidate.RuntimeDigest == runtimeDigest && candidate.ToolchainDigest == toolchainDigest && candidate.Digest != "" {
+			candidate.Digest != "" {
 			return true
 		}
 	}
@@ -231,14 +211,4 @@ func contains(values []string, wanted string) bool {
 		}
 	}
 	return false
-}
-
-func intersectionCount(left, right []string) int {
-	count := 0
-	for _, value := range left {
-		if contains(right, value) {
-			count++
-		}
-	}
-	return count
 }

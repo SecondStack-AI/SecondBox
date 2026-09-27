@@ -511,7 +511,6 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		request.WorkspaceID == "" || request.StartMutationID == "" ||
 		request.ProfileRevisionID == "" || request.Requirements.PoolName == "" ||
 		request.Requirements.Architecture == "" ||
-		request.Requirements.GuestProtocolGeneration == 0 ||
 		len(request.FencingToken) < 32 || request.ClaimExpiresAt.IsZero() ||
 		request.OperationDeadline.IsZero() || request.HeartbeatTimeout <= 0 ||
 		request.RetryLimit < 0 || request.SerializationRetryLimit < 0 || request.Now.IsZero() {
@@ -645,13 +644,11 @@ func lockRunnerCandidates(
 			return nil, fmt.Errorf("SecondBox scheduler Runner reservation decoding: %w", err)
 		}
 		var cacheEvidence struct {
-			ArtifactDigests  []string                  `json:"artifactDigests"`
 			Materializations []MaterializationSnapshot `json:"materializations"`
 		}
 		if err := json.Unmarshal(cacheJSON, &cacheEvidence); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner cache decoding: %w", err)
 		}
-		runner.ArtifactDigests = cacheEvidence.ArtifactDigests
 		runner.Materializations = cacheEvidence.Materializations
 		if err := json.Unmarshal(egressContextsJSON, &runner.SupportedEgressContexts); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner egress-context decoding: %w", err)

@@ -158,10 +158,6 @@ func TestQualifiedBackendBootsAgentAndWorkspace(t *testing.T) {
 			RequiredCapabilities: []string{"cleanup", "kvm", "local-workspace", "microsandbox", "storage"},
 			MaximumOperationMs:   60_000, MaximumOutputBytes: 8 << 20,
 		},
-		Assets: []*runnerprotocol.AssetReference{
-			{ArtifactId: "runtime", ManifestDigest: manifest.Key.RuntimeManifestDigest, Architecture: runtime.GOARCH, GuestProtocolGeneration: 6},
-			{ArtifactId: "toolchain", ManifestDigest: manifest.Key.ToolchainManifestDigest, Architecture: runtime.GOARCH, GuestProtocolGeneration: 6},
-		},
 		DeadlineUnixMs: uint64(time.Now().Add(3 * time.Minute).UnixMilli()),
 		Correlation:    &runnerprotocol.Correlation{RequestId: "qualification-request", OperationId: "qualification-operation", LeaseId: "qualification-lease"},
 		NetworkPolicy:  &runnerprotocol.NetworkPolicy{Mode: runnerprotocol.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL},

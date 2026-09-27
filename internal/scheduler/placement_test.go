@@ -12,9 +12,7 @@ func TestPhysicalStorageAdmissionSkipsOnlyDiskCapacity(t *testing.T) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64",
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+		Capacity: Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Instances: 1},
 	}
 	runner := RunnerSnapshot{
 		ID: "home", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
@@ -62,10 +60,8 @@ func TestSelectRunnerFiltersCompatibilityCapacityHealthAndDrain(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64",
-		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+		RequiredCapabilities: []string{"local-workspace", "network-policy"},
+		Capacity:             Capacity{VCPUCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30, Instances: 1},
 	}
 	candidates := []RunnerSnapshot{
 		{
@@ -104,14 +100,12 @@ func TestSelectRunnerFiltersCompatibilityCapacityHealthAndDrain(t *testing.T) {
 	}
 }
 
-func TestSelectRunnerPrefersArtifactLocalityThenStableID(t *testing.T) {
+func TestSelectRunnerPrefersStableIDAmongEquallyFreeRunners(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64",
-		RequiredCapabilities:     []string{"local-workspace"},
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+		RequiredCapabilities: []string{"local-workspace"},
+		Capacity:             Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
 	}
 	base := RunnerSnapshot{
 		PoolName: "general", Architecture: "amd64", BackendKind: "firecracker", Capabilities: readyCapabilities(),
@@ -119,17 +113,17 @@ func TestSelectRunnerPrefersArtifactLocalityThenStableID(t *testing.T) {
 		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
 	}
 	candidates := []RunnerSnapshot{
-		withRunnerEvidence(base, "runner-z", []string{"sha256:runtime", "sha256:toolchain"}),
-		withRunnerEvidence(base, "runner-b", []string{"sha256:runtime"}),
-		withRunnerEvidence(base, "runner-a", []string{"sha256:runtime"}),
+		withRunnerID(base, "runner-z"),
+		withRunnerID(base, "runner-b"),
+		withRunnerID(base, "runner-a"),
 	}
 
 	selected, err := SelectRunner(requirements, candidates, now, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selected.ID != "runner-z" {
-		t.Fatalf("selected runner = %q, want runner-z artifact locality", selected.ID)
+	if selected.ID != "runner-a" {
+		t.Fatalf("selected runner = %q, want runner-a stable identity", selected.ID)
 	}
 }
 
@@ -137,7 +131,6 @@ func TestSelectRunnerRejectsUnavailablePool(t *testing.T) {
 	_, err := SelectRunner(
 		Requirements{
 			PoolName: "general", Architecture: "amd64",
-			GuestProtocolGeneration: 1,
 		},
 		nil,
 		time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
@@ -152,10 +145,8 @@ func TestSelectRunnerUsesPreparedImageWithoutFixedMaterialization(t *testing.T) 
 	now := time.Now().UTC()
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64",
-		RequiredCapabilities:     []string{"client-selected-image"},
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:selected-runtime", "sha256:selected-toolchain"},
+		RequiredCapabilities: []string{"client-selected-image"},
+		Capacity:             Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, Instances: 1},
 	}
 	runner := RunnerSnapshot{
 		ID: "home", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
@@ -178,10 +169,8 @@ func TestSelectRunnerRequiresExactPinnedEgressContext(t *testing.T) {
 	required := "tenant-blue"
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64", EgressContext: &required,
-		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+		RequiredCapabilities: []string{"local-workspace", "network-policy"},
+		Capacity:             Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
 	}
 	base := RunnerSnapshot{
 		PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
@@ -213,10 +202,8 @@ func TestSelectRunnerDoesNotPlaceOnDrainingContextCompatibleRunner(t *testing.T)
 	required := "tenant-blue"
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64", EgressContext: &required,
-		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+		RequiredCapabilities: []string{"local-workspace", "network-policy"},
+		Capacity:             Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
 	}
 	base := RunnerSnapshot{
 		PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
@@ -242,10 +229,8 @@ func TestSelectRunnerWithNoPinnedContextDoesNotRequireAdvertisement(t *testing.T
 	now := time.Date(2026, 8, 31, 12, 30, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64",
-		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+		RequiredCapabilities: []string{"local-workspace", "network-policy"},
+		Capacity:             Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
 	}
 	runner := RunnerSnapshot{
 		ID: "runner-isolated", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
@@ -260,29 +245,32 @@ func TestSelectRunnerWithNoPinnedContextDoesNotRequireAdvertisement(t *testing.T
 	}
 }
 
-func TestSelectRunnerRejectsMissingExactMaterialization(t *testing.T) {
+// TestSelectRunnerAcceptsAnyVerifiedBundleForItsBackend pins the upgrade
+// property: a default-image start needs a verified materialization for the
+// Runner's own backend, whichever release bundle that materialization holds.
+func TestSelectRunnerAcceptsAnyVerifiedBundleForItsBackend(t *testing.T) {
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64",
-		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+		RequiredCapabilities: []string{"local-workspace", "network-policy"},
+		Capacity:             Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
 	}
 	runner := RunnerSnapshot{
-		ID: "runner-materialized-for-other-toolchain", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
+		ID: "runner-upgraded", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
 		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
 		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
-		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
 		Materializations: []MaterializationSnapshot{{
 			BackendKind: "firecracker", Architecture: "amd64",
-			RuntimeDigest: "sha256:runtime", ToolchainDigest: "sha256:different-toolchain",
+			RuntimeDigest: "sha256:newer-runtime", ToolchainDigest: "sha256:newer-toolchain",
 			Digest: "sha256:materialization",
 		}},
 	}
-
+	if _, err := SelectRunner(requirements, []RunnerSnapshot{runner}, now, 30*time.Second); err != nil {
+		t.Fatalf("Runner with a newer verified bundle was refused: %v", err)
+	}
+	runner.Materializations = nil
 	if _, err := SelectRunner(requirements, []RunnerSnapshot{runner}, now, 30*time.Second); !errors.Is(err, ErrNoCompatibleRunner) {
-		t.Fatalf("Runner without exact materialization selected: %v", err)
+		t.Fatalf("Runner without a verified materialization selected: %v", err)
 	}
 }
 
@@ -290,8 +278,7 @@ func TestSelectHomeRunnerNeverFallsBackToCompatibleReplacement(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64",
-		RequiredCapabilities:    []string{"local-workspace"},
-		GuestProtocolGeneration: 1,
+		RequiredCapabilities: []string{"local-workspace"},
 		Capacity: Capacity{
 			VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 			Instances: 1, Operations: 1,
@@ -315,8 +302,7 @@ func TestSelectHomeRunnerRejectsDrainingHomeWithoutRelocation(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 30, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", Architecture: "amd64",
-		RequiredCapabilities:    []string{"local-workspace"},
-		GuestProtocolGeneration: 1,
+		RequiredCapabilities: []string{"local-workspace"},
 		Capacity: Capacity{
 			VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 			Instances: 1, Operations: 1,
@@ -358,13 +344,8 @@ func readyMaterializations() []MaterializationSnapshot {
 	}}
 }
 
-func withRunnerEvidence(
-	runner RunnerSnapshot,
-	id string,
-	artifacts []string,
-) RunnerSnapshot {
+func withRunnerID(runner RunnerSnapshot, id string) RunnerSnapshot {
 	runner.ID = id
-	runner.ArtifactDigests = artifacts
 	runner.Materializations = readyMaterializations()
 	return runner
 }
@@ -380,9 +361,7 @@ func TestSelectRunnerAdmitsSnapshotResumeOnlyOnAdvertisingRunners(t *testing.T) 
 		RequiredCapabilities: []string{
 			"network-policy", "storage", "cleanup", "local-workspace", "snapshot-resume",
 		},
-		GuestProtocolGeneration:  1,
-		Capacity:                 Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
-		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
+		Capacity: Capacity{VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
 	}
 	coldOnly := RunnerSnapshot{
 		ID: "runner-cold-only", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",

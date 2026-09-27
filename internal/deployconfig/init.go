@@ -92,10 +92,6 @@ func InitDevelopment(directory string) (string, error) {
 	if err := generateRunnerPKI(pkiDirectory, "control-plane", 825); err != nil {
 		return "", err
 	}
-	asset := `{"assets":[{"artifactId":"secondbox-development-runtime","manifestDigest":"` + developmentRuntimeDigest + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]},{"artifactId":"secondbox-development-toolchain","manifestDigest":"` + developmentToolchainDigest + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
-	if err := writeAtomic(filepath.Join(secrets, "development-signed-assets.json"), []byte(asset), 0o600, false); err != nil {
-		return "", err
-	}
 	developmentRelease, err := developmentReleaseManifest()
 	if err != nil {
 		return "", err
@@ -139,7 +135,7 @@ func InitDevelopment(directory string) (string, error) {
 
 func developmentManifest(postgresPassword, platformToken, runnerCredential string) ManifestV1 {
 	pool := StandardRunnerPool{Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: []string{"client-selected-image", "compute", "evidence", "exec-streaming", "file-streaming", "local-workspace", "port-proxy", "pty"}, State: "ready"}
-	return ManifestV1{SchemaVersion: 1, Deployment: Deployment{Mode: "development", ComposeProjectName: DefaultComposeProjectName, PublicBaseURL: "http://127.0.0.1:8080", TLSTermination: "development-loopback", ControlPlaneImage: "secondbox-control-plane:development", RunnerImage: "secondbox-runner:development", PostgresImage: "docker.io/library/postgres:18.4-bookworm", APIBindIP: "127.0.0.1", APIPublishedPort: integer(8080), RunnerBindIP: "127.0.0.1", RunnerPublishedPort: integer(9443), LogPath: "/var/log/secondbox/control-plane.jsonl", AssetCatalog: "secrets/development-signed-assets.json", DevelopmentWaitSeconds: integer(180)}, Database: Database{Mode: "bundled", BindIP: "127.0.0.1", PublishedPort: integer(5432), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword}, RunnerTrust: RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: "secrets/runner-pki/runner-ca.crt", CAPrivateKeyFile: "secrets/runner-pki/runner-ca.key", ServerCertificateFile: "secrets/runner-pki/server.crt", ServerPrivateKeyFile: "secrets/runner-pki/server.key", ServerName: "control-plane", CertificateLifetimeDays: integer(825)}, Applications: Applications{PlatformTokenFile: platformToken}, StandardResources: StandardResources{ArtifactManifest: "development-artifact-manifest.json", Bundles: standardresources.BundleNames(), RunnerPools: []StandardRunnerPool{pool}, ApplyWaitSeconds: integer(180)}, Policy: Policy{DataPlaneRetentionSeconds: integer(86400), RunnerEnabledFeatures: "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy,client-selected-image"}}
+	return ManifestV1{SchemaVersion: 1, Deployment: Deployment{Mode: "development", ComposeProjectName: DefaultComposeProjectName, PublicBaseURL: "http://127.0.0.1:8080", TLSTermination: "development-loopback", ControlPlaneImage: "secondbox-control-plane:development", RunnerImage: "secondbox-runner:development", PostgresImage: "docker.io/library/postgres:18.4-bookworm", APIBindIP: "127.0.0.1", APIPublishedPort: integer(8080), RunnerBindIP: "127.0.0.1", RunnerPublishedPort: integer(9443), LogPath: "/var/log/secondbox/control-plane.jsonl", DevelopmentWaitSeconds: integer(180)}, Database: Database{Mode: "bundled", BindIP: "127.0.0.1", PublishedPort: integer(5432), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword}, RunnerTrust: RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: "secrets/runner-pki/runner-ca.crt", CAPrivateKeyFile: "secrets/runner-pki/runner-ca.key", ServerCertificateFile: "secrets/runner-pki/server.crt", ServerPrivateKeyFile: "secrets/runner-pki/server.key", ServerName: "control-plane", CertificateLifetimeDays: integer(825)}, Applications: Applications{PlatformTokenFile: platformToken}, StandardResources: StandardResources{ArtifactManifest: "development-artifact-manifest.json", Bundles: standardresources.BundleNames(), RunnerPools: []StandardRunnerPool{pool}, ApplyWaitSeconds: integer(180)}, Policy: Policy{DataPlaneRetentionSeconds: integer(86400), RunnerEnabledFeatures: "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy,client-selected-image"}}
 }
 
 func developmentReleaseManifest() (releasecontract.ArtifactManifest, error) {
@@ -154,7 +150,7 @@ func developmentReleaseManifest() (releasecontract.ArtifactManifest, error) {
 	}
 	bundles := []releasecontract.StandardBundleArtifact{}
 	for _, name := range standardresources.BundleNames() {
-		profile, err := standardresources.DevelopmentProfileLineage(name, developmentRuntimeDigest, developmentToolchainDigest)
+		profile, err := standardresources.DevelopmentProfileLineage(name)
 		if err != nil {
 			return releasecontract.ArtifactManifest{}, err
 		}
@@ -319,7 +315,6 @@ func materializeProduction(manifest ManifestV1, sourcePath, directory string, re
 		}
 		return filepath.Clean(filepath.Join(sourceBase, reference))
 	}
-	manifest.Deployment.AssetCatalog = absoluteReference(manifest.Deployment.AssetCatalog)
 	manifest.Deployment.ExecutionImagePublicKey = absoluteReference(manifest.Deployment.ExecutionImagePublicKey)
 	if releaseBytes == nil {
 		manifest.StandardResources.ArtifactManifest = absoluteReference(manifest.StandardResources.ArtifactManifest)

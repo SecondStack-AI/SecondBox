@@ -57,14 +57,14 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fresh.Results) != 9 || fresh.Results[1].Action != resourceapply.ActionCreate || fresh.Results[2].Action != resourceapply.ActionAppend || fresh.Results[3].Action != resourceapply.ActionAppend {
+	if len(fresh.Results) != 12 || fresh.Results[1].Action != resourceapply.ActionCreate || fresh.Results[2].Action != resourceapply.ActionAppend || fresh.Results[3].Action != resourceapply.ActionAppend {
 		t.Fatalf("fresh results = %#v", fresh.Results)
 	}
 	agent, err := client.GetProfile(t.Context(), standardresources.AgentCompartment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agent.Revisions) != 5 || agent.Revisions[0].Spec.Execution.MaximumDeadlineMilliseconds != 120000 || agent.CurrentRevision.Number != 5 || agent.CurrentRevision.Spec.Execution.MaximumDeadlineMilliseconds != 900000 {
+	if len(agent.Revisions) != 6 || agent.Revisions[0].Spec.Execution.MaximumDeadlineMilliseconds != 120000 || agent.CurrentRevision.Number != 6 || agent.CurrentRevision.Spec.Execution.MaximumDeadlineMilliseconds != 900000 {
 		t.Fatalf("fresh agent-compartment lineage = %#v", agent)
 	}
 	if policy := agent.CurrentRevision.Spec.AttributedExecution; policy == nil || policy.Gateway != standardresources.AgentGateway || policy.MaximumConnections != 128 {
@@ -99,13 +99,14 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 		t.Fatal("isolated Profile is absent from standard document")
 	}
 	upgraded.Profiles[isolatedIndex].Revisions = append([]resourceapply.ProfileRevision(nil), document.Profiles[isolatedIndex].Revisions...)
-	second := upgraded.Profiles[isolatedIndex].Revisions[1].Spec
+	installedRevisions := int64(len(document.Profiles[isolatedIndex].Revisions))
+	second := upgraded.Profiles[isolatedIndex].Revisions[installedRevisions-1].Spec
 	second.Lifecycle.InitialState = secondboxclient.SandboxDesiredStateStopped
 	digest, err := resourceapply.SpecDigest(second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	upgraded.Profiles[isolatedIndex].Revisions = append(upgraded.Profiles[isolatedIndex].Revisions, resourceapply.ProfileRevision{Number: 3, SpecDigest: digest, Spec: second})
+	upgraded.Profiles[isolatedIndex].Revisions = append(upgraded.Profiles[isolatedIndex].Revisions, resourceapply.ProfileRevision{Number: installedRevisions + 1, SpecDigest: digest, Spec: second})
 	if _, err := resourceapply.Apply(t.Context(), client, upgraded); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +131,7 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	upgraded.Profiles[isolatedIndex].Revisions = append(upgraded.Profiles[isolatedIndex].Revisions, resourceapply.ProfileRevision{Number: 4, SpecDigest: thirdDigest, Spec: third})
+	upgraded.Profiles[isolatedIndex].Revisions = append(upgraded.Profiles[isolatedIndex].Revisions, resourceapply.ProfileRevision{Number: installedRevisions + 2, SpecDigest: thirdDigest, Spec: third})
 	if _, err := resourceapply.Apply(t.Context(), client, upgraded); err != nil {
 		t.Fatal(err)
 	}
@@ -165,17 +166,15 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 
 func liveStandardDocument(t *testing.T) resourceapply.Document {
 	t.Helper()
-	runtimeDigest := "sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335"
-	toolchainDigest := "sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4"
-	agent, err := standardresources.ProfileLineage(standardresources.AgentCompartment, runtimeDigest, toolchainDigest)
+	agent, err := standardresources.ProfileLineage(standardresources.AgentCompartment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	coding, err := standardresources.ProfileLineage(standardresources.DurableCoding, runtimeDigest, toolchainDigest)
+	coding, err := standardresources.ProfileLineage(standardresources.DurableCoding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	isolated, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated, runtimeDigest, toolchainDigest)
+	isolated, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -184,6 +184,7 @@ func TestDeploymentRejectsRetiredSettings(t *testing.T) {
 		{"[deployment]", "listen_address", "deployment.listen_address"},
 		{"[deployment]", "runner_listen_address", "deployment.runner_listen_address"},
 		{"[deployment]", "signed_asset_catalog_path", "deployment.signed_asset_catalog_path"},
+		{"[deployment]", "signed_asset_catalog", "deployment.signed_asset_catalog"},
 		{"[[standard_resources.runner_pools]]", "bundle", "standard_resources.runner_pools.bundle"},
 	}
 	for _, suffix := range []string{
@@ -643,22 +644,6 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
-	}
-}
-
-func TestManifestValidationUsesTheRuntimeAssetCatalogSchema(t *testing.T) {
-	manifestPath := initializedDevelopment(t)
-	manifest, err := ReadManifest(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalogPath := filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.AssetCatalog)
-	incomplete := `{"assets":[{"manifestDigest":"` + developmentRuntimeDigest + `"}]}`
-	if err := os.WriteFile(catalogPath, []byte(incomplete), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "incomplete trust evidence") {
-		t.Fatalf("runtime catalog schema error = %v", err)
 	}
 }
 

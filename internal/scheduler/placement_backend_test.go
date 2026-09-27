@@ -22,11 +22,11 @@ func TestMaterializationMatchRequiresSameBackendKind(t *testing.T) {
 			Digest:          "sha256:3333333333333333333333333333333333333333333333333333333333333333",
 		}},
 	}
-	if hasMaterialization(snapshot, runtimeDigest, toolchainDigest) {
+	if hasMaterialization(snapshot) {
 		t.Fatal("cross-backend materialization satisfied placement")
 	}
 	snapshot.Materializations[0].BackendKind = "gvisor"
-	if !hasMaterialization(snapshot, runtimeDigest, toolchainDigest) {
+	if !hasMaterialization(snapshot) {
 		t.Fatal("matching-backend materialization did not satisfy placement")
 	}
 }

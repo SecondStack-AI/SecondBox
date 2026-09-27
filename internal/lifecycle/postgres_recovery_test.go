@@ -87,7 +87,7 @@ func newRecoveryFixture(t *testing.T, assignmentState string) *recoveryFixture {
 	fixture := &recoveryFixture{pool: pool, now: now}
 	ids := 0
 	broker, err := lifecycle.NewPostgresEffectBroker(t.Context(), url, unusedAssignmentScheduler{}, lifecycle.EffectBrokerConfig{
-		AssignmentClaimDuration: time.Minute, HeartbeatTimeout: time.Minute, AssetCatalog: unusedAssetCatalog{},
+		AssignmentClaimDuration: time.Minute, HeartbeatTimeout: time.Minute,
 		AssignmentDeadline: time.Second, RetryLimit: 1, SessionCanceller: recoverySessions{},
 		NewID:           func(prefix string) string { ids++; return fmt.Sprintf("%s-%d", prefix, ids) },
 		NewFencingToken: func() ([]byte, error) { return []byte("01234567890123456789012345678901"), nil },

@@ -1,0 +1,179 @@
+{
+  "schemaVersion": "secondbox.standard-bundle/v3",
+  "name": "agent-compartment-isolated",
+  "architecture": "amd64",
+  "runnerPoolSelector": "standard-amd64",
+  "logicalGateway": "",
+  "signedManifestDigest": "sha256:dfa134fef7bc322d48910a0a4d90d0e44285b53d44e4469af70851c511a562d4",
+  "runtimeBundleDigest": "sha256:2ca676c7b22f7b81df57f4fcb2061e1538bd4393bb99e4f08300baecbb9e30b7",
+  "toolchainBundleDigest": "sha256:656dd7b7c2ea8e26d388f1d9ff1492da3abe11b915cc029009e42a252fc31bd1",
+  "profile": {
+    "name": "agent-compartment-isolated",
+    "revisions": [
+      {
+        "number": 1,
+        "specDigest": "sha256:e1c26c6688bc9eb9bc80fd994904b4e020131a8e61ca5341e37fc2e4ba3632db",
+        "spec": {
+          "pool": "standard-amd64",
+          "architecture": "amd64",
+          "runtimeBundleDigest": "sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335",
+          "toolchainBundleDigest": "sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4",
+          "resources": {
+            "vcpuCount": 1,
+            "memoryBytes": 1073741824,
+            "workspaceBytes": 2147483648,
+            "concurrentOperations": 4
+          },
+          "startup": {
+            "mode": "cold_boot"
+          },
+          "lifecycle": {
+            "initialState": "running",
+            "drainGraceSeconds": 10,
+            "idleSeconds": 60,
+            "maximumDurationSeconds": 900,
+            "leaseSeconds": 60
+          },
+          "retention": {
+            "snapshotLimit": 0,
+            "snapshotRetentionSeconds": 3600
+          },
+          "execution": {
+            "maximumDeadlineMilliseconds": 900000,
+            "maximumBufferedOutputBytes": 1048576,
+            "streamWindowBytes": 65536,
+            "maximumTransferBytes": 268435456,
+            "terminalDetachSeconds": 0,
+            "dataPlaneTransport": "proxied"
+          },
+          "network": {
+            "mode": "deny_all",
+            "destinations": [],
+            "requiresTenantEgressContext": false
+          },
+          "ports": []
+        }
+      },
+      {
+        "number": 2,
+        "specDigest": "sha256:16aec1df819def0ab2c2fdcacae6627aac480e18e27404fb600aac5c8697ae33",
+        "spec": {
+          "pool": "standard-amd64",
+          "architecture": "amd64",
+          "runtimeBundleDigest": "sha256:2ca676c7b22f7b81df57f4fcb2061e1538bd4393bb99e4f08300baecbb9e30b7",
+          "toolchainBundleDigest": "sha256:656dd7b7c2ea8e26d388f1d9ff1492da3abe11b915cc029009e42a252fc31bd1",
+          "resources": {
+            "vcpuCount": 1,
+            "memoryBytes": 1073741824,
+            "workspaceBytes": 2147483648,
+            "concurrentOperations": 4
+          },
+          "startup": {
+            "mode": "cold_boot"
+          },
+          "lifecycle": {
+            "initialState": "running",
+            "drainGraceSeconds": 10,
+            "idleSeconds": 60,
+            "maximumDurationSeconds": 900,
+            "leaseSeconds": 60
+          },
+          "retention": {
+            "snapshotLimit": 0,
+            "snapshotRetentionSeconds": 3600
+          },
+          "execution": {
+            "maximumDeadlineMilliseconds": 900000,
+            "maximumBufferedOutputBytes": 1048576,
+            "streamWindowBytes": 65536,
+            "maximumTransferBytes": 268435456,
+            "terminalDetachSeconds": 0,
+            "dataPlaneTransport": "proxied"
+          },
+          "network": {
+            "mode": "deny_all",
+            "destinations": [],
+            "requiresTenantEgressContext": false
+          },
+          "ports": []
+        }
+      },
+      {
+        "number": 3,
+        "specDigest": "sha256:ef4a5f91809dc13985a088591d168703173c0bf95b84980200b8e5aeb91087ba",
+        "spec": {
+          "pool": "standard-amd64",
+          "architecture": "amd64",
+          "runtimeBundleDigest": "sha256:2ca676c7b22f7b81df57f4fcb2061e1538bd4393bb99e4f08300baecbb9e30b7",
+          "toolchainBundleDigest": "sha256:656dd7b7c2ea8e26d388f1d9ff1492da3abe11b915cc029009e42a252fc31bd1",
+          "resources": {
+            "vcpuCount": 1,
+            "memoryBytes": 1073741824,
+            "workspaceBytes": 2147483648,
+            "concurrentOperations": 4
+          },
+          "startup": {
+            "mode": "cold_boot"
+          },
+          "lifecycleCeiling": {
+            "idleSeconds": null,
+            "maximumDurationSeconds": null
+          },
+          "lifecycle": {
+            "initialState": "running",
+            "drainGraceSeconds": 10,
+            "idleSeconds": 60,
+            "maximumDurationSeconds": null,
+            "leaseSeconds": 60
+          },
+          "retention": {
+            "snapshotLimit": 0,
+            "snapshotRetentionSeconds": 3600
+          },
+          "execution": {
+            "maximumDeadlineMilliseconds": 900000,
+            "maximumBufferedOutputBytes": 1048576,
+            "streamWindowBytes": 65536,
+            "maximumTransferBytes": 268435456,
+            "terminalDetachSeconds": 0,
+            "dataPlaneTransport": "proxied"
+          },
+          "network": {
+            "mode": "deny_all",
+            "destinations": [],
+            "requiresTenantEgressContext": false
+          },
+          "ports": []
+        }
+      }
+    ]
+  },
+  "parameterSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "architectures",
+      "capabilities",
+      "state"
+    ],
+    "properties": {
+      "architectures": {
+        "type": "array",
+        "contains": {
+          "const": "amd64"
+        }
+      },
+      "capabilities": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string"
+        }
+      },
+      "state": {
+        "const": "ready"
+      }
+    }
+  }
+}
