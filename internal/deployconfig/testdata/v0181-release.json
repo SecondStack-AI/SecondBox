@@ -1,0 +1,352 @@
+{
+  "schemaVersion": "secondbox.release/artifact-manifest/v6",
+  "version": "0.18.1",
+  "tag": "v0.18.1",
+  "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6",
+  "openapi": {
+    "identity": {
+      "version": "0.18.1",
+      "tag": "v0.18.1",
+      "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+    },
+    "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-0.18.1-openapi.json",
+    "digest": "sha256:3d83d18fcab26f03d5629c8480beff3c621c6656ff4679ec5c8476391566e7d3"
+  },
+  "runnerProtocol": {
+    "minimum": 5,
+    "maximum": 5
+  },
+  "guestProtocol": {
+    "minimum": 1,
+    "maximum": 1
+  },
+  "platforms": {
+    "hostBinaries": [
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/amd64",
+      "darwin/arm64"
+    ],
+    "controlPlane": [
+      "linux/amd64"
+    ],
+    "runner": [
+      "linux/amd64"
+    ],
+    "installerTools": [
+      "linux/amd64"
+    ],
+    "guest": [
+      "linux/amd64"
+    ],
+    "qualifiedRunnerGuest": [
+      "linux/amd64"
+    ]
+  },
+  "goSdk": {
+    "identity": {
+      "version": "0.18.1",
+      "tag": "v0.18.1",
+      "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+    },
+    "coordinate": "github.com/SecondStack-AI/SecondBox@v0.18.1",
+    "package": {
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-0.18.1-go-module.tar.gz",
+      "digest": "sha256:1c100d23bacda2c13941d8cf901c13ff92e8f71659868d586c417656cf629f93"
+    }
+  },
+  "typeScriptSdk": {
+    "identity": {
+      "version": "0.18.1",
+      "tag": "v0.18.1",
+      "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+    },
+    "coordinate": "@secondstack-ai/secondbox@0.18.1",
+    "package": {
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondstack-ai-secondbox-0.18.1.tgz",
+      "digest": "sha256:d9d7b73c386d07ed7a10e8292b3ff6680adf0579d4f745a2bbdaa02aec3b47da"
+    }
+  },
+  "controlPlane": {
+    "identity": {
+      "version": "0.18.1",
+      "tag": "v0.18.1",
+      "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+    },
+    "reference": "ghcr.io/secondstack-ai/secondbox/control-plane@sha256:e52c2f70a1242adaef0b507b113e8aa7101a569cce780b24c9858f695cc0f880"
+  },
+  "runner": {
+    "identity": {
+      "version": "0.18.1",
+      "tag": "v0.18.1",
+      "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+    },
+    "reference": "ghcr.io/secondstack-ai/secondbox/runner@sha256:6c98b8ab59a0799a68f3e8f1d1ba4ae3305c6bf82f8a8a010d55f7177cf317e5"
+  },
+  "installerTools": {
+    "identity": {
+      "version": "0.18.1",
+      "tag": "v0.18.1",
+      "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+    },
+    "reference": "ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:1faa3f536a38ae97938bab18dea58bceb61751cddda3bab0fdebe469a8d55eea"
+  },
+  "bundledServices": {
+    "postgres": "docker.io/library/postgres@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382"
+  },
+  "installBootstrap": {
+    "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/install.sh",
+    "digest": "sha256:e4f397e2f99881839a4ee84329fd27ba952e19a72ae2486639c50df9a55abffe"
+  },
+  "microvm": {
+    "identity": {
+      "version": "0.18.1",
+      "tag": "v0.18.1",
+      "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+    },
+    "imageReference": "ghcr.io/secondstack-ai/secondbox/microvm-artifacts@sha256:5c3ca797a9cd740a11f83de8aa35f78249d351710ea0eff248387809fc4b4c79",
+    "signedManifestDigest": "sha256:5c121ea4b4eadffe8e167a0ec2581387cf774ba3a67c937afca039acdd6245f3",
+    "signingKeyFingerprint": "SHA256:59C127F459B8C93CA422F2F6C5BD43FF1E17D50309A262B7AFF1B07BF59A5CED",
+    "runtimeBundle": {
+      "artifactId": "secondbox-0.17.0-runtime",
+      "manifestDigest": "sha256:abdfe1ff2e9a1752418868664dd23ddb1fd28f46fdbe3d89feb39ffb18e47b78",
+      "mandatoryGuestFeatures": []
+    },
+    "toolchainBundle": {
+      "artifactId": "secondbox-0.17.0-toolchain",
+      "manifestDigest": "sha256:6999b7927eb8e06f1b2a794e3619d19ad2267a035f2b96f7815c307cca6859ee",
+      "mandatoryGuestFeatures": []
+    }
+  },
+  "gvisor": {
+    "identity": {
+      "version": "0.18.1",
+      "tag": "v0.18.1",
+      "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+    },
+    "runnerReference": "ghcr.io/secondstack-ai/secondbox/runner-gvisor@sha256:5fd396f563b2ed4d1d6e8ebf506015aaf4eb5e975c9e90a868e4bd86d2e1d0a1",
+    "imageReference": "ghcr.io/secondstack-ai/secondbox/gvisor-artifacts@sha256:120805700aa9d8816b169099f2347db96ec1972cb336eaf8ba061020856421c7",
+    "materialization": {
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-0.18.1-gvisor-materialization.json",
+      "digest": "sha256:ae410b47bf9a39c2bb8e925e81b18de006bc67556e856cab5293ad18fc98362a"
+    },
+    "materializationDigest": "sha256:99a670eedbb0073ea48e16e6eb173c8810b59577159ed6c29d34a32f90c7178f",
+    "flatRootDigest": "sha256:3b2c5388bea350b7c419f9b7543dac2c88bf57b56cda7216dcfa6fe7fad75b2c",
+    "runscRelease": "20260817.0",
+    "qualificationEvidence": {
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-0.18.1-gvisor-qualification-evidence.json",
+      "digest": "sha256:e1bf54a1e19527b625800f602b46ea68d0a6003c589a7bec2e79b0f80ed4f329"
+    },
+    "podQualificationEvidence": {
+      "location": "",
+      "digest": ""
+    }
+  },
+  "binaries": [
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "secondbox",
+      "platform": "linux/amd64",
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox_0.18.1_linux_amd64",
+      "sha256": "88d48c10211d20e79df21bbde3de52b65000ecb378da57c7290000cc898d02a3"
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "secondbox",
+      "platform": "linux/arm64",
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox_0.18.1_linux_arm64",
+      "sha256": "7f776c8dc31d6f4d8dec7baf4ab60c76de38f9b4a9434e44a77aebb6c85dcbe6"
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "secondbox",
+      "platform": "darwin/amd64",
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox_0.18.1_darwin_amd64",
+      "sha256": "bc6eaa4539e5a70e599c7deeed9262bae335e5ea8172192c488b266872197978"
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "secondbox",
+      "platform": "darwin/arm64",
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox_0.18.1_darwin_arm64",
+      "sha256": "5023dcb6d5d441f755d9a5376d22912139bff5a4571857f7f083d06b385f36c7"
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "secondbox-deploy",
+      "platform": "linux/amd64",
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-deploy_0.18.1_linux_amd64",
+      "sha256": "6d8b30a6a06c398b183dd2b39ed5e409de89c0809cdbd55bd66e9976f9b7ae5f"
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "secondbox-deploy",
+      "platform": "linux/arm64",
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-deploy_0.18.1_linux_arm64",
+      "sha256": "e27405418acdf6f55621935b06cd20f08a35ad964952b12eabea7605fc3296b6"
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "secondbox-deploy",
+      "platform": "darwin/amd64",
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-deploy_0.18.1_darwin_amd64",
+      "sha256": "2ad25942da5111212787fab4ec312886eff6c7755d1a1d76c8cee1b38b86c814"
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "secondbox-deploy",
+      "platform": "darwin/arm64",
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-deploy_0.18.1_darwin_arm64",
+      "sha256": "e5db2073fa3bd7e1316830e5932026ab970b86913f44f9f355687177965490d0"
+    }
+  ],
+  "sboms": [
+    {
+      "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-0.18.1.spdx.json",
+      "digest": "sha256:ad9d171a4c4a75a02c3148b7353093b9955d1a931125b7d5ad94e77018b1ec66"
+    }
+  ],
+  "sourceFreeSuite": {
+    "location": "",
+    "digest": ""
+  },
+  "qualificationEvidence": {
+    "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-0.18.1-qualification-evidence.json",
+    "digest": "sha256:a634da35878b0569d068a809dabf9c2d3165619a6fe009d4028bb6699110a873"
+  },
+  "installerQualificationEvidence": {
+    "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/secondbox-0.18.1-installer-qualification-evidence.json",
+    "digest": "sha256:2bd660dc93fc9f532496ca71e8f11bae265e5262c1a9db3e86507b41613f40aa"
+  },
+  "standardBundles": [
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "agent-compartment",
+      "document": {
+        "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/agent-compartment.standard-bundle.json",
+        "digest": "sha256:eff16edfee4af5e4fb6c5df6325df2ce48f094675b41b5400be57ead3b2db98f"
+      },
+      "profiles": [
+        {
+          "name": "agent-compartment",
+          "revision": 1,
+          "specDigest": "sha256:054dc1ce0afc837bf729c32ddbb64b532ba6a8a75793dd492d9d8698765c1e88"
+        },
+        {
+          "name": "agent-compartment",
+          "revision": 2,
+          "specDigest": "sha256:04dbcb9d5c6c767562ed8d959a2deffcba9980364893f805764b762637c25353"
+        },
+        {
+          "name": "agent-compartment",
+          "revision": 3,
+          "specDigest": "sha256:5e11301c459cf6c1161b2e85151a6612953b63b2e2bd565fd361064c7b850b4f"
+        },
+        {
+          "name": "agent-compartment",
+          "revision": 4,
+          "specDigest": "sha256:bd4c87beee5523c8dd023d57284fd6afdc476a96fd0a654c7f9a4b5de49d4fc4"
+        },
+        {
+          "name": "agent-compartment",
+          "revision": 5,
+          "specDigest": "sha256:fda7d93414bbb180c6d70cb8ffe312c8b25631d24c60767bb34952508d1fcea2"
+        },
+        {
+          "name": "agent-compartment",
+          "revision": 6,
+          "specDigest": "sha256:0215c776eba31bdd828fd1219b6771966188b7f1ad6c4d1fe8a06285791535d0"
+        }
+      ]
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "durable-coding",
+      "document": {
+        "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/durable-coding.standard-bundle.json",
+        "digest": "sha256:9e5bbcd61d28e79489d254dbb461999b16df6f3497c08ef01345b9372abd2333"
+      },
+      "profiles": [
+        {
+          "name": "durable-coding",
+          "revision": 1,
+          "specDigest": "sha256:83f5e9717510552d7c27f42f2125f3a9e8461d430ee56e19957808db7efb37ca"
+        },
+        {
+          "name": "durable-coding",
+          "revision": 2,
+          "specDigest": "sha256:12ece350a6d04f4341e0f9e80ff0b0f886e9c9431cf79d3a97b2ff5f85403a68"
+        }
+      ]
+    },
+    {
+      "identity": {
+        "version": "0.18.1",
+        "tag": "v0.18.1",
+        "sourceCommit": "45bc523cf6d93d102128275445edb8c8b146fdd6"
+      },
+      "name": "agent-compartment-isolated",
+      "document": {
+        "location": "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.18.1/agent-compartment-isolated.standard-bundle.json",
+        "digest": "sha256:a4a764f3edc4daeebb09a36d872f7ad71af1ebcf5b72930c491869bab65e761a"
+      },
+      "profiles": [
+        {
+          "name": "agent-compartment-isolated",
+          "revision": 1,
+          "specDigest": "sha256:e1c26c6688bc9eb9bc80fd994904b4e020131a8e61ca5341e37fc2e4ba3632db"
+        },
+        {
+          "name": "agent-compartment-isolated",
+          "revision": 2,
+          "specDigest": "sha256:5ab9fb255298aeab81ff23dba8db80a5b7da4ae3d308f62e0e731eb6f2302c70"
+        },
+        {
+          "name": "agent-compartment-isolated",
+          "revision": 3,
+          "specDigest": "sha256:5c6df8fddc7e816abbdc448c2b36c795855a90ea8257751b0ce873372ddaa69b"
+        }
+      ]
+    }
+  ]
+}

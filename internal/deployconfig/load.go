@@ -50,6 +50,9 @@ const (
 	linuxUnixSocketPathLimit      = 108
 	maxFirecrackerInstanceIDBytes = 42
 	cleanInstallBoundaryVersion   = "0.6.0"
+	// updateMigrationBaselineVersion is the oldest release whose database
+	// migrates forward to this release. v0.14.0 rewrote the initial migration.
+	updateMigrationBaselineVersion = "0.14.0"
 )
 
 var (

@@ -12,10 +12,10 @@ import (
 )
 
 func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
-	// The source deployment is represented by the exact bytes a v0.6.0
-	// release recorded (frozen in testdata, independent of current
+	// The source deployment is represented by the exact published v0.18.1
+	// artifact manifest (frozen in testdata, independent of current
 	// generators); only the on-disk file placement is test-local.
-	releaseBytes, err := os.ReadFile(filepath.Join("testdata", "v060-release.json"))
+	releaseBytes, err := os.ReadFile(filepath.Join("testdata", "v0181-release.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +76,19 @@ func TestUpdateSourceValidationRefusesPreCleanInstallBoundary(t *testing.T) {
 		!strings.Contains(err.Error(), "clean reinstall") ||
 		!strings.Contains(err.Error(), "compatibility modes are not available") {
 		t.Fatalf("pre-boundary update error = %v", err)
+	}
+}
+
+func TestUpdateSourceValidationRefusesPreMigrationBaseline(t *testing.T) {
+	err := ValidateSingleHostUpdateSource(
+		install.InstallPlan{},
+		releasecontract.ArtifactManifest{Identity: releasecontract.Identity{Version: "0.13.0"}},
+		nil,
+		install.VerifiedArtifact{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "v0.14.0 migration baseline") ||
+		!strings.Contains(err.Error(), "clean reinstall") {
+		t.Fatalf("pre-baseline update error = %v", err)
 	}
 }
 

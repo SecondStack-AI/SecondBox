@@ -155,8 +155,11 @@ func (document Document) Validate() error {
 				return fmt.Errorf("SecondBox Profile %q revision %d specDigest is not canonical sha256", profile.Name, revision.Number)
 			}
 			actual, err := SpecDigest(revision.Spec)
-			if err != nil || actual != revision.SpecDigest {
-				return fmt.Errorf("SecondBox Profile %q revision %d spec digest mismatch", profile.Name, revision.Number)
+			if err != nil {
+				return fmt.Errorf("SecondBox Profile %q revision %d spec digest: %w", profile.Name, revision.Number, err)
+			}
+			if actual != revision.SpecDigest {
+				return fmt.Errorf("SecondBox Profile %q revision %d spec digest mismatch: declared %s, spec is %s", profile.Name, revision.Number, revision.SpecDigest, actual)
 			}
 			if _, ok := pools[revision.Spec.Pool]; !ok {
 				return fmt.Errorf("SecondBox Profile %q revision %d references undeclared RunnerPool %q", profile.Name, revision.Number, revision.Spec.Pool)

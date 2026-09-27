@@ -32,56 +32,64 @@ func TestDocumentRejectsLineageThatDiffersFromPolicy(t *testing.T) {
 
 // TestPublishedLineageConvergesOnceBundleDigestsAreRemoved proves an upgraded
 // deployment keeps its installed Profile history. Migration 0031 removes the
-// retired bundle digests from every recorded spec; what remains must be the
-// current lineage revision for revision, so resource apply sees an unaltered
-// prefix instead of a rewritten history.
+// retired bundle digests from every recorded spec; what remains must be a
+// prefix of the current lineage revision for revision, so resource apply only
+// appends instead of seeing a rewritten history. v0.14.0 is the oldest
+// supported update source; v0.18.1 is the latest pinned release.
 func TestPublishedLineageConvergesOnceBundleDigestsAreRemoved(t *testing.T) {
-	for _, name := range BundleNames() {
-		content, err := os.ReadFile(filepath.Join("testdata", "v0.18.1", name+".standard-bundle.json"))
+	for _, release := range []string{"v0.14.0", "v0.18.1"} {
+		for _, name := range BundleNames() {
+			assertPublishedLineageConverges(t, release, name)
+		}
+	}
+}
+
+func assertPublishedLineageConverges(t *testing.T, release, name string) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join("testdata", release, name+".standard-bundle.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published struct {
+		Profile struct {
+			Revisions []struct {
+				Number int64                      `json:"number"`
+				Spec   map[string]json.RawMessage `json:"spec"`
+			} `json:"revisions"`
+		} `json:"profile"`
+	}
+	if err := json.Unmarshal(content, &published); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ProfileLineage(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Profile.Revisions) > len(current.Revisions) {
+		t.Fatalf("%s %s published %d revisions, current lineage has %d", release, name, len(published.Profile.Revisions), len(current.Revisions))
+	}
+	for index, revision := range published.Profile.Revisions {
+		if _, pinned := revision.Spec["runtimeBundleDigest"]; !pinned {
+			t.Fatalf("%s revision %d fixture lacks the retired bundle digest", name, revision.Number)
+		}
+		delete(revision.Spec, "runtimeBundleDigest")
+		delete(revision.Spec, "toolchainBundleDigest")
+		stripped, err := json.Marshal(revision.Spec)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var published struct {
-			Profile struct {
-				Revisions []struct {
-					Number int64                      `json:"number"`
-					Spec   map[string]json.RawMessage `json:"spec"`
-				} `json:"revisions"`
-			} `json:"profile"`
+		var spec secondboxclient.ProfileRevisionSpec
+		decoder := json.NewDecoder(bytes.NewReader(stripped))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&spec); err != nil {
+			t.Fatalf("%s revision %d: %v", name, revision.Number, err)
 		}
-		if err := json.Unmarshal(content, &published); err != nil {
-			t.Fatal(err)
-		}
-		current, err := ProfileLineage(name)
+		digest, err := resourceapply.SpecDigest(spec)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(published.Profile.Revisions) != len(current.Revisions) {
-			t.Fatalf("%s published %d revisions, current lineage has %d", name, len(published.Profile.Revisions), len(current.Revisions))
-		}
-		for index, revision := range published.Profile.Revisions {
-			if _, pinned := revision.Spec["runtimeBundleDigest"]; !pinned {
-				t.Fatalf("%s revision %d fixture lacks the retired bundle digest", name, revision.Number)
-			}
-			delete(revision.Spec, "runtimeBundleDigest")
-			delete(revision.Spec, "toolchainBundleDigest")
-			stripped, err := json.Marshal(revision.Spec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var spec secondboxclient.ProfileRevisionSpec
-			decoder := json.NewDecoder(bytes.NewReader(stripped))
-			decoder.DisallowUnknownFields()
-			if err := decoder.Decode(&spec); err != nil {
-				t.Fatalf("%s revision %d: %v", name, revision.Number, err)
-			}
-			digest, err := resourceapply.SpecDigest(spec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if revision.Number != current.Revisions[index].Number || digest != current.Revisions[index].SpecDigest {
-				t.Fatalf("%s installed revision %d does not converge on the current lineage", name, revision.Number)
-			}
+		if revision.Number != current.Revisions[index].Number || digest != current.Revisions[index].SpecDigest {
+			t.Fatalf("%s %s installed revision %d does not converge on the current lineage", release, name, revision.Number)
 		}
 	}
 }

@@ -26,6 +26,15 @@ func ValidateSingleHostUpdateSource(plan install.InstallPlan, release releasecon
 	if release.Version != "0.0.0-development" && comparison < 0 {
 		return cleanInstallBoundaryError("installed deployment predates v" + cleanInstallBoundaryVersion)
 	}
+	// Refuse before activation: an older database cannot migrate forward, and
+	// its standard Profile lineage predates the history this release appends to.
+	baseline, err := releasecontract.CompareVersions(release.Version, updateMigrationBaselineVersion)
+	if err != nil {
+		return err
+	}
+	if release.Version != "0.0.0-development" && baseline < 0 {
+		return manifestError("installed deployment predates the v"+updateMigrationBaselineVersion+" migration baseline; perform a clean reinstall", nil)
+	}
 	if err := release.Validate(); err != nil {
 		return err
 	}

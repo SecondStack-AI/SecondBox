@@ -7,8 +7,8 @@ Sandboxes survive execution bundle upgrades. Profiles no longer pin runtime and 
 ### Changed
 
 - Removed `runtimeBundleDigest` and `toolchainBundleDigest` from `ProfileRevisionSpec`. Requests that still send them are rejected; migration `0031_profile_execution_assets_unpinned` removes them from recorded revisions. Client-selected images keep their signed component identities.
-- Default-image Assignments carry no asset references, and placement requires a verified materialization for the Runner's backend rather than exact bundle digests. The guided updater no longer refuses updates that change the Firecracker bundle.
-- Standard bundle documents moved to `secondbox.standard-bundle/v4` without bundle digests. Standard Profile lineages keep their revision numbers, so installed histories converge after migration. Release verification binds bundle documents by digest, which lets the updater authenticate releases published under the older schema.
+- Default-image Assignments carry no asset references, and placement requires a verified materialization for the Runner's backend rather than exact bundle digests. The guided updater no longer refuses updates that change the Firecracker bundle; it refuses sources older than the v0.14.0 migration baseline before activation.
+- Standard bundle documents moved to `secondbox.standard-bundle/v4` without bundle digests. Standard Profile lineages keep their revision numbers, so installed histories from v0.14.0 onward converge after migration; their spec digests change. `secondbox resources check` reports the computed digest of a mismatched revision. Release verification binds bundle documents by digest, which lets the updater authenticate releases published under the older schema.
 
 ### Removed
 
