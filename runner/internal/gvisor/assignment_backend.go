@@ -482,7 +482,7 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 		if err := backend.validateSelectedImageAssignment(assignment); err != nil {
 			return artifactAssignment(err)
 		}
-	} else if err := backend.validateAssignmentMaterialization(assignment); err != nil {
+	} else if err := backend.validateDefaultImageAssignment(assignment); err != nil {
 		return artifactAssignment(err)
 	}
 	if _, err := validateConfig(backend.config.Config); err != nil {
@@ -1423,29 +1423,12 @@ func (backend *AssignmentBackend) operationFenceActive(active *activeAssignment,
 	return backend.assignments[fence.GetAssignmentId()] == active && !active.fenced && sameFence(active.fence, fence)
 }
 
-func (backend *AssignmentBackend) validateAssignmentMaterialization(assignment *runnerprotocol.AssignmentCommand) error {
-	manifest := backend.config.manifest
-	if len(assignment.Assets) != 2 {
-		return fmt.Errorf("SecondBox gVisor assignment must select exactly runtime and toolchain assets")
-	}
-	expected := map[string]bool{
-		manifest.Key.RuntimeManifestDigest:   false,
-		manifest.Key.ToolchainManifestDigest: false,
-	}
-	for _, asset := range assignment.Assets {
-		if asset == nil || asset.Architecture != manifest.Key.GuestArchitecture ||
-			asset.GuestProtocolGeneration != manifest.AgentProtocolGeneration {
-			return fmt.Errorf("SecondBox gVisor assignment asset compatibility differs from the materialization")
-		}
-		if _, exists := expected[asset.ManifestDigest]; !exists || expected[asset.ManifestDigest] {
-			return fmt.Errorf("SecondBox gVisor assignment asset digest differs from the materialization")
-		}
-		expected[asset.ManifestDigest] = true
-		for _, feature := range asset.MandatoryGuestFeatures {
-			if !slices.Contains(manifest.AgentFeatures, feature) {
-				return fmt.Errorf("SecondBox gVisor assignment requires unsupported agent feature %q", feature)
-			}
-		}
+// validateDefaultImageAssignment accepts a default-image assignment, which boots
+// the locally verified materialization of whichever release this Runner runs
+// and therefore names no assets.
+func (backend *AssignmentBackend) validateDefaultImageAssignment(assignment *runnerprotocol.AssignmentCommand) error {
+	if len(assignment.Assets) != 0 {
+		return fmt.Errorf("SecondBox gVisor default-image assignment must not select assets")
 	}
 	return nil
 }

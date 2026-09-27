@@ -1,0 +1,159 @@
+{
+  "schemaVersion": "secondbox.standard-bundle/v3",
+  "name": "durable-coding",
+  "architecture": "amd64",
+  "runnerPoolSelector": "standard-amd64",
+  "logicalGateway": "platform-gateway.secondbox.internal",
+  "signedManifestDigest": "sha256:5c121ea4b4eadffe8e167a0ec2581387cf774ba3a67c937afca039acdd6245f3",
+  "runtimeBundleDigest": "sha256:abdfe1ff2e9a1752418868664dd23ddb1fd28f46fdbe3d89feb39ffb18e47b78",
+  "toolchainBundleDigest": "sha256:6999b7927eb8e06f1b2a794e3619d19ad2267a035f2b96f7815c307cca6859ee",
+  "profile": {
+    "name": "durable-coding",
+    "revisions": [
+      {
+        "number": 1,
+        "specDigest": "sha256:83f5e9717510552d7c27f42f2125f3a9e8461d430ee56e19957808db7efb37ca",
+        "spec": {
+          "pool": "standard-amd64",
+          "architecture": "amd64",
+          "runtimeBundleDigest": "sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335",
+          "toolchainBundleDigest": "sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4",
+          "resources": {
+            "vcpuCount": 4,
+            "memoryBytes": 8589934592,
+            "workspaceBytes": 53687091200,
+            "concurrentOperations": 16
+          },
+          "startup": {
+            "mode": "cold_boot"
+          },
+          "lifecycle": {
+            "initialState": "running",
+            "drainGraceSeconds": 120,
+            "idleSeconds": 28800,
+            "maximumDurationSeconds": 604800,
+            "leaseSeconds": 300
+          },
+          "retention": {
+            "snapshotLimit": 64,
+            "snapshotRetentionSeconds": 2592000
+          },
+          "execution": {
+            "maximumDeadlineMilliseconds": 86400000,
+            "maximumBufferedOutputBytes": 16777216,
+            "streamWindowBytes": 1048576,
+            "maximumTransferBytes": 10737418240,
+            "terminalDetachSeconds": 86400,
+            "dataPlaneTransport": "proxied"
+          },
+          "network": {
+            "mode": "allow_list",
+            "destinations": [
+              {
+                "protocol": "https",
+                "domain": "platform-gateway.secondbox.internal",
+                "port": 443
+              }
+            ],
+            "requiresTenantEgressContext": true
+          },
+          "ports": [
+            {
+              "name": "development-http",
+              "port": 3000,
+              "protocol": "http",
+              "maximumSessions": 8,
+              "maximumSessionSeconds": 86400
+            }
+          ]
+        }
+      },
+      {
+        "number": 2,
+        "specDigest": "sha256:12ece350a6d04f4341e0f9e80ff0b0f886e9c9431cf79d3a97b2ff5f85403a68",
+        "spec": {
+          "pool": "standard-amd64",
+          "architecture": "amd64",
+          "runtimeBundleDigest": "sha256:abdfe1ff2e9a1752418868664dd23ddb1fd28f46fdbe3d89feb39ffb18e47b78",
+          "toolchainBundleDigest": "sha256:6999b7927eb8e06f1b2a794e3619d19ad2267a035f2b96f7815c307cca6859ee",
+          "resources": {
+            "vcpuCount": 4,
+            "memoryBytes": 8589934592,
+            "workspaceBytes": 53687091200,
+            "concurrentOperations": 16
+          },
+          "startup": {
+            "mode": "cold_boot"
+          },
+          "lifecycle": {
+            "initialState": "running",
+            "drainGraceSeconds": 120,
+            "idleSeconds": 28800,
+            "maximumDurationSeconds": 604800,
+            "leaseSeconds": 300
+          },
+          "retention": {
+            "snapshotLimit": 64,
+            "snapshotRetentionSeconds": 2592000
+          },
+          "execution": {
+            "maximumDeadlineMilliseconds": 86400000,
+            "maximumBufferedOutputBytes": 16777216,
+            "streamWindowBytes": 1048576,
+            "maximumTransferBytes": 10737418240,
+            "terminalDetachSeconds": 86400,
+            "dataPlaneTransport": "proxied"
+          },
+          "network": {
+            "mode": "allow_list",
+            "destinations": [
+              {
+                "protocol": "https",
+                "domain": "platform-gateway.secondbox.internal",
+                "port": 443
+              }
+            ],
+            "requiresTenantEgressContext": true
+          },
+          "ports": [
+            {
+              "name": "development-http",
+              "port": 3000,
+              "protocol": "http",
+              "maximumSessions": 8,
+              "maximumSessionSeconds": 86400
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "parameterSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "architectures",
+      "capabilities",
+      "state"
+    ],
+    "properties": {
+      "architectures": {
+        "type": "array",
+        "contains": {
+          "const": "amd64"
+        }
+      },
+      "capabilities": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string"
+        }
+      },
+      "state": {
+        "const": "ready"
+      }
+    }
+  }
+}

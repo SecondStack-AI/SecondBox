@@ -58,7 +58,7 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 		VerifySource: func(ctx context.Context, location string) (releaseverify.VerifiedRelease, error) {
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
-			return releaseverify.RecordedArtifactManifest(ctx, location, releaseverify.HTTPFetcher(httpClient))
+			return releaseverify.ArtifactManifest(ctx, location, releaseverify.HTTPFetcher(httpClient))
 		},
 		CheckCapacity: install.ValidateUpdateStagingCapacity,
 		Materializer:  install.SystemReleaseMaterializer{Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic, HTTPClient: httpClient},
@@ -345,12 +345,8 @@ func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt in
 	if !sameUpdateTarget(target, releasePlan(targetVerified, target.ArtifactManifestURL)) {
 		return errors.New("SecondBox installer update: target release verification changed")
 	}
-	sourceVerified, err := validateUpdateSource(ctx, plan, receipt, dependencies)
-	if err != nil {
+	if _, err := validateUpdateSource(ctx, plan, receipt, dependencies); err != nil {
 		return err
-	}
-	if err := install.ValidateUpdateAssetCompatibility(sourceVerified.Manifest, targetVerified.Manifest); err != nil {
-		return fmt.Errorf("SecondBox installer update: %w", err)
 	}
 	if err := dependencies.CheckCapacity(plan, target); err != nil {
 		return err
@@ -415,9 +411,6 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 	}
 	if !sameUpdateTarget(update.SourceRelease, releasePlan(source, update.SourceRelease.ArtifactManifestURL)) {
 		return errors.New("SecondBox installer update: resumed source release differs from its journaled public identity")
-	}
-	if err := install.ValidateUpdateAssetCompatibility(source.Manifest, target.Manifest); err != nil {
-		return fmt.Errorf("SecondBox installer update: %w", err)
 	}
 	persist := func() error { return dependencies.SaveReceipt(directory, plan, receipt, dependencies.OwnerUID) }
 	fail := func(stage install.UpdateStage, class install.FailureClass, problem error) error {
@@ -626,7 +619,7 @@ func refreshUpdateResourceLedger(receipt *install.InstallReceipt, update install
 	}
 	expected["secondbox-binary"] = "sha256:" + update.TargetRelease.BinaryDigests["secondbox"]
 	expected["secondbox-deploy-binary"] = "sha256:" + update.TargetRelease.BinaryDigests["secondbox-deploy"]
-	for _, id := range []string{"secondbox-binary", "secondbox-deploy-binary", "signed-asset-catalog", "release-artifact-manifest", "manifest", "compose-environment"} {
+	for _, id := range []string{"secondbox-binary", "secondbox-deploy-binary", "release-artifact-manifest", "manifest", "compose-environment"} {
 		digest := expected[id]
 		if digest == "" {
 			return fmt.Errorf("SecondBox installer update: verified target digest is absent for %s", id)

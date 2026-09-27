@@ -16,8 +16,6 @@ type runtimeInputs struct {
 	baseURL          string
 	platformToken    string
 	applicationToken string
-	runtimeDigest    string
-	toolchainDigest  string
 	guestCIDR        string
 	sourceCommit     string
 	goVersion        string
@@ -84,7 +82,6 @@ func runMain(arguments []string) error {
 	}
 	driver := &lifecycleDriver{
 		config: config, admin: clients.Admin, client: clients.Subject,
-		runtimeDigest: inputs.runtimeDigest, toolchainDigest: inputs.toolchainDigest,
 	}
 	switch *mode {
 	case "prepare":
@@ -270,12 +267,6 @@ func readRuntimeInputs(mode string) (runtimeInputs, error) {
 		return runtimeInputs{}, err
 	}
 	if inputs.applicationToken, err = required("SECONDBOX_SCENARIO_APPLICATION_TOKEN"); err != nil {
-		return runtimeInputs{}, err
-	}
-	if inputs.runtimeDigest, err = required("SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"); err != nil {
-		return runtimeInputs{}, err
-	}
-	if inputs.toolchainDigest, err = required("SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"); err != nil {
 		return runtimeInputs{}, err
 	}
 	if inputs.guestCIDR, err = required("SECONDBOX_SCENARIO_GUEST_CIDR"); err != nil {

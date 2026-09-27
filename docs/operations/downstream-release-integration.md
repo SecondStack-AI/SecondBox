@@ -5,6 +5,8 @@ version consistently for binaries, SDKs, images, and standard bundles. In the
 examples below, replace `VERSION` with the chosen numeric version. The tag and
 attached files identify one release; the publishing workflow does not rebuild them.
 
+The next release removes Profile bundle pinning. A bundle change no longer blocks an in-place update, and existing Sandboxes start on the new bundle with their Workspaces intact. Drop `runtimeBundleDigest` and `toolchainBundleDigest` from Profile specs and fixtures, and remove `deployment.signed_asset_catalog` from `secondbox.toml`.
+
 For [v0.18.0](../releases/v0.18.0.md), a v0.17.0 deployment updates in place: the Firecracker bundle, trust anchor, Runner protocol generation 5, and migration baseline are unchanged. gVisor consumers must deploy the image fetcher, a reflink-capable execution image cache, registry configuration, and the publisher key beside every gVisor Runner before updating; see the release notes for the settings.
 
 For [v0.17.0](../releases/v0.17.0.md), the new signed Firecracker bundle changes runtime and toolchain identities. The guided updater refuses an in-place update. Retire Sandboxes, retain a coordinated backup, reinstall with a fresh database and separate Runner storage root, and recreate resources against the new bundle and standard revisions. The RSA trust anchor from v0.12.0 is retained. The release keeps Runner protocol generation 5 and the v0.15.0 migration baseline.

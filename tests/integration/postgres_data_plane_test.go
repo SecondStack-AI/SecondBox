@@ -111,8 +111,8 @@ func TestLifecycleStopCancelsInFlightGenerationSession(t *testing.T) {
 		lifecycle.EffectBrokerConfig{
 			AssignmentClaimDuration: time.Minute, AssignmentDeadline: time.Minute,
 			HeartbeatTimeout: time.Minute, RetryLimit: 2, SerializationRetryLimit: 2,
-			AssetCatalog: multirunnerAssetCatalog{}, SessionCanceller: relay,
-			NewID: func(prefix string) string { return prefix + "-lifecycle-stop-cancel" },
+			SessionCanceller: relay,
+			NewID:            func(prefix string) string { return prefix + "-lifecycle-stop-cancel" },
 			NewFencingToken: func() ([]byte, error) {
 				return []byte("01234567890123456789012345678901"), nil
 			},

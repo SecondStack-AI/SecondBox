@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	"github.com/SecondStack-AI/SecondBox/internal/install"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
@@ -167,26 +166,12 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 		}
 	}
 
-	catalogPath := installPath(plan, "signed-asset-catalog")
-	catalog := struct {
-		Assets []assetcatalog.Asset `json:"assets"`
-	}{Assets: []assetcatalog.Asset{
-		componentAsset(release.MicroVM.RuntimeBundle, release.GuestProtocol.Maximum),
-		componentAsset(release.MicroVM.ToolchainBundle, release.GuestProtocol.Maximum),
-	}}
-	catalogBytes, err := json.Marshal(catalog)
-	if err != nil {
-		return SingleHostInstallResult{}, err
-	}
-	if err := write(catalogPath, append(catalogBytes, '\n'), 0o600); err != nil {
-		return SingleHostInstallResult{}, err
-	}
 	releasePath := installPath(plan, "release-artifact-manifest")
 	if err := write(releasePath, slices.Clone(releaseBytes), 0o644); err != nil {
 		return SingleHostInstallResult{}, err
 	}
 
-	manifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pki))
+	manifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, relativeTo(deployment, releasePath), relativeTo(deployment, pki))
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -252,7 +237,7 @@ func recoverPartialSingleHostInstall(plan install.InstallPlan) error {
 		return manifestError("partial single-host materialization marker differs from the accepted plan", err)
 	}
 	deployment := installPath(plan, "deployment")
-	for _, name := range []string{"manifest", "signed-asset-catalog", "release-artifact-manifest", "runner-identity", "identity-parent", "runner-pki", "secrets"} {
+	for _, name := range []string{"manifest", "release-artifact-manifest", "runner-identity", "identity-parent", "runner-pki", "secrets"} {
 		path := installPath(plan, name)
 		if path == "" {
 			continue
@@ -324,10 +309,9 @@ func validateExistingSingleHostInstall(plan install.InstallPlan, release release
 		targets[target.Category] = target.Path
 	}
 	relativeTarget := func(category string) string { return relativeTo(deployment, targets[category]) }
-	catalogPath := installPath(plan, "signed-asset-catalog")
 	releasePath := installPath(plan, "release-artifact-manifest")
 	pkiPath := installPath(plan, "runner-pki")
-	expectedManifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
+	expectedManifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -342,20 +326,6 @@ func validateExistingSingleHostInstall(plan install.InstallPlan, release release
 	actualReleaseBytes, err := readSingleHostPlannedFile(plan, "release-artifact-manifest")
 	if err != nil || !bytes.Equal(actualReleaseBytes, releaseBytes) {
 		return SingleHostInstallResult{}, manifestError("existing single-host release manifest differs from the verified release", err)
-	}
-	catalog := struct {
-		Assets []assetcatalog.Asset `json:"assets"`
-	}{Assets: []assetcatalog.Asset{
-		componentAsset(release.MicroVM.RuntimeBundle, release.GuestProtocol.Maximum),
-		componentAsset(release.MicroVM.ToolchainBundle, release.GuestProtocol.Maximum),
-	}}
-	expectedCatalog, err := json.Marshal(catalog)
-	if err != nil {
-		return SingleHostInstallResult{}, err
-	}
-	actualCatalog, err := readSingleHostPlannedFile(plan, "signed-asset-catalog")
-	if err != nil || !bytes.Equal(actualCatalog, append(expectedCatalog, '\n')) {
-		return SingleHostInstallResult{}, manifestError("existing single-host signed-asset catalog differs from the verified release", err)
 	}
 	if _, err := resolveManifestWithOptions(expectedManifest, deployment, false); err != nil {
 		return SingleHostInstallResult{}, manifestError("existing single-host deployment does not resolve", err)
@@ -381,7 +351,7 @@ func readSingleHostPlannedFile(plan install.InstallPlan, name string) ([]byte, e
 	return os.ReadFile(path)
 }
 
-func singleHostManifest(plan install.InstallPlan, release releasecontract.ArtifactManifest, signingKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, catalogPath, releasePath, pkiPath string) (ManifestV1, error) {
+func singleHostManifest(plan install.InstallPlan, release releasecontract.ArtifactManifest, signingKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, releasePath, pkiPath string) (ManifestV1, error) {
 	apiHost, apiPort, err := splitPlanAddress(plan.Network.APIAddress)
 	if err != nil {
 		return ManifestV1{}, err
@@ -430,7 +400,7 @@ func singleHostManifest(plan install.InstallPlan, release releasecontract.Artifa
 	maxDiskMiB := max(int64(1024), plan.Capacity.MaxWorkspaceBytes/plan.Capacity.MaxSandboxes/(1<<20))
 	manifest := ManifestV1{
 		SchemaVersion:     1,
-		Deployment:        Deployment{Mode: "development", ComposeProjectName: "secondbox-" + strings.ReplaceAll(strings.TrimPrefix(plan.OperationID, "install_"), "_", "-"), ComposeBackendCIDR: plan.Network.ComposeBackendCIDR, PublicBaseURL: "http://" + plan.Network.APIAddress, TLSTermination: "development-loopback", ControlPlaneImage: release.ControlPlane.Reference, RunnerImage: release.Runner.Reference, PostgresImage: release.BundledServices.Postgres, APIBindIP: apiHost, APIPublishedPort: integer(apiPort), RunnerBindIP: runnerHost, RunnerPublishedPort: integer(runnerPort), LogPath: "/var/log/secondbox/control-plane.jsonl", AssetCatalog: catalogPath, DevelopmentWaitSeconds: integer(300)},
+		Deployment:        Deployment{Mode: "development", ComposeProjectName: "secondbox-" + strings.ReplaceAll(strings.TrimPrefix(plan.OperationID, "install_"), "_", "-"), ComposeBackendCIDR: plan.Network.ComposeBackendCIDR, PublicBaseURL: "http://" + plan.Network.APIAddress, TLSTermination: "development-loopback", ControlPlaneImage: release.ControlPlane.Reference, RunnerImage: release.Runner.Reference, PostgresImage: release.BundledServices.Postgres, APIBindIP: apiHost, APIPublishedPort: integer(apiPort), RunnerBindIP: runnerHost, RunnerPublishedPort: integer(runnerPort), LogPath: "/var/log/secondbox/control-plane.jsonl", DevelopmentWaitSeconds: integer(300)},
 		Database:          Database{Mode: "bundled", BindIP: databaseHost, PublishedPort: integer(databasePort), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword},
 		RunnerTrust:       RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: filepath.Join(pkiPath, "runner-ca.crt"), CAPrivateKeyFile: filepath.Join(pkiPath, "runner-ca.key"), ServerCertificateFile: filepath.Join(pkiPath, "server.crt"), ServerPrivateKeyFile: filepath.Join(pkiPath, "server.key"), ServerName: "control-plane", CertificateLifetimeDays: integer(825)},
 		Applications:      Applications{PlatformTokenFile: platformToken},
@@ -448,10 +418,6 @@ func singleHostManifest(plan install.InstallPlan, release releasecontract.Artifa
 	manifest.Runners[0].ExecutionImageMaxExpandedBytes = integer(16 << 30)
 	manifest.Runners[0].ExecutionImageMaxCacheBytes = integer(64 << 30)
 	return manifest, nil
-}
-
-func componentAsset(component releasecontract.SignedComponent, protocol uint32) assetcatalog.Asset {
-	return assetcatalog.Asset{ArtifactID: component.ArtifactID, ManifestDigest: component.ManifestDigest, Architecture: standardresources.ArchitectureAMD64, GuestProtocolGeneration: protocol, MandatoryGuestFeatures: slices.Clone(component.MandatoryGuestFeatures)}
 }
 
 func installPath(plan install.InstallPlan, name string) string {

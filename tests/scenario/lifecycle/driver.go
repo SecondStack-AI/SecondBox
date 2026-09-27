@@ -19,11 +19,9 @@ import (
 )
 
 type lifecycleDriver struct {
-	config          lifecycleConfig
-	admin           *secondboxclient.Client
-	client          *secondboxclient.Client
-	runtimeDigest   string
-	toolchainDigest string
+	config lifecycleConfig
+	admin  *secondboxclient.Client
+	client *secondboxclient.Client
 
 	readyCount   atomic.Int64
 	inFlight     atomic.Int64
@@ -75,8 +73,6 @@ func (driver *lifecycleDriver) prepare(ctx context.Context) error {
 				Name: driver.config.ProfileName,
 				Spec: secondboxclient.ProfileRevisionSpec{
 					Pool: driver.config.RunnerPoolName, Architecture: "amd64",
-					RuntimeBundleDigest:   driver.runtimeDigest,
-					ToolchainBundleDigest: driver.toolchainDigest,
 					Resources: secondboxclient.ResourcePolicy{
 						VCPUCount:      driver.config.Profile.VCPUCount,
 						MemoryBytes:    driver.config.Profile.MemoryBytes,

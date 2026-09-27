@@ -911,16 +911,32 @@ type SignedBundleGuestStart struct {
 	MandatoryFeatures       []string
 }
 
+// assignmentGuestProtocolStart resolves the guest a start boots. A default-image
+// assignment names no assets and boots the Runner's installed signed bundle,
+// whichever release that is; a client-selected image names its components.
 func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (SignedBundleGuestStart, error) {
-	if artifactDirectory == "" {
-		artifactDirectory = filepath.Dir(b.manager.cfg.MicroVMKernelPath)
+	if assignment.ExecutionImage == nil {
+		if len(assignment.Assets) != 0 {
+			return SignedBundleGuestStart{}, fmt.Errorf("SecondBox default-image assignment must not select assets")
+		}
+		return InstalledSignedBundleGuestStart(filepath.Dir(b.manager.cfg.MicroVMKernelPath))
 	}
 	return ResolveSignedBundleGuestStart(assignment, artifactDirectory)
 }
 
-// ResolveSignedBundleGuestStart matches an assignment's runtime and toolchain
-// assets to the signed manifest of an already verified bundle directory. Every
-// backend that launches a signed bundle's userspace shares this check.
+// InstalledSignedBundleGuestStart grants a start the identity of an already
+// verified bundle directory without consulting the assignment.
+func InstalledSignedBundleGuestStart(artifactDirectory string) (SignedBundleGuestStart, error) {
+	manifest, err := loadSignedArtifactManifest(filepath.Join(artifactDirectory, "manifest.json"))
+	if err != nil {
+		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle compatibility metadata: %w", err)
+	}
+	return signedBundleGuestStart(manifest), nil
+}
+
+// ResolveSignedBundleGuestStart matches a client-selected image assignment's
+// runtime and toolchain assets to the signed manifest of an already verified
+// bundle directory. Every backend that launches a selected image shares this check.
 func ResolveSignedBundleGuestStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (SignedBundleGuestStart, error) {
 	manifestPath := filepath.Join(artifactDirectory, "manifest.json")
 	manifest, err := loadSignedArtifactManifest(manifestPath)
@@ -953,16 +969,19 @@ func ResolveSignedBundleGuestStart(assignment *runnerprotocol.AssignmentCommand,
 		assignment.Assets[toolchainAsset].GuestProtocolGeneration {
 		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle runtime and toolchain guest generations differ")
 	}
-	features := mergeUniqueStrings(
-		manifest.RuntimeBundle.MandatoryGuestFeatures,
-		manifest.ToolchainBundle.MandatoryGuestFeatures,
-	)
+	return signedBundleGuestStart(manifest), nil
+}
+
+func signedBundleGuestStart(manifest signedArtifactManifest) SignedBundleGuestStart {
 	return SignedBundleGuestStart{
 		GuestBuildID:            manifest.ArtifactVersion,
 		ImageManifestDigest:     manifest.RuntimeBundle.ManifestDigest,
 		ToolchainManifestDigest: manifest.ToolchainBundle.ManifestDigest,
-		MandatoryFeatures:       features,
-	}, nil
+		MandatoryFeatures: mergeUniqueStrings(
+			manifest.RuntimeBundle.MandatoryGuestFeatures,
+			manifest.ToolchainBundle.MandatoryGuestFeatures,
+		),
+	}
 }
 
 func mergeUniqueStrings(groups ...[]string) []string {

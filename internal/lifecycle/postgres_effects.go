@@ -32,14 +32,13 @@ type ActiveSessionCanceller interface {
 	CancelSandboxSessions(context.Context, string, int64, string, time.Time) (int64, error)
 }
 
-// EffectBrokerConfig contains explicit lifecycle effect bounds and artifact trust.
+// EffectBrokerConfig contains explicit lifecycle effect bounds and selected-image trust.
 type EffectBrokerConfig struct {
 	AssignmentClaimDuration time.Duration
 	AssignmentDeadline      time.Duration
 	HeartbeatTimeout        time.Duration
 	RetryLimit              int64
 	SerializationRetryLimit int
-	AssetCatalog            AssetCatalog
 	ExecutionImageAuthority *assetcatalog.ExecutionImageAuthority
 	SessionCanceller        ActiveSessionCanceller
 	NewID                   func(string) string
@@ -64,7 +63,7 @@ func NewPostgresEffectBroker(
 	if databaseURL == "" || assignmentScheduler == nil ||
 		config.AssignmentClaimDuration <= 0 || config.AssignmentDeadline <= 0 ||
 		config.HeartbeatTimeout <= 0 || config.RetryLimit < 0 ||
-		config.SerializationRetryLimit < 0 || config.AssetCatalog == nil ||
+		config.SerializationRetryLimit < 0 ||
 		config.SessionCanceller == nil || config.NewID == nil || config.NewFencingToken == nil ||
 		config.Now == nil {
 		return nil, errors.New("SecondBox lifecycle effect broker requires database, scheduler, trust, identity, and retry bounds")
@@ -471,12 +470,11 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		// binding. Ordinary destinations must never accompany this generation.
 		networkPolicy = &runnerv1.NetworkPolicy{Mode: runnerv1.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL}
 	}
-	assets, guestProtocolGeneration, err := resolveProfileAssets(
-		broker.config.AssetCatalog, plan.spec,
-	)
-	if err != nil {
-		return broker.failInvalidProfileStart(ctx, claim, plan, err, now.UTC())
-	}
+	// A default-image start carries no assets: the home Runner boots the signed
+	// bundle it has installed, so a Sandbox survives release upgrades. Only a
+	// client-selected image names its signed components.
+	var assets []*runnerv1.AssetReference
+	resolvedArtifacts := map[string]string{}
 	selectedReference := ""
 	if plan.image.RequestedReference != "" {
 		var prepared bool
@@ -487,7 +485,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		if !prepared {
 			return broker.deferUnavailableHomeRunnerStart(ctx, claim, plan.generation, nextReconcileAt.UTC())
 		}
-		guestProtocolGeneration = assets[0].GuestProtocolGeneration
+		resolvedArtifacts = map[string]string{
+			"runtime": assets[0].ManifestDigest, "toolchain": assets[1].ManifestDigest,
+		}
 	}
 	// The Runner is told which backend prerequisites its Assignment needs. The
 	// startup mode travels separately, as its own field, because a Runner decides
@@ -578,13 +578,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 				DiskBytes:   plan.resources.WorkspaceBytes,
 				Instances:   1, Operations: plan.spec.Resources.ConcurrentOperations,
 			},
-			GuestProtocolGeneration:  guestProtocolGeneration,
-			PreferredArtifactDigests: []string{assets[0].ManifestDigest, assets[1].ManifestDigest},
 		},
 		AssignmentCommand: assignmentCommand, FencingToken: fencingToken,
-		ResolvedArtifacts: map[string]string{
-			"runtime": assets[0].ManifestDigest, "toolchain": assets[1].ManifestDigest,
-		},
+		ResolvedArtifacts: resolvedArtifacts,
 		ClaimExpiresAt:    now.UTC().Add(broker.config.AssignmentClaimDuration),
 		OperationDeadline: deadline, RetryLimit: broker.config.RetryLimit,
 		SerializationRetryLimit: broker.config.SerializationRetryLimit,
@@ -779,42 +775,6 @@ func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
 		return fmt.Errorf("SecondBox lifecycle unavailable home Runner deferral commit failed: %w", err)
 	}
 	return nil
-}
-
-func resolveProfileAssets(
-	catalog AssetCatalog,
-	spec contracts.ProfileRevisionSpec,
-) ([]*runnerv1.AssetReference, uint32, error) {
-	runtimeAsset, err := catalog.Resolve(spec.RuntimeBundleDigest)
-	if err != nil {
-		return nil, 0, err
-	}
-	toolchainAsset, err := catalog.Resolve(spec.ToolchainBundleDigest)
-	if err != nil {
-		return nil, 0, err
-	}
-	if runtimeAsset.ManifestDigest != spec.RuntimeBundleDigest ||
-		toolchainAsset.ManifestDigest != spec.ToolchainBundleDigest ||
-		runtimeAsset.Architecture != spec.Architecture ||
-		toolchainAsset.Architecture != spec.Architecture ||
-		runtimeAsset.GuestProtocolGeneration != toolchainAsset.GuestProtocolGeneration {
-		return nil, 0, errors.New("SecondBox signed asset catalog is incompatible with the pinned Profile")
-	}
-	assets := []*runnerv1.AssetReference{
-		{
-			ArtifactId: runtimeAsset.ArtifactID, ManifestDigest: runtimeAsset.ManifestDigest,
-			Architecture:            runtimeAsset.Architecture,
-			GuestProtocolGeneration: runtimeAsset.GuestProtocolGeneration,
-			MandatoryGuestFeatures:  append([]string(nil), runtimeAsset.MandatoryGuestFeatures...),
-		},
-		{
-			ArtifactId: toolchainAsset.ArtifactID, ManifestDigest: toolchainAsset.ManifestDigest,
-			Architecture:            toolchainAsset.Architecture,
-			GuestProtocolGeneration: toolchainAsset.GuestProtocolGeneration,
-			MandatoryGuestFeatures:  append([]string(nil), toolchainAsset.MandatoryGuestFeatures...),
-		},
-	}
-	return assets, runtimeAsset.GuestProtocolGeneration, nil
 }
 
 func (broker *PostgresEffectBroker) loadStartPlan(

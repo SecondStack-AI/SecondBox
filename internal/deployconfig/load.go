@@ -44,7 +44,6 @@ const DefaultComposeProjectName = "secondbox"
 const (
 	packagedControlPlaneListenAddress = "0.0.0.0:8080"
 	packagedRunnerListenAddress       = "0.0.0.0:9443"
-	packagedAssetCatalogPath          = "/etc/secondbox/signed-assets.json"
 )
 
 const (
@@ -171,16 +170,6 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	if deployment.DevelopmentWaitSeconds != nil {
 		putInt("SECONDBOX_DEVELOPMENT_PREPARE_WAIT_TIMEOUT_SECONDS", deployment.DevelopmentWaitSeconds)
 	}
-	catalog, err := resolveRegularReference(base, deployment.AssetCatalog)
-	if err != nil {
-		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog", err)
-	}
-	verifiedCatalog, err := assetcatalog.LoadFileAssetCatalog(catalog)
-	if err != nil {
-		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog", err)
-	}
-	put("SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH", catalog)
-	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", packagedAssetCatalogPath)
 	imageKey, err := resolveRegularReference(base, deployment.ExecutionImagePublicKey)
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("deployment.execution_image_public_key", err)
@@ -336,7 +325,7 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		}
 	}
 
-	resources, err := resolveStandardResources(base, manifest, verifiedCatalog)
+	resources, err := resolveStandardResources(base, manifest)
 	if err != nil {
 		return ResolvedDeployment{}, err
 	}
@@ -383,7 +372,7 @@ func validateManifestShape(manifest ManifestV1) error {
 		return manifestError("schema_version must be 1", nil)
 	}
 	d := manifest.Deployment
-	for path, value := range map[string]string{"deployment.mode": d.Mode, "deployment.public_base_url": d.PublicBaseURL, "deployment.tls_termination": d.TLSTermination, "deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage, "deployment.api_bind_ip": d.APIBindIP, "deployment.runner_bind_ip": d.RunnerBindIP, "deployment.log_path": d.LogPath, "deployment.signed_asset_catalog": d.AssetCatalog} {
+	for path, value := range map[string]string{"deployment.mode": d.Mode, "deployment.public_base_url": d.PublicBaseURL, "deployment.tls_termination": d.TLSTermination, "deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage, "deployment.api_bind_ip": d.APIBindIP, "deployment.runner_bind_ip": d.RunnerBindIP, "deployment.log_path": d.LogPath} {
 		if err := require(path, value); err != nil {
 			return err
 		}
@@ -951,7 +940,7 @@ func addPolicyEnvironment(environment map[string]string, p Policy) {
 	environment["SECONDBOX_RUNNER_ENABLED_FEATURES"] = p.RunnerEnabledFeatures
 }
 
-func resolveStandardResources(base string, manifest ManifestV1, catalog assetcatalog.AssetCatalog) (resourceapply.Document, error) {
+func resolveStandardResources(base string, manifest ManifestV1) (resourceapply.Document, error) {
 	path, err := resolveRegularReference(base, manifest.StandardResources.ArtifactManifest)
 	if err != nil {
 		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
@@ -965,18 +954,6 @@ func resolveStandardResources(base string, manifest ManifestV1, catalog assetcat
 		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
 	}
 	expectedKeyID := strings.ToLower(strings.TrimPrefix(releaseManifest.MicroVM.SigningKeyFingerprint, "SHA256:"))
-	components := []releasecontract.SignedComponent{releaseManifest.MicroVM.RuntimeBundle, releaseManifest.MicroVM.ToolchainBundle}
-	for _, component := range components {
-		asset, err := catalog.Resolve(component.ManifestDigest)
-		if err != nil {
-			return resourceapply.Document{}, manifestError("standard_resources artifact manifest component identity must exist in deployment.signed_asset_catalog", err)
-		}
-		if asset.ArtifactID != component.ArtifactID || asset.ManifestDigest != component.ManifestDigest ||
-			asset.Architecture != standardresources.ArchitectureAMD64 || asset.GuestProtocolGeneration != releaseManifest.GuestProtocol.Maximum ||
-			!slices.Equal(asset.MandatoryGuestFeatures, component.MandatoryGuestFeatures) {
-			return resourceapply.Document{}, manifestError("standard_resources artifact manifest component identity differs from deployment.signed_asset_catalog", nil)
-		}
-	}
 	if manifest.Deployment.Mode == "production" {
 		for index, runner := range manifest.Runners {
 			if runner.PoolID == standardresources.PoolAMD64 && runner.ArtifactPublicKeySHA256 != expectedKeyID {

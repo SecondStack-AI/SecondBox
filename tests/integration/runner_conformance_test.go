@@ -172,7 +172,6 @@ func (boundary *postgresConformanceBoundary) SeedAssignment(
 		boundary.t, fence.SandboxId, "profile-revision-conformance", "runner-conformance", now,
 	)
 	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	_, created, err := boundary.schedulerStore.Schedule(ctx, scheduler.ScheduleRequest{
 		AssignmentID: fence.AssignmentId, AssignmentCommandID: "assignment-command-" + fence.AssignmentId,
 		InstanceID: fence.InstanceId, SandboxID: fence.SandboxId,
@@ -181,12 +180,10 @@ func (boundary *postgresConformanceBoundary) SeedAssignment(
 		Requirements: scheduler.Requirements{
 			PoolName:     "pool-conformance",
 			Architecture: "amd64", RequiredCapabilities: []string{"local-workspace"},
-			GuestProtocolGeneration: 1,
 			Capacity: scheduler.Capacity{
 				VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 				Instances: 1, Operations: 1,
 			},
-			PreferredArtifactDigests: []string{runtimeDigest, toolchainDigest},
 		},
 		AssignmentCommand: &runnerv1.AssignmentCommand{
 			Fence: fence, ProfileRevisionId: "profile-revision-conformance", WorkspaceId: workspaceID,

@@ -35,13 +35,9 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	spec := contracts.ProfileRevisionSpec{
-		Pool:                  "pool",
-		Architecture:          "amd64",
-		RuntimeBundleDigest:   runtimeDigest,
-		ToolchainBundleDigest: toolchainDigest,
+		Pool:         "pool",
+		Architecture: "amd64",
 		Resources: contracts.ResourcePolicy{
 			VCPUCount: 4, MemoryBytes: 4 << 30, WorkspaceBytes: 8 << 30,
 			ConcurrentOperations: 1,
@@ -98,18 +94,6 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 	}
 	schedulerFailure := errors.New("captured automatic restart")
 	recordingScheduler := &recordingFailureScheduler{err: schedulerFailure}
-	catalog := fixedLifecycleAssetCatalog{assets: map[string]lifecycle.Asset{
-		runtimeDigest: {
-			ArtifactID: "runtime", ManifestDigest: runtimeDigest,
-			Architecture:            "amd64",
-			GuestProtocolGeneration: 1,
-		},
-		toolchainDigest: {
-			ArtifactID: "toolchain", ManifestDigest: toolchainDigest,
-			Architecture:            "amd64",
-			GuestProtocolGeneration: 1,
-		},
-	}}
 	broker, err := lifecycle.NewPostgresEffectBroker(
 		t.Context(),
 		databaseURL,
@@ -120,7 +104,6 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			HeartbeatTimeout:        time.Minute,
 			RetryLimit:              2,
 			SerializationRetryLimit: 2,
-			AssetCatalog:            catalog,
 			SessionCanceller:        noOpSessionCanceller{},
 			NewID: func(prefix string) string {
 				return prefix + "-automatic"
@@ -155,6 +138,10 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		command.Requirements.VcpuCount != 1 ||
 		command.Requirements.MemoryBytes != 1<<30 ||
 		command.Requirements.DiskBytes != 4<<30 ||
+		// A default-image start names no assets: the home Runner boots the
+		// signed bundle it has installed, whichever release that is.
+		len(command.Assets) != 0 || command.ExecutionImage != nil ||
+		len(recordingScheduler.request.ResolvedArtifacts) != 0 ||
 		recordingScheduler.request.Requirements.Capacity.VCPUCount != 1 ||
 		recordingScheduler.request.Requirements.Capacity.MemoryBytes != 1<<30 ||
 		recordingScheduler.request.Requirements.Capacity.DiskBytes != 4<<30 ||
@@ -313,7 +300,6 @@ func TestOrdinaryStopAndSnapshotDeleteSerializeAcrossControlPlaneReplicas(t *tes
 			HeartbeatTimeout:        time.Minute,
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
-			AssetCatalog:            unusedAssetCatalog{},
 			SessionCanceller:        noOpSessionCanceller{},
 			NewID: func(prefix string) string {
 				return prefix + "-unused"
@@ -467,7 +453,6 @@ func TestSandboxDeleteQueuesHomeWorkspaceRemovalWhileRunnerIsOffline(t *testing.
 			HeartbeatTimeout:        time.Minute,
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
-			AssetCatalog:            unusedAssetCatalog{},
 			SessionCanceller:        noOpSessionCanceller{},
 			NewID: func(prefix string) string {
 				return prefix + "-unused"
@@ -648,26 +633,6 @@ func (recorder *recordingFailureScheduler) Schedule(
 ) (scheduler.DurableAssignment, bool, error) {
 	recorder.request = request
 	return scheduler.DurableAssignment{}, false, recorder.err
-}
-
-type fixedLifecycleAssetCatalog struct {
-	assets map[string]lifecycle.Asset
-}
-
-func (catalog fixedLifecycleAssetCatalog) Resolve(
-	digest string,
-) (lifecycle.Asset, error) {
-	asset, found := catalog.assets[digest]
-	if !found {
-		return lifecycle.Asset{}, errors.New("missing fixed lifecycle asset")
-	}
-	return asset, nil
-}
-
-type unusedAssetCatalog struct{}
-
-func (unusedAssetCatalog) Resolve(string) (lifecycle.Asset, error) {
-	return lifecycle.Asset{}, errors.New("unused asset catalog")
 }
 
 type noOpSessionCanceller struct{}

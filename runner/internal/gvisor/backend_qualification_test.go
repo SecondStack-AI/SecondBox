@@ -204,10 +204,6 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 			RequiredCapabilities: []string{"cleanup", "gvisor", "local-workspace", "storage"},
 			MaximumOperationMs:   60_000, MaximumOutputBytes: 8 << 20,
 		},
-		Assets: []*runnerprotocol.AssetReference{
-			{ArtifactId: "runtime", ManifestDigest: manifest.Key.RuntimeManifestDigest, Architecture: runtime.GOARCH, GuestProtocolGeneration: 1},
-			{ArtifactId: "toolchain", ManifestDigest: manifest.Key.ToolchainManifestDigest, Architecture: runtime.GOARCH, GuestProtocolGeneration: 1},
-		},
 		DeadlineUnixMs: uint64(time.Now().Add(3 * time.Minute).UnixMilli()),
 		Correlation:    &runnerprotocol.Correlation{RequestId: "gvisor-request", OperationId: "gvisor-operation", LeaseId: "gvisor-lease"},
 		NetworkPolicy:  &runnerprotocol.NetworkPolicy{Mode: runnerprotocol.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL},

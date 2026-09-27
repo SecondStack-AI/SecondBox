@@ -157,10 +157,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer assignmentReconcileStore.Close()
-	signedAssetCatalog, err := lifecycle.LoadFileAssetCatalog(processConfig.AssetCatalogPath)
-	if err != nil {
-		return err
-	}
 	executionImageAuthority, err := assetcatalog.LoadExecutionImageAuthority(processConfig.ExecutionImagePublicKeyPath, processConfig.ExecutionImagePublicKeySHA256)
 	if err != nil {
 		return err
@@ -175,7 +171,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			HeartbeatTimeout:        processConfig.RunnerHeartbeatTimeout,
 			RetryLimit:              processConfig.AssignmentRetryLimit,
 			SerializationRetryLimit: processConfig.SchedulerSerializationRetryLimit,
-			AssetCatalog:            signedAssetCatalog,
 			ExecutionImageAuthority: executionImageAuthority,
 			SessionCanceller:        dataPlaneStore,
 			NewID:                   service.NewOpaqueID,

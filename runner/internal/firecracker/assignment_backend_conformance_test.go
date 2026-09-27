@@ -107,6 +107,30 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 	}
 }
 
+// TestDefaultImageBootsTheInstalledBundleWithoutAssets pins the upgrade
+// property: a default-image assignment names no assets and boots whichever
+// signed bundle this Runner has verified, so a Sandbox created under an
+// earlier release starts on the current one.
+func TestDefaultImageBootsTheInstalledBundleWithoutAssets(t *testing.T) {
+	fixture := newFirecrackerConformanceFixture(t)
+	backend := fixture.Backend.(*AssignmentBackend)
+	assignment := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+	selectedAssets := assignment.Assets
+	assignment.ExecutionImage = nil
+	assignment.Assets = nil
+	start, err := backend.assignmentGuestProtocolStart(assignment, "")
+	if err != nil {
+		t.Fatalf("default image did not boot the installed bundle: %v", err)
+	}
+	if start.ImageManifestDigest != selectedAssets[0].ManifestDigest || start.ToolchainManifestDigest != selectedAssets[1].ManifestDigest {
+		t.Fatalf("default image guest identity = %+v", start)
+	}
+	assignment.Assets = selectedAssets
+	if _, err := backend.assignmentGuestProtocolStart(assignment, ""); err == nil {
+		t.Fatal("default-image assignment accepted control-plane assets")
+	}
+}
+
 func TestSelectedImageValidationDoesNotUseHistoricalManifest(t *testing.T) {
 	fixture := newFirecrackerConformanceFixture(t)
 	backend := fixture.Backend.(*AssignmentBackend)

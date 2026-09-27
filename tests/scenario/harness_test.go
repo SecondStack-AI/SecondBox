@@ -246,10 +246,8 @@ func ensureScenarioRunnerPool(t *testing.T, fixture scenarioFixture) contracts.R
 func scenarioProfileSpec(t *testing.T, initialState string) contracts.ProfileRevisionSpec {
 	t.Helper()
 	return contracts.ProfileRevisionSpec{
-		Pool:                  scenarioRunnerPool,
-		Architecture:          requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_ARCHITECTURE"),
-		RuntimeBundleDigest:   requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"),
-		ToolchainBundleDigest: requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"),
+		Pool:         scenarioRunnerPool,
+		Architecture: requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_ARCHITECTURE"),
 		Resources: contracts.ResourcePolicy{
 			VCPUCount:      1,
 			MemoryBytes:    256 << 20,

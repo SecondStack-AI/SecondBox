@@ -1,3 +1,4 @@
+// Package assetcatalog authenticates the signed components of client-selected execution images.
 package assetcatalog
 
 import (
@@ -11,9 +12,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 )
+
+var catalogDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+
+// signedImageComponent is one runtime or toolchain component a signed
+// execution image manifest binds.
+type signedImageComponent struct {
+	ArtifactID             string   `json:"artifactId"`
+	ManifestDigest         string   `json:"manifestDigest"`
+	MandatoryGuestFeatures []string `json:"mandatoryGuestFeatures"`
+}
 
 // ExecutionImageAuthority imports component identities from the existing signed bundle.
 // Runner materialization reports alone cannot grant execution authority.
@@ -54,8 +66,8 @@ func (authority *ExecutionImageAuthority) ImportManifest(manifest, signature []b
 	var document struct {
 		Architecture    string                            `json:"architecture"`
 		GuestProtocol   struct{ Minimum, Maximum uint32 } `json:"guestProtocol"`
-		RuntimeBundle   Asset                             `json:"runtimeBundle"`
-		ToolchainBundle Asset                             `json:"toolchainBundle"`
+		RuntimeBundle   signedImageComponent              `json:"runtimeBundle"`
+		ToolchainBundle signedImageComponent              `json:"toolchainBundle"`
 	}
 	if err := json.Unmarshal(manifest, &document); err != nil {
 		return nil, fmt.Errorf("SecondBox execution image manifest decode: %w", err)
@@ -64,7 +76,7 @@ func (authority *ExecutionImageAuthority) ImportManifest(manifest, signature []b
 		return nil, errors.New("SecondBox execution image manifest architecture or guest protocol is invalid")
 	}
 	assets := make([]*runnerv1.AssetReference, 0, 2)
-	for _, component := range []Asset{document.RuntimeBundle, document.ToolchainBundle} {
+	for _, component := range []signedImageComponent{document.RuntimeBundle, document.ToolchainBundle} {
 		if component.ArtifactID == "" || !catalogDigestPattern.MatchString(component.ManifestDigest) {
 			return nil, errors.New("SecondBox execution image manifest component identity is invalid")
 		}

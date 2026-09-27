@@ -17,14 +17,12 @@ import (
 )
 
 type stressDriver struct {
-	config          stressConfig
-	admin           *secondboxclient.Client
-	client          *secondboxclient.Client
-	runtimeDigest   string
-	toolchainDigest string
-	guestCIDR       string
-	bootMu          sync.Mutex
-	bootStages      map[string][]time.Duration
+	config     stressConfig
+	admin      *secondboxclient.Client
+	client     *secondboxclient.Client
+	guestCIDR  string
+	bootMu     sync.Mutex
+	bootStages map[string][]time.Duration
 }
 
 func (driver *stressDriver) prepare(ctx context.Context) error {
@@ -52,8 +50,6 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 				Name: driver.config.ProfileName,
 				Spec: secondboxclient.ProfileRevisionSpec{
 					Pool: driver.config.RunnerPoolName, Architecture: "amd64",
-					RuntimeBundleDigest:   driver.runtimeDigest,
-					ToolchainBundleDigest: driver.toolchainDigest,
 					Resources: secondboxclient.ResourcePolicy{
 						VCPUCount:      driver.config.Profile.VCPUCount,
 						MemoryBytes:    driver.config.Profile.MemoryBytes,

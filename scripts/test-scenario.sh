@@ -290,8 +290,6 @@ if [[ "$scenario_backend" == "firecracker" ]]; then
   : "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SecondBox Firecracker scenario requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY}"
   : "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SecondBox Firecracker scenario requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256}"
 else
-  : "${SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST:?SecondBox scenario requires SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST}"
-  : "${SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST:?SecondBox scenario requires SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST}"
   if [[ "$scenario_backend" == "microsandbox" ]]; then
   : "${SECONDBOX_SCENARIO_MICROSANDBOX_BUILD:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_MICROSANDBOX_BUILD}"
   : "${SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION}"
@@ -390,18 +388,6 @@ if [[ "$scenario_backend" == "firecracker" ]]; then
     fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 does not match the parsed public key"
 
   manifest_digest="sha256:$(sha256sum "$artifacts_dir/manifest.json" | awk '{print $1}')"
-  runtime_digest="$(jq -er '.runtimeBundle.manifestDigest' "$artifacts_dir/manifest.json")" ||
-    fail "artifact manifest lacks runtimeBundle.manifestDigest"
-  toolchain_digest="$(jq -er '.toolchainBundle.manifestDigest' "$artifacts_dir/manifest.json")" ||
-    fail "artifact manifest lacks toolchainBundle.manifestDigest"
-  runtime_artifact_id="$(jq -er '.runtimeBundle.artifactId' "$artifacts_dir/manifest.json")" ||
-    fail "artifact manifest lacks runtimeBundle.artifactId"
-  toolchain_artifact_id="$(jq -er '.toolchainBundle.artifactId' "$artifacts_dir/manifest.json")" ||
-    fail "artifact manifest lacks toolchainBundle.artifactId"
-  runtime_features="$(jq -ce '.runtimeBundle.mandatoryGuestFeatures' "$artifacts_dir/manifest.json")" ||
-    fail "artifact manifest lacks runtimeBundle.mandatoryGuestFeatures"
-  toolchain_features="$(jq -ce '.toolchainBundle.mandatoryGuestFeatures' "$artifacts_dir/manifest.json")" ||
-    fail "artifact manifest lacks toolchainBundle.mandatoryGuestFeatures"
   guest_protocol_minimum="$(jq -er '.guestProtocol.minimum' "$artifacts_dir/manifest.json")" ||
     fail "artifact manifest lacks guestProtocol.minimum"
   guest_protocol_maximum="$(jq -er '.guestProtocol.maximum' "$artifacts_dir/manifest.json")" ||
@@ -421,14 +407,6 @@ elif [[ "$scenario_backend" == "gvisor" ]]; then
   [[ "$(jq -er '.schemaVersion' "$materialization")" == "secondbox.runner/backend-materialization/v1" &&
      "$(jq -er '.key.backendKind' "$materialization")" == "gvisor" ]] ||
     fail "gVisor materialization schema or backend kind is invalid"
-  runtime_digest="$SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"
-  toolchain_digest="$SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"
-  runtime_artifact_id="gvisor-runtime"
-  toolchain_artifact_id="gvisor-toolchain"
-  runtime_features='[]'
-  toolchain_features='[]'
-  guest_protocol_minimum=1
-  guest_protocol_maximum=1
   architecture="$(jq -er '.key.guestArchitecture' "$materialization")" ||
     fail "gVisor materialization lacks key.guestArchitecture"
   manifest_digest="$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST"
@@ -439,14 +417,6 @@ else
   [[ "$(jq -er '.schemaVersion' "$materialization")" == "secondbox.runner/backend-materialization/v1" &&
      "$(jq -er '.key.backendKind' "$materialization")" == "microsandbox" ]] ||
     fail "Microsandbox materialization schema or backend kind is invalid"
-  runtime_digest="$SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"
-  toolchain_digest="$SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"
-  runtime_artifact_id="microsandbox-runtime"
-  toolchain_artifact_id="microsandbox-toolchain"
-  runtime_features='[]'
-  toolchain_features='[]'
-  guest_protocol_minimum=6
-  guest_protocol_maximum=6
   architecture="$(jq -er '.key.guestArchitecture' "$materialization")" ||
     fail "Microsandbox materialization lacks key.guestArchitecture"
   manifest_digest="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"
@@ -523,7 +493,6 @@ identity_dir="$run_dir/runner-identity"
 state_dir="$run_dir/runner-state"
 relocation_identity_dir="$run_dir/relocation-runner-identity"
 relocation_state_dir="$run_dir/relocation-runner-state"
-asset_catalog="$run_dir/signed-assets.json"
 mkdir -p "$pki_dir" "$state_dir" "$relocation_state_dir"
 mkdir -p "$state_dir/execution-image-certificates"
 scenario_workspace_dir="$(mktemp -d "$workspace_root/secondbox-scenario.XXXXXX")"
@@ -614,34 +583,6 @@ if [[ "$scenario_backend" != "firecracker" ]]; then
     "$repo_root/scripts/issue-scenario-runner-identity.sh" "$relocation_identity_dir" >/dev/null
 fi
 
-jq -n \
-  --arg architecture "$architecture" \
-  --arg runtime "$runtime_digest" \
-  --arg runtimeArtifactID "$runtime_artifact_id" \
-  --arg toolchain "$toolchain_digest" \
-  --arg toolchainArtifactID "$toolchain_artifact_id" \
-  --argjson runtimeFeatures "$runtime_features" \
-  --argjson toolchainFeatures "$toolchain_features" \
-  --argjson guestProtocolGeneration "$guest_protocol_minimum" \
-  '{
-    assets: [
-      {
-        artifactId: $runtimeArtifactID,
-        manifestDigest: $runtime,
-        architecture: $architecture,
-        guestProtocolGeneration: $guestProtocolGeneration,
-        mandatoryGuestFeatures: $runtimeFeatures
-      },
-      {
-        artifactId: $toolchainArtifactID,
-        manifestDigest: $toolchain,
-        architecture: $architecture,
-        guestProtocolGeneration: $guestProtocolGeneration,
-        mandatoryGuestFeatures: $toolchainFeatures
-      }
-    ]
-  }' >"$asset_catalog"
-
 export SECONDBOX_SCENARIO_UID
 SECONDBOX_SCENARIO_UID="$(id -u)"
 export SECONDBOX_SCENARIO_GID
@@ -654,7 +595,6 @@ export SECONDBOX_SCENARIO_RELOCATION_IDENTITY_DIR="$relocation_identity_dir"
 export SECONDBOX_SCENARIO_RELOCATION_STATE_DIR="$relocation_state_dir"
 export SECONDBOX_SCENARIO_RELOCATION_WORKSPACE_DIR="$relocation_workspace_dir"
 export SECONDBOX_SCENARIO_RELOCATION_RUNNER_ID=scenario-runner-relocation
-export SECONDBOX_SCENARIO_ASSET_CATALOG="$asset_catalog"
 export SECONDBOX_SCENARIO_RUNNER_IMAGE="$runner_image"
 export SECONDBOX_SCENARIO_SOURCE_COMMIT
 SECONDBOX_SCENARIO_SOURCE_COMMIT="$scenario_source_commit"
@@ -724,8 +664,6 @@ chmod 0600 "$SECONDBOX_SCENARIO_EGRESS_CONTEXT_CONFIG"
 export SECONDBOX_SCENARIO_RUNNER_CLIENT_CERTIFICATE=/opt/secondbox-runner-identity/runner.crt
 export SECONDBOX_SCENARIO_RUNNER_CREDENTIAL=scenario-runner-credential-000000000000000000000000
 export SECONDBOX_SCENARIO_RUNNER_GUEST_HEARTBEAT_INTERVAL=1s
-export SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST="$runtime_digest"
-export SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST="$toolchain_digest"
 export SECONDBOX_SCENARIO_COMPOSE_FILE="$compose_file"
 export SECONDBOX_SCENARIO_COMPOSE_OVERRIDE_FILE="$compose_override_file"
 export SECONDBOX_SCENARIO_COMPOSE_PROJECT="$project_name"

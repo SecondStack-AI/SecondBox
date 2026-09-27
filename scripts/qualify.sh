@@ -251,9 +251,6 @@ if [[ "$only" == all || "$only" == firecracker ]]; then
   for tool in openssl sha256sum docker; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
   actual="$(openssl pkey -pubin -in "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY" -outform DER | sha256sum | cut -d' ' -f1)"
   [[ "$actual" == "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" ]] || fail 'artifact public key fingerprint mismatch'
-  for key in SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST; do
-    [[ "${!key:-}" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "$key must be a sha256 digest"
-  done
   [[ "${SECONDBOX_REQUIRE_QUALIFIED_SCENARIO:-}" == 1 ]] || fail 'SECONDBOX_REQUIRE_QUALIFIED_SCENARIO must be 1'
   [[ -c /dev/kvm && -c /dev/net/tun ]] || fail 'Firecracker requires /dev/kvm and /dev/net/tun'
   docker info >/dev/null || fail 'Docker unavailable'

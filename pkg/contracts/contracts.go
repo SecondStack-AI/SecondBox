@@ -142,20 +142,18 @@ type ProfileRevision struct {
 
 // ProfileRevisionSpec resolves every execution, durability, and placement bound.
 type ProfileRevisionSpec struct {
-	Pool                  string                     `json:"pool"`
-	Architecture          string                     `json:"architecture"`
-	RuntimeBundleDigest   string                     `json:"runtimeBundleDigest"`
-	ToolchainBundleDigest string                     `json:"toolchainBundleDigest"`
-	Resources             ResourcePolicy             `json:"resources"`
-	ResourceCeiling       ProfileResourceCeiling     `json:"resourceCeiling,omitzero"`
-	Startup               StartupPolicy              `json:"startup"`
-	LifecycleCeiling      *SandboxLifecycleLimits    `json:"lifecycleCeiling,omitempty"`
-	Lifecycle             LifecyclePolicy            `json:"lifecycle"`
-	Retention             RetentionPolicy            `json:"retention"`
-	Execution             ExecutionPolicy            `json:"execution"`
-	Network               NetworkPolicy              `json:"network"`
-	Ports                 []PortPolicy               `json:"ports"`
-	AttributedExecution   *AttributedExecutionPolicy `json:"attributedExecution,omitempty"`
+	Pool                string                     `json:"pool"`
+	Architecture        string                     `json:"architecture"`
+	Resources           ResourcePolicy             `json:"resources"`
+	ResourceCeiling     ProfileResourceCeiling     `json:"resourceCeiling,omitzero"`
+	Startup             StartupPolicy              `json:"startup"`
+	LifecycleCeiling    *SandboxLifecycleLimits    `json:"lifecycleCeiling,omitempty"`
+	Lifecycle           LifecyclePolicy            `json:"lifecycle"`
+	Retention           RetentionPolicy            `json:"retention"`
+	Execution           ExecutionPolicy            `json:"execution"`
+	Network             NetworkPolicy              `json:"network"`
+	Ports               []PortPolicy               `json:"ports"`
+	AttributedExecution *AttributedExecutionPolicy `json:"attributedExecution,omitempty"`
 	// Zero represents omission; field decoding rejects explicit zero and null.
 	AttributedExecutionCeiling AttributedExecutionConnectionLimits `json:"attributedExecutionCeiling,omitzero"`
 }

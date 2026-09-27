@@ -1,7 +1,10 @@
 package standardresources
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,8 +14,8 @@ import (
 	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
-func TestRecordedBundleAcceptsImmutablePrefixAfterPolicyAppends(t *testing.T) {
-	documents, err := Documents("sha256:"+strings.Repeat("a", 64), v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+func TestDocumentRejectsLineageThatDiffersFromPolicy(t *testing.T) {
+	documents, err := Documents()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,34 +26,68 @@ func TestRecordedBundleAcceptsImmutablePrefixAfterPolicyAppends(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := DecodeDocument(content); err == nil || !strings.Contains(err.Error(), "lineage") {
-		t.Fatalf("current-policy decoder accepted recorded prefix: %v", err)
-	}
-	recorded, err := DecodeRecordedDocument(content)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(recorded.Profile.Revisions) != 1 || recorded.Profile.Revisions[0].SpecDigest != document.Profile.Revisions[0].SpecDigest {
-		t.Fatalf("recorded lineage = %#v", recorded.Profile.Revisions)
+		t.Fatalf("decoder accepted a lineage that differs from policy: %v", err)
 	}
 }
 
-func TestRecordedBundleRejectsPreRecreationSchema(t *testing.T) {
-	documents, err := Documents("sha256:"+strings.Repeat("a", 64), v030RuntimeBundleDigest, v030ToolchainBundleDigest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	documents[0].SchemaVersion = "secondbox.standard-bundle/v2"
-	content, err := json.Marshal(documents[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := DecodeRecordedDocument(content); err == nil {
-		t.Fatal("pre-recreation standard bundle schema was accepted")
+// TestPublishedLineageConvergesOnceBundleDigestsAreRemoved proves an upgraded
+// deployment keeps its installed Profile history. Migration 0031 removes the
+// retired bundle digests from every recorded spec; what remains must be the
+// current lineage revision for revision, so resource apply sees an unaltered
+// prefix instead of a rewritten history.
+func TestPublishedLineageConvergesOnceBundleDigestsAreRemoved(t *testing.T) {
+	for _, name := range BundleNames() {
+		content, err := os.ReadFile(filepath.Join("testdata", "v0.18.1", name+".standard-bundle.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var published struct {
+			Profile struct {
+				Revisions []struct {
+					Number int64                      `json:"number"`
+					Spec   map[string]json.RawMessage `json:"spec"`
+				} `json:"revisions"`
+			} `json:"profile"`
+		}
+		if err := json.Unmarshal(content, &published); err != nil {
+			t.Fatal(err)
+		}
+		current, err := ProfileLineage(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(published.Profile.Revisions) != len(current.Revisions) {
+			t.Fatalf("%s published %d revisions, current lineage has %d", name, len(published.Profile.Revisions), len(current.Revisions))
+		}
+		for index, revision := range published.Profile.Revisions {
+			if _, pinned := revision.Spec["runtimeBundleDigest"]; !pinned {
+				t.Fatalf("%s revision %d fixture lacks the retired bundle digest", name, revision.Number)
+			}
+			delete(revision.Spec, "runtimeBundleDigest")
+			delete(revision.Spec, "toolchainBundleDigest")
+			stripped, err := json.Marshal(revision.Spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var spec secondboxclient.ProfileRevisionSpec
+			decoder := json.NewDecoder(bytes.NewReader(stripped))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&spec); err != nil {
+				t.Fatalf("%s revision %d: %v", name, revision.Number, err)
+			}
+			digest, err := resourceapply.SpecDigest(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if revision.Number != current.Revisions[index].Number || digest != current.Revisions[index].SpecDigest {
+				t.Fatalf("%s installed revision %d does not converge on the current lineage", name, revision.Number)
+			}
+		}
 	}
 }
 
 func TestDocumentsContainThreeExplicitBundlesAndNoIsolatedGatewayDependency(t *testing.T) {
-	documents, err := Documents("sha256:"+strings.Repeat("c", 64), v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+	documents, err := Documents()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,17 +113,15 @@ func TestDocumentsContainThreeExplicitBundlesAndNoIsolatedGatewayDependency(t *t
 }
 
 func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *testing.T) {
-	runtimeDigest := v030RuntimeBundleDigest
-	toolchainDigest := v030ToolchainBundleDigest
-	agent, err := ProfileLineage(AgentCompartment, runtimeDigest, toolchainDigest)
+	agent, err := ProfileLineage(AgentCompartment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	coding, err := ProfileLineage(DurableCoding, runtimeDigest, toolchainDigest)
+	coding, err := ProfileLineage(DurableCoding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	isolated, err := ProfileLineage(AgentCompartmentIsolated, runtimeDigest, toolchainDigest)
+	isolated, err := ProfileLineage(AgentCompartmentIsolated)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,12 +129,12 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 		if !slices.Contains(BundleNames(), profile.Name) {
 			t.Fatalf("unexpected Profile %q", profile.Name)
 		}
-		wantRevisions := 1
+		wantRevisions := 2
 		if profile.Name == AgentCompartment {
-			wantRevisions = 5
+			wantRevisions = 6
 		}
 		if profile.Name == AgentCompartmentIsolated {
-			wantRevisions = 2
+			wantRevisions = 3
 		}
 		if len(profile.Revisions) != wantRevisions {
 			t.Fatalf("lineage = %#v", profile.Revisions)
@@ -114,9 +149,6 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 			}
 			if revision.Spec.Architecture != ArchitectureAMD64 {
 				t.Fatalf("standard spec = %#v", revision.Spec)
-			}
-			if revision.Spec.RuntimeBundleDigest != runtimeDigest || revision.Spec.ToolchainBundleDigest != toolchainDigest || revision.Spec.RuntimeBundleDigest == revision.Spec.ToolchainBundleDigest {
-				t.Fatalf("standard component identity = %#v", revision.Spec)
 			}
 		}
 	}
@@ -161,72 +193,49 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 }
 
 func TestProfileLineageRejectsUnknownBundle(t *testing.T) {
-	if _, err := ProfileLineage("unknown", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"); err == nil {
+	if _, err := ProfileLineage("unknown"); err == nil {
 		t.Fatal("expected unknown bundle failure")
 	}
 }
 
 func TestAgentCompartmentPinsPortableResourceRevisionIdentity(t *testing.T) {
-	profile, err := ProfileLineage(AgentCompartment, v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+	profile, err := ProfileLineage(AgentCompartment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := profile.Revisions[0].SpecDigest, "sha256:054dc1ce0afc837bf729c32ddbb64b532ba6a8a75793dd492d9d8698765c1e88"; got != want {
+	if got, want := profile.Revisions[0].SpecDigest, "sha256:9abf6803df496257362d7c4003088de1a17302d3fc6d149632bcf53686f37752"; got != want {
 		t.Fatalf("portable revision 1 digest = %q, want %q", got, want)
 	}
 }
 
 func TestAgentCompartmentIsolatedCanonicalRevisionIdentity(t *testing.T) {
-	profile, err := ProfileLineage(AgentCompartmentIsolated, v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+	profile, err := ProfileLineage(AgentCompartmentIsolated)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := profile.Revisions[0].SpecDigest, "sha256:e1c26c6688bc9eb9bc80fd994904b4e020131a8e61ca5341e37fc2e4ba3632db"; got != want {
+	if got, want := profile.Revisions[0].SpecDigest, "sha256:7d3273dc7bf997e28034509d2a1c002b5340039363acbbeb539b745c7947375a"; got != want {
 		t.Fatalf("agent-compartment-isolated revision 1 digest = %q, want %q", got, want)
 	}
 }
 
-func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T) {
-	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	agent, err := ProfileLineage(AgentCompartment, runtimeDigest, toolchainDigest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	coding, err := ProfileLineage(DurableCoding, runtimeDigest, toolchainDigest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	isolated, err := ProfileLineage(AgentCompartmentIsolated, runtimeDigest, toolchainDigest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(agent.Revisions) != 6 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 3 {
-		t.Fatalf("changed-bundle lineage = agent %#v coding %#v isolated %#v", agent.Revisions, coding.Revisions, isolated.Revisions)
-	}
-	priorAssetRevision := agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000)
-	if !reflect.DeepEqual(agent.Revisions[2].Spec, priorAssetRevision) {
-		t.Fatalf("attributed permission replaced the previous asset revision: %#v", agent.Revisions[2])
-	}
-	if agent.Revisions[0].SpecDigest != "sha256:054dc1ce0afc837bf729c32ddbb64b532ba6a8a75793dd492d9d8698765c1e88" {
-		t.Fatalf("changed bundle rewrote agent revision 1: %#v", agent.Revisions)
-	}
-	if isolated.Revisions[0].SpecDigest != "sha256:e1c26c6688bc9eb9bc80fd994904b4e020131a8e61ca5341e37fc2e4ba3632db" {
-		t.Fatalf("changed bundle rewrote isolated revision 1: %#v", isolated.Revisions)
-	}
-	for _, profile := range []resourceapply.Profile{agent, coding, isolated} {
-		head := profile.Revisions[len(profile.Revisions)-1].Spec
-		if head.RuntimeBundleDigest != runtimeDigest || head.ToolchainBundleDigest != toolchainDigest {
-			t.Fatalf("changed bundle did not reach %s head: %#v", profile.Name, head)
+// TestProfileLineageKeepsRetiredBundleRevisionNumbers pins the revision that
+// once moved each bundle off the v0.3.0 execution assets. It now repeats its
+// predecessor, and removing it would renumber every installed lineage.
+func TestProfileLineageKeepsRetiredBundleRevisionNumbers(t *testing.T) {
+	for name, repeated := range map[string]int{AgentCompartment: 2, DurableCoding: 1, AgentCompartmentIsolated: 1} {
+		profile, err := ProfileLineage(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if profile.Revisions[repeated].SpecDigest != profile.Revisions[repeated-1].SpecDigest {
+			t.Fatalf("%s revision %d no longer repeats its predecessor", name, repeated+1)
 		}
 	}
 }
 
-func TestDevelopmentProfileLineageUsesOnlySyntheticAssets(t *testing.T) {
-	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+func TestDevelopmentProfileLineageOmitsPublishedHistory(t *testing.T) {
 	for _, name := range BundleNames() {
-		profile, err := DevelopmentProfileLineage(name, runtimeDigest, toolchainDigest)
+		profile, err := DevelopmentProfileLineage(name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -241,11 +250,8 @@ func TestDevelopmentProfileLineageUsesOnlySyntheticAssets(t *testing.T) {
 			t.Fatalf("development %s lineage = %#v", name, profile.Revisions)
 		}
 		spec := profile.Revisions[0].Spec
-		if name == AgentCompartment && !reflect.DeepEqual(spec, agentSpec(PoolAMD64, runtimeDigest, toolchainDigest, 900000)) {
+		if name == AgentCompartment && !reflect.DeepEqual(spec, agentSpec(PoolAMD64, 900000)) {
 			t.Fatalf("attributed permission replaced development revision 1: %#v", spec)
-		}
-		if spec.RuntimeBundleDigest != runtimeDigest || spec.ToolchainBundleDigest != toolchainDigest {
-			t.Fatalf("development %s assets = %#v", name, spec)
 		}
 	}
 }
@@ -256,7 +262,7 @@ func TestAttributedConnectionRevisionPreservesHistoricalPrefix(t *testing.T) {
 		if development {
 			build = DevelopmentProfileLineage
 		}
-		profile, err := build(AgentCompartment, v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+		profile, err := build(AgentCompartment)
 		if err != nil {
 			t.Fatal(err)
 		}

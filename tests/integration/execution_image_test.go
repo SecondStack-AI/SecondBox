@@ -78,14 +78,7 @@ func completeTestImagePreparation(t *testing.T, pool *pgxpool.Pool, sandboxID st
 		t.Fatal(err)
 	}
 	for _, preparation := range preparations {
-		runtime, err := (multirunnerAssetCatalog{}).Resolve(preparation.spec.RuntimeBundleDigest)
-		if err != nil {
-			t.Fatal(err)
-		}
-		toolchain, err := (multirunnerAssetCatalog{}).Resolve(preparation.spec.ToolchainBundleDigest)
-		if err != nil {
-			t.Fatal(err)
-		}
+		runtime, toolchain := selectedImageComponents()
 		manifest, err := json.Marshal(map[string]any{"architecture": preparation.spec.Architecture, "guestProtocol": map[string]int{"minimum": 1, "maximum": 1}, "runtimeBundle": runtime, "toolchainBundle": toolchain})
 		if err != nil {
 			t.Fatal(err)

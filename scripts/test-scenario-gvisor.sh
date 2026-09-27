@@ -104,8 +104,6 @@ export SECONDBOX_SCENARIO_COMPUTE_BACKEND=gvisor
 export SECONDBOX_SCENARIO_GVISOR_BUILD="$build_root"
 export SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION="$materialization"
 export SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST="$materialization_digest"
-export SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST="$runtime_digest"
-export SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST="$toolchain_digest"
 export SECONDBOX_SCENARIO_ARTIFACT_MANIFEST_DIGEST="$materialization_digest"
 
 "$repo_root/scripts/test-scenario.sh"

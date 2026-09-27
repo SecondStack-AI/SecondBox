@@ -2,9 +2,11 @@
 
 ## Release upgrade boundary
 
+Profiles no longer name execution bundle digests. A Sandbox's Instances boot whichever signed bundle its home Runner has installed, so a release that ships a new bundle updates in place and existing Sandboxes keep their Workspaces and start on the new bundle. Migration `0031_profile_execution_assets_unpinned` removes the retired digests from recorded Profile revisions, and the guided updater no longer compares bundle identities. A guest image upgrade can still change what software a Workspace sees, as any base-image upgrade does.
+
 v0.18.0 retains the v0.17.0 signed Firecracker bundle, Runner protocol generation 5, and the migration baseline, so a v0.17.0 deployment updates in place. It is breaking for gVisor Runners: each now requires the image fetcher, a reflink-capable execution image cache, registry configuration, and the publisher key before it starts. See the [v0.18.0 release notes](../releases/v0.18.0.md).
 
-v0.17.0 shipped a new signed Firecracker bundle. Its runtime and toolchain component digests changed, so the guided updater refuses an in-place update from earlier releases. Retire Sandboxes, retain a coordinated backup, then reinstall with a fresh database and separate Runner storage root; recreate resources against the new signed asset catalog. A new database cannot recover another deployment's Workspaces. Keep the old database, storage, signed assets, and credentials together for rollback. See the [v0.17.0 release notes](../releases/v0.17.0.md).
+v0.17.0 shipped a new signed Firecracker bundle. Under the retired Profile bundle pin, its releases refused in-place updates from earlier releases; the current updater accepts them. See the [v0.17.0 release notes](../releases/v0.17.0.md).
 
 Historically, v0.16.0 allowed a v0.15.0 deployment to update in place because its bundle and migration baseline were unchanged. v0.15.0 accepted the exact v0.14.0 migration baseline and applied forward migrations. Other checksum mismatches remain errors; do not reset migration records to bypass them. See each target release's notes for its boundary.
 
@@ -92,11 +94,11 @@ Runner host paths are different: they are typed absolute values interpreted on t
 
 ### Authority, policy, tuning, and compiled facts
 
-Required deployment authority has no default. This includes identities, the platform and Runner credentials, public endpoints, host paths, signed-asset catalog source, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, and data-plane retention. Tenant aggregate ceilings and Subject quotas are explicit persisted management resources created after startup; they are the sole quota source for admission. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
+Required deployment authority has no default. This includes identities, the platform and Runner credentials, public endpoints, host paths, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, and data-plane retention. Tenant aggregate ceilings and Subject quotas are explicit persisted management resources created after startup; they are the sole quota source for admission. Execution bundles are Runner-installed release inputs; no policy field names them.
 
-The deployment compiler supplies the packaged container listeners (`0.0.0.0:8080` for the API and `0.0.0.0:9443` for Runners) and mounted catalog path (`/etc/secondbox/signed-assets.json`). Operators choose the host bind addresses, published ports, and catalog source. Generated process configuration still states every value explicitly.
+The deployment compiler supplies the packaged container listeners (`0.0.0.0:8080` for the API and `0.0.0.0:9443` for Runners). Operators choose the host bind addresses and published ports. Generated process configuration still states every value explicitly.
 
-Existing manifests must remove the retired `policy.default_subject_max_*`, `deployment.listen_address`, `deployment.runner_listen_address`, and `deployment.signed_asset_catalog_path` keys. Standard bundles now share one RunnerPool inventory declaration by name: remove its `bundle` key and consolidate identical `[[standard_resources.runner_pools]]` entries into one. Conflicting inventory declarations require an explicit operator choice; the compiler rejects duplicate names. The strict decoder identifies retired keys without disclosing their values.
+Existing manifests must remove the retired `policy.default_subject_max_*`, `deployment.listen_address`, `deployment.runner_listen_address`, `deployment.signed_asset_catalog_path`, and `deployment.signed_asset_catalog` keys; the control plane no longer reads a signed-asset catalog, and its catalog file may be deleted. Standard bundles now share one RunnerPool inventory declaration by name: remove its `bundle` key and consolidate identical `[[standard_resources.runner_pools]]` entries into one. Conflicting inventory declarations require an explicit operator choice; the compiler rejects duplicate names. The strict decoder identifies retired keys without disclosing their values.
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
@@ -172,7 +174,7 @@ An incomplete production initialization is intentionally unusable and reports ev
 - digest-pinned control-plane and Runner images, public HTTPS ingress, and external TLS termination;
 - bundled or external database authority, with `sslmode=verify-full` for an external database;
 - zero or more explicit immutable Runner declarations and their placement;
-- an operator-supplied signed-asset catalog, verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
+- a verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
 - independent platform and Runner enrollment authorities;
 - retention, enabled Runner features, and any intentional tuning overrides.
 

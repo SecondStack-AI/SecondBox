@@ -44,8 +44,8 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) == 5 && args[0] == "standard-documents" {
-		return writeStandardDocuments(args[1], args[2], args[3], args[4])
+	if len(args) == 2 && args[0] == "standard-documents" {
+		return writeStandardDocuments(args[1])
 	}
 	if len(args) == 3 && args[0] == "manifest" {
 		return writeManifest(args[1], args[2])
@@ -56,7 +56,7 @@ func run(args []string) error {
 	if len(args) == 2 && args[0] == "installer-qualification-subject" {
 		return writeInstallerQualificationSubject(args[1])
 	}
-	return errors.New("usage: secondbox-release-tool {standard-documents SIGNED_MANIFEST_DIGEST RUNTIME_BUNDLE_DIGEST TOOLCHAIN_BUNDLE_DIGEST OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|verify STAGING_DIR}")
+	return errors.New("usage: secondbox-release-tool {standard-documents OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|verify STAGING_DIR}")
 }
 
 func writeInstallerQualificationSubject(path string) error {
@@ -76,8 +76,8 @@ func writeInstallerQualificationSubject(path string) error {
 	return err
 }
 
-func writeStandardDocuments(signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest, outputDirectory string) error {
-	documents, err := standardresources.Documents(signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest)
+func writeStandardDocuments(outputDirectory string) error {
+	documents, err := standardresources.Documents()
 	if err != nil {
 		return err
 	}

@@ -13,30 +13,6 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/deployconfig"
 )
 
-func TestDevelopmentManifestBindsStandardResourceAssetsToGeneratedCatalog(t *testing.T) {
-	manifestPath, err := deployconfig.InitDevelopment(filepath.Join(t.TempDir(), "deployment"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := deployconfig.Resolve(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := os.ReadFile(resolved.Environment["SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, profile := range resolved.ResourceDocument.Profiles {
-		for _, revision := range profile.Revisions {
-			for _, digest := range []string{revision.Spec.RuntimeBundleDigest, revision.Spec.ToolchainBundleDigest} {
-				if !strings.Contains(string(catalog), digest) {
-					t.Errorf("catalog does not bind standard Profile %s digest %s", profile.Name, digest)
-				}
-			}
-		}
-	}
-}
-
 func TestDeploymentCompilerReplacesLegacyOperatorSurface(t *testing.T) {
 	root := repositoryRootForDeploymentPolicy(t)
 	for _, removed := range []string{"deploy/environment.example", "deploy/bin/bootstrap-environment.sh", "deploy/bin/validate-environment.sh"} {
@@ -238,9 +214,8 @@ func TestComposeArtifactPreservesAbsentAndSelectedOverrides(t *testing.T) {
 	}
 	environment := readEnvironment()
 	for name, want := range map[string]string{
-		"SECONDBOX_LISTEN_ADDR":               "0.0.0.0:8080",
-		"SECONDBOX_RUNNER_LISTEN_ADDR":        "0.0.0.0:9443",
-		"SECONDBOX_SIGNED_ASSET_CATALOG_PATH": "/etc/secondbox/signed-assets.json",
+		"SECONDBOX_LISTEN_ADDR":        "0.0.0.0:8080",
+		"SECONDBOX_RUNNER_LISTEN_ADDR": "0.0.0.0:9443",
 	} {
 		if got := environment[name]; got != want {
 			t.Errorf("packaged setting %s = %#v, want %q", name, got, want)

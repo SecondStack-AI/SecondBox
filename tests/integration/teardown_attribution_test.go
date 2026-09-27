@@ -2,7 +2,6 @@ package integration_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -410,7 +409,6 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 			HeartbeatTimeout:        time.Minute,
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
-			AssetCatalog:            teardownAssetCatalog{},
 			ExecutionImageAuthority: testExecutionImageAuthority(t),
 			SessionCanceller:        teardownSessionCanceller{},
 			NewID: func(prefix string) string {
@@ -817,22 +815,6 @@ func (fixture *teardownFixture) readOperationTiming(
 	var timing contracts.OperationTiming
 	decodeResponseJSON(t, response, &timing)
 	return timing
-}
-
-type teardownAssetCatalog struct{}
-
-func (teardownAssetCatalog) Resolve(digest string) (lifecycle.Asset, error) {
-	if digest == "" {
-		return lifecycle.Asset{}, errors.New("empty teardown fixture asset digest")
-	}
-	return lifecycle.Asset{
-		ArtifactID:     "asset-" + digest[len(digest)-8:],
-		ManifestDigest: digest,
-
-		Architecture:            "amd64",
-		GuestProtocolGeneration: 1,
-		MandatoryGuestFeatures:  []string{},
-	}, nil
 }
 
 type teardownSessionCanceller struct{}

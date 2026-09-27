@@ -417,8 +417,6 @@ const (
 func placementTestSpec(poolName string) contracts.ProfileRevisionSpec {
 	return contracts.ProfileRevisionSpec{
 		Pool: poolName, Architecture: "amd64",
-		RuntimeBundleDigest:   placementTestRuntimeDigest,
-		ToolchainBundleDigest: placementTestToolchainDigest,
 		Resources: contracts.ResourcePolicy{
 			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 1 << 30,
 			ConcurrentOperations: 1,
@@ -555,11 +553,11 @@ func TestRunnerPlacementRequiresSnapshotResumeCapacityForResumeProfiles(t *testi
 	}
 }
 
-// TestRunnerPlacementRequiresExactBackendMaterialization pins the home-time
-// half of asset admission: a Sandbox must never be homed to a Runner that
-// holds no exact materialization of the Profile's pinned execution assets,
-// because every later assignment onto that permanent home would be refused.
-func TestRunnerPlacementRequiresExactBackendMaterialization(t *testing.T) {
+// TestRunnerPlacementRequiresBackendMaterialization pins home-time admission: a
+// Sandbox is homed only to a Runner holding a verified materialization for its
+// own backend, whichever release bundle that is, because a permanent home that
+// cannot boot anything would refuse every later assignment.
+func TestRunnerPlacementRequiresBackendMaterialization(t *testing.T) {
 	materialized := runnerPlacementCandidate{
 		id: "runner-materialized", poolName: "pool", state: "ready", drainPhase: "active",
 		activeConnectionID: "connection", backendKind: "firecracker",
@@ -579,8 +577,8 @@ func TestRunnerPlacementRequiresExactBackendMaterialization(t *testing.T) {
 	unsealed.backendKind = ""
 	unmaterialized := materialized
 	unmaterialized.materializations = nil
-	wrongRuntime := materialized
-	wrongRuntime.materializations = []placementMaterialization{{
+	newerBundle := materialized
+	newerBundle.materializations = []placementMaterialization{{
 		BackendKind: "firecracker", Architecture: "amd64",
 		RuntimeDigest:   "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 		ToolchainDigest: placementTestToolchainDigest,
@@ -603,7 +601,7 @@ func TestRunnerPlacementRequiresExactBackendMaterialization(t *testing.T) {
 		{"exact materialization", materialized, true},
 		{"unsealed backend", unsealed, false},
 		{"no materialization", unmaterialized, false},
-		{"different runtime digest", wrongRuntime, false},
+		{"newer release bundle", newerBundle, true},
 		{"materialization for a different backend", foreignBackend, false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

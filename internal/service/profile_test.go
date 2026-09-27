@@ -53,10 +53,8 @@ func TestValidateProfileAttributedExecutionPolicy(t *testing.T) {
 
 func validProfileRevisionSpecForValidation() contracts.ProfileRevisionSpec {
 	return contracts.ProfileRevisionSpec{
-		Pool:                  "pool",
-		Architecture:          "amd64",
-		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
-		ToolchainBundleDigest: "sha256:" + strings.Repeat("b", 64),
+		Pool:         "pool",
+		Architecture: "amd64",
 		Resources: contracts.ResourcePolicy{
 			VCPUCount: 1, MemoryBytes: 64 << 20, WorkspaceBytes: 1 << 20, ConcurrentOperations: 1,
 		},

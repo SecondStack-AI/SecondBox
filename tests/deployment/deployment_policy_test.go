@@ -269,8 +269,7 @@ func TestDeploymentCannotReconstructAbsentHomeOnReplacementRunner(t *testing.T) 
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	requirements := scheduler.Requirements{
 		PoolName: "deployment", Architecture: "amd64",
-		RequiredCapabilities:    []string{"local-workspace"},
-		GuestProtocolGeneration: 1,
+		RequiredCapabilities: []string{"local-workspace"},
 		Capacity: scheduler.Capacity{
 			VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 			Instances: 1, Operations: 1,

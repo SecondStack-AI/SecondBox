@@ -287,9 +287,9 @@ func runnerPlacementCompatible(
 		!contains(candidate.capabilities, contracts.RunnerCapabilitySnapshotResume) {
 		return false
 	}
-	// A Sandbox is homed permanently, so the home must already hold an exact
-	// materialization of the Profile's pinned execution assets for its sealed
-	// backend; otherwise every later assignment onto this home is refused.
+	// A Sandbox is homed permanently, so the home must already hold a verified
+	// execution bundle for the Profile architecture on its sealed backend. The
+	// bundle itself is whatever release the Runner runs, now and after upgrades.
 	if !placementHasMaterialization(candidate, spec) {
 		return false
 	}
@@ -364,8 +364,6 @@ func placementHasMaterialization(candidate runnerPlacementCandidate, spec contra
 	for _, materialization := range candidate.materializations {
 		if materialization.BackendKind == candidate.backendKind &&
 			materialization.Architecture == spec.Architecture &&
-			materialization.RuntimeDigest == spec.RuntimeBundleDigest &&
-			materialization.ToolchainDigest == spec.ToolchainBundleDigest &&
 			materialization.Digest != "" {
 			return true
 		}

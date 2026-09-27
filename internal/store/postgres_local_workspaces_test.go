@@ -1383,8 +1383,6 @@ func seedLocalWorkspacePolicyAndRunner(
 	t.Helper()
 	specJSON, err := json.Marshal(contracts.ProfileRevisionSpec{
 		Pool: "pool-local", Architecture: "amd64",
-		RuntimeBundleDigest:   placementTestRuntimeDigest,
-		ToolchainBundleDigest: placementTestToolchainDigest,
 		Resources: contracts.ResourcePolicy{
 			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
 			ConcurrentOperations: 4,

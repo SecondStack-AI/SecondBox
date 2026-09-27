@@ -689,9 +689,7 @@
       "ports",
       "resources",
       "retention",
-      "runtimeBundleDigest",
-      "startup",
-      "toolchainBundleDigest"
+      "startup"
     ],
     "optional": [
       "attributedExecution",

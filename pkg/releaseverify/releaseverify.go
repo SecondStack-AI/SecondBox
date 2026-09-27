@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
-	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 const maximumReleaseObjectBytes = 512 << 20
@@ -130,18 +129,6 @@ func HTTPFetcher(client *http.Client) FetchFunc {
 }
 
 func ArtifactManifest(ctx context.Context, location string, fetch FetchFunc) (VerifiedRelease, error) {
-	return artifactManifest(ctx, location, fetch, false)
-}
-
-// RecordedArtifactManifest verifies a previously published release while
-// treating its immutable standard Profile lineage as recorded data. This lets
-// a newer updater authenticate an older release after code-owned policy has
-// appended later Profile revisions.
-func RecordedArtifactManifest(ctx context.Context, location string, fetch FetchFunc) (VerifiedRelease, error) {
-	return artifactManifest(ctx, location, fetch, true)
-}
-
-func artifactManifest(ctx context.Context, location string, fetch FetchFunc, recorded bool) (VerifiedRelease, error) {
 	data, err := fetch(ctx, location)
 	if err != nil {
 		return VerifiedRelease{}, err
@@ -153,13 +140,16 @@ func artifactManifest(ctx context.Context, location string, fetch FetchFunc, rec
 	if location != releasecontract.ArtifactManifestLocation(manifest.Version) {
 		return VerifiedRelease{}, fmt.Errorf("SecondBox release verification: artifact manifest location is not canonical for %s", manifest.Tag)
 	}
-	if err := verifyManifestObjects(ctx, manifest, fetch, recorded); err != nil {
+	if err := verifyManifestObjects(ctx, manifest, fetch); err != nil {
 		return VerifiedRelease{}, err
 	}
 	return VerifiedRelease{Manifest: manifest, ManifestBytes: data}, nil
 }
 
-func verifyManifestObjects(ctx context.Context, manifest releasecontract.ArtifactManifest, fetch FetchFunc, recorded bool) error {
+// verifyManifestObjects binds every referenced object to its manifest digest.
+// Standard bundle documents are release data bound by digest alone, so an
+// updater authenticates an older release without decoding its bundle schema.
+func verifyManifestObjects(ctx context.Context, manifest releasecontract.ArtifactManifest, fetch FetchFunc) error {
 	verifiedObjects := map[string][]byte{}
 	references := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}
 	if manifest.GVisor != nil {
@@ -238,52 +228,6 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 		}
 		if releasecontract.Digest(data) != "sha256:"+binary.SHA256 {
 			return fmt.Errorf("SecondBox release verification: binary digest mismatch at %s", binary.Location)
-		}
-	}
-	for _, bundle := range manifest.StandardBundles {
-		data, err := fetch(ctx, bundle.Document.Location)
-		if err != nil {
-			return err
-		}
-		var documentName, profileName, signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest string
-		var profileNumbers []int64
-		var profileDigests []string
-		if recorded {
-			document, decodeErr := standardresources.DecodeRecordedDocument(data)
-			err = decodeErr
-			if err == nil {
-				documentName, profileName = document.Name, document.Profile.Name
-				signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest = document.SignedManifestDigest, document.RuntimeBundleDigest, document.ToolchainBundleDigest
-				for _, revision := range document.Profile.Revisions {
-					profileNumbers = append(profileNumbers, revision.Number)
-					profileDigests = append(profileDigests, revision.SpecDigest)
-				}
-			}
-		} else {
-			document, decodeErr := standardresources.DecodeDocument(data)
-			err = decodeErr
-			if err == nil {
-				documentName, profileName = document.Name, document.Profile.Name
-				signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest = document.SignedManifestDigest, document.RuntimeBundleDigest, document.ToolchainBundleDigest
-				for _, revision := range document.Profile.Revisions {
-					profileNumbers = append(profileNumbers, revision.Number)
-					profileDigests = append(profileDigests, revision.SpecDigest)
-				}
-			}
-		}
-		if err != nil {
-			return fmt.Errorf("SecondBox release verification: standard bundle %s: %w", bundle.Name, err)
-		}
-		if documentName != bundle.Name || profileName != bundle.Name || len(profileNumbers) != len(bundle.Profiles) ||
-			signedManifestDigest != manifest.MicroVM.SignedManifestDigest ||
-			runtimeBundleDigest != manifest.MicroVM.RuntimeBundle.ManifestDigest ||
-			toolchainBundleDigest != manifest.MicroVM.ToolchainBundle.ManifestDigest {
-			return fmt.Errorf("SecondBox release verification: standard bundle %s identity mismatch", bundle.Name)
-		}
-		for index, profile := range bundle.Profiles {
-			if profile.Name != bundle.Name || profileNumbers[index] != profile.Revision || profileDigests[index] != profile.SpecDigest {
-				return fmt.Errorf("SecondBox release verification: standard bundle %s Profile lineage mismatch", bundle.Name)
-			}
 		}
 	}
 	return nil
