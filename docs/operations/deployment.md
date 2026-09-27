@@ -2,7 +2,7 @@
 
 ## Release upgrade boundary
 
-Profiles no longer name execution bundle digests. A Sandbox's Instances boot whichever signed bundle its home Runner has installed, so a release that ships a new bundle updates in place and existing Sandboxes keep their Workspaces and start on the new bundle. Migration `0031_profile_execution_assets_unpinned` removes the retired digests from recorded Profile revisions, and the guided updater no longer compares bundle identities. A guest image upgrade can still change what software a Workspace sees, as any base-image upgrade does.
+Starting with [v0.19.0](../releases/v0.19.0.md), Profiles no longer name execution bundle digests, and deployments from v0.14.0 onward update in place with the control plane and all Runners updated together. A Sandbox's Instances boot whichever signed bundle its home Runner has installed, so a release that ships a new bundle updates in place and existing Sandboxes keep their Workspaces and start on the new bundle. Migration `0031_profile_execution_assets_unpinned` removes the retired digests from recorded Profile revisions, and the guided updater no longer compares bundle identities. A guest image upgrade can still change what software a Workspace sees, as any base-image upgrade does.
 
 v0.18.0 retains the v0.17.0 signed Firecracker bundle, Runner protocol generation 5, and the migration baseline, so a v0.17.0 deployment updates in place. It is breaking for gVisor Runners: each now requires the image fetcher, a reflink-capable execution image cache, registry configuration, and the publisher key before it starts. See the [v0.18.0 release notes](../releases/v0.18.0.md).
 

@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-Sandboxes survive execution bundle upgrades. Profiles no longer pin runtime and toolchain digests; every Instance boots the signed bundle its home Runner has installed, so a release with a new bundle updates in place and existing Sandboxes keep their Workspaces.
+## 0.19.0 - 2026-09-27
+
+Sandboxes survive execution bundle upgrades. Profiles no longer pin runtime and toolchain digests; every Instance boots the signed bundle its home Runner has installed, so a release with a new bundle updates in place and existing Sandboxes keep their Workspaces. Deployments from v0.14.0 onward update in place; update the control plane and all Runners together. See the [v0.19.0 release notes](docs/releases/v0.19.0.md).
 
 ### Changed
 
-- Removed `runtimeBundleDigest` and `toolchainBundleDigest` from `ProfileRevisionSpec`. Requests that still send them are rejected; migration `0031_profile_execution_assets_unpinned` removes them from recorded revisions. Client-selected images keep their signed component identities.
+- Removed `runtimeBundleDigest` and `toolchainBundleDigest` from `ProfileRevisionSpec` ([#177](https://github.com/SecondStack-AI/SecondBox/pull/177)). Requests that still send them are rejected; migration `0031_profile_execution_assets_unpinned` removes them from recorded revisions. Client-selected images keep their signed component identities.
 - Default-image Assignments carry no asset references, and placement requires a verified materialization for the Runner's backend rather than exact bundle digests. The guided updater no longer refuses updates that change the Firecracker bundle; it refuses sources older than the v0.14.0 migration baseline before activation.
 - Standard bundle documents moved to `secondbox.standard-bundle/v4` without bundle digests. Standard Profile lineages keep their revision numbers, so installed histories from v0.14.0 onward converge after migration; their spec digests change. `secondbox resources check` reports the computed digest of a mismatched revision. Release verification binds bundle documents by digest, which lets the updater authenticate releases published under the older schema.
 
