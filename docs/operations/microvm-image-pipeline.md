@@ -52,7 +52,8 @@ Set every `SECONDBOX_CLIENT_IMAGE_*` variable explicitly.
 The source reference must contain a digest.
 The source commit must be the exact SecondBox revision used by the builder image.
 The prepared source image must contain Python 3 and pip because the rootfs inventory records the installed Python environment.
-The builder always uses prepared OCI mode and forbids browser packages.
+The builder always uses prepared OCI mode.
+`SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY` is `forbid` or `allow`. `forbid` fails the build when the rootfs contains a browser package, launcher, or runtime; `allow` builds a userspace that ships a browser on purpose and records `browserPolicy: allow` in the signed rootfs contract.
 Both output directories must be absent before the build starts.
 
 This example builds the amd64 builder on any Docker host and runs the privileged Linux work on the Docker daemon:
@@ -69,6 +70,7 @@ docker run --rm --privileged --platform linux/amd64 \
   -v /absolute/kernel-parent:/kernel:ro \
   -v /absolute/signing-parent:/signing:ro \
   -e SECONDBOX_CLIENT_IMAGE_ARTIFACT_VERSION=local \
+  -e SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY=forbid \
   -e SECONDBOX_CLIENT_IMAGE_BUNDLE_DIR=/output/bundle \
   -e SECONDBOX_CLIENT_IMAGE_KERNEL_PATH=/kernel/vmlinux \
   -e SECONDBOX_CLIENT_IMAGE_KERNEL_CONFIG= \
