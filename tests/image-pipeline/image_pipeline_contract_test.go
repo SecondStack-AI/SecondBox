@@ -144,6 +144,28 @@ func TestSecondBoxImagePipelineRequiresExplicitOCIModeAndBrowserPolicy(t *testin
 	}
 }
 
+func TestClientExecutionImageBuilderRequiresExplicitBrowserPolicy(t *testing.T) {
+	environment := []string{"PATH=" + os.Getenv("PATH"), "SECONDBOX_CLIENT_IMAGE_KERNEL_CONFIG="}
+	for _, name := range []string{
+		"ARTIFACT_VERSION", "BUNDLE_DIR", "KERNEL_PATH", "OUTPUT_REFERENCE", "PUBLIC_KEY",
+		"PUBLIC_KEY_SHA256", "ROOTFS_SIZE_MIB", "ROOTFS_SOURCE_DIR", "ROOTFS_UUID",
+		"SHARED_FORMAT", "SHARED_SIZE_MIB", "SIGNING_KEY", "SOURCE_COMMIT", "SOURCE_REFERENCE",
+	} {
+		environment = append(environment, "SECONDBOX_CLIENT_IMAGE_"+name+"=set")
+	}
+	command := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts/build-client-execution-image.sh"))
+	command.Env = environment
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY is required") {
+		t.Fatalf("missing client browser policy = (%v, %q), want explicit rejection", err, output)
+	}
+
+	builder := readRepositoryFile(t, "scripts/build-client-execution-image.sh")
+	if !strings.Contains(builder, `SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY="$SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY"`) {
+		t.Fatal("the client builder must pass the caller's browser policy to the rootfs source builder")
+	}
+}
+
 func TestArtifactVerifierKeepsKnownSignedV1BundlesVerifiable(t *testing.T) {
 	verifier := readRepositoryFile(t, "runner/scripts/microvm-image/verify.sh")
 	for _, required := range []string{

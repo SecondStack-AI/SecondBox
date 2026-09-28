@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- The client execution image builder requires `SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY` (`forbid` or `allow`) instead of always forbidding browsers, so an application can ship a headless browser in its own signed userspace. Set it to `forbid` to keep the previous behavior.
+
 ## 0.19.0 - 2026-09-27
 
 Sandboxes survive execution bundle upgrades. Profiles no longer pin runtime and toolchain digests; every Instance boots the signed bundle its home Runner has installed, so a release with a new bundle updates in place and existing Sandboxes keep their Workspaces. Deployments from v0.14.0 onward update in place; update the control plane and all Runners together. See the [v0.19.0 release notes](docs/releases/v0.19.0.md).
