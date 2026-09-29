@@ -28,6 +28,12 @@ import (
 // is still unambiguously not due when the next assertion reads it.
 const teardownPollInterval = 400 * time.Millisecond
 
+// teardownAttributionPollInterval is the recovery interval of the wall-clock
+// attribution fixture alone. A hop that went back to sleep waits out this
+// interval, so it must stay far above one notified hop on a loaded CI runner,
+// which has taken over 500 ms.
+const teardownAttributionPollInterval = 2 * time.Second
+
 // teardownAttributionAllowanceMilliseconds bounds the Operation wall clock that
 // the recorded stages are permitted to leave unattributed. The final teardown
 // milestone shares its transaction and timestamp with the Operation
@@ -46,6 +52,7 @@ const teardownAttributionAllowanceMilliseconds = 5
 // out its recovery poll interval.
 func TestTeardownStagesCoverTheDeleteOperationWallClock(t *testing.T) {
 	fixture := newTeardownFixture(t)
+	fixture.reconciler.PollInterval = teardownAttributionPollInterval
 
 	sandboxID, createOperationID := fixture.createReadySandbox(t)
 
@@ -142,7 +149,7 @@ func TestTeardownStagesCoverTheDeleteOperationWallClock(t *testing.T) {
 	// schedule it at their own clock; the generation-advance acknowledgement
 	// already did. A hop that reaches the poll floor means a transition went
 	// back to sleep with its successor decision already available.
-	pollFloor := 0.8 * float64(teardownPollInterval.Milliseconds())
+	pollFloor := 0.8 * float64(teardownAttributionPollInterval.Milliseconds())
 	for _, hop := range []struct {
 		name   string
 		from   string
