@@ -24,6 +24,12 @@ func forwarderTestAttribution() egressattribution.ExecutionAttribution {
 
 func startTestForwarder(t *testing.T, socket string, attribution egressattribution.ExecutionAttribution, capacity int) (*net.TCPAddr, context.CancelFunc, <-chan error) {
 	t.Helper()
+	listener, cancel, done := startTestForwarderListener(t, socket, attribution, capacity)
+	return listener.Addr().(*net.TCPAddr), cancel, done
+}
+
+func startTestForwarderListener(t *testing.T, socket string, attribution egressattribution.ExecutionAttribution, capacity int) (*net.TCPListener, context.CancelFunc, <-chan error) {
+	t.Helper()
 	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +38,7 @@ func startTestForwarder(t *testing.T, socket string, attribution egressattributi
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- ForwardAttributedExecution(ctx, listener, socket, attribution, capacity) }()
-	return listener.Addr().(*net.TCPAddr), cancel, done
+	return listener, cancel, done
 }
 
 func testForwarderGateway(t *testing.T) *net.UnixListener {
@@ -130,8 +136,8 @@ func TestExecutionForwarderClosesActiveRelaysAndListener(t *testing.T) {
 			if reason == "expiry" {
 				attribution.ExpiresAt = time.Now().UTC().Add(time.Second).Truncate(time.Millisecond)
 			}
-			address, cancel, done := startTestForwarder(t, gateway.Addr().String(), attribution, 1)
-			guest := dialTestForwarder(t, address)
+			listener, cancel, done := startTestForwarderListener(t, gateway.Addr().String(), attribution, 1)
+			guest := dialTestForwarder(t, listener.Addr().(*net.TCPAddr))
 			upstream := acceptForwarderAttribution(t, gateway, attribution)
 			if reason == "cancel" {
 				cancel()
@@ -144,10 +150,17 @@ func TestExecutionForwarderClosesActiveRelaysAndListener(t *testing.T) {
 					t.Fatalf("relay remained open: bytes = %d, error = %v", n, err)
 				}
 			}
-			connection, err := net.DialTimeout("tcp", address.String(), time.Second)
+			// Inspect the listener itself: dialing its freed port can reach
+			// whichever socket the kernel handed that port to next.
+			err := listener.SetDeadline(time.Now())
 			if err == nil {
-				connection.Close()
-				t.Fatal("listener accepted after termination")
+				var connection net.Conn
+				if connection, err = listener.Accept(); err == nil {
+					connection.Close()
+				}
+			}
+			if !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("listener remained open after termination: %v", err)
 			}
 		})
 	}
