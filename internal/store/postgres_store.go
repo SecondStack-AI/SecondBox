@@ -666,10 +666,15 @@ func (store *PostgresControlPlaneStore) ListSandboxes(
 	cursor string,
 	selection contracts.SandboxListFilter,
 ) (contracts.SandboxPage, error) {
-	selection, err := selection.Normalize()
+	normalized, err := selection.Normalize()
 	if err != nil {
-		return contracts.SandboxPage{}, errors.Join(ports.ErrInvalidRequest, err)
+		field := &ports.InvalidFieldError{Field: "id", Reason: "must name Sandbox IDs and repeat at most 64 times"}
+		if _, stateErr := (contracts.SandboxListFilter{States: selection.States}).Normalize(); stateErr != nil {
+			field = &ports.InvalidFieldError{Field: "state", Reason: "must name Sandbox states and repeat at most 9 times"}
+		}
+		return contracts.SandboxPage{}, errors.Join(field, err)
 	}
+	selection = normalized
 	filter, err := encodeSandboxMetadataFilter(selection.Metadata)
 	if err != nil {
 		return contracts.SandboxPage{}, err

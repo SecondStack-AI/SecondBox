@@ -285,7 +285,7 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 		session.TerminalDetachSeconds = policy.TerminalDetachSeconds
 		if input.Detachable && policy.TerminalDetachSeconds == 0 {
 			return DataPlaneSession{}, false, errors.Join(
-				ports.ErrInvalidRequest,
+				&ports.InvalidFieldError{Field: "detachable", Reason: "requires a pinned Profile with positive execution.terminalDetachSeconds"},
 				errors.New("SecondBox pinned Profile does not permit detached Terminal sessions"),
 			)
 		}
@@ -313,20 +313,33 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	if !policy.MaximumDeadlineMilliseconds.IsUnlimited() && input.DeadlineAt.After(input.Now.Add(
 		time.Duration(policy.MaximumDeadlineMilliseconds)*time.Millisecond,
 	)) {
+		deadlineError := errors.New("SecondBox data-plane deadline exceeds the pinned Profile")
+		// A file operation's deadline is a server constant, not a request field.
+		if input.Kind == "file" {
+			return DataPlaneSession{}, false, errors.Join(ports.ErrInvalidRequest, deadlineError)
+		}
 		return DataPlaneSession{}, false, errors.Join(
-			ports.ErrInvalidRequest,
-			errors.New("SecondBox data-plane deadline exceeds the pinned Profile"),
+			&ports.InvalidFieldError{Field: "deadlineMilliseconds", Reason: "must not exceed the pinned Profile's execution.maximumDeadlineMilliseconds"},
+			deadlineError,
 		)
 	}
+	// Only an Exec stream supplies its own window and response limit; a
+	// Terminal and a file operation take the pinned Profile's values.
 	if input.DeferResponseCredit && input.StreamWindowBytes > policy.StreamWindowBytes {
-		return DataPlaneSession{}, false, ErrDataPlaneStreamWindow
+		return DataPlaneSession{}, false, errors.Join(
+			&ports.InvalidFieldError{Field: "windowBytes", Reason: "must not exceed the pinned Profile's execution.streamWindowBytes"},
+			ErrDataPlaneStreamWindow,
+		)
 	}
 	responseLimit := policy.MaximumBufferedOutputBytes
 	if input.Kind == "file" {
 		responseLimit = policy.MaximumTransferBytes
 	}
 	if input.MaximumResponseBytes > responseLimit {
-		return DataPlaneSession{}, false, ErrDataPlaneOutputLimit
+		return DataPlaneSession{}, false, errors.Join(
+			&ports.InvalidFieldError{Field: "maximumOutputBytes", Reason: "must not exceed the pinned Profile's execution.maximumBufferedOutputBytes"},
+			ErrDataPlaneOutputLimit,
+		)
 	}
 	if input.MaximumRequestBytes > policy.MaximumTransferBytes {
 		return DataPlaneSession{}, false, ErrDataPlaneSessionLimit

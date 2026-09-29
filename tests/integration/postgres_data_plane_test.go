@@ -886,6 +886,17 @@ func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testin
 			Request: map[string]any{"command": "true", "id": id}, Now: now,
 		}
 	}
+	requireRefusedField := func(err error, want string) {
+		t.Helper()
+		var field *ports.InvalidFieldError
+		if !errors.Is(err, ports.ErrInvalidRequest) || !errors.As(err, &field) || field.Field != want {
+			t.Fatalf("refusal = %v, want invalid_request naming %s", err, want)
+		}
+	}
+	lateDeadline := execAdmission("exec_deadline_bound")
+	lateDeadline.DeadlineAt = now.Add(time.Duration(policy.MaximumDeadlineMilliseconds)*time.Millisecond + time.Second)
+	_, _, err = relay.AdmitDataPlane(t.Context(), lateDeadline)
+	requireRefusedField(err, "deadlineMilliseconds")
 	oversizedOutput := execAdmission("exec_output_bound")
 	oversizedOutput.MaximumResponseBytes = policy.MaximumBufferedOutputBytes + 1
 	oversizedOutput.ExecOpen.OutputLimitBytes = uint64(policy.MaximumBufferedOutputBytes + 1)
@@ -893,6 +904,8 @@ func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testin
 		errors.Is(err, ports.ErrQuotaExceeded) {
 		t.Fatalf("output bound above the Profile error = %v", err)
 	}
+	_, _, err = relay.AdmitDataPlane(t.Context(), oversizedOutput)
+	requireRefusedField(err, "maximumOutputBytes")
 	oversizedStdin := execAdmission("exec_request_bound")
 	oversizedStdin.MaximumRequestBytes = policy.MaximumTransferBytes + 1
 	if _, _, err := relay.AdmitDataPlane(t.Context(), oversizedStdin); !errors.Is(err, runnercontrol.ErrDataPlaneSessionLimit) ||
@@ -910,6 +923,8 @@ func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testin
 		errors.Is(err, ports.ErrQuotaExceeded) {
 		t.Fatalf("stream window above the Profile error = %v", err)
 	}
+	_, _, err = relay.AdmitDataPlane(t.Context(), oversizedWindow)
+	requireRefusedField(err, "windowBytes")
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)

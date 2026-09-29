@@ -1,10 +1,10 @@
 package api
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -17,7 +17,7 @@ func (apiHandler *handler) updateTenantQuota(writer http.ResponseWriter, request
 		return
 	}
 	if body.AggregateQuota == nil {
-		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Tenant aggregateQuota is required")))
+		apiHandler.writeError(writer, request, &ports.InvalidFieldError{Field: "aggregateQuota", Reason: "is required"})
 		return
 	}
 	revision, err := parseIfMatch(request)

@@ -132,7 +132,15 @@ port, and placement fields remain rejected as unknown properties.
 
 Creation fails before allocating durable intent when the profile is absent, disabled, requires an egress context that the authenticated Tenant lacks, or has no RunnerPool capable of its immutable requirements. Successful creation persists the exact ProfileRevision ID, the immutable Tenant-context pin when required, and a resolved compatibility summary. Later Tenant or Runner availability changes do not rewrite that selection.
 
-Profiles may be disabled to stop future creation. Disablement does not mutate pinned Sandboxes. A profile revision and its referenced assets cannot be deleted while reachable from a Sandbox or retention record.
+### Profile lifecycle
+
+A Profile has two states, `enabled` and `disabled`, and three mutations:
+
+- `POST /v1/profiles` creates it `enabled` with revision 1.
+- `POST /v1/profiles/{name}:revise` appends an immutable revision under `If-Match` and makes it current. It does not check state: a disabled Profile can be revised and stays disabled.
+- `POST /v1/profiles/{name}:disable` sets `disabled` under `If-Match`. Disabling an already disabled Profile changes nothing.
+
+There is no enable, re-enable, or delete operation, so disabling is terminal and every Profile and ProfileRevision is retained. A disabled Profile refuses Sandbox creation, including from a Snapshot, with `409 profile_unavailable`. It also refuses Subject sandbox-policy selection, is skipped by image preparation, and makes `standard_resources` apply fail for that name rather than re-enable it. Existing Sandboxes keep their pinned revision: start, stop, restore, Snapshots, Leases, and data-plane requests do not consult Profile state.
 
 ## Startup mode
 

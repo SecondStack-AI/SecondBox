@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/gorilla/websocket"
@@ -105,7 +106,7 @@ func (apiHandler *handler) publicExecStreamSession(
 
 func (apiHandler *handler) connectSandboxExecStream(writer http.ResponseWriter, request *http.Request) {
 	if !containsString(websocket.Subprotocols(request), execStreamSubprotocol) {
-		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Exec WebSocket subprotocol is required")))
+		apiHandler.writeError(writer, request, &ports.InvalidFieldError{Field: "Sec-WebSocket-Protocol", Reason: "must offer the " + execStreamSubprotocol + " subprotocol"})
 		return
 	}
 	generation, err := parseGeneration(request)

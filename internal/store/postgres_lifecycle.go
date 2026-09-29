@@ -172,7 +172,9 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		}
 		attributed, err := contracts.ParseAttributedExecutionMetadata(input.Operation.RequestMetadata)
 		if err != nil {
-			return contracts.Operation{}, fmt.Errorf("%w: %w", ports.ErrInvalidRequest, err)
+			return contracts.Operation{}, errors.Join(&ports.InvalidFieldError{
+				Field: "attributedExecution", Reason: "must contain a bounded authorizationRef and an explicit expiresAt",
+			}, err)
 		}
 		if attributed != nil {
 			if observed != contracts.SandboxStateStopped || desired != contracts.SandboxDesiredStateStopped || locked.CurrentInstanceID != "" {
@@ -180,12 +182,16 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			}
 			if spec.AttributedExecution == nil || spec.Network.RequiresTenantEgressContext == nil ||
 				!*spec.Network.RequiresTenantEgressContext || locked.EgressContext == nil {
-				return contracts.Operation{}, fmt.Errorf("%w: SecondBox attributed start requires Profile permission and pinned Tenant routing", ports.ErrInvalidRequest)
+				return contracts.Operation{}, &ports.InvalidFieldError{
+					Field: "attributedExecution", Reason: "requires a Profile that permits attributed execution and a pinned Tenant egress context",
+				}
 			}
 			remaining := attributed.ExpiresAt.Sub(input.Now)
 			maximum := spec.Execution.MaximumDeadlineMilliseconds
 			if remaining <= 0 || !maximum.IsUnlimited() && remaining > time.Duration(maximum)*time.Millisecond {
-				return contracts.Operation{}, fmt.Errorf("%w: SecondBox attributed start expiry exceeds its execution deadline", ports.ErrInvalidRequest)
+				return contracts.Operation{}, &ports.InvalidFieldError{
+					Field: "attributedExecution.expiresAt", Reason: "must be in the future and within the pinned Profile execution deadline",
+				}
 			}
 			var supported bool
 			if err := tx.QueryRow(ctx, `SELECT capabilities_json ? $2 FROM secondbox.runners WHERE id=$1 FOR SHARE`,

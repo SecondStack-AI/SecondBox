@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -132,7 +133,9 @@ func (store *PostgresControlPlaneStore) UpdateSubjectSandboxPolicy(ctx context.C
 		return result, receipt, err
 	}
 	if err := selection.Lifecycle.Validate(); err != nil {
-		return result, receipt, fmt.Errorf("%w: %w", ports.ErrInvalidRequest, err)
+		return result, receipt, errors.Join(&ports.InvalidFieldError{
+			Field: "lifecycle", Reason: "must have null or positive representable idleSeconds and maximumDurationSeconds",
+		}, err)
 	}
 	// A complete PUT can preserve an unchanged desired block after an operator
 	// tightens its grant. The other block remains editable; effective resolution
@@ -144,7 +147,9 @@ func (store *PostgresControlPlaneStore) UpdateSubjectSandboxPolicy(ctx context.C
 	}
 	if selection.AttributedExecution != nil {
 		if err := selection.AttributedExecution.Validate(); err != nil {
-			return result, receipt, fmt.Errorf("%w: %w", ports.ErrInvalidRequest, err)
+			return result, receipt, errors.Join(&ports.InvalidFieldError{
+				Field: "attributedExecution.maximumConnections", Reason: "must be between 1 and 4096",
+			}, err)
 		}
 		unchanged := previous != nil && previous.AttributedExecution != nil &&
 			*previous.AttributedExecution == *selection.AttributedExecution
@@ -154,7 +159,7 @@ func (store *PostgresControlPlaneStore) UpdateSubjectSandboxPolicy(ctx context.C
 				return result, receipt, err
 			}
 			if grant == nil {
-				return result, receipt, fmt.Errorf("%w: SecondBox Profile does not permit attributed execution", ports.ErrInvalidRequest)
+				return result, receipt, &ports.InvalidFieldError{Field: "attributedExecution", Reason: "requires a Profile that permits attributed execution"}
 			}
 			if selection.AttributedExecution.MaximumConnections > grant.MaximumConnectionsCeiling {
 				return result, receipt, fmt.Errorf("%w: SecondBox attributed execution maximumConnections exceeds Profile ceiling", ports.ErrProfilePolicyCeilingExceeded)

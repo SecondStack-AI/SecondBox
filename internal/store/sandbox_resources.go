@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	"math/bits"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
@@ -25,7 +24,7 @@ func resolveSandboxResources(spec contracts.ProfileRevisionSpec, request *contra
 		}
 	}
 	if resolved.VCPUCount < 1 || resolved.MemoryBytes < 67108864 || resolved.WorkspaceBytes < 1048576 {
-		return contracts.SandboxResources{}, fmt.Errorf("%w: SecondBox Sandbox resources are below their minimum", ports.ErrInvalidRequest)
+		return contracts.SandboxResources{}, &ports.InvalidFieldError{Field: "resources", Reason: "must resolve to at least 1 vcpuCount, 67108864 memoryBytes, and 1048576 workspaceBytes"}
 	}
 	// Validate before rounding as well as allocation: rounding must not hide an
 	// invalid request, including when disk capacity is clamped to the ceiling.
@@ -36,7 +35,7 @@ func resolveSandboxResources(spec contracts.ProfileRevisionSpec, request *contra
 		{"memoryBytes", resolved.MemoryBytes}, {"workspaceBytes", resolved.WorkspaceBytes},
 	} {
 		if axis.value%(1<<20) != 0 {
-			return contracts.SandboxResources{}, &ports.ResourceAlignmentError{Field: "resources." + axis.name}
+			return contracts.SandboxResources{}, ports.ResourceAlignmentError("resources." + axis.name)
 		}
 	}
 	ceiling := contracts.SandboxResourceRequest{VCPUCount: &policy.VCPUCount, MemoryBytes: &policy.MemoryBytes, WorkspaceBytes: &policy.WorkspaceBytes}
@@ -54,7 +53,7 @@ func resolveSandboxResources(spec contracts.ProfileRevisionSpec, request *contra
 	if request != nil && request.WorkspaceBytes != nil {
 		// The next power of two must remain representable as a positive int64.
 		if resolved.WorkspaceBytes > 1<<62 {
-			return contracts.SandboxResources{}, fmt.Errorf("%w: SecondBox Sandbox rounded workspaceBytes exceeds int64 capacity", ports.ErrInvalidRequest)
+			return contracts.SandboxResources{}, &ports.InvalidFieldError{Field: "resources.workspaceBytes", Reason: "must not exceed 4611686018427387904"}
 		}
 		requested := resolved.WorkspaceBytes
 		resolved.WorkspaceBytes = int64(1) << bits.Len64(uint64(requested-1))
@@ -68,7 +67,7 @@ func resolveSandboxResources(spec contracts.ProfileRevisionSpec, request *contra
 	// Older published ceilings may predate alignment validation. Never pin an
 	// unaligned allocation after clamping to one of those immutable bounds.
 	if resolved.WorkspaceBytes%(1<<20) != 0 {
-		return contracts.SandboxResources{}, &ports.ResourceAlignmentError{Field: "resources.workspaceBytes"}
+		return contracts.SandboxResources{}, ports.ResourceAlignmentError("resources.workspaceBytes")
 	}
 	if (ceiling.VCPUCount != nil && resolved.VCPUCount > *ceiling.VCPUCount) ||
 		(ceiling.MemoryBytes != nil && resolved.MemoryBytes > *ceiling.MemoryBytes) ||

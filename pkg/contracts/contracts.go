@@ -625,7 +625,7 @@ func (command *ExecCommand) UnmarshalJSON(data []byte) error {
 			Mode: value.Mode, Executable: value.Executable, Arguments: value.Arguments,
 		}
 	default:
-		return errors.New("SecondBox Exec command mode must be shell or argv")
+		return &RequestFieldError{Field: "mode", Reason: "must be shell or argv"}
 	}
 	return nil
 }

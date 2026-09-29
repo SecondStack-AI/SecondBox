@@ -62,7 +62,7 @@ func (store *PostgresControlPlaneStore) UpdateManagedTenantEgressContext(
 ) (contracts.Tenant, ports.AdminIdempotencyResult, error) {
 	if egressContext != nil {
 		if err := contracts.ValidateEgressContextName(*egressContext); err != nil {
-			return contracts.Tenant{}, ports.AdminIdempotencyResult{}, errors.Join(ports.ErrInvalidRequest, err)
+			return contracts.Tenant{}, ports.AdminIdempotencyResult{}, errors.Join(egressContextFieldError(), err)
 		}
 	}
 	tx, err := store.pool.Begin(ctx)
@@ -1606,10 +1606,18 @@ func insertAuthorityIdentity(
 	return nil
 }
 
+// egressContextFieldError names a refused Tenant egressContext.
+func egressContextFieldError() error {
+	return &ports.InvalidFieldError{
+		Field:  "egressContext",
+		Reason: "must contain 1 to 63 lowercase ASCII letters, digits, or hyphens and begin and end with a letter or digit",
+	}
+}
+
 func insertTenant(ctx context.Context, tx pgx.Tx, tenant contracts.Tenant) error {
 	if tenant.EgressContext != nil {
 		if err := contracts.ValidateEgressContextName(*tenant.EgressContext); err != nil {
-			return errors.Join(ports.ErrInvalidRequest, err)
+			return errors.Join(egressContextFieldError(), err)
 		}
 	}
 	profileGrantsJSON, err := encodeManagementJSON("Tenant Profile grants", tenant.AllowedProfileGrants)

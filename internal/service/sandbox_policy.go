@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
@@ -10,7 +12,7 @@ func (service *ControlPlaneService) GetSubjectSandboxPolicy(ctx context.Context,
 	if principal.Kind != contracts.AuthorityKindTenantController {
 		return contracts.SubjectSandboxPolicyObservation{}, ports.ErrAuthorizationDenied
 	}
-	if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+	if err := validateOwnershipRef("subjectRef", subjectRef); err != nil {
 		return contracts.SubjectSandboxPolicyObservation{}, err
 	}
 	return service.store.GetSubjectSandboxPolicy(ctx, principal.TenantRef, subjectRef, profile, service.now().UTC())
@@ -20,18 +22,21 @@ func (service *ControlPlaneService) UpdateSubjectSandboxPolicy(ctx context.Conte
 	if principal.Kind != contracts.AuthorityKindTenantController {
 		return contracts.SubjectSandboxPolicyObservation{}, false, ports.ErrAuthorizationDenied
 	}
-	if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+	if err := validateOwnershipRef("subjectRef", subjectRef); err != nil {
 		return contracts.SubjectSandboxPolicyObservation{}, false, err
 	}
-	if !profileNamePattern.MatchString(request.Profile) || revision < 1 {
-		return contracts.SubjectSandboxPolicyObservation{}, false, ports.ErrInvalidRequest
+	if !profileNamePattern.MatchString(request.Profile) {
+		return contracts.SubjectSandboxPolicyObservation{}, false, invalidField("profile", "must match ^[a-z][a-z0-9-]{0,79}$")
+	}
+	if revision < 1 {
+		return contracts.SubjectSandboxPolicyObservation{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	if err := request.Lifecycle.Validate(); err != nil {
-		return contracts.SubjectSandboxPolicyObservation{}, false, invalidRequest(err)
+		return contracts.SubjectSandboxPolicyObservation{}, false, errors.Join(invalidField("lifecycle", "must have null or positive representable idleSeconds and maximumDurationSeconds"), err)
 	}
 	if request.AttributedExecution != nil {
 		if err := request.AttributedExecution.Validate(); err != nil {
-			return contracts.SubjectSandboxPolicyObservation{}, false, invalidRequest(err)
+			return contracts.SubjectSandboxPolicyObservation{}, false, errors.Join(invalidField("attributedExecution.maximumConnections", "must be between 1 and 4096"), err)
 		}
 	}
 	now := service.now().UTC()

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -124,7 +125,7 @@ func (apiHandler *handler) publicTerminalSession(
 
 func (apiHandler *handler) connectSandboxTerminal(writer http.ResponseWriter, request *http.Request) {
 	if !containsString(websocket.Subprotocols(request), terminalSubprotocol) {
-		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Terminal WebSocket subprotocol is required")))
+		apiHandler.writeError(writer, request, &ports.InvalidFieldError{Field: "Sec-WebSocket-Protocol", Reason: "must offer the " + terminalSubprotocol + " subprotocol"})
 		return
 	}
 	generation, err := parseGeneration(request)
@@ -136,9 +137,9 @@ func (apiHandler *handler) connectSandboxTerminal(writer http.ResponseWriter, re
 	if value := request.Header.Get(terminalAfterSequenceHeader); value != "" {
 		afterSequence, err = strconv.ParseInt(value, 10, 64)
 		if err != nil || afterSequence < -1 {
-			apiHandler.writeError(writer, request, requestValidationError(
-				errors.New("SecondBox Terminal replay sequence is invalid"),
-			))
+			apiHandler.writeError(writer, request, &ports.InvalidFieldError{
+				Field: terminalAfterSequenceHeader, Reason: "must be an integer of at least -1",
+			})
 			return
 		}
 	}

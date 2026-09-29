@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -14,6 +13,8 @@ import (
 
 var managementMetadataKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 var managementOwnershipRefPattern = regexp.MustCompile(`^[\x21-\x7e]{1,128}$`)
+
+const egressContextNameReason = "must contain 1 to 63 lowercase ASCII letters, digits, or hyphens and begin and end with a letter or digit"
 
 var applicationScopeSet = map[string]bool{
 	"sandbox:read": true, "sandbox:lifecycle": true, "sandbox:exec": true,
@@ -58,17 +59,17 @@ func (service *ControlPlaneService) UpdateTenantEgressContext(
 	expectedRevision int64,
 	request contracts.UpdateTenantEgressContextRequest,
 ) (contracts.Tenant, bool, error) {
-	if err := validateOwnershipRef("Tenant", tenantRef); err != nil {
+	if err := validateOwnershipRef("tenantRef", tenantRef); err != nil {
 		return contracts.Tenant{}, false, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Tenant{}, false, invalidRequest(errors.New("SecondBox Tenant revision must be positive"))
+		return contracts.Tenant{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	if request.EgressContext != nil {
 		if err := contracts.ValidateEgressContextName(*request.EgressContext); err != nil {
 			return contracts.Tenant{}, false, service.managementDenied(
 				ctx, principal, "tenant.egress_context_updated", "tenant", tenantRef, tenantRef,
-				invalidRequest(err),
+				errors.Join(invalidField("egressContext", egressContextNameReason), err),
 			)
 		}
 	}
@@ -111,9 +112,9 @@ func (service *ControlPlaneService) ExtendTenantCeiling(
 		return contracts.Tenant{}, false, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Tenant{}, false, invalidRequest(errors.New("SecondBox Tenant revision must be positive"))
+		return contracts.Tenant{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
-	if err := validateGrantExtension("Tenant ceiling", request.ProfileGrants, request.ApplicationScopes); err != nil {
+	if err := validateGrantExtension("applicationScopes", request.ProfileGrants, request.ApplicationScopes); err != nil {
 		return contracts.Tenant{}, false, service.managementDenied(
 			ctx, principal, "tenant.ceiling_extended", "tenant", tenantRef, tenantRef, err,
 		)
@@ -145,7 +146,7 @@ func (service *ControlPlaneService) ExtendTenantCeiling(
 }
 
 func (service *ControlPlaneService) GetTenant(ctx context.Context, _ contracts.Principal, tenantRef string) (contracts.Tenant, error) {
-	if err := validateOwnershipRef("Tenant", tenantRef); err != nil {
+	if err := validateOwnershipRef("tenantRef", tenantRef); err != nil {
 		return contracts.Tenant{}, err
 	}
 	return service.store.GetTenant(ctx, tenantRef)
@@ -164,11 +165,11 @@ func (service *ControlPlaneService) ReactivateTenant(ctx context.Context, princi
 }
 
 func (service *ControlPlaneService) setTenantState(ctx context.Context, principal contracts.Principal, tenantRef, targetState, operation, auditAction, idempotencyKey string, expectedRevision int64) (contracts.Tenant, bool, error) {
-	if err := validateOwnershipRef("Tenant", tenantRef); err != nil {
+	if err := validateOwnershipRef("tenantRef", tenantRef); err != nil {
 		return contracts.Tenant{}, false, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Tenant{}, false, invalidRequest(errors.New("SecondBox Tenant revision must be positive"))
+		return contracts.Tenant{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	now := service.now().UTC()
 	idempotency, err := service.adminIdempotency(principal, operation, tenantRef, idempotencyKey, struct {
@@ -187,12 +188,12 @@ func (service *ControlPlaneService) setTenantState(ctx context.Context, principa
 
 func (service *ControlPlaneService) CreateTenantControllerAuthority(ctx context.Context, principal contracts.Principal, tenantRef, idempotencyKey string, request contracts.CreateTenantControllerAuthorityRequest) (contracts.TenantControllerCredentialResponse, bool, error) {
 	now := service.now().UTC()
-	if err := validateOwnershipRef("Tenant", tenantRef); err != nil {
+	if err := validateOwnershipRef("tenantRef", tenantRef); err != nil {
 		return contracts.TenantControllerCredentialResponse{}, false, err
 	}
 	if err := validateManagementMetadata(request.Metadata); err != nil || !request.ExpiresAt.After(now) {
 		if err == nil {
-			err = invalidRequest(errors.New("SecondBox TenantControllerAuthority expiry must be in the future"))
+			err = invalidField("expiresAt", "must be in the future")
 		}
 		return contracts.TenantControllerCredentialResponse{}, false, service.managementDenied(ctx, principal, "tenant_controller_authority.created", "tenant_controller_authority", tenantRef, tenantRef, err)
 	}
@@ -299,14 +300,14 @@ func (service *ControlPlaneService) UpdateSubjectQuota(
 	expectedRevision int64,
 	request contracts.UpdateSubjectQuotaRequest,
 ) (contracts.Subject, bool, error) {
-	if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+	if err := validateOwnershipRef("subjectRef", subjectRef); err != nil {
 		return contracts.Subject{}, false, err
 	}
 	if !validSubjectQuota(request.Quota) {
-		return contracts.Subject{}, false, invalidRequest(errors.New("SecondBox Subject quota must be non-negative"))
+		return contracts.Subject{}, false, invalidField("quota", "must have nonnegative or null limits")
 	}
 	if expectedRevision < 1 {
-		return contracts.Subject{}, false, invalidRequest(errors.New("SecondBox Subject revision must be positive"))
+		return contracts.Subject{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	now := service.now().UTC()
 	idempotency, err := service.adminIdempotency(principal, "subject.quota.update", subjectRef, idempotencyKey, struct {
@@ -336,11 +337,11 @@ func (service *ControlPlaneService) CloseSubject(
 	idempotencyKey string,
 	expectedRevision int64,
 ) (contracts.Subject, bool, error) {
-	if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+	if err := validateOwnershipRef("subjectRef", subjectRef); err != nil {
 		return contracts.Subject{}, false, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Subject{}, false, invalidRequest(errors.New("SecondBox Subject revision must be positive"))
+		return contracts.Subject{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	now := service.now().UTC()
 	idempotency, err := service.adminIdempotency(principal, "subject.close", subjectRef, idempotencyKey, struct {
@@ -369,11 +370,11 @@ func (service *ControlPlaneService) CleanupSubject(
 	idempotencyKey string,
 	expectedRevision int64,
 ) (contracts.Operation, bool, error) {
-	if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+	if err := validateOwnershipRef("subjectRef", subjectRef); err != nil {
 		return contracts.Operation{}, false, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Operation{}, false, invalidRequest(errors.New("SecondBox Subject revision must be positive"))
+		return contracts.Operation{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	now := service.now().UTC()
 	idempotency, err := service.adminIdempotency(principal, "subject.cleanup", subjectRef, idempotencyKey, struct {
@@ -456,7 +457,7 @@ func (service *ControlPlaneService) GetApplicationAuthority(ctx context.Context,
 
 func (service *ControlPlaneService) ListApplicationAuthorities(ctx context.Context, principal contracts.Principal, subjectRef string, limit int, cursor string) (contracts.ApplicationAuthorityPage, error) {
 	if subjectRef != "" {
-		if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+		if err := validateOwnershipRef("subjectRef", subjectRef); err != nil {
 			return contracts.ApplicationAuthorityPage{}, err
 		}
 	}
@@ -507,9 +508,9 @@ func (service *ControlPlaneService) ExtendApplicationAuthority(
 	request contracts.ExtendApplicationAuthorityRequest,
 ) (contracts.ApplicationAuthority, bool, error) {
 	if expectedRevision < 1 {
-		return contracts.ApplicationAuthority{}, false, invalidRequest(errors.New("SecondBox ApplicationAuthority revision must be positive"))
+		return contracts.ApplicationAuthority{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
-	if err := validateGrantExtension("ApplicationAuthority", request.ProfileGrants, request.Scopes); err != nil {
+	if err := validateGrantExtension("scopes", request.ProfileGrants, request.Scopes); err != nil {
 		return contracts.ApplicationAuthority{}, false, service.managementDenied(
 			ctx, principal, "application_authority.extended", "application_authority", authorityID, principal.TenantRef, err,
 		)
@@ -566,7 +567,7 @@ func isManagementDenial(err error) bool {
 }
 
 func validateCreateTenantRequest(request contracts.CreateTenantRequest, now time.Time) error {
-	if err := validateOwnershipRef("Tenant", request.Ref); err != nil {
+	if err := validateOwnershipRef("ref", request.Ref); err != nil {
 		return err
 	}
 	if err := validateManagementMetadata(request.Metadata); err != nil {
@@ -574,24 +575,24 @@ func validateCreateTenantRequest(request contracts.CreateTenantRequest, now time
 	}
 	if request.EgressContext != nil {
 		if err := contracts.ValidateEgressContextName(*request.EgressContext); err != nil {
-			return invalidRequest(err)
+			return errors.Join(invalidField("egressContext", egressContextNameReason), err)
 		}
 	}
-	if err := validateProfileGrants(request.AllowedProfileGrants); err != nil {
+	if err := validateProfileGrants("allowedProfileGrants", request.AllowedProfileGrants); err != nil {
 		return err
 	}
-	if err := validateApplicationScopes(request.AllowedApplicationScopes); err != nil {
+	if err := validateApplicationScopes("allowedApplicationScopes", request.AllowedApplicationScopes); err != nil {
 		return err
 	}
 	if !validTenantQuota(request.AggregateQuota) {
-		return invalidRequest(errors.New("SecondBox Tenant aggregate quota must be non-negative"))
+		return invalidField("aggregateQuota", "must have nonnegative or null limits")
 	}
 	if request.ExpiryPolicy.MaximumSubjectLifetimeSeconds < 1 || request.ExpiryPolicy.MaximumSubjectLifetimeSeconds > 31536000 ||
 		request.ExpiryPolicy.MaximumAuthorityLifetimeSeconds < 1 || request.ExpiryPolicy.MaximumAuthorityLifetimeSeconds > 31536000 {
-		return invalidRequest(errors.New("SecondBox Tenant expiry policy must be between 1 and 31536000 seconds"))
+		return invalidField("expiryPolicy", "must have maximumSubjectLifetimeSeconds and maximumAuthorityLifetimeSeconds between 1 and 31536000")
 	}
 	if request.ExpiresAt != nil && !request.ExpiresAt.After(now) {
-		return invalidRequest(errors.New("SecondBox Tenant expiry must be in the future"))
+		return invalidField("expiresAt", "must be in the future")
 	}
 	return nil
 }
@@ -605,89 +606,91 @@ func cloneOptionalString(value *string) *string {
 }
 
 func validateCreateSubjectRequest(request contracts.CreateSubjectRequest, now time.Time) error {
-	if err := validateOwnershipRef("Subject", request.Ref); err != nil {
+	if err := validateOwnershipRef("ref", request.Ref); err != nil {
 		return err
 	}
 	if err := validateManagementMetadata(request.Metadata); err != nil {
 		return err
 	}
 	if !validSubjectQuota(request.Quota) {
-		return invalidRequest(errors.New("SecondBox Subject quota must be non-negative"))
+		return invalidField("quota", "must have nonnegative or null limits")
 	}
 	if request.ExpiresAt != nil && !request.ExpiresAt.After(now) {
-		return invalidRequest(errors.New("SecondBox Subject expiry must be in the future"))
+		return invalidField("expiresAt", "must be in the future")
 	}
 	return nil
 }
 
 func validateCreateApplicationAuthorityRequest(request contracts.CreateApplicationAuthorityRequest, now time.Time) error {
-	if err := validateOwnershipRef("Subject", request.SubjectRef); err != nil {
+	if err := validateOwnershipRef("subjectRef", request.SubjectRef); err != nil {
 		return err
 	}
-	if err := validateApplicationScopes(request.Scopes); err != nil {
+	if err := validateApplicationScopes("scopes", request.Scopes); err != nil {
 		return err
 	}
-	if err := validateProfileGrants(request.ProfileGrants); err != nil {
+	if err := validateProfileGrants("profileGrants", request.ProfileGrants); err != nil {
 		return err
 	}
 	if err := validateManagementMetadata(request.Metadata); err != nil {
 		return err
 	}
 	if !request.ExpiresAt.After(now) {
-		return invalidRequest(errors.New("SecondBox ApplicationAuthority expiry must be in the future"))
+		return invalidField("expiresAt", "must be in the future")
 	}
 	return nil
 }
 
-func validateOwnershipRef(kind, value string) error {
+// validateOwnershipRef checks a Tenant or Subject reference named by its
+// public field or parameter.
+func validateOwnershipRef(field, value string) error {
 	if !managementOwnershipRefPattern.MatchString(value) {
-		return invalidRequest(fmt.Errorf("SecondBox %s reference must contain 1 to 128 visible ASCII characters", kind))
+		return invalidField(field, "must contain 1 to 128 visible ASCII characters")
 	}
 	return nil
 }
 
 func validateManagementMetadata(metadata map[string]string) error {
 	if metadata == nil || len(metadata) > 32 {
-		return invalidRequest(errors.New("SecondBox management metadata must contain at most 32 entries"))
+		return invalidField("metadata", "is required and must contain at most 32 entries")
 	}
 	for key, value := range metadata {
 		if len(key) < 1 || len(key) > 128 || !managementMetadataKeyPattern.MatchString(key) || len(value) > 1024 {
-			return invalidRequest(errors.New("SecondBox management metadata key or value is invalid"))
+			return invalidField("metadata", "must have keys of 1 to 128 characters from A-Z a-z 0-9 . _ / - and values of at most 1024 bytes")
 		}
 	}
 	return nil
 }
 
-func validateApplicationScopes(scopes []string) error {
+func validateApplicationScopes(field string, scopes []string) error {
 	if len(scopes) < 1 || len(scopes) > 6 {
-		return invalidRequest(errors.New("SecondBox application scopes must contain 1 to 6 values"))
+		return invalidField(field, "must contain 1 to 6 values")
 	}
-	return validateApplicationScopeValues(scopes)
+	return validateApplicationScopeValues(field, scopes)
 }
 
-func validateApplicationScopeValues(scopes []string) error {
+func validateApplicationScopeValues(field string, scopes []string) error {
 	seen := make(map[string]bool, len(scopes))
 	for _, scope := range scopes {
 		if !applicationScopeSet[scope] || seen[scope] {
-			return invalidRequest(errors.New("SecondBox application scopes contain an invalid or duplicate value"))
+			return invalidField(field, "must contain unique supported application scopes")
 		}
 		seen[scope] = true
 	}
 	return nil
 }
 
-func validateProfileGrants(grants []string) error {
+func validateProfileGrants(field string, grants []string) error {
 	if len(grants) < 1 || len(grants) > 32 {
-		return invalidRequest(errors.New("SecondBox Profile grants must contain 1 to 32 values"))
+		return invalidField(field, "must contain 1 to 32 values")
 	}
-	return validateProfileGrantValues(grants)
+	return validateProfileGrantValues(field, grants)
 }
 
-func validateProfileGrantValues(grants []string) error {
+func validateProfileGrantValues(field string, grants []string) error {
 	seen := make(map[string]bool, len(grants))
 	for _, grant := range grants {
 		if !profileNamePattern.MatchString(grant) || seen[grant] {
-			return invalidRequest(errors.New("SecondBox Profile grants contain an invalid or duplicate value"))
+			return invalidField(field, "must contain unique Profile names")
 		}
 		seen[grant] = true
 	}
@@ -696,20 +699,20 @@ func validateProfileGrantValues(grants []string) error {
 
 // validateGrantExtension accepts empty lists individually, but an extension
 // must add at least one entry. Entries follow the creation rules.
-func validateGrantExtension(resource string, profileGrants, scopes []string) error {
+func validateGrantExtension(scopesField string, profileGrants, scopes []string) error {
 	if len(profileGrants) == 0 && len(scopes) == 0 {
-		return invalidRequest(fmt.Errorf("SecondBox %s extension requires at least one Profile grant or application scope", resource))
+		return invalidField("body", "must add at least one Profile grant or application scope")
 	}
 	if len(profileGrants) > 32 {
-		return invalidRequest(errors.New("SecondBox Profile grants must contain at most 32 values"))
+		return invalidField("profileGrants", "must contain at most 32 values")
 	}
 	if len(scopes) > 6 {
-		return invalidRequest(errors.New("SecondBox application scopes must contain at most 6 values"))
+		return invalidField(scopesField, "must contain at most 6 values")
 	}
-	if err := validateProfileGrantValues(profileGrants); err != nil {
+	if err := validateProfileGrantValues("profileGrants", profileGrants); err != nil {
 		return err
 	}
-	return validateApplicationScopeValues(scopes)
+	return validateApplicationScopeValues(scopesField, scopes)
 }
 
 func validSubjectQuota(quota contracts.QuotaLimits) bool {

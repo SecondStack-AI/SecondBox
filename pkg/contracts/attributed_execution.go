@@ -30,7 +30,7 @@ func (request *StartSandboxRequest) UnmarshalJSON(data []byte) error {
 	request.Image = ExecutionImage{}
 	if len(body.Image) != 0 {
 		if bytes.Equal(body.Image, []byte("null")) {
-			return errors.New("SecondBox start execution image cannot be null")
+			return &RequestFieldError{Field: "image", Reason: "must be an object, not null"}
 		}
 		decoder = json.NewDecoder(bytes.NewReader(body.Image))
 		decoder.DisallowUnknownFields()
@@ -45,7 +45,7 @@ func (request *StartSandboxRequest) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	if bytes.Equal(body.AttributedExecution, []byte("null")) {
-		return errors.New("SecondBox attributed execution cannot be null")
+		return &RequestFieldError{Field: "attributedExecution", Reason: "must be an object, not null"}
 	}
 	request.AttributedExecution = new(AttributedExecutionRequest)
 	decoder = json.NewDecoder(bytes.NewReader(body.AttributedExecution))
