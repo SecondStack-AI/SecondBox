@@ -419,3 +419,55 @@ func relayPortOpen(
 		}},
 	}
 }
+
+// The read pump and the frame handler both emit frames on one Port stream. The
+// control plane drops the whole Runner connection when a stream's sequence
+// arrives out of order, so each frame must be sent in the order its sequence
+// was assigned.
+func TestRunnerPortFramesLeaveInSequenceOrderUnderConcurrentSenders(t *testing.T) {
+	connection := newTestPortConnection()
+	connection.reads = make(chan testPortRead, 4096)
+	service, err := NewRunnerProtocolService(testRunnerConfig(), &portRelayAssignmentBackend{
+		connection: connection,
+	}, staticProtocolConnector{stream: &threadSafeRunnerStream{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &threadSafeRunnerStream{}
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	enabled := map[runnerprotocol.RunnerFeature]bool{runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY: true}
+	asyncErrors := make(chan error, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := service.handlePortFrame(ctx, stream, relayPortOpen(fence, "busy", "busy-stream"), enabled, asyncErrors); err != nil {
+		t.Fatal(err)
+	}
+	const frames = 2000
+	sequence := uint64(2)
+	if err := service.handlePortFrame(ctx, stream, &runnerprotocol.PortFrame{
+		Fence: cloneRunnerFence(fence), OperationId: "busy", StreamId: "busy-stream", Sequence: sequence,
+		Payload: &runnerprotocol.PortFrame_Credit{Credit: &runnerprotocol.StreamCredit{ByteCount: frames}},
+	}, enabled, asyncErrors); err != nil {
+		t.Fatal(err)
+	}
+	for range frames {
+		connection.queueRead([]byte{1}, nil)
+	}
+	// Client bytes make the handler send credit while the pump sends bytes.
+	for range frames {
+		sequence++
+		if err := service.handlePortFrame(ctx, stream, &runnerprotocol.PortFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "busy", StreamId: "busy-stream", Sequence: sequence,
+			Payload: &runnerprotocol.PortFrame_Bytes{Bytes: &runnerprotocol.PortBytes{Data: []byte{2}}},
+		}, enabled, asyncErrors); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitRunnerMessages(t, stream, 1+2*frames)
+	for index, message := range stream.messages() {
+		if got := message.GetPort().GetSequence(); got != uint64(index+1) {
+			t.Fatalf("Port frame %d left with sequence %d", index+1, got)
+		}
+	}
+}

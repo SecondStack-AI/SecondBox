@@ -5,6 +5,7 @@
 ### Fixed
 
 - A proxied PortSession whose tunnel closed while the Runner waited for credit stayed `cancelling` forever and kept counting toward `concurrentOperations`, eventually refusing `exec` with `quota_exceeded`. The Runner now reports a terminal on every Port pump exit; the data-plane sweep completes cancelling sessions whose Assignment has ended and closed PortSessions the Runner has not confirmed within 10 seconds, and an unconsumed proxied PortSession completes when it closes. Existing stuck sessions converge at the first sweep after upgrade.
+- A Runner could send a Port stream's bytes and credit frames out of sequence order when the guest and the client were both active. The control plane then dropped the whole Runner connection, ending every data-plane session on that Runner. Port frames now leave in sequence order.
 - The Firecracker and gVisor Port relay applies credit backpressure to the guest instead of granting credit on every read and closing the connection when 16 guest frames were queued. A consumer slower than the guest application now slows it within a fixed 256 KiB receive window, and fast streams are no longer disconnected.
 
 ### Changed

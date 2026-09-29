@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
@@ -26,14 +27,18 @@ type PortBackend interface {
 }
 
 type runnerPortOperation struct {
-	key           string
-	fence         *runnerprotocol.AssignmentFence
-	correlation   *runnerprotocol.Correlation
-	operationID   string
-	streamID      string
-	nextIncoming  uint64
-	lastIncoming  []byte
-	nextOutgoing  uint64
+	key          string
+	fence        *runnerprotocol.AssignmentFence
+	correlation  *runnerprotocol.Correlation
+	operationID  string
+	streamID     string
+	nextIncoming uint64
+	lastIncoming []byte
+	nextOutgoing uint64
+	// sendMu spans assigning an outgoing sequence and sending its frame. The
+	// read pump and the frame handler both send on this stream, and the control
+	// plane drops the Runner connection when a stream's sequence is reordered.
+	sendMu        sync.Mutex
 	credit        *runnerCreditWindow
 	connection    PortConnection
 	cancel        context.CancelCauseFunc
@@ -247,6 +252,8 @@ func (s *RunnerProtocolService) sendPortBytes(
 	state *runnerPortOperation,
 	data []byte,
 ) error {
+	state.sendMu.Lock()
+	defer state.sendMu.Unlock()
 	s.operationMu.Lock()
 	if state.terminal {
 		s.operationMu.Unlock()
@@ -273,6 +280,8 @@ func (s *RunnerProtocolService) sendPortCredit(
 	if credit == 0 {
 		return fmt.Errorf("SecondBox runner Port credit must be positive")
 	}
+	state.sendMu.Lock()
+	defer state.sendMu.Unlock()
 	s.operationMu.Lock()
 	if state.terminal {
 		s.operationMu.Unlock()
@@ -297,6 +306,8 @@ func (s *RunnerProtocolService) sendPortTerminal(
 	kind runnerprotocol.PortTerminalKind,
 	detail string,
 ) error {
+	state.sendMu.Lock()
+	defer state.sendMu.Unlock()
 	s.operationMu.Lock()
 	if state.terminal {
 		frame := proto.Clone(state.terminalFrame).(*runnerprotocol.PortFrame)
