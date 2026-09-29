@@ -1,7 +1,6 @@
 package integration_test
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -468,11 +467,10 @@ func (fixture portSessionFixture) dataPlaneState(t *testing.T, sessionID string)
 	return state, terminalKind
 }
 
-// A tunnel that closes while its acknowledgement transaction is in flight
-// leaves the Runner's read pump waiting for credit it will never receive. The
-// session must still terminate and release its operation admission, whether or
-// not the Runner ever confirms the cancellation.
-func TestPostgresPortSessionCloseDuringAcknowledgementReleasesAdmission(t *testing.T) {
+// A tunnel that closes while the Runner's read pump waits for credit it will
+// never receive must still terminate and release its operation admission,
+// whether or not the Runner ever confirms the cancellation.
+func TestPostgresClosedPortSessionReleasesAdmissionWithoutRunnerConfirmation(t *testing.T) {
 	fixture := newPortSessionFixture(t, "port-close-ack", fixtureControlPlaneNow)
 	lease, err := fixture.controlPlane.AcquireSandboxLease(
 		t.Context(), fixture.principal, fixture.sandbox.ID, fixture.sandbox.Generation, "port-close-ack-lease", 60,
@@ -483,16 +481,6 @@ func TestPostgresPortSessionCloseDuringAcknowledgementReleasesAdmission(t *testi
 	tunnel := fixture.openConsumedPortTunnel(t, lease.ID, "port-close-ack")
 	if got := fixture.admittedOperations(t); got != 1 {
 		t.Fatalf("admitted operations after connect = %d", got)
-	}
-	// The public connection drops while the tunnel's accounting is being
-	// recorded: that write is cancelled with the tunnel.
-	cancelled, cancel := context.WithCancel(t.Context())
-	cancel()
-	if err := fixture.dataPlaneStore.CheckpointPortSession(cancelled, runnercontrol.PortSessionCheckpoint{
-		TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef, SessionID: tunnel.Session.ID,
-		ClientBytes: 1, RunnerBytes: 1, Active: true, Live: true, Now: *fixture.now,
-	}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("in-flight checkpoint error = %v", err)
 	}
 	if err := fixture.portService.ClosePortTunnel(t.Context(), tunnel, "public port tunnel disconnected"); err != nil {
 		t.Fatal(err)
@@ -589,12 +577,6 @@ func TestPostgresCancellingSessionOfEndedAssignmentReleasesAdmission(t *testing.
 func TestPostgresPortSessionLivesWhileItsLeaseIsRenewed(t *testing.T) {
 	fixture := newPortSessionFixture(t, "port-lease-lifetime", fixtureControlPlaneNow)
 	start := *fixture.now
-	liveCheckpoint := func(tunnel runnercontrol.PortTunnel) error {
-		return fixture.dataPlaneStore.CheckpointPortSession(t.Context(), runnercontrol.PortSessionCheckpoint{
-			TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef, SessionID: tunnel.Session.ID,
-			Live: true, Now: *fixture.now,
-		})
-	}
 	sweep := func() {
 		t.Helper()
 		if _, err := fixture.dataPlaneStore.SweepDataPlane(t.Context(), *fixture.now, 100); err != nil {
@@ -645,17 +627,11 @@ func TestPostgresPortSessionLivesWhileItsLeaseIsRenewed(t *testing.T) {
 		if state, _ := fixture.dataPlaneState(t, renewed.Session.ID); state != "running" {
 			t.Fatalf("after renewal %d at +%s the session is %q", renewal, fixture.now.Sub(start), state)
 		}
-		if err := liveCheckpoint(renewed); err != nil {
-			t.Fatalf("live checkpoint after renewal %d: %v", renewal, err)
-		}
 	}
 	if _, err := fixture.portService.ReleaseSandboxLease(
 		t.Context(), fixture.principal, lease.ID, "port-lifetime-release",
 	); err != nil {
 		t.Fatal(err)
-	}
-	if err := liveCheckpoint(renewed); !errors.Is(err, ports.ErrLeaseInactive) {
-		t.Fatalf("live checkpoint after release = %v", err)
 	}
 	sweep()
 	if state, terminal := fixture.dataPlaneState(t, renewed.Session.ID); state != "cancelling" ||

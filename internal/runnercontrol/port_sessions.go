@@ -29,21 +29,19 @@ type PortSessionAdmission struct {
 
 // PortTunnel is the private assignment-bound projection consumed by the proxy.
 type PortTunnel struct {
-	Session              contracts.PortSession
-	TenantRef            string
-	SubjectRef           string
-	RequestID            string
-	LeaseID              string
-	ProfileRevisionID    string
-	AssignmentID         string
-	InstanceID           string
-	RunnerID             string
-	StreamID             string
-	FencingToken         []byte
-	GuestPort            int64
-	StreamWindowBytes    int64
-	MaximumRequestBytes  int64
-	MaximumResponseBytes int64
+	Session           contracts.PortSession
+	TenantRef         string
+	SubjectRef        string
+	RequestID         string
+	LeaseID           string
+	ProfileRevisionID string
+	AssignmentID      string
+	InstanceID        string
+	RunnerID          string
+	StreamID          string
+	FencingToken      []byte
+	GuestPort         int64
+	StreamWindowBytes int64
 	// DataPlaneAddress is the home Runner's advertised caller-facing address. It
 	// is returned only to an ingress holding the exact direct-endpoint grant.
 	DataPlaneAddress string
@@ -128,25 +126,6 @@ type RunnerDataPlaneFrame struct {
 	Message      *runnerv1.RunnerToControlPlane
 }
 
-// PortSessionCheckpoint is the periodic accounting of one live proxied tunnel.
-// Byte counts are cumulative for the tunnel; they are recorded eventually, not
-// per chunk, because flow control and session limits are enforced in memory.
-type PortSessionCheckpoint struct {
-	TenantRef   string
-	SubjectRef  string
-	SessionID   string
-	ClientBytes int64
-	RunnerBytes int64
-	// Active reports bytes moved since the previous checkpoint, which is useful
-	// activity for idle accounting.
-	Active bool
-	// Live requires the session's authority to still hold: an open session, a
-	// ready generation under its active Lease, and a connected home Runner. A
-	// closing tunnel records its final counts without it.
-	Live bool
-	Now  time.Time
-}
-
 // PortSessionStore persists Port admission, single-use connection state, and
 // bounded accounting without retaining proxied payload bytes.
 type PortSessionStore interface {
@@ -155,7 +134,6 @@ type PortSessionStore interface {
 	ClosePortSession(context.Context, PortTunnelClose) (contracts.PortSession, error)
 	ConsumePortSession(context.Context, string, string, string, time.Time) (PortTunnel, error)
 	ConsumeDirectPortSession(context.Context, DirectPortConsumption) (PortTunnel, error)
-	CheckpointPortSession(context.Context, PortSessionCheckpoint) error
 }
 
 // PortSessionTerminalRecorder projects the terminal outcome of a Port session

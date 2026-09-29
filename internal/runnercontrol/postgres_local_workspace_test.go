@@ -2782,13 +2782,13 @@ func seedStaleRestoreGenerationAuthority(
 		INSERT INTO secondbox.port_sessions (
 			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,
 			data_plane_session_id,lease_id,generation,name,guest_port,protocol,
-			stream_window_bytes,client_bytes,runner_bytes,state,
+			stream_window_bytes,state,
 			idempotency_key,request_hash,expires_at,created_at,updated_at,
 				connected_at,closed_at
 		) VALUES (
 			'port-stale-generation','tenant','subject','sandbox-restore','revision',
 			'session-stale-generation','lease-stale-generation',3,'web',8080,'tcp',
-			1024,0,0,'open','idempotency-port-stale','hash-port-stale',
+			1024,'open','idempotency-port-stale','hash-port-stale',
 				$2,$1,$1,$1,NULL
 		)`,
 		pgx.QueryExecModeSimpleProtocol,

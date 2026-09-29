@@ -233,9 +233,10 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	}
 }
 
-// Streaming through a proxied tunnel writes to PostgreSQL once per checkpoint
-// and once at close, never per chunk, and data-plane traffic never changes the
-// Sandbox resource revision that If-Match consumers depend on.
+// Streaming through a proxied tunnel never writes to PostgreSQL: payload,
+// credit, and sequence state live in memory, and only the session's close is
+// recorded. Data-plane traffic never changes the Sandbox resource revision that
+// If-Match consumers depend on.
 func TestPublicPortTunnelStreamingWritesAreIndependentOfChunkCount(t *testing.T) {
 	fixture := newPortTunnelHTTPFixture(t, "port-tunnel-stream")
 	updates := countSandboxAccountingUpdates(t, fixture.pool, fixture.sandbox.ID)
@@ -277,8 +278,7 @@ func TestPublicPortTunnelStreamingWritesAreIndependentOfChunkCount(t *testing.T)
 			t.Fatalf("public chunk %d = %d bytes, %v", index, len(payload), err)
 		}
 	}
-	// At most one periodic checkpoint can fall inside the stream.
-	if streamed := updates() - before; streamed > 4 {
+	if streamed := updates() - before; streamed != 0 {
 		t.Fatalf("streaming %d chunks each way wrote %d accounting rows", chunks, streamed)
 	}
 	if err := connection.Close(); err != nil {
@@ -287,18 +287,19 @@ func TestPublicPortTunnelStreamingWritesAreIndependentOfChunkCount(t *testing.T)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var state string
-		var clientBytes, runnerBytes int64
+		var closedAt, lastActivityAt time.Time
 		if err := fixture.pool.QueryRow(t.Context(), `
-			SELECT activity.state,port.client_bytes,port.runner_bytes
-			FROM secondbox.port_sessions AS port
-			JOIN secondbox.activity_sessions AS activity ON activity.id=port.id
-			WHERE port.id=$1`, session.ID,
-		).Scan(&state, &clientBytes, &runnerBytes); err != nil {
+			SELECT activity.state,COALESCE(activity.closed_at,'epoch'),COALESCE(sandbox.last_activity_at,'epoch')
+			FROM secondbox.activity_sessions AS activity
+			JOIN secondbox.sandboxes AS sandbox ON sandbox.id=activity.sandbox_id
+			WHERE activity.id=$1`, session.ID,
+		).Scan(&state, &closedAt, &lastActivityAt); err != nil {
 			t.Fatal(err)
 		}
 		if state == "closed" {
-			if clientBytes != chunks*int64(len(clientChunk)) || runnerBytes != chunks*int64(len(runnerChunk)) {
-				t.Fatalf("recorded Port bytes = client %d, runner %d", clientBytes, runnerBytes)
+			// Idle time is measured from the close.
+			if !lastActivityAt.Equal(closedAt) {
+				t.Fatalf("Sandbox last activity %s, session closed %s", lastActivityAt, closedAt)
 			}
 			break
 		}
@@ -307,7 +308,7 @@ func TestPublicPortTunnelStreamingWritesAreIndependentOfChunkCount(t *testing.T)
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if total := updates() - before; total > 12 {
+	if total := updates() - before; total > 8 {
 		t.Fatalf("streaming and closing wrote %d accounting rows", total)
 	}
 	if got := sandboxRevision(t, fixture.pool, fixture.sandbox.ID); got != revision {

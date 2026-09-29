@@ -267,13 +267,8 @@ func completeCancelledSession(
 	); err != nil {
 		return fmt.Errorf("SecondBox cancelled PortSession completion: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.activity_sessions
-		SET state='closed',closed_at=COALESCE(closed_at,$2),updated_at=$2
-		WHERE id=$1 AND state='active'`,
-		sessionID, now.UTC(),
-	); err != nil {
-		return fmt.Errorf("SecondBox cancelled session activity close: %w", err)
+	if err := closeActivitySession(ctx, tx, sessionID, now); err != nil {
+		return err
 	}
 	return nil
 }

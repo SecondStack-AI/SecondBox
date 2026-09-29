@@ -57,9 +57,9 @@ func TestApplicationSubjectCapacityHTTPRespectsSharedQuotaAndAuthority(t *testin
 		if _, err := pool.Exec(t.Context(), `INSERT INTO secondbox.port_sessions (
 			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,
 			lease_id,generation,name,guest_port,protocol,stream_window_bytes,
-			client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at
+			state,idempotency_key,request_hash,expires_at,created_at,updated_at
 		) VALUES ($1,$2,'same-local-subject','capacity-sandbox','profile','session','lease',1,
-			'web',8080,'tcp',1024,0,0,$3,$1,$1,$4,$5,$5)`, id, tenantRef, session.state, session.expiresAt, now); err != nil {
+			'web',8080,'tcp',1024,$3,$1,$1,$4,$5,$5)`, id, tenantRef, session.state, session.expiresAt, now); err != nil {
 			t.Fatal(err)
 		}
 	}
