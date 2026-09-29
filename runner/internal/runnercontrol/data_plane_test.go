@@ -468,6 +468,107 @@ func TestRunnerDataPlanePTYReplayRingDetachEvictionAndExclusiveAttachment(t *tes
 	service.operationMu.Unlock()
 }
 
+// A PTY frame that read its attachment just before a detach must not reach
+// that attachment's stream. The hook parks the frame in that window while the
+// attachment is detached and replaced; the replacement's replay carries the
+// frame instead. On a shared control-plane stream a late copy would land among
+// the replacement's replay and fail the control plane's sequence check.
+func TestRunnerDataPlanePTYDetachedAttachmentNeverSends(t *testing.T) {
+	emitters := make(chan func([]byte) error, 1)
+	backend := &relayAssignmentBackend{
+		pty: func(
+			ctx context.Context,
+			_ *runnerprotocol.AssignmentFence,
+			_ *runnerprotocol.ExecOpen,
+			_ <-chan PTYControl,
+			emit func([]byte) error,
+		) (*runnerprotocol.ExecTerminal, error) {
+			emitters <- emit
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	service := newRelayRunnerService(t, backend)
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	enabled := map[runnerprotocol.RunnerFeature]bool{
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING: true,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY:            true,
+	}
+	first := &threadSafeRunnerStream{}
+	open := relayExecOpen(fence, "terminal-detach", "terminal-detach-stream", "interactive")
+	open.GetOpen().AllocatePty = true
+	open.GetOpen().PtyRows = 24
+	open.GetOpen().PtyColumns = 80
+	if err := service.handleExecFrame(t.Context(), first, open, enabled, make(chan error, 1)); err != nil {
+		t.Fatal(err)
+	}
+	emit := <-emitters
+	ptyFrame := func(payload any) *runnerprotocol.PtyFrame {
+		frame := &runnerprotocol.PtyFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "terminal-detach",
+			StreamId: "terminal-detach-stream", Sequence: 2,
+		}
+		switch payload := payload.(type) {
+		case *runnerprotocol.PtyAttach:
+			frame.Payload = &runnerprotocol.PtyFrame_Attach{Attach: payload}
+		case *runnerprotocol.PtyDetach:
+			frame.Payload = &runnerprotocol.PtyFrame_Detach{Detach: payload}
+		}
+		return frame
+	}
+	if err := service.handlePTYFrame(t.Context(), first, ptyFrame(&runnerprotocol.PtyAttach{
+		ReconnectId: "attachment-first", AfterSequence: -1, StreamWindowBytes: 256,
+	}), enabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := emit([]byte("aa")); err != nil {
+		t.Fatal(err)
+	}
+
+	read := make(chan struct{})
+	release := make(chan struct{})
+	service.ptyAttachmentReadHook = func() {
+		close(read)
+		<-release
+	}
+	emitted := make(chan error, 1)
+	go func() { emitted <- emit([]byte("bb")) }()
+	<-read
+	if err := service.handlePTYFrame(t.Context(), first, ptyFrame(&runnerprotocol.PtyDetach{
+		ReconnectId: "attachment-first",
+	}), enabled); err != nil {
+		t.Fatal(err)
+	}
+	detachedAt := len(first.messages())
+	second := &threadSafeRunnerStream{}
+	if err := service.handlePTYFrame(t.Context(), second, ptyFrame(&runnerprotocol.PtyAttach{
+		ReconnectId: "attachment-second", AfterSequence: 0, StreamWindowBytes: 256,
+	}), enabled); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-emitted; err != nil {
+		t.Fatal(err)
+	}
+	service.ptyAttachmentReadHook = nil
+
+	if late := first.messages()[detachedAt:]; len(late) != 0 {
+		t.Fatalf("detached attachment sent %d frames: %v", len(late), late)
+	}
+	secondMessages := second.messages()
+	if len(secondMessages) != 2 ||
+		secondMessages[0].GetPty().GetAttachResult().GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED ||
+		secondMessages[1].GetPty().GetSequence() != 2 || string(secondMessages[1].GetPty().GetOutput().GetData()) != "bb" {
+		t.Fatalf("replacement attachment messages = %v", secondMessages)
+	}
+	service.operationMu.Lock()
+	service.execOperations[runnerDataPlaneOperationKey(
+		fence, "terminal-detach", "terminal-detach-stream",
+	)].cancel(context.Canceled)
+	service.operationMu.Unlock()
+}
+
 func TestRunnerDataPlanePTYDeadlineProducesTypedTerminal(t *testing.T) {
 	backend := &relayAssignmentBackend{
 		pty: func(
