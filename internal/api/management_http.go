@@ -151,9 +151,13 @@ func (apiHandler *handler) updateTenantEgressContext(writer http.ResponseWriter,
 }
 
 func (apiHandler *handler) tenantManagementAction(writer http.ResponseWriter, request *http.Request) {
-	tenantRef, action, ok := splitAction(request.PathValue("tenantAction"), "suspend", "reactivate")
-	if !ok || action != "suspend" && action != "reactivate" {
+	tenantRef, action, ok := splitAction(request.PathValue("tenantAction"), "suspend", "reactivate", "extend-ceiling")
+	if !ok {
 		http.NotFound(writer, request)
+		return
+	}
+	if action == "extend-ceiling" {
+		apiHandler.extendTenantCeiling(writer, request, tenantRef)
 		return
 	}
 	if err := requireEmptyBody(request); err != nil {
@@ -172,6 +176,37 @@ func (apiHandler *handler) tenantManagementAction(writer http.ResponseWriter, re
 	} else {
 		tenant, replayed, err = apiHandler.service.ReactivateTenant(request.Context(), requestPrincipal(request), tenantRef, request.Header.Get("Idempotency-Key"), expectedRevision)
 	}
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	setRevisionETag(writer, tenant.Revision)
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+	apiHandler.writeJSON(writer, request, http.StatusOK, tenant)
+}
+
+func (apiHandler *handler) extendTenantCeiling(writer http.ResponseWriter, request *http.Request, tenantRef string) {
+	var body struct {
+		ProfileGrants     *[]string `json:"profileGrants"`
+		ApplicationScopes *[]string `json:"applicationScopes"`
+	}
+	if err := decodeStrictJSON(request, &body); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	if body.ProfileGrants == nil || body.ApplicationScopes == nil {
+		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Tenant ceiling extension requires profileGrants and applicationScopes")))
+		return
+	}
+	expectedRevision, err := parseIfMatch(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	tenant, replayed, err := apiHandler.service.ExtendTenantCeiling(
+		request.Context(), requestPrincipal(request), tenantRef, request.Header.Get("Idempotency-Key"), expectedRevision,
+		contracts.ExtendTenantCeilingRequest{ProfileGrants: *body.ProfileGrants, ApplicationScopes: *body.ApplicationScopes},
+	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
@@ -395,9 +430,13 @@ func (apiHandler *handler) subjectManagementAction(writer http.ResponseWriter, r
 }
 
 func (apiHandler *handler) applicationAuthorityManagementAction(writer http.ResponseWriter, request *http.Request) {
-	authorityID, action, ok := splitAction(request.PathValue("authorityAction"), "rotate", "revoke")
-	if !ok || action != "rotate" && action != "revoke" {
+	authorityID, action, ok := splitAction(request.PathValue("authorityAction"), "rotate", "revoke", "extend")
+	if !ok {
 		http.NotFound(writer, request)
+		return
+	}
+	if action == "extend" {
+		apiHandler.extendApplicationAuthority(writer, request, authorityID)
 		return
 	}
 	if err := requireEmptyBody(request); err != nil {
@@ -421,6 +460,37 @@ func (apiHandler *handler) applicationAuthorityManagementAction(writer http.Resp
 		return
 	}
 	authority, replayed, err := apiHandler.service.RevokeApplicationAuthority(request.Context(), requestPrincipal(request), authorityID, request.Header.Get("Idempotency-Key"), expectedRevision)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	setRevisionETag(writer, authority.Revision)
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+	apiHandler.writeJSON(writer, request, http.StatusOK, authority)
+}
+
+func (apiHandler *handler) extendApplicationAuthority(writer http.ResponseWriter, request *http.Request, authorityID string) {
+	var body struct {
+		ProfileGrants *[]string `json:"profileGrants"`
+		Scopes        *[]string `json:"scopes"`
+	}
+	if err := decodeStrictJSON(request, &body); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	if body.ProfileGrants == nil || body.Scopes == nil {
+		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox ApplicationAuthority extension requires profileGrants and scopes")))
+		return
+	}
+	expectedRevision, err := parseIfMatch(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	authority, replayed, err := apiHandler.service.ExtendApplicationAuthority(
+		request.Context(), requestPrincipal(request), authorityID, request.Header.Get("Idempotency-Key"), expectedRevision,
+		contracts.ExtendApplicationAuthorityRequest{ProfileGrants: *body.ProfileGrants, Scopes: *body.Scopes},
+	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return

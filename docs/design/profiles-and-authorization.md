@@ -50,6 +50,19 @@ Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:e
 
 `sandbox:ports:direct` grants no route of its own. It selects the direct Port transport for an authority that already holds `sandbox:ports`, and it is the only grant through which any caller learns a Runner data-plane address. It is denied by default and is never implied by `sandbox:ports`; an authority without it receives the proxied WebSocket endpoint. See [Networking and ports](networking-and-ports.md). Tokens must be unique and distinct from the platform token. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
 
+### Extending grants
+
+Tenant ceilings and application authority grants are add-only after creation, so an existing installation can adopt a new Profile or scope such as `sandbox:ports` without re-creating authorities or rotating credentials held by other systems.
+
+- `POST /v1/tenants/{tenantRef}:extend-ceiling` (`extendTenantCeiling`) is a platform operation, authorized like `createTenant`. Its body `{"profileGrants": [...], "applicationScopes": [...]}` requires both lists; at least one must be non-empty.
+- `POST /v1/application-authorities/{authorityId}:extend` (`extendApplicationAuthority`) is a tenant-controller operation, authorized like `createApplicationAuthority` and limited to the controller's Tenant. Its body `{"profileGrants": [...], "scopes": [...]}` follows the same rules. The authority keeps its bearer token and lookup identifier.
+
+Entries are validated exactly as at creation: known scopes, valid Profile names, and no duplicates. The stored result is the sorted union of the current and requested entries; a Tenant ceiling holds at most 32 Profile grants. An application authority's resulting grants and scopes must remain subsets of its Tenant's current ceiling, or the request fails with `grant_escalation_denied` exactly as creation does. Revoked or expired authorities return `invalid_lifecycle_transition`. Because a ceiling extension never narrows the ceiling, existing authorities stay within it.
+
+Both operations require `If-Match` with the current revision ETag (`"revision-N"`) and fail with `precondition_failed` when it is stale. They require an `Idempotency-Key`: an identical retry replays the stored response with `Idempotency-Replayed: true`, and reusing a key with a different body returns `idempotency_conflict`. A request whose entries are all already present succeeds and returns the resource unchanged, without a new revision or `updatedAt`. Every accepted request, including such a no-op, writes one `tenant.ceiling_extended` or `application_authority.extended` audit event with the requested entries; once the body and `If-Match` parse, entry validation, ceiling, lifecycle, revision, and idempotency-conflict failures write a denied event.
+
+Narrowing is not supported. To remove a grant or scope from an application authority, revoke it and create a replacement. No operation narrows a Tenant ceiling. The CLI exposes these operations as `secondbox tenant extend-ceiling TENANT` and `secondbox application-authority extend AUTHORITY`, each taking repeatable `--profile-grant` and `--scope` flags plus `--revision` and `--idempotency-key`.
+
 ## Profile and revision
 
 A Profile is a stable operator-chosen name with an enabled state and current revision. Creation and each revision operation produce an immutable ProfileRevision. Updating the Profile changes the revision selected by future Sandbox creation. Existing Sandboxes remain pinned. Only the attributed connection numeric default and ceiling follow the current head at each new Assignment, as described below.

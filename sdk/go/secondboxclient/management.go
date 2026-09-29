@@ -43,6 +43,17 @@ func (client *Client) UpdateTenantQuota(ctx context.Context, tenantRef Ownership
 	return tenant, err
 }
 
+// ExtendTenantCeiling adds Profile grants and application scopes to a Tenant
+// ceiling. Both lists must be non-nil; an empty list adds none.
+func (client *Client) ExtendTenantCeiling(ctx context.Context, tenantRef OwnershipRef, request ExtendTenantCeilingRequest, expectedRevision int64, idempotencyKey string) (Tenant, error) {
+	if request.ProfileGrants == nil || request.ApplicationScopes == nil {
+		return Tenant{}, errors.New("SecondBox Tenant ceiling extension requires non-nil ProfileGrants and ApplicationScopes")
+	}
+	var tenant Tenant
+	err := client.mutateManagementJSON(ctx, "extendTenantCeiling", map[string]string{"tenantRef": tenantRef}, expectedRevision, idempotencyKey, request, &tenant)
+	return tenant, err
+}
+
 func (client *Client) SuspendTenant(ctx context.Context, tenantRef OwnershipRef, expectedRevision int64, idempotencyKey string) (Tenant, error) {
 	return client.mutateTenantLifecycle(ctx, "suspendTenant", tenantRef, expectedRevision, idempotencyKey)
 }
@@ -165,6 +176,18 @@ func (client *Client) RotateApplicationAuthority(ctx context.Context, authorityI
 func (client *Client) RevokeApplicationAuthority(ctx context.Context, authorityID AuthorityID, expectedRevision int64, idempotencyKey string) (ApplicationAuthority, error) {
 	var authority ApplicationAuthority
 	err := client.mutateManagementJSON(ctx, "revokeApplicationAuthority", map[string]string{"authorityId": authorityID}, expectedRevision, idempotencyKey, nil, &authority)
+	return authority, err
+}
+
+// ExtendApplicationAuthority adds Profile grants and scopes within the Tenant
+// ceiling without rotating the bearer token. Both lists must be non-nil; an
+// empty list adds none.
+func (client *Client) ExtendApplicationAuthority(ctx context.Context, authorityID AuthorityID, request ExtendApplicationAuthorityRequest, expectedRevision int64, idempotencyKey string) (ApplicationAuthority, error) {
+	if request.ProfileGrants == nil || request.Scopes == nil {
+		return ApplicationAuthority{}, errors.New("SecondBox ApplicationAuthority extension requires non-nil ProfileGrants and Scopes")
+	}
+	var authority ApplicationAuthority
+	err := client.mutateManagementJSON(ctx, "extendApplicationAuthority", map[string]string{"authorityId": authorityID}, expectedRevision, idempotencyKey, request, &authority)
 	return authority, err
 }
 

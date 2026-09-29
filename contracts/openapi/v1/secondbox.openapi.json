@@ -462,6 +462,70 @@
         }
       }
     },
+    "/v1/tenants/{tenantRef}:extend-ceiling": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "extendTenantCeiling",
+        "security": [
+          {
+            "platformBearer": []
+          }
+        ],
+        "description": "Adds Profile grants and application scopes to the Tenant ceiling. The ceiling becomes the sorted union of its current and requested entries; this operation never removes an entry, so existing application authorities stay within it. A request whose entries are all present returns the unchanged Tenant without a new revision.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantRefPath"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendTenantCeilingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/TenantMutationOK"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementUnavailable"
+          }
+        }
+      }
+    },
     "/v1/tenants/{tenantRef}/controller-authorities": {
       "get": {
         "tags": [
@@ -1235,6 +1299,70 @@
             "$ref": "#/components/parameters/RequestID"
           }
         ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApplicationAuthorityMutationOK"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/application-authorities/{authorityId}:extend": {
+      "post": {
+        "tags": [
+          "ApplicationAuthorities"
+        ],
+        "operationId": "extendApplicationAuthority",
+        "security": [
+          {
+            "tenantControllerBearer": []
+          }
+        ],
+        "description": "Adds Profile grants and scopes to an active authority in the authenticated tenant without rotating its bearer token. The resulting grants and scopes must remain subsets of the current tenant ceiling. This operation never removes an entry; a request whose entries are all present returns the unchanged authority without a new revision.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AuthorityID"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendApplicationAuthorityRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "$ref": "#/components/responses/ApplicationAuthorityMutationOK"
@@ -5992,6 +6120,24 @@
           "$ref": "#/components/schemas/ApplicationScope"
         }
       },
+      "ProfileGrantAdditionList": {
+        "type": "array",
+        "maxItems": 32,
+        "uniqueItems": true,
+        "description": "Profile grants to add. An empty list adds none.",
+        "items": {
+          "$ref": "#/components/schemas/ProfileName"
+        }
+      },
+      "ApplicationScopeAdditionList": {
+        "type": "array",
+        "maxItems": 6,
+        "uniqueItems": true,
+        "description": "Application scopes to add. An empty list adds none.",
+        "items": {
+          "$ref": "#/components/schemas/ApplicationScope"
+        }
+      },
       "TenantState": {
         "type": "string",
         "enum": [
@@ -6402,6 +6548,23 @@
           }
         }
       },
+      "ExtendTenantCeilingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profileGrants",
+          "applicationScopes"
+        ],
+        "description": "Adds entries to the Tenant ceiling. Both lists are required and at least one must be non-empty. Entries already present are ignored; no entry is removed.",
+        "properties": {
+          "profileGrants": {
+            "$ref": "#/components/schemas/ProfileGrantAdditionList"
+          },
+          "applicationScopes": {
+            "$ref": "#/components/schemas/ApplicationScopeAdditionList"
+          }
+        }
+      },
       "Subject": {
         "type": "object",
         "additionalProperties": false,
@@ -6723,6 +6886,23 @@
           },
           "expiresAt": {
             "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "ExtendApplicationAuthorityRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profileGrants",
+          "scopes"
+        ],
+        "description": "Adds entries to an application authority. Both lists are required and at least one must be non-empty. The resulting grants and scopes must be subsets of the tenant ceiling; entries already present are ignored and no entry is removed.",
+        "properties": {
+          "profileGrants": {
+            "$ref": "#/components/schemas/ProfileGrantAdditionList"
+          },
+          "scopes": {
+            "$ref": "#/components/schemas/ApplicationScopeAdditionList"
           }
         }
       },

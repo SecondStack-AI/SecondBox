@@ -189,11 +189,13 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		}
 		for _, required := range []string{
 			"listTenants", "createTenant", "getTenant", "updateTenantEgressContext", "suspendTenant", "reactivateTenant",
+			"extendTenantCeiling",
 			"listTenantControllerAuthorities", "createTenantControllerAuthority",
 			"getTenantControllerAuthority", "rotateTenantControllerAuthority", "revokeTenantControllerAuthority",
 			"listSubjects", "createSubject", "getSubject", "updateSubjectQuota", "closeSubject", "cleanupSubject",
 			"listApplicationAuthorities", "createApplicationAuthority", "getApplicationAuthority",
-			"rotateApplicationAuthority", "revokeApplicationAuthority", "getTenantUsage", "getDeploymentUsage",
+			"rotateApplicationAuthority", "revokeApplicationAuthority", "extendApplicationAuthority",
+			"getTenantUsage", "getDeploymentUsage",
 			"createProfile", "reviseProfile", "createSandbox", "updateSandboxMetadata", "startSandbox",
 			"drainSandbox", "stopSandbox", "restoreSandboxSnapshot", "getOperation",
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
@@ -236,11 +238,11 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		required := map[string]bool{
 			"createProfile": true, "reviseProfile": true, "disableProfile": true,
 			"createTenant": true, "updateTenantEgressContext": true, "suspendTenant": true, "reactivateTenant": true,
-			"createTenantControllerAuthority": true, "rotateTenantControllerAuthority": true,
+			"extendTenantCeiling": true, "createTenantControllerAuthority": true, "rotateTenantControllerAuthority": true,
 			"revokeTenantControllerAuthority": true, "createSubject": true, "updateSubjectQuota": true,
 			"closeSubject": true, "cleanupSubject": true,
 			"createApplicationAuthority": true, "rotateApplicationAuthority": true,
-			"revokeApplicationAuthority": true,
+			"revokeApplicationAuthority": true, "extendApplicationAuthority": true,
 		}
 		paths := object(t, document["paths"], "paths")
 		for path, pathValue := range paths {

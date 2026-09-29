@@ -1253,9 +1253,14 @@ test("controller helpers preserve revision fences, idempotency, and authority ki
   assert.equal(seen[1]?.path, "/v1/application-authorities/authority-id:rotate");
   assert.equal(seen[1]?.headers.get("If-Match"), '"revision-9"');
   assert.equal(seen[1]?.body, undefined);
+  await api.extendApplicationAuthority("authority-id", { profileGrants: [], scopes: ["sandbox:ports"] }, 10, "extend-key");
+  assert.equal(seen[2]?.path, "/v1/application-authorities/authority-id:extend");
+  assert.equal(seen[2]?.headers.get("If-Match"), '"revision-10"');
+  assert.equal(seen[2]?.headers.get("Idempotency-Key"), "extend-key");
+  assert.deepEqual(JSON.parse(seen[2]?.body ?? ""), { profileGrants: [], scopes: ["sandbox:ports"] });
   assert.throws(() => api.closeSubject("subject/name", 0, "close-key"));
   assert.throws(() => api.closeSubject("subject/name", 1, ""));
-  assert.equal(seen.length, 2);
+  assert.equal(seen.length, 3);
 });
 
 test("Sandbox list forwards state and ID sets without losing metadata", async () => {

@@ -67,11 +67,11 @@ Required uniqueness constraints protect tenant references, subject identity, aut
 ## Authority hierarchy
 
 The deployment-wide platform token remains the operator authority.
-It creates and suspends tenants, selects or clears a Tenant's egress context, manages tenant-controller authorities, manages Profiles and RunnerPools, enrolls Runners, and inspects deployment-wide operations.
+It creates and suspends tenants, extends a Tenant's Profile grant and application scope ceiling, selects or clears a Tenant's egress context, manages tenant-controller authorities, manages Profiles and RunnerPools, enrolls Runners, and inspects deployment-wide operations.
 It never enters a SecondStack application container.
 
 A tenant-controller authority is fixed to one tenant and has one code-owned permission set.
-It can create, inspect, list, rotate, and revoke application authorities, create and close subjects, set subject quota within its tenant ceiling, and request cleanup for its own subjects.
+It can create, inspect, list, extend, rotate, and revoke application authorities, create and close subjects, set subject quota within its tenant ceiling, and request cleanup for its own subjects.
 It cannot select another tenant, change its tenant ceiling or egress context, grant an unapproved Profile or scope, administer Runners, or call ordinary Sandbox routes as another subject.
 Management routes derive the tenant from the authenticated controller authority and do not accept a tenant assertion from request headers.
 
@@ -85,8 +85,9 @@ The three authority kinds are explicit in the service and OpenAPI contract.
 
 ## Management API and authentication
 
-Operator routes create, inspect, list, suspend, and reactivate tenants and create, inspect, list, rotate, and revoke tenant-controller authorities.
-Tenant-controller routes create, inspect, list, close, and clean subjects and create, inspect, list, rotate, and revoke application authorities.
+Operator routes create, inspect, list, suspend, reactivate, and extend the ceiling of tenants and create, inspect, list, rotate, and revoke tenant-controller authorities.
+Tenant-controller routes create, inspect, list, close, and clean subjects and create, inspect, list, extend, rotate, and revoke application authorities.
+Ceiling and authority extensions are add-only; see [Extending grants](profiles-and-authorization.md#extending-grants).
 All management mutations use idempotency keys and optimistic resource revisions where an existing resource can change.
 
 Authentication in `internal/api/http.go` resolves the presented token lookup identifier, verifies the secret in constant time, and checks persisted state and expiry on every newly admitted request.

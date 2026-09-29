@@ -46,6 +46,9 @@ export interface ApplicationCredentialResponse {
 
 export type ApplicationScope = "sandbox:read" | "sandbox:lifecycle" | "sandbox:exec" | "sandbox:files" | "sandbox:ports" | "sandbox:ports:direct";
 
+/** Application scopes to add. An empty list adds none. */
+export type ApplicationScopeAdditionList = readonly ApplicationScope[];
+
 export type ApplicationScopeList = readonly ApplicationScope[];
 
 export interface ArgvCommand {
@@ -366,6 +369,18 @@ export interface ExecutionPolicy {
   readonly terminalDetachSeconds: number;
 }
 
+/** Adds entries to an application authority. Both lists are required and at least one must be non-empty. The resulting grants and scopes must be subsets of the tenant ceiling; entries already present are ignored and no entry is removed. */
+export interface ExtendApplicationAuthorityRequest {
+  readonly profileGrants: ProfileGrantAdditionList;
+  readonly scopes: ApplicationScopeAdditionList;
+}
+
+/** Adds entries to the Tenant ceiling. Both lists are required and at least one must be non-empty. Entries already present are ignored; no entry is removed. */
+export interface ExtendTenantCeilingRequest {
+  readonly applicationScopes: ApplicationScopeAdditionList;
+  readonly profileGrants: ProfileGrantAdditionList;
+}
+
 export interface FileExistsResult {
   readonly exists: boolean;
   readonly path: WorkspacePath;
@@ -581,6 +596,9 @@ export interface Profile {
   readonly state: ProfileState;
   readonly updatedAt: Timestamp;
 }
+
+/** Profile grants to add. An empty list adds none. */
+export type ProfileGrantAdditionList = readonly ProfileName[];
 
 export type ProfileGrantList = readonly ProfileName[];
 
@@ -1191,6 +1209,8 @@ export type OperationID =
   | "disableProfile"
   | "drainSandbox"
   | "executeSandboxCommand"
+  | "extendApplicationAuthority"
+  | "extendTenantCeiling"
   | "getApplicationAuthority"
   | "getApplicationSandboxPolicy"
   | "getDeploymentTiming"
@@ -1283,6 +1303,8 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   disableProfile: { method: "POST", path: "/v1/profiles/{profileName}:disable" },
   drainSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:drain" },
   executeSandboxCommand: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec", contentType: "application/json" },
+  extendApplicationAuthority: { method: "POST", path: "/v1/application-authorities/{authorityId}:extend", contentType: "application/json" },
+  extendTenantCeiling: { method: "POST", path: "/v1/tenants/{tenantRef}:extend-ceiling", contentType: "application/json" },
   getApplicationAuthority: { method: "GET", path: "/v1/application-authorities/{authorityId}" },
   getApplicationSandboxPolicy: { method: "GET", path: "/v1/subject-policy" },
   getDeploymentTiming: { method: "GET", path: "/v1/timings" },
