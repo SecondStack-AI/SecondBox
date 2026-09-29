@@ -241,6 +241,10 @@ type RunnerProtocolService struct {
 	storageObservationMu       sync.Mutex
 	storageObservationRunning  bool
 	storageObservationResult   *workspaceStorageResult
+	// ptyAttachmentReadHook is nil outside tests. It runs after a PTY frame
+	// has read its attachment and before it locks that attachment, the
+	// window in which a detach can overtake the send.
+	ptyAttachmentReadHook func()
 }
 
 // NewRunnerProtocolService validates immutable identity before creating the composition root.

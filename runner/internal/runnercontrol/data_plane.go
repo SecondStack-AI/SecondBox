@@ -109,6 +109,11 @@ type runnerPTYAttachment struct {
 	stream      RunnerProtocolStream
 	reconnectID string
 	mu          sync.Mutex
+	// detached is set under mu when the attachment stops being current. A
+	// producer that read the attachment before the detach must not send
+	// through it: a successor attachment on the same stream replays that
+	// frame, and a late copy would reach the control plane out of sequence.
+	detached bool
 }
 
 type runnerFileOperation struct {
@@ -555,6 +560,7 @@ func (s *RunnerProtocolService) detachPTYAttachment(key string, reconnectID stri
 	attachment := state.ptyAttachment
 	attachment.mu.Lock()
 	state.ptyAttachment = nil
+	attachment.detached = true
 	attachment.mu.Unlock()
 	return nil
 }
@@ -567,6 +573,7 @@ func (s *RunnerProtocolService) detachPTYAttachmentsForStream(stream RunnerProto
 			attachment := state.ptyAttachment
 			attachment.mu.Lock()
 			state.ptyAttachment = nil
+			attachment.detached = true
 			attachment.mu.Unlock()
 		}
 	}
@@ -592,7 +599,14 @@ func (s *RunnerProtocolService) retainAndSendPTYFrame(
 	if attachment == nil {
 		return nil
 	}
+	if s.ptyAttachmentReadHook != nil {
+		s.ptyAttachmentReadHook()
+	}
 	attachment.mu.Lock()
+	if attachment.detached {
+		attachment.mu.Unlock()
+		return nil
+	}
 	err := s.sendRunnerFrame(attachment.stream, &runnerprotocol.RunnerToControlPlane{
 		Message: &runnerprotocol.RunnerToControlPlane_Pty{
 			Pty: proto.Clone(retained).(*runnerprotocol.PtyFrame),
