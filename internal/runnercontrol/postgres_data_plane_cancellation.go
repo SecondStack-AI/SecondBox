@@ -16,6 +16,17 @@ import (
 // and session sweeping without changing the Runner's execution deadline.
 const ExecCompletionGrace = 30 * time.Second
 
+// PortCancellationConfirmationGrace bounds how long a closed PortSession keeps
+// its operation admission while the home Runner confirms teardown. A Port has
+// no guest work beyond its relayed connection, so after this grace the session
+// completes with the cancellation it already recorded even if the Runner never
+// answers.
+const PortCancellationConfirmationGrace = 10 * time.Second
+
+// liveAssignmentStates are the Assignment states in which a Runner may still
+// own guest work and will answer a cancellation.
+const liveAssignmentStates = `('assigned','accepted','starting','ready','uncertain','fencing')`
+
 func (store *PostgresDataPlaneStore) CancelDataPlaneSession(
 	ctx context.Context,
 	tenantRef string,
@@ -144,11 +155,127 @@ func (store *PostgresDataPlaneStore) SweepDataPlane(
 			}
 		}
 	}
+	finalized, err := store.finalizeUnconfirmedCancellations(ctx, now.UTC(), limit)
+	if err != nil {
+		return false, err
+	}
 	sessionsChanged, err := store.sweepDataPlaneSessions(ctx, now.UTC(), limit)
 	if err != nil {
 		return false, err
 	}
-	return len(due) > 0 || sessionsChanged, nil
+	return len(due) > 0 || finalized || sessionsChanged, nil
+}
+
+// finalizeUnconfirmedCancellations completes cancelling sessions that no Runner
+// will confirm, so they stop counting toward operation admission. A session
+// whose Assignment is no longer live has lost the Instance that ran it; a
+// closed PortSession is also finalized after its confirmation grace. Each
+// session completes with the terminal outcome its cancellation recorded, which
+// is the outcome a Runner confirmation would have produced.
+func (store *PostgresDataPlaneStore) finalizeUnconfirmedCancellations(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+) (bool, error) {
+	rows, err := store.pool.Query(ctx, `
+		SELECT session.id
+		FROM secondbox.data_plane_sessions AS session
+		LEFT JOIN secondbox.port_sessions AS port ON port.data_plane_session_id=session.id
+		WHERE session.state='cancelling'
+		  AND (
+		    NOT EXISTS (
+		      SELECT 1 FROM secondbox.assignments AS assignment
+		      WHERE assignment.id=session.assignment_id
+		        AND assignment.state IN `+liveAssignmentStates+`
+		    )
+		    OR (session.kind='port' AND port.closed_at IS NOT NULL AND port.closed_at<=$1)
+		  )
+		ORDER BY session.updated_at,session.id
+		LIMIT $2`,
+		now.Add(-PortCancellationConfirmationGrace), limit,
+	)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox unconfirmed cancellation lookup: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return false, fmt.Errorf("SecondBox unconfirmed cancellation rows: %w", err)
+	}
+	for _, id := range ids {
+		if err := store.finalizeUnconfirmedCancellation(ctx, id, now); err != nil {
+			return false, err
+		}
+	}
+	return len(ids) > 0, nil
+}
+
+func (store *PostgresDataPlaneStore) finalizeUnconfirmedCancellation(
+	ctx context.Context,
+	sessionID string,
+	now time.Time,
+) error {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox unconfirmed cancellation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := lockDataPlaneSessionQuota(ctx, tx, sessionID); err != nil {
+		return fmt.Errorf("SecondBox unconfirmed cancellation quota lock: %w", err)
+	}
+	var state string
+	if err := tx.QueryRow(ctx, `
+		SELECT state FROM secondbox.data_plane_sessions WHERE id=$1 FOR UPDATE`, sessionID,
+	).Scan(&state); err != nil {
+		return fmt.Errorf("SecondBox unconfirmed cancellation lock: %w", err)
+	}
+	// A Runner confirmation that won the race already completed the session.
+	if state != "cancelling" {
+		return tx.Commit(ctx)
+	}
+	if err := completeCancelledSession(ctx, tx, sessionID, now, store.retention); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox unconfirmed cancellation commit: %w", err)
+	}
+	return nil
+}
+
+// completeCancelledSession records the terminal outcome of a session whose
+// cancellation needs no Runner confirmation, keeping the terminal kind and
+// detail its cancellation recorded.
+func completeCancelledSession(
+	ctx context.Context,
+	tx pgx.Tx,
+	sessionID string,
+	now time.Time,
+	retention time.Duration,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.data_plane_sessions
+		SET state='completed',completed_at=COALESCE(completed_at,$2),updated_at=$2,retain_until=$3
+		WHERE id=$1`,
+		sessionID, now.UTC(), now.UTC().Add(retention),
+	); err != nil {
+		return fmt.Errorf("SecondBox cancelled session completion: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.port_sessions
+		SET state='closed',closed_at=COALESCE(closed_at,$2),updated_at=$2
+		WHERE data_plane_session_id=$1 AND state IN ('open','closing')`,
+		sessionID, now.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox cancelled PortSession completion: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.activity_sessions
+		SET state='closed',closed_at=COALESCE(closed_at,$2),updated_at=$2
+		WHERE id=$1 AND state='active'`,
+		sessionID, now.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox cancelled session activity close: %w", err)
+	}
+	return nil
 }
 
 func (store *PostgresDataPlaneStore) sweepDataPlaneSessions(

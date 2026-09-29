@@ -183,6 +183,9 @@ func (s *RunnerProtocolService) pumpPortReads(
 	for {
 		credit, err := state.credit.take(ctx, runnerDataPlaneChunkBytes)
 		if err != nil {
+			// Cancellation usually finds the pump waiting for credit, because a
+			// control plane that is closing the tunnel stops granting it.
+			s.finishPortPump(stream, state, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED, "port session cancelled", asyncErrors)
 			return
 		}
 		data, err := state.connection.Read(ctx, int(credit))
@@ -205,14 +208,37 @@ func (s *RunnerProtocolService) pumpPortReads(
 		if err != nil {
 			kind := runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED
 			detail := "guest port read failed"
-			if errors.Is(err, io.EOF) {
+			switch {
+			case errors.Is(err, io.EOF):
 				kind, detail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, "guest port closed"
+			case ctx.Err() != nil:
+				kind, detail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED, "port session cancelled"
 			}
-			if sendErr := s.sendPortTerminal(stream, state, kind, detail); sendErr != nil {
-				reportRunnerAsyncError(asyncErrors, sendErr)
-			}
+			s.finishPortPump(stream, state, kind, detail, asyncErrors)
 			return
 		}
+	}
+}
+
+// finishPortPump reports the outcome of a pump that stopped on its own. The
+// control plane holds the session's admission until a terminal arrives, so every
+// pump exit must produce one; an explicit Cancel frame has usually sent it
+// already, and that terminal is not repeated.
+func (s *RunnerProtocolService) finishPortPump(
+	stream RunnerProtocolStream,
+	state *runnerPortOperation,
+	kind runnerprotocol.PortTerminalKind,
+	detail string,
+	asyncErrors chan<- error,
+) {
+	s.operationMu.Lock()
+	terminal := state.terminal
+	s.operationMu.Unlock()
+	if terminal {
+		return
+	}
+	if err := s.sendPortTerminal(stream, state, kind, detail); err != nil {
+		reportRunnerAsyncError(asyncErrors, err)
 	}
 }
 

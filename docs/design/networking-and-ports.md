@@ -145,7 +145,7 @@ TCP flow control governs the caller-to-Runner leg. The existing guest-protocol c
 
 ### Common properties
 
-The guest-facing half is identical for both transports. A dedicated guest-protocol stream dials only the approved `127.0.0.1:<guest-port>` TCP endpoint inside the guest; neither the Runner nor guest agent creates a wildcard listener, host publication, DNAT rule, or fallback route. The guest TAP, bridge, and per-assignment nftables table are not in the Port path, so neither transport changes network policy. TCP and HTTP policies currently use the same binary TCP tunnel.
+The guest-facing half is identical for both transports. A dedicated guest-protocol stream dials only the approved `127.0.0.1:<guest-port>` TCP endpoint inside the guest; neither the Runner nor guest agent creates a wildcard listener, host publication, DNAT rule, or fallback route. On that stream the Runner holds a fixed receive window per Port: credit granted to the guest plus received bytes not yet forwarded never exceed it, and credit returns to the guest only as the Runner forwards bytes. A consumer slower than the guest application therefore slows the guest socket; the Runner neither buffers without bound nor closes a healthy connection for being fast. The guest TAP, bridge, and per-assignment nftables table are not in the Port path, so neither transport changes network policy. TCP and HTTP policies currently use the same binary TCP tunnel.
 
 The public API never returns a bridge address, TAP address, or raw host port, and returns a Runner data-plane address only to an authority holding the exact direct-endpoint grant.
 

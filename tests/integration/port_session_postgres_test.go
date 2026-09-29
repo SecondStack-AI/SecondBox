@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,6 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
@@ -235,21 +235,23 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	if changed, err := dataPlaneStore.SweepDataPlane(t.Context(), now.Add(time.Second), 100); err != nil || !changed {
 		t.Fatalf("inactive Lease Port sweep = %t, %v", changed, err)
 	}
-	var portCancellationPayload []byte
+	// The tunnel never connected, so no Runner holds state to cancel and the
+	// session completes without waiting for a confirmation.
+	var leaseSweptDataPlaneState, leaseSweptTerminal, leaseSweptDetail string
+	var leaseSweptCommands int64
 	if err := pool.QueryRow(t.Context(), `
-		SELECT payload FROM secondbox.runner_commands WHERE id=$1`,
-		leaseSwept.ID+"_port_cancel",
-	).Scan(&portCancellationPayload); err != nil {
+		SELECT session.state,session.terminal_kind,session.terminal_detail,
+		       (SELECT count(*) FROM secondbox.runner_commands WHERE id LIKE session.id||'%')
+		FROM secondbox.data_plane_sessions AS session WHERE session.id=$1`,
+		leaseSwept.ID,
+	).Scan(&leaseSweptDataPlaneState, &leaseSweptTerminal, &leaseSweptDetail, &leaseSweptCommands); err != nil {
 		t.Fatal(err)
 	}
-	var portCancellation runnerv1.ControlPlaneToRunner
-	if err := proto.Unmarshal(portCancellationPayload, &portCancellation); err != nil {
-		t.Fatal(err)
-	}
-	if cancel := portCancellation.GetDataPlaneCancel(); cancel == nil ||
-		cancel.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT ||
-		cancel.Reason != "operation Lease is inactive" {
-		t.Fatalf("inactive Lease Port cancellation = %#v", portCancellation.GetDataPlaneCancel())
+	if leaseSweptDataPlaneState != "completed" ||
+		leaseSweptTerminal != runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED.String() ||
+		leaseSweptDetail != "operation Lease is inactive" || leaseSweptCommands != 0 {
+		t.Fatalf("unconsumed inactive-Lease Port = %q %q %q with %d Runner commands",
+			leaseSweptDataPlaneState, leaseSweptTerminal, leaseSweptDetail, leaseSweptCommands)
 	}
 	leaseSweptState, err := portService.GetSandboxPortSession(
 		t.Context(), principal, sandbox.ID, leaseSwept.ID, contracts.PortTransportProxied,
@@ -338,5 +340,243 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 10},
 	); !errors.Is(err, ports.ErrLeaseInactive) {
 		t.Fatalf("stale Lease PortSession error = %v", err)
+	}
+}
+
+// fixtureControlPlaneNow is the fixed clock of newControlPlaneFixture, which
+// issues the Leases a Port fixture admits sessions under.
+var fixtureControlPlaneNow = time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+
+type portSessionFixture struct {
+	controlPlane   *service.ControlPlaneService
+	portService    *service.ControlPlaneService
+	dataPlaneStore *runnercontrol.PostgresDataPlaneStore
+	pool           *pgxpool.Pool
+	principal      contracts.Principal
+	sandbox        contracts.Sandbox
+	seed           dataPlaneReadySeed
+	now            *time.Time
+}
+
+func newPortSessionFixture(t *testing.T, name string, start time.Time) portSessionFixture {
+	t.Helper()
+	now := start
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, name)
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, name+"-profile")
+	scopes := []string{"sandbox:read", "sandbox:lifecycle", "sandbox:ports"}
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
+		t.Context(), admin, project.ID, account.ID,
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
+	); err != nil {
+		t.Fatal(err)
+	}
+	key, err := createFixtureAPIKey(t, controlPlane,
+		t.Context(), admin, project.ID, account.ID,
+		fixtureCreateAPIKeyRequest{Name: name, Scopes: scopes},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := authenticateCredential(t, controlPlane, key.Credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, name+"-sandbox",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
+	dataPlaneStore, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 2 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(dataPlaneStore.Close)
+	fixture := portSessionFixture{
+		controlPlane: controlPlane, dataPlaneStore: dataPlaneStore,
+		principal: principal, sandbox: sandbox, seed: seed, now: &now,
+	}
+	fixture.portService, err = service.NewControlPlaneService(service.ControlPlaneConfig{
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		Now: func() time.Time { return *fixture.now }, NewID: service.NewOpaqueID,
+		NewCredentialMaterial: service.NewCredentialMaterial,
+		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: time.Millisecond,
+		PortSessionStore: dataPlaneStore, PublicBaseURL: "https://secondbox.example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.pool, err = pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(fixture.pool.Close)
+	return fixture
+}
+
+// openConsumedPortTunnel admits and consumes one proxied session, as a public
+// WebSocket connection does before any byte is relayed.
+func (fixture portSessionFixture) openConsumedPortTunnel(
+	t *testing.T,
+	leaseID string,
+	idempotencyKey string,
+) runnercontrol.PortTunnel {
+	t.Helper()
+	session, _, err := fixture.portService.CreateSandboxPortSession(
+		t.Context(), fixture.principal, "request-"+idempotencyKey, fixture.sandbox.ID,
+		fixture.sandbox.Generation, leaseID, idempotencyKey, contracts.PortTransportProxied,
+		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 30},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnel, err := fixture.portService.ConsumePortTunnel(t.Context(), session.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tunnel
+}
+
+// admittedOperations counts the Sandbox's sessions that hold operation
+// admission, with the predicate data-plane admission uses.
+func (fixture portSessionFixture) admittedOperations(t *testing.T) int64 {
+	t.Helper()
+	var count int64
+	if err := fixture.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.data_plane_sessions
+		WHERE sandbox_id=$1 AND state IN ('pending','running','cancelling')`,
+		fixture.sandbox.ID,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func (fixture portSessionFixture) dataPlaneState(t *testing.T, sessionID string) (string, string) {
+	t.Helper()
+	var state, terminalKind string
+	if err := fixture.pool.QueryRow(t.Context(), `
+		SELECT state,terminal_kind FROM secondbox.data_plane_sessions WHERE id=$1`, sessionID,
+	).Scan(&state, &terminalKind); err != nil {
+		t.Fatal(err)
+	}
+	return state, terminalKind
+}
+
+// A tunnel that closes while its acknowledgement transaction is in flight
+// leaves the Runner's read pump waiting for credit it will never receive. The
+// session must still terminate and release its operation admission, whether or
+// not the Runner ever confirms the cancellation.
+func TestPostgresPortSessionCloseDuringAcknowledgementReleasesAdmission(t *testing.T) {
+	fixture := newPortSessionFixture(t, "port-close-ack", fixtureControlPlaneNow)
+	lease, err := fixture.controlPlane.AcquireSandboxLease(
+		t.Context(), fixture.principal, fixture.sandbox.ID, fixture.sandbox.Generation, "port-close-ack-lease", 60,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnel := fixture.openConsumedPortTunnel(t, lease.ID, "port-close-ack")
+	if got := fixture.admittedOperations(t); got != 1 {
+		t.Fatalf("admitted operations after connect = %d", got)
+	}
+	// The public connection drops mid-acknowledgement: the tunnel context is
+	// cancelled while the acknowledgement is being recorded.
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := fixture.dataPlaneStore.RecordPortTunnelAcknowledgement(
+		cancelled, tunnel.TenantRef, tunnel.SubjectRef, tunnel.Session.ID, 1, *fixture.now,
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("in-flight acknowledgement error = %v", err)
+	}
+	if err := fixture.portService.ClosePortTunnel(t.Context(), tunnel, "public port tunnel disconnected"); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := fixture.dataPlaneState(t, tunnel.Session.ID); state != "cancelling" {
+		t.Fatalf("closed tunnel data-plane state = %q", state)
+	}
+	// Closing again, as the sweep or an application may, is idempotent.
+	if err := fixture.portService.ClosePortTunnel(t.Context(), tunnel, "public port tunnel disconnected"); err != nil {
+		t.Fatal(err)
+	}
+	// The Runner is still owed its confirmation within the grace.
+	if _, err := fixture.dataPlaneStore.SweepDataPlane(
+		t.Context(), fixture.now.Add(runnercontrol.PortCancellationConfirmationGrace-time.Second), 100,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.admittedOperations(t); got != 1 {
+		t.Fatalf("admitted operations within the confirmation grace = %d", got)
+	}
+	if changed, err := fixture.dataPlaneStore.SweepDataPlane(
+		t.Context(), fixture.now.Add(runnercontrol.PortCancellationConfirmationGrace), 100,
+	); err != nil || !changed {
+		t.Fatalf("unconfirmed Port cancellation sweep = %t, %v", changed, err)
+	}
+	state, terminalKind := fixture.dataPlaneState(t, tunnel.Session.ID)
+	if state != "completed" || terminalKind != runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED.String() {
+		t.Fatalf("unconfirmed Port cancellation = %q %q", state, terminalKind)
+	}
+	if got := fixture.admittedOperations(t); got != 0 {
+		t.Fatalf("admitted operations after the confirmation grace = %d", got)
+	}
+	var portState, activityState string
+	if err := fixture.pool.QueryRow(t.Context(), `
+		SELECT port.state,activity.state FROM secondbox.port_sessions AS port
+		JOIN secondbox.activity_sessions AS activity ON activity.id=port.id WHERE port.id=$1`,
+		tunnel.Session.ID,
+	).Scan(&portState, &activityState); err != nil {
+		t.Fatal(err)
+	}
+	if portState != contracts.PortSessionStateClosed || activityState != "closed" {
+		t.Fatalf("unconfirmed Port projection = %q, activity %q", portState, activityState)
+	}
+	// Later sweeps leave the completed session as it is.
+	if _, err := fixture.dataPlaneStore.SweepDataPlane(
+		t.Context(), fixture.now.Add(2*runnercontrol.PortCancellationConfirmationGrace), 100,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if repeated, _ := fixture.dataPlaneState(t, tunnel.Session.ID); repeated != "completed" {
+		t.Fatalf("repeated sweep state = %q", repeated)
+	}
+}
+
+// A cancelling session whose Instance has ended can never be confirmed by a
+// Runner. It completes at the next sweep instead of holding admission forever.
+func TestPostgresCancellingSessionOfEndedAssignmentReleasesAdmission(t *testing.T) {
+	fixture := newPortSessionFixture(t, "port-ended-assignment", fixtureControlPlaneNow)
+	lease, err := fixture.controlPlane.AcquireSandboxLease(
+		t.Context(), fixture.principal, fixture.sandbox.ID, fixture.sandbox.Generation, "port-ended-lease", 60,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnel := fixture.openConsumedPortTunnel(t, lease.ID, "port-ended-assignment")
+	if err := fixture.portService.ClosePortTunnel(t.Context(), tunnel, "public port tunnel disconnected"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.dataPlaneStore.SweepDataPlane(t.Context(), *fixture.now, 100); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := fixture.dataPlaneState(t, tunnel.Session.ID); state != "cancelling" {
+		t.Fatalf("session with a live Assignment swept to %q", state)
+	}
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.assignments SET state='released' WHERE id=$1`, tunnel.AssignmentID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := fixture.dataPlaneStore.SweepDataPlane(t.Context(), *fixture.now, 100); err != nil || !changed {
+		t.Fatalf("sweep after the Assignment ended = %t, %v", changed, err)
+	}
+	if state, _ := fixture.dataPlaneState(t, tunnel.Session.ID); state != "completed" {
+		t.Fatalf("ended-Assignment session state = %q", state)
+	}
+	if got := fixture.admittedOperations(t); got != 0 {
+		t.Fatalf("admitted operations after the Assignment ended = %d", got)
 	}
 }

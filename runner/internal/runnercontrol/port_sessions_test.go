@@ -190,6 +190,54 @@ func TestRunnerPortProxyIsFencedBackpressuredAndCancelled(t *testing.T) {
 	}
 }
 
+// A control plane that closes a tunnel stops granting credit, so its
+// cancellation command normally finds the read pump waiting for credit. The
+// pump must still report a terminal: the control plane holds the session's
+// admission until one arrives.
+func TestRunnerPortCancellationCommandReportsTerminalWhileAwaitingCredit(t *testing.T) {
+	connection := newTestPortConnection()
+	service, err := NewRunnerProtocolService(testRunnerConfig(), &portRelayAssignmentBackend{
+		connection: connection,
+	}, staticProtocolConnector{stream: &threadSafeRunnerStream{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &threadSafeRunnerStream{}
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	enabled := map[runnerprotocol.RunnerFeature]bool{runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY: true}
+	asyncErrors := make(chan error, 1)
+	if err := service.handlePortFrame(t.Context(), stream, relayPortOpen(fence, "starved", "starved-stream"), enabled, asyncErrors); err != nil {
+		t.Fatal(err)
+	}
+	waitRunnerMessages(t, stream, 1)
+	if err := service.handleDataPlaneCancel(&runnerprotocol.DataPlaneCancelCommand{
+		Fence: cloneRunnerFence(fence), OperationId: "starved", StreamId: "starved-stream",
+		Kind:   runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT,
+		Reason: "public port tunnel disconnected",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRunnerMessages(t, stream, 2)
+	terminal := stream.messages()[1].GetPort().GetTerminal()
+	if terminal == nil || terminal.Kind != runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED ||
+		stream.messages()[1].GetPort().Sequence != 2 {
+		t.Fatalf("cancelled Port terminal = %#v", stream.messages()[1].GetPort())
+	}
+	if !connection.isClosed() {
+		t.Fatal("Port connection remained open after cancellation")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got := len(stream.messages()); got != 2 {
+		t.Fatalf("cancelled Port emitted %d messages, want one terminal", got)
+	}
+	select {
+	case err := <-asyncErrors:
+		t.Fatalf("cancelled Port reported %v", err)
+	default:
+	}
+}
+
 func TestRunnerPortFrameContractRequiresAndValidatesCorrelation(t *testing.T) {
 	if field := (&runnerprotocol.PortFrame{}).ProtoReflect().Descriptor().Fields().ByName("correlation"); field == nil {
 		t.Fatal("Runner PortFrame contract lacks operation correlation")
