@@ -74,7 +74,7 @@ func runTenantCommand(ctx context.Context, session cliSession, args []string, ou
 		return err
 	}
 	if len(args) == 0 {
-		return errors.New("SecondBox tenant requires create, get, list, egress-context, suspend, or reactivate")
+		return errors.New("SecondBox tenant requires create, get, list, egress-context, extend-ceiling, suspend, or reactivate")
 	}
 	var result any
 	switch args[0] {
@@ -103,6 +103,14 @@ func runTenantCommand(ctx context.Context, session cliSession, args []string, ou
 			return parseErr
 		}
 		result, err = client.UpdateTenantEgressContext(ctx, ref, request, revision, idempotencyKey)
+	case "extend-ceiling":
+		ref, extension, parseErr := parseGrantExtensionOptions("tenant extend-ceiling", args[1:])
+		if parseErr != nil {
+			return parseErr
+		}
+		result, err = client.ExtendTenantCeiling(ctx, ref, secondboxclient.ExtendTenantCeilingRequest{
+			ProfileGrants: extension.profileGrants, ApplicationScopes: extension.scopes,
+		}, extension.revision, extension.idempotencyKey)
 	case "suspend", "reactivate":
 		ref, revision, idempotencyKey, parseErr := parseRevisionMutationOptions("tenant "+args[0], args[1:])
 		if parseErr != nil {
@@ -255,7 +263,7 @@ func runApplicationAuthorityCommand(ctx context.Context, session cliSession, arg
 		return err
 	}
 	if len(args) == 0 {
-		return errors.New("SecondBox application-authority requires create, get, list, rotate, or revoke")
+		return errors.New("SecondBox application-authority requires create, get, list, extend, rotate, or revoke")
 	}
 	var result any
 	switch args[0] {
@@ -278,6 +286,14 @@ func runApplicationAuthorityCommand(ctx context.Context, session cliSession, arg
 			return parseErr
 		}
 		result, err = client.ListApplicationAuthorities(ctx, options.subjectRef, options.page)
+	case "extend":
+		authorityID, extension, parseErr := parseGrantExtensionOptions("application-authority extend", args[1:])
+		if parseErr != nil {
+			return parseErr
+		}
+		result, err = client.ExtendApplicationAuthority(ctx, authorityID, secondboxclient.ExtendApplicationAuthorityRequest{
+			ProfileGrants: extension.profileGrants, Scopes: extension.scopes,
+		}, extension.revision, extension.idempotencyKey)
 	case "rotate", "revoke":
 		authorityID, revision, idempotencyKey, parseErr := parseRevisionMutationOptions("application-authority "+args[0], args[1:])
 		if parseErr != nil {
@@ -442,6 +458,41 @@ func parseAuthorityMutationOptions(command string, args []string) (string, strin
 	}
 	revision, idempotencyKey, err := parseMutationFlags(command, args[2:])
 	return tenantRef, authorityID, revision, idempotencyKey, err
+}
+
+type grantExtensionOptions struct {
+	profileGrants  []string
+	scopes         []string
+	revision       int64
+	idempotencyKey string
+}
+
+// parseGrantExtensionOptions reads add-only Profile grants and scopes. An
+// unset kind is sent as an empty list; at least one entry is required.
+func parseGrantExtensionOptions(command string, args []string) (string, grantExtensionOptions, error) {
+	ref, remaining, err := shiftManagementReference(command, args)
+	if err != nil {
+		return "", grantExtensionOptions{}, err
+	}
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var profileGrants, scopes repeatedValues
+	flags.Var(&profileGrants, "profile-grant", "Profile grant to add; repeatable")
+	flags.Var(&scopes, "scope", "application scope to add; repeatable")
+	revision := flags.Int64("revision", 0, "expected positive resource revision")
+	idempotencyKey := flags.String("idempotency-key", "", "idempotency key")
+	if err := flags.Parse(remaining); err != nil {
+		return "", grantExtensionOptions{}, fmt.Errorf("SecondBox %s options: %w", command, err)
+	}
+	if flags.NArg() != 0 || len(profileGrants)+len(scopes) == 0 || *revision < 1 || strings.TrimSpace(*idempotencyKey) == "" {
+		return "", grantExtensionOptions{}, fmt.Errorf("SecondBox %s requires --profile-grant or --scope, --revision, and --idempotency-key", command)
+	}
+	return ref, grantExtensionOptions{
+		profileGrants:  append(make([]string, 0, len(profileGrants)), profileGrants...),
+		scopes:         append(make([]string, 0, len(scopes)), scopes...),
+		revision:       *revision,
+		idempotencyKey: strings.TrimSpace(*idempotencyKey),
+	}, nil
 }
 
 func parseMutationFlags(command string, args []string) (int64, string, error) {

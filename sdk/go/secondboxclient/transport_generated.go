@@ -128,6 +128,20 @@ var operations = map[string]OperationMetadata{
 		},
 		RequestBodyRequired: true,
 	},
+	"extendApplicationAuthority": {
+		OperationID: "extendApplicationAuthority", Method: "POST", PathTemplate: "/v1/application-authorities/{authorityId}:extend",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "ExtendApplicationAuthorityRequest"},
+		},
+		RequestBodyRequired: true,
+	},
+	"extendTenantCeiling": {
+		OperationID: "extendTenantCeiling", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}:extend-ceiling",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "ExtendTenantCeilingRequest"},
+		},
+		RequestBodyRequired: true,
+	},
 	"getApplicationAuthority": {
 		OperationID: "getApplicationAuthority", Method: "GET", PathTemplate: "/v1/application-authorities/{authorityId}",
 	},

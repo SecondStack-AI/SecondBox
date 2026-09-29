@@ -56,6 +56,9 @@ const (
 	ApplicationScopeSandboxPortsDirect ApplicationScope = "sandbox:ports:direct"
 )
 
+// ApplicationScopeAdditionList Application scopes to add. An empty list adds none.
+type ApplicationScopeAdditionList = []ApplicationScope
+
 type ApplicationScopeList = []ApplicationScope
 
 type ArgvCommand struct {
@@ -352,6 +355,18 @@ type ExecutionImage = contracts.ExecutionImage
 
 type ExecutionPolicy = contracts.ExecutionPolicy
 
+// ExtendApplicationAuthorityRequest Adds entries to an application authority. Both lists are required and at least one must be non-empty. The resulting grants and scopes must be subsets of the tenant ceiling; entries already present are ignored and no entry is removed.
+type ExtendApplicationAuthorityRequest struct {
+	ProfileGrants ProfileGrantAdditionList     `json:"profileGrants"`
+	Scopes        ApplicationScopeAdditionList `json:"scopes"`
+}
+
+// ExtendTenantCeilingRequest Adds entries to the Tenant ceiling. Both lists are required and at least one must be non-empty. Entries already present are ignored; no entry is removed.
+type ExtendTenantCeilingRequest struct {
+	ApplicationScopes ApplicationScopeAdditionList `json:"applicationScopes"`
+	ProfileGrants     ProfileGrantAdditionList     `json:"profileGrants"`
+}
+
 type FileExistsResult struct {
 	Exists bool          `json:"exists"`
 	Path   WorkspacePath `json:"path"`
@@ -604,6 +619,9 @@ type ProblemDetail struct {
 }
 
 type Profile = contracts.Profile
+
+// ProfileGrantAdditionList Profile grants to add. An empty list adds none.
+type ProfileGrantAdditionList = []ProfileName
 
 type ProfileGrantList = []ProfileName
 

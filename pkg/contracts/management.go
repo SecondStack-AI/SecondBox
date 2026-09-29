@@ -179,6 +179,12 @@ type UpdateTenantEgressContextRequest struct {
 	EgressContext *string `json:"egressContext"`
 }
 
+// ExtendTenantCeilingRequest adds Profile grants and application scopes to one Tenant ceiling.
+type ExtendTenantCeilingRequest struct {
+	ProfileGrants     []string `json:"profileGrants"`
+	ApplicationScopes []string `json:"applicationScopes"`
+}
+
 // CreateSubjectRequest supplies one tenant-scoped subject and its quota.
 type CreateSubjectRequest struct {
 	Ref       string            `json:"ref"`
@@ -205,6 +211,12 @@ type CreateApplicationAuthorityRequest struct {
 	ProfileGrants []string          `json:"profileGrants"`
 	Metadata      map[string]string `json:"metadata"`
 	ExpiresAt     time.Time         `json:"expiresAt"`
+}
+
+// ExtendApplicationAuthorityRequest adds Profile grants and scopes within the Tenant ceiling.
+type ExtendApplicationAuthorityRequest struct {
+	ProfileGrants []string `json:"profileGrants"`
+	Scopes        []string `json:"scopes"`
 }
 
 // TenantPage is one bounded stable Tenant traversal page.

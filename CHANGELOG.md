@@ -6,6 +6,10 @@
 
 - Application data-plane requests (exec, terminals, files, directories, Port sessions) require the addressed Sandbox's Profile to be in the authority's `profileGrants`. Previously grants gated only Profile reads and Sandbox creation, so an application could exec into a Sandbox that the platform or another authority had created in its subject on a Profile it was never granted. Reads, listing, Leases, and lifecycle remain subject-scoped.
 
+### Added
+
+- Added add-only `extendTenantCeiling` (`POST /v1/tenants/{tenantRef}:extend-ceiling`) and `extendApplicationAuthority` (`POST /v1/application-authorities/{authorityId}:extend`), with `secondbox tenant extend-ceiling` and `secondbox application-authority extend`, so existing installations can grant a new Profile or scope such as `sandbox:ports` without re-creating authorities or rotating their credentials. Both are revision-fenced and idempotent, and an authority extension must stay within its Tenant ceiling.
+
 ### Fixed
 
 - A proxied PortSession whose tunnel closed while the Runner waited for credit stayed `cancelling` forever and kept counting toward `concurrentOperations`, eventually refusing `exec` with `quota_exceeded`. The Runner now reports a terminal on every Port pump exit; the data-plane sweep completes cancelling sessions whose Assignment has ended and closed PortSessions the Runner has not confirmed within 10 seconds, and an unconsumed proxied PortSession completes when it closes. Existing stuck sessions converge at the first sweep after upgrade.

@@ -136,6 +136,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 		{"tenant create", http.MethodPost, "/v1/tenants", testPlatformToken, tenantRequest, 0},
 		{"tenant egress context", http.MethodPut, "/v1/tenants/" + string(tenant.Ref) + "/egress-context", testPlatformToken, secondboxclient.UpdateTenantEgressContextRequest{}, tenant.Revision},
 		{"tenant action", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + ":suspend", testPlatformToken, nil, tenant.Revision},
+		{"tenant ceiling extension", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + ":extend-ceiling", testPlatformToken, secondboxclient.ExtendTenantCeilingRequest{ProfileGrants: []string{"agent-compartment"}, ApplicationScopes: []string{}}, tenant.Revision},
 		{"controller create", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities", testPlatformToken, secondboxclient.CreateTenantControllerAuthorityRequest{ExpiresAt: expiresAt, Metadata: map[string]string{}}, 0},
 		{"controller rotate", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities/" + controller.Authority.ID + ":rotate", testPlatformToken, nil, controller.Authority.Revision},
 		{"controller revoke", http.MethodPost, "/v1/tenants/" + string(tenant.Ref) + "/controller-authorities/" + controller.Authority.ID + ":revoke", testPlatformToken, nil, controller.Authority.Revision},
@@ -146,6 +147,7 @@ func TestManagementHTTPRejectsMissingIdempotencyKeyForEveryMutationClass(t *test
 		{"application create", http.MethodPost, "/v1/application-authorities", controller.BearerToken, applicationRequest, 0},
 		{"application rotate", http.MethodPost, "/v1/application-authorities/" + application.Authority.ID + ":rotate", controller.BearerToken, nil, application.Authority.Revision},
 		{"application revoke", http.MethodPost, "/v1/application-authorities/" + application.Authority.ID + ":revoke", controller.BearerToken, nil, application.Authority.Revision},
+		{"application extension", http.MethodPost, "/v1/application-authorities/" + application.Authority.ID + ":extend", controller.BearerToken, secondboxclient.ExtendApplicationAuthorityRequest{ProfileGrants: []string{}, Scopes: []string{"sandbox:read"}}, application.Authority.Revision},
 	}
 	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {

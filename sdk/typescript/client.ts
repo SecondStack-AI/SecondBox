@@ -43,6 +43,7 @@ import {
   type ApplicationAuthority,
   type ApplicationAuthorityPage,
   type CreateApplicationAuthorityRequest,
+  type ExtendApplicationAuthorityRequest,
   type ApplicationCredentialResponse,
   type TenantUsage,
   type SubjectCapacity,
@@ -105,6 +106,7 @@ export type {
   ApplicationAuthority,
   ApplicationAuthorityPage,
   CreateApplicationAuthorityRequest,
+  ExtendApplicationAuthorityRequest,
   ApplicationCredentialResponse,
   TenantUsage,
   SubjectCapacity,
@@ -236,6 +238,11 @@ export class SecondBox {
 
   public revokeApplicationAuthority(authorityId: string, revision: number, key: string, signal?: AbortSignal): Promise<ApplicationAuthority> {
     return this.mutateController("revokeApplicationAuthority", { authorityId }, revision, key, undefined, signal);
+  }
+
+  /** Adds Profile grants and scopes within the tenant ceiling without rotating the bearer token. */
+  public extendApplicationAuthority(authorityId: string, request: ExtendApplicationAuthorityRequest, revision: number, key: string, signal?: AbortSignal): Promise<ApplicationAuthority> {
+    return this.mutateController("extendApplicationAuthority", { authorityId }, revision, key, request, signal);
   }
 
   public getTenantUsage(options: PageOptions = {}, signal?: AbortSignal): Promise<TenantUsage> {

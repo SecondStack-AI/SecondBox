@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
@@ -91,6 +92,53 @@ func (service *ControlPlaneService) UpdateTenantEgressContext(
 	if err != nil {
 		return contracts.Tenant{}, false, service.managementDenied(
 			ctx, principal, "tenant.egress_context_updated", "tenant", tenantRef, tenantRef, err,
+		)
+	}
+	return tenant, result.Replayed, nil
+}
+
+// ExtendTenantCeiling adds Profile grants and application scopes to one Tenant
+// ceiling under revision and idempotency fences. It never removes an entry.
+func (service *ControlPlaneService) ExtendTenantCeiling(
+	ctx context.Context,
+	principal contracts.Principal,
+	tenantRef string,
+	idempotencyKey string,
+	expectedRevision int64,
+	request contracts.ExtendTenantCeilingRequest,
+) (contracts.Tenant, bool, error) {
+	if err := validateOwnershipRef("Tenant", tenantRef); err != nil {
+		return contracts.Tenant{}, false, err
+	}
+	if expectedRevision < 1 {
+		return contracts.Tenant{}, false, invalidRequest(errors.New("SecondBox Tenant revision must be positive"))
+	}
+	if err := validateGrantExtension("Tenant ceiling", request.ProfileGrants, request.ApplicationScopes); err != nil {
+		return contracts.Tenant{}, false, service.managementDenied(
+			ctx, principal, "tenant.ceiling_extended", "tenant", tenantRef, tenantRef, err,
+		)
+	}
+	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(principal, "tenant.ceiling.extend", tenantRef, idempotencyKey, struct {
+		ExpectedRevision  int64    `json:"expectedRevision"`
+		ProfileGrants     []string `json:"profileGrants"`
+		ApplicationScopes []string `json:"applicationScopes"`
+	}{ExpectedRevision: expectedRevision, ProfileGrants: request.ProfileGrants, ApplicationScopes: request.ApplicationScopes}, now)
+	if err != nil {
+		return contracts.Tenant{}, false, err
+	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(
+		ctx, principal, "tenant.ceiling_extended", "tenant", tenantRef, tenantRef, now,
+	))
+	idempotency.AuditEvent.Details["profileGrants"] = strings.Join(sortedUnique(request.ProfileGrants), ",")
+	idempotency.AuditEvent.Details["applicationScopes"] = strings.Join(sortedUnique(request.ApplicationScopes), ",")
+	tenant, result, err := service.store.ExtendManagedTenantCeiling(
+		ctx, tenantRef, sortedUnique(request.ProfileGrants), sortedUnique(request.ApplicationScopes),
+		expectedRevision, now, idempotency,
+	)
+	if err != nil {
+		return contracts.Tenant{}, false, service.managementDenied(
+			ctx, principal, "tenant.ceiling_extended", "tenant", tenantRef, tenantRef, err,
 		)
 	}
 	return tenant, result.Replayed, nil
@@ -447,6 +495,51 @@ func (service *ControlPlaneService) RevokeApplicationAuthority(ctx context.Conte
 	return authority, result.Replayed, nil
 }
 
+// ExtendApplicationAuthority adds Profile grants and scopes to one active
+// application authority within its Tenant ceiling. The bearer credential is
+// unchanged, and no entry is ever removed.
+func (service *ControlPlaneService) ExtendApplicationAuthority(
+	ctx context.Context,
+	principal contracts.Principal,
+	authorityID string,
+	idempotencyKey string,
+	expectedRevision int64,
+	request contracts.ExtendApplicationAuthorityRequest,
+) (contracts.ApplicationAuthority, bool, error) {
+	if expectedRevision < 1 {
+		return contracts.ApplicationAuthority{}, false, invalidRequest(errors.New("SecondBox ApplicationAuthority revision must be positive"))
+	}
+	if err := validateGrantExtension("ApplicationAuthority", request.ProfileGrants, request.Scopes); err != nil {
+		return contracts.ApplicationAuthority{}, false, service.managementDenied(
+			ctx, principal, "application_authority.extended", "application_authority", authorityID, principal.TenantRef, err,
+		)
+	}
+	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(principal, "application_authority.extend", authorityID, idempotencyKey, struct {
+		ExpectedRevision int64    `json:"expectedRevision"`
+		ProfileGrants    []string `json:"profileGrants"`
+		Scopes           []string `json:"scopes"`
+	}{ExpectedRevision: expectedRevision, ProfileGrants: request.ProfileGrants, Scopes: request.Scopes}, now)
+	if err != nil {
+		return contracts.ApplicationAuthority{}, false, err
+	}
+	idempotency.AuditEvent = auditEventPointer(service.newAudit(
+		ctx, principal, "application_authority.extended", "application_authority", authorityID, principal.TenantRef, now,
+	))
+	idempotency.AuditEvent.Details["profileGrants"] = strings.Join(sortedUnique(request.ProfileGrants), ",")
+	idempotency.AuditEvent.Details["scopes"] = strings.Join(sortedUnique(request.Scopes), ",")
+	authority, result, err := service.store.ExtendManagedApplicationAuthority(
+		ctx, principal.TenantRef, authorityID, sortedUnique(request.ProfileGrants), sortedUnique(request.Scopes),
+		expectedRevision, now, idempotency,
+	)
+	if err != nil {
+		return contracts.ApplicationAuthority{}, false, service.managementDenied(
+			ctx, principal, "application_authority.extended", "application_authority", authorityID, principal.TenantRef, err,
+		)
+	}
+	return authority, result.Replayed, nil
+}
+
 func auditEventPointer(event contracts.AuditEvent) *contracts.AuditEvent {
 	return &event
 }
@@ -569,6 +662,10 @@ func validateApplicationScopes(scopes []string) error {
 	if len(scopes) < 1 || len(scopes) > 6 {
 		return invalidRequest(errors.New("SecondBox application scopes must contain 1 to 6 values"))
 	}
+	return validateApplicationScopeValues(scopes)
+}
+
+func validateApplicationScopeValues(scopes []string) error {
 	seen := make(map[string]bool, len(scopes))
 	for _, scope := range scopes {
 		if !applicationScopeSet[scope] || seen[scope] {
@@ -583,6 +680,10 @@ func validateProfileGrants(grants []string) error {
 	if len(grants) < 1 || len(grants) > 32 {
 		return invalidRequest(errors.New("SecondBox Profile grants must contain 1 to 32 values"))
 	}
+	return validateProfileGrantValues(grants)
+}
+
+func validateProfileGrantValues(grants []string) error {
 	seen := make(map[string]bool, len(grants))
 	for _, grant := range grants {
 		if !profileNamePattern.MatchString(grant) || seen[grant] {
@@ -591,6 +692,24 @@ func validateProfileGrants(grants []string) error {
 		seen[grant] = true
 	}
 	return nil
+}
+
+// validateGrantExtension accepts empty lists individually, but an extension
+// must add at least one entry. Entries follow the creation rules.
+func validateGrantExtension(resource string, profileGrants, scopes []string) error {
+	if len(profileGrants) == 0 && len(scopes) == 0 {
+		return invalidRequest(fmt.Errorf("SecondBox %s extension requires at least one Profile grant or application scope", resource))
+	}
+	if len(profileGrants) > 32 {
+		return invalidRequest(errors.New("SecondBox Profile grants must contain at most 32 values"))
+	}
+	if len(scopes) > 6 {
+		return invalidRequest(errors.New("SecondBox application scopes must contain at most 6 values"))
+	}
+	if err := validateProfileGrantValues(profileGrants); err != nil {
+		return err
+	}
+	return validateApplicationScopeValues(scopes)
 }
 
 func validSubjectQuota(quota contracts.QuotaLimits) bool {

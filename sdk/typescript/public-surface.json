@@ -420,6 +420,20 @@
     ],
     "optional": []
   },
+  "ExtendApplicationAuthorityRequest": {
+    "required": [
+      "profileGrants",
+      "scopes"
+    ],
+    "optional": []
+  },
+  "ExtendTenantCeilingRequest": {
+    "required": [
+      "applicationScopes",
+      "profileGrants"
+    ],
+    "optional": []
+  },
   "FileExistsResult": {
     "required": [
       "exists",

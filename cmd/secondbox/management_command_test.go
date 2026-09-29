@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -129,6 +130,7 @@ func TestManagementCommandActionsUseGeneratedRoutes(t *testing.T) {
 		{name: "tenant get", authority: platform, args: []string{"tenant", "get", "tenant-a"}, method: http.MethodGet, path: "/v1/tenants/tenant-a"},
 		{name: "tenant list", authority: platform, args: []string{"tenant", "list", "--limit", "2", "--cursor", "next"}, method: http.MethodGet, path: "/v1/tenants", query: "cursor=next&limit=2"},
 		{name: "tenant egress context", authority: platform, args: []string{"tenant", "egress-context", "tenant-a", "--file", egressContextRequest, "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPut, path: "/v1/tenants/tenant-a/egress-context", mutation: true},
+		{name: "tenant extend ceiling", authority: platform, args: []string{"tenant", "extend-ceiling", "tenant-a", "--profile-grant", "durable-coding", "--scope", "sandbox:ports", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/tenants/tenant-a:extend-ceiling", mutation: true},
 		{name: "tenant suspend", authority: platform, args: []string{"tenant", "suspend", "tenant-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/tenants/tenant-a:suspend", mutation: true},
 		{name: "tenant reactivate", authority: platform, args: []string{"tenant", "reactivate", "tenant-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/tenants/tenant-a:reactivate", mutation: true},
 		{name: "controller get", authority: platform, args: []string{"controller-authority", "get", "tenant-a", "controller-a"}, method: http.MethodGet, path: "/v1/tenants/tenant-a/controller-authorities/controller-a"},
@@ -141,6 +143,7 @@ func TestManagementCommandActionsUseGeneratedRoutes(t *testing.T) {
 		{name: "subject cleanup", authority: controller, args: []string{"subject", "cleanup", "subject-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/subjects/subject-a:cleanup", mutation: true},
 		{name: "application get", authority: controller, args: []string{"application-authority", "get", "application-a"}, method: http.MethodGet, path: "/v1/application-authorities/application-a"},
 		{name: "application list", authority: controller, args: []string{"application-authority", "list", "--subject-ref", "subject-a", "--limit", "2"}, method: http.MethodGet, path: "/v1/application-authorities", query: "limit=2&subjectRef=subject-a"},
+		{name: "application extend", authority: controller, args: []string{"application-authority", "extend", "application-a", "--scope", "sandbox:ports", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/application-authorities/application-a:extend", mutation: true},
 		{name: "application rotate", authority: controller, args: []string{"application-authority", "rotate", "application-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/application-authorities/application-a:rotate", mutation: true},
 		{name: "application revoke", authority: controller, args: []string{"application-authority", "revoke", "application-a", "--revision", "1", "--idempotency-key", "mutation"}, method: http.MethodPost, path: "/v1/application-authorities/application-a:revoke", mutation: true},
 		{name: "tenant usage", authority: controller, args: []string{"tenant", "usage"}, method: http.MethodGet, path: "/v1/usage", query: "limit=100"},
@@ -169,6 +172,72 @@ func TestManagementCommandActionsUseGeneratedRoutes(t *testing.T) {
 				t.Fatalf("handled, error = %t, %v", handled, err)
 			}
 		})
+	}
+}
+
+func TestManagementGrantExtensionsSendExplicitAddOnlyLists(t *testing.T) {
+	tests := []struct {
+		name      string
+		authority sessionAuthorityKind
+		args      []string
+		path      string
+		want      map[string][]string
+	}{
+		{
+			name: "tenant ceiling", authority: sessionAuthorityPlatform,
+			args: []string{"tenant", "extend-ceiling", "tenant-a", "--profile-grant", "durable-coding", "--profile-grant", "agent-compartment", "--revision", "3", "--idempotency-key", "extend-tenant"},
+			path: "/v1/tenants/tenant-a:extend-ceiling",
+			want: map[string][]string{"profileGrants": {"durable-coding", "agent-compartment"}, "applicationScopes": {}},
+		},
+		{
+			name: "application authority", authority: sessionAuthorityTenantController,
+			args: []string{"application-authority", "extend", "application-a", "--scope", "sandbox:ports", "--revision", "3", "--idempotency-key", "extend-application"},
+			path: "/v1/application-authorities/application-a:extend",
+			want: map[string][]string{"profileGrants": {}, "scopes": {"sandbox:ports"}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPost || request.URL.Path != test.path {
+					t.Errorf("grant extension request = %s %s", request.Method, request.URL.Path)
+				}
+				if request.Header.Get("If-Match") != `"revision-3"` {
+					t.Errorf("grant extension If-Match = %q", request.Header.Get("If-Match"))
+				}
+				var body map[string][]string
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Errorf("grant extension body: %v", err)
+				}
+				if !reflect.DeepEqual(body, test.want) {
+					t.Errorf("grant extension body = %#v, want %#v", body, test.want)
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, `{}`)
+			}))
+			defer server.Close()
+			var output bytes.Buffer
+			ctx := managementPresentationContext(&output, cliui.OutputJSON)
+			handled, err := runManagementCommand(ctx, cliSession{url: server.URL, token: "test-token", authority: test.authority}, test.args, &output, server.Client())
+			if err != nil || !handled {
+				t.Fatalf("handled, error = %t, %v", handled, err)
+			}
+		})
+	}
+
+	for _, args := range [][]string{
+		{"tenant", "extend-ceiling", "tenant-a", "--revision", "1", "--idempotency-key", "empty"},
+		{"application-authority", "extend", "application-a", "--scope", "sandbox:ports", "--idempotency-key", "no-revision"},
+		{"application-authority", "extend", "application-a", "--scope", "sandbox:ports", "--revision", "1"},
+	} {
+		authority := sessionAuthorityTenantController
+		if args[0] == "tenant" {
+			authority = sessionAuthorityPlatform
+		}
+		_, err := runManagementCommand(context.Background(), cliSession{url: "https://secondbox.example", token: "test-token", authority: authority}, args, io.Discard, http.DefaultClient)
+		if err == nil || !strings.Contains(err.Error(), "requires --profile-grant or --scope, --revision, and --idempotency-key") {
+			t.Fatalf("%v error = %v", args, err)
+		}
 	}
 }
 
