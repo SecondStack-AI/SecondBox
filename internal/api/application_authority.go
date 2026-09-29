@@ -42,6 +42,37 @@ func authorizeApplicationRequest(
 	return nil
 }
 
+// authorizeApplicationDataPlane re-checks the Profile grant on every
+// Sandbox-addressed data-plane request. A Profile is a capability boundary: its
+// revision carries network egress, attributed execution, approved ports, and
+// resources. Creation alone cannot enforce it, because a Sandbox in the
+// authority's subject may have been created by the platform or by another
+// authority with different grants. Reads, listing, and lifecycle stay
+// subject-scoped, so an authority can still see, stop, and delete what lives in
+// its subject.
+func (apiHandler *handler) authorizeApplicationDataPlane(
+	authority ports.AuthenticatedApplicationAuthority,
+	request *http.Request,
+) error {
+	switch applicationRequestScope(request.Pattern) {
+	case applicationScopeSandboxExec, applicationScopeSandboxFiles, applicationScopeSandboxPorts:
+	default:
+		return nil
+	}
+	sandboxID := request.PathValue("sandboxID")
+	if sandboxID == "" {
+		return ports.ErrAuthorizationDenied
+	}
+	sandbox, err := apiHandler.service.GetSandbox(request.Context(), applicationPrincipal(authority), sandboxID)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(authority.ProfileGrants, sandbox.Profile) {
+		return ports.ErrAuthorizationDenied
+	}
+	return nil
+}
+
 func authorizeApplicationProfile(request *http.Request, profile string) error {
 	authority, ok := request.Context().Value(applicationAuthorityContextKey{}).(ports.AuthenticatedApplicationAuthority)
 	if !ok {
