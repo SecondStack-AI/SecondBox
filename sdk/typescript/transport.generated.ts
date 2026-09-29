@@ -529,6 +529,7 @@ export interface PortPolicy {
   readonly protocol: "tcp" | "http";
 }
 
+/** A PortSession lives while the Lease it was admitted under is renewed. expiresAt is the latest instant it can live; it ends earlier when that Lease is released, lapses, or is fenced. */
 export interface PortSession {
   readonly certificateSpkiSha256?: string;
   readonly createdAt: Timestamp;

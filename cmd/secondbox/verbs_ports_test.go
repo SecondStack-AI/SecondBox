@@ -84,14 +84,16 @@ func testPortsForward(t *testing.T, resetClient bool) {
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Error(err)
 			}
-			if request.Name != "development-http" || request.DurationSeconds < 1 || request.DurationSeconds > 19 {
+			// The session lives while the forwarder's Lease is renewed, so it asks
+			// for the policy's full duration however little of the Lease remains.
+			if request.Name != "development-http" || request.DurationSeconds != 86400 {
 				t.Errorf("request=%#v", request)
 			}
-			expiry := time.Now().Add(time.Duration(request.DurationSeconds) * time.Second)
-			if expiry.After(time.Unix(0, leaseExpiry.Load())) {
+			if !time.Now().Before(time.Unix(0, leaseExpiry.Load())) {
 				http.Error(w, `{"code":"lease_inactive"}`, http.StatusConflict)
 				return
 			}
+			expiry := time.Now().Add(time.Duration(request.DurationSeconds) * time.Second)
 			id := created.Add(1)
 			if err := json.NewEncoder(w).Encode(sb.PortSession{ID: fmt.Sprintf("port_%d", id), SandboxID: "sbx_test1", Generation: 4, State: "open", Transport: "proxied", Name: request.Name, ExpiresAt: expiry, Endpoint: strings.Replace(server.URL, "http://", "ws://", 1) + "/tunnel#credential-" + strconv.Itoa(int(id))}); err != nil {
 				t.Error(err)

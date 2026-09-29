@@ -12,6 +12,7 @@
 
 ### Changed
 
+- A PortSession lives while the Lease it was admitted under is renewed, bounded by its `durationSeconds` and the Port policy's `maximumSessionSeconds`, instead of being capped at creation by the Lease's remaining grant. It still ends when the Lease is released, lapses, or is fenced. Long-lived viewers under a 60-second Lease no longer have to reconnect every minute. The Go SDK's `ForwardPort` and `secondbox ports forward` request the policy's full duration for each connection.
 - The client execution image builder requires `SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY` (`forbid` or `allow`) instead of always forbidding browsers, so an application can ship a headless browser in its own signed userspace. Set it to `forbid` to keep the previous behavior.
 
 ## 0.19.0 - 2026-09-27

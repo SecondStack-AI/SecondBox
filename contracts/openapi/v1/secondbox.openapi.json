@@ -10248,6 +10248,7 @@
           },
           "durationSeconds": {
             "type": "integer",
+            "description": "Maximum lifetime of the session in seconds, at most the Port policy's maximumSessionSeconds. The session also ends when its Lease is released, lapses, or is fenced.",
             "minimum": 1,
             "maximum": 86400
           }
@@ -10256,6 +10257,7 @@
       "PortSession": {
         "type": "object",
         "additionalProperties": false,
+        "description": "A PortSession lives while the Lease it was admitted under is renewed. expiresAt is the latest instant it can live; it ends earlier when that Lease is released, lapses, or is fenced.",
         "required": [
           "id",
           "sandboxId",
