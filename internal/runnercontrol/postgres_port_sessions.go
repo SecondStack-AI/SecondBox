@@ -18,8 +18,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const maximumPortFrameBytes int64 = 512 << 10
-
 func (store *PostgresDataPlaneStore) AdmitPortSession(
 	ctx context.Context,
 	input PortSessionAdmission,
@@ -166,9 +164,9 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.port_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,transport,credential_digest,stream_window_bytes,client_credit_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at,acknowledged_inbound_sequence
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,transport,credential_digest,stream_window_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$16,$17,$11,0,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL,0
+			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$16,$17,$11,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL
 		)`,
 		input.Session.ID, tunnel.TenantRef, tunnel.SubjectRef, input.Session.SandboxID, tunnel.ProfileRevisionID, input.LeaseID, input.Session.Generation, input.Session.Name, policy.Port, policy.Protocol, tunnel.StreamWindowBytes, input.IdempotencyKey, input.RequestHash, input.Session.ExpiresAt.UTC(), input.Now.UTC(), tunnel.Session.Transport, input.CredentialDigest,
 	); err != nil {
@@ -392,9 +390,10 @@ func (store *PostgresDataPlaneStore) ConsumeDirectPortSession(
 	); err != nil {
 		return PortTunnel{}, fmt.Errorf("SecondBox direct Port activity insert: %w", err)
 	}
+	// Data-plane activity is not a change to the Sandbox resource, so it leaves
+	// the resource revision alone.
 	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.sandboxes
-		SET last_activity_at=$1,revision=revision+1,updated_at=$1
+		UPDATE secondbox.sandboxes SET last_activity_at=$1,updated_at=$1
 		WHERE id=$2 AND generation=$3`,
 		now, tunnel.Session.SandboxID, tunnel.Session.Generation,
 	); err != nil {
@@ -556,108 +555,78 @@ func (store *PostgresDataPlaneStore) ClosePortSession(
 	return tunnel.Session, nil
 }
 
-func (store *PostgresDataPlaneStore) RecordPortClientBytes(
+// CheckpointPortSession records one live tunnel's cumulative byte counts and,
+// when bytes moved, its useful activity. It is written once per checkpoint
+// interval rather than per chunk; data-plane traffic never changes the Sandbox
+// resource revision.
+func (store *PostgresDataPlaneStore) CheckpointPortSession(
 	ctx context.Context,
-	tenantRef string,
-	subjectRef string,
-	sessionID string,
-	data []byte,
-	now time.Time,
+	input PortSessionCheckpoint,
 ) error {
-	if len(data) == 0 || int64(len(data)) > maximumPortFrameBytes {
-		return ErrDataPlaneFrameLimit
+	if input.TenantRef == "" || input.SubjectRef == "" || input.SessionID == "" ||
+		input.ClientBytes < 0 || input.RunnerBytes < 0 || input.Now.IsZero() {
+		return errors.New("SecondBox Port checkpoint is incomplete")
 	}
+	now := input.Now.UTC()
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("SecondBox Port client-byte transaction: %w", err)
+		return fmt.Errorf("SecondBox Port checkpoint transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
-		return fmt.Errorf("SecondBox Port client-byte quota lock: %w", err)
+	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
+		return fmt.Errorf("SecondBox Port checkpoint quota lock: %w", err)
 	}
-	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
+	tunnel, err := lockPortTunnel(ctx, tx, input.TenantRef, input.SubjectRef, "", input.SessionID)
 	if err != nil {
 		return err
 	}
-	if err := validateLivePortAuthority(ctx, tx, tunnel, now.UTC()); err != nil {
-		return err
+	if input.Live {
+		if tunnel.Session.State != contracts.PortSessionStateOpen {
+			return ports.ErrLeaseInactive
+		}
+		if err := validateLivePortAuthority(ctx, tx, tunnel, now); err != nil {
+			return err
+		}
 	}
-	var credit, sent, maximum int64
-	if err := tx.QueryRow(ctx, `
-		SELECT port.client_credit_bytes,port.client_bytes,session.maximum_request_bytes
-		FROM secondbox.port_sessions AS port
-		JOIN secondbox.data_plane_sessions AS session ON session.id=port.data_plane_session_id
-		WHERE port.id=$1`,
-		sessionID,
-	).Scan(&credit, &sent, &maximum); err != nil {
-		return fmt.Errorf("SecondBox Port client credit lookup: %w", err)
-	}
-	if int64(len(data)) > credit {
-		return ports.ErrPortBackpressure
-	}
-	if sent+int64(len(data)) > maximum {
+	if input.ClientBytes > tunnel.MaximumRequestBytes || input.RunnerBytes > tunnel.MaximumResponseBytes {
 		return ErrDataPlaneSessionLimit
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.port_sessions
-		SET client_credit_bytes=client_credit_bytes-$2,client_bytes=client_bytes+$2,
-		    updated_at=$3 WHERE id=$1`,
-		sessionID, len(data), now.UTC(),
+		SET client_bytes=GREATEST(client_bytes,$2),runner_bytes=GREATEST(runner_bytes,$3),updated_at=$4
+		WHERE id=$1`,
+		input.SessionID, input.ClientBytes, input.RunnerBytes, now,
 	); err != nil {
-		return fmt.Errorf("SecondBox Port client credit update: %w", err)
+		return fmt.Errorf("SecondBox Port checkpoint update: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.activity_sessions
-		SET last_activity_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
-		sessionID, now.UTC(),
+		UPDATE secondbox.data_plane_sessions
+		SET outbound_bytes=GREATEST(outbound_bytes,$2),inbound_bytes=GREATEST(inbound_bytes,$3),updated_at=$4
+		WHERE id=$1`,
+		input.SessionID, input.ClientBytes, input.RunnerBytes, now,
 	); err != nil {
-		return fmt.Errorf("SecondBox Port client activity update: %w", err)
+		return fmt.Errorf("SecondBox Port checkpoint data-plane update: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.sandboxes
-		SET last_activity_at=$1,revision=revision+1,updated_at=$1
-		WHERE id=$2 AND generation=$3`,
-		now.UTC(), tunnel.Session.SandboxID, tunnel.Session.Generation,
-	); err != nil {
-		return fmt.Errorf("SecondBox Port client Sandbox activity update: %w", err)
+	if input.Active {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.activity_sessions
+			SET last_activity_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
+			input.SessionID, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox Port checkpoint activity update: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.sandboxes SET last_activity_at=$1,updated_at=$1
+			WHERE id=$2 AND generation=$3`,
+			now, tunnel.Session.SandboxID, tunnel.Session.Generation,
+		); err != nil {
+			return fmt.Errorf("SecondBox Port checkpoint Sandbox activity update: %w", err)
+		}
 	}
-	return tx.Commit(ctx)
-}
-
-func (store *PostgresDataPlaneStore) RecordPortTunnelAcknowledgement(
-	ctx context.Context,
-	tenantRef string,
-	subjectRef string,
-	sessionID string,
-	sequence int64,
-	now time.Time,
-) error {
-	if sequence < 1 {
-		return errors.New("SecondBox live Port acknowledgement sequence is invalid")
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox Port checkpoint commit: %w", err)
 	}
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("SecondBox live Port acknowledgement transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	if err := rowlock.TenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef); err != nil {
-		return fmt.Errorf("SecondBox live Port acknowledgement quota lock: %w", err)
-	}
-	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
-	if err != nil {
-		return err
-	}
-	if sequence <= tunnel.AcknowledgedInboundSequence {
-		return tx.Commit(ctx)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.port_sessions
-		SET acknowledged_inbound_sequence=$2,updated_at=$3
-		WHERE id=$1`, sessionID, sequence, now.UTC(),
-	); err != nil {
-		return fmt.Errorf("SecondBox live Port acknowledgement update: %w", err)
-	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func lockPortAdmissionAuthority(
@@ -929,8 +898,7 @@ const portTunnelSelect = `
 	  session.request_id,
 	  session.stream_id,session.fencing_token,port.guest_port,port.stream_window_bytes,
 	  session.maximum_request_bytes,session.maximum_response_bytes,
-	  sandbox.tenant_ref,sandbox.subject_ref,COALESCE(runner.data_plane_address,''),
-	  port.acknowledged_inbound_sequence
+	  sandbox.tenant_ref,sandbox.subject_ref,COALESCE(runner.data_plane_address,'')
 	FROM secondbox.port_sessions AS port
 	JOIN secondbox.data_plane_sessions AS session ON session.id=port.data_plane_session_id
 	JOIN secondbox.sandboxes AS sandbox ON sandbox.id=port.sandbox_id
@@ -982,7 +950,6 @@ func scanPortTunnel(row dataPlaneRow) (PortTunnel, error) {
 		&tunnel.FencingToken, &tunnel.GuestPort, &tunnel.StreamWindowBytes,
 		&tunnel.MaximumRequestBytes, &tunnel.MaximumResponseBytes,
 		&tunnel.TenantRef, &tunnel.SubjectRef, &encodedDataPlaneEndpoint,
-		&tunnel.AcknowledgedInboundSequence,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, ports.ErrPortSessionNotFound
@@ -1001,46 +968,43 @@ func scanPortTunnel(row dataPlaneRow) (PortTunnel, error) {
 	return tunnel, nil
 }
 
-func (store *PostgresDataPlaneStore) projectPortSessionFrame(
+// RecordPortSessionTerminal projects the terminal outcome of one Port session
+// without retaining the authenticated Runner message. Port bytes and credit
+// frames are routed in memory by the live data plane and never reach this
+// store; their sequence numbers therefore advance past the recorded one, and
+// only a sequence at or beyond it is a new terminal.
+func (store *PostgresDataPlaneStore) RecordPortSessionTerminal(
 	ctx context.Context,
 	input RunnerDataPlaneFrame,
 	now time.Time,
 ) (bool, error) {
+	now = now.UTC()
 	frame := input.Message.GetPort()
 	if frame == nil || frame.Fence == nil || frame.OperationId == "" ||
 		frame.StreamId == "" || frame.Sequence == 0 {
 		return false, errors.New("SecondBox inbound Port frame is incomplete")
 	}
-	payloadCount := 0
-	if frame.GetBytes() != nil {
-		payloadCount++
-	}
-	if frame.GetCredit() != nil {
-		payloadCount++
-	}
-	if frame.GetTerminal() != nil {
-		payloadCount++
-	}
-	if payloadCount != 1 || frame.GetOpen() != nil || frame.GetCancel() != nil {
-		return false, errors.New("SecondBox inbound Port payload is invalid")
+	terminal := frame.GetTerminal()
+	if terminal == nil {
+		return false, errors.New("SecondBox inbound Port frame is not a terminal")
 	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return false, fmt.Errorf("SecondBox inbound Port transaction: %w", err)
+		return false, fmt.Errorf("SecondBox inbound Port terminal transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	if err := lockDataPlaneSessionQuota(ctx, tx, frame.OperationId); err != nil {
-		return false, fmt.Errorf("SecondBox inbound Port quota lock: %w", err)
+		return false, fmt.Errorf("SecondBox inbound Port terminal quota lock: %w", err)
 	}
 	tunnel, err := lockDirectPortTunnel(ctx, tx, input.RunnerID, frame.OperationId)
 	if err != nil {
 		return false, err
 	}
 	var sessionState, assignmentState, sandboxState, connectionState string
-	var nextSequence, inboundBytes, generation int64
+	var nextSequence, generation int64
 	var fencingToken []byte
 	if err := tx.QueryRow(ctx, `
-		SELECT session.state,session.next_inbound_sequence,session.inbound_bytes,
+		SELECT session.state,session.next_inbound_sequence,
 		       assignment.state,sandbox.state,sandbox.generation,assignment.fencing_token,
 		       connection.state
 		FROM secondbox.data_plane_sessions AS session
@@ -1051,7 +1015,7 @@ func (store *PostgresDataPlaneStore) projectPortSessionFrame(
 		WHERE session.id=$1`,
 		frame.OperationId, input.ConnectionID, input.RunnerID,
 	).Scan(
-		&sessionState, &nextSequence, &inboundBytes, &assignmentState, &sandboxState,
+		&sessionState, &nextSequence, &assignmentState, &sandboxState,
 		&generation, &fencingToken, &connectionState,
 	); err != nil {
 		return false, ErrDataPlaneFence
@@ -1075,129 +1039,57 @@ func (store *PostgresDataPlaneStore) projectPortSessionFrame(
 		return false, ErrDataPlaneFence
 	}
 	sequence := int64(frame.Sequence)
-	if sequence < nextSequence {
+	if sequence < nextSequence ||
+		(session.State != "pending" && session.State != "running" && session.State != "cancelling") {
+		// A replayed terminal, or one that follows a session the control plane
+		// already completed, changes nothing.
 		if err := tx.Commit(ctx); err != nil {
 			return false, fmt.Errorf("SecondBox inbound Port duplicate commit: %w", err)
 		}
 		return false, nil
 	}
-	if sequence != nextSequence ||
-		(session.State != "pending" && session.State != "running" && session.State != "cancelling") {
-		return false, ErrDataPlaneSequence
-	}
-	var credit, clientCredit, runnerBytes int64
 	var transport string
-	if value := frame.GetCredit(); value != nil {
-		if value.ByteCount == 0 || value.ByteCount > uint64(session.StreamWindowBytes) {
-			return false, ErrDataPlaneFrameLimit
-		}
-		credit = int64(value.ByteCount)
-	}
 	if err := tx.QueryRow(ctx, `
-		SELECT client_credit_bytes,runner_bytes,transport FROM secondbox.port_sessions
-		WHERE id=$1 FOR UPDATE`,
-		session.ID,
-	).Scan(&clientCredit, &runnerBytes, &transport); err != nil {
-		return false, fmt.Errorf("SecondBox inbound Port usage lookup: %w", err)
+		SELECT transport FROM secondbox.port_sessions WHERE id=$1`, session.ID,
+	).Scan(&transport); err != nil {
+		return false, fmt.Errorf("SecondBox inbound Port transport lookup: %w", err)
 	}
-	if transport == contracts.PortTransportDirect && frame.GetTerminal() == nil {
-		return false, ErrDataPlaneSequence
-	}
-	if credit > 0 && clientCredit+credit > session.StreamWindowBytes {
-		return false, ErrDataPlaneFrameLimit
-	}
-	if value := frame.GetBytes(); value != nil {
-		if len(value.Data) == 0 || int64(len(value.Data)) > maximumPortFrameBytes ||
-			runnerBytes+int64(len(value.Data)) > session.MaximumResponseBytes {
-			return false, ErrDataPlaneSessionLimit
-		}
-	}
-	state, terminalKind, terminalDetail := session.State, "", ""
-	portState := contracts.PortSessionStateOpen
-	var completedAt *time.Time
-	if terminal := frame.GetTerminal(); terminal != nil {
-		terminalKind, terminalDetail = terminal.Kind.String(), terminal.SafeDetail
-		state = "completed"
-		if terminal.Kind == runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_FENCED {
-			state, portState = "failed", contracts.PortSessionStateFenced
-		} else {
-			portState = contracts.PortSessionStateClosed
-		}
-		finished := now.UTC()
-		completedAt = &finished
-	}
-	frameDataBytes := int64(0)
-	if value := frame.GetBytes(); value != nil {
-		frameDataBytes = int64(len(value.Data))
-	}
-	if inboundBytes+frameDataBytes > store.maximumSessionBytes {
-		return false, ErrDataPlaneSessionLimit
+	state, portState := "completed", contracts.PortSessionStateClosed
+	if terminal.Kind == runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_FENCED {
+		state, portState = "failed", contracts.PortSessionStateFenced
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_sessions
-		SET state=$2,next_inbound_sequence=$3,inbound_bytes=inbound_bytes+$4,
-		    terminal_kind=CASE WHEN $5='' THEN terminal_kind ELSE $5 END,
-		    terminal_detail=CASE WHEN $5='' THEN terminal_detail ELSE $6 END,
-		    updated_at=$7,completed_at=COALESCE($8,completed_at)
+		SET state=$2,next_inbound_sequence=$3,
+		    terminal_kind=$4,terminal_detail=$5,
+		    updated_at=$6,completed_at=COALESCE(completed_at,$6),retain_until=$7
 		WHERE id=$1`,
-		session.ID, state, sequence+1, frameDataBytes,
-		terminalKind, terminalDetail, now.UTC(), completedAt,
+		session.ID, state, sequence+1, terminal.Kind.String(), terminal.SafeDetail,
+		now, now.Add(store.retention),
 	); err != nil {
-		return false, fmt.Errorf("SecondBox inbound Port session update: %w", err)
+		return false, fmt.Errorf("SecondBox inbound Port terminal update: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.port_sessions
-		SET client_credit_bytes=client_credit_bytes+$2,runner_bytes=runner_bytes+$3,
-		    state=CASE WHEN $4='' THEN state ELSE $4 END,
-		    closed_at=CASE WHEN $4='' THEN closed_at ELSE COALESCE(closed_at,$5) END,
-		    updated_at=$5
+		SET state=CASE WHEN state IN ('open','closing') THEN $2 ELSE state END,
+		    closed_at=COALESCE(closed_at,$3),updated_at=$3
 		WHERE id=$1`,
-		session.ID, credit, frameDataBytes,
-		map[bool]string{true: portState, false: ""}[completedAt != nil], now.UTC(),
+		session.ID, portState, now,
 	); err != nil {
-		return false, fmt.Errorf("SecondBox inbound Port projection update: %w", err)
+		return false, fmt.Errorf("SecondBox inbound Port terminal projection update: %w", err)
 	}
-	if frameDataBytes > 0 {
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.activity_sessions
-			SET last_activity_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
-			session.ID, now.UTC(),
-		); err != nil {
-			return false, fmt.Errorf("SecondBox inbound Port activity update: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.sandboxes
-			SET last_activity_at=$1,revision=revision+1,updated_at=$1
-			WHERE id=$2 AND generation=$3`,
-			now.UTC(), session.SandboxID, session.Generation,
-		); err != nil {
-			return false, fmt.Errorf("SecondBox inbound Port activity update: %w", err)
-		}
-	}
-	if completedAt != nil {
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.activity_sessions
-			SET state='closed',closed_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
-			session.ID, now.UTC(),
-		); err != nil {
-			return false, fmt.Errorf("SecondBox inbound Port activity close: %w", err)
-		}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.activity_sessions
+		SET state='closed',closed_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
+		session.ID, now,
+	); err != nil {
+		return false, fmt.Errorf("SecondBox inbound Port activity close: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox inbound Port commit: %w", err)
+		return false, fmt.Errorf("SecondBox inbound Port terminal commit: %w", err)
 	}
 	return transport == contracts.PortTransportProxied, nil
 }
 
-// RecordPortSessionFrame projects Port counters and terminal state without
-// retaining the authenticated Runner message or its payload.
-func (store *PostgresDataPlaneStore) RecordPortSessionFrame(
-	ctx context.Context,
-	input RunnerDataPlaneFrame,
-	now time.Time,
-) (bool, error) {
-	return store.projectPortSessionFrame(ctx, input, now.UTC())
-}
-
 var _ PortSessionStore = (*PostgresDataPlaneStore)(nil)
-var _ PortSessionFrameRecorder = (*PostgresDataPlaneStore)(nil)
+var _ PortSessionTerminalRecorder = (*PostgresDataPlaneStore)(nil)

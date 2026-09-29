@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -220,6 +221,12 @@ func (service *ControlPlaneService) ClosePortTunnel(
 	return err
 }
 
+// portSessionCheckpointInterval bounds how stale a live tunnel's recorded byte
+// counts, useful activity, and authority check may be. Flow control and session
+// limits are enforced in memory for every chunk; PostgreSQL sees one checkpoint
+// per interval, and the final counts when the tunnel closes.
+const portSessionCheckpointInterval = 5 * time.Second
+
 // SandboxPortStream forwards one proxied PortSession over the authenticated
 // Runner connection without retaining payload bytes in PostgreSQL.
 type SandboxPortStream struct {
@@ -235,6 +242,15 @@ type SandboxPortStream struct {
 	runnerBytes    int64
 	acknowledged   int64
 	terminal       bool
+	failure        error
+	// checkpointMu serializes checkpoints and guards the counts they recorded.
+	checkpointMu            sync.Mutex
+	checkpointedClientBytes int64
+	checkpointedRunnerBytes int64
+	stopCheckpoints         context.CancelFunc
+	checkpointsDone         chan struct{}
+	closeOnce               sync.Once
+	closeErr                error
 }
 
 func (service *ControlPlaneService) OpenPortTunnel(
@@ -258,7 +274,6 @@ func (service *ControlPlaneService) OpenPortTunnel(
 	result := &SandboxPortStream{
 		service: service, tunnel: tunnel, stream: stream,
 		nextSend: 1, nextReceive: 1, responseCredit: tunnel.StreamWindowBytes,
-		acknowledged: tunnel.AcknowledgedInboundSequence,
 	}
 	idleTimeout := tunnel.Session.ExpiresAt.Sub(service.now().UTC()).Milliseconds()
 	if idleTimeout < 1 {
@@ -275,7 +290,66 @@ func (service *ControlPlaneService) OpenPortTunnel(
 	}}); err != nil {
 		return nil, errors.Join(err, stream.Close())
 	}
+	result.startCheckpoints()
 	return result, nil
+}
+
+func (stream *SandboxPortStream) startCheckpoints() {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream.stopCheckpoints = cancel
+	stream.checkpointsDone = make(chan struct{})
+	go func() {
+		defer close(stream.checkpointsDone)
+		ticker := time.NewTicker(portSessionCheckpointInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := stream.checkpoint(ctx, true); err != nil {
+					if ctx.Err() == nil {
+						stream.fail(fmt.Errorf("SecondBox Port tunnel checkpoint: %w", err))
+					}
+					return
+				}
+			}
+		}
+	}()
+}
+
+// checkpoint records the tunnel's cumulative counts. A live checkpoint also
+// proves the session's authority still holds; a closing one only records the
+// final counts, and is skipped when nothing moved since the last one.
+func (stream *SandboxPortStream) checkpoint(ctx context.Context, live bool) error {
+	stream.checkpointMu.Lock()
+	defer stream.checkpointMu.Unlock()
+	stream.mu.Lock()
+	clientBytes, runnerBytes := stream.clientBytes, stream.runnerBytes
+	stream.mu.Unlock()
+	active := clientBytes != stream.checkpointedClientBytes || runnerBytes != stream.checkpointedRunnerBytes
+	if !live && !active {
+		return nil
+	}
+	if err := stream.service.portSessionStore.CheckpointPortSession(ctx, runnercontrol.PortSessionCheckpoint{
+		TenantRef: stream.tunnel.TenantRef, SubjectRef: stream.tunnel.SubjectRef,
+		SessionID: stream.tunnel.Session.ID, ClientBytes: clientBytes, RunnerBytes: runnerBytes,
+		Active: active, Live: live, Now: stream.service.now().UTC(),
+	}); err != nil {
+		return err
+	}
+	stream.checkpointedClientBytes, stream.checkpointedRunnerBytes = clientBytes, runnerBytes
+	return nil
+}
+
+// fail ends the tunnel with a checkpoint failure, which Receive reports.
+func (stream *SandboxPortStream) fail(err error) {
+	stream.mu.Lock()
+	if stream.failure == nil {
+		stream.failure = err
+	}
+	stream.mu.Unlock()
+	_ = stream.stream.Close()
 }
 
 func (stream *SandboxPortStream) send(payload any) error {
@@ -319,18 +393,15 @@ func (stream *SandboxPortStream) send(payload any) error {
 func (stream *SandboxPortStream) Send(ctx context.Context, payload []byte) error {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
+	if stream.failure != nil {
+		return stream.failure
+	}
 	if stream.terminal || len(payload) == 0 || int64(len(payload)) > stream.clientCredit ||
 		stream.clientBytes+int64(len(payload)) > stream.tunnel.MaximumRequestBytes {
 		if len(payload) > 0 && int64(len(payload)) > stream.clientCredit {
 			return ports.ErrPortBackpressure
 		}
 		return runnercontrol.ErrDataPlaneSessionLimit
-	}
-	if err := stream.service.portSessionStore.RecordPortClientBytes(
-		ctx, stream.tunnel.TenantRef, stream.tunnel.SubjectRef,
-		stream.tunnel.Session.ID, payload, stream.service.now().UTC(),
-	); err != nil {
-		return err
 	}
 	stream.clientCredit -= int64(len(payload))
 	stream.clientBytes += int64(len(payload))
@@ -345,6 +416,12 @@ func (stream *SandboxPortStream) Receive(
 	for {
 		message, err := stream.stream.Receive(ctx)
 		if err != nil {
+			stream.mu.Lock()
+			failure := stream.failure
+			stream.mu.Unlock()
+			if failure != nil {
+				return runnercontrol.PortTunnelEvent{}, failure
+			}
 			return runnercontrol.PortTunnelEvent{}, err
 		}
 		frame := message.GetPort()
@@ -406,12 +483,6 @@ func (stream *SandboxPortStream) Acknowledge(
 		(event.Bytes == nil) == (event.TerminalKind == "") {
 		return runnercontrol.ErrDataPlaneSequence
 	}
-	if err := stream.service.portSessionStore.RecordPortTunnelAcknowledgement(
-		ctx, stream.tunnel.TenantRef, stream.tunnel.SubjectRef,
-		stream.tunnel.Session.ID, event.Sequence, stream.service.now().UTC(),
-	); err != nil {
-		return err
-	}
 	stream.acknowledged = event.Sequence
 	if event.Bytes == nil {
 		return nil
@@ -425,11 +496,23 @@ func (stream *SandboxPortStream) Acknowledge(
 	return nil
 }
 
+// Close stops checkpointing, records the tunnel's final counts, and releases
+// its live route.
 func (stream *SandboxPortStream) Close() error {
 	if stream == nil || stream.stream == nil {
 		return nil
 	}
-	return stream.stream.Close()
+	stream.closeOnce.Do(func() {
+		if stream.stopCheckpoints != nil {
+			stream.stopCheckpoints()
+			<-stream.checkpointsDone
+		}
+		checkpointContext, stopCheckpoint := context.WithTimeout(context.Background(), 5*time.Second)
+		checkpointErr := stream.checkpoint(checkpointContext, false)
+		stopCheckpoint()
+		stream.closeErr = errors.Join(checkpointErr, stream.stream.Close())
+	})
+	return stream.closeErr
 }
 
 func portTunnelFence(tunnel runnercontrol.PortTunnel) *runnerv1.AssignmentFence {

@@ -65,7 +65,7 @@ type ServerConfig struct {
 	StateStore          ProtocolStateStore
 	LiveDataPlane       *LiveDataPlaneBroker
 	DirectPorts         DirectPortAdmitter
-	PortSessions        PortSessionFrameRecorder
+	PortSessions        PortSessionTerminalRecorder
 	DirectDataPlane     DirectDataPlaneAdmitter
 	WorkspaceTransfers  WorkspaceTransferBroker
 	SupportedVersions   VersionRange
@@ -737,19 +737,23 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 		}
 		return server.config.LiveDataPlane.Deliver(ctx, event)
 	case EventPort:
-		if server.config.PortSessions == nil {
+		if server.config.PortSessions == nil || server.config.LiveDataPlane == nil {
 			return errors.New("SecondBox runner control Port session recorder is not configured")
 		}
-		deliver, err := server.config.PortSessions.RecordPortSessionFrame(ctx, RunnerDataPlaneFrame{
+		// Port bytes and credit are flow-controlled per route in memory and
+		// validated against the admitted fence by the tunnel that owns the route.
+		// Only a terminal outcome is durable, so the Runner connection never
+		// waits on PostgreSQL for a Port chunk.
+		if event.Message.GetPort().GetTerminal() == nil {
+			return server.config.LiveDataPlane.Deliver(ctx, event)
+		}
+		deliver, err := server.config.PortSessions.RecordPortSessionTerminal(ctx, RunnerDataPlaneFrame{
 			RunnerID:     event.RunnerID,
 			ConnectionID: event.ConnectionID,
 			Message:      event.Message,
 		}, receivedAt)
 		if err != nil || !deliver {
 			return err
-		}
-		if server.config.LiveDataPlane == nil {
-			return ErrLiveDataPlaneUnavailable
 		}
 		return server.config.LiveDataPlane.Deliver(ctx, event)
 	default:

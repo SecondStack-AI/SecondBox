@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,11 +25,26 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T) {
+type portTunnelHTTPFixture struct {
+	serverURL     string
+	serverAddress string
+	credential    string
+	sandbox       contracts.Sandbox
+	lease         contracts.Lease
+	seed          dataPlaneReadySeed
+	pool          *pgxpool.Pool
+	fake          *portTunnelFakeRunner
+	fakeErrors    chan error
+}
+
+// newPortTunnelHTTPFixture serves the public API over HTTP with a live data
+// plane bound to a fake Runner that answers one proxied Port stream.
+func newPortTunnelHTTPFixture(t *testing.T, name string) portTunnelHTTPFixture {
+	t.Helper()
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
-	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "port-tunnel-http")
-	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-port-tunnel-http")
+	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, name)
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-"+name)
 	scopes := []string{
 		"sandbox:read", "sandbox:lifecycle", "sandbox:ports",
 	}
@@ -42,14 +56,14 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	}
 	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		fixtureCreateAPIKeyRequest{Name: "port-tunnel-http", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: name, Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	principal := authenticateCredential(t, controlPlane, key.Credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
-		t.Context(), principal, "port-tunnel-http-create",
+		t.Context(), principal, name+"-create",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
 	if err != nil {
@@ -58,7 +72,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	now := time.Now().UTC()
 	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
-		t.Context(), principal, sandbox.ID, sandbox.Generation, "port-tunnel-http-lease", 60,
+		t.Context(), principal, sandbox.ID, sandbox.Generation, name+"-lease", 60,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -106,18 +120,27 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	server.Start()
 	t.Cleanup(server.Close)
 	fake, detachFake := newPortTunnelFakeRunner(
-		t, liveDataPlane, dataPlaneStore, seed.RunnerID, seed.ConnectionOne,
+		t, liveDataPlane, seed.RunnerID, seed.ConnectionOne,
 	)
-	defer detachFake()
+	t.Cleanup(detachFake)
 	fakeContext, stopFake := context.WithCancel(t.Context())
-	defer stopFake()
+	t.Cleanup(stopFake)
 	fakeErrors := make(chan error, 1)
 	go func() { fakeErrors <- fake.run(fakeContext) }()
+	return portTunnelHTTPFixture{
+		serverURL: server.URL, serverAddress: server.Listener.Addr().String(),
+		credential: key.Credential, sandbox: sandbox, lease: lease, seed: seed,
+		pool: pool, fake: fake, fakeErrors: fakeErrors,
+	}
+}
 
-	session := createPortSessionHTTP(t, server.URL, key.Credential, sandbox, lease.ID)
+func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T) {
+	fixture := newPortTunnelHTTPFixture(t, "port-tunnel-http")
+	fake, pool := fixture.fake, fixture.pool
+	session := createPortSessionHTTP(t, fixture.serverURL, fixture.credential, fixture.sandbox, fixture.lease.ID)
 	if session.Transport != contracts.PortTransportProxied ||
-		!strings.HasPrefix(session.Endpoint, "ws://"+server.Listener.Addr().String()+"/v1/port-tunnels/") ||
-		strings.Contains(session.Endpoint, seed.RunnerID) {
+		!strings.HasPrefix(session.Endpoint, "ws://"+fixture.serverAddress+"/v1/port-tunnels/") ||
+		strings.Contains(session.Endpoint, fixture.seed.RunnerID) {
 		t.Fatalf("proxied PortSession = %#v", session)
 	}
 	connection := dialPortTunnel(t, session.Endpoint)
@@ -202,11 +225,145 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 		time.Sleep(time.Millisecond)
 	}
 	select {
-	case err := <-fakeErrors:
+	case err := <-fixture.fakeErrors:
 		if err != nil {
 			t.Fatal(err)
 		}
 	default:
+	}
+}
+
+// Streaming through a proxied tunnel writes to PostgreSQL once per checkpoint
+// and once at close, never per chunk, and data-plane traffic never changes the
+// Sandbox resource revision that If-Match consumers depend on.
+func TestPublicPortTunnelStreamingWritesAreIndependentOfChunkCount(t *testing.T) {
+	fixture := newPortTunnelHTTPFixture(t, "port-tunnel-stream")
+	updates := countSandboxAccountingUpdates(t, fixture.pool, fixture.sandbox.ID)
+	session := createPortSessionHTTP(t, fixture.serverURL, fixture.credential, fixture.sandbox, fixture.lease.ID)
+	connection := dialPortTunnel(t, session.Endpoint)
+	defer connection.Close()
+	opened := make(chan struct{})
+	go func() {
+		for event := range fixture.fake.events {
+			if event.kind == "open" {
+				close(opened)
+			}
+		}
+	}()
+	select {
+	case <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("fake Runner did not receive the Port Open")
+	}
+	close(fixture.fake.grantClientCredit)
+	revision := sandboxRevision(t, fixture.pool, fixture.sandbox.ID)
+	before := updates()
+
+	const chunks = 400
+	clientChunk, runnerChunk := bytes.Repeat([]byte{7}, 64), bytes.Repeat([]byte{9}, 100)
+	for range chunks {
+		if err := connection.WriteMessage(websocket.BinaryMessage, clientChunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := range chunks {
+		if err := fixture.fake.output(t.Context(), runnerChunk); err != nil {
+			t.Fatalf("runner chunk %d: %v", index, err)
+		}
+		if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if _, payload, err := connection.ReadMessage(); err != nil || !bytes.Equal(payload, runnerChunk) {
+			t.Fatalf("public chunk %d = %d bytes, %v", index, len(payload), err)
+		}
+	}
+	// At most one periodic checkpoint can fall inside the stream.
+	if streamed := updates() - before; streamed > 4 {
+		t.Fatalf("streaming %d chunks each way wrote %d accounting rows", chunks, streamed)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var state string
+		var clientBytes, runnerBytes int64
+		if err := fixture.pool.QueryRow(t.Context(), `
+			SELECT activity.state,port.client_bytes,port.runner_bytes
+			FROM secondbox.port_sessions AS port
+			JOIN secondbox.activity_sessions AS activity ON activity.id=port.id
+			WHERE port.id=$1`, session.ID,
+		).Scan(&state, &clientBytes, &runnerBytes); err != nil {
+			t.Fatal(err)
+		}
+		if state == "closed" {
+			if clientBytes != chunks*int64(len(clientChunk)) || runnerBytes != chunks*int64(len(runnerChunk)) {
+				t.Fatalf("recorded Port bytes = client %d, runner %d", clientBytes, runnerBytes)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Port tunnel disconnect did not close activity accounting")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if total := updates() - before; total > 12 {
+		t.Fatalf("streaming and closing wrote %d accounting rows", total)
+	}
+	if got := sandboxRevision(t, fixture.pool, fixture.sandbox.ID); got != revision {
+		t.Fatalf("Sandbox revision changed from %d to %d by Port traffic", revision, got)
+	}
+}
+
+func sandboxRevision(t *testing.T, pool *pgxpool.Pool, sandboxID string) int64 {
+	t.Helper()
+	var revision int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT revision FROM secondbox.sandboxes WHERE id=$1`, sandboxID,
+	).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	return revision
+}
+
+// countSandboxAccountingUpdates installs a trigger counting row updates to the
+// tables data-plane accounting touches for one Sandbox, and returns a reader.
+func countSandboxAccountingUpdates(t *testing.T, pool *pgxpool.Pool, sandboxID string) func() int64 {
+	t.Helper()
+	tables := []string{"sandboxes", "port_sessions", "data_plane_sessions", "activity_sessions"}
+	statements := []string{
+		`CREATE TABLE public.accounting_update_counts (sandbox_id text NOT NULL, relation text NOT NULL)`,
+		`CREATE FUNCTION public.count_accounting_update() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			INSERT INTO public.accounting_update_counts
+			VALUES (COALESCE(to_jsonb(NEW)->>'sandbox_id', to_jsonb(NEW)->>'id'), TG_TABLE_NAME);
+			RETURN NEW;
+		END $$`,
+	}
+	for _, table := range tables {
+		statements = append(statements, `CREATE TRIGGER count_accounting_update AFTER UPDATE ON secondbox.`+
+			table+` FOR EACH ROW EXECUTE FUNCTION public.count_accounting_update()`)
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(t.Context(), statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, table := range tables {
+			_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS count_accounting_update ON secondbox.`+table)
+		}
+		_, _ = pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS public.count_accounting_update()`)
+		_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS public.accounting_update_counts`)
+	})
+	return func() int64 {
+		var count int64
+		if err := pool.QueryRow(t.Context(), `
+			SELECT count(*) FROM public.accounting_update_counts WHERE sandbox_id=$1`, sandboxID,
+		).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
 	}
 }
 
@@ -275,10 +432,7 @@ type portFakeEvent struct {
 
 type portTunnelFakeRunner struct {
 	broker            *runnercontrol.LiveDataPlaneBroker
-	dataPlaneStore    *runnercontrol.PostgresDataPlaneStore
 	session           *runnercontrol.Session
-	runnerID          string
-	connectionID      string
 	incoming          chan *runnerv1.ControlPlaneToRunner
 	events            chan portFakeEvent
 	grantClientCredit chan struct{}
@@ -290,7 +444,6 @@ type portTunnelFakeRunner struct {
 func newPortTunnelFakeRunner(
 	t *testing.T,
 	broker *runnercontrol.LiveDataPlaneBroker,
-	dataPlaneStore *runnercontrol.PostgresDataPlaneStore,
 	runnerID string,
 	connectionID string,
 ) (*portTunnelFakeRunner, func()) {
@@ -334,8 +487,7 @@ func newPortTunnelFakeRunner(
 		t.Fatal(err)
 	}
 	fake := &portTunnelFakeRunner{
-		broker: broker, dataPlaneStore: dataPlaneStore, session: session,
-		runnerID: runnerID, connectionID: connectionID,
+		broker: broker, session: session,
 		incoming: make(chan *runnerv1.ControlPlaneToRunner, 16),
 		events:   make(chan portFakeEvent, 16), grantClientCredit: make(chan struct{}),
 		nextSequence: 1,
@@ -417,12 +569,8 @@ func (fake *portTunnelFakeRunner) deliver(ctx context.Context, payload any) erro
 	if err != nil {
 		return err
 	}
-	deliver, err := fake.dataPlaneStore.RecordPortSessionFrame(ctx, runnercontrol.RunnerDataPlaneFrame{
-		RunnerID: fake.runnerID, ConnectionID: fake.connectionID, Message: message,
-	}, time.Now().UTC())
-	if err != nil || !deliver {
-		return errors.Join(err, errors.New("fake proxied Port frame was not deliverable"))
-	}
+	// Port bytes and credit are routed in memory, exactly as the runner control
+	// server routes them; only a terminal is recorded durably.
 	return fake.broker.Deliver(ctx, event)
 }
 
