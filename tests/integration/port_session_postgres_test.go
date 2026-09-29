@@ -483,14 +483,15 @@ func TestPostgresPortSessionCloseDuringAcknowledgementReleasesAdmission(t *testi
 	if got := fixture.admittedOperations(t); got != 1 {
 		t.Fatalf("admitted operations after connect = %d", got)
 	}
-	// The public connection drops mid-acknowledgement: the tunnel context is
-	// cancelled while the acknowledgement is being recorded.
+	// The public connection drops while the tunnel's accounting is being
+	// recorded: that write is cancelled with the tunnel.
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := fixture.dataPlaneStore.RecordPortTunnelAcknowledgement(
-		cancelled, tunnel.TenantRef, tunnel.SubjectRef, tunnel.Session.ID, 1, *fixture.now,
-	); !errors.Is(err, context.Canceled) {
-		t.Fatalf("in-flight acknowledgement error = %v", err)
+	if err := fixture.dataPlaneStore.CheckpointPortSession(cancelled, runnercontrol.PortSessionCheckpoint{
+		TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef, SessionID: tunnel.Session.ID,
+		ClientBytes: 1, RunnerBytes: 1, Active: true, Live: true, Now: *fixture.now,
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("in-flight checkpoint error = %v", err)
 	}
 	if err := fixture.portService.ClosePortTunnel(t.Context(), tunnel, "public port tunnel disconnected"); err != nil {
 		t.Fatal(err)

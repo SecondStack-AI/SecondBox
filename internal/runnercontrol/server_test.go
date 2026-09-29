@@ -348,14 +348,50 @@ func (failingCommandStateStore) ClaimCommands(
 	return nil, errCommandClaim
 }
 
-type recordingPortSessionStore struct{}
+type recordingPortSessionStore struct {
+	terminals []*runnerv1.PortFrame
+}
 
-func (*recordingPortSessionStore) RecordPortSessionFrame(
-	context.Context,
-	RunnerDataPlaneFrame,
-	time.Time,
+func (store *recordingPortSessionStore) RecordPortSessionTerminal(
+	_ context.Context,
+	frame RunnerDataPlaneFrame,
+	_ time.Time,
 ) (bool, error) {
+	store.terminals = append(store.terminals, frame.Message.GetPort())
 	return true, nil
+}
+
+// A Port chunk must never wait on PostgreSQL: the Runner connection is served
+// serially, so a durable write per chunk throttles every session and heartbeat
+// on it. Only the terminal outcome is recorded.
+func TestPortChunksBypassTheTerminalRecorder(t *testing.T) {
+	recorder := &recordingPortSessionStore{}
+	server := &Server{config: ServerConfig{PortSessions: recorder, LiveDataPlane: NewLiveDataPlaneBroker()}}
+	fence := &runnerv1.AssignmentFence{AssignmentId: "asn", SandboxId: "sbx", InstanceId: "ins", SandboxGeneration: 1, FencingToken: []byte("fence")}
+	for sequence, payload := range []any{
+		&runnerv1.PortFrame_Credit{Credit: &runnerv1.StreamCredit{ByteCount: 8}},
+		&runnerv1.PortFrame_Bytes{Bytes: &runnerv1.PortBytes{Data: []byte("chunk")}},
+		&runnerv1.PortFrame_Terminal{Terminal: &runnerv1.PortTerminal{Kind: runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED}},
+	} {
+		frame := &runnerv1.PortFrame{Fence: fence, OperationId: "port", StreamId: "stream", Sequence: uint64(sequence + 1)}
+		switch value := payload.(type) {
+		case *runnerv1.PortFrame_Credit:
+			frame.Payload = value
+		case *runnerv1.PortFrame_Bytes:
+			frame.Payload = value
+		case *runnerv1.PortFrame_Terminal:
+			frame.Payload = value
+		}
+		if err := server.persistEvent(t.Context(), Event{
+			Kind: EventPort, RunnerID: "runner", ConnectionID: "connection",
+			Message: &runnerv1.RunnerToControlPlane{Message: &runnerv1.RunnerToControlPlane_Port{Port: frame}},
+		}, time.Now()); err != nil {
+			t.Fatalf("Port frame %d: %v", sequence+1, err)
+		}
+	}
+	if len(recorder.terminals) != 1 || recorder.terminals[0].GetTerminal() == nil {
+		t.Fatalf("recorded Port frames = %v, want only the terminal", recorder.terminals)
+	}
 }
 
 type recordingControlPlaneSender struct {

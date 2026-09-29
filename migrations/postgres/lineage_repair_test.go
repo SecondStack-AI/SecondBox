@@ -50,6 +50,7 @@ var postFenceMigrationFiles = []string{
 	"0029_instance_execution_images.sql",
 	"0030_sandbox_execution_image_pin.sql",
 	"0031_profile_execution_assets_unpinned.sql",
+	"0032_port_stream_accounting.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {
