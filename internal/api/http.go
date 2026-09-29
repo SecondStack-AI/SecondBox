@@ -884,6 +884,10 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
+		if err := apiHandler.authorizeApplicationDataPlane(authority, request); err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
 		requestContext := context.WithValue(
 			request.Context(),
 			applicationAuthorityContextKey{},
