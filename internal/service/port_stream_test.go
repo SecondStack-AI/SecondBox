@@ -34,7 +34,7 @@ func (*scriptedPortDataPlaneStream) Close() error { return nil }
 
 func newScriptedPortStream() (*SandboxPortStream, *scriptedPortDataPlaneStream) {
 	tunnel := runnercontrol.PortTunnel{
-		Session: contracts.PortSession{ID: "port", SandboxID: "sbx", Generation: 1},
+		Session:  contracts.PortSession{ID: "port", SandboxID: "sbx", Generation: 1},
 		StreamID: "stream", AssignmentID: "asn", InstanceID: "ins", RunnerID: "runner",
 		RequestID: "request", LeaseID: "lease", FencingToken: []byte("fence"),
 		StreamWindowBytes: 16, MaximumRequestBytes: 1 << 20, MaximumResponseBytes: 1 << 20,
