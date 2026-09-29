@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -579,5 +580,106 @@ func TestPostgresCancellingSessionOfEndedAssignmentReleasesAdmission(t *testing.
 	}
 	if got := fixture.admittedOperations(t); got != 0 {
 		t.Fatalf("admitted operations after the Assignment ended = %d", got)
+	}
+}
+
+// A PortSession admitted under a Lease outlives the Lease's current grant: it
+// lives while the Lease is renewed, bounded by its own duration, and ends
+// promptly when the Lease is released, lapses, or is fenced.
+func TestPostgresPortSessionLivesWhileItsLeaseIsRenewed(t *testing.T) {
+	fixture := newPortSessionFixture(t, "port-lease-lifetime", fixtureControlPlaneNow)
+	start := *fixture.now
+	liveCheckpoint := func(tunnel runnercontrol.PortTunnel) error {
+		return fixture.dataPlaneStore.CheckpointPortSession(t.Context(), runnercontrol.PortSessionCheckpoint{
+			TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef, SessionID: tunnel.Session.ID,
+			Live: true, Now: *fixture.now,
+		})
+	}
+	sweep := func() {
+		t.Helper()
+		if _, err := fixture.dataPlaneStore.SweepDataPlane(t.Context(), *fixture.now, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acquire := func(key string) contracts.Lease {
+		t.Helper()
+		lease, err := fixture.portService.AcquireSandboxLease(
+			t.Context(), fixture.principal, fixture.sandbox.ID, fixture.sandbox.Generation, key, 60,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return lease
+	}
+	openLongSession := func(leaseID string, key string) runnercontrol.PortTunnel {
+		t.Helper()
+		// The session asks for five minutes under a one-minute Lease grant.
+		session, _, err := fixture.portService.CreateSandboxPortSession(
+			t.Context(), fixture.principal, "request-"+key, fixture.sandbox.ID, fixture.sandbox.Generation,
+			leaseID, key, contracts.PortTransportProxied,
+			contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 300},
+		)
+		if err != nil {
+			t.Fatalf("PortSession longer than the Lease grant: %v", err)
+		}
+		if !session.ExpiresAt.Equal(fixture.now.Add(300 * time.Second)) {
+			t.Fatalf("PortSession expiresAt = %s", session.ExpiresAt)
+		}
+		tunnel, err := fixture.portService.ConsumePortTunnel(t.Context(), session.Endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tunnel
+	}
+
+	lease := acquire("port-lifetime-renewed")
+	renewed := openLongSession(lease.ID, "port-lifetime-renewed")
+	for renewal := 1; renewal <= 4; renewal++ {
+		*fixture.now = start.Add(time.Duration(renewal) * 50 * time.Second)
+		if _, err := fixture.portService.RenewSandboxLease(
+			t.Context(), fixture.principal, lease.ID, fmt.Sprintf("port-lifetime-renew-%d", renewal), 60,
+		); err != nil {
+			t.Fatalf("renewal %d: %v", renewal, err)
+		}
+		sweep()
+		if state, _ := fixture.dataPlaneState(t, renewed.Session.ID); state != "running" {
+			t.Fatalf("after renewal %d at +%s the session is %q", renewal, fixture.now.Sub(start), state)
+		}
+		if err := liveCheckpoint(renewed); err != nil {
+			t.Fatalf("live checkpoint after renewal %d: %v", renewal, err)
+		}
+	}
+	if _, err := fixture.portService.ReleaseSandboxLease(
+		t.Context(), fixture.principal, lease.ID, "port-lifetime-release",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := liveCheckpoint(renewed); !errors.Is(err, ports.ErrLeaseInactive) {
+		t.Fatalf("live checkpoint after release = %v", err)
+	}
+	sweep()
+	if state, terminal := fixture.dataPlaneState(t, renewed.Session.ID); state != "cancelling" ||
+		terminal != runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED.String() {
+		t.Fatalf("released-Lease session = %q %q", state, terminal)
+	}
+
+	lapsing := acquire("port-lifetime-lapsed")
+	lapsed := openLongSession(lapsing.ID, "port-lifetime-lapsed")
+	*fixture.now = fixture.now.Add(61 * time.Second)
+	sweep()
+	if state, _ := fixture.dataPlaneState(t, lapsed.Session.ID); state != "cancelling" {
+		t.Fatalf("lapsed-Lease session = %q", state)
+	}
+
+	fencing := acquire("port-lifetime-fenced")
+	fenced := openLongSession(fencing.ID, "port-lifetime-fenced")
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.leases SET state='fenced' WHERE id=$1`, fencing.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	sweep()
+	if state, _ := fixture.dataPlaneState(t, fenced.Session.ID); state != "cancelling" {
+		t.Fatalf("fenced-Lease session = %q", state)
 	}
 }

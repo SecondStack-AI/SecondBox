@@ -102,19 +102,17 @@ func (handle *SandboxHandle) ForwardPort(ctx context.Context, listener net.Liste
 	return ctx.Err()
 }
 
-// Leave time for admission after the request crosses the network. Each request
-// reads the latest service-granted expiry, including successful Lease renewals.
+// A PortSession lives while its Lease is renewed, so each forwarded connection
+// asks for the Profile's full session duration and the keeper's renewals carry
+// it; the session ends when the Lease ends.
 func (handle *SandboxHandle) createForwardSession(ctx context.Context, policy PortPolicy, keeper *LeaseKeeper) (PortSession, error) {
 	keeper.mu.Lock()
-	expiresAt, leaseID, failure := keeper.lease.ExpiresAt, keeper.lease.ID, keeper.failure
+	leaseID, failure := keeper.lease.ID, keeper.failure
 	keeper.mu.Unlock()
 	if failure != nil {
 		return PortSession{}, fmt.Errorf("SecondBox Port forwarding Lease: %w", failure)
 	}
-	seconds := min(int64((time.Until(expiresAt)-time.Second)/time.Second), policy.MaximumSessionSeconds, int64(86400))
-	if seconds < 1 {
-		return PortSession{}, errors.New("SecondBox Port forwarding Lease has insufficient remaining lifetime")
-	}
+	seconds := min(policy.MaximumSessionSeconds, int64(86400))
 	return handle.CreatePortSession(ctx, CreatePortSessionRequest{Name: policy.Name, DurationSeconds: seconds}, "", leaseID)
 }
 

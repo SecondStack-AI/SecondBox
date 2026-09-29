@@ -118,6 +118,10 @@ Guest traffic cannot reach Runner listeners, the Runner's control-plane connecti
 
 A ProfileRevision lists approved guest ports, protocols, session duration, and concurrency. A trusted caller requests a session for one named approved port on a ready Sandbox generation and supplies the current Lease. Admission transactionally binds the tenant, subject, pinned ProfileRevision, Lease, assignment fence, generation, named port, protocol, duration, and subject/Profile/port-session limits.
 
+A PortSession lives while the Lease it was admitted under is renewed. Its requested `durationSeconds`, at most the Port policy's `maximumSessionSeconds`, bounds it and sets `expiresAt`; the Lease's current grant does not. The data-plane sweep ends the session when its Lease is released, lapses, or is fenced, and each live tunnel re-proves the Lease at its periodic checkpoint. The endpoint credential stays single-use, so a caller that reconnects creates a new PortSession.
+
+A Sandbox has one active Lease, so an application that shares a Sandbox between its own work and a long-lived viewer holds that Lease in one place and mints PortSessions under it: for example, Agent Platform holds the Sandbox's owner Lease, renews it on its own cadence, creates a PortSession per viewer connection, and relays the tunnel to its UI. Viewers never hold a Lease or a SecondBox credential of their own, and releasing the Lease ends every PortSession admitted under it.
+
 Admission is identical for both Port transports. The single-use credential exists for both and is consumed exactly once against PostgreSQL for both. Only the endpoint the control plane returns and the leg that carries bytes differ.
 
 ### Proxied transport

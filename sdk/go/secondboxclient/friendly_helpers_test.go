@@ -53,8 +53,8 @@ func TestPortForwardReportsPresentationAndCleanupFailures(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Error(err)
 			}
-			if request.DurationSeconds < 1 || time.Now().Add(time.Duration(request.DurationSeconds)*time.Second).After(leaseExpiry) {
-				http.Error(w, `{"code":"lease_inactive"}`, http.StatusConflict)
+			if request.DurationSeconds != 86400 {
+				http.Error(w, `{"code":"invalid_request"}`, http.StatusBadRequest)
 				return
 			}
 			_, _ = io.WriteString(w, `{"id":"port-1"}`)
@@ -91,7 +91,10 @@ func TestPortForwardReportsPresentationAndCleanupFailures(t *testing.T) {
 	}
 }
 
-func TestForwardSessionUsesObservedLeaseExpiryAndPolicy(t *testing.T) {
+// A forwarded connection's PortSession lives while the keeper renews its Lease,
+// so the request asks for the policy's full duration however little of the
+// current Lease grant remains, and fails only once the keeper has failed.
+func TestForwardSessionRequestsPolicyDurationUnderRenewedLease(t *testing.T) {
 	var duration int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request CreatePortSessionRequest
@@ -107,25 +110,19 @@ func TestForwardSessionUsesObservedLeaseExpiryAndPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	handle := NewSandboxHandle(client, Sandbox{ID: "sbx-1", Generation: 1})
-	keeper := newLeaseKeeper(client, Lease{ID: "lease-1", ExpiresAt: time.Now().Add(10 * time.Second)}, time.Minute, time.Second)
-	for _, test := range []struct {
-		remaining      time.Duration
-		maximum, upper int64
-	}{
-		{10 * time.Second, 86400, 9},
-		{30 * time.Second, 86400, 29}, // The next connection observes a renewed grant.
-		{30 * time.Second, 5, 5},
+	keeper := newLeaseKeeper(client, Lease{ID: "lease-1", ExpiresAt: time.Now().Add(2 * time.Second)}, time.Minute, time.Second)
+	for _, test := range []struct{ maximum, want int64 }{
+		{3600, 3600}, {90000, 86400}, {5, 5},
 	} {
-		keeper.lease.ExpiresAt = time.Now().Add(test.remaining)
 		if _, err := handle.createForwardSession(t.Context(), PortPolicy{Name: "http", MaximumSessionSeconds: test.maximum}, keeper); err != nil {
 			t.Fatal(err)
 		}
-		if duration < test.upper-1 || duration > test.upper {
-			t.Fatalf("duration=%d upper=%d", duration, test.upper)
+		if duration != test.want {
+			t.Fatalf("duration=%d, want %d", duration, test.want)
 		}
 	}
-	keeper.lease.ExpiresAt = time.Now().Add(time.Second)
-	if _, err := handle.createForwardSession(t.Context(), PortPolicy{Name: "http", MaximumSessionSeconds: 86400}, keeper); err == nil {
-		t.Fatal("accepted exhausted Lease")
+	keeper.failure = errors.New("renewal refused")
+	if _, err := handle.createForwardSession(t.Context(), PortPolicy{Name: "http", MaximumSessionSeconds: 3600}, keeper); err == nil {
+		t.Fatal("created a PortSession under a failed Lease keeper")
 	}
 }

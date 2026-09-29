@@ -698,9 +698,13 @@ func lockPortAdmissionAuthority(
 		}
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, fmt.Errorf("SecondBox Port Lease lookup: %w", err)
 	}
+	// A session is admitted under an active Lease and lives while that Lease
+	// is renewed: its own expiry bounds it by the Profile's maximum session
+	// duration, not by the Lease's current expiry. The data-plane sweep and
+	// every live checkpoint end it when the Lease is released, lapses, or is
+	// fenced.
 	if leaseGeneration != input.Session.Generation || leaseAccount != input.SubjectRef ||
-		leaseState != contracts.LeaseStateActive || !input.Now.Before(leaseExpiry) ||
-		input.Session.ExpiresAt.After(leaseExpiry) {
+		leaseState != contracts.LeaseStateActive || !input.Now.Before(leaseExpiry) {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrLeaseInactive
 	}
 	var spec contracts.ProfileRevisionSpec
