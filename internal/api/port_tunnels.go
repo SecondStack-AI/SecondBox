@@ -197,20 +197,7 @@ func (apiHandler *handler) readPortTunnelMessages(
 		if messageType != websocket.BinaryMessage {
 			return errors.New("SecondBox Port WebSocket accepts only binary messages")
 		}
-		for {
-			err = stream.Send(ctx, payload)
-			if !errors.Is(err, ports.ErrPortBackpressure) {
-				break
-			}
-			timer := time.NewTimer(apiHandler.service.DataPlanePollInterval())
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			}
-		}
-		if err != nil {
+		if err := stream.Send(ctx, payload); err != nil {
 			return err
 		}
 	}

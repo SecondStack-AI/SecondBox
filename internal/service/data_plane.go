@@ -187,10 +187,6 @@ func (service *ControlPlaneService) SandboxExecStreamEndpoint(
 	return base.String(), nil
 }
 
-func (service *ControlPlaneService) DataPlanePollInterval() time.Duration {
-	return service.dataPlanePollInterval
-}
-
 func (service *ControlPlaneService) SandboxExecStreamOutcome(
 	ctx context.Context,
 	principal contracts.Principal,

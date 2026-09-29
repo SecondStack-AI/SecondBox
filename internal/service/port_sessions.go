@@ -243,6 +243,9 @@ type SandboxPortStream struct {
 	acknowledged   int64
 	terminal       bool
 	failure        error
+	// creditChanged wakes a Send waiting for client credit when credit
+	// arrives or the stream ends.
+	creditChanged chan struct{}
 	// checkpointMu serializes checkpoints and guards the counts they recorded.
 	checkpointMu            sync.Mutex
 	checkpointedClientBytes int64
@@ -274,6 +277,7 @@ func (service *ControlPlaneService) OpenPortTunnel(
 	result := &SandboxPortStream{
 		service: service, tunnel: tunnel, stream: stream,
 		nextSend: 1, nextReceive: 1, responseCredit: tunnel.StreamWindowBytes,
+		creditChanged: make(chan struct{}, 1),
 	}
 	idleTimeout := tunnel.Session.ExpiresAt.Sub(service.now().UTC()).Milliseconds()
 	if idleTimeout < 1 {
@@ -349,7 +353,15 @@ func (stream *SandboxPortStream) fail(err error) {
 		stream.failure = err
 	}
 	stream.mu.Unlock()
+	stream.signalCreditChanged()
 	_ = stream.stream.Close()
+}
+
+func (stream *SandboxPortStream) signalCreditChanged() {
+	select {
+	case stream.creditChanged <- struct{}{}:
+	default:
+	}
 }
 
 func (stream *SandboxPortStream) send(payload any) error {
@@ -390,19 +402,35 @@ func (stream *SandboxPortStream) send(payload any) error {
 	return nil
 }
 
+// Send forwards one client message once the Runner has granted credit for it.
+// It waits for that credit, woken by the credit frame itself, so a client that
+// outpaces the guest is slowed by exactly the Runner's grants.
 func (stream *SandboxPortStream) Send(ctx context.Context, payload []byte) error {
-	stream.mu.Lock()
-	defer stream.mu.Unlock()
-	if stream.failure != nil {
-		return stream.failure
+	if len(payload) == 0 || int64(len(payload)) > stream.tunnel.StreamWindowBytes {
+		return runnercontrol.ErrDataPlaneFrameLimit
 	}
-	if stream.terminal || len(payload) == 0 || int64(len(payload)) > stream.clientCredit ||
-		stream.clientBytes+int64(len(payload)) > stream.tunnel.MaximumRequestBytes {
-		if len(payload) > 0 && int64(len(payload)) > stream.clientCredit {
-			return ports.ErrPortBackpressure
+	for {
+		stream.mu.Lock()
+		if stream.failure != nil {
+			stream.mu.Unlock()
+			return stream.failure
 		}
-		return runnercontrol.ErrDataPlaneSessionLimit
+		if stream.terminal ||
+			stream.clientBytes+int64(len(payload)) > stream.tunnel.MaximumRequestBytes {
+			stream.mu.Unlock()
+			return runnercontrol.ErrDataPlaneSessionLimit
+		}
+		if int64(len(payload)) <= stream.clientCredit {
+			break
+		}
+		stream.mu.Unlock()
+		select {
+		case <-stream.creditChanged:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	defer stream.mu.Unlock()
 	stream.clientCredit -= int64(len(payload))
 	stream.clientBytes += int64(len(payload))
 	return stream.send(&runnerv1.PortFrame_Bytes{Bytes: &runnerv1.PortBytes{
@@ -443,6 +471,7 @@ func (stream *SandboxPortStream) Receive(
 			}
 			stream.clientCredit += credit
 			stream.mu.Unlock()
+			stream.signalCreditChanged()
 			continue
 		case frame.GetBytes() != nil:
 			payload := frame.GetBytes().Data
@@ -459,6 +488,7 @@ func (stream *SandboxPortStream) Receive(
 			return event, nil
 		case frame.GetTerminal() != nil:
 			stream.terminal = true
+			stream.signalCreditChanged()
 			event := runnercontrol.PortTunnelEvent{
 				Sequence:       int64(frame.Sequence),
 				TerminalKind:   frame.GetTerminal().Kind.String(),

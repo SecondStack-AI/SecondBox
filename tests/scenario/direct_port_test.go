@@ -83,23 +83,19 @@ func TestScenarioDirectPortTransportQualification(t *testing.T) {
 			direct.echoMaximum(), pollInterval,
 		)
 	}
-	// Connect is measured and logged but deliberately not gated. It pays one
-	// control-plane consumption round trip plus one guest-protocol stream setup,
-	// neither of which this plan changes, and both vary with host load. Raising
-	// SECONDBOX_SCENARIO_DATA_PLANE_POLL_INTERVAL_MILLISECONDS is how to re-check
-	// that connect does not track the poll interval; a fixed threshold on it
-	// would assert host speed rather than a transport property.
-	//
-	// An SSH connection completes several round trips before its first prompt.
-	// Comparing whole interactive sessions rather than the bare handshake is
-	// what shows the transport difference: the proxy defers its cost to every
-	// round trip instead of charging it at connect.
-	if direct.session() >= proxied.session() {
+	// The proxied transport waits on Runner credit events rather than the poll
+	// interval, so its round trip must also land well inside one interval.
+	if proxied.echoMean() >= pollInterval {
 		t.Fatalf(
-			"direct Port interactive session = %v, proxied baseline = %v",
-			direct.session(), proxied.session(),
+			"proxied Port echo mean = %v, want below one %v data-plane poll interval",
+			proxied.echoMean(), pollInterval,
 		)
 	}
+	// Connect and whole-session times are measured and logged but deliberately
+	// not gated. Direct connect pays one control-plane consumption round trip
+	// plus TLS, so over a short interactive session the event-driven proxy can
+	// finish first; a fixed ordering between the transports would assert host
+	// speed rather than a transport property.
 
 	assertScenarioRunnerAddressNeedsTheGrant(t, ctx, fixture, ingress, handle, lease.ID)
 
