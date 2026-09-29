@@ -1135,8 +1135,6 @@ func classifyError(err error) (int, string, string, bool) {
 			"Eligible execution node set exceeds the image preparation limit; select a narrower Profile", false
 	case errors.Is(err, ports.ErrQuotaExceeded):
 		return http.StatusTooManyRequests, "quota_exceeded", "Quota exceeded", false
-	case errors.Is(err, ports.ErrPortBackpressure):
-		return http.StatusTooManyRequests, "backpressure", "Port tunnel has no available byte credit", true
 	case errors.Is(err, ports.ErrRevisionConflict):
 		return http.StatusPreconditionFailed, "precondition_failed", "Resource revision changed", false
 	case errors.Is(err, ports.ErrGenerationFenced):

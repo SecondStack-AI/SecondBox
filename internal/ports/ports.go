@@ -73,7 +73,6 @@ var (
 	ErrPortPolicyDenied        = errors.New("SecondBox exposed port is not approved by the pinned Profile")
 	ErrPortTokenInvalid        = errors.New("SecondBox port tunnel token is invalid")
 	ErrPortTokenConsumed       = errors.New("SecondBox port tunnel token was already consumed")
-	ErrPortBackpressure        = errors.New("SecondBox port tunnel has no available byte credit")
 	ErrWaitExpired             = errors.New("SecondBox Sandbox wait deadline expired")
 )
 
