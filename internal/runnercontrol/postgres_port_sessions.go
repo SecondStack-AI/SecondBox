@@ -496,7 +496,25 @@ func (store *PostgresDataPlaneStore) ClosePortSession(
 		return contracts.PortSession{}, err
 	}
 	if tunnel.Session.State == contracts.PortSessionStateOpen {
-		if err := store.enqueueCancellation(
+		var dataPlaneState string
+		if err := tx.QueryRow(ctx, `
+			SELECT state FROM secondbox.data_plane_sessions WHERE id=$1`, input.SessionID,
+		).Scan(&dataPlaneState); err != nil {
+			return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close state lookup: %w", err)
+		}
+		if tunnel.Session.Transport == contracts.PortTransportProxied && dataPlaneState == "pending" {
+			// A Runner learns of a proxied session only when its tunnel opens, so
+			// an unconsumed session has no Runner state to cancel.
+			if _, err := tx.Exec(ctx, `
+				UPDATE secondbox.data_plane_sessions SET terminal_kind=$2,terminal_detail=$3 WHERE id=$1`,
+				input.SessionID, runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED.String(), input.Reason,
+			); err != nil {
+				return contracts.PortSession{}, fmt.Errorf("SecondBox unconsumed PortSession close: %w", err)
+			}
+			if err := completeCancelledSession(ctx, tx, input.SessionID, input.Now.UTC(), store.retention); err != nil {
+				return contracts.PortSession{}, err
+			}
+		} else if err := store.enqueueCancellation(
 			ctx, tx, portDataPlaneSession(tunnel),
 			runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED.String(),
 			input.Reason, input.Now.UTC(),

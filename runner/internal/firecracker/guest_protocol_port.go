@@ -12,27 +12,41 @@ import (
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
-const firecrackerGuestPortFrameBytes = 64 << 10
+const (
+	firecrackerGuestPortFrameBytes = 64 << 10
+	// firecrackerGuestPortReceiveWindowBytes bounds the guest bytes one Port
+	// holds on the Runner: credit granted to the guest but not yet used, plus
+	// received bytes the caller has not read. Credit returns to the guest only
+	// as the caller reads, so a slow caller slows the guest socket instead of
+	// growing a buffer or losing the connection.
+	firecrackerGuestPortReceiveWindowBytes = 4 * firecrackerGuestPortFrameBytes
+	// firecrackerGuestPortCreditGrantBytes is the smallest top-up the adapter
+	// sends, so a stream of small reads does not become a stream of credit frames.
+	firecrackerGuestPortCreditGrantBytes = firecrackerGuestPortFrameBytes
+)
 
 type guestPortConnection struct {
-	stream        guestv1.GuestAgent_ConnectClient
-	binding       *guestv1.OperationBinding
-	cancel        context.CancelFunc
-	sendMu        sync.Mutex
-	nextSend      uint64
-	credit        *guestPortCredit
-	reads         chan guestPortRead
-	readMu        sync.Mutex
-	readPending   []byte
+	stream   guestv1.GuestAgent_ConnectClient
+	binding  *guestv1.OperationBinding
+	cancel   context.CancelFunc
+	sendMu   sync.Mutex
+	nextSend uint64
+	credit   *guestPortCredit
+	// opened reports the guest's first writable credit, or the failure that
+	// preceded it, exactly once.
+	opened chan error
+	readMu sync.Mutex
+	// receiveMu guards the receive window. The guest never holds more than
+	// receiveCredit, and receiveCredit plus receivedBytes never exceeds
+	// firecrackerGuestPortReceiveWindowBytes.
 	receiveMu     sync.Mutex
+	received      [][]byte
+	receivedBytes uint64
 	receiveCredit uint64
+	receiveErr    error
+	receiveReady  chan struct{}
 	closeOnce     sync.Once
 	closeErr      error
-}
-
-type guestPortRead struct {
-	data []byte
-	err  error
 }
 
 type guestPortCredit struct {
@@ -124,10 +138,7 @@ func OpenPortOverSession(
 		Connection: binding, AssignmentId: assignmentID,
 		OperationId: operationID, StreamId: operationID + "-port", Sequence: 1,
 	}
-	connection := &guestPortConnection{
-		stream: stream, binding: operationBinding, cancel: cancel, nextSend: 2,
-		credit: newGuestPortCredit(), reads: make(chan guestPortRead, 16),
-	}
+	connection := newGuestPortConnection(stream, operationBinding, cancel)
 	if err := stream.Send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_Port{Port: &guestv1.PortFrame{
 			Binding: cloneGuestOperationBinding(operationBinding),
@@ -143,17 +154,25 @@ func OpenPortOverSession(
 	select {
 	case <-portCtx.Done():
 		return nil, portCtx.Err()
-	case first := <-connection.reads:
-		if first.err != nil {
+	case err := <-connection.opened:
+		if err != nil {
 			cancel()
-			return nil, first.err
-		}
-		if len(first.data) != 0 {
-			cancel()
-			return nil, fmt.Errorf("Firecracker guest Port emitted bytes before initial credit")
+			return nil, err
 		}
 	}
 	return connection, nil
+}
+
+func newGuestPortConnection(
+	stream guestv1.GuestAgent_ConnectClient,
+	binding *guestv1.OperationBinding,
+	cancel context.CancelFunc,
+) *guestPortConnection {
+	return &guestPortConnection{
+		stream: stream, binding: binding, cancel: cancel, nextSend: 2,
+		credit: newGuestPortCredit(), opened: make(chan error, 1),
+		receiveReady: make(chan struct{}, 1),
+	}
 }
 
 func (session *GuestProtocolSession) openPortProtocolStream(
@@ -208,10 +227,17 @@ func (session *GuestProtocolSession) openPortProtocolStream(
 func (connection *guestPortConnection) receive(ctx context.Context) {
 	expectedSequence := uint64(1)
 	initial := true
+	fail := func(err error) {
+		if initial {
+			connection.opened <- err
+			return
+		}
+		connection.finishReceive(err)
+	}
 	for {
 		message, err := connection.stream.Recv()
 		if err != nil {
-			connection.deliver(guestPortRead{err: err})
+			fail(err)
 			return
 		}
 		frame := message.GetPort()
@@ -221,63 +247,111 @@ func (connection *guestPortConnection) receive(ctx context.Context) {
 			frame.Binding.StreamId != connection.binding.StreamId ||
 			!sameConnectionBinding(frame.Binding.Connection, connection.binding.Connection) ||
 			frame.Binding.Sequence != expectedSequence {
-			connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port frame binding or sequence is invalid")})
+			fail(fmt.Errorf("Firecracker guest Port frame binding or sequence is invalid"))
 			return
 		}
 		expectedSequence++
 		switch {
 		case frame.GetCredit() != nil:
 			if err := connection.credit.add(frame.GetCredit().ByteCount); err != nil {
-				connection.deliver(guestPortRead{err: err})
+				fail(err)
 				return
 			}
 			if initial {
 				initial = false
-				connection.deliver(guestPortRead{})
+				connection.opened <- nil
 			}
 		case frame.GetBytes() != nil:
 			if initial || len(frame.GetBytes().Data) == 0 {
-				connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port byte ordering is invalid")})
+				fail(fmt.Errorf("Firecracker guest Port byte ordering is invalid"))
 				return
 			}
 			if len(frame.GetBytes().Data) > firecrackerGuestPortFrameBytes {
-				connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port bytes exceed the frame bound")})
+				fail(fmt.Errorf("Firecracker guest Port bytes exceed the frame bound"))
 				return
 			}
-			connection.receiveMu.Lock()
-			if uint64(len(frame.GetBytes().Data)) > connection.receiveCredit {
-				connection.receiveMu.Unlock()
-				connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port bytes exceed granted credit")})
+			if err := connection.enqueueReceived(frame.GetBytes().Data); err != nil {
+				fail(err)
 				return
 			}
-			connection.receiveCredit -= uint64(len(frame.GetBytes().Data))
-			connection.receiveMu.Unlock()
-			connection.deliver(guestPortRead{data: bytes.Clone(frame.GetBytes().Data)})
 		case frame.GetTerminal() != nil:
 			detail := frame.GetTerminal().SafeDetail
 			if detail == "" {
 				detail = frame.GetTerminal().Kind.String()
 			}
-			connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port terminated: %s", detail)})
+			fail(fmt.Errorf("Firecracker guest Port terminated: %s", detail))
 			return
 		default:
-			connection.deliver(guestPortRead{err: fmt.Errorf("Firecracker guest Port payload is invalid")})
+			fail(fmt.Errorf("Firecracker guest Port payload is invalid"))
 			return
 		}
 		select {
 		case <-ctx.Done():
+			fail(ctx.Err())
 			return
 		default:
 		}
 	}
 }
 
-func (connection *guestPortConnection) deliver(read guestPortRead) {
-	select {
-	case connection.reads <- read:
-	default:
-		connection.cancel()
+// enqueueReceived spends granted credit on one guest frame. A guest that sends
+// more than it was granted has broken the protocol; nothing it sent is queued.
+func (connection *guestPortConnection) enqueueReceived(data []byte) error {
+	connection.receiveMu.Lock()
+	if uint64(len(data)) > connection.receiveCredit {
+		connection.receiveMu.Unlock()
+		return fmt.Errorf("Firecracker guest Port bytes exceed granted credit")
 	}
+	connection.receiveCredit -= uint64(len(data))
+	connection.received = append(connection.received, bytes.Clone(data))
+	connection.receivedBytes += uint64(len(data))
+	connection.receiveMu.Unlock()
+	connection.signalReceive()
+	return nil
+}
+
+// finishReceive records the outcome that follows every byte already queued.
+func (connection *guestPortConnection) finishReceive(err error) {
+	connection.receiveMu.Lock()
+	if connection.receiveErr == nil {
+		connection.receiveErr = err
+	}
+	connection.receiveMu.Unlock()
+	connection.signalReceive()
+}
+
+func (connection *guestPortConnection) signalReceive() {
+	select {
+	case connection.receiveReady <- struct{}{}:
+	default:
+	}
+}
+
+// grantReceiveCreditLocked tops the guest's credit up to the receive window.
+func (connection *guestPortConnection) grantReceiveCreditLocked() uint64 {
+	held := connection.receiveCredit + connection.receivedBytes
+	if held >= firecrackerGuestPortReceiveWindowBytes ||
+		firecrackerGuestPortReceiveWindowBytes-held < firecrackerGuestPortCreditGrantBytes {
+		return 0
+	}
+	grant := firecrackerGuestPortReceiveWindowBytes - held
+	connection.receiveCredit += grant
+	return grant
+}
+
+// takeReceivedLocked removes at most maximum bytes from the head of the queue.
+func (connection *guestPortConnection) takeReceivedLocked(maximum int) []byte {
+	head := connection.received[0]
+	size := min(maximum, len(head))
+	data := head[:size:size]
+	if size == len(head) {
+		connection.received[0] = nil
+		connection.received = connection.received[1:]
+	} else {
+		connection.received[0] = head[size:]
+	}
+	connection.receivedBytes -= uint64(size)
+	return data
 }
 
 func (connection *guestPortConnection) Read(
@@ -289,41 +363,43 @@ func (connection *guestPortConnection) Read(
 	}
 	connection.readMu.Lock()
 	defer connection.readMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(connection.readPending) == 0 {
-		// Grant the caller's full read bound for every new frame. A guest agent
-		// built before the short-read credit fix discards the unused part of a
-		// grant after a short read, so credit the adapter believes is still
-		// outstanding may already be gone inside the guest; withholding a new
-		// grant on that belief stalls the connection. The receive side still
-		// bounds every frame by the total granted, and frames never exceed
-		// firecrackerGuestPortFrameBytes, so a guest cannot exceed the window
-		// the Runner has explicitly offered.
-		connection.receiveMu.Lock()
-		connection.receiveCredit += uint64(maximum)
-		connection.receiveMu.Unlock()
-		if err := connection.send(&guestv1.PortFrame{
-			Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: uint64(maximum)}},
-		}); err != nil {
-			connection.cancel()
+	for {
+		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		connection.receiveMu.Lock()
+		var data []byte
+		if len(connection.received) > 0 {
+			data = connection.takeReceivedLocked(maximum)
+		} else if connection.receiveErr != nil {
+			err := connection.receiveErr
+			connection.receiveMu.Unlock()
+			return nil, err
+		}
+		grant := uint64(0)
+		if connection.receiveErr == nil {
+			grant = connection.grantReceiveCreditLocked()
+		}
+		connection.receiveMu.Unlock()
+		if grant > 0 {
+			if err := connection.send(&guestv1.PortFrame{
+				Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: grant}},
+			}); err != nil {
+				// A guest that finished its stream refuses further credit while
+				// its last bytes may still be queued here; they are delivered
+				// before this outcome, unless the guest's own terminal came first.
+				connection.finishReceive(fmt.Errorf("grant Firecracker guest Port credit: %w", err))
+			}
+		}
+		if data != nil {
+			return data, nil
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case read := <-connection.reads:
-			if read.err != nil {
-				return nil, read.err
-			}
-			connection.readPending = read.data
+		case <-connection.receiveReady:
 		}
 	}
-	size := min(maximum, len(connection.readPending))
-	data := connection.readPending[:size:size]
-	connection.readPending = connection.readPending[size:]
-	return data, nil
 }
 
 func (connection *guestPortConnection) Write(

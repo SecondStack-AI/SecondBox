@@ -3,6 +3,7 @@ package firecracker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -13,62 +14,109 @@ import (
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
-func TestGuestPortAdapterBoundsReadsAndGrantsPerFrame(t *testing.T) {
+// The adapter grants the guest only what the receive window has room for and
+// returns credit as the caller reads. A caller that lags behind the guest
+// therefore holds the guest back; it is never disconnected for being slow.
+func TestGuestPortAdapterWithholdsCreditWhileCallerLags(t *testing.T) {
 	stream := &recordingPortCreditStream{}
-	connection := &guestPortConnection{
-		stream: stream, binding: &guestv1.OperationBinding{},
-		reads: make(chan guestPortRead, 5), cancel: func() {},
+	connection := newGuestPortConnection(stream, &guestv1.OperationBinding{}, func() {})
+	data, err := readWithGuest(t, connection, stream, 8)
+	if err != nil || len(data) != 8 {
+		t.Fatalf("first Read = %d bytes, error = %v", len(data), err)
 	}
-	for _, data := range []string{"a", "b", "cdefgh", "i", "jkl"} {
-		connection.reads <- guestPortRead{data: []byte(data)}
+	if stream.granted != firecrackerGuestPortReceiveWindowBytes {
+		t.Fatalf("initial grant = %d, want the receive window %d", stream.granted, firecrackerGuestPortReceiveWindowBytes)
 	}
-	// Every new frame is preceded by a grant of the caller's full bound; reads
-	// served from a buffered frame grant nothing.
-	for _, step := range []struct {
-		maximum int
-		want    string
-		granted uint64
-	}{
-		{8, "a", 8}, {7, "b", 15}, {2, "cd", 17}, {2, "ef", 17},
-		{2, "gh", 17}, {1, "i", 18}, {3, "jkl", 21},
-	} {
-		data, err := connection.Read(t.Context(), step.maximum)
-		if err != nil || string(data) != step.want || stream.granted != step.granted {
-			t.Fatalf("Read(%d) = %q, error = %v, total credit = %d; want %q, %d",
-				step.maximum, data, err, stream.granted, step.want, step.granted)
+	// Eight freed bytes are below one grant unit, so the guest keeps what it
+	// had and spends all of it before the caller reads again.
+	fillGuestPortWindow(t, connection)
+	if held := heldGuestPortBytes(connection); held != firecrackerGuestPortReceiveWindowBytes-8 {
+		t.Fatalf("held bytes = %d, want %d", held, firecrackerGuestPortReceiveWindowBytes-8)
+	}
+	if err := connection.enqueueReceived([]byte{1}); err == nil {
+		t.Fatal("guest exceeded the receive window without a protocol error")
+	}
+	// Reads below one grant unit free room without re-granting it.
+	granted := stream.granted
+	for range 3 {
+		if _, err := connection.Read(t.Context(), firecrackerGuestPortCreditGrantBytes/4); err != nil {
+			t.Fatal(err)
 		}
+	}
+	if stream.granted != granted {
+		t.Fatalf("partial reads granted %d more bytes", stream.granted-granted)
+	}
+	if _, err := connection.Read(t.Context(), firecrackerGuestPortCreditGrantBytes/4); err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(firecrackerGuestPortCreditGrantBytes + 8); stream.granted-granted != want {
+		t.Fatalf("returned credit = %d, want %d", stream.granted-granted, want)
+	}
+	if held := heldGuestPortBytes(connection); held != firecrackerGuestPortReceiveWindowBytes {
+		t.Fatalf("held bytes after top-up = %d, want %d", held, firecrackerGuestPortReceiveWindowBytes)
 	}
 }
 
-// A guest agent from a signed bundle built before the short-read credit fix
-// discards whatever part of a grant a short read left unused. The adapter must
-// keep granting for each new frame instead of waiting on credit the guest no
-// longer holds; otherwise every interactive Port stalls after its first short
-// reply. The fake guest below models that legacy behavior exactly.
-func TestGuestPortAdapterKeepsGrantingToLegacyGuestAfterShortReads(t *testing.T) {
+func TestGuestPortAdapterDeliversQueuedBytesBeforeTerminalOutcome(t *testing.T) {
 	stream := &recordingPortCreditStream{}
-	connection := &guestPortConnection{
-		stream: stream, binding: &guestv1.OperationBinding{},
-		reads: make(chan guestPortRead, 5), cancel: func() {},
-	}
-	legacyGuestCredit := uint64(0)
-	stream.onGrant = func(granted uint64) {
-		legacyGuestCredit += granted
-		// The legacy guest reserves the whole grant for one socket read and
-		// forgets the remainder after a short read; only the bytes read are
-		// delivered.
-		connection.reads <- guestPortRead{data: []byte("x")}
-		legacyGuestCredit = 0
-	}
-	for i := range 3 {
-		data, err := connection.Read(t.Context(), 8)
-		if err != nil || string(data) != "x" {
-			t.Fatalf("legacy short read %d = %q, error = %v", i, data, err)
-		}
-		if stream.granted != uint64(8*(i+1)) {
-			t.Fatalf("legacy short read %d granted %d in total, want %d", i, stream.granted, 8*(i+1))
+	connection := newGuestPortConnection(stream, &guestv1.OperationBinding{}, func() {})
+	connection.receiveCredit = 6
+	for _, chunk := range []string{"ab", "cdef"} {
+		if err := connection.enqueueReceived([]byte(chunk)); err != nil {
+			t.Fatal(err)
 		}
 	}
+	connection.finishReceive(io.EOF)
+	var received []byte
+	for {
+		data, err := connection.Read(t.Context(), 3)
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatal(err)
+			}
+			break
+		}
+		received = append(received, data...)
+	}
+	if string(received) != "abcdef" {
+		t.Fatalf("received %q before the terminal outcome", received)
+	}
+}
+
+func readWithGuest(
+	t *testing.T,
+	connection *guestPortConnection,
+	stream *recordingPortCreditStream,
+	size int,
+) ([]byte, error) {
+	t.Helper()
+	stream.onGrant = func(uint64) {
+		stream.onGrant = nil
+		if err := connection.enqueueReceived(make([]byte, size)); err != nil {
+			t.Error(err)
+		}
+	}
+	return connection.Read(t.Context(), size)
+}
+
+func fillGuestPortWindow(t *testing.T, connection *guestPortConnection) {
+	t.Helper()
+	connection.receiveMu.Lock()
+	remaining := connection.receiveCredit
+	connection.receiveMu.Unlock()
+	for remaining > 0 {
+		size := min(remaining, firecrackerGuestPortFrameBytes)
+		if err := connection.enqueueReceived(make([]byte, size)); err != nil {
+			t.Fatal(err)
+		}
+		remaining -= size
+	}
+}
+
+func heldGuestPortBytes(connection *guestPortConnection) uint64 {
+	connection.receiveMu.Lock()
+	defer connection.receiveMu.Unlock()
+	return connection.receiveCredit + connection.receivedBytes
 }
 
 func TestGuestPortAdapterRejectsUncreditedFramesBeforeQueueing(t *testing.T) {
@@ -84,15 +132,16 @@ func TestGuestPortAdapterRejectsUncreditedFramesBeforeQueueing(t *testing.T) {
 				Binding: byteBinding, Payload: &guestv1.PortFrame_Bytes{Bytes: &guestv1.PortBytes{Data: make([]byte, size)}},
 			}}},
 		}}
-		connection := &guestPortConnection{
-			stream: stream, binding: binding, receiveCredit: 8,
-			credit: newGuestPortCredit(), reads: make(chan guestPortRead, 3), cancel: func() {},
-		}
+		connection := newGuestPortConnection(stream, binding, func() {})
+		connection.receiveCredit = 8
 		connection.receive(t.Context())
-		<-connection.reads // Initial writable credit acknowledges the Port opening.
-		read := <-connection.reads
-		if len(read.data) != 0 || read.err == nil || !strings.Contains(read.err.Error(), "bytes exceed") {
-			t.Fatalf("uncredited frame size %d: queued data = %d bytes, error = %v", size, len(read.data), read.err)
+		if err := <-connection.opened; err != nil {
+			t.Fatalf("initial writable credit did not open the Port: %v", err)
+		}
+		if len(connection.received) != 0 || connection.receiveErr == nil ||
+			!strings.Contains(connection.receiveErr.Error(), "bytes exceed") {
+			t.Fatalf("uncredited frame size %d: queued %d frames, error = %v",
+				size, len(connection.received), connection.receiveErr)
 		}
 	}
 }
@@ -188,6 +237,85 @@ func TestGuestPortAdapterPreservesCreditAcrossShortReadsAndBurst(t *testing.T) {
 	}
 	select {
 	case err := <-echoErrors:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
+// A guest socket that produces faster than the caller consumes is slowed by
+// withheld credit: the connection survives, the Runner holds at most one
+// receive window, and every byte arrives in order. This runs the production
+// guest Port pump behind the production adapter.
+func TestGuestPortAdapterBackpressuresFastGuestProducer(t *testing.T) {
+	socketPath, _, _ := startDirectUnixSocketGuest(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	session := negotiateDirectUnixSocket(t, ctx, socketPath)
+	defer session.Close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	// Small paced writes make the guest pump emit many small frames, the shape
+	// of an application streaming discrete messages; a plain bulk write would
+	// coalesce into full frames.
+	const total, chunkBytes = 2 << 20, 1 << 10
+	producerErrors := make(chan error, 1)
+	go func() {
+		connection, err := listener.Accept()
+		if err != nil {
+			producerErrors <- err
+			return
+		}
+		defer connection.Close()
+		chunk := make([]byte, chunkBytes)
+		for offset := 0; offset < total; offset += len(chunk) {
+			for index := range chunk {
+				chunk[index] = byte((offset + index) % 251)
+			}
+			if _, err := connection.Write(chunk); err != nil {
+				producerErrors <- err
+				return
+			}
+			time.Sleep(20 * time.Microsecond)
+		}
+		producerErrors <- nil
+	}()
+	port, err := OpenPortOverSession(ctx, session, "assignment-1", &runnerprotocol.PortOpen{
+		GuestPort: uint32(listener.Addr().(*net.TCPAddr).Port),
+		Protocol:  "tcp", IdleTimeoutMs: 30_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer port.Close()
+	adapter := port.(*guestPortConnection)
+	received := 0
+	maximumHeld := uint64(0)
+	for received < total {
+		// The caller is slower than the producer throughout.
+		time.Sleep(200 * time.Microsecond)
+		maximumHeld = max(maximumHeld, heldGuestPortBytes(adapter))
+		data, err := port.Read(ctx, firecrackerGuestPortFrameBytes)
+		if err != nil {
+			t.Fatalf("Port read after %d of %d bytes: %v", received, total, err)
+		}
+		for index, value := range data {
+			if value != byte((received+index)%251) {
+				t.Fatalf("byte %d = %d, want %d", received+index, value, (received+index)%251)
+			}
+		}
+		received += len(data)
+	}
+	if maximumHeld > firecrackerGuestPortReceiveWindowBytes {
+		t.Fatalf("Runner held %d guest bytes, window is %d", maximumHeld, firecrackerGuestPortReceiveWindowBytes)
+	}
+	select {
+	case err := <-producerErrors:
 		if err != nil {
 			t.Fatal(err)
 		}
