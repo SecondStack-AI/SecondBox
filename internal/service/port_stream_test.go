@@ -37,7 +37,7 @@ func newScriptedPortStream() (*SandboxPortStream, *scriptedPortDataPlaneStream) 
 		Session:  contracts.PortSession{ID: "port", SandboxID: "sbx", Generation: 1},
 		StreamID: "stream", AssignmentID: "asn", InstanceID: "ins", RunnerID: "runner",
 		RequestID: "request", LeaseID: "lease", FencingToken: []byte("fence"),
-		StreamWindowBytes: 16, MaximumRequestBytes: 1 << 20, MaximumResponseBytes: 1 << 20,
+		StreamWindowBytes: 16,
 	}
 	fake := &scriptedPortDataPlaneStream{
 		sent:     make(chan *runnerv1.ControlPlaneToRunner, 16),

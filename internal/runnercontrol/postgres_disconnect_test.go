@@ -311,12 +311,12 @@ func TestCloseCurrentConnectionDetachesProxiedTerminalAndFailsOtherDataPlaneSess
 		INSERT INTO secondbox.port_sessions (
 			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,
 			data_plane_session_id,lease_id,generation,name,guest_port,protocol,
-			stream_window_bytes,client_bytes,runner_bytes,state,
+			stream_window_bytes,state,
 			idempotency_key,request_hash,expires_at,created_at,updated_at,
 				connected_at,closed_at
 		) VALUES (
 			'port-session','tenant','subject','sandbox','profile-revision',
-			'session-port','',1,'http',8080,'tcp',1024,0,0,'open','','',
+			'session-port','',1,'http',8080,'tcp',1024,'open','','',
 				$2,$3,$3,$3,NULL
 		)`,
 		pgx.QueryExecModeSimpleProtocol,

@@ -99,10 +99,8 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 	if err := enforcePortSessionCapacity(ctx, tx, input, tunnel.ProfileRevisionID, policy); err != nil {
 		return PortTunnel{}, false, err
 	}
-	maximumPayloadBytes := min(spec.Execution.MaximumTransferBytes, store.maximumSessionBytes)
-	if maximumPayloadBytes < 1 || tunnel.StreamWindowBytes < 1 ||
-		tunnel.StreamWindowBytes > maximumPayloadBytes {
-		return PortTunnel{}, false, ports.ErrQuotaExceeded
+	if tunnel.StreamWindowBytes < 1 {
+		return PortTunnel{}, false, ports.ErrPortPolicyDenied
 	}
 	session := DataPlaneSession{
 		ID: input.Session.ID, StreamID: input.StreamID,
@@ -113,8 +111,10 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 		Generation: input.Session.Generation, FencingToken: bytes.Clone(tunnel.FencingToken),
 		RequestID: input.RequestID, LeaseID: input.LeaseID,
 		Kind: "port", Operation: "port:" + input.Session.Name, State: "pending",
-		DeadlineAt: input.Session.ExpiresAt, MaximumResponseBytes: maximumPayloadBytes,
-		MaximumRequestBytes: maximumPayloadBytes, StreamWindowBytes: tunnel.StreamWindowBytes,
+		// A Port session relays a byte stream without buffering or storing it:
+		// the stream window bounds its memory and its duration bounds its life,
+		// so it carries no byte limit.
+		DeadlineAt: input.Session.ExpiresAt, StreamWindowBytes: tunnel.StreamWindowBytes,
 		CreatedAt: input.Now.UTC(), UpdatedAt: input.Now.UTC(),
 	}
 	// The direct transport hands the caller a Runner address, so a Runner that
@@ -140,7 +140,7 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 		) VALUES (
 			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'port',$13,$14,'pending',0,$15,$16,$17,$18,$18,$19,0,0,false,false,0,'',NULL,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',$20,'{}',$21,$22,$22,NULL,$23,1
 		)`,
-		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, input.RequestID, input.LeaseID, session.Operation, session.StreamID, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, maximumPayloadBytes, tunnel.StreamWindowBytes, resultJSON, requestJSON, input.Now.UTC(), input.Now.UTC().Add(store.retention),
+		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, input.RequestID, input.LeaseID, session.Operation, session.StreamID, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, session.MaximumResponseBytes, tunnel.StreamWindowBytes, resultJSON, requestJSON, input.Now.UTC(), input.Now.UTC().Add(store.retention),
 	); err != nil {
 		return PortTunnel{}, false, fmt.Errorf("SecondBox Port data-plane insert: %w", err)
 	}
@@ -164,9 +164,9 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.port_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,transport,credential_digest,stream_window_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,transport,credential_digest,stream_window_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$16,$17,$11,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL
+			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$16,$17,$11,'open',$12,$13,$14,$15,$15,NULL,NULL
 		)`,
 		input.Session.ID, tunnel.TenantRef, tunnel.SubjectRef, input.Session.SandboxID, tunnel.ProfileRevisionID, input.LeaseID, input.Session.Generation, input.Session.Name, policy.Port, policy.Protocol, tunnel.StreamWindowBytes, input.IdempotencyKey, input.RequestHash, input.Session.ExpiresAt.UTC(), input.Now.UTC(), tunnel.Session.Transport, input.CredentialDigest,
 	); err != nil {
@@ -526,12 +526,8 @@ func (store *PostgresDataPlaneStore) ClosePortSession(
 		); err != nil {
 			return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close update: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.activity_sessions
-			SET state='closed',closed_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
-			input.SessionID, input.Now.UTC(),
-		); err != nil {
-			return contracts.PortSession{}, fmt.Errorf("SecondBox Port activity close update: %w", err)
+		if err := closeActivitySession(ctx, tx, input.SessionID, input.Now.UTC()); err != nil {
+			return contracts.PortSession{}, err
 		}
 		tunnel.Session.State = contracts.PortSessionStateClosed
 	}
@@ -553,80 +549,6 @@ func (store *PostgresDataPlaneStore) ClosePortSession(
 		return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close commit: %w", err)
 	}
 	return tunnel.Session, nil
-}
-
-// CheckpointPortSession records one live tunnel's cumulative byte counts and,
-// when bytes moved, its useful activity. It is written once per checkpoint
-// interval rather than per chunk; data-plane traffic never changes the Sandbox
-// resource revision.
-func (store *PostgresDataPlaneStore) CheckpointPortSession(
-	ctx context.Context,
-	input PortSessionCheckpoint,
-) error {
-	if input.TenantRef == "" || input.SubjectRef == "" || input.SessionID == "" ||
-		input.ClientBytes < 0 || input.RunnerBytes < 0 || input.Now.IsZero() {
-		return errors.New("SecondBox Port checkpoint is incomplete")
-	}
-	now := input.Now.UTC()
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("SecondBox Port checkpoint transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	if err := rowlock.TenantAndSubjectQuota(ctx, tx, input.TenantRef, input.SubjectRef); err != nil {
-		return fmt.Errorf("SecondBox Port checkpoint quota lock: %w", err)
-	}
-	tunnel, err := lockPortTunnel(ctx, tx, input.TenantRef, input.SubjectRef, "", input.SessionID)
-	if err != nil {
-		return err
-	}
-	if input.Live {
-		if tunnel.Session.State != contracts.PortSessionStateOpen {
-			return ports.ErrLeaseInactive
-		}
-		if err := validateLivePortAuthority(ctx, tx, tunnel, now); err != nil {
-			return err
-		}
-	}
-	if input.ClientBytes > tunnel.MaximumRequestBytes || input.RunnerBytes > tunnel.MaximumResponseBytes {
-		return ErrDataPlaneSessionLimit
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.port_sessions
-		SET client_bytes=GREATEST(client_bytes,$2),runner_bytes=GREATEST(runner_bytes,$3),updated_at=$4
-		WHERE id=$1`,
-		input.SessionID, input.ClientBytes, input.RunnerBytes, now,
-	); err != nil {
-		return fmt.Errorf("SecondBox Port checkpoint update: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_sessions
-		SET outbound_bytes=GREATEST(outbound_bytes,$2),inbound_bytes=GREATEST(inbound_bytes,$3),updated_at=$4
-		WHERE id=$1`,
-		input.SessionID, input.ClientBytes, input.RunnerBytes, now,
-	); err != nil {
-		return fmt.Errorf("SecondBox Port checkpoint data-plane update: %w", err)
-	}
-	if input.Active {
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.activity_sessions
-			SET last_activity_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
-			input.SessionID, now,
-		); err != nil {
-			return fmt.Errorf("SecondBox Port checkpoint activity update: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.sandboxes SET last_activity_at=$1,updated_at=$1
-			WHERE id=$2 AND generation=$3`,
-			now, tunnel.Session.SandboxID, tunnel.Session.Generation,
-		); err != nil {
-			return fmt.Errorf("SecondBox Port checkpoint Sandbox activity update: %w", err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("SecondBox Port checkpoint commit: %w", err)
-	}
-	return nil
 }
 
 func lockPortAdmissionAuthority(
@@ -700,9 +622,8 @@ func lockPortAdmissionAuthority(
 	}
 	// A session is admitted under an active Lease and lives while that Lease
 	// is renewed: its own expiry bounds it by the Profile's maximum session
-	// duration, not by the Lease's current expiry. The data-plane sweep and
-	// every live checkpoint end it when the Lease is released, lapses, or is
-	// fenced.
+	// duration, not by the Lease's current expiry. The data-plane sweep ends it
+	// when the Lease is released, lapses, or is fenced.
 	if leaseGeneration != input.Session.Generation || leaseAccount != input.SubjectRef ||
 		leaseState != contracts.LeaseStateActive || !input.Now.Before(leaseExpiry) {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrLeaseInactive
@@ -864,12 +785,8 @@ func (store *PostgresDataPlaneStore) terminatePortSession(
 	); err != nil {
 		return fmt.Errorf("SecondBox Port terminal projection update: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.activity_sessions
-		SET state='closed',closed_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
-		tunnel.Session.ID, now.UTC(),
-	); err != nil {
-		return fmt.Errorf("SecondBox Port terminal activity close: %w", err)
+	if err := closeActivitySession(ctx, tx, tunnel.Session.ID, now.UTC()); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("SecondBox Port terminal projection commit: %w", err)
@@ -887,10 +804,8 @@ func portDataPlaneSession(tunnel PortTunnel) DataPlaneSession {
 		FencingToken: bytes.Clone(tunnel.FencingToken), RequestID: tunnel.RequestID,
 		LeaseID: tunnel.LeaseID, Kind: "port", Operation: "port:" + tunnel.Session.Name,
 		State: "running", DeadlineAt: tunnel.Session.ExpiresAt,
-		MaximumResponseBytes: tunnel.MaximumResponseBytes,
-		MaximumRequestBytes:  tunnel.MaximumRequestBytes,
-		StreamWindowBytes:    tunnel.StreamWindowBytes,
-		CreatedAt:            tunnel.Session.CreatedAt, UpdatedAt: tunnel.Session.CreatedAt,
+		StreamWindowBytes: tunnel.StreamWindowBytes,
+		CreatedAt:         tunnel.Session.CreatedAt, UpdatedAt: tunnel.Session.CreatedAt,
 	}
 }
 
@@ -901,7 +816,6 @@ const portTunnelSelect = `
 	  port.profile_revision_id,session.assignment_id,session.instance_id,session.runner_id,
 	  session.request_id,
 	  session.stream_id,session.fencing_token,port.guest_port,port.stream_window_bytes,
-	  session.maximum_request_bytes,session.maximum_response_bytes,
 	  sandbox.tenant_ref,sandbox.subject_ref,COALESCE(runner.data_plane_address,'')
 	FROM secondbox.port_sessions AS port
 	JOIN secondbox.data_plane_sessions AS session ON session.id=port.data_plane_session_id
@@ -952,7 +866,6 @@ func scanPortTunnel(row dataPlaneRow) (PortTunnel, error) {
 		&tunnel.LeaseID, &tunnel.ProfileRevisionID,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID, &tunnel.RequestID, &tunnel.StreamID,
 		&tunnel.FencingToken, &tunnel.GuestPort, &tunnel.StreamWindowBytes,
-		&tunnel.MaximumRequestBytes, &tunnel.MaximumResponseBytes,
 		&tunnel.TenantRef, &tunnel.SubjectRef, &encodedDataPlaneEndpoint,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1082,12 +995,8 @@ func (store *PostgresDataPlaneStore) RecordPortSessionTerminal(
 	); err != nil {
 		return false, fmt.Errorf("SecondBox inbound Port terminal projection update: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.activity_sessions
-		SET state='closed',closed_at=$2,updated_at=$2 WHERE id=$1 AND state='active'`,
-		session.ID, now,
-	); err != nil {
-		return false, fmt.Errorf("SecondBox inbound Port activity close: %w", err)
+	if err := closeActivitySession(ctx, tx, session.ID, now); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("SecondBox inbound Port terminal commit: %w", err)
@@ -1097,3 +1006,33 @@ func (store *PostgresDataPlaneStore) RecordPortSessionTerminal(
 
 var _ PortSessionStore = (*PostgresDataPlaneStore)(nil)
 var _ PortSessionTerminalRecorder = (*PostgresDataPlaneStore)(nil)
+
+// closeActivitySession closes one active useful-activity session and stamps
+// its Sandbox's last activity at the close. Streams write nothing while they
+// run, because an active session already holds the Sandbox out of idle, so the
+// close is the instant idle time is measured from.
+func closeActivitySession(ctx context.Context, tx pgx.Tx, sessionID string, now time.Time) error {
+	var sandboxID string
+	var generation int64
+	err := tx.QueryRow(ctx, `
+		UPDATE secondbox.activity_sessions
+		SET state='closed',closed_at=$2,last_activity_at=$2,updated_at=$2
+		WHERE id=$1 AND state='active'
+		RETURNING sandbox_id,generation`,
+		sessionID, now.UTC(),
+	).Scan(&sandboxID, &generation)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox activity session close: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes SET last_activity_at=$3,updated_at=$3
+		WHERE id=$1 AND generation=$2`,
+		sandboxID, generation, now.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox activity session Sandbox stamp: %w", err)
+	}
+	return nil
+}

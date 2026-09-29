@@ -64,7 +64,7 @@ Profiles and every Tenant/Subject quota are explicitly operator-selected.
 | `lifecycle.leaseSeconds` | seconds | Profile / 60 | no: renewable owner authority must expire | API, database and Runner fences | operator / new Sandbox; each lease remains finite |
 | `execution.maximumDeadlineMilliseconds` | milliseconds | Profile / 900000 | null policy ceiling; each command still needs a finite deadline | data-plane admission, Runner and guest cancellation | operator / new Sandbox, next admitted command |
 | `execution.maximumBufferedOutputBytes` | bytes | Profile / 1 MiB | no: control-plane and guest buffered response memory bound | API, relay, Runner, guest | operator / new Sandbox |
-| `execution.maximumTransferBytes` | bytes | Profile / 256 MiB | unsupported: relay session byte accounting and Runner file transfer limit (1 GiB) are finite | API, relay, guest file stream | operator / new Sandbox |
+| `execution.maximumTransferBytes` | bytes | Profile / 256 MiB | unsupported: Exec and File relay byte accounting and Runner file transfer limit (1 GiB) are finite; Port sessions carry no byte limit | API, Exec and File relay, guest file stream | operator / new Sandbox |
 | `execution.streamWindowBytes` | bytes in flight | Profile / 64 KiB | no: credit flow control requires a finite window | relay, Runner, guest | operator / new Sandbox |
 | `execution.terminalDetachSeconds` | seconds | Profile / 0 (disabled) | no: detached terminal authority expires | terminal admission and sweeper | operator / new Sandbox |
 | `resources.concurrentOperations` | reserved operation slots | Profile / 4 | unsupported: placement reserves this concrete finite capacity on a Runner | scheduler and data-plane admission | operator / new Sandbox |
