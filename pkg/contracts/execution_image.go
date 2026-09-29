@@ -30,7 +30,10 @@ func (image *ExecutionImage) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*image = ExecutionImage(decoded)
-	return image.Validate()
+	if image.Validate() != nil {
+		return &RequestFieldError{Field: "reference", Reason: "must be a fully qualified tag or sha256 digest reference of at most 512 bytes"}
+	}
+	return nil
 }
 
 type PrepareImageRequest struct {

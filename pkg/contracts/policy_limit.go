@@ -62,7 +62,7 @@ func (limit *PolicyLimit) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if value < 0 || value > MaximumPolicyLimit {
-		return errors.New("SecondBox policy limit must be an exact nonnegative JSON integer or null")
+		return &RequestFieldError{Reason: "must be null or an exact JSON integer from 0 to 9007199254740991"}
 	}
 	*limit = PolicyLimit(value)
 	return nil
@@ -96,7 +96,7 @@ func decodeCompletePolicy(data []byte, target any, fields ...string) error {
 	}
 	for _, field := range fields {
 		if _, ok := present[field]; !ok {
-			return fmt.Errorf("SecondBox policy field %s is required", field)
+			return &RequestFieldError{Field: field, Reason: "is required"}
 		}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -105,7 +105,7 @@ func decodeCompletePolicy(data []byte, target any, fields ...string) error {
 		return err
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return errors.New("SecondBox policy must contain one object")
+		return &RequestFieldError{Reason: "must contain exactly one JSON object"}
 	}
 	return nil
 }

@@ -167,7 +167,7 @@ func TestInvalidRequestErrorUsesStaticTitleAndCorrelation(t *testing.T) {
 	apiHandler.writeError(
 		writer,
 		request,
-		requestValidationError(errors.New(validationText)),
+		errors.Join(ports.ErrInvalidRequest, errors.New(validationText)),
 	)
 
 	response := writer.Result()

@@ -3,6 +3,7 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -16,6 +17,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -256,7 +258,7 @@ func (apiHandler *handler) writeSandboxFile(writer http.ResponseWriter, request 
 func requireBinaryContentType(request *http.Request) error {
 	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/octet-stream" {
-		return requestValidationError(errors.New("SecondBox File upload Content-Type must be application/octet-stream"))
+		return &ports.InvalidFieldError{Field: "Content-Type", Reason: "must be application/octet-stream"}
 	}
 	return nil
 }
@@ -587,7 +589,7 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 					return
 				}
 			} else if body == nil {
-				apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox start request must be an object")))
+				apiHandler.writeError(writer, request, &ports.InvalidFieldError{Field: "body", Reason: "must be a JSON object"})
 				return
 			}
 		}
@@ -849,13 +851,18 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 		if subtle.ConstantTimeCompare(presentedHash[:], apiHandler.platformTokenHash[:]) == 1 {
 			tenantRef := request.Header.Get("X-SecondBox-Tenant-Ref")
 			subjectRef := request.Header.Get("X-SecondBox-Subject-Ref")
-			if !ownershipRefPattern.MatchString(tenantRef) ||
-				!ownershipRefPattern.MatchString(subjectRef) {
-				apiHandler.writeError(
-					writer,
-					request,
-					requestValidationError(errors.New("SecondBox tenant and subject references must contain 1 to 128 visible ASCII characters")),
-				)
+			var invalidRefs []error
+			for _, ref := range []struct{ header, value string }{
+				{"X-SecondBox-Tenant-Ref", tenantRef}, {"X-SecondBox-Subject-Ref", subjectRef},
+			} {
+				if !ownershipRefPattern.MatchString(ref.value) {
+					invalidRefs = append(invalidRefs, &ports.InvalidFieldError{
+						Field: ref.header, Reason: "must contain 1 to 128 visible ASCII characters",
+					})
+				}
+			}
+			if len(invalidRefs) != 0 {
+				apiHandler.writeError(writer, request, errors.Join(invalidRefs...))
 				return
 			}
 			principal := contracts.Principal{
@@ -1021,10 +1028,8 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		Type: "https://secondbox.dev/problems/" + code, Title: title, Status: status,
 		Code: code, RequestID: writer.Header().Get("X-Request-ID"), Retryable: retryable,
 	}
-	var alignment *ports.ResourceAlignmentError
-	if errors.As(err, &alignment) {
-		problem.Title = alignment.Error()
-		problem.Details = []contracts.ProblemDetail{{Field: alignment.Field, Reason: "must use whole MiB (multiples of 1048576 bytes)"}}
+	if code == "invalid_request" {
+		problem.Title, problem.Details = invalidRequestProblemDetails(err, title)
 	}
 	var resourcesError *ports.ResourcesExceedProfileError
 	if errors.As(err, &resourcesError) {
@@ -1163,19 +1168,15 @@ func classifyError(err error) (int, string, string, bool) {
 	}
 }
 
-func requestValidationError(err error) error {
-	return errors.Join(ports.ErrInvalidRequest, err)
-}
-
 func parseHTTPDigest(value string) (string, error) {
 	const prefix = "sha-256=:"
 	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, ":") {
-		return "", requestValidationError(errors.New("SecondBox Digest must contain a SHA-256 content digest"))
+		return "", &ports.InvalidFieldError{Field: "Digest", Reason: "must contain a SHA-256 content digest"}
 	}
 	encoded := strings.TrimSuffix(strings.TrimPrefix(value, prefix), ":")
 	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil || len(decoded) != sha256.Size || base64.StdEncoding.EncodeToString(decoded) != encoded {
-		return "", requestValidationError(errors.New("SecondBox Digest must contain canonical SHA-256 base64"))
+		return "", &ports.InvalidFieldError{Field: "Digest", Reason: "must contain canonical SHA-256 base64"}
 	}
 	return hex.EncodeToString(decoded), nil
 }
@@ -1194,16 +1195,22 @@ func protocolChecksumToHTTPDigest(checksum string) (string, error) {
 
 func decodeStrictJSON(request *http.Request, destination any) error {
 	if request.Body == nil {
-		return requestValidationError(errors.New("SecondBox JSON request body is required"))
+		return &ports.InvalidFieldError{Field: "body", Reason: "is required"}
 	}
-	decoder := json.NewDecoder(io.LimitReader(request.Body, (1<<20)+1))
+	// The decoder reads a complete value before decoding it, so the captured
+	// bytes hold the whole refused object when a custom decoder fails.
+	var captured bytes.Buffer
+	decoder := json.NewDecoder(io.TeeReader(io.LimitReader(request.Body, (1<<20)+1), &captured))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
-		return requestValidationError(fmt.Errorf("SecondBox JSON request decoding failed: %w", err))
+		return errors.Join(
+			jsonRequestBodyFieldError(err, captured.Bytes(), reflect.TypeOf(destination)),
+			fmt.Errorf("SecondBox JSON request decoding failed: %w", err),
+		)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return requestValidationError(errors.New("SecondBox JSON request must contain exactly one object"))
+		return &ports.InvalidFieldError{Field: "body", Reason: "must contain exactly one JSON object"}
 	}
 	return nil
 }
@@ -1217,7 +1224,7 @@ func requireEmptyBody(request *http.Request) error {
 	if errors.Is(decoder.Decode(&value), io.EOF) {
 		return nil
 	}
-	return requestValidationError(errors.New("SecondBox request body must be empty"))
+	return &ports.InvalidFieldError{Field: "body", Reason: "must be empty"}
 }
 
 func (apiHandler *handler) writeJSON(
@@ -1445,7 +1452,7 @@ func queryLimit(request *http.Request) (int, error) {
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < 1 || value > 200 {
-		return 0, requestValidationError(errors.New("SecondBox list limit must be an integer between 1 and 200"))
+		return 0, &ports.InvalidFieldError{Field: "limit", Reason: "must be an integer between 1 and 200"}
 	}
 	return value, nil
 }
@@ -1461,21 +1468,20 @@ func queryMetadataFilter(request *http.Request) (map[string]string, error) {
 		return nil, nil
 	}
 	if len(values) > maximumMetadataFilterEntries {
-		return nil, requestValidationError(fmt.Errorf(
-			"SecondBox list metadata filter must not exceed %d entries",
-			maximumMetadataFilterEntries,
-		))
+		return nil, &ports.InvalidFieldError{
+			Field: "metadata", Reason: fmt.Sprintf("must not exceed %d entries", maximumMetadataFilterEntries),
+		}
 	}
 	filter := make(map[string]string, len(values))
 	for _, entry := range values {
 		name, value, found := strings.Cut(entry, "=")
 		if !found || strings.TrimSpace(name) == "" || len(name) > 128 || len(value) > 1024 {
-			return nil, requestValidationError(errors.New(
-				"SecondBox list metadata filter must be name=value within the Metadata bounds",
-			))
+			return nil, &ports.InvalidFieldError{
+				Field: "metadata", Reason: "must be name=value with a non-blank name of at most 128 bytes and a value of at most 1024 bytes",
+			}
 		}
 		if _, duplicate := filter[name]; duplicate {
-			return nil, requestValidationError(errors.New("SecondBox list metadata filter must not repeat a name"))
+			return nil, &ports.InvalidFieldError{Field: "metadata", Reason: "must not repeat a name"}
 		}
 		filter[name] = value
 	}
@@ -1491,7 +1497,7 @@ func parseIfMatch(request *http.Request) (int64, error) {
 	value = strings.TrimPrefix(value, "revision-")
 	revision, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || revision < 1 {
-		return 0, requestValidationError(errors.New("SecondBox If-Match must contain a positive revision ETag"))
+		return 0, &ports.InvalidFieldError{Field: "If-Match", Reason: `must contain a positive revision ETag such as "revision-1"`}
 	}
 	return revision, nil
 }
@@ -1499,7 +1505,7 @@ func parseIfMatch(request *http.Request) (int64, error) {
 func parseGeneration(request *http.Request) (int64, error) {
 	generation, err := strconv.ParseInt(request.Header.Get("SecondBox-Generation"), 10, 64)
 	if err != nil || generation < 1 {
-		return 0, requestValidationError(errors.New("SecondBox-Generation must contain a positive integer"))
+		return 0, &ports.InvalidFieldError{Field: "SecondBox-Generation", Reason: "must contain a positive integer"}
 	}
 	return generation, nil
 }

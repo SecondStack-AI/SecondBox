@@ -37,10 +37,14 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
-	if leaseID == "" ||
-		request.Rows < 1 || request.Rows > 1000 ||
-		request.Columns < 1 || request.Columns > 1000 {
-		return runnercontrol.DataPlaneSession{}, false, invalidRequest(errors.New("SecondBox Terminal Lease or dimensions are invalid"))
+	if leaseID == "" {
+		return runnercontrol.DataPlaneSession{}, false, invalidField("SecondBox-Lease-ID", "is required")
+	}
+	if request.Rows < 1 || request.Rows > 1000 {
+		return runnercontrol.DataPlaneSession{}, false, invalidField("rows", "must be between 1 and 1000")
+	}
+	if request.Columns < 1 || request.Columns > 1000 {
+		return runnercontrol.DataPlaneSession{}, false, invalidField("columns", "must be between 1 and 1000")
 	}
 	if _, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
 		Command: request.Command, Cwd: request.Cwd, Environment: request.Environment,

@@ -249,7 +249,7 @@ func (service *ControlPlaneService) CreateProfileIdempotent(
 		return contracts.Profile{}, false, err
 	}
 	if !profileNamePattern.MatchString(request.Name) {
-		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox Profile name must match ^[a-z][a-z0-9-]{0,79}$"))
+		return contracts.Profile{}, false, invalidField("name", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	if err := validateProfileRevisionSpec(request.Spec); err != nil {
 		return contracts.Profile{}, false, err
@@ -410,19 +410,19 @@ func (service *ControlPlaneService) createSandboxOperation(
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	if !profileNamePattern.MatchString(request.Profile) {
-		return contracts.Sandbox{}, contracts.Operation{}, false, invalidRequest(errors.New("SecondBox Sandbox profile name is invalid"))
+		return contracts.Sandbox{}, contracts.Operation{}, false, invalidField("profile", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	if request.Image.Reference != "" {
 		if err := request.Image.Validate(); err != nil {
-			return contracts.Sandbox{}, contracts.Operation{}, false, invalidRequest(err)
+			return contracts.Sandbox{}, contracts.Operation{}, false, errors.Join(executionImageFieldError(), err)
 		}
 	}
 	if len(request.SourceSnapshotID) > 128 {
 		return contracts.Sandbox{}, contracts.Operation{}, false,
-			invalidRequest(errors.New("SecondBox source Snapshot ID exceeds its bound"))
+			invalidField("sourceSnapshotId", "must not exceed 128 bytes")
 	}
 	canonicalRequest, err := json.Marshal(request)
 	if err != nil {
@@ -499,7 +499,7 @@ func (service *ControlPlaneService) UpdateSandboxMetadata(
 		return contracts.Sandbox{}, ports.ErrAuthorizationDenied
 	}
 	if expectedRevision < 1 {
-		return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox Sandbox expected revision must be positive"))
+		return contracts.Sandbox{}, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, err
@@ -590,7 +590,7 @@ func (service *ControlPlaneService) StartSandbox(
 ) (contracts.Operation, error) {
 	if image.Reference != "" {
 		if err := image.Validate(); err != nil {
-			return contracts.Operation{}, invalidRequest(err)
+			return contracts.Operation{}, errors.Join(executionImageFieldError(), err)
 		}
 	}
 	return service.setSandboxDesiredState(
@@ -644,15 +644,19 @@ func (service *ControlPlaneService) RelocateSandbox(
 	}
 	if expectedRevision < 1 {
 		return contracts.Operation{}, false,
-			invalidRequest(errors.New("SecondBox Workspace relocation If-Match revision must be positive"))
+			invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	request.TargetRunnerID = strings.TrimSpace(request.TargetRunnerID)
 	request.RunnerPool = strings.TrimSpace(request.RunnerPool)
-	if (request.TargetRunnerID == "") == (request.RunnerPool == "") ||
-		len(request.TargetRunnerID) > 128 ||
-		(request.RunnerPool != "" && !profileNamePattern.MatchString(request.RunnerPool)) {
+	if (request.TargetRunnerID == "") == (request.RunnerPool == "") {
 		return contracts.Operation{}, false,
-			invalidRequest(errors.New("SecondBox Workspace relocation requires exactly one valid target Runner or RunnerPool"))
+			invalidField("body", "must contain exactly one of targetRunnerId or runnerPool")
+	}
+	if len(request.TargetRunnerID) > 128 {
+		return contracts.Operation{}, false, invalidField("targetRunnerId", "must not exceed 128 bytes")
+	}
+	if request.RunnerPool != "" && !profileNamePattern.MatchString(request.RunnerPool) {
+		return contracts.Operation{}, false, invalidField("runnerPool", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	canonicalRequest, err := json.Marshal(request)
 	if err != nil {
@@ -704,7 +708,7 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 		return contracts.Operation{}, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Operation{}, invalidRequest(errors.New("SecondBox lifecycle If-Match revision must be positive"))
+		return contracts.Operation{}, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	canonicalRequest, err := json.Marshal(struct {
 		Kind     string            `json:"kind"`
@@ -787,7 +791,7 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 		return contracts.Lease{}, ports.ErrAuthorizationDenied
 	}
 	if generation < 1 {
-		return contracts.Lease{}, invalidRequest(errors.New("SecondBox Lease generation must be positive"))
+		return contracts.Lease{}, invalidField("SecondBox-Generation", "must contain a positive integer")
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.Lease{}, err
@@ -799,7 +803,7 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 		return contracts.Lease{}, err
 	}
 	if durationSeconds < 1 || durationSeconds > 86400 || durationSeconds > policy.LeaseSeconds {
-		return contracts.Lease{}, invalidRequest(errors.New("SecondBox Lease duration exceeds the pinned lifecycle policy"))
+		return contracts.Lease{}, invalidField("durationSeconds", fmt.Sprintf("must be between 1 and %d under the pinned lifecycle policy", min(policy.LeaseSeconds, 86400)))
 	}
 	requestHash, err := hashCanonicalRequest(struct {
 		DurationSeconds int64 `json:"durationSeconds"`
@@ -862,7 +866,7 @@ func (service *ControlPlaneService) RenewSandboxLease(
 		return contracts.Lease{}, err
 	}
 	if durationSeconds < 1 || durationSeconds > 86400 || durationSeconds > policy.LeaseSeconds {
-		return contracts.Lease{}, invalidRequest(errors.New("SecondBox Lease duration exceeds the pinned lifecycle policy"))
+		return contracts.Lease{}, invalidField("durationSeconds", fmt.Sprintf("must be between 1 and %d under the pinned lifecycle policy", min(policy.LeaseSeconds, 86400)))
 	}
 	requestHash, err := hashCanonicalRequest(struct {
 		DurationSeconds int64 `json:"durationSeconds"`
@@ -948,7 +952,7 @@ func (service *ControlPlaneService) InspectSandbox(
 		return contracts.SandboxInspection{}, ports.ErrAuthorizationDenied
 	}
 	if generation < 1 {
-		return contracts.SandboxInspection{}, invalidRequest(errors.New("SecondBox inspection generation must be positive"))
+		return contracts.SandboxInspection{}, invalidField("SecondBox-Generation", "must contain a positive integer")
 	}
 	return service.store.ReadSandboxInspection(ctx, ports.GenerationInput{
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
@@ -987,7 +991,7 @@ func (service *ControlPlaneService) TouchSandbox(
 		return contracts.TouchResult{}, ports.ErrAuthorizationDenied
 	}
 	if generation < 1 {
-		return contracts.TouchResult{}, invalidRequest(errors.New("SecondBox touch generation must be positive"))
+		return contracts.TouchResult{}, invalidField("SecondBox-Generation", "must contain a positive integer")
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.TouchResult{}, err
@@ -1027,18 +1031,18 @@ func (service *ControlPlaneService) WaitSandbox(
 		return contracts.Sandbox{}, ports.ErrAuthorizationDenied
 	}
 	if request.DeadlineMilliseconds < 1 || request.DeadlineMilliseconds > 60000 {
-		return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox wait deadlineMilliseconds must be between 1 and 60000"))
+		return contracts.Sandbox{}, invalidField("deadlineMilliseconds", "must be between 1 and 60000")
 	}
 	if len(request.States) < 1 || len(request.States) > 10 {
-		return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox wait states must contain between 1 and 10 values"))
+		return contracts.Sandbox{}, invalidField("states", "must contain between 1 and 10 values")
 	}
 	requested := make(map[string]struct{}, len(request.States))
 	for _, state := range request.States {
 		if !validSandboxState(state) {
-			return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox wait state is invalid"))
+			return contracts.Sandbox{}, invalidField("states", "must contain only Sandbox states")
 		}
 		if _, duplicate := requested[state]; duplicate {
-			return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox wait states must be unique"))
+			return contracts.Sandbox{}, invalidField("states", "must be unique")
 		}
 		requested[state] = struct{}{}
 	}
@@ -1135,7 +1139,7 @@ func (service *ControlPlaneService) adminIdempotency(
 	now time.Time,
 ) (ports.AdminIdempotencyInput, error) {
 	if idempotencyKey == "" {
-		return ports.AdminIdempotencyInput{}, invalidRequest(errors.New("SecondBox management Idempotency-Key is required"))
+		return ports.AdminIdempotencyInput{}, invalidField("Idempotency-Key", "is required")
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return ports.AdminIdempotencyInput{}, err
@@ -1186,16 +1190,26 @@ func invalidRequest(err error) error {
 	return errors.Join(ports.ErrInvalidRequest, err)
 }
 
+// invalidField names the public request input that made a request invalid.
+func invalidField(field, reason string) error {
+	return &ports.InvalidFieldError{Field: field, Reason: reason}
+}
+
+// executionImageFieldError names the refused client-selected execution image.
+func executionImageFieldError() error {
+	return invalidField("image.reference", "must be a fully qualified tag or sha256 digest reference of at most 512 bytes")
+}
+
 func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	if !profileNamePattern.MatchString(spec.Pool) {
-		return invalidRequest(errors.New("SecondBox Profile runner pool selector is invalid"))
+		return invalidField("spec.pool", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	if spec.Architecture != "amd64" && spec.Architecture != "arm64" {
-		return invalidRequest(errors.New("SecondBox Profile architecture must be amd64 or arm64"))
+		return invalidField("spec.architecture", "must be amd64 or arm64")
 	}
 	if spec.Resources.VCPUCount < 1 || spec.Resources.MemoryBytes < 1 || spec.Resources.WorkspaceBytes < 1 ||
 		spec.Resources.ConcurrentOperations < 1 {
-		return invalidRequest(errors.New("SecondBox Profile resource limits must be positive"))
+		return invalidField("spec.resources", "must have positive vcpuCount, memoryBytes, workspaceBytes, and concurrentOperations")
 	}
 	for _, axis := range []struct {
 		name  string
@@ -1204,15 +1218,15 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		{"memoryBytes", spec.Resources.MemoryBytes}, {"workspaceBytes", spec.Resources.WorkspaceBytes},
 	} {
 		if axis.value%(1<<20) != 0 {
-			return &ports.ResourceAlignmentError{Field: "resources." + axis.name}
+			return ports.ResourceAlignmentError("spec.resources." + axis.name)
 		}
 	}
 	if spec.ResourceCeiling != nil {
 		if spec.Startup.Mode == contracts.StartupModeSnapshotResume {
-			return invalidRequest(errors.New("SecondBox Profile snapshot_resume forbids resourceCeiling"))
+			return invalidField("spec.resourceCeiling", "must be omitted when spec.startup.mode is snapshot_resume")
 		}
 		if len(spec.ResourceCeiling) != 3 {
-			return invalidRequest(errors.New("SecondBox Profile resourceCeiling must state exactly vcpuCount, memoryBytes, and workspaceBytes"))
+			return invalidField("spec.resourceCeiling", "must state exactly vcpuCount, memoryBytes, and workspaceBytes")
 		}
 		for _, axis := range []struct {
 			name    string
@@ -1222,81 +1236,91 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		} {
 			bound, present := spec.ResourceCeiling[axis.name]
 			if bound != nil && axis.name != "vcpuCount" && *bound%(1<<20) != 0 {
-				return &ports.ResourceAlignmentError{Field: "resourceCeiling." + axis.name}
+				return ports.ResourceAlignmentError("spec.resourceCeiling." + axis.name)
 			}
 			if !present || (bound != nil && *bound < axis.minimum) {
-				return invalidRequest(fmt.Errorf("SecondBox Profile resourceCeiling.%s must be explicit null or at least resources.%s", axis.name, axis.name))
+				return invalidField("spec.resourceCeiling."+axis.name, "must be explicit null or at least spec.resources."+axis.name)
 			}
 		}
 	}
 	if spec.Startup.Mode != contracts.StartupModeColdBoot &&
 		spec.Startup.Mode != contracts.StartupModeSnapshotResume {
-		return invalidRequest(errors.New("SecondBox Profile startup mode must be cold_boot or snapshot_resume"))
+		return invalidField("spec.startup.mode", "must be cold_boot or snapshot_resume")
 	}
 	if spec.Lifecycle.InitialState != contracts.SandboxDesiredStateStopped &&
 		spec.Lifecycle.InitialState != contracts.SandboxDesiredStateRunning {
-		return invalidRequest(errors.New("SecondBox Profile initial state must be stopped or running"))
+		return invalidField("spec.lifecycle.initialState", "must be stopped or running")
 	}
 	if spec.Lifecycle.DrainGraceSeconds < 1 || !spec.Lifecycle.IdleSeconds.Valid(1) ||
 		!spec.Lifecycle.MaximumDurationSeconds.Valid(1) || spec.Lifecycle.LeaseSeconds < 1 {
-		return invalidRequest(errors.New("SecondBox Profile lifecycle limits must be positive"))
+		return invalidField("spec.lifecycle", "must have positive drainGraceSeconds and leaseSeconds and positive or null idleSeconds and maximumDurationSeconds")
 	}
 	if err := (contracts.SandboxLifecycleLimits{IdleSeconds: spec.Lifecycle.IdleSeconds, MaximumDurationSeconds: spec.Lifecycle.MaximumDurationSeconds}).Validate(); err != nil {
-		return invalidRequest(err)
+		return errors.Join(invalidField("spec.lifecycle", "must have idleSeconds and maximumDurationSeconds representable as durations"), err)
 	}
 	if spec.LifecycleCeiling != nil {
 		if err := spec.LifecycleCeiling.Validate(); err != nil {
-			return invalidRequest(err)
+			return errors.Join(invalidField("spec.lifecycleCeiling", "must have null or positive representable idleSeconds and maximumDurationSeconds"), err)
 		}
 		if !spec.Lifecycle.IdleSeconds.Within(spec.LifecycleCeiling.IdleSeconds) || !spec.Lifecycle.MaximumDurationSeconds.Within(spec.LifecycleCeiling.MaximumDurationSeconds) {
-			return invalidRequest(errors.New("SecondBox lifecycle defaults exceed Profile ceiling"))
+			return invalidField("spec.lifecycle", "must have idleSeconds and maximumDurationSeconds within spec.lifecycleCeiling")
 		}
 	}
 	if !spec.Retention.SnapshotRetentionSeconds.Valid(1) || int64(spec.Retention.SnapshotRetentionSeconds) > int64((1<<63-1)/time.Second) || !spec.Retention.SnapshotLimit.Valid(0) {
-		return invalidRequest(errors.New("SecondBox Profile retention limits are invalid"))
+		return invalidField("spec.retention", "must have a nonnegative or null snapshotLimit and a positive representable or null snapshotRetentionSeconds")
 	}
 	if !spec.Execution.MaximumDeadlineMilliseconds.Valid(1) || int64(spec.Execution.MaximumDeadlineMilliseconds) > int64((1<<63-1)/time.Millisecond) || spec.Execution.MaximumBufferedOutputBytes < 1 ||
 		spec.Execution.MaximumBufferedOutputBytes > runnercontrol.MaximumBufferedExecBytes ||
 		spec.Execution.StreamWindowBytes < 4096 || spec.Execution.MaximumTransferBytes < 1 ||
 		spec.Execution.TerminalDetachSeconds < 0 {
-		return invalidRequest(errors.New("SecondBox Profile execution limits are invalid"))
+		return invalidField("spec.execution", "must have positive representable limits, streamWindowBytes of at least 4096, and nonnegative terminalDetachSeconds")
 	}
 	if spec.Execution.DataPlaneTransport != contracts.DataPlaneTransportProxied &&
 		spec.Execution.DataPlaneTransport != contracts.DataPlaneTransportDirect {
-		return invalidRequest(errors.New("SecondBox Profile data-plane transport must be proxied or direct"))
+		return invalidField("spec.execution.dataPlaneTransport", "must be proxied or direct")
 	}
 	if spec.Network.Mode != "deny_all" && spec.Network.Mode != "allow_list" {
-		return invalidRequest(errors.New("SecondBox Profile network mode must be deny_all or allow_list"))
+		return invalidField("spec.network.mode", "must be deny_all or allow_list")
 	}
 	if spec.Network.RequiresTenantEgressContext == nil {
-		return invalidRequest(errors.New("SecondBox Profile network policy must explicitly state requiresTenantEgressContext"))
+		return invalidField("spec.network.requiresTenantEgressContext", "is required")
 	}
+	if policy := spec.AttributedExecution; policy != nil {
+		if policy.MaximumConnections < 1 || policy.MaximumConnections > 4096 {
+			return invalidField("spec.attributedExecution.maximumConnections", "must be between 1 and 4096")
+		}
+	}
+	// With the default connection count validated above, a refused grant is
+	// always attributable to the ceiling.
 	if _, err := spec.AttributedConnectionGrant(); err != nil {
-		return invalidRequest(err)
+		if spec.AttributedExecution == nil {
+			return errors.Join(invalidField("spec.attributedExecutionCeiling", "requires spec.attributedExecution"), err)
+		}
+		return errors.Join(invalidField("spec.attributedExecutionCeiling.maximumConnections", "must be between spec.attributedExecution.maximumConnections and 4096"), err)
 	}
 	if policy := spec.AttributedExecution; policy != nil {
 		gateway, err := networkpolicycontract.NormalizeLogicalGatewayName(policy.Gateway)
 		if err != nil || gateway != policy.Gateway {
-			return invalidRequest(errors.New("SecondBox Profile attributed execution gateway must be a canonical logical gateway name"))
+			return invalidField("spec.attributedExecution.gateway", "must be a canonical logical gateway name")
 		}
 		if !*spec.Network.RequiresTenantEgressContext {
-			return invalidRequest(errors.New("SecondBox Profile attributed execution requires the Tenant egress context"))
-		}
-		if policy.MaximumConnections < 1 || policy.MaximumConnections > 4096 {
-			return invalidRequest(errors.New("SecondBox Profile attributed execution maximumConnections must be between 1 and 4096"))
+			return invalidField("spec.network.requiresTenantEgressContext", "must be true when spec.attributedExecution is set")
 		}
 	}
 	if spec.Network.Mode == "deny_all" && len(spec.Network.Destinations) != 0 {
-		return invalidRequest(errors.New("SecondBox Profile deny_all network policy cannot contain destinations"))
+		return invalidField("spec.network.destinations", "must be empty when spec.network.mode is deny_all")
 	}
-	if len(spec.Network.Destinations) > 128 || len(spec.Ports) > 32 {
-		return invalidRequest(errors.New("SecondBox Profile network or port policy exceeds its bounded size"))
+	if len(spec.Network.Destinations) > 128 {
+		return invalidField("spec.network.destinations", "must not exceed 128 entries")
+	}
+	if len(spec.Ports) > 32 {
+		return invalidField("spec.ports", "must not exceed 32 entries")
 	}
 	for _, port := range spec.Ports {
 		if port.Name == "" || port.Port < 1 || port.Port > 65535 ||
 			(port.Protocol != "tcp" && port.Protocol != "http") ||
 			!port.MaximumSessions.Valid(1) || port.MaximumSessionSeconds < 1 {
-			return invalidRequest(errors.New("SecondBox Profile exposed-port policy is invalid"))
+			return invalidField("spec.ports", "must each have a name, a port from 1 to 65535, protocol tcp or http, positive or null maximumSessions, and positive maximumSessionSeconds")
 		}
 	}
 	return nil
@@ -1304,14 +1328,14 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 
 func validateSandboxMetadata(metadata map[string]string) error {
 	if metadata == nil {
-		return invalidRequest(errors.New("SecondBox Sandbox metadata object is required"))
+		return invalidField("metadata", "is required")
 	}
 	if len(metadata) > 32 {
-		return invalidRequest(errors.New("SecondBox Sandbox metadata must not exceed 32 entries"))
+		return invalidField("metadata", "must not exceed 32 entries")
 	}
 	for key, value := range metadata {
 		if strings.TrimSpace(key) == "" || len(key) > 128 || len(value) > 1024 {
-			return invalidRequest(errors.New("SecondBox Sandbox metadata key or value exceeds its bound"))
+			return invalidField("metadata", "must have non-blank keys of at most 128 bytes and values of at most 1024 bytes")
 		}
 	}
 	return validateReservedSandboxName(metadata)
@@ -1326,23 +1350,17 @@ func validateReservedSandboxName(metadata map[string]string) error {
 		return nil
 	}
 	if name != strings.TrimSpace(name) || name == "" {
-		return invalidRequest(fmt.Errorf(
-			"SecondBox Sandbox metadata %s must not be blank or surrounded by whitespace",
-			contracts.SandboxNameMetadataKey,
-		))
+		return invalidField("metadata", contracts.SandboxNameMetadataKey+" must not be blank or surrounded by whitespace")
 	}
 	if strings.HasPrefix(name, contracts.SandboxIDPrefix) {
-		return invalidRequest(fmt.Errorf(
-			"SecondBox Sandbox metadata %s must not begin with %q, which identifies a Sandbox",
-			contracts.SandboxNameMetadataKey, contracts.SandboxIDPrefix,
-		))
+		return invalidField("metadata", fmt.Sprintf("%s must not begin with %q, which identifies a Sandbox", contracts.SandboxNameMetadataKey, contracts.SandboxIDPrefix))
 	}
 	return nil
 }
 
 func validateIdempotencyKey(key string) error {
 	if len(key) < 8 || len(key) > 200 || !idempotencyKeyPattern.MatchString(key) {
-		return invalidRequest(errors.New("SecondBox Idempotency-Key must contain 8 to 200 permitted ASCII characters"))
+		return invalidField("Idempotency-Key", "must contain 8 to 200 characters from A-Z a-z 0-9 . _ ~ : + / = -")
 	}
 	return nil
 }

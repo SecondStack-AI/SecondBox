@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"regexp"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -59,14 +57,14 @@ func (service *ControlPlaneService) UpdateRunnerPool(
 	expectedRevision int64,
 ) (contracts.RunnerPool, error) {
 	if !profileNamePattern.MatchString(name) {
-		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool name is invalid"))
+		return contracts.RunnerPool{}, invalidField("runnerPoolName", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	if expectedRevision < 1 {
-		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool update requires a positive revision"))
+		return contracts.RunnerPool{}, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	if request.State == nil && request.Architectures == nil &&
 		request.Capabilities == nil {
-		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool update requires at least one field"))
+		return contracts.RunnerPool{}, invalidField("body", "must contain at least one of state, architectures, or capabilities")
 	}
 	current, err := service.store.GetRunnerPool(ctx, name)
 	if err != nil {
@@ -110,7 +108,7 @@ func (service *ControlPlaneService) GetRunnerPool(
 	name string,
 ) (contracts.RunnerPool, error) {
 	if !profileNamePattern.MatchString(name) {
-		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool name is invalid"))
+		return contracts.RunnerPool{}, invalidField("runnerPoolName", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	return service.store.GetRunnerPool(ctx, name)
 }
@@ -132,7 +130,7 @@ func (service *ControlPlaneService) GetRunner(
 	runnerID string,
 ) (contracts.Runner, error) {
 	if !opaqueRunnerIDPattern.MatchString(runnerID) {
-		return contracts.Runner{}, invalidRequest(errors.New("SecondBox Runner ID is invalid"))
+		return contracts.Runner{}, invalidField("runnerId", "must match ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 	}
 	return service.store.GetRunner(ctx, runnerID)
 }
@@ -146,7 +144,7 @@ func (service *ControlPlaneService) ListRunners(
 	cursor string,
 ) (contracts.RunnerPage, error) {
 	if poolName != "" && !profileNamePattern.MatchString(poolName) {
-		return contracts.RunnerPage{}, invalidRequest(errors.New("SecondBox Runner pool filter is invalid"))
+		return contracts.RunnerPage{}, invalidField("pool", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	return service.store.ListRunners(ctx, poolName, boundedLimit(limit), cursor)
 }
@@ -163,31 +161,31 @@ func validateRunnerPoolPolicy(
 	capabilities []string,
 ) error {
 	if !profileNamePattern.MatchString(name) {
-		return invalidRequest(errors.New("SecondBox RunnerPool name is invalid"))
+		return invalidField("name", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	switch state {
 	case contracts.RunnerPoolStateReady,
 		contracts.RunnerPoolStateDraining,
 		contracts.RunnerPoolStateOffline:
 	default:
-		return invalidRequest(errors.New("SecondBox RunnerPool state is invalid"))
+		return invalidField("state", "must be ready, draining, or offline")
 	}
 	architectures = sortedUnique(architectures)
 	if len(architectures) < 1 || len(architectures) > 8 {
-		return invalidRequest(errors.New("SecondBox RunnerPool architectures must contain between 1 and 8 values"))
+		return invalidField("architectures", "must contain between 1 and 8 unique values")
 	}
 	for _, architecture := range architectures {
 		if architecture != "amd64" && architecture != "arm64" {
-			return invalidRequest(fmt.Errorf("SecondBox RunnerPool architecture is unsupported: %s", architecture))
+			return invalidField("architectures", "must contain only amd64 or arm64")
 		}
 	}
 	capabilities = sortedUnique(capabilities)
 	if len(capabilities) < 1 || len(capabilities) > 64 {
-		return invalidRequest(errors.New("SecondBox RunnerPool capabilities must contain between 1 and 64 values"))
+		return invalidField("capabilities", "must contain between 1 and 64 unique values")
 	}
 	for _, capability := range capabilities {
 		if !runnerCapabilityPattern.MatchString(capability) {
-			return invalidRequest(errors.New("SecondBox RunnerPool capability is invalid"))
+			return invalidField("capabilities", "must contain only values matching ^[a-z][a-z0-9_-]{0,63}$")
 		}
 	}
 	return nil

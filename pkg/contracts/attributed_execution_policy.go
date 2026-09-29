@@ -21,7 +21,10 @@ func (limits *AttributedExecutionConnectionLimits) UnmarshalJSON(data []byte) er
 		return err
 	}
 	*limits = AttributedExecutionConnectionLimits(value)
-	return limits.Validate()
+	if limits.Validate() != nil {
+		return &RequestFieldError{Field: "maximumConnections", Reason: "must be between 1 and 4096"}
+	}
+	return nil
 }
 
 type AttributedExecutionConnectionObservation struct {

@@ -23,10 +23,10 @@ func (service *ControlPlaneService) PrepareImage(ctx context.Context, principal 
 		return contracts.Operation{}, false, err
 	}
 	if err := request.Image.Validate(); err != nil {
-		return contracts.Operation{}, false, invalidRequest(err)
+		return contracts.Operation{}, false, errors.Join(executionImageFieldError(), err)
 	}
 	if request.Profile != "" && !profileNamePattern.MatchString(request.Profile) {
-		return contracts.Operation{}, false, ports.ErrInvalidRequest
+		return contracts.Operation{}, false, invalidField("profile", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	store, ok := service.store.(ImagePreparationStore)
 	if !ok {

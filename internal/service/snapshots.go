@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,7 +26,7 @@ func (service *ControlPlaneService) CreateSandboxSnapshot(
 		return contracts.Operation{}, false, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Operation{}, false, invalidRequest(errors.New("SecondBox Snapshot expected revision must be positive"))
+		return contracts.Operation{}, false, invalidField("If-Match", "must contain a positive revision ETag")
 	}
 	if err := validateSnapshotRequest(request); err != nil {
 		return contracts.Operation{}, false, err
@@ -93,7 +92,7 @@ func (service *ControlPlaneService) ListSandboxSnapshots(
 		return contracts.SnapshotPage{}, err
 	}
 	if len(cursor) > 512 {
-		return contracts.SnapshotPage{}, invalidRequest(errors.New("SecondBox Snapshot page cursor exceeds its bound"))
+		return contracts.SnapshotPage{}, invalidField("cursor", "must not exceed 512 bytes")
 	}
 	return service.store.ListSnapshots(
 		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
@@ -178,8 +177,11 @@ func (service *ControlPlaneService) RestoreSandboxSnapshot(
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.Operation{}, false, err
 	}
-	if expectedRevision < 1 || strings.TrimSpace(request.SnapshotID) == "" {
-		return contracts.Operation{}, false, invalidRequest(errors.New("SecondBox Snapshot restore revision and Snapshot ID are required"))
+	if expectedRevision < 1 {
+		return contracts.Operation{}, false, invalidField("If-Match", "must contain a positive revision ETag")
+	}
+	if strings.TrimSpace(request.SnapshotID) == "" {
+		return contracts.Operation{}, false, invalidField("snapshotId", "is required")
 	}
 	requestHash, err := hashCanonicalRequest(request)
 	if err != nil {
@@ -236,7 +238,7 @@ func requireSnapshotRead(principal contracts.Principal) error {
 func validateSnapshotRequest(request contracts.CreateSnapshotRequest) error {
 	if !utf8.ValidString(request.Name) || strings.TrimSpace(request.Name) == "" ||
 		len(request.Name) > 255 {
-		return invalidRequest(errors.New("SecondBox Snapshot name is invalid"))
+		return invalidField("name", "must be valid UTF-8, not blank, and at most 255 bytes")
 	}
 	return validateSandboxMetadata(request.Metadata)
 }

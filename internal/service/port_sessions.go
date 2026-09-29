@@ -57,16 +57,24 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 	if transport != contracts.PortTransportProxied && transport != contracts.PortTransportDirect {
 		return contracts.PortSession{}, false, errors.New("SecondBox PortSession transport is invalid")
 	}
-	if requestID == "" || sandboxID == "" || generation < 1 || leaseID == "" {
+	if requestID == "" || sandboxID == "" {
 		return contracts.PortSession{}, false, invalidRequest(errors.New("SecondBox PortSession authority is incomplete"))
+	}
+	if generation < 1 {
+		return contracts.PortSession{}, false, invalidField("SecondBox-Generation", "must contain a positive integer")
+	}
+	if leaseID == "" {
+		return contracts.PortSession{}, false, invalidField("SecondBox-Lease-ID", "is required")
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.PortSession{}, false, err
 	}
 	if !utf8.ValidString(request.Name) || strings.TrimSpace(request.Name) != request.Name ||
-		request.Name == "" || utf8.RuneCountInString(request.Name) > 80 ||
-		request.DurationSeconds < 1 || request.DurationSeconds > 86400 {
-		return contracts.PortSession{}, false, invalidRequest(errors.New("SecondBox PortSession request is invalid"))
+		request.Name == "" || utf8.RuneCountInString(request.Name) > 80 {
+		return contracts.PortSession{}, false, invalidField("name", "must contain 1 to 80 characters without surrounding whitespace")
+	}
+	if request.DurationSeconds < 1 || request.DurationSeconds > 86400 {
+		return contracts.PortSession{}, false, invalidField("durationSeconds", "must be between 1 and 86400")
 	}
 	requestHash, err := hashCanonicalRequest(struct {
 		Request    contracts.CreatePortSessionRequest `json:"request"`

@@ -119,14 +119,14 @@ func (apiHandler *handler) updateTenantEgressContext(writer http.ResponseWriter,
 		return
 	}
 	if len(wire.EgressContext) == 0 {
-		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Tenant egressContext is required")))
+		apiHandler.writeError(writer, request, &ports.InvalidFieldError{Field: "egressContext", Reason: "is required"})
 		return
 	}
 	var egressContext *string
 	if !bytes.Equal(bytes.TrimSpace(wire.EgressContext), []byte("null")) {
 		var value string
 		if err := json.Unmarshal(wire.EgressContext, &value); err != nil {
-			apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Tenant egressContext must be a string or null")))
+			apiHandler.writeError(writer, request, &ports.InvalidFieldError{Field: "egressContext", Reason: "must be a string or null"})
 			return
 		}
 		egressContext = &value
@@ -194,8 +194,8 @@ func (apiHandler *handler) extendTenantCeiling(writer http.ResponseWriter, reque
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	if body.ProfileGrants == nil || body.ApplicationScopes == nil {
-		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Tenant ceiling extension requires profileGrants and applicationScopes")))
+	if err := requireExtensionLists(body.ProfileGrants, "applicationScopes", body.ApplicationScopes); err != nil {
+		apiHandler.writeError(writer, request, err)
 		return
 	}
 	expectedRevision, err := parseIfMatch(request)
@@ -478,8 +478,8 @@ func (apiHandler *handler) extendApplicationAuthority(writer http.ResponseWriter
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	if body.ProfileGrants == nil || body.Scopes == nil {
-		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox ApplicationAuthority extension requires profileGrants and scopes")))
+	if err := requireExtensionLists(body.ProfileGrants, "scopes", body.Scopes); err != nil {
+		apiHandler.writeError(writer, request, err)
 		return
 	}
 	expectedRevision, err := parseIfMatch(request)
@@ -538,4 +538,17 @@ func (apiHandler *handler) listApplicationAuthorities(writer http.ResponseWriter
 		return
 	}
 	apiHandler.writeJSON(writer, request, http.StatusOK, page)
+}
+
+// requireExtensionLists names each grant-extension list the body omitted. An
+// explicit empty list is present; only an absent member is refused here.
+func requireExtensionLists(profileGrants *[]string, scopesField string, scopes *[]string) error {
+	var missing []error
+	if profileGrants == nil {
+		missing = append(missing, &ports.InvalidFieldError{Field: "profileGrants", Reason: "is required"})
+	}
+	if scopes == nil {
+		missing = append(missing, &ports.InvalidFieldError{Field: scopesField, Reason: "is required"})
+	}
+	return errors.Join(missing...)
 }

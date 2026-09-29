@@ -2,11 +2,13 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/observability"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -96,13 +98,13 @@ func requiredBoundedTimingQuery(
 ) (int64, error) {
 	values, exists := request.URL.Query()[name]
 	if !exists || len(values) != 1 || values[0] == "" {
-		return 0, requestValidationError(errors.New("SecondBox timing query parameter is required: " + name))
+		return 0, &ports.InvalidFieldError{Field: name, Reason: "is required exactly once"}
 	}
 	value, err := strconv.ParseInt(values[0], 10, 64)
 	if err != nil || value < minimum || value > maximum {
-		return 0, requestValidationError(errors.New(
-			"SecondBox timing query parameter is outside its explicit bound: " + name,
-		))
+		return 0, &ports.InvalidFieldError{
+			Field: name, Reason: fmt.Sprintf("must be an integer between %d and %d", minimum, maximum),
+		}
 	}
 	return value, nil
 }
