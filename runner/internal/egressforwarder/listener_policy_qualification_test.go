@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -299,12 +300,20 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 		return nil
 	}
 	paused, resume := make(chan struct{}), make(chan struct{})
+	var resumeOnce sync.Once
+	resumeStartup := func() { resumeOnce.Do(func() { close(resume) }) }
 	executionListenerStartupHook = func() {
 		close(paused)
 		<-resume
 	}
-	fencedStartup := make(chan error, 1)
+	fencedStartup, fencedDone := make(chan error, 1), make(chan struct{})
+	t.Cleanup(func() {
+		executionListenerStartupHook = nil
+		resumeStartup()
+		<-fencedDone
+	})
 	go func() {
+		defer close(fencedDone)
 		forwarder, err := StartExecutionForwarder(t.Context(), fencedConfig)
 		if forwarder != nil {
 			err = errors.Join(errors.New("fenced startup returned a forwarder"), forwarder.Close(context.Background()))
@@ -323,7 +332,7 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	if err := RemoveExecutionListenerRules(t.Context(), config.NFTPath, []string{policy.GuestInterface}); err != nil {
 		t.Fatal(err)
 	}
-	close(resume)
+	resumeStartup()
 	if err := <-fencedStartup; err == nil || !strings.Contains(err.Error(), "instance fenced") {
 		t.Fatalf("startup after the teardown fence = %v", err)
 	}
@@ -333,6 +342,8 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	// Admission runs while the startup holds the sweep lock, so a teardown
 	// that fences during admission waits for the startup and then revokes it.
 	admitted, release := make(chan bool, 1), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAdmission := func() { releaseOnce.Do(func() { close(release) }) }
 	overlapConfig := config
 	overlapConfig.Attribution.ExpiresAt = time.Now().UTC().Add(10 * time.Second).Truncate(time.Millisecond)
 	overlapConfig.Admission = func() error {
@@ -348,15 +359,26 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 		forwarder *ExecutionForwarder
 		err       error
 	}
-	overlapStartup := make(chan startup, 1)
+	overlapStartup, overlapDone := make(chan startup, 1), make(chan struct{})
+	var overlapForwarder *ExecutionForwarder
+	t.Cleanup(func() {
+		releaseAdmission()
+		<-overlapDone
+		if overlapForwarder != nil {
+			if err := overlapForwarder.Close(context.Background()); err != nil {
+				t.Error(err)
+			}
+		}
+	})
 	go func() {
+		defer close(overlapDone)
 		forwarder, err := StartExecutionForwarder(t.Context(), overlapConfig)
+		overlapForwarder = forwarder
 		overlapStartup <- startup{forwarder, err}
 	}()
 	select {
 	case locked := <-admitted:
 		if !locked {
-			close(release)
 			t.Fatal("forwarder admission ran outside the sweep lock")
 		}
 	case failed := <-overlapStartup:
@@ -368,7 +390,7 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	go func() {
 		overlapSweep <- RemoveExecutionListenerRules(t.Context(), config.NFTPath, []string{policy.GuestInterface})
 	}()
-	close(release)
+	releaseAdmission()
 	overlapped := <-overlapStartup
 	if overlapped.err != nil {
 		t.Fatal(overlapped.err)
