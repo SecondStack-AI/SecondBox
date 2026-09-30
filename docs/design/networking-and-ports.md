@@ -185,6 +185,8 @@ The guest-facing half is identical for both transports. A dedicated guest-protoc
 
 The public API never returns a bridge address, TAP address, or raw host port, and returns a Runner data-plane address only to an authority holding the exact direct-endpoint grant.
 
+A proxied PortSession whose approved guest port has no listener ends with a guest-unavailable Port terminal, and its tunnel closes with the reason `guest port is unavailable`. The failure ends only that session; the Runner connection and every other operation on it continue.
+
 Useful activity starts only when the credential is consumed, not when the session is created or inspected. Client disconnect, terminal delivery, expiry, Lease or generation fencing, operator drain, Instance termination, and Runner disconnect close activity and the session deterministically on both transports; a direct connection's live sockets are closed by the same events, and the Runner returns bounded proof of closure. Without an admitted session, unsolicited inbound traffic toward every TAP remains denied.
 
 UDP, port ranges, public unauthenticated sharing, and ungranted direct access are unsupported. UDP and port ranges require kernel-path forwarding and a flow-lifetime model with no analogue in the current connection-scoped session semantics.

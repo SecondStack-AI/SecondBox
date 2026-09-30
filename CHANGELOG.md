@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- A proxied PortSession to an approved guest port with no listener dropped its home Runner's whole control-plane connection, cancelling every in-flight exec, file, terminal, and Port operation on that Runner across all tenants (clients saw `409 execution_node_unavailable`). The Runner refused the Open but kept no record of the stream, so the Credit frame the control plane sends behind every Open was treated as a protocol violation. The PortSession now ends by itself with a `guest port is unavailable` tunnel close, and the Runner connection stays up. The same fix applies to Exec and File Opens refused for capacity, File write chunks behind a refused Open (which could also start the refused write), and PTY input, resize, or credit that arrives after the terminal's process has exited.
+
 ## 0.21.0 - 2026-09-30
 
 Attributed execution moves from a dedicated single-command generation to one exec inside an ordinary running Sandbox. This is a breaking API, runner protocol, and schema change. Deployments from v0.14.0 onward update in place; configure the attributed gateway route on every Runner first, drain attributed traffic, update the control plane and all Runners together, and keep the pre-update database backup for rollback. See the [v0.21.0 release notes](docs/releases/v0.21.0.md).

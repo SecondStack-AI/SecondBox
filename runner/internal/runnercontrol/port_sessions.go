@@ -104,35 +104,43 @@ func (s *RunnerProtocolService) handlePortFrame(
 			s.operationMu.Unlock()
 			return err
 		}
-		if !s.hasActiveFence(frame.Fence) {
-			s.operationMu.Unlock()
-			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FENCED, "assignment fence is not active")
-		}
-		if s.portBackend == nil {
-			s.operationMu.Unlock()
-			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "runner Port backend is unavailable")
-		}
-		if len(s.portOperations) >= maxRunnerDataPlaneOperationStates {
-			s.operationMu.Unlock()
-			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "runner Port capacity is exhausted")
-		}
-		portCtx, cancel := context.WithCancelCause(ctx)
-		connection, err := s.portBackend.OpenPort(portCtx, cloneRunnerFence(frame.Fence), proto.Clone(frame.GetOpen()).(*runnerprotocol.PortOpen))
-		if err != nil {
-			cancel(err)
-			s.operationMu.Unlock()
-			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable")
-		}
 		state = &runnerPortOperation{
 			key: key, fence: cloneRunnerFence(frame.Fence), operationID: frame.OperationId,
 			correlation: cloneRunnerCorrelation(frame.Correlation),
 			streamID:    frame.StreamId, nextIncoming: 2, lastIncoming: bytes.Clone(encoded),
-			nextOutgoing: 1, credit: newRunnerCreditWindow(), connection: connection, cancel: cancel,
+			nextOutgoing: 1, credit: newRunnerCreditWindow(),
+		}
+		refusal, refusalDetail := runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_UNSPECIFIED, ""
+		switch {
+		case !s.hasActiveFence(frame.Fence):
+			refusal, refusalDetail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FENCED, "assignment fence is not active"
+		case s.portBackend == nil:
+			refusal, refusalDetail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "runner Port backend is unavailable"
+		case len(s.portOperations) >= maxRunnerDataPlaneOperationStates:
+			refusal, refusalDetail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "runner Port capacity is exhausted"
+		}
+		var portCtx context.Context
+		if refusal == runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_UNSPECIFIED {
+			portCtx, state.cancel = context.WithCancelCause(ctx)
+			connection, err := s.portBackend.OpenPort(portCtx, cloneRunnerFence(frame.Fence), proto.Clone(frame.GetOpen()).(*runnerprotocol.PortOpen))
+			if err != nil {
+				state.cancel(err)
+				refusal, refusalDetail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable"
+			} else {
+				state.connection = connection
+			}
+		}
+		// A refused Open is tracked like an admitted one: the control plane may
+		// already have sent Credit or Bytes behind it, and those frames must meet
+		// a terminal stream rather than an unknown one.
+		s.portOperations[key] = state
+		if refusal != runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_UNSPECIFIED {
+			s.operationMu.Unlock()
+			return s.sendPortTerminal(stream, state, refusal, refusalDetail)
 		}
 		context.AfterFunc(portCtx, func() {
-			_ = connection.Close()
+			_ = state.connection.Close()
 		})
-		s.portOperations[key] = state
 		s.setActiveOperation(frame.Fence.AssignmentId, frame.OperationId, true)
 		s.operationMu.Unlock()
 		if err := s.sendPortCredit(stream, state, runnerDataPlaneChunkBytes); err != nil {
@@ -158,7 +166,13 @@ func (s *RunnerProtocolService) handlePortFrame(
 	}
 	state.nextIncoming++
 	state.lastIncoming = bytes.Clone(encoded)
+	terminal := state.terminal
 	s.operationMu.Unlock()
+	if terminal {
+		// Frames the control plane sent before it observed the terminal are
+		// sequenced and discarded; the stream's outcome is already reported.
+		return nil
+	}
 	switch {
 	case frame.GetBytes() != nil:
 		data := frame.GetBytes().Data
@@ -341,7 +355,10 @@ func (s *RunnerProtocolService) sendPortTerminal(
 	); err != nil {
 		return err
 	}
-	closeErr := state.connection.Close()
+	var closeErr error
+	if state.connection != nil {
+		closeErr = state.connection.Close()
+	}
 	return errors.Join(closeErr, s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
 		Message: &runnerprotocol.RunnerToControlPlane_Port{Port: frame},
 	}))

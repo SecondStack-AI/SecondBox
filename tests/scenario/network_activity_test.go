@@ -5,6 +5,7 @@ package scenario_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -556,6 +557,66 @@ func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *te
 	assertScenarioExited(t, enabledResponse, 0, "", "")
 	isolationOutcome := executeScenarioCommand(t, ctx, isolated, "test ! -e /workspace/network-response", 4096, "isolated-network-response-file")
 	assertScenarioExited(t, isolationOutcome, 0, "", "")
+}
+
+// One Runner connection carries every Sandbox's operations. A PortSession to an
+// approved guest port with no listener must end by itself while an Exec in
+// another Sandbox on the same Runner keeps running.
+func TestScenarioClosedGuestPortFailsOnlyItsPortSession(t *testing.T) {
+	fixture := newScenarioFixture(t)
+	ensureScenarioRunnerPool(t, fixture)
+	waitForScenarioRunner(t, fixture, 90*time.Second)
+	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
+	spec.Ports = []contracts.PortPolicy{{
+		Name: "web", Port: 8080, Protocol: "tcp", MaximumSessions: 1, MaximumSessionSeconds: 30,
+	}}
+	profile := createScenarioProfile(t, fixture, "scenario-closed-guest-port", spec)
+	portHandle, _ := createScenarioSandbox(t, fixture, profile, "closed-guest-port")
+	neighbourHandle, _ := createScenarioSandbox(t, fixture, profile, "closed-guest-port-neighbour")
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	ready := waitForSandbox(t, ctx, portHandle, secondboxclient.SandboxStateReady)
+	waitForSandbox(t, ctx, neighbourHandle, secondboxclient.SandboxStateReady)
+
+	type neighbourResult struct {
+		outcome secondboxclient.ExecOutcome
+		err     error
+	}
+	neighbour := make(chan neighbourResult, 1)
+	neighbourKey := uniqueScenarioKey(t, "closed-guest-port-neighbour-exec")
+	go func() {
+		outcome, err := neighbourHandle.Execute(
+			ctx, scenarioExecRequest("sleep 6; echo neighbour survived", 4096), neighbourKey, "",
+		)
+		neighbour <- neighbourResult{outcome: outcome, err: err}
+	}()
+	// The neighbouring Exec is admitted and running on the Runner before the
+	// PortSession is refused.
+	time.Sleep(2 * time.Second)
+
+	lease := acquireScenarioLease(t, ctx, fixture, portHandle, 30, "closed-guest-port-lease")
+	session := createScenarioPortSession(t, ctx, fixture, portHandle, lease.ID, "closed-guest-port-session")
+	connection := dialScenarioPortTunnel(t, ctx, session.Endpoint)
+	if err := connection.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := connection.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) || closeErr.Text != "guest port is unavailable" {
+		t.Fatalf("SecondBox scenario closed guest Port tunnel read payload=%q error=%v", payload, err)
+	}
+	connection.Close()
+	waitForScenarioPortState(t, ctx, fixture, ready.ID, session.ID, contracts.PortSessionStateClosed)
+
+	select {
+	case result := <-neighbour:
+		if result.err != nil {
+			t.Fatalf("SecondBox scenario neighbouring Exec failed while a PortSession was refused: %v", result.err)
+		}
+		assertScenarioExited(t, result.outcome, 0, "neighbour survived\n", "")
+	case <-ctx.Done():
+		t.Fatal("SecondBox scenario neighbouring Exec did not finish")
+	}
 }
 
 func startScenarioNetworkTarget(t *testing.T, address string, response string) {
