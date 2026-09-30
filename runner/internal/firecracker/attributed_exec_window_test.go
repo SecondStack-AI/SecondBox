@@ -206,9 +206,13 @@ func TestAttributedExecWindowReportsFailedRuleRevocation(t *testing.T) {
 
 func TestAttributedExecWindowRefusesInvalidBinding(t *testing.T) {
 	for name, change := range map[string]func(*AttributedExecWindowConfig){
-		"PTY":              func(config *AttributedExecWindowConfig) { config.Open.AllocatePty = true },
-		"deadline":         func(config *AttributedExecWindowConfig) { config.Open.DeadlineUnixMs = config.Open.AttributedExecution.ExpiresAtUnixMs + 1 },
-		"expired":          func(config *AttributedExecWindowConfig) { config.Open.AttributedExecution.ExpiresAtUnixMs = uint64(time.Now().UnixMilli()) },
+		"PTY": func(config *AttributedExecWindowConfig) { config.Open.AllocatePty = true },
+		"deadline": func(config *AttributedExecWindowConfig) {
+			config.Open.DeadlineUnixMs = config.Open.AttributedExecution.ExpiresAtUnixMs + 1
+		},
+		"expired": func(config *AttributedExecWindowConfig) {
+			config.Open.AttributedExecution.ExpiresAtUnixMs = uint64(time.Now().UnixMilli())
+		},
 		"tenant":           func(config *AttributedExecWindowConfig) { config.Open.AttributedExecution.TenantRef = "" },
 		"authorization":    func(config *AttributedExecWindowConfig) { config.Open.AttributedExecution.AuthorizationRef = "" },
 		"Instance policy":  func(config *AttributedExecWindowConfig) { config.Policy = nil },
@@ -232,7 +236,10 @@ func TestAttributedExecWindowRefusesInvalidBinding(t *testing.T) {
 func TestRunAttributedExecBindsGatewayOnlyToAttributedOpen(t *testing.T) {
 	opened := false
 	result, err := RunAttributedExec(t.Context(), &runnerprotocol.ExecOpen{},
-		func(context.Context) (*AttributedExecWindow, error) { opened = true; return nil, errors.New("unexpected") },
+		func(context.Context) (*AttributedExecWindow, error) {
+			opened = true
+			return nil, errors.New("unexpected")
+		},
 		func(_ context.Context, gateway netip.AddrPort) (string, error) {
 			if gateway.IsValid() {
 				t.Fatalf("ordinary exec received gateway %s", gateway)
