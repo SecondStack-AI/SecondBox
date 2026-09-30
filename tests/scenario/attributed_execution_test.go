@@ -301,7 +301,13 @@ func TestScenarioAttributedWindowRevocation(t *testing.T) {
 				scenarioCompose(t, "stop", "control-plane")
 				t.Cleanup(func() { scenarioCompose(t, "start", "control-plane") })
 			}
-			if err := accepted.connection.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			// Cancellation and control loss must close the relay well before the
+			// exec deadline and expiry could.
+			revokedBy := expiresAt.Add(-10 * time.Second)
+			if trigger == "expiry" {
+				revokedBy = time.Now().Add(30 * time.Second)
+			}
+			if err := accepted.connection.SetReadDeadline(revokedBy); err != nil {
 				t.Fatal(err)
 			}
 			if n, err := accepted.connection.Read(make([]byte, 1)); n != 0 || err != io.EOF {

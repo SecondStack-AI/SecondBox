@@ -323,6 +323,55 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
 		t.Fatalf("fenced startup installed firewall rules: %v: %s", err, output)
 	}
+	// Admission runs while the startup holds the sweep lock, so a teardown
+	// that fences during admission waits for the startup and then revokes it.
+	admitted, release := make(chan bool, 1), make(chan struct{})
+	overlapConfig := config
+	overlapConfig.Admission = func() error {
+		locked := !executionListenerTablesMu.TryLock()
+		if !locked {
+			executionListenerTablesMu.Unlock()
+		}
+		admitted <- locked
+		<-release
+		return nil
+	}
+	type startup struct {
+		forwarder *ExecutionForwarder
+		err       error
+	}
+	overlapStartup := make(chan startup, 1)
+	go func() {
+		forwarder, err := StartExecutionForwarder(t.Context(), overlapConfig)
+		overlapStartup <- startup{forwarder, err}
+	}()
+	if !<-admitted {
+		close(release)
+		t.Fatal("forwarder admission ran outside the sweep lock")
+	}
+	overlapSweep := make(chan error, 1)
+	go func() {
+		overlapSweep <- RemoveExecutionListenerRules(t.Context(), config.NFTPath, []string{policy.GuestInterface})
+	}()
+	close(release)
+	overlapped := <-overlapStartup
+	if overlapped.err != nil {
+		t.Fatal(overlapped.err)
+	}
+	if err := <-overlapSweep; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-overlapped.forwarder.Done():
+	default:
+		t.Fatal("teardown sweep left an admitted forwarder running")
+	}
+	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
+		t.Fatalf("teardown sweep left an admitted forwarder's rules: %v: %s", err, output)
+	}
+	if err := overlapped.forwarder.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	// A sibling exec window on the same interface keeps its own listener
 	// table when this window closes.
 	sibling, err := StartExecutionForwarder(t.Context(), config)
