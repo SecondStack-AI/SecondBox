@@ -309,7 +309,11 @@ func TestScenarioAttributedWindowRevocation(t *testing.T) {
 				waitForScenarioRunner(t, fixture, 90*time.Second)
 			}
 			current := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
-			if current.Generation != ready.Generation || current.Instance == nil || current.Instance.ID != ready.Instance.ID {
+			// A control-plane outage longer than the scenario Runner heartbeat
+			// timeout (5s) lets the control plane retire the generation as Runner
+			// loss, so only expiry and cancellation prove the Instance survives.
+			if trigger != "control-plane" &&
+				(current.Generation != ready.Generation || current.Instance == nil || current.Instance.ID != ready.Instance.ID) {
 				t.Fatalf("attributed revocation on %s changed compute: before=%+v after=%+v", trigger, ready, current)
 			}
 			// The Runner reconnects after the control plane restarts; until then
@@ -320,7 +324,17 @@ func TestScenarioAttributedWindowRevocation(t *testing.T) {
 					assertScenarioExited(t, outcome, 0, "still-running", "")
 					break
 				}
-				if secondboxclient.ProblemCodeOf(err) != string(secondboxclient.ProblemCodeExecutionNodeUnavailable) {
+				switch secondboxclient.ProblemCodeOf(err) {
+				case string(secondboxclient.ProblemCodeExecutionNodeUnavailable):
+				case string(secondboxclient.ProblemCodeGenerationFenced):
+					if trigger != "control-plane" {
+						t.Fatal(err)
+					}
+					if _, err := handle.Refresh(ctx); err != nil {
+						t.Fatal(err)
+					}
+					waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
+				default:
 					t.Fatal(err)
 				}
 				select {
