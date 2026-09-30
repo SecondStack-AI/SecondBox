@@ -509,9 +509,9 @@ The entries are routing information. They contain no credentials and convey no a
 
 ## Attributed commands
 
-Create the Sandbox with a Profile revision that permits attributed execution. Stop its ordinary Instance explicitly before starting an attributed generation. With the TypeScript SDK, call `handle.start({ ...options, image: { reference: executionImageReference }, attributedExecution: { authorizationRef, expiresAt } })`, where `authorizationRef` is the application's bounded non-secret authorization reference and `expiresAt` is an absolute UTC timestamp within the Profile execution limit. Wait for the start Operation before executing one command. The application retains credential selection and authorization; SecondBox supplies the generation identity.
+Create the Sandbox with a Profile revision that permits attributed execution and start it normally. Attribution belongs to one exec, not to a start: pass `attributedExecution: { authorizationRef, expiresAt }` in the exec options, for example `handle.exec(command, { ...options, attributedExecution: { authorizationRef, expiresAt } })` in TypeScript or `BufferedExecRequest.AttributedExecution` / `StreamingExecRequest.AttributedExecution` in Go. `authorizationRef` is the application's bounded non-secret authorization reference, and `expiresAt` is an absolute UTC timestamp within the Profile execution limit that the exec deadline must not outlive. Terminals cannot be attributed. The application retains credential selection and authorization; SecondBox supplies the exec identity.
 
-The Runner injects `SECONDBOX_EXECUTION_GATEWAY` into that command as an IPv4 `host:port`, without a URL scheme. Configure the command's HTTP proxy variables explicitly, for example in its shell wrapper:
+The Runner injects `SECONDBOX_EXECUTION_GATEWAY` into that exec only, as an IPv4 `host:port` without a URL scheme. Configure the command's HTTP proxy variables explicitly, for example in its shell wrapper:
 
 ```sh
 export HTTP_PROXY="http://${SECONDBOX_EXECUTION_GATEWAY}"
@@ -519,7 +519,7 @@ export HTTPS_PROXY="$HTTP_PROXY"
 exec integration-cli read
 ```
 
-The variable is routing information. It contains no credentials and conveys no authority by itself. Caller-supplied values for this reserved name are rejected in ordinary and attributed execs, including whitespace-normalized names. Ordinary execs receive no injected value. Attributed generations have only the declared forwarder route; they cannot use ordinary gateway or direct egress, so they resolve no logical gateway and receive no `SECONDBOX_RUNNER_GATEWAYS`. Completion, cancellation or expiry destroys compute before confirming the command result. Buffered result delivery allows a separate bounded teardown interval after the execution deadline; the command's deadline and credential expiry do not extend. The next command needs a new explicit attributed start, while the Workspace persists.
+The variable is routing information. It contains no credentials and conveys no authority by itself. Caller-supplied values for this reserved name are rejected in ordinary and attributed execs, including whitespace-normalized names. Ordinary execs receive no injected value. An attributed exec keeps its generation's ordinary routes and `SECONDBOX_RUNNER_GATEWAYS`; only traffic through `SECONDBOX_EXECUTION_GATEWAY` carries attribution. The listener closes when the exec ends, is cancelled, or reaches its deadline or `expiresAt`, and the Instance keeps running for the next command. While it is open, any process in the Instance can reach it, so treat the window as the command's lifetime rather than as process isolation.
 
 ## Flue adapter
 

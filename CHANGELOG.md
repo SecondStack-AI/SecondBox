@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+Attributed execution moves from a dedicated single-command generation to one exec inside an ordinary running Sandbox. This is a breaking API, runner protocol, and schema change; read the upgrade notes before deploying.
+
+### Upgrade notes
+
+- **Update the control plane and every Runner together.** The runner protocol advances to generation 6 exactly; generation 5 Runners and control planes refuse each other. Runners replace the `attributed-execution` capability with `per-exec-attribution`.
+- **Drain attributed traffic first.** Let in-flight attributed starts and their commands finish before updating: migration `0034_per_exec_attribution` drops `assignments.execution_authorization_ref`, `execution_expires_at`, and `execution_session_id`, and adds `execution_authorization_ref` and `execution_expires_at` to `data_plane_sessions`. The migration is forward-only; rolling back requires the pre-update database backup.
+- **Route every permitting Profile's gateway.** Every Assignment of a Profile with `attributedExecution`, such as the standard `agent-compartment`, now carries the gateway permission and requires a home Runner that advertises `per-exec-attribution` and routes that gateway through `attributed_socket` in the Sandbox's pinned egress context. Configure the route on every Runner that hosts such Sandboxes; without it they no longer start.
+- **Move attribution from start to exec.** Clients start the Sandbox normally and pass `attributedExecution` on the buffered or streaming exec that needs it. Stopping the Sandbox before a credentialed command is no longer needed.
+
+### Changed
+
+- **Breaking:** `StartSandboxRequest.attributedExecution` is removed, and `BufferedExecRequest` and `StreamingExecRequest` accept `attributedExecution {authorizationRef, expiresAt}` instead. An attributed exec runs in the Sandbox's ordinary generation with its ordinary network policy, Runner gateways, terminals, Ports, and file writes; the Instance is not stopped or fenced afterwards, and one generation admits any number of sequential or concurrent attributed execs. Admission requires the `sandbox:exec` scope and Profile grant, Profile permission, a pinned Tenant egress context, an expiry within the Profile execution deadline that the exec deadline does not outlive, and a home Runner advertising `per-exec-attribution` (otherwise `503 home_runner_unavailable`). The binding is stored with the exec session and covered by its idempotency key. Attributed exec streams use the proxied transport. The Go and TypeScript SDKs follow the new request shape.
+- Each attributed exec gets its own Runner listener on the Instance interface, added to and removed from the Instance firewall policy for that exec only, and `SECONDBOX_EXECUTION_GATEWAY` is injected into that exec alone. The listener and its relays close when the exec ends, is cancelled, reaches its deadline or `expiresAt`, or loses its control-plane connection. While the window is open, any process in the Instance can reach the listener under that exec's identity; this is an accepted residual risk, because the sandbox never holds real credentials and the gateway and Integrations authorize every credentialed request. The `SBXATTR1` identity preface is unchanged.
 ## 0.20.0 - 2026-09-29
 
 Port sessions stream entirely in memory and live as long as their Lease is renewed, application data-plane requests enforce Profile grants, and grants can be extended in place. Deployments from v0.14.0 onward update in place; update the control plane and all Runners together, and audit application authority Profile grants first: missing grants can be added in place only after the update. Rolling back requires the pre-update database backup. See the [v0.20.0 release notes](docs/releases/v0.20.0.md).

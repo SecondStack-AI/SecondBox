@@ -2,6 +2,8 @@
 
 ## Archive outcome
 
+Superseded by [per-exec attributed execution](2026-09-30-per-exec-attribution.md): attribution now binds one exec inside an ordinary generation, and the single-exec generation described below no longer exists.
+
 Implemented in `0d7b377` (#123), with connection-close termination corrected in `5739d46` (#125). The feature is included in the source history for v0.14.0. The original unchecked implementation checklist is retained as history, not an assertion that every proposed adversarial experiment or downstream rollout was completed. Current contracts are in [Profiles and authorization](../../design/profiles-and-authorization.md) and [Networking and ports](../../design/networking-and-ports.md).
 
 Provide trusted network attribution for one command and its descendants without making guest code an identity authority.
