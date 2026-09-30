@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- A proxied PortSession to an approved guest port with no listener dropped its home Runner's whole control-plane connection, cancelling every in-flight exec, file, terminal, and Port operation on that Runner across all tenants (clients saw `409 execution_node_unavailable`). The Runner refused the Open but kept no record of the stream, so the Credit frame the control plane sends behind every Open was treated as a protocol violation. The PortSession now ends by itself with a `guest port is unavailable` tunnel close, and the Runner connection stays up. The same fix applies to Exec and File Opens refused for capacity, File write chunks behind a refused Open (which could also start the refused write), and PTY input, resize, or credit that arrives after the terminal's process has exited.
+- A proxied PortSession to an approved guest port with no listener dropped its home Runner's whole control-plane connection, cancelling every in-flight exec, file, terminal, and Port operation on that Runner across all tenants (clients saw `409 execution_node_unavailable`) ([#194](https://github.com/SecondStack-AI/SecondBox/pull/194)). The Runner refused the Open but kept no record of the stream, so the Credit frame the control plane sends behind every Open was treated as a protocol violation. The PortSession now ends by itself with a `guest port is unavailable` tunnel close, and the Runner connection stays up. The same fix applies to Exec and File Opens refused for capacity, File write chunks behind a refused Open (which could also start the refused write), and PTY input, resize, or credit that arrives after the terminal's process has exited.
 
 ## 0.21.0 - 2026-09-30
 
