@@ -115,11 +115,58 @@ func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfi
 	}
 	forwardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	forwarder := &ExecutionForwarder{address: config.Policy.ListenerAddress, nftPath: config.NFTPath, policy: config.Policy, cancel: cancel, done: make(chan struct{})}
+	liveExecutionForwarders.add(forwarder)
 	go func() {
 		defer close(forwarder.done)
+		defer liveExecutionForwarders.remove(forwarder)
 		forwarder.forwardErr = ForwardAttributedExecution(forwardCtx, listener.(*net.TCPListener), config.GatewaySocket, config.Attribution, config.MaximumConnections)
 	}()
 	return forwarder, nil
+}
+
+// liveExecutionForwarders lets an interface sweep close every listener on the
+// interface before it deletes the tables that restrict those listeners.
+var liveExecutionForwarders = executionForwarderRegistry{forwarders: make(map[*ExecutionForwarder]struct{})}
+
+type executionForwarderRegistry struct {
+	mu         sync.Mutex
+	forwarders map[*ExecutionForwarder]struct{}
+}
+
+func (registry *executionForwarderRegistry) add(forwarder *ExecutionForwarder) {
+	registry.mu.Lock()
+	registry.forwarders[forwarder] = struct{}{}
+	registry.mu.Unlock()
+}
+
+func (registry *executionForwarderRegistry) remove(forwarder *ExecutionForwarder) {
+	registry.mu.Lock()
+	delete(registry.forwarders, forwarder)
+	registry.mu.Unlock()
+}
+
+// revoke closes the listener and relays of every forwarder on the interfaces
+// and waits until each has stopped.
+func (registry *executionForwarderRegistry) revoke(ctx context.Context, guestInterfaces map[string]bool) error {
+	registry.mu.Lock()
+	var revoked []*ExecutionForwarder
+	for forwarder := range registry.forwarders {
+		if guestInterfaces[forwarder.policy.GuestInterface] {
+			revoked = append(revoked, forwarder)
+		}
+	}
+	registry.mu.Unlock()
+	for _, forwarder := range revoked {
+		forwarder.Revoke()
+	}
+	for _, forwarder := range revoked {
+		select {
+		case <-forwarder.done:
+		case <-ctx.Done():
+			return fmt.Errorf("attributed listener revocation did not finish: %w", ctx.Err())
+		}
+	}
+	return nil
 }
 
 func (forwarder *ExecutionForwarder) ListenerAddress() netip.AddrPort { return forwarder.address }
@@ -155,20 +202,25 @@ func (forwarder *ExecutionForwarder) Close(ctx context.Context) error {
 	return nil
 }
 
-// RemoveExecutionListenerRules sweeps every listener table of the given guest
-// interfaces. Call only while no exec window of those interfaces is live: at
-// Instance teardown or when reclaiming a stopped Runner's interfaces. Table
-// names derive from the interface, so restart needs no authority journal.
+// RemoveExecutionListenerRules closes every live listener of the given guest
+// interfaces, then sweeps their listener tables. Call it at Instance teardown
+// or when reclaiming a stopped Runner's interfaces. Table names derive from the
+// interface, so restart needs no authority journal.
 func RemoveExecutionListenerRules(ctx context.Context, nftPath string, guestInterfaces []string) error {
 	prefixes := make([]string, 0, len(guestInterfaces))
+	interfaces := make(map[string]bool, len(guestInterfaces))
 	for _, name := range guestInterfaces {
 		if !executionInterfaceName.MatchString(name) {
 			return fmt.Errorf("attributed listener cleanup requires valid guest interfaces")
 		}
 		prefixes = append(prefixes, executionListenerTablePrefix(name))
+		interfaces[name] = true
 	}
 	if len(prefixes) == 0 {
 		return nil
+	}
+	if err := liveExecutionForwarders.revoke(ctx, interfaces); err != nil {
+		return err
 	}
 	return removeExecutionListenerTables(ctx, nftPath, nil, prefixes)
 }

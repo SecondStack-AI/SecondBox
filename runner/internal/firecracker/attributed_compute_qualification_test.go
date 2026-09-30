@@ -4,7 +4,6 @@ package firecracker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,10 +245,11 @@ func TestSmokeFirecrackerAttributedWindowRevocation(t *testing.T) {
 			if err := gateway.SetDeadline(expiry); err != nil {
 				t.Fatal(err)
 			}
-			commandDone := make(chan error, 1)
+			type outcome struct{ exec, close error }
+			commandDone := make(chan outcome, 1)
 			go func() {
 				_, err := ExecuteBufferedOverSession(window.Context(), instance.guestProtocolSession, qualificationAttributedFence.AssignmentId, open, window.Gateway())
-				commandDone <- errors.Join(err, window.Close())
+				commandDone <- outcome{exec: err, close: window.Close()}
 			}()
 			connection, err := gateway.AcceptUnix()
 			if err != nil {
@@ -274,9 +275,17 @@ func TestSmokeFirecrackerAttributedWindowRevocation(t *testing.T) {
 				t.Fatalf("attributed connection survived revocation: bytes=%d error=%v", n, err)
 			}
 			select {
-			case <-commandDone:
+			case result := <-commandDone:
+				// Only stopping the Instance may fail the exec itself; every
+				// trigger must revoke the window cleanly.
+				if result.close != nil || (trigger != "stop" && result.exec != nil) {
+					t.Fatalf("attributed exec after %s: exec=%v close=%v", trigger, result.exec, result.close)
+				}
 			case <-time.After(20 * time.Second):
 				t.Fatal("attributed exec did not return after revocation")
+			}
+			if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), "sbx_exec_") {
+				t.Fatalf("revoked window left listener tables after %s: %v: %s", trigger, err, output)
 			}
 			running, err := manager.IsRunning(t.Context(), instance.id)
 			if err != nil || running != (trigger != "stop") {

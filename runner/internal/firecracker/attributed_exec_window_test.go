@@ -195,6 +195,53 @@ func TestAttributedExecWindowExpiryRevokesWithoutFailingExec(t *testing.T) {
 	}
 }
 
+// A cancelled or overdue exec loses its gateway before the guest returns.
+func TestAttributedExecWindowRevokesOnCancellationAndDeadline(t *testing.T) {
+	waitForRevocation := func(t *testing.T, events *windowEvents) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for !slices.Contains(events.snapshot(), "remove listener table") && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if got := events.snapshot(); !slices.Equal(got[1:], []string{
+			"revoke listener", "revoke policy-instance 10.0.0.1:41000", "remove listener table",
+		}) {
+			t.Fatalf("window was not revoked while the exec was outstanding: %q", got)
+		}
+	}
+	t.Run("cancellation", func(t *testing.T) {
+		events := &windowEvents{}
+		execCtx, cancelExec := context.WithCancel(t.Context())
+		config := testAttributedExecConfig(&fakeListenerEnforcer{events: events})
+		forwarder := &fakeExecForwarder{events: events, address: netip.MustParseAddrPort("10.0.0.1:41000"), done: make(chan struct{})}
+		window, err := openAttributedExecWindowWithForwarder(execCtx, config,
+			func(context.Context, AttributedExecWindowConfig, egressattribution.ExecutionAttribution) (attributedExecForwarder, error) {
+				return forwarder, nil
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cancelExec()
+		waitForRevocation(t, events)
+		if err := window.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("deadline", func(t *testing.T) {
+		events := &windowEvents{}
+		config := testAttributedExecConfig(&fakeListenerEnforcer{events: events})
+		config.Open.DeadlineUnixMs = uint64(time.Now().Add(50 * time.Millisecond).UnixMilli())
+		window, _, _ := openFakeExecWindow(t, config, events)
+		waitForRevocation(t, events)
+		if window.Context().Err() != nil {
+			t.Fatal("the exec deadline cancelled the exec; the guest reports its own deadline")
+		}
+		if err := window.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestAttributedExecWindowReportsFailedRuleRevocation(t *testing.T) {
 	events := &windowEvents{}
 	revokeErr := errors.New("nft update failed")

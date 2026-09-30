@@ -96,10 +96,16 @@ reference, and expiry. Guest headers and source addresses are not identity claim
 and the receiving gateway must authenticate the Unix peer before it accepts the
 preface.
 
-The window closes when the exec ends, is cancelled, reaches its deadline or
-`expiresAt`, or loses its control-plane connection, and when its Instance is
-fenced. Closing revokes the listener and its active relays, then removes the
-listener from the Instance policy and deletes its listener table. The Instance
+The Runner opens the window when it admits the exec. Execs, terminals, and file
+operations on one Instance share its guest session and run one at a time, so a
+window can open while the exec waits for an earlier operation; the exec deadline
+and `expiresAt` still bound it. The window closes when the exec ends, is
+cancelled, reaches its deadline or `expiresAt`, or loses its control-plane
+connection, even if the guest has not yet returned the exec, and when its
+Instance is torn down. Closing revokes the listener and its active relays, then
+removes the listener from the Instance policy and deletes its listener table.
+Instance teardown closes every live listener on the Instance interface before
+it deletes their tables. The Instance
 keeps running. A gateway connection or identity-preface failure, or a listener
 failure, cancels the exec and reports a Runner failure. If the Runner cannot
 prove that the rule was removed, it terminates the Instance, as for any failed

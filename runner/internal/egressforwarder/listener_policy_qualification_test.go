@@ -365,4 +365,17 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	}
 	probe("attr-a", sibling.ListenerAddress(), true)
 	probe("attr-b", sibling.ListenerAddress(), false)
+	// Instance teardown sweeps the interface: the live listener closes before
+	// the table restricting it is deleted.
+	if err := RemoveExecutionListenerRules(ctx, "/usr/sbin/nft", []string{policy.GuestInterface}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sibling.Wait(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("swept listener outcome: %v", err)
+	}
+	probe("attr-a", sibling.ListenerAddress(), false)
+	probe("", sibling.ListenerAddress(), false)
+	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
+		t.Fatalf("interface sweep left listener tables: %v: %s", err, output)
+	}
 }

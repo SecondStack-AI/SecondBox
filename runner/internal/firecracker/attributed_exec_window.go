@@ -59,7 +59,8 @@ type AttributedExecWindowConfig struct {
 
 // AttributedExecWindow is the lifetime of one attributed exec's gateway. Any
 // process in the Instance can reach the listener while the window is open; the
-// window closes when the exec ends, expires, or its forwarder fails.
+// window closes when the exec ends or is cancelled, at its deadline or expiry,
+// or when its forwarder fails.
 type AttributedExecWindow struct {
 	policy           ExecutionListenerPolicyEnforcer
 	policyInstanceID string
@@ -70,6 +71,8 @@ type AttributedExecWindow struct {
 	revokeErr        error
 	monitored        chan struct{}
 	failure          error
+	// stopRevokers releases the cancellation and deadline revocation hooks.
+	stopRevokers func()
 }
 
 func OpenAttributedExecWindow(ctx context.Context, config AttributedExecWindowConfig) (*AttributedExecWindow, error) {
@@ -102,6 +105,15 @@ func openAttributedExecWindowWithForwarder(
 	window := &AttributedExecWindow{
 		policy: config.Policy, policyInstanceID: config.PolicyInstanceID, forwarder: forwarder,
 		ctx: windowCtx, cancel: cancel, monitored: make(chan struct{}),
+	}
+	// Cancellation, control-plane loss, and the exec deadline revoke the
+	// window at once, even while the guest has not yet returned the exec.
+	revokeNow := func() { window.revokeOnce.Do(window.revoke) }
+	stopOnCancel := context.AfterFunc(ctx, revokeNow)
+	deadline := time.AfterFunc(time.Until(time.UnixMilli(int64(config.Open.DeadlineUnixMs))), revokeNow)
+	window.stopRevokers = func() {
+		stopOnCancel()
+		deadline.Stop()
 	}
 	go window.monitor()
 	return window, nil
@@ -142,6 +154,7 @@ func (window *AttributedExecWindow) revoke() {
 // Close revokes the window and reports a forwarder failure or incomplete
 // revocation. It is safe to call once the exec has returned.
 func (window *AttributedExecWindow) Close() error {
+	window.stopRevokers()
 	window.revokeOnce.Do(window.revoke)
 	<-window.monitored
 	window.cancel(nil)
