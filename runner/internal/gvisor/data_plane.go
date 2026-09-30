@@ -91,8 +91,8 @@ func (backend *AssignmentBackend) ExecuteBuffered(
 		func(ctx context.Context) (*firecracker.AttributedExecWindow, error) {
 			return backend.openAttributedExecWindow(ctx, active, fence, open)
 		},
-		func(ctx context.Context, gateway netip.AddrPort) (runnercontrol.BufferedExecResult, error) {
-			return firecracker.ExecuteBufferedOverSession(ctx, session, fence.AssignmentId, open, gateway)
+		func(ctx context.Context, openGateway firecracker.ExecutionGatewayOpener) (runnercontrol.BufferedExecResult, error) {
+			return firecracker.ExecuteBufferedOverSession(ctx, session, fence.AssignmentId, open, openGateway)
 		})
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
@@ -119,8 +119,8 @@ func (backend *AssignmentBackend) ExecuteStreaming(
 		func(ctx context.Context) (*firecracker.AttributedExecWindow, error) {
 			return backend.openAttributedExecWindow(ctx, active, fence, open)
 		},
-		func(ctx context.Context, gateway netip.AddrPort) (*runnerprotocol.ExecTerminal, error) {
-			return firecracker.ExecuteStreamingOverSession(ctx, session, fence.AssignmentId, open, gateway, controls, emit)
+		func(ctx context.Context, openGateway firecracker.ExecutionGatewayOpener) (*runnerprotocol.ExecTerminal, error) {
+			return firecracker.ExecuteStreamingOverSession(ctx, session, fence.AssignmentId, open, openGateway, controls, emit)
 		})
 	if err != nil {
 		return nil, err

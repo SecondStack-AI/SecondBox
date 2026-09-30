@@ -44,7 +44,7 @@ type ExecutionForwarder struct {
 // StartExecutionForwarder binds one attributed exec's listener and installs its
 // listener table before accepting. The caller must Close it before releasing the
 // Instance network. Wait reports forwarding failure separately from cleanup.
-func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfig) (_ *ExecutionForwarder, resultErr error) {
+func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfig) (*ExecutionForwarder, error) {
 	ctx, cancelStartup := context.WithDeadline(ctx, config.Attribution.ExpiresAt)
 	defer cancelStartup()
 	if !filepath.IsAbs(config.NFTPath) || config.MaximumConnections < 1 || config.MaximumConnections > 4096 || config.Policy.InstanceID != config.Attribution.InstanceID {
@@ -90,28 +90,19 @@ func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfi
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if resultErr != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			resultErr = errors.Join(resultErr, removeExecutionListenerTables(cleanupCtx, config.NFTPath, map[string]bool{
-				executionListenerTable(config.Policy.GuestInterface, config.Policy.ListenerID): true,
-			}, nil))
-		}
-	}()
-	if err := applyExecutionListenerRules(ctx, config.NFTPath, rules); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	// Bind reserves the port without accepting connections until policy is installed.
-	if err := unix.Listen(fd, unix.SOMAXCONN); err != nil {
-		return nil, fmt.Errorf("listen on attributed socket: %w", err)
-	}
-	listener, err := net.FileListener(file)
+	// The listener table, the listener, and the registration appear under the
+	// sweep lock, so an interface sweep either sees and revokes this forwarder
+	// or runs before its table exists.
+	executionListenerTablesMu.Lock()
+	defer executionListenerTablesMu.Unlock()
+	listener, err := installExecutionListener(ctx, config.NFTPath, rules, fd, file)
 	if err != nil {
-		return nil, fmt.Errorf("open attributed TCP listener: %w", err)
+		// A failed nft invocation may still have applied the table.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		return nil, errors.Join(err, removeExecutionListenerTablesLocked(cleanupCtx, config.NFTPath, map[string]bool{
+			executionListenerTable(config.Policy.GuestInterface, config.Policy.ListenerID): true,
+		}, nil))
 	}
 	forwardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	forwarder := &ExecutionForwarder{address: config.Policy.ListenerAddress, nftPath: config.NFTPath, policy: config.Policy, cancel: cancel, done: make(chan struct{})}
@@ -119,9 +110,28 @@ func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfi
 	go func() {
 		defer close(forwarder.done)
 		defer liveExecutionForwarders.remove(forwarder)
-		forwarder.forwardErr = ForwardAttributedExecution(forwardCtx, listener.(*net.TCPListener), config.GatewaySocket, config.Attribution, config.MaximumConnections)
+		forwarder.forwardErr = ForwardAttributedExecution(forwardCtx, listener, config.GatewaySocket, config.Attribution, config.MaximumConnections)
 	}()
 	return forwarder, nil
+}
+
+// installExecutionListener starts accepting only after the listener table
+// exists; bind alone reserves the port.
+func installExecutionListener(ctx context.Context, nftPath, rules string, fd int, file *os.File) (*net.TCPListener, error) {
+	if err := applyExecutionListenerRules(ctx, nftPath, rules); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := unix.Listen(fd, unix.SOMAXCONN); err != nil {
+		return nil, fmt.Errorf("listen on attributed socket: %w", err)
+	}
+	listener, err := net.FileListener(file)
+	if err != nil {
+		return nil, fmt.Errorf("open attributed TCP listener: %w", err)
+	}
+	return listener.(*net.TCPListener), nil
 }
 
 // liveExecutionForwarders lets an interface sweep close every listener on the
@@ -219,20 +229,27 @@ func RemoveExecutionListenerRules(ctx context.Context, nftPath string, guestInte
 	if len(prefixes) == 0 {
 		return nil
 	}
+	executionListenerTablesMu.Lock()
+	defer executionListenerTablesMu.Unlock()
 	if err := liveExecutionForwarders.revoke(ctx, interfaces); err != nil {
 		return err
 	}
-	return removeExecutionListenerTables(ctx, nftPath, nil, prefixes)
+	return removeExecutionListenerTablesLocked(ctx, nftPath, nil, prefixes)
 }
 
-// executionListenerTablesMu serializes listing and deleting listener tables, so
-// an exec window closing during its Instance's teardown sweep cannot make the
-// sweep delete a table that no longer exists.
+// executionListenerTablesMu orders listener table creation, forwarder
+// registration, and table removal. A sweep therefore revokes every forwarder
+// whose table it deletes, and an exec window closing during a sweep cannot make
+// the sweep delete a table that no longer exists.
 var executionListenerTablesMu sync.Mutex
 
 func removeExecutionListenerTables(ctx context.Context, nftPath string, exact map[string]bool, prefixes []string) error {
 	executionListenerTablesMu.Lock()
 	defer executionListenerTablesMu.Unlock()
+	return removeExecutionListenerTablesLocked(ctx, nftPath, exact, prefixes)
+}
+
+func removeExecutionListenerTablesLocked(ctx context.Context, nftPath string, exact map[string]bool, prefixes []string) error {
 	owned := func(table string) bool {
 		if exact[table] {
 			return true

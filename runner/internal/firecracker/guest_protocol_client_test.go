@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,7 +91,7 @@ func TestNegotiateGuestProtocolOverFirecrackerVsockTransport(t *testing.T) {
 	execResult, err := session.ExecuteBuffered(context.Background(), "assignment-1", &guestv1.ExecRequest{
 		Command:          &guestv1.ExecRequest_Shell{Shell: "printf transport-exec"},
 		OutputLimitBytes: 1024,
-	}, netip.AddrPort{})
+	}, nil)
 	if err != nil {
 		t.Fatalf("execute over retained Firecracker transport: %v", err)
 	}
@@ -387,7 +386,7 @@ func assertStreamingExecOverTransport(t *testing.T, session *GuestProtocolSessio
 				OutputLimitBytes: 1024,
 				Streaming:        true,
 			},
-			netip.AddrPort{}, controls,
+			nil, controls,
 			func(channel guestv1.ExecOutputChannel, data []byte) error {
 				outputs <- channel.String() + ":" + string(data)
 				return nil
@@ -444,7 +443,7 @@ func assertStreamingExecOverTransport(t *testing.T, session *GuestProtocolSessio
 			OutputLimitBytes: 4,
 			Streaming:        true,
 		},
-		netip.AddrPort{}, exhaustedControls,
+		nil, exhaustedControls,
 		func(_ guestv1.ExecOutputChannel, data []byte) error {
 			_, err := partial.Write(data)
 			return err
@@ -468,7 +467,7 @@ func assertStreamingExecOverTransport(t *testing.T, session *GuestProtocolSessio
 			OutputLimitBytes: 1024,
 			Streaming:        true,
 		},
-		netip.AddrPort{}, make(chan GuestExecControl),
+		nil, make(chan GuestExecControl),
 		func(guestv1.ExecOutputChannel, []byte) error { return nil },
 	)
 	if err != nil {
@@ -490,7 +489,7 @@ func assertStreamingExecOverTransport(t *testing.T, session *GuestProtocolSessio
 				OutputLimitBytes: 1024,
 				Streaming:        true,
 			},
-			netip.AddrPort{}, eofControls,
+			nil, eofControls,
 			func(_ guestv1.ExecOutputChannel, data []byte) error {
 				eofOutputs <- string(data)
 				return nil

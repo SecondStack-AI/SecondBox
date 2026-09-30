@@ -775,7 +775,7 @@ func (inst *jailedResumeInstance) runGuestShell(ctx context.Context, script stri
 		Command:          &guestv1.ExecRequest_Shell{Shell: script},
 		OutputLimitBytes: 64 * 1024,
 		DeadlineUnixMs:   uint64(time.Now().Add(30 * time.Second).UnixMilli()),
-	}, netip.AddrPort{})
+	}, nil)
 	if err != nil {
 		return "", err
 	}

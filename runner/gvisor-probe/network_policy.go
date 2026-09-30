@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -389,7 +388,7 @@ func runNetcheck(
 		Cwd:              ".",
 		DeadlineUnixMs:   uint64(time.Now().Add(120 * time.Second).UnixMilli()),
 		OutputLimitBytes: 1 << 20,
-	}, netip.AddrPort{})
+	}, nil)
 	if err != nil {
 		return nil, err
 	}

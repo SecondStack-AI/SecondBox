@@ -161,24 +161,32 @@ func (window *AttributedExecWindow) Close() error {
 	return errors.Join(window.failure, window.revokeErr)
 }
 
-// RunAttributedExec runs execute inside an attributed window when the Open
-// carries attribution, and directly otherwise. A window failure replaces the
-// exec outcome, because the exec lost its admitted gateway.
+// RunAttributedExec runs execute with a window opener when the Open carries
+// attribution, and with none otherwise. The guest session opens the window only
+// once the exec owns the session, so a queued exec holds no listener. A window
+// failure replaces the exec outcome, because the exec lost its admitted gateway.
 func RunAttributedExec[T any](
 	ctx context.Context,
 	open *runnerprotocol.ExecOpen,
 	openWindow func(context.Context) (*AttributedExecWindow, error),
-	execute func(context.Context, netip.AddrPort) (T, error),
+	execute func(context.Context, ExecutionGatewayOpener) (T, error),
 ) (T, error) {
 	if open.GetAttributedExecution() == nil {
-		return execute(ctx, netip.AddrPort{})
+		return execute(ctx, nil)
+	}
+	var window *AttributedExecWindow
+	result, err := execute(ctx, func(ctx context.Context) (context.Context, netip.AddrPort, error) {
+		opened, err := openWindow(ctx)
+		if err != nil {
+			return nil, netip.AddrPort{}, err
+		}
+		window = opened
+		return opened.Context(), opened.Gateway(), nil
+	})
+	if window == nil {
+		return result, err
 	}
 	var zero T
-	window, err := openWindow(ctx)
-	if err != nil {
-		return zero, err
-	}
-	result, err := execute(window.Context(), window.Gateway())
 	if closeErr := window.Close(); closeErr != nil {
 		if errors.Is(err, context.Canceled) {
 			err = nil

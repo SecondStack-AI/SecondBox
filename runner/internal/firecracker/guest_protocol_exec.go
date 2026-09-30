@@ -79,12 +79,17 @@ type GuestExecControl struct {
 }
 
 // ExecuteStreaming performs one bounded exec over the retained assignment-bound guest stream.
-// executionGateway is the listener of this exec's attributed window, or zero.
+// ExecutionGatewayOpener opens an attributed exec's window once the exec owns
+// the guest session. It returns the exec context, which the window cancels
+// when its forwarder fails, and the window's listener.
+type ExecutionGatewayOpener func(context.Context) (context.Context, netip.AddrPort, error)
+
+// openExecutionGateway is nil for an ordinary exec.
 func (s *GuestProtocolSession) ExecuteStreaming(
 	ctx context.Context,
 	assignmentID string,
 	request *guestv1.ExecRequest,
-	executionGateway netip.AddrPort,
+	openExecutionGateway ExecutionGatewayOpener,
 	controls <-chan GuestExecControl,
 	emit func(guestv1.ExecOutputChannel, []byte) error,
 ) (result BufferedGuestExecResult, resultErr error) {
@@ -102,8 +107,16 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 	}
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
-	if executionGateway.IsValid() && request.Pty != nil {
-		return BufferedGuestExecResult{}, fmt.Errorf("attributed execution does not admit a PTY")
+	var executionGateway netip.AddrPort
+	if openExecutionGateway != nil {
+		if request.Pty != nil {
+			return BufferedGuestExecResult{}, fmt.Errorf("attributed execution does not admit a PTY")
+		}
+		var err error
+		ctx, executionGateway, err = openExecutionGateway(ctx)
+		if err != nil {
+			return BufferedGuestExecResult{}, err
+		}
 	}
 	request, err := s.prepareReservedGuestEnvironment(request, executionGateway)
 	if err != nil {
@@ -238,7 +251,7 @@ func (s *GuestProtocolSession) ExecuteBuffered(
 	ctx context.Context,
 	assignmentID string,
 	request *guestv1.ExecRequest,
-	executionGateway netip.AddrPort,
+	openExecutionGateway ExecutionGatewayOpener,
 ) (BufferedGuestExecResult, error) {
 	request = cloneGuestExecRequest(request)
 	request.Streaming = false
@@ -251,7 +264,7 @@ func (s *GuestProtocolSession) ExecuteBuffered(
 		ctx,
 		assignmentID,
 		request,
-		executionGateway,
+		openExecutionGateway,
 		controls,
 		func(channel guestv1.ExecOutputChannel, data []byte) error {
 			switch channel {

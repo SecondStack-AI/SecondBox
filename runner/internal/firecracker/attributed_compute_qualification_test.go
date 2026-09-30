@@ -177,7 +177,7 @@ func runQualificationExec(t *testing.T, instance *instance, script string) Buffe
 	result, err := instance.guestProtocolSession.ExecuteBuffered(t.Context(), qualificationAttributedFence.AssignmentId, &guestv1.ExecRequest{
 		Command: &guestv1.ExecRequest_Argv{Argv: &guestv1.ArgvCommand{Argument: []string{"/bin/sh", "-c", script}}},
 		Cwd:     ".", DeadlineUnixMs: uint64(time.Now().Add(20 * time.Second).UnixMilli()), OutputLimitBytes: 1024,
-	}, netip.AddrPort{})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestSmokeFirecrackerAttributedExecWindows(t *testing.T) {
 			t.Fatal(err)
 		}
 		accepted := acceptQualificationAttribution(gateway, reference, expiry)
-		executed, err := ExecuteBufferedOverSession(window.Context(), instance.guestProtocolSession, qualificationAttributedFence.AssignmentId, open, window.Gateway())
+		executed, err := ExecuteBufferedOverSession(window.Context(), instance.guestProtocolSession, qualificationAttributedFence.AssignmentId, open, staticExecutionGateway(window.Gateway()))
 		if closeErr := window.Close(); closeErr != nil {
 			t.Fatal(closeErr)
 		}
@@ -248,7 +248,7 @@ func TestSmokeFirecrackerAttributedWindowRevocation(t *testing.T) {
 			type outcome struct{ exec, close error }
 			commandDone := make(chan outcome, 1)
 			go func() {
-				_, err := ExecuteBufferedOverSession(window.Context(), instance.guestProtocolSession, qualificationAttributedFence.AssignmentId, open, window.Gateway())
+				_, err := ExecuteBufferedOverSession(window.Context(), instance.guestProtocolSession, qualificationAttributedFence.AssignmentId, open, staticExecutionGateway(window.Gateway()))
 				commandDone <- outcome{exec: err, close: window.Close()}
 			}()
 			connection, err := gateway.AcceptUnix()

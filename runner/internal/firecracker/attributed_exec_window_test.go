@@ -280,22 +280,36 @@ func TestAttributedExecWindowRefusesInvalidBinding(t *testing.T) {
 	}
 }
 
-func TestRunAttributedExecBindsGatewayOnlyToAttributedOpen(t *testing.T) {
+func TestRunAttributedExecOpensWindowOnlyWhenTheExecRuns(t *testing.T) {
 	opened := false
 	result, err := RunAttributedExec(t.Context(), &runnerprotocol.ExecOpen{},
 		func(context.Context) (*AttributedExecWindow, error) {
 			opened = true
 			return nil, errors.New("unexpected")
 		},
-		func(_ context.Context, gateway netip.AddrPort) (string, error) {
-			if gateway.IsValid() {
-				t.Fatalf("ordinary exec received gateway %s", gateway)
+		func(_ context.Context, openGateway ExecutionGatewayOpener) (string, error) {
+			if openGateway != nil {
+				t.Fatal("ordinary exec received a gateway opener")
 			}
 			return "ordinary", nil
 		})
 	if err != nil || result != "ordinary" || opened {
 		t.Fatalf("ordinary exec result=%q opened=%v error=%v", result, opened, err)
 	}
+
+	// A queued exec that never reaches the guest opens no window.
+	result, err = RunAttributedExec(t.Context(), testAttributedExecConfig(nil).Open,
+		func(context.Context) (*AttributedExecWindow, error) {
+			t.Fatal("a queued exec opened its window")
+			return nil, nil
+		},
+		func(context.Context, ExecutionGatewayOpener) (string, error) {
+			return "", errors.New("guest session closed while queued")
+		})
+	if err == nil || result != "" {
+		t.Fatalf("queued exec result=%q error=%v", result, err)
+	}
+
 	events := &windowEvents{}
 	config := testAttributedExecConfig(&fakeListenerEnforcer{events: events})
 	result, err = RunAttributedExec(t.Context(), config.Open,
@@ -303,13 +317,26 @@ func TestRunAttributedExecBindsGatewayOnlyToAttributedOpen(t *testing.T) {
 			window, _, _ := openFakeExecWindow(t, config, events)
 			return window, nil
 		},
-		func(_ context.Context, gateway netip.AddrPort) (string, error) {
-			if gateway != netip.MustParseAddrPort("10.0.0.1:41000") || slices.Contains(events.snapshot(), "revoke listener") {
-				t.Fatalf("attributed exec gateway=%s events=%q", gateway, events.snapshot())
+		func(ctx context.Context, openGateway ExecutionGatewayOpener) (string, error) {
+			if len(events.snapshot()) != 0 {
+				t.Fatalf("window opened before the exec owned the guest session: %q", events.snapshot())
+			}
+			windowCtx, gateway, err := openGateway(ctx)
+			if err != nil || windowCtx.Err() != nil || gateway != netip.MustParseAddrPort("10.0.0.1:41000") || slices.Contains(events.snapshot(), "revoke listener") {
+				t.Fatalf("attributed exec gateway=%s error=%v events=%q", gateway, err, events.snapshot())
 			}
 			return "attributed", nil
 		})
 	if err != nil || result != "attributed" || !slices.Contains(events.snapshot(), "remove listener table") {
 		t.Fatalf("attributed exec result=%q error=%v events=%q", result, err, events.snapshot())
 	}
+}
+
+// staticExecutionGateway hands an already-open listener to a guest exec, or
+// nothing for an ordinary exec.
+func staticExecutionGateway(gateway netip.AddrPort) ExecutionGatewayOpener {
+	if gateway == (netip.AddrPort{}) {
+		return nil
+	}
+	return func(ctx context.Context) (context.Context, netip.AddrPort, error) { return ctx, gateway, nil }
 }

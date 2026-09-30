@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -262,7 +261,7 @@ func subproofBufferedExec(
 		Cwd:              ".",
 		DeadlineUnixMs:   execDeadline(),
 		OutputLimitBytes: 1 << 20,
-	}, netip.AddrPort{})
+	}, nil)
 	if err != nil {
 		return err
 	}
@@ -299,7 +298,7 @@ func subproofStreamingExec(
 		DeadlineUnixMs:   execDeadline(),
 		OutputLimitBytes: 1 << 20,
 		Streaming:        true,
-	}, netip.AddrPort{}, controls, func(channel guestv1.ExecOutputChannel, data []byte) error {
+	}, nil, controls, func(channel guestv1.ExecOutputChannel, data []byte) error {
 		if channel == guestv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT {
 			stdout.Write(data)
 		}
