@@ -308,9 +308,9 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	}
 	fencedStartup, fencedDone := make(chan error, 1), make(chan struct{})
 	t.Cleanup(func() {
-		executionListenerStartupHook = nil
 		resumeStartup()
 		<-fencedDone
+		executionListenerStartupHook = nil
 	})
 	go func() {
 		defer close(fencedDone)
