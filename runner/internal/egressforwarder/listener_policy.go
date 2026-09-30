@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-var executionInterfaceName = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,15}$`)
+var (
+	executionInterfaceName = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,15}$`)
+	executionListenerID    = regexp.MustCompile(`^[a-f0-9]{16}$`)
+)
 
 type ExecutionListenerPolicy struct {
 	InstanceID      string
@@ -17,21 +20,25 @@ type ExecutionListenerPolicy struct {
 	BridgeInterface string
 	GuestAddress    netip.Addr
 	ListenerAddress netip.AddrPort
+	// ListenerID distinguishes concurrent and successive listeners on one
+	// guest interface, so one exec's cleanup never removes another's rules.
+	ListenerID string
 }
 
 // RenderExecutionListenerPolicy reserves the endpoint across host input and
 // output. Bridged guests also need a bridge input check before L3 delivery.
 func RenderExecutionListenerPolicy(policy ExecutionListenerPolicy) (string, error) {
 	if strings.TrimSpace(policy.InstanceID) == "" || !executionInterfaceName.MatchString(policy.GuestInterface) ||
+		!executionListenerID.MatchString(policy.ListenerID) ||
 		!executionListenerIPv4(policy.GuestAddress) ||
 		!executionListenerIPv4(policy.ListenerAddress.Addr()) ||
 		policy.ListenerAddress.Port() == 0 || policy.GuestAddress == policy.ListenerAddress.Addr() {
-		return "", fmt.Errorf("attributed listener policy requires an Instance, interface, and distinct unicast IPv4 endpoints")
+		return "", fmt.Errorf("attributed listener policy requires an Instance, interface, listener ID, and distinct unicast IPv4 endpoints")
 	}
 	if policy.BridgeInterface != "" && (!executionInterfaceName.MatchString(policy.BridgeInterface) || policy.BridgeInterface == policy.GuestInterface) {
 		return "", fmt.Errorf("attributed listener bridge interface is invalid")
 	}
-	table := executionListenerTable(policy.GuestInterface)
+	table := executionListenerTable(policy.GuestInterface, policy.ListenerID)
 	inputInterface := policy.GuestInterface
 	if policy.BridgeInterface != "" {
 		inputInterface = policy.BridgeInterface
@@ -57,7 +64,13 @@ func executionListenerIPv4(address netip.Addr) bool {
 	return address.Is4() && (address.IsGlobalUnicast() || address.IsLinkLocalUnicast())
 }
 
-func executionListenerTable(guestInterface string) string {
+// executionListenerTablePrefix is shared by every listener table of one guest
+// interface, which lets Instance teardown and Runner startup sweep them all.
+func executionListenerTablePrefix(guestInterface string) string {
 	digest := sha256.Sum256([]byte(guestInterface))
 	return fmt.Sprintf("sbx_exec_%x", digest[:8])
+}
+
+func executionListenerTable(guestInterface, listenerID string) string {
+	return executionListenerTablePrefix(guestInterface) + "_" + listenerID
 }

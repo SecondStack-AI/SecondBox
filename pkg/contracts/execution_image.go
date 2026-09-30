@@ -16,6 +16,34 @@ const (
 	RunnerCapabilityClientSelectedImage = "client-selected-image"
 )
 
+type StartSandboxRequest struct {
+	Image ExecutionImage `json:"image,omitzero"`
+}
+
+func (request *StartSandboxRequest) UnmarshalJSON(data []byte) error {
+	var body struct {
+		Image json.RawMessage `json:"image"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		return err
+	}
+	request.Image = ExecutionImage{}
+	if len(body.Image) == 0 {
+		return nil
+	}
+	if bytes.Equal(body.Image, []byte("null")) {
+		return &RequestFieldError{Field: "image", Reason: "must be an object, not null"}
+	}
+	decoder = json.NewDecoder(bytes.NewReader(body.Image))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request.Image); err != nil {
+		return err
+	}
+	return request.Image.Validate()
+}
+
 // ExecutionImage selects one signed OCI execution bundle for a lifecycle operation.
 type ExecutionImage struct {
 	Reference string `json:"reference"`
@@ -77,23 +105,9 @@ func ExecutionImageDigestReference(reference, digest string) string {
 	return repository + "@" + digest
 }
 
-func MergeExecutionImageMetadata(image ExecutionImage, attributed *AttributedExecutionRequest) map[string]string {
-	metadata := image.LifecycleMetadata()
-	if attributed != nil {
-		for key, value := range attributed.AttributedExecutionMetadata() {
-			metadata[key] = value
-		}
-	}
-	return metadata
-}
-
 func ParseExecutionImageMetadata(metadata map[string]string) (PublicExecutionImage, error) {
 	reference := metadata[executionImageReferenceMetadata]
-	allowedLength := 1
-	if metadata["executionAuthorizationRef"] != "" || metadata["executionExpiresAt"] != "" {
-		allowedLength = 3
-	}
-	if len(metadata) != allowedLength || reference == "" {
+	if len(metadata) != 1 || reference == "" {
 		return PublicExecutionImage{}, errors.New("SecondBox lifecycle operation has no execution image selection")
 	}
 	image := ExecutionImage{Reference: reference}

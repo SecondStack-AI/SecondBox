@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/egressforwarder"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
@@ -28,7 +29,6 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
-	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 	"google.golang.org/protobuf/proto"
 )
@@ -42,18 +42,20 @@ type capacityReservation struct {
 }
 
 type activeAssignment struct {
-	executionBinding    *runnerprotocol.AttributedExecution
-	attributedExecution *runtimemanager.AttributedExecutionGuard
-	fence               *runnerprotocol.AssignmentFence
-	correlation         *runnerprotocol.Correlation
-	egressContext       string
-	handles             *SupervisorHandles
-	session             *firecracker.GuestProtocolSession
-	workspace           workspacestore.ComputeAttachment
-	network             instanceNetwork
-	instanceDir         string
-	reservation         capacityReservation
-	backendRef          string
+	attributedPermission *runnerprotocol.AttributedExecutionPermission
+	// attributedGateway is resolved at start; nil when the Profile permits
+	// no attributed execution.
+	attributedGateway *firecracker.AttributedExecGateway
+	fence             *runnerprotocol.AssignmentFence
+	correlation       *runnerprotocol.Correlation
+	egressContext     string
+	handles           *SupervisorHandles
+	session           *firecracker.GuestProtocolSession
+	workspace         workspacestore.ComputeAttachment
+	network           instanceNetwork
+	instanceDir       string
+	reservation       capacityReservation
+	backendRef        string
 	// identity is the guest identity negotiated at launch and, for a
 	// client-selected image, the image the Instance reports.
 	identity guestLaunchIdentity
@@ -252,18 +254,6 @@ func (backend *AssignmentBackend) RecoveredAssignments() []*runnerprotocol.Activ
 	return result
 }
 
-func (backend *AssignmentBackend) AttributedAssignmentFences() []*runnerprotocol.AssignmentFence {
-	backend.mu.Lock()
-	defer backend.mu.Unlock()
-	var fences []*runnerprotocol.AssignmentFence
-	for _, active := range backend.assignments {
-		if active != nil && active.executionBinding != nil {
-			fences = append(fences, proto.CloneOf(active.fence))
-		}
-	}
-	return fences
-}
-
 func (backend *AssignmentBackend) SetRunnerEvidenceSink(sink runnerevidence.Sink, runnerID string) {
 	if sink == nil || strings.TrimSpace(runnerID) == "" {
 		return
@@ -372,7 +362,7 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 				Maximum: manifest.AgentProtocolGeneration,
 			},
 			SnapshotResumeReady:           false,
-			AttributedExecutionReady:      backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
+			PerExecAttributionReady:       backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
 			ClientSelectedImageReady:      true,
 			PhysicalStorageAdmissionReady: backend.storagePressure != nil,
 		},
@@ -407,7 +397,7 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	assignment *runnerprotocol.AssignmentCommand,
 	ownClaim *activeAssignment,
 ) error {
-	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+	if err := runnerprotocol.ValidateAttributedExecutionPermission(assignment); err != nil {
 		return incompatibleAssignment(err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -424,7 +414,7 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	// begun; the claiming start passes its own claim through.
 	backend.mu.Lock()
 	if active, exists := backend.assignments[assignment.Fence.AssignmentId]; exists && active != ownClaim {
-		same := active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.executionBinding, assignment) &&
+		same := active != nil && runnerprotocol.SameAssignmentIdentity(active.fence, active.egressContext, active.attributedPermission, assignment) &&
 			active.identity.requestedReference == assignment.GetExecutionImage().GetReference()
 		fenced := active != nil && active.fenced
 		backend.mu.Unlock()
@@ -463,20 +453,18 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 		}
 	}
 	supported := map[string]bool{
-		"attributed-execution":  backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
 		"client-selected-image": true,
 		"cleanup":               true, "evidence": true, "gvisor": true, "local-workspace": true,
 		"network-policy": true, "storage": true,
+		"per-exec-attribution": backend.config.NetworkPolicy.EgressContexts.HasAttributedGateway(),
 	}
 	for _, capability := range requirements.RequiredCapabilities {
 		if !supported[capability] {
 			return incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment requires unsupported capability %q", capability))
 		}
 	}
-	if execution := assignment.AttributedExecution; execution != nil {
-		if _, err := backend.config.NetworkPolicy.EgressContexts.AttributedGatewaySocket(assignment.EgressContext, execution.Gateway); err != nil {
-			return incompatibleAssignment(err)
-		}
+	if _, err := firecracker.ResolveAttributedExecGateway(backend.config.NetworkPolicy.EgressContexts, assignment); err != nil {
+		return incompatibleAssignment(err)
 	}
 	if assignment.ExecutionImage != nil {
 		if err := backend.validateSelectedImageAssignment(assignment); err != nil {
@@ -521,7 +509,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignment *runnerprotocol.AssignmentCommand,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (result runnercontrol.BackendInstance, resultErr error) {
-	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+	if err := runnerprotocol.ValidateAttributedExecutionPermission(assignment); err != nil {
 		return result, incompatibleAssignment(err)
 	}
 	started := time.Now()
@@ -537,7 +525,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignmentID := assignment.Fence.AssignmentId
 	backend.mu.Lock()
 	if existing, exists := backend.assignments[assignmentID]; exists {
-		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, existing.executionBinding, assignment) ||
+		if existing == nil || !runnerprotocol.SameAssignmentIdentity(existing.fence, existing.egressContext, existing.attributedPermission, assignment) ||
 			existing.identity.requestedReference != assignment.GetExecutionImage().GetReference() {
 			backend.mu.Unlock()
 			return result, incompatibleAssignment(fmt.Errorf("SecondBox gVisor assignment ID was reused with different fencing"))
@@ -563,7 +551,7 @@ func (backend *AssignmentBackend) StartAssignment(
 			backend.mu.Lock()
 			reference = ""
 			if current, still := backend.assignments[assignmentID]; still && current != nil &&
-				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, current.executionBinding, assignment) && !current.fenced {
+				runnerprotocol.SameAssignmentIdentity(current.fence, current.egressContext, current.attributedPermission, assignment) && !current.fenced {
 				reference = current.backendRef
 				identity = current.identity
 				guestFeatures = current.session.NegotiatedFeatureNames()
@@ -584,9 +572,9 @@ func (backend *AssignmentBackend) StartAssignment(
 	launched := make(chan struct{})
 	claim := &activeAssignment{
 		fence: cloneFence(assignment.Fence), launched: launched, done: make(chan struct{}),
-		egressContext:    assignment.EgressContext,
-		executionBinding: proto.CloneOf(assignment.AttributedExecution),
-		identity:         guestLaunchIdentity{requestedReference: assignment.GetExecutionImage().GetReference()},
+		egressContext:        assignment.EgressContext,
+		attributedPermission: proto.CloneOf(assignment.AttributedExecutionPermission),
+		identity:             guestLaunchIdentity{requestedReference: assignment.GetExecutionImage().GetReference()},
 	}
 	claim.launchDone = sync.OnceFunc(func() { close(launched) })
 	backend.assignments[assignmentID] = claim
@@ -678,7 +666,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err != nil {
 		return result, incompatibleAssignment(err)
 	}
-	network, supervisorProcess, err := backend.installInstanceNetwork(ctx, assignment, compiled, compileOptions)
+	network, supervisorProcess, err := backend.installInstanceNetwork(ctx, assignment, compiled)
 	if err != nil {
 		return result, err
 	}
@@ -781,13 +769,9 @@ func (backend *AssignmentBackend) launchInstance(
 	rootImage *os.File,
 	identity guestLaunchIdentity,
 ) (*activeAssignment, error) {
-	var attributedExecution *runtimemanager.AttributedExecutionGuard
-	if execution := assignment.AttributedExecution; execution != nil {
-		var err error
-		attributedExecution, err = runtimemanager.NewAttributedExecutionGuard(assignment.Fence.AssignmentId, time.UnixMilli(int64(execution.ExpiresAtUnixMs)))
-		if err != nil {
-			return nil, err
-		}
+	attributedGateway, err := firecracker.ResolveAttributedExecGateway(backend.config.NetworkPolicy.EgressContexts, assignment)
+	if err != nil {
+		return nil, err
 	}
 	// A short digest keeps every per-Instance socket path inside sun_path
 	// regardless of Instance ID length or runtime-directory depth.
@@ -858,20 +842,20 @@ func (backend *AssignmentBackend) launchInstance(
 	}
 	supervisorProcess.Store(handles.Command.Process)
 	active := &activeAssignment{
-		attributedExecution: attributedExecution,
-		fence:               cloneFence(assignment.Fence),
-		correlation:         proto.Clone(assignment.Correlation).(*runnerprotocol.Correlation),
-		egressContext:       assignment.EgressContext,
-		executionBinding:    proto.CloneOf(assignment.AttributedExecution),
-		handles:             handles,
-		workspace:           workspace,
-		network:             network,
-		instanceDir:         instanceDir,
-		backendRef:          fmt.Sprintf("gvisor:%d", handles.Command.Process.Pid),
-		identity:            identity,
-		operations:          make(map[uint64]context.CancelFunc),
-		nextOperation:       1,
-		done:                make(chan struct{}),
+		attributedGateway:    attributedGateway,
+		fence:                cloneFence(assignment.Fence),
+		correlation:          proto.Clone(assignment.Correlation).(*runnerprotocol.Correlation),
+		egressContext:        assignment.EgressContext,
+		attributedPermission: proto.CloneOf(assignment.AttributedExecutionPermission),
+		handles:              handles,
+		workspace:            workspace,
+		network:              network,
+		instanceDir:          instanceDir,
+		backendRef:           fmt.Sprintf("gvisor:%d", handles.Command.Process.Pid),
+		identity:             identity,
+		operations:           make(map[uint64]context.CancelFunc),
+		nextOperation:        1,
+		done:                 make(chan struct{}),
 	}
 	go func() {
 		waitErr := handles.Command.Wait()
@@ -880,15 +864,6 @@ func (backend *AssignmentBackend) launchInstance(
 		active.exitMu.Unlock()
 		close(active.done)
 	}()
-	if network.executionForwarder != nil {
-		go func() {
-			if err := network.executionForwarder.Wait(); !errors.Is(err, context.Canceled) {
-				// Stop compute while its supervisor can still flush and detach the Workspace.
-				_, _ = handles.Control.Write([]byte{controlKill})
-				_ = handles.Control.Close()
-			}
-		}()
-	}
 
 	ready := make(chan error, 1)
 	go func() {
@@ -957,18 +932,7 @@ func (backend *AssignmentBackend) negotiateSession(
 ) (*firecracker.GuestProtocolSession, error) {
 	negotiateCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	var executionGateway netip.AddrPort
-	if active.network.executionForwarder != nil {
-		select {
-		case <-active.network.executionForwarder.Done():
-			return nil, fmt.Errorf("SecondBox gVisor execution gateway has stopped: %w", active.network.executionForwarder.Wait())
-		default:
-		}
-		executionGateway = active.network.executionForwarder.ListenerAddress()
-	}
 	return firecracker.NegotiateGuestProtocol(negotiateCtx, firecracker.GuestProtocolNegotiation{
-		AttributedExecution:             active.attributedExecution,
-		ExecutionGateway:                executionGateway,
 		RunnerGateways:                  active.network.runnerGateways,
 		UDSPath:                         filepath.Join(active.instanceDir, "sockets", "protocol.sock"),
 		DirectUnixSocket:                true,
@@ -1000,9 +964,6 @@ var errSupervisorExitUnconfirmed = errors.New("SecondBox gVisor supervisor exit 
 // attachment only after the supervisor has exited (its exit proves the mount
 // and loop device are gone).
 func (backend *AssignmentBackend) destroyInstance(ctx context.Context, active *activeAssignment) error {
-	if active.network.executionForwarder != nil {
-		active.network.executionForwarder.Revoke()
-	}
 	if active.session != nil {
 		_ = active.session.Close()
 	}
@@ -1041,7 +1002,6 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 	ctx context.Context,
 	assignment *runnerprotocol.AssignmentCommand,
 	compiled *networkpolicy.CompiledPolicy,
-	compileOptions networkpolicy.CompileOptions,
 ) (instanceNetwork, *atomic.Pointer[os.Process], error) {
 	network, err := backend.acquireNetworkSlot()
 	if err != nil {
@@ -1058,13 +1018,6 @@ func (backend *AssignmentBackend) installInstanceNetwork(
 		return instanceNetwork{}, nil, infrastructureAssignment(err)
 	}
 	supervisorProcess := &atomic.Pointer[os.Process]{}
-	if assignment.AttributedExecution != nil {
-		network.executionForwarder, compiled, err = backend.startExecutionForwarder(ctx, assignment, network, compileOptions)
-		if err != nil {
-			teardown := backend.teardownInstanceNetwork(assignment.Fence.InstanceId, network)
-			return instanceNetwork{}, nil, infrastructureAssignment(errors.Join(err, teardown))
-		}
-	}
 	network.runnerGateways = compiled.LogicalGatewayEndpoints()
 	if err := backend.enforcer.Install(ctx, firecracker.PolicyNetworkConfig{
 		InstanceID: assignment.Fence.InstanceId,
@@ -1098,25 +1051,21 @@ const networkTeardownBound = 30 * time.Second
 func (backend *AssignmentBackend) teardownInstanceNetwork(instanceID string, network instanceNetwork) error {
 	ctx, cancel := context.WithTimeout(context.Background(), networkTeardownBound)
 	defer cancel()
-	if network.executionForwarder != nil {
-		if err := network.executionForwarder.Close(ctx); err != nil {
-			return err
-		}
-	}
+	listenerErr := egressforwarder.RemoveExecutionListenerRules(ctx, backend.nftPath, []string{network.hostVeth})
 	removeErr := backend.enforcer.Remove(ctx, instanceID)
 	// The enforcer deletes both family tables in one atomic script, so a
 	// single already-missing table aborts it while its twin survives; sweep
 	// each family independently so no orphan outlives the released slot.
 	residualErr := removeResidualPolicyTables(ctx, firecracker.PolicyTableName(instanceID))
 	destroyErr := destroyInstanceNetwork(ctx, network)
-	if removeErr == nil && residualErr == nil && destroyErr == nil {
+	if listenerErr == nil && removeErr == nil && residualErr == nil && destroyErr == nil {
 		// The slot returns to the allocator only once its resources are
 		// verifiably gone; a failed teardown keeps the slot leaked so a
 		// later assignment cannot collide with stale links or tables. The
 		// next runner start reconciles the leftovers and the slot space.
 		backend.releaseNetworkSlot(network)
 	}
-	return errors.Join(removeErr, residualErr, destroyErr)
+	return errors.Join(listenerErr, removeErr, residualErr, destroyErr)
 }
 
 const supervisorStopBound = 15 * time.Second
@@ -1145,9 +1094,6 @@ func (backend *AssignmentBackend) MarkAssignmentReady(fence *runnerprotocol.Assi
 
 func (backend *AssignmentBackend) observeExit(active *activeAssignment) {
 	<-active.done
-	if active.network.executionForwarder != nil {
-		active.network.executionForwarder.Revoke()
-	}
 	backend.mu.Lock()
 	current, exists := backend.assignments[active.fence.AssignmentId]
 	if !exists || current != active || active.fenced || active.terminalSent {
@@ -1241,9 +1187,6 @@ func (backend *AssignmentBackend) FenceAssignment(
 	backend.mu.Unlock()
 	for _, cancel := range cancels {
 		cancel()
-	}
-	if active.network.executionForwarder != nil {
-		active.network.executionForwarder.Revoke()
 	}
 	if active.session != nil {
 		_ = active.session.Close()

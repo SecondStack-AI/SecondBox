@@ -218,8 +218,6 @@ type RunnerProtocolService struct {
 	stateMu                    sync.Mutex
 	drain                      runnerprotocol.DrainPhase
 	active                     map[string]*runnerprotocol.ActiveAssignmentSummary
-	attributedLifetimes        map[string]*attributedAssignmentLifetime
-	attributedFailures         chan error
 	operationMu                sync.Mutex
 	execOperations             map[string]*runnerExecOperation
 	fileOperations             map[string]*runnerFileOperation
@@ -357,7 +355,6 @@ func NewRunnerProtocolService(
 		evidence:                   runnerevidence.SlogSink{},
 		correlations:               make(map[string]*runnerprotocol.Correlation),
 		dataPlane:                  newDataPlaneListener(),
-		attributedFailures:         make(chan error, 1),
 		dataPlaneSPKIPin:           dataPlaneSPKIPin,
 		directPorts:                newDirectPortRegistry(),
 		directDataPlane:            newDirectDataPlaneRegistry(),
@@ -433,9 +430,6 @@ func validateDataPlaneCertificate(
 
 // Run preserves ordinary Instances while reconnecting transient control-plane sessions.
 func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
-	if err := s.fenceDisconnectedAttributedAssignments(ctx); err != nil {
-		return err
-	}
 	stopDataPlane, err := s.startDataPlaneListener(ctx)
 	if err != nil {
 		return err
@@ -450,9 +444,6 @@ func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
 		}
 		sessionEstablished, sessionErr := s.runProtocolSession(ctx)
 		sessionErr = errors.Join(sessionErr, s.abortWorkspaceRelocations(), s.connector.Close())
-		if err := s.fenceDisconnectedAttributedAssignments(ctx); err != nil {
-			return errors.Join(sessionErr, err)
-		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -842,8 +833,6 @@ func (s *RunnerProtocolService) consumeCommands(
 			return err
 		case err := <-dataPlaneFailures:
 			return err
-		case err := <-s.attributedFailures:
-			return err
 		case terminal := <-s.instanceTerminals:
 			s.directPorts.closeAssignment(
 				terminal.Fence.GetAssignmentId(),
@@ -1228,14 +1217,6 @@ func (s *RunnerProtocolService) handleAssignment(
 	}
 	startCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(int64(assignment.DeadlineUnixMs)))
 	defer cancel()
-	if execution := assignment.AttributedExecution; execution != nil {
-		executionDeadline := time.UnixMilli(int64(execution.ExpiresAtUnixMs))
-		if assignmentDeadline, _ := startCtx.Deadline(); executionDeadline.Before(assignmentDeadline) {
-			var cancelExecution context.CancelFunc
-			startCtx, cancelExecution = context.WithDeadline(startCtx, executionDeadline)
-			defer cancelExecution()
-		}
-	}
 	instance, err := s.backend.StartAssignment(startCtx, assignment, progress)
 	terminal := runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY
 	safeDetail := ""
@@ -1255,7 +1236,6 @@ func (s *RunnerProtocolService) handleAssignment(
 	} else {
 		s.recordActiveAssignment(assignment.Fence, instance.BackendReference, assignment.EgressContext)
 		s.recordAssignmentCorrelation(assignment)
-		s.armAttributedAssignmentExpiry(ctx, assignment)
 	}
 	if evidenceErr := s.emitEvidence(
 		ctx,
@@ -1454,7 +1434,7 @@ func (s *RunnerProtocolService) handleFence(
 	// is stopped.
 	s.directPorts.closeAssignment(command.Fence.AssignmentId, "assignment fenced")
 	s.directDataPlane.closeAssignment(command.Fence.AssignmentId, "assignment fenced")
-	evidence, err := s.fenceAssignment(ctx, command)
+	evidence, err := s.backend.FenceAssignment(ctx, command)
 	if err != nil {
 		evidence.Result = runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_FAILED
 	} else {
@@ -1600,10 +1580,6 @@ func (s *RunnerProtocolService) recordActiveAssignment(
 
 func (s *RunnerProtocolService) removeActiveAssignment(assignmentID string) {
 	s.stateMu.Lock()
-	if lifetime := s.attributedLifetimes[assignmentID]; lifetime != nil {
-		lifetime.timer.Stop()
-		delete(s.attributedLifetimes, assignmentID)
-	}
 	delete(s.active, assignmentID)
 	delete(s.correlations, assignmentID)
 	if s.drain == runnerprotocol.DrainPhase_DRAIN_PHASE_DRAINING && len(s.active) == 0 {
@@ -1794,7 +1770,7 @@ func (s *RunnerProtocolService) sendRunnerFrame(
 }
 
 func validateResolvedAssignment(assignment *runnerprotocol.AssignmentCommand) error {
-	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+	if err := runnerprotocol.ValidateAttributedExecutionPermission(assignment); err != nil {
 		return err
 	}
 	if assignment == nil || assignment.Fence == nil {

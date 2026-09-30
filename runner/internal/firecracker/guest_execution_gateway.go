@@ -20,11 +20,10 @@ const (
 // refused before dispatch.
 var reservedGuestEnvironmentNames = []string{executionGatewayEnvironment, runnerGatewaysEnvironment}
 
-func validateExecutionGateway(attributed bool, endpoint netip.AddrPort) error {
-	if !attributed {
-		if endpoint != (netip.AddrPort{}) {
-			return fmt.Errorf("ordinary execution cannot have an execution gateway")
-		}
+// validateExecutionGateway accepts no gateway for an ordinary exec, or the
+// IPv4 listener of one attributed exec window.
+func validateExecutionGateway(endpoint netip.AddrPort) error {
+	if endpoint == (netip.AddrPort{}) {
 		return nil
 	}
 	address := endpoint.Addr()
@@ -45,7 +44,7 @@ func validateRunnerGateways(gateways []networkpolicy.LogicalGatewayEndpoint) err
 		}
 		// Publication admits every address the egress-context loader and the
 		// policy compiler admit; address-class policy belongs to the loader.
-		// Only the attributed listener is restricted, to its IPv4 bridge address.
+		// Only an attributed exec listener is restricted, to its IPv4 host address.
 		address := gateway.Endpoint.Addr()
 		if !address.IsValid() || address.Is4In6() || gateway.Endpoint.Port() == 0 {
 			return fmt.Errorf("Runner gateway %q requires a valid unmapped IP endpoint with a nonzero port", gateway.LogicalName)
@@ -66,8 +65,9 @@ func formatRunnerGateways(gateways []networkpolicy.LogicalGatewayEndpoint) strin
 
 // The host supplies routing information; the listener supplies authority.
 // Application wrappers choose proxy environment variables and HTTP semantics.
-func (s *GuestProtocolSession) prepareReservedGuestEnvironment(request *guestv1.ExecRequest) (*guestv1.ExecRequest, error) {
-	if err := validateExecutionGateway(s.attributedExecution != nil, s.executionGateway); err != nil {
+// Only the attributed exec itself receives its window's gateway.
+func (s *GuestProtocolSession) prepareReservedGuestEnvironment(request *guestv1.ExecRequest, executionGateway netip.AddrPort) (*guestv1.ExecRequest, error) {
+	if err := validateExecutionGateway(executionGateway); err != nil {
 		return nil, err
 	}
 	if err := validateRunnerGateways(s.runnerGateways); err != nil {
@@ -82,9 +82,9 @@ func (s *GuestProtocolSession) prepareReservedGuestEnvironment(request *guestv1.
 		}
 	}
 	injected := make([]*guestv1.EnvironmentEntry, 0, 2)
-	if s.attributedExecution != nil {
+	if executionGateway.IsValid() {
 		injected = append(injected, &guestv1.EnvironmentEntry{
-			Name: executionGatewayEnvironment, Value: []byte(s.executionGateway.String()),
+			Name: executionGatewayEnvironment, Value: []byte(executionGateway.String()),
 		})
 	}
 	if len(s.runnerGateways) > 0 {

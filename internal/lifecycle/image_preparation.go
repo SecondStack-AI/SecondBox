@@ -25,9 +25,6 @@ func (broker *PostgresEffectBroker) prepareStartImage(ctx context.Context, claim
 	err := broker.pool.QueryRow(ctx, `SELECT state,evidence_json,effect_deadline FROM secondbox.lifecycle_effects WHERE id=$1 AND kind='prepare_image'`, plan.operationID).Scan(&state, &evidence, &deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		deadline = now.Add(imagePreparationDeadline)
-		if plan.attributed != nil && plan.attributed.ExpiresAt.Before(deadline) {
-			deadline = plan.attributed.ExpiresAt
-		}
 		command := &runnerv1.PrepareImageCommand{OperationId: plan.operationID, TenantRef: plan.tenantRef, Reference: plan.image.RequestedReference, DeadlineUnixMs: uint64(deadline.UnixMilli())}
 		payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{Message: &runnerv1.ControlPlaneToRunner_PrepareImage{PrepareImage: command}})
 		if err != nil {

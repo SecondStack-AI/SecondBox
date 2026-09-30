@@ -85,11 +85,14 @@ message RunnerCapabilities {
   // admitted template built from the exact signed bundle it verified. It is not
   // a prerequisite: a runner without it stays fully eligible for cold boot.
   bool snapshot_resume_ready = 12;
-  bool attributed_execution_ready = 13;
+  reserved 13;
   bool client_selected_image_ready = 14;
   // Physical storage admission measures filesystem use without reserving the
   // full logical capacities of retained or active Workspace images.
   bool physical_storage_admission_ready = 15;
+  // Generation 6: attributed gateway routing is configured, so ordinary
+  // generations can admit per-exec attribution windows.
+  bool per_exec_attribution_ready = 16;
 }
 
 enum ComputeBackendKind {
@@ -300,7 +303,7 @@ message NetworkPolicy {
 }
 
 message AssignmentCommand {
-  reserved 7;
+  reserved 7, 13;
   string message_id = 1;
   uint64 sequence = 2;
   AssignmentFence fence = 3;
@@ -314,8 +317,11 @@ message AssignmentCommand {
   // egress_context is the Sandbox's immutable creation-time pin. It is empty
   // exactly when requirements.requires_tenant_egress_context is false.
   string egress_context = 12;
-  AttributedExecution attributed_execution = 13;
   ExecutionImage execution_image = 14;
+  // Present exactly when the pinned Profile permits attributed execution. It
+  // lets execs of this ordinary generation request attribution and carries
+  // routing and bounds only, never an execution identity.
+  AttributedExecutionPermission attributed_execution_permission = 15;
 }
 
 message ExecutionImage {
@@ -343,15 +349,21 @@ message PrepareImageResult {
   string failure = 8;
 }
 
-// Attribution is control-plane authority fixed before guest networking opens.
-// AssignmentFence supplies its Sandbox, Instance, and generation binding.
+// The gateway is a logical name resolved inside the pinned egress context.
+// maximum_connections bounds each attributed exec's open TCP connections.
+message AttributedExecutionPermission {
+  string gateway = 1;
+  uint32 maximum_connections = 2;
+}
+
+// AttributedExecution is control-plane authority admitted with one exec. The
+// frame fence supplies its Sandbox, Instance, Assignment, and generation.
 message AttributedExecution {
   string tenant_ref = 1;
   string subject_ref = 2;
   string authorization_ref = 3;
   uint64 expires_at_unix_ms = 4;
-  string gateway = 5;
-  uint32 maximum_connections = 6;
+  reserved 5, 6;
 }
 
 enum AssignmentDecision {
@@ -498,6 +510,8 @@ message ExecOpen {
   uint32 pty_columns = 9;
   bytes stdin = 10;
   bool streaming = 11;
+  // Generation 6: present only on an admitted attributed non-PTY exec.
+  AttributedExecution attributed_execution = 12;
 }
 
 message ArgvCommand {

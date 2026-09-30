@@ -370,8 +370,8 @@ func (store *PostgresStateStore) RecordRegistration(
 	if registration.Capabilities.SnapshotResumeReady {
 		capabilities = append(capabilities, contracts.RunnerCapabilitySnapshotResume)
 	}
-	if registration.Capabilities.AttributedExecutionReady {
-		capabilities = append(capabilities, contracts.RunnerCapabilityAttributedExecution)
+	if registration.Capabilities.PerExecAttributionReady {
+		capabilities = append(capabilities, contracts.RunnerCapabilityPerExecAttribution)
 	}
 	if registration.Capabilities.ClientSelectedImageReady {
 		capabilities = append(capabilities, contracts.RunnerCapabilityClientSelectedImage)

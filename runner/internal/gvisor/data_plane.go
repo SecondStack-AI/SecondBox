@@ -5,7 +5,9 @@ package gvisor
 import (
 	"context"
 	"fmt"
+	"net/netip"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/egressforwarder"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
@@ -34,6 +36,35 @@ func (backend *AssignmentBackend) sessionForOperation(
 	return active, active.session, opCtx, release, nil
 }
 
+// openAttributedExecWindow binds the window listener to the host end of the
+// Instance veth and admits it only from that veth and the guest address.
+func (backend *AssignmentBackend) openAttributedExecWindow(
+	ctx context.Context,
+	active *activeAssignment,
+	fence *runnerprotocol.AssignmentFence,
+	open *runnerprotocol.ExecOpen,
+) (*firecracker.AttributedExecWindow, error) {
+	if active.attributedGateway == nil {
+		return nil, fmt.Errorf("SecondBox gVisor assignment does not permit attributed execution")
+	}
+	guestAddress, err := netip.ParseAddr(active.network.guestAddress)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox gVisor attributed execution guest address: %w", err)
+	}
+	hostAddress, err := netip.ParseAddr(active.network.hostAddress)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox gVisor attributed execution host address: %w", err)
+	}
+	return firecracker.OpenAttributedExecWindow(ctx, firecracker.AttributedExecWindowConfig{
+		NFTPath: backend.nftPath, Policy: backend.enforcer, PolicyInstanceID: fence.InstanceId,
+		Gateway: *active.attributedGateway, Fence: fence, Open: open,
+		Listener: egressforwarder.ExecutionListenerPolicy{
+			GuestInterface: active.network.hostVeth, GuestAddress: guestAddress,
+			ListenerAddress: netip.AddrPortFrom(hostAddress, 0),
+		},
+	})
+}
+
 // confirmTerminalFence rejects a result whose assignment was fenced while the
 // operation ran, so a stale generation never publishes a terminal.
 func (backend *AssignmentBackend) confirmTerminalFence(
@@ -56,7 +87,13 @@ func (backend *AssignmentBackend) ExecuteBuffered(
 		return runnercontrol.BufferedExecResult{}, err
 	}
 	defer release()
-	result, err := firecracker.ExecuteBufferedOverSession(opCtx, session, fence.AssignmentId, open)
+	result, err := firecracker.RunAttributedExec(opCtx, open,
+		func(ctx context.Context) (*firecracker.AttributedExecWindow, error) {
+			return backend.openAttributedExecWindow(ctx, active, fence, open)
+		},
+		func(ctx context.Context, gateway netip.AddrPort) (runnercontrol.BufferedExecResult, error) {
+			return firecracker.ExecuteBufferedOverSession(ctx, session, fence.AssignmentId, open, gateway)
+		})
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}
@@ -78,7 +115,13 @@ func (backend *AssignmentBackend) ExecuteStreaming(
 		return nil, err
 	}
 	defer release()
-	terminal, err := firecracker.ExecuteStreamingOverSession(opCtx, session, fence.AssignmentId, open, controls, emit)
+	terminal, err := firecracker.RunAttributedExec(opCtx, open,
+		func(ctx context.Context) (*firecracker.AttributedExecWindow, error) {
+			return backend.openAttributedExecWindow(ctx, active, fence, open)
+		},
+		func(ctx context.Context, gateway netip.AddrPort) (*runnerprotocol.ExecTerminal, error) {
+			return firecracker.ExecuteStreamingOverSession(ctx, session, fence.AssignmentId, open, gateway, controls, emit)
+		})
 	if err != nil {
 		return nil, err
 	}

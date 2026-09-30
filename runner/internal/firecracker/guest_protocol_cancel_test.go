@@ -3,6 +3,7 @@ package firecracker
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
@@ -21,7 +22,7 @@ func TestGuestProtocolCancellationSendFailureIsReturned(t *testing.T) {
 				_, err := session.ExecuteBuffered(ctx, "assignment-1", &guestv1.ExecRequest{
 					Command:          &guestv1.ExecRequest_Shell{Shell: "sleep 60"},
 					OutputLimitBytes: 1024,
-				})
+				}, netip.AddrPort{})
 				return err
 			},
 		},

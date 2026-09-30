@@ -70,6 +70,7 @@ type DataPlaneAdmission struct {
 	StreamWindowBytes       int64
 	Priority                int64
 	ExecOpen                *runnerv1.ExecOpen
+	AttributedExecution     *contracts.AttributedExecutionRequest
 	DeferResponseCredit     bool
 	UseProfileRequestLimit  bool
 	UseProfileResponseLimit bool
@@ -153,6 +154,7 @@ type DataPlaneSession struct {
 	CompletedAt              *time.Time
 	RetainUntil              time.Time
 	RequestJSON              []byte `json:"-"`
+	AttributedExecution      *contracts.AttributedExecutionRequest
 	Transport                string
 	DataPlaneAddress         string
 	DataPlaneCertificateSPKI string
@@ -363,6 +365,13 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	if capacity.exhausted() {
 		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
 	}
+	var executionAuthorizationRef *string
+	var executionExpiresAt *time.Time
+	if attribution := input.AttributedExecution; attribution != nil {
+		reference, expiresAt := attribution.AuthorizationRef, attribution.ExpiresAt.UTC()
+		executionAuthorizationRef, executionExpiresAt = &reference, &expiresAt
+		session.AttributedExecution = &contracts.AttributedExecutionRequest{AuthorizationRef: reference, ExpiresAt: expiresAt}
+	}
 	requestJSON, err := json.Marshal(input.Request)
 	if err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane request encoding: %w", err)
@@ -380,11 +389,12 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,result_json,metadata_json,request_json,created_at,updated_at,completed_at,retain_until,next_outbound_sequence
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,result_json,metadata_json,request_json,created_at,updated_at,completed_at,retain_until,next_outbound_sequence,execution_authorization_ref,execution_expires_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending',$16,$17,$18,$19,$20,$21,$22,0,0,false,$23,$24,'',NULL,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',$25,'{}',$26,$27,$27,NULL,$28,$29
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending',$16,$17,$18,$19,$20,$21,$22,0,0,false,$23,$24,'',NULL,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',$25,'{}',$26,$27,$27,NULL,$28,$29,$30,$31
 		)`,
 		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, session.RequestID, session.LeaseID, session.Kind, session.Operation, session.StreamID, input.Priority, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, session.MaximumResponseBytes, session.MaximumRequestBytes, session.StreamWindowBytes, session.Detachable, session.TerminalDetachSeconds, resultJSON, requestJSON, session.CreatedAt, session.CreatedAt.Add(store.retention), nextOutboundSequence,
+		executionAuthorizationRef, executionExpiresAt,
 	); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane session insert: %w", err)
 	}
@@ -584,8 +594,8 @@ func lockDataPlaneAuthority(
 	input *DataPlaneAdmission,
 ) (DataPlaneSession, contracts.ExecutionPolicy, dataPlaneCapacity, error) {
 	var session DataPlaneSession
-	var sandboxState, assignmentState, desiredState string
-	var attribution attributedAssignmentAuthority
+	var sandboxState, assignmentState string
+	var egressContextPinned, perExecAttributionReady bool
 	var runnerConnected bool
 	var encodedDataPlaneEndpoint string
 	var specJSON []byte
@@ -594,8 +604,8 @@ func lockDataPlaneAuthority(
 		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
 		       assignment.fencing_token,assignment.state,revision.spec_json,
-		       COALESCE(runner.data_plane_address,''),sandbox.desired_state,
-		       assignment.execution_authorization_ref,assignment.execution_expires_at,assignment.execution_session_id,
+		       COALESCE(runner.data_plane_address,''),sandbox.egress_context IS NOT NULL,
+		       COALESCE(runner.capabilities_json ? $4,false),
 		       EXISTS (
 		         SELECT 1
 		         FROM secondbox.runner_connections AS connection
@@ -611,13 +621,13 @@ func lockDataPlaneAuthority(
 		LEFT JOIN secondbox.runners AS runner ON runner.id=assignment.runner_id
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$3
 		FOR UPDATE OF sandbox,assignment`,
-		input.TenantRef, input.SubjectRef, input.SandboxID,
+		input.TenantRef, input.SubjectRef, input.SandboxID, contracts.RunnerCapabilityPerExecAttribution,
 	).Scan(
 		&session.TenantRef, &session.SubjectRef,
 		&session.ProfileRevisionID, &session.Generation, &sandboxState,
 		&session.AssignmentID, &session.InstanceID, &session.RunnerID,
-		&session.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint, &desiredState,
-		&attribution.reference, &attribution.expiresAt, &attribution.sessionID,
+		&session.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint,
+		&egressContextPinned, &perExecAttributionReady,
 		&runnerConnected,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -669,14 +679,16 @@ func lockDataPlaneAuthority(
 			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrLeaseInactive
 		}
 	}
-	if err := attribution.admitDataPlane(ctx, tx, session.AssignmentID, desiredState, input); err != nil {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, err
-	}
 	var spec contracts.ProfileRevisionSpec
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox data-plane Profile policy decoding: %w", err)
 	}
-	session.Transport = dataPlaneTransport(spec.Execution.DataPlaneTransport, input.Kind, input.Operation)
+	if input.AttributedExecution != nil {
+		if err := admitAttributedExecution(spec, egressContextPinned, perExecAttributionReady, input); err != nil {
+			return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, err
+		}
+	}
+	session.Transport = dataPlaneTransport(spec.Execution.DataPlaneTransport, input.Kind, input.Operation, input.AttributedExecution != nil)
 	if session.Transport == contracts.DataPlaneTransportDirect {
 		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)
 		if err != nil {
@@ -752,7 +764,8 @@ const dataPlaneSessionSelect = `
 	       limit_bytes,infrastructure_failure_reason,retryable,terminal_message,
 	       result_json,metadata_json,
 	       request_json,
-	       created_at,updated_at,completed_at,retain_until
+	       created_at,updated_at,completed_at,retain_until,
+	       execution_authorization_ref,execution_expires_at
 	FROM secondbox.data_plane_sessions`
 
 type dataPlaneRow interface {
@@ -762,6 +775,8 @@ type dataPlaneRow interface {
 func scanDataPlaneSession(row dataPlaneRow) (DataPlaneSession, error) {
 	var session DataPlaneSession
 	var resultJSON, metadataJSON []byte
+	var executionAuthorizationRef *string
+	var executionExpiresAt *time.Time
 	err := row.Scan(
 		&session.ID, &session.StreamID, &session.TenantRef,
 		&session.SubjectRef, &session.SandboxID,
@@ -783,12 +798,21 @@ func scanDataPlaneSession(row dataPlaneRow) (DataPlaneSession, error) {
 		&session.TerminalMessage, &resultJSON, &metadataJSON, &session.RequestJSON,
 		&session.CreatedAt, &session.UpdatedAt,
 		&session.CompletedAt, &session.RetainUntil,
+		&executionAuthorizationRef, &executionExpiresAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DataPlaneSession{}, ErrDataPlaneNotFound
 	}
 	if err != nil {
 		return DataPlaneSession{}, fmt.Errorf("SecondBox data-plane session lookup: %w", err)
+	}
+	if (executionAuthorizationRef == nil) != (executionExpiresAt == nil) {
+		return DataPlaneSession{}, errors.New("SecondBox data-plane session attribution binding is incomplete")
+	}
+	if executionAuthorizationRef != nil {
+		session.AttributedExecution = &contracts.AttributedExecutionRequest{
+			AuthorizationRef: *executionAuthorizationRef, ExpiresAt: executionExpiresAt.UTC(),
+		}
 	}
 	var result dataPlaneResult
 	if err := json.Unmarshal(resultJSON, &result); err != nil {
@@ -829,7 +853,7 @@ func hydrateDataPlaneTransport(
 		return fmt.Errorf("SecondBox data-plane transport Profile decoding: %w", err)
 	}
 	session.Transport = dataPlaneTransport(
-		spec.Execution.DataPlaneTransport, session.Kind, session.Operation,
+		spec.Execution.DataPlaneTransport, session.Kind, session.Operation, session.AttributedExecution != nil,
 	)
 	if session.Transport == contracts.DataPlaneTransportDirect {
 		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)
@@ -844,8 +868,40 @@ func hydrateDataPlaneTransport(
 
 // Buffered Exec returns its single bounded completion on the Runner control
 // connection; Profile transport selection applies to streaming sessions.
-func dataPlaneTransport(profileTransport string, kind string, operation string) string {
-	if kind == "exec" && operation == "exec" {
+// An attributed exec always uses the proxied transport: a direct client sends
+// its own ExecOpen, which must never carry control-plane attribution.
+// admitAttributedExecution binds one non-PTY exec to the pinned Profile's
+// attributed permission. Its window must fit the Profile execution limit and
+// the exec deadline must end inside it.
+func admitAttributedExecution(spec contracts.ProfileRevisionSpec, egressContextPinned, runnerReady bool, input *DataPlaneAdmission) error {
+	if input.Kind != "exec" || input.ExecOpen == nil || input.ExecOpen.AllocatePty {
+		return errors.New("SecondBox attributed execution admits only a non-PTY exec")
+	}
+	if spec.AttributedExecution == nil || spec.Network.RequiresTenantEgressContext == nil ||
+		!*spec.Network.RequiresTenantEgressContext || !egressContextPinned {
+		return &ports.InvalidFieldError{
+			Field: "attributedExecution", Reason: "requires a Profile that permits attributed execution and a pinned Tenant egress context",
+		}
+	}
+	expiresAt := input.AttributedExecution.ExpiresAt
+	remaining := expiresAt.Sub(input.Now)
+	maximum := spec.Execution.MaximumDeadlineMilliseconds
+	if remaining <= 0 || !maximum.IsUnlimited() && remaining > time.Duration(maximum)*time.Millisecond {
+		return &ports.InvalidFieldError{
+			Field: "attributedExecution.expiresAt", Reason: "must be in the future and within the pinned Profile's execution.maximumDeadlineMilliseconds",
+		}
+	}
+	if input.DeadlineAt.After(expiresAt) {
+		return &ports.InvalidFieldError{Field: "deadlineMilliseconds", Reason: "must end at or before attributedExecution.expiresAt"}
+	}
+	if !runnerReady {
+		return ports.ErrHomeRunnerUnavailable
+	}
+	return nil
+}
+
+func dataPlaneTransport(profileTransport string, kind string, operation string, attributed bool) string {
+	if kind == "exec" && (operation == "exec" || attributed) {
 		return contracts.DataPlaneTransportProxied
 	}
 	return profileTransport

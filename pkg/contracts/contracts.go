@@ -158,8 +158,9 @@ type ProfileRevisionSpec struct {
 	AttributedExecutionCeiling AttributedExecutionConnectionLimits `json:"attributedExecutionCeiling,omitzero"`
 }
 
-// AttributedExecutionPolicy permits one isolated exec through a Runner-owned
-// forwarder. It never adds destinations to an ordinary generation's network.
+// AttributedExecutionPolicy lets execs in ordinary generations of the Profile
+// request attribution through a Runner-owned forwarder to the named gateway.
+// It adds no ordinary destination; each attributed exec gets its own listener.
 type AttributedExecutionPolicy struct {
 	Gateway            string `json:"gateway"`
 	MaximumConnections int64  `json:"maximumConnections"`
@@ -656,22 +657,50 @@ func unmarshalClosedJSON(data []byte, destination any) error {
 
 // BufferedExecRequest is one bounded non-PTY execution.
 type BufferedExecRequest struct {
-	Command              ExecCommand       `json:"command"`
-	Cwd                  *string           `json:"cwd,omitempty"`
-	Environment          map[string]string `json:"environment"`
-	StdinBase64          *string           `json:"stdinBase64,omitempty"`
-	DeadlineMilliseconds int64             `json:"deadlineMilliseconds"`
-	MaximumOutputBytes   int64             `json:"maximumOutputBytes"`
+	Command              ExecCommand                 `json:"command"`
+	Cwd                  *string                     `json:"cwd,omitempty"`
+	Environment          map[string]string           `json:"environment"`
+	StdinBase64          *string                     `json:"stdinBase64,omitempty"`
+	DeadlineMilliseconds int64                       `json:"deadlineMilliseconds"`
+	MaximumOutputBytes   int64                       `json:"maximumOutputBytes"`
+	AttributedExecution  *AttributedExecutionRequest `json:"attributedExecution,omitempty"`
+}
+
+func (request *BufferedExecRequest) UnmarshalJSON(data []byte) error {
+	type bufferedExecFields BufferedExecRequest
+	var decoded bufferedExecFields
+	if err := unmarshalClosedJSON(data, &decoded); err != nil {
+		return err
+	}
+	if err := rejectNullAttributedExecution(data); err != nil {
+		return err
+	}
+	*request = BufferedExecRequest(decoded)
+	return nil
 }
 
 // StreamingExecRequest starts one non-PTY command controlled by WebSocket frames.
 type StreamingExecRequest struct {
-	Command              ExecCommand       `json:"command"`
-	Cwd                  *string           `json:"cwd,omitempty"`
-	Environment          map[string]string `json:"environment"`
-	DeadlineMilliseconds int64             `json:"deadlineMilliseconds"`
-	MaximumOutputBytes   int64             `json:"maximumOutputBytes"`
-	WindowBytes          int64             `json:"windowBytes"`
+	Command              ExecCommand                 `json:"command"`
+	Cwd                  *string                     `json:"cwd,omitempty"`
+	Environment          map[string]string           `json:"environment"`
+	DeadlineMilliseconds int64                       `json:"deadlineMilliseconds"`
+	MaximumOutputBytes   int64                       `json:"maximumOutputBytes"`
+	WindowBytes          int64                       `json:"windowBytes"`
+	AttributedExecution  *AttributedExecutionRequest `json:"attributedExecution,omitempty"`
+}
+
+func (request *StreamingExecRequest) UnmarshalJSON(data []byte) error {
+	type streamingExecFields StreamingExecRequest
+	var decoded streamingExecFields
+	if err := unmarshalClosedJSON(data, &decoded); err != nil {
+		return err
+	}
+	if err := rejectNullAttributedExecution(data); err != nil {
+		return err
+	}
+	*request = StreamingExecRequest(decoded)
+	return nil
 }
 
 // ExecStreamSession is the durable public streaming-exec negotiation result.

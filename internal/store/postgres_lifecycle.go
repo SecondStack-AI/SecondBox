@@ -161,47 +161,6 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 				input.Operation.RequestMetadata["executionImageReference"] = reference
 			}
 		}
-		var specJSON []byte
-		if err := tx.QueryRow(ctx, `SELECT spec_json FROM secondbox.profile_revisions WHERE id=$1`,
-			locked.ProfileRevisionID).Scan(&specJSON); err != nil {
-			return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle quota Profile lookup failed: %w", err)
-		}
-		var spec contracts.ProfileRevisionSpec
-		if err := json.Unmarshal(specJSON, &spec); err != nil {
-			return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle quota Profile decoding failed: %w", err)
-		}
-		attributed, err := contracts.ParseAttributedExecutionMetadata(input.Operation.RequestMetadata)
-		if err != nil {
-			return contracts.Operation{}, errors.Join(&ports.InvalidFieldError{
-				Field: "attributedExecution", Reason: "must contain a bounded authorizationRef and an explicit expiresAt",
-			}, err)
-		}
-		if attributed != nil {
-			if observed != contracts.SandboxStateStopped || desired != contracts.SandboxDesiredStateStopped || locked.CurrentInstanceID != "" {
-				return contracts.Operation{}, ports.ErrWorkspaceMutation
-			}
-			if spec.AttributedExecution == nil || spec.Network.RequiresTenantEgressContext == nil ||
-				!*spec.Network.RequiresTenantEgressContext || locked.EgressContext == nil {
-				return contracts.Operation{}, &ports.InvalidFieldError{
-					Field: "attributedExecution", Reason: "requires a Profile that permits attributed execution and a pinned Tenant egress context",
-				}
-			}
-			remaining := attributed.ExpiresAt.Sub(input.Now)
-			maximum := spec.Execution.MaximumDeadlineMilliseconds
-			if remaining <= 0 || !maximum.IsUnlimited() && remaining > time.Duration(maximum)*time.Millisecond {
-				return contracts.Operation{}, &ports.InvalidFieldError{
-					Field: "attributedExecution.expiresAt", Reason: "must be in the future and within the pinned Profile execution deadline",
-				}
-			}
-			var supported bool
-			if err := tx.QueryRow(ctx, `SELECT capabilities_json ? $2 FROM secondbox.runners WHERE id=$1 FOR SHARE`,
-				locked.Workspace.HomeRunnerID, contracts.RunnerCapabilityAttributedExecution).Scan(&supported); err != nil {
-				return contracts.Operation{}, fmt.Errorf("SecondBox attributed start Runner capability lookup failed: %w", err)
-			}
-			if !supported {
-				return contracts.Operation{}, ports.ErrHomeRunnerUnavailable
-			}
-		}
 		subjectUsage, err := readSubjectQuotaUsage(
 			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Now,
 		)
@@ -698,22 +657,10 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		scheduled := nextReconcileAt.UTC()
 		scheduledAt = &scheduled
 	}
-	// Retiring an attributed generation normally parks its Sandbox. A pending
-	// explicit start belongs to the successor generation and must survive the
-	// cleanup of an earlier failed command.
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET state=$1,lifecycle_action=CASE WHEN $2='wait' THEN lifecycle_action ELSE $2 END,
 		    desired_state=CASE
-		      WHEN $2 IN ('drain','finish_stop') AND desired_state='running' AND NOT EXISTS (
-		        SELECT 1 FROM secondbox.operations AS operation
-		        WHERE operation.sandbox_id=secondbox.sandboxes.id
-		          AND operation.kind='start' AND operation.state IN ('pending','running')
-		      ) AND EXISTS (
-		        SELECT 1 FROM secondbox.assignments AS assignment
-		        WHERE assignment.instance_id=secondbox.sandboxes.current_instance_id
-		          AND assignment.execution_authorization_ref IS NOT NULL
-		      ) THEN 'stopped'
 		      WHEN $2='drain' AND $3 IN ('idle_timeout','maximum_duration') THEN 'stopped'
 		      ELSE desired_state
 		    END,

@@ -4,6 +4,7 @@ package firecracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,14 +17,17 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/egressattribution"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/egressforwarder"
+	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
-func newFirecrackerAttributedQualification(t *testing.T, lifetime time.Duration) (*Manager, *instance, *net.UnixListener, egressattribution.ExecutionAttribution) {
+// newFirecrackerAttributedQualification starts one ordinary jailed, networked
+// Instance under the default deny-all policy and a Runner-side gateway socket.
+func newFirecrackerAttributedQualification(t *testing.T) (*Manager, *instance, *net.UnixListener) {
 	t.Helper()
 	if os.Getenv("SECONDBOX_RUNNER_QUALIFY_FIRECRACKER") != "1" {
 		t.Skip("set SECONDBOX_RUNNER_QUALIFY_FIRECRACKER=1 for jailed attributed compute qualification")
@@ -85,39 +89,59 @@ func newFirecrackerAttributedQualification(t *testing.T, lifetime time.Duration)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { gateway.Close() })
-	expiry := time.Now().Add(lifetime)
-	guard, err := runtimemanager.NewAttributedExecutionGuard("assignment-attributed", expiry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	attribution := egressattribution.ExecutionAttribution{TenantRef: "tenant-a", SubjectRef: "owner-a", SandboxID: "sandbox-attributed", InstanceID: "instance-attributed", AssignmentID: "assignment-attributed", Generation: 1, AuthorizationRef: "authorization-a", ExpiresAt: expiry}
 	opts := smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
-		Timezone: "UTC", CompartmentID: attribution.InstanceID, AssignmentID: attribution.AssignmentID,
+		Timezone: "UTC", CompartmentID: "instance-attributed", AssignmentID: "assignment-attributed",
 		RequestID: "request-attributed", OperationID: "operation-attributed",
-		WorkspaceAttachment: attachment, AttributedExecution: guard,
-		ExecutionNetwork: &runtimemanager.AttributedExecutionNetwork{Attribution: attribution, GatewaySocket: gateway.Addr().String(), MaximumConnections: 2, CompileOptions: networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Minute}},
+		WorkspaceAttachment: attachment,
 	})
-	instanceID, err := manager.createAndStart(ctx, attribution.SandboxID, opts)
+	instanceID, err := manager.createAndStart(ctx, "sandbox-attributed", opts)
 	if err != nil {
 		if closeErr := attachment.Close(); closeErr != nil {
 			t.Error(closeErr)
 		}
-		t.Fatalf("attributed VM startup: %v\n%s", err, latestSmokeLog(t, workDir))
+		t.Fatalf("attributed qualification VM startup: %v\n%s", err, latestSmokeLog(t, workDir))
 	}
 	instance := manager.lookup(instanceID)
-	if instance == nil || instance.jailRoot == "" || instance.guestProtocolSession == nil {
-		t.Fatal("attributed VM did not establish jailed guest session")
+	if instance == nil || instance.jailRoot == "" || instance.guestProtocolSession == nil || instance.tapName == "" {
+		t.Fatal("qualification VM did not establish a jailed networked guest session")
 	}
-	return manager, instance, gateway, attribution
+	return manager, instance, gateway
 }
 
-func TestSmokeFirecrackerAttributedCommand(t *testing.T) {
-	manager, instance, gateway, attribution := newFirecrackerAttributedQualification(t, time.Minute)
-	ctx, expiry := t.Context(), attribution.ExpiresAt
-	result := make(chan error, 1)
-	if err := gateway.SetDeadline(expiry); err != nil {
+var qualificationAttributedFence = &runnerprotocol.AssignmentFence{
+	AssignmentId: "assignment-attributed", SandboxId: "sandbox-attributed", InstanceId: "instance-attributed", SandboxGeneration: 1,
+}
+
+// openQualificationExecWindow opens one attributed exec window inside the
+// running ordinary Instance, as the assignment backend does for an ExecOpen.
+func openQualificationExecWindow(t *testing.T, manager *Manager, instance *instance, gateway *net.UnixListener, reference string, lifetime time.Duration, script string) (*AttributedExecWindow, *runnerprotocol.ExecOpen) {
+	t.Helper()
+	expiry := time.Now().Add(lifetime)
+	open := &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", script}}},
+		Cwd:     ".", DeadlineUnixMs: uint64(expiry.UnixMilli()), OutputLimitBytes: 1024,
+		AttributedExecution: &runnerprotocol.AttributedExecution{
+			TenantRef: "tenant-a", SubjectRef: "owner-a", AuthorizationRef: reference, ExpiresAtUnixMs: uint64(expiry.UnixMilli()),
+		},
+	}
+	window, err := OpenAttributedExecWindow(t.Context(), AttributedExecWindowConfig{
+		NFTPath: manager.cfg.NetworkPolicyNFTPath, Policy: manager.networkPolicy, PolicyInstanceID: instance.id,
+		Gateway: AttributedExecGateway{Socket: gateway.Addr().String(), MaximumConnections: 2},
+		Fence:   qualificationAttributedFence, Open: open,
+		Listener: egressforwarder.ExecutionListenerPolicy{
+			GuestInterface: instance.tapName, BridgeInterface: manager.cfg.MicroVMBridgeName,
+			GuestAddress:    netip.MustParseAddr(instance.guestIP),
+			ListenerAddress: netip.AddrPortFrom(bridgeAddress(manager.cfg.MicroVMBridgeCIDR), 0),
+		},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	return window, open
+}
+
+func acceptQualificationAttribution(gateway *net.UnixListener, reference string, expiry time.Time) <-chan error {
+	result := make(chan error, 1)
 	go func() {
 		connection, err := gateway.AcceptUnix()
 		if err != nil {
@@ -126,7 +150,8 @@ func TestSmokeFirecrackerAttributedCommand(t *testing.T) {
 		}
 		defer connection.Close()
 		actual, err := egressattribution.ReadRunnerExecutionAttribution(connection, uint32(os.Getuid()), expiry)
-		if err == nil && (actual.SubjectRef != attribution.SubjectRef || actual.AuthorizationRef != attribution.AuthorizationRef || actual.InstanceID != attribution.InstanceID) {
+		if err == nil && (actual.SubjectRef != "owner-a" || actual.AuthorizationRef != reference ||
+			actual.InstanceID != qualificationAttributedFence.InstanceId || actual.AssignmentID != qualificationAttributedFence.AssignmentId) {
 			err = fmt.Errorf("incorrect Firecracker attribution: %+v", actual)
 		}
 		if err == nil {
@@ -140,54 +165,97 @@ func TestSmokeFirecrackerAttributedCommand(t *testing.T) {
 			err = fmt.Errorf("unexpected guest bytes: %q", request)
 		}
 		if err == nil {
-			_, err = connection.Write([]byte("qualified-attributed"))
+			_, err = connection.Write([]byte(reference))
 		}
 		result <- err
 	}()
-	request := &runnerprotocol.ExecOpen{Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", `endpoint=$SECONDBOX_EXECUTION_GATEWAY; printf 'guest-context: forged\n' | nc -w 2 "${endpoint%:*}" "${endpoint##*:}"`}}}, Cwd: ".", DeadlineUnixMs: uint64(expiry.UnixMilli()), OutputLimitBytes: 1024}
-	executed, err := ExecuteBufferedOverSession(ctx, instance.guestProtocolSession, attribution.AssignmentID, request)
-	if err != nil || executed.Terminal.GetExitCode() != 0 || string(executed.Stdout) != "qualified-attributed" {
-		t.Fatalf("attributed exec: %v stdout=%q stderr=%q terminal=%+v", err, executed.Stdout, executed.Stderr, executed.Terminal)
-	}
-	if err := <-result; err != nil {
+	return result
+}
+
+func runQualificationExec(t *testing.T, instance *instance, script string) BufferedGuestExecResult {
+	t.Helper()
+	result, err := instance.guestProtocolSession.ExecuteBuffered(t.Context(), qualificationAttributedFence.AssignmentId, &guestv1.ExecRequest{
+		Command: &guestv1.ExecRequest_Argv{Argv: &guestv1.ArgvCommand{Argument: []string{"/bin/sh", "-c", script}}},
+		Cwd:     ".", DeadlineUnixMs: uint64(time.Now().Add(20 * time.Second).UnixMilli()), OutputLimitBytes: 1024,
+	}, netip.AddrPort{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ExecuteBufferedOverSession(ctx, instance.guestProtocolSession, attribution.AssignmentID, request); err == nil {
-		t.Fatal("second attributed command admitted")
+	return result
+}
+
+// Each attributed exec in one ordinary Instance gets its own listener and
+// identity; a daemon survives, and the listener is gone once the exec ends.
+func TestSmokeFirecrackerAttributedExecWindows(t *testing.T) {
+	manager, instance, gateway := newFirecrackerAttributedQualification(t)
+	if result := runQualificationExec(t, instance, `nohup sh -c 'while :; do sleep 1; done' >/dev/null 2>&1 & echo $! > daemon.pid`); result.Terminal.GetExitCode() != 0 {
+		t.Fatalf("daemon start: %+v %q", result.Terminal, result.Stderr)
 	}
-	if err := manager.Remove(ctx, instance.id); err != nil {
-		t.Fatal(err)
+	var previous netip.AddrPort
+	for _, reference := range []string{"authorization-1", "authorization-2"} {
+		script := `endpoint=$SECONDBOX_EXECUTION_GATEWAY; printf %s "$endpoint" > gateway-` + reference + `; printf 'guest-context: forged\n' | nc -w 2 "${endpoint%:*}" "${endpoint##*:}"`
+		window, open := openQualificationExecWindow(t, manager, instance, gateway, reference, time.Minute, script)
+		if window.Gateway() == previous {
+			t.Fatalf("sequential attributed execs share listener %s", previous)
+		}
+		previous = window.Gateway()
+		expiry := time.UnixMilli(int64(open.AttributedExecution.ExpiresAtUnixMs))
+		if err := gateway.SetDeadline(expiry); err != nil {
+			t.Fatal(err)
+		}
+		accepted := acceptQualificationAttribution(gateway, reference, expiry)
+		executed, err := ExecuteBufferedOverSession(window.Context(), instance.guestProtocolSession, qualificationAttributedFence.AssignmentId, open, window.Gateway())
+		if closeErr := window.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if err != nil || executed.Terminal.GetExitCode() != 0 || string(executed.Stdout) != reference {
+			t.Fatalf("attributed exec: %v stdout=%q stderr=%q terminal=%+v", err, executed.Stdout, executed.Stderr, executed.Terminal)
+		}
+		if err := <-accepted; err != nil {
+			t.Fatal(err)
+		}
+		probe := runQualificationExec(t, instance, `endpoint=$(cat gateway-`+reference+`); nc -z -w 2 "${endpoint%:*}" "${endpoint##*:}"`)
+		if probe.Terminal.GetExitCode() == 0 {
+			t.Fatalf("closed attributed listener %s stayed reachable", window.Gateway())
+		}
 	}
-	if running, err := manager.IsRunning(ctx, instance.id); err != nil || running {
-		t.Fatalf("attributed VM teardown: running=%v error=%v", running, err)
+	if result := runQualificationExec(t, instance, `kill -0 "$(cat daemon.pid)"`); result.Terminal.GetExitCode() != 0 {
+		t.Fatal("background daemon did not survive attributed execs")
+	}
+	if running, err := manager.IsRunning(t.Context(), instance.id); err != nil || !running {
+		t.Fatalf("attributed execs stopped the Instance: running=%v error=%v", running, err)
 	}
 }
 
-func TestSmokeFirecrackerAttributedRevocation(t *testing.T) {
-	for _, trigger := range []string{"expiry", "stop", "compute-loss"} {
+// Revoking a window closes an active relay held by a descendant process;
+// only stopping the Instance ends its compute.
+func TestSmokeFirecrackerAttributedWindowRevocation(t *testing.T) {
+	for _, trigger := range []string{"exec-end", "expiry", "stop"} {
 		t.Run(trigger, func(t *testing.T) {
-			lifetime := time.Minute
-			if trigger == "expiry" {
+			manager, instance, gateway := newFirecrackerAttributedQualification(t)
+			lifetime, script := time.Minute, `endpoint=$SECONDBOX_EXECUTION_GATEWAY; ( { printf ready; sleep 120; } | nc "${endpoint%:*}" "${endpoint##*:}" ) & wait`
+			switch trigger {
+			case "exec-end":
+				script = `endpoint=$SECONDBOX_EXECUTION_GATEWAY; ( { printf ready; sleep 120; } | nc "${endpoint%:*}" "${endpoint##*:}" ) & sleep 3`
+			case "expiry":
 				lifetime = 8 * time.Second
 			}
-			manager, instance, gateway, attribution := newFirecrackerAttributedQualification(t, lifetime)
-			if err := gateway.SetDeadline(attribution.ExpiresAt); err != nil {
+			window, open := openQualificationExecWindow(t, manager, instance, gateway, "authorization-"+trigger, lifetime, script)
+			expiry := time.UnixMilli(int64(open.AttributedExecution.ExpiresAtUnixMs))
+			if err := gateway.SetDeadline(expiry); err != nil {
 				t.Fatal(err)
 			}
-			commandDone := make(chan struct{})
+			commandDone := make(chan error, 1)
 			go func() {
-				defer close(commandDone)
-				_, _ = ExecuteBufferedOverSession(t.Context(), instance.guestProtocolSession, attribution.AssignmentID, &runnerprotocol.ExecOpen{
-					Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", `endpoint=$SECONDBOX_EXECUTION_GATEWAY; ( { printf ready; sleep 120; } | nc "${endpoint%:*}" "${endpoint##*:}" ) & wait`}}},
-					Cwd:     ".", DeadlineUnixMs: uint64(attribution.ExpiresAt.UnixMilli()), OutputLimitBytes: 1024,
-				})
+				_, err := ExecuteBufferedOverSession(window.Context(), instance.guestProtocolSession, qualificationAttributedFence.AssignmentId, open, window.Gateway())
+				commandDone <- errors.Join(err, window.Close())
 			}()
 			connection, err := gateway.AcceptUnix()
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer connection.Close()
-			if _, err := egressattribution.ReadRunnerExecutionAttribution(connection, uint32(os.Getuid()), attribution.ExpiresAt); err != nil {
+			if _, err := egressattribution.ReadRunnerExecutionAttribution(connection, uint32(os.Getuid()), expiry); err != nil {
 				t.Fatal(err)
 			}
 			if err := connection.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
@@ -197,13 +265,8 @@ func TestSmokeFirecrackerAttributedRevocation(t *testing.T) {
 			if _, err := io.ReadFull(connection, ready); err != nil || string(ready) != "ready" {
 				t.Fatalf("attributed descendant readiness: %q %v", ready, err)
 			}
-			switch trigger {
-			case "stop":
+			if trigger == "stop" {
 				if err := manager.Remove(t.Context(), instance.id); err != nil {
-					t.Fatal(err)
-				}
-			case "compute-loss":
-				if err := instance.cmd.Process.Kill(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -213,15 +276,11 @@ func TestSmokeFirecrackerAttributedRevocation(t *testing.T) {
 			select {
 			case <-commandDone:
 			case <-time.After(20 * time.Second):
-				t.Fatal("attributed descendant exec survived teardown")
+				t.Fatal("attributed exec did not return after revocation")
 			}
-			select {
-			case <-instance.done:
-			case <-time.After(20 * time.Second):
-				t.Fatal("attributed Firecracker process survived teardown")
-			}
-			if running, err := manager.IsRunning(t.Context(), instance.id); err != nil || running {
-				t.Fatalf("attributed compute revocation: running=%v error=%v", running, err)
+			running, err := manager.IsRunning(t.Context(), instance.id)
+			if err != nil || running != (trigger != "stop") {
+				t.Fatalf("Instance after %s: running=%v error=%v", trigger, running, err)
 			}
 		})
 	}

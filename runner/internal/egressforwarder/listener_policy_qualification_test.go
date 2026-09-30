@@ -48,9 +48,11 @@ func TestMain(m *testing.M) {
 }
 
 func TestExecutionListenerRecoveryKeepsOtherInterfaces(t *testing.T) {
-	for _, name := range []string{"ownedtap", "othertap"} {
-		policy := ExecutionListenerPolicy{InstanceID: name, GuestInterface: name, BridgeInterface: "execbr",
-			GuestAddress: netip.MustParseAddr("10.0.0.2"), ListenerAddress: netip.MustParseAddrPort("10.0.0.1:41000")}
+	type listener struct{ guestInterface, listenerID string }
+	listeners := []listener{{"ownedtap", "0000000000000001"}, {"ownedtap", "0000000000000002"}, {"othertap", "0000000000000003"}}
+	for _, owned := range listeners {
+		policy := ExecutionListenerPolicy{InstanceID: owned.guestInterface, GuestInterface: owned.guestInterface, BridgeInterface: "execbr",
+			GuestAddress: netip.MustParseAddr("10.0.0.2"), ListenerAddress: netip.MustParseAddrPort("10.0.0.1:41000"), ListenerID: owned.listenerID}
 		rules, err := RenderExecutionListenerPolicy(policy)
 		if err != nil {
 			t.Fatal(err)
@@ -59,7 +61,7 @@ func TestExecutionListenerRecoveryKeepsOtherInterfaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			if err := RemoveExecutionListenerRules(context.Background(), "/usr/sbin/nft", []string{name}); err != nil {
+			if err := RemoveExecutionListenerRules(context.Background(), "/usr/sbin/nft", []string{owned.guestInterface}); err != nil {
 				t.Error(err)
 			}
 		})
@@ -70,7 +72,8 @@ func TestExecutionListenerRecoveryKeepsOtherInterfaces(t *testing.T) {
 		}
 	}
 	output, err := exec.Command("nft", "list", "tables").CombinedOutput()
-	if err != nil || strings.Contains(string(output), executionListenerTable("ownedtap")) || strings.Count(string(output), executionListenerTable("othertap")) != 2 {
+	if err != nil || strings.Contains(string(output), executionListenerTablePrefix("ownedtap")) ||
+		strings.Count(string(output), executionListenerTable("othertap", "0000000000000003")) != 2 {
 		t.Fatalf("interface-scoped listener recovery: %v: %s", err, output)
 	}
 }
@@ -104,7 +107,7 @@ func TestExecutionListenerFirewallQualification(t *testing.T) {
 				command("ip", "-n", namespace, "link", "set", "attrg"+suffix, "up")
 				command("ip", "-n", namespace, "link", "set", "lo", "up")
 			}
-			policy := ExecutionListenerPolicy{InstanceID: t.Name(), GuestInterface: "attrha", GuestAddress: netip.MustParseAddr("10.73.1.2")}
+			policy := ExecutionListenerPolicy{InstanceID: t.Name(), GuestInterface: "attrha", GuestAddress: netip.MustParseAddr("10.73.1.2"), ListenerID: "00000000000000aa"}
 			if bridged {
 				policy.BridgeInterface = "attrbr"
 				command("ip", "link", "add", "attrbr", "type", "bridge")
@@ -176,9 +179,9 @@ func TestExecutionListenerFirewallQualification(t *testing.T) {
 			}
 			installed := true
 			removePolicy := func() {
-				command("nft", "delete", "table", "inet", executionListenerTable(policy.GuestInterface))
+				command("nft", "delete", "table", "inet", executionListenerTable(policy.GuestInterface, policy.ListenerID))
 				if bridged {
-					command("nft", "delete", "table", "bridge", executionListenerTable(policy.GuestInterface))
+					command("nft", "delete", "table", "bridge", executionListenerTable(policy.GuestInterface, policy.ListenerID))
 				}
 				installed = false
 			}
@@ -280,12 +283,28 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	if forwarder, err := StartExecutionForwarder(t.Context(), failedConfig); err == nil || forwarder != nil {
 		t.Fatal("startup succeeded after firewall command failure")
 	}
-	if output, err := exec.Command("nft", "list", "table", "inet", executionListenerTable(policy.GuestInterface)).CombinedOutput(); err == nil || !strings.Contains(string(output), "No such file") {
+	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
 		t.Fatalf("failed startup leaked firewall rules: %v: %s", err, output)
 	}
+	// A sibling exec window on the same interface keeps its own listener
+	// table when this window closes.
+	sibling, err := StartExecutionForwarder(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := sibling.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
 	forwarder, err := StartExecutionForwarder(t.Context(), config)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if forwarder.policy.ListenerID == sibling.policy.ListenerID || forwarder.ListenerAddress() == sibling.ListenerAddress() {
+		t.Fatalf("exec windows share listener identity: %s %s", forwarder.policy.ListenerID, forwarder.ListenerAddress())
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -338,7 +357,12 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 			t.Fatal("gateway relay did not close")
 		}
 	}
-	if output, err := exec.Command("nft", "list", "table", "inet", executionListenerTable(policy.GuestInterface)).CombinedOutput(); err == nil || !strings.Contains(string(output), "No such file") {
+	if output, err := exec.Command("nft", "list", "table", "inet", executionListenerTable(policy.GuestInterface, forwarder.policy.ListenerID)).CombinedOutput(); err == nil || !strings.Contains(string(output), "No such file") {
 		t.Fatalf("listener firewall remained after close: %v: %s", err, output)
 	}
+	if output, err := exec.Command("nft", "list", "table", "inet", executionListenerTable(policy.GuestInterface, sibling.policy.ListenerID)).CombinedOutput(); err != nil {
+		t.Fatalf("closing one exec window removed its sibling's listener firewall: %v: %s", err, output)
+	}
+	probe("attr-a", sibling.ListenerAddress(), true)
+	probe("attr-b", sibling.ListenerAddress(), false)
 }

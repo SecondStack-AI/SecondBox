@@ -265,6 +265,21 @@ func dataPlaneDeadlineContext(
 	return context.WithDeadline(ctx, session.DeadlineAt)
 }
 
+// attributedExecOpen binds only the attribution persisted with the admitted
+// session; the Runner never receives attribution from any other source.
+func attributedExecOpen(session runnercontrol.DataPlaneSession, open *runnerv1.ExecOpen) *runnerv1.ExecOpen {
+	bound := proto.CloneOf(open)
+	bound.AttributedExecution = nil
+	if attribution := session.AttributedExecution; attribution != nil {
+		bound.AttributedExecution = &runnerv1.AttributedExecution{
+			TenantRef: session.TenantRef, SubjectRef: session.SubjectRef,
+			AuthorizationRef: attribution.AuthorizationRef,
+			ExpiresAtUnixMs:  uint64(attribution.ExpiresAt.UnixMilli()),
+		}
+	}
+	return bound
+}
+
 func (service *ControlPlaneService) executeBufferedDataPlane(
 	ctx context.Context,
 	session runnercontrol.DataPlaneSession,
@@ -280,7 +295,7 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 		Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
 			Fence: dataPlaneFence(session), OperationId: session.ID, StreamId: session.StreamID,
 			Sequence: 1, Correlation: dataPlaneCorrelation(session),
-			Payload: &runnerv1.ExecFrame_Open{Open: proto.Clone(open).(*runnerv1.ExecOpen)},
+			Payload: &runnerv1.ExecFrame_Open{Open: attributedExecOpen(session, open)},
 		}},
 	}); err != nil {
 		return runnercontrol.DataPlaneSession{}, service.abortDataPlaneSetup(
@@ -345,6 +360,7 @@ func (service *ControlPlaneService) OpenSandboxExecStream(
 		session.MaximumResponseBytes, nil,
 	)
 	open.Streaming = true
+	open = attributedExecOpen(session, open)
 	operationCtx, cancel := dataPlaneDeadlineContext(ctx, session)
 	defer cancel()
 	stream, err := service.openDataPlaneStream(operationCtx, session)

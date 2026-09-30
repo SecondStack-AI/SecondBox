@@ -415,7 +415,6 @@ type startPlan struct {
 	resources         contracts.SandboxResources
 	tenantRef         string
 	subjectRef        string
-	attributed        *contracts.AttributedExecutionRequest
 	workspaceID       string
 	mutationID        string
 	generation        int64
@@ -461,15 +460,6 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	if err != nil {
 		return broker.failInvalidProfileStart(ctx, claim, plan, err, now.UTC())
 	}
-	if plan.attributed != nil {
-		if !plan.attributed.ExpiresAt.After(now) || plan.spec.AttributedExecution == nil || plan.operationID == "" {
-			return broker.failInvalidProfileStart(ctx, claim, plan,
-				errors.New("SecondBox attributed start requires a current explicit Operation and Profile permission"), now.UTC())
-		}
-		// The backend installs the private forwarder path from the attributed
-		// binding. Ordinary destinations must never accompany this generation.
-		networkPolicy = &runnerv1.NetworkPolicy{Mode: runnerv1.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL}
-	}
 	// A default-image start carries no assets: the home Runner boots the signed
 	// bundle it has installed, so a Sandbox survives release upgrades. Only a
 	// client-selected image names its signed components.
@@ -497,8 +487,8 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	if selectedReference != "" {
 		requiredCapabilities = append(requiredCapabilities, contracts.RunnerCapabilityClientSelectedImage)
 	}
-	if plan.attributed != nil {
-		requiredCapabilities = append(requiredCapabilities, contracts.RunnerCapabilityAttributedExecution)
+	if plan.spec.AttributedExecution != nil {
+		requiredCapabilities = append(requiredCapabilities, contracts.RunnerCapabilityPerExecAttribution)
 	}
 	// Placement additionally requires advertised resume capacity for a
 	// snapshot_resume revision. There is no cold-boot substitution, so this is a
@@ -512,9 +502,6 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		)
 	}
 	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
-	if plan.attributed != nil && plan.attributed.ExpiresAt.Before(deadline) {
-		deadline = plan.attributed.ExpiresAt
-	}
 	assignmentCommand := &runnerv1.AssignmentCommand{
 		Fence: &runnerv1.AssignmentFence{
 			AssignmentId: assignmentID, SandboxId: claim.SandboxID, InstanceId: instanceID,
@@ -548,15 +535,11 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	if plan.egressContext != nil {
 		assignmentCommand.EgressContext = *plan.egressContext
 	}
-	if plan.attributed != nil {
+	if policy := plan.spec.AttributedExecution; policy != nil {
 		// The scheduler resolves only MaximumConnections from current numeric
-		// policy when it commits a new Assignment. Every other field stays pinned.
-		assignmentCommand.AttributedExecution = &runnerv1.AttributedExecution{
-			TenantRef: plan.tenantRef, SubjectRef: plan.subjectRef,
-			AuthorizationRef:   plan.attributed.AuthorizationRef,
-			ExpiresAtUnixMs:    uint64(plan.attributed.ExpiresAt.UnixMilli()),
-			Gateway:            plan.spec.AttributedExecution.Gateway,
-			MaximumConnections: uint32(plan.spec.AttributedExecution.MaximumConnections),
+		// policy when it commits a new Assignment. The gateway stays pinned.
+		assignmentCommand.AttributedExecutionPermission = &runnerv1.AttributedExecutionPermission{
+			Gateway: policy.Gateway, MaximumConnections: uint32(policy.MaximumConnections),
 		}
 	}
 	planReadyAt, err := broker.observeAtOrAfter(effectStartedAt)
@@ -821,10 +804,6 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 			return startPlan{}, fmt.Errorf("SecondBox lifecycle start binding decoding failed: %w", err)
 		}
 	}
-	plan.attributed, err = contracts.ParseAttributedExecutionMetadata(metadata)
-	if err != nil {
-		return startPlan{}, err
-	}
 	if metadata["executionImageReference"] != "" {
 		plan.image, err = contracts.ParseExecutionImageMetadata(metadata)
 		if err != nil {
@@ -844,7 +823,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	} else if plan.egressContext != nil {
 		return startPlan{}, errors.New("SecondBox lifecycle start isolated Sandbox has an unexpected egress-context pin")
 	}
-	if plan.operationID == "" && plan.attributed == nil {
+	if plan.operationID == "" {
 		if imageDigest != "" {
 			plan.image = contracts.PublicExecutionImage{RequestedReference: contracts.ExecutionImageDigestReference(imageReference, imageDigest), ResolvedDigest: imageDigest}
 		}

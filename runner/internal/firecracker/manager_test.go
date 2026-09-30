@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,7 +21,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
@@ -118,6 +119,14 @@ func (r *recordingHostNetworkPolicyEnforcer) Install(_ context.Context, cfg Poli
 
 func (r *recordingHostNetworkPolicyEnforcer) Remove(_ context.Context, instanceID string) error {
 	r.removed = append(r.removed, instanceID)
+	return nil
+}
+
+func (r *recordingHostNetworkPolicyEnforcer) AllowExecutionListener(context.Context, string, netip.AddrPort) error {
+	return nil
+}
+
+func (r *recordingHostNetworkPolicyEnforcer) RevokeExecutionListener(context.Context, string, netip.AddrPort) error {
 	return nil
 }
 

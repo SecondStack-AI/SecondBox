@@ -3357,6 +3357,9 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -3438,6 +3441,9 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -7315,9 +7321,6 @@
         "properties": {
           "image": {
             "$ref": "#/components/schemas/ExecutionImage"
-          },
-          "attributedExecution": {
-            "$ref": "#/components/schemas/AttributedExecutionRequest"
           }
         }
       },
@@ -7373,6 +7376,7 @@
       },
       "AttributedExecutionRequest": {
         "type": "object",
+        "description": "Binds one non-PTY exec to an application authorization reference until an absolute expiry. The pinned Profile must permit attributed execution; the expiry must lie within its execution deadline and at or after the exec deadline. Omit it for ordinary execution; null is invalid.",
         "additionalProperties": false,
         "required": [
           "authorizationRef",
@@ -7391,7 +7395,7 @@
       },
       "AttributedExecutionPolicy": {
         "type": "object",
-        "description": "Permits one isolated exec through the named installation gateway. Requires the Tenant egress context; it does not extend ordinary generation network policy.",
+        "description": "Lets execs in ordinary generations of this Profile request attribution through the named installation gateway. Requires the Tenant egress context. Each attributed exec gets its own Runner listener for its window; ordinary network policy is unchanged.",
         "additionalProperties": false,
         "required": [
           "gateway",
@@ -9495,6 +9499,9 @@
             "type": "integer",
             "format": "int64",
             "minimum": 1
+          },
+          "attributedExecution": {
+            "$ref": "#/components/schemas/AttributedExecutionRequest"
           }
         }
       },
@@ -9532,6 +9539,9 @@
             "type": "integer",
             "format": "int64",
             "minimum": 4096
+          },
+          "attributedExecution": {
+            "$ref": "#/components/schemas/AttributedExecutionRequest"
           }
         }
       },

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/netip"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
@@ -24,7 +25,13 @@ func (b *AssignmentBackend) ExecuteStreaming(
 	if err != nil {
 		return nil, err
 	}
-	return ExecuteStreamingOverSession(ctx, session, fence.AssignmentId, open, controls, emit)
+	return RunAttributedExec(ctx, open,
+		func(ctx context.Context) (*AttributedExecWindow, error) {
+			return b.openAttributedExecWindow(ctx, fence, open)
+		},
+		func(ctx context.Context, gateway netip.AddrPort) (*runnerprotocol.ExecTerminal, error) {
+			return ExecuteStreamingOverSession(ctx, session, fence.AssignmentId, open, gateway, controls, emit)
+		})
 }
 
 // ExecuteStreamingOverSession bridges one runner streaming Exec onto any
@@ -35,6 +42,7 @@ func ExecuteStreamingOverSession(
 	session *GuestProtocolSession,
 	assignmentID string,
 	open *runnerprotocol.ExecOpen,
+	executionGateway netip.AddrPort,
 	controls <-chan runnercontrol.ExecControl,
 	emit func(runnerprotocol.ExecOutputChannel, []byte) error,
 ) (*runnerprotocol.ExecTerminal, error) {
@@ -73,6 +81,7 @@ func ExecuteStreamingOverSession(
 		ctx,
 		assignmentID,
 		request,
+		executionGateway,
 		guestControls,
 		func(channel guestv1.ExecOutputChannel, data []byte) error {
 			return emit(runnerExecOutputChannel(channel), data)
@@ -159,7 +168,13 @@ func (b *AssignmentBackend) ExecuteBuffered(
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}
-	return ExecuteBufferedOverSession(ctx, session, fence.AssignmentId, open)
+	return RunAttributedExec(ctx, open,
+		func(ctx context.Context) (*AttributedExecWindow, error) {
+			return b.openAttributedExecWindow(ctx, fence, open)
+		},
+		func(ctx context.Context, gateway netip.AddrPort) (runnercontrol.BufferedExecResult, error) {
+			return ExecuteBufferedOverSession(ctx, session, fence.AssignmentId, open, gateway)
+		})
 }
 
 // ExecuteBufferedOverSession bridges one runner buffered Exec onto any
@@ -169,13 +184,14 @@ func ExecuteBufferedOverSession(
 	session *GuestProtocolSession,
 	assignmentID string,
 	open *runnerprotocol.ExecOpen,
+	executionGateway netip.AddrPort,
 ) (runnercontrol.BufferedExecResult, error) {
 	request, err := guestExecRequest(open)
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}
 	request.Streaming = false
-	result, err := session.ExecuteBuffered(ctx, assignmentID, request)
+	result, err := session.ExecuteBuffered(ctx, assignmentID, request, executionGateway)
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}

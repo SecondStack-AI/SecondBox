@@ -32,8 +32,6 @@ const (
 )
 
 type StartOpts struct {
-	AttributedExecution     *AttributedExecutionGuard
-	ExecutionNetwork        *AttributedExecutionNetwork
 	Timezone                string
 	CompartmentID           string
 	WorkspaceAttachment     workspacestore.ComputeAttachment

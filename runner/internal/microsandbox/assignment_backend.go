@@ -313,7 +313,7 @@ func (backend *AssignmentBackend) validateAssignmentClaimed(
 	assignment *runnerprotocol.AssignmentCommand,
 	ownClaim *activeAssignment,
 ) error {
-	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+	if err := runnerprotocol.ValidateAttributedExecutionPermission(assignment); err != nil {
 		return incompatibleAssignment(err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -403,7 +403,7 @@ func (backend *AssignmentBackend) StartAssignment(
 	assignment *runnerprotocol.AssignmentCommand,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (result runnercontrol.BackendInstance, resultErr error) {
-	if err := runnerprotocol.ValidateAttributedExecutionCapability(assignment); err != nil {
+	if err := runnerprotocol.ValidateAttributedExecutionPermission(assignment); err != nil {
 		return result, incompatibleAssignment(err)
 	}
 	started := time.Now()

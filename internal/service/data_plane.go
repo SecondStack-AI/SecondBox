@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
@@ -66,6 +67,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 		Command: request.Command, Cwd: request.Cwd, Environment: request.Environment,
 		DeadlineMilliseconds: request.DeadlineMilliseconds,
 		MaximumOutputBytes:   request.MaximumOutputBytes,
+		AttributedExecution:  request.AttributedExecution,
 	}); err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
@@ -92,7 +94,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 		DeadlineAt:           now.Add(time.Duration(request.DeadlineMilliseconds) * time.Millisecond),
 		MaximumResponseBytes: request.MaximumOutputBytes,
 		StreamWindowBytes:    request.WindowBytes, UseProfileRequestLimit: true,
-		DeferResponseCredit: true, ExecOpen: open, Request: request,
+		DeferResponseCredit: true, ExecOpen: open, AttributedExecution: request.AttributedExecution, Request: request,
 		CredentialDigest: service.dataPlaneCredentialDigest(sessionID), Now: now,
 	})
 }
@@ -245,7 +247,7 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		DeadlineAt:           deadline,
 		MaximumResponseBytes: request.MaximumOutputBytes, MaximumRequestBytes: int64(len(stdin)),
-		UseProfileStreamWindow: true, ExecOpen: open,
+		UseProfileStreamWindow: true, ExecOpen: open, AttributedExecution: request.AttributedExecution,
 		Request: struct {
 			Command              contracts.ExecCommand `json:"command"`
 			Cwd                  *string               `json:"cwd,omitempty"`
@@ -597,6 +599,16 @@ func validateBufferedExecRequest(request contracts.BufferedExecRequest) ([]byte,
 	}
 	if request.MaximumOutputBytes < 1 {
 		return nil, invalidField("maximumOutputBytes", "must be positive")
+	}
+	if attribution := request.AttributedExecution; attribution != nil {
+		reference := attribution.AuthorizationRef
+		if reference == "" || len(reference) > 256 || strings.TrimSpace(reference) != reference ||
+			strings.IndexFunc(reference, unicode.IsControl) >= 0 {
+			return nil, invalidField("attributedExecution.authorizationRef", "must contain 1 to 256 bytes without surrounding space or control characters")
+		}
+		if attribution.ExpiresAt.IsZero() {
+			return nil, invalidField("attributedExecution.expiresAt", "is required")
+		}
 	}
 	if request.Cwd != nil {
 		if err := validateWorkspacePath("cwd", *request.Cwd); err != nil {

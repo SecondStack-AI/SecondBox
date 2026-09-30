@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
@@ -79,18 +78,7 @@ func (m *Manager) negotiateInstanceGuest(
 	if err != nil {
 		return err
 	}
-	var executionGateway netip.AddrPort
-	if inst.executionForwarder != nil {
-		select {
-		case <-inst.executionForwarder.Done():
-			return fmt.Errorf("Firecracker execution gateway has stopped: %w", inst.executionForwarder.Wait())
-		default:
-		}
-		executionGateway = inst.executionForwarder.ListenerAddress()
-	}
 	session, err := NegotiateGuestProtocol(ctx, GuestProtocolNegotiation{
-		AttributedExecution:             inst.attributedExecution,
-		ExecutionGateway:                executionGateway,
 		RunnerGateways:                  inst.runnerGateways,
 		UDSPath:                         inst.vsockUDS,
 		Port:                            inst.guestProtocolPort,

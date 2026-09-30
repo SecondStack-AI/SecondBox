@@ -12,7 +12,6 @@ import (
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
-	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -39,22 +38,6 @@ const testRunnerGatewaysValue = "agent-gateway.secondbox.internal=10.210.2.10:44
 
 var testExecutionListener = netip.MustParseAddrPort("169.254.104.1:41000")
 
-// attributedListenerGateways is what both backends hand an attributed
-// generation: the projection of the forwarder-compiled listener policy, built
-// from compile options that do map ordinary logical gateways.
-func attributedListenerGateways(t *testing.T) []networkpolicy.LogicalGatewayEndpoint {
-	t.Helper()
-	listener, err := networkpolicy.CompileExecutionListener(testExecutionListener, networkpolicy.CompileOptions{
-		MaximumPins: 64, MaximumTTL: time.Minute,
-		ManagementPrefixes: []netip.Prefix{netip.MustParsePrefix("10.210.2.0/24")},
-		RunnerGateways:     map[string]netip.Addr{"agent-gateway.secondbox.internal": netip.MustParseAddr("10.210.2.10")},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return listener.LogicalGatewayEndpoints()
-}
-
 func TestReservedGuestEnvironmentInjectedAtGuestDispatch(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -69,8 +52,13 @@ func TestReservedGuestEnvironmentInjectedAtGuestDispatch(t *testing.T) {
 			want:     []*guestv1.EnvironmentEntry{{Name: runnerGatewaysEnvironment, Value: []byte(testRunnerGatewaysValue)}},
 		},
 		{
-			name: "attributed", attributed: true, gateways: attributedListenerGateways,
-			want: []*guestv1.EnvironmentEntry{{Name: executionGatewayEnvironment, Value: []byte(testExecutionListener.String())}},
+			// The attributed exec keeps the ordinary gateways of its generation.
+			name: "attributed", attributed: true,
+			gateways: func(*testing.T) []networkpolicy.LogicalGatewayEndpoint { return testRunnerGateways },
+			want: []*guestv1.EnvironmentEntry{
+				{Name: executionGatewayEnvironment, Value: []byte(testExecutionListener.String())},
+				{Name: runnerGatewaysEnvironment, Value: []byte(testRunnerGatewaysValue)},
+			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -81,13 +69,9 @@ func TestReservedGuestEnvironmentInjectedAtGuestDispatch(t *testing.T) {
 				EnabledFeatures: map[guestv1.GuestFeature]bool{guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC: true},
 				runnerGateways:  test.gateways(t),
 			}
+			var executionGateway netip.AddrPort
 			if test.attributed {
-				guard, err := runtimemanager.NewAttributedExecutionGuard("assignment", expiry)
-				if err != nil {
-					t.Fatal(err)
-				}
-				session.attributedExecution = guard
-				session.executionGateway = testExecutionListener
+				executionGateway = testExecutionListener
 			}
 			request := &guestv1.ExecRequest{DeadlineUnixMs: uint64(expiry.UnixMilli()), OutputLimitBytes: 1024, Environment: []*guestv1.EnvironmentEntry{{Name: "HTTP_PROXY", Value: []byte("application-owned")}}}
 			for _, reserved := range []string{
@@ -96,11 +80,11 @@ func TestReservedGuestEnvironmentInjectedAtGuestDispatch(t *testing.T) {
 			} {
 				collision := proto.CloneOf(request)
 				collision.Environment = append(collision.Environment, &guestv1.EnvironmentEntry{Name: reserved, Value: []byte("forged:123")})
-				if _, err := session.ExecuteBuffered(t.Context(), "assignment", collision); err == nil || !strings.Contains(err.Error(), "reserved") || stream.sends != 0 {
+				if _, err := session.ExecuteBuffered(t.Context(), "assignment", collision, executionGateway); err == nil || !strings.Contains(err.Error(), "reserved") || stream.sends != 0 {
 					t.Fatalf("caller value for %s was not refused before dispatch: %v", reserved, err)
 				}
 			}
-			if _, err := session.ExecuteBuffered(t.Context(), "assignment", request); err == nil || !strings.Contains(err.Error(), "captured exec send") {
+			if _, err := session.ExecuteBuffered(t.Context(), "assignment", request, executionGateway); err == nil || !strings.Contains(err.Error(), "captured exec send") {
 				t.Fatalf("dispatch: %v", err)
 			}
 			if len(request.Environment) != 1 || string(stream.request.Environment[0].Value) != "application-owned" {
@@ -175,22 +159,28 @@ func TestRunnerGatewaysPublishCompiledPolicyProjection(t *testing.T) {
 	}
 }
 
-func TestExecutionGatewayRequiresMatchingHostMode(t *testing.T) {
-	for _, test := range []struct {
-		attributed bool
-		endpoint   netip.AddrPort
-	}{
-		{true, netip.AddrPort{}}, {true, netip.MustParseAddrPort("127.0.0.1:123")},
-		{true, netip.MustParseAddrPort("[::1]:123")}, {true, netip.MustParseAddrPort("169.254.104.1:0")},
-		{false, netip.MustParseAddrPort("169.254.104.1:41000")},
+func TestExecutionGatewayMustBeHostIPv4Listener(t *testing.T) {
+	stream := &captureExecutionGatewayStream{}
+	session := &GuestProtocolSession{
+		Stream: stream, Binding: &guestv1.ConnectionBinding{},
+		EnabledFeatures: map[guestv1.GuestFeature]bool{guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC: true},
+	}
+	request := &guestv1.ExecRequest{DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024}
+	for _, endpoint := range []netip.AddrPort{
+		netip.MustParseAddrPort("127.0.0.1:123"), netip.MustParseAddrPort("[::1]:123"),
+		netip.MustParseAddrPort("169.254.104.1:0"), netip.MustParseAddrPort("[fe80::1]:41000"),
 	} {
-		request := GuestProtocolNegotiation{ExecutionGateway: test.endpoint}
-		if test.attributed {
-			request.AttributedExecution = &runtimemanager.AttributedExecutionGuard{}
+		if _, err := session.ExecuteBuffered(context.Background(), "assignment", request, endpoint); err == nil || !strings.Contains(err.Error(), "gateway endpoint") {
+			t.Fatalf("invalid execution gateway %s accepted: %v", endpoint, err)
 		}
-		if _, err := NegotiateGuestProtocol(context.Background(), request); err == nil || !strings.Contains(err.Error(), "execution") {
-			t.Fatalf("invalid execution gateway accepted: %v", err)
-		}
+	}
+	pty := proto.CloneOf(request)
+	pty.Pty, pty.Streaming = &guestv1.PtyDimensions{Rows: 24, Columns: 80}, true
+	if _, err := session.ExecuteStreaming(context.Background(), "assignment", pty, testExecutionListener, nil, nil); err == nil || !strings.Contains(err.Error(), "PTY") {
+		t.Fatalf("attributed PTY accepted: %v", err)
+	}
+	if stream.sends != 0 {
+		t.Fatalf("refused execution gateways sent %d frames", stream.sends)
 	}
 }
 
@@ -265,7 +255,7 @@ func TestRunnerGatewaysPublishEveryLoaderAdmittedMapping(t *testing.T) {
 	result, err := session.ExecuteBuffered(ctx, "assignment", &guestv1.ExecRequest{
 		Command:        &guestv1.ExecRequest_Shell{Shell: `sh -c 'printf "%s" "${SECONDBOX_RUNNER_GATEWAYS-absent}"'`},
 		DeadlineUnixMs: uint64(expiry.UnixMilli()), OutputLimitBytes: 1024,
-	})
+	}, netip.AddrPort{})
 	if err != nil || result.Terminal.GetExitCode() != 0 || string(result.Stdout) != want {
 		t.Fatalf("published gateways: err=%v terminal=%+v stdout=%q, want %q", err, result.Terminal, result.Stdout, want)
 	}
@@ -284,15 +274,10 @@ func TestReservedGuestEnvironmentReachesRealGuestCommand(t *testing.T) {
 				MandatoryFeatures: []guestv1.GuestFeature{guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC},
 			}
 			want := "absent|" + testRunnerGatewaysValue
+			var executionGateway netip.AddrPort
 			if attributed {
-				guard, err := runtimemanager.NewAttributedExecutionGuard("assignment", expiry)
-				if err != nil {
-					t.Fatal(err)
-				}
-				negotiation.AttributedExecution = guard
-				negotiation.ExecutionGateway = testExecutionListener
-				negotiation.RunnerGateways = attributedListenerGateways(t)
-				want = testExecutionListener.String() + "|absent"
+				executionGateway = testExecutionListener
+				want = testExecutionListener.String() + "|" + testRunnerGatewaysValue
 			}
 			ctx, cancel := context.WithDeadline(t.Context(), expiry)
 			defer cancel()
@@ -304,7 +289,7 @@ func TestReservedGuestEnvironmentReachesRealGuestCommand(t *testing.T) {
 			result, err := session.ExecuteBuffered(ctx, "assignment", &guestv1.ExecRequest{
 				Command:        &guestv1.ExecRequest_Shell{Shell: `sh -c 'printf "%s|%s" "${SECONDBOX_EXECUTION_GATEWAY-absent}" "${SECONDBOX_RUNNER_GATEWAYS-absent}"'`},
 				DeadlineUnixMs: uint64(expiry.UnixMilli()), OutputLimitBytes: 1024,
-			})
+			}, executionGateway)
 			if err != nil || result.Terminal.GetKind() != guestv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED || result.Terminal.GetExitCode() != 0 || string(result.Stdout) != want {
 				t.Fatalf("reserved guest environment: err=%v terminal=%+v stdout=%q stderr=%q", err, result.Terminal, result.Stdout, result.Stderr)
 			}

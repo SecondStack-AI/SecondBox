@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
@@ -53,9 +54,6 @@ func (s *GuestProtocolSession) ExecutePTY(
 	if s == nil || s.Stream == nil || s.Binding == nil {
 		return GuestPTYResult{}, fmt.Errorf("guest protocol session is not ready")
 	}
-	if s.attributedExecution != nil {
-		return GuestPTYResult{}, fmt.Errorf("attributed execution forbids terminals")
-	}
 	if !s.EnabledFeatures[guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC] ||
 		!s.EnabledFeatures[guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE] {
 		return GuestPTYResult{}, fmt.Errorf("guest protocol PTY features were not negotiated")
@@ -77,7 +75,7 @@ func (s *GuestProtocolSession) ExecutePTY(
 	}
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
-	request, err := s.prepareReservedGuestEnvironment(request)
+	request, err := s.prepareReservedGuestEnvironment(request, netip.AddrPort{})
 	if err != nil {
 		return GuestPTYResult{}, err
 	}

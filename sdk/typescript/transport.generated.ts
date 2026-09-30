@@ -69,12 +69,13 @@ export interface AttributedExecutionConnectionObservation {
   readonly maximumConnectionsCeiling: number;
 }
 
-/** Permits one isolated exec through the named installation gateway. Requires the Tenant egress context; it does not extend ordinary generation network policy. */
+/** Lets execs in ordinary generations of this Profile request attribution through the named installation gateway. Requires the Tenant egress context. Each attributed exec gets its own Runner listener for its window; ordinary network policy is unchanged. */
 export interface AttributedExecutionPolicy {
   readonly gateway: string;
   readonly maximumConnections: number;
 }
 
+/** Binds one non-PTY exec to an application authorization reference until an absolute expiry. The pinned Profile must permit attributed execution; the expiry must lie within its execution deadline and at or after the exec deadline. Omit it for ordinary execution; null is invalid. */
 export interface AttributedExecutionRequest {
   readonly authorizationRef: string;
   readonly expiresAt: Timestamp;
@@ -126,6 +127,7 @@ export interface BootTiming {
 }
 
 export interface BufferedExecRequest {
+  readonly attributedExecution?: AttributedExecutionRequest;
   readonly command: Command;
   readonly cwd?: WorkspacePath;
   readonly deadlineMilliseconds: number;
@@ -849,7 +851,6 @@ export interface SnapshotPage {
 export type SpawnFailureKind = "not_found" | "permission_denied" | "invalid_cwd" | "malformed_executable";
 
 export interface StartSandboxRequest {
-  readonly attributedExecution?: AttributedExecutionRequest;
   readonly image?: ExecutionImage;
 }
 
@@ -905,6 +906,7 @@ export interface StreamSignalFrame {
 }
 
 export interface StreamingExecRequest {
+  readonly attributedExecution?: AttributedExecutionRequest;
   readonly command: Command;
   readonly cwd?: WorkspacePath;
   readonly deadlineMilliseconds: number;

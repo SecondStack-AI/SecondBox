@@ -3,22 +3,24 @@
 package firecracker
 
 import (
-	"context"
-	"errors"
 	"net"
 	"net/netip"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/SecondStack-AI/SecondBox/runner/egressattribution"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/egressforwarder"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
+	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
 // This network-only qualification needs an isolated namespace and /dev/net/tun.
+// An attributed exec window opens and closes on an ordinary reserved Instance
+// network without touching the Instance; startup sweeps a crashed window.
 func TestFirecrackerExecutionNetworkQualification(t *testing.T) {
 	gateway, err := net.ListenUnix("unix", &net.UnixAddr{Name: shortUnixSocketPath(t, "gateway.sock"), Net: "unix"})
 	if err != nil {
@@ -36,68 +38,88 @@ func TestFirecrackerExecutionNetworkQualification(t *testing.T) {
 			t.Errorf("bridge cleanup: %v: %s", err, output)
 		}
 	})
-	for _, failStartup := range []bool{false, true} {
+	denyAll, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := m.reserveInstanceHost(t.Context(), t.Context(), "sandbox", "instance", runtimemanager.StartOpts{NetworkPolicy: denyAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	openWindow := func(reference string) *AttributedExecWindow {
+		t.Helper()
 		expiry := time.Now().Add(time.Minute)
-		guard, err := runtimemanager.NewAttributedExecutionGuard("assignment", expiry)
+		window, err := OpenAttributedExecWindow(t.Context(), AttributedExecWindowConfig{
+			NFTPath: m.cfg.NetworkPolicyNFTPath, Policy: m.networkPolicy, PolicyInstanceID: host.id,
+			Gateway: AttributedExecGateway{Socket: gateway.Addr().String(), MaximumConnections: 2},
+			Fence:   &runnerprotocol.AssignmentFence{AssignmentId: "assignment", SandboxId: "sandbox", InstanceId: "instance", SandboxGeneration: 1},
+			Open: &runnerprotocol.ExecOpen{DeadlineUnixMs: uint64(expiry.UnixMilli()), AttributedExecution: &runnerprotocol.AttributedExecution{
+				TenantRef: "tenant", SubjectRef: "subject", AuthorizationRef: reference, ExpiresAtUnixMs: uint64(expiry.UnixMilli()),
+			}},
+			Listener: egressforwarder.ExecutionListenerPolicy{
+				GuestInterface: host.tapName, BridgeInterface: m.cfg.MicroVMBridgeName,
+				GuestAddress: netip.MustParseAddr(host.guestIP), ListenerAddress: netip.MustParseAddrPort("10.254.72.1:0"),
+			},
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		opts := runtimemanager.StartOpts{AttributedExecution: guard, ExecutionNetwork: &runtimemanager.AttributedExecutionNetwork{
-			GatewaySocket: gateway.Addr().String(), MaximumConnections: 2,
-			CompileOptions: networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Second},
-			Attribution:    egressattribution.ExecutionAttribution{TenantRef: "tenant", SubjectRef: "subject", SandboxID: "sandbox", InstanceID: "instance", AssignmentID: "assignment", Generation: 1, AuthorizationRef: "authorization", ExpiresAt: expiry},
-		}}
-		startupErr := errors.New("injected post-network startup failure")
-		if failStartup {
-			opts.StartupProgress = func(runtimemanager.StartupStage) error { return startupErr }
-		}
-		host, err := m.reserveInstanceHost(t.Context(), t.Context(), "sandbox", "instance", opts)
-		if failStartup {
-			if !errors.Is(err, startupErr) || host != nil {
-				t.Fatalf("failed launch result: host=%v err=%v", host, err)
-			}
-		} else {
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if err := host.joinNetworkCleanup(t.Context(), nil); err != nil {
-					t.Error(err)
-				}
-				host.release()
-			})
-			if host.guestIP != "10.254.72.2" || host.executionForwarder == nil {
-				t.Fatalf("wrong network reservation: %+v", host)
-			}
-			endpoint := host.executionForwarder.ListenerAddress()
-			if connection, err := net.DialTimeout("tcp", endpoint.String(), 300*time.Millisecond); err == nil {
-				connection.Close()
-				t.Fatal("host reached private execution listener")
-			}
-			host.executionForwarder.Revoke()
-			if err := host.executionForwarder.Wait(); !errors.Is(err, context.Canceled) {
-				t.Fatal(err)
-			}
-			host.executionForwarder = nil
-			recovered := &Manager{cfg: m.cfg, network: m.network, networkPolicy: m.networkPolicy}
-			if err := recovered.sweepStartupOrphans(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			output, err := exec.Command("nft", "list", "tables").CombinedOutput()
-			if err != nil || strings.Contains(string(output), "sbx_exec_") {
-				t.Fatalf("restart left execution rules: %v: %s", err, output)
-			}
-			if err := host.joinNetworkCleanup(t.Context(), nil); err != nil {
-				t.Fatal(err)
-			}
-			host.release()
-		}
-		if len(m.guestIPs) != 0 {
-			t.Fatalf("guest identity leaked: %+v", m.guestIPs)
-		}
+		return window
+	}
+	nftTables := func() string {
+		t.Helper()
 		output, err := exec.Command("nft", "list", "tables").CombinedOutput()
-		if err != nil || strings.Contains(string(output), "sbx_exec_") || strings.Contains(string(output), "secondbox_") {
-			t.Fatalf("execution firewall cleanup: %v: %s", err, output)
+		if err != nil {
+			t.Fatalf("list nftables: %v: %s", err, output)
 		}
+		return string(output)
+	}
+	policyTable := func() string {
+		t.Helper()
+		output, err := exec.Command("nft", "list", "table", "bridge", nftTableName(host.id)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("list Instance policy: %v: %s", err, output)
+		}
+		return string(output)
+	}
+	first := openWindow("authorization-1")
+	second := openWindow("authorization-2")
+	if first.Gateway() == second.Gateway() || strings.Count(nftTables(), "sbx_exec_") != 4 {
+		t.Fatalf("concurrent windows must own distinct listeners and tables: %s %s\n%s", first.Gateway(), second.Gateway(), nftTables())
+	}
+	for _, window := range []*AttributedExecWindow{first, second} {
+		if !strings.Contains(policyTable(), "tcp dport "+strconv.Itoa(int(window.Gateway().Port()))) {
+			t.Fatalf("window listener %s missing from Instance policy:\n%s", window.Gateway(), policyTable())
+		}
+		if connection, err := net.DialTimeout("tcp", window.Gateway().String(), 300*time.Millisecond); err == nil {
+			connection.Close()
+			t.Fatal("host reached a private execution listener")
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if rules := policyTable(); strings.Contains(rules, "tcp dport "+strconv.Itoa(int(first.Gateway().Port()))) ||
+		!strings.Contains(rules, "tcp dport "+strconv.Itoa(int(second.Gateway().Port()))) || strings.Count(nftTables(), "sbx_exec_") != 2 {
+		t.Fatalf("closing one window must remove only its rules:\n%s\n%s", rules, nftTables())
+	}
+	// A Runner crash leaves the second window's rules behind; startup sweeps them
+	// with the orphaned Instance network.
+	recovered := &Manager{cfg: m.cfg, network: m.network, networkPolicy: m.networkPolicy}
+	if err := recovered.sweepStartupOrphans(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if tables := nftTables(); strings.Contains(tables, "sbx_exec_") || strings.Contains(tables, "secondbox_") {
+		t.Fatalf("restart left execution rules: %s", tables)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("closing a window after its Instance policy was swept = %v", err)
+	}
+	if err := host.joinNetworkCleanup(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	host.release()
+	if len(m.guestIPs) != 0 {
+		t.Fatalf("guest identity leaked: %+v", m.guestIPs)
 	}
 }

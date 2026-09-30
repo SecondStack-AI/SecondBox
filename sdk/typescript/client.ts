@@ -569,6 +569,9 @@ export class SecondBox {
       ...(request.stdinBase64 === undefined ? {} : { stdinBase64: request.stdinBase64 }),
       deadlineMilliseconds: request.deadlineMilliseconds,
       maximumOutputBytes: request.maximumOutputBytes,
+      ...(request.attributedExecution === undefined
+        ? {}
+        : { attributedExecution: request.attributedExecution }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
     return { handle, sandbox, result };
@@ -1187,9 +1190,6 @@ export class SandboxHandle implements SandboxFilesystem {
   public start(options: LifecycleOptions & StartSandboxRequest): Promise<Operation> {
     const request: JSONValue = {
 	  ...(options.image === undefined ? {} : { image: executionImageJSON(options.image) }),
-      ...(options.attributedExecution === undefined
-        ? {}
-        : { attributedExecution: { ...options.attributedExecution } }),
     };
     return this.lifecycle("startSandbox", options, request);
   }
@@ -1237,6 +1237,9 @@ export class SandboxHandle implements SandboxFilesystem {
         ...(options.stdinBase64 === undefined ? {} : { stdinBase64: options.stdinBase64 }),
         deadlineMilliseconds: options.deadlineMilliseconds,
         maximumOutputBytes: options.maximumOutputBytes,
+        ...(options.attributedExecution === undefined
+          ? {}
+          : { attributedExecution: { ...options.attributedExecution } }),
       }),
       signal: options.signal,
     });

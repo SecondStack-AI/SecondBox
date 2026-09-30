@@ -7,9 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
-	"time"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"google.golang.org/protobuf/proto"
@@ -79,10 +79,12 @@ type GuestExecControl struct {
 }
 
 // ExecuteStreaming performs one bounded exec over the retained assignment-bound guest stream.
+// executionGateway is the listener of this exec's attributed window, or zero.
 func (s *GuestProtocolSession) ExecuteStreaming(
 	ctx context.Context,
 	assignmentID string,
 	request *guestv1.ExecRequest,
+	executionGateway netip.AddrPort,
 	controls <-chan GuestExecControl,
 	emit func(guestv1.ExecOutputChannel, []byte) error,
 ) (result BufferedGuestExecResult, resultErr error) {
@@ -100,14 +102,11 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 	}
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
-	if s.attributedExecution != nil && request.Pty != nil {
-		return BufferedGuestExecResult{}, fmt.Errorf("attributed execution forbids PTY exec")
+	if executionGateway.IsValid() && request.Pty != nil {
+		return BufferedGuestExecResult{}, fmt.Errorf("attributed execution does not admit a PTY")
 	}
-	request, err := s.prepareReservedGuestEnvironment(request)
+	request, err := s.prepareReservedGuestEnvironment(request, executionGateway)
 	if err != nil {
-		return BufferedGuestExecResult{}, err
-	}
-	if err := s.attributedExecution.AdmitExec(assignmentID, time.UnixMilli(int64(request.DeadlineUnixMs))); err != nil {
 		return BufferedGuestExecResult{}, err
 	}
 
@@ -239,6 +238,7 @@ func (s *GuestProtocolSession) ExecuteBuffered(
 	ctx context.Context,
 	assignmentID string,
 	request *guestv1.ExecRequest,
+	executionGateway netip.AddrPort,
 ) (BufferedGuestExecResult, error) {
 	request = cloneGuestExecRequest(request)
 	request.Streaming = false
@@ -251,6 +251,7 @@ func (s *GuestProtocolSession) ExecuteBuffered(
 		ctx,
 		assignmentID,
 		request,
+		executionGateway,
 		controls,
 		func(channel guestv1.ExecOutputChannel, data []byte) error {
 			switch channel {

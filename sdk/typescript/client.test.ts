@@ -26,21 +26,40 @@ import { SecondBoxAPIError, SecondBoxClient, type TerminalSession } from "./tran
 
 const executionImage = { reference: "registry.example/secondbox/sdk-test:stable" };
 
-test("Sandbox start sends attributed execution with lifecycle authority", async () => {
-  const attributedExecution = { authorizationRef: "command-sdk", expiresAt: "2026-09-10T12:00:00Z" };
+test("Sandbox start sends only the execution image", async () => {
   const fetcher: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
-    assert.equal(request.method, "POST");
     assert.equal(new URL(request.url).pathname, "/v1/sandboxes/sandbox-1:start");
-    assert.equal(request.headers.get("Idempotency-Key"), "start-command-sdk");
     assert.equal(request.headers.get("If-Match"), '"revision-7"');
-    assert.deepEqual(await request.json(), { image: executionImage, attributedExecution });
+    assert.deepEqual(await request.json(), { image: executionImage });
     return Response.json({ id: "operation-start", state: "pending", kind: "start" });
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const handle = new SandboxHandle(api, { ...sandbox("stopped"), revision: 7 });
-  const operation = await handle.start({ image: executionImage, attributedExecution, idempotencyKey: "start-command-sdk" });
+  const operation = await handle.start({ image: executionImage, idempotencyKey: "start-sdk" });
   assert.equal(operation.id, "operation-start");
+});
+
+test("Sandbox exec sends attributed execution for that exec", async () => {
+  const attributedExecution = { authorizationRef: "command-sdk", expiresAt: "2026-09-10T12:00:00Z" };
+  let requestBody: unknown;
+  const fetcher: typeof fetch = async (input, init) => {
+    assert.equal(new URL(new Request(input, init).url).pathname, "/v1/sandboxes/sandbox-1/exec");
+    requestBody = JSON.parse(String(init?.body));
+    return Response.json({
+      kind: "exited", exitCode: 0, elapsedMilliseconds: 1,
+      output: { stdoutBase64: "", stderrBase64: "" },
+    });
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, sandbox("ready"));
+  await handle.exec({ mode: "shell", command: "true" }, {
+    environment: {}, deadlineMilliseconds: 500, maximumOutputBytes: 64, attributedExecution,
+  });
+  assert.deepEqual(requestBody, {
+    command: { mode: "shell", command: "true" }, environment: {},
+    deadlineMilliseconds: 500, maximumOutputBytes: 64, attributedExecution,
+  });
 });
 
 test("requestJSON uses generated operation metadata", async () => {

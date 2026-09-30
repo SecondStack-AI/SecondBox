@@ -54,7 +54,6 @@ func dnsAddressForProfile(profile uint32) string {
 }
 
 type instanceNetwork struct {
-	executionForwarder *egressforwarder.ExecutionForwarder
 	// runnerGateways are the logical gateway endpoints the installed compiled
 	// policy resolved, published to the guest at protocol negotiation.
 	runnerGateways []networkpolicy.LogicalGatewayEndpoint

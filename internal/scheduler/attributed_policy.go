@@ -15,7 +15,7 @@ import (
 // resolveAttributedConnections runs only for a new Assignment, inside its
 // serializable transaction. Policy reads participate in dependency tracking and
 // use Schedule's existing serialization retry, without changing row-lock order.
-func resolveAttributedConnections(ctx context.Context, tx pgx.Tx, locked rowlock.SandboxWorkspace, attribution *runnerv1.AttributedExecution) error {
+func resolveAttributedConnections(ctx context.Context, tx pgx.Tx, locked rowlock.SandboxWorkspace, permission *runnerv1.AttributedExecutionPermission) error {
 	var pinnedJSON, currentJSON, selectionJSON []byte
 	var profileName string
 	if err := tx.QueryRow(ctx, `
@@ -32,8 +32,8 @@ func resolveAttributedConnections(ctx context.Context, tx pgx.Tx, locked rowlock
 	if err := json.Unmarshal(pinnedJSON, &pinned); err != nil {
 		return fmt.Errorf("SecondBox attributed pinned Profile decoding failed: %w", err)
 	}
-	if pinned.AttributedExecution == nil || attribution.Gateway != pinned.AttributedExecution.Gateway {
-		return errors.New("SecondBox attributed Assignment requires pinned gateway permission")
+	if pinned.AttributedExecution == nil || permission.Gateway != pinned.AttributedExecution.Gateway {
+		return errors.New("SecondBox attributed execution permission requires the pinned Profile gateway")
 	}
 	if err := json.Unmarshal(currentJSON, &current); err != nil {
 		return fmt.Errorf("SecondBox attributed current Profile decoding failed: %w", err)
@@ -68,6 +68,6 @@ func resolveAttributedConnections(ctx context.Context, tx pgx.Tx, locked rowlock
 	if err != nil {
 		return err
 	}
-	attribution.MaximumConnections = uint32(resolved.MaximumConnections)
+	permission.MaximumConnections = uint32(resolved.MaximumConnections)
 	return nil
 }

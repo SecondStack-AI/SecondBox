@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +18,9 @@ import (
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
-func newAttributedComputeQualification(t *testing.T, lifetime time.Duration) (qualificationFixture, *net.UnixListener, time.Time) {
+// newAttributedComputeQualification starts one ordinary gVisor Instance whose
+// assignment permits attributed execs through a Runner-side gateway socket.
+func newAttributedComputeQualification(t *testing.T) (qualificationFixture, *net.UnixListener) {
 	t.Helper()
 	qualificationBuild(t)
 	directory, err := os.MkdirTemp("/run", "attr-gw-")
@@ -51,108 +52,140 @@ func newAttributedComputeQualification(t *testing.T, lifetime time.Duration) (qu
 	})
 	backend, assignment := fixture.backend, fixture.command
 	readiness, err := backend.Readiness(t.Context())
-	if err != nil || !readiness.Capabilities.GetAttributedExecutionReady() {
+	if err != nil || !readiness.Capabilities.GetPerExecAttributionReady() {
 		t.Fatalf("attributed readiness: %+v %v", readiness, err)
 	}
-	expiry := time.Now().Add(lifetime)
 	assignment.EgressContext = "tenant-a"
 	assignment.Requirements.RequiresTenantEgressContext = true
-	assignment.Requirements.RequiredCapabilities = append(assignment.Requirements.RequiredCapabilities, "attributed-execution")
-	assignment.AttributedExecution = &runnerprotocol.AttributedExecution{TenantRef: "tenant-a", SubjectRef: "owner-a", AuthorizationRef: "authorization-a", Gateway: "tools.internal", MaximumConnections: 2, ExpiresAtUnixMs: uint64(expiry.UnixMilli())}
+	assignment.Requirements.RequiredCapabilities = append(assignment.Requirements.RequiredCapabilities, "per-exec-attribution")
+	assignment.AttributedExecutionPermission = &runnerprotocol.AttributedExecutionPermission{Gateway: "tools.internal", MaximumConnections: 2}
 	if _, err := backend.StartAssignment(t.Context(), assignment, func(runnerprotocol.AssignmentProgressStage) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.MarkAssignmentReady(fixture.fence); err != nil {
 		t.Fatal(err)
 	}
-	return fixture, gateway, expiry
+	return fixture, gateway
 }
 
-func TestQualifiedGVisorAttributedCommand(t *testing.T) {
-	fixture, gateway, expiry := newAttributedComputeQualification(t, time.Minute)
+func attributedQualificationExec(reference string, lifetime time.Duration, script string) (*runnerprotocol.ExecOpen, time.Time) {
+	expiry := time.Now().Add(lifetime)
+	return &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", script}}},
+		Cwd:     ".", DeadlineUnixMs: uint64(expiry.UnixMilli()), OutputLimitBytes: 1024,
+		AttributedExecution: &runnerprotocol.AttributedExecution{
+			TenantRef: "tenant-a", SubjectRef: "owner-a", AuthorizationRef: reference, ExpiresAtUnixMs: uint64(expiry.UnixMilli()),
+		},
+	}, expiry
+}
+
+func ordinaryQualificationExec(t *testing.T, backend *AssignmentBackend, fence *runnerprotocol.AssignmentFence, script string) *runnerprotocol.ExecTerminal {
+	t.Helper()
+	result, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", script}}},
+		Cwd:     ".", DeadlineUnixMs: uint64(time.Now().Add(20 * time.Second).UnixMilli()), OutputLimitBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result.Terminal
+}
+
+// Sequential attributed execs share one ordinary Instance: each gets its own
+// listener and identity, a background daemon survives, and a closed listener
+// is unreachable.
+func TestQualifiedGVisorAttributedExecWindows(t *testing.T) {
+	fixture, gateway := newAttributedComputeQualification(t)
 	backend := fixture.backend
 	t.Cleanup(func() {
 		if err := backend.Shutdown(context.Background()); err != nil {
 			t.Error(err)
 		}
 	})
-	result := make(chan error, 1)
-	go func() {
-		connection, err := gateway.AcceptUnix()
-		if err != nil {
+	if terminal := ordinaryQualificationExec(t, backend, fixture.fence, `nohup sh -c 'while :; do sleep 1; done' >/dev/null 2>&1 & echo $! > daemon.pid`); terminal.GetExitCode() != 0 {
+		t.Fatalf("daemon start: %+v", terminal)
+	}
+	for _, reference := range []string{"authorization-1", "authorization-2"} {
+		execRequest, expiry := attributedQualificationExec(reference, time.Minute,
+			`endpoint=$SECONDBOX_EXECUTION_GATEWAY; printf %s "$endpoint" > gateway-`+reference+`; printf 'guest-context: forged\n' | nc -w 2 "${endpoint%:*}" "${endpoint##*:}"`)
+		result := make(chan error, 1)
+		go func() {
+			connection, err := gateway.AcceptUnix()
+			if err != nil {
+				result <- err
+				return
+			}
+			defer connection.Close()
+			attribution, err := egressattribution.ReadRunnerExecutionAttribution(connection, uint32(os.Getuid()), expiry)
+			if err == nil && (attribution.AssignmentID != fixture.fence.AssignmentId || attribution.SubjectRef != "owner-a" || attribution.AuthorizationRef != reference || attribution.Generation != 1) {
+				err = fmt.Errorf("incorrect host attribution: %+v", attribution)
+			}
+			if err == nil {
+				err = connection.SetDeadline(expiry)
+			}
+			request := make([]byte, len("guest-context: forged\n"))
+			if err == nil {
+				_, err = io.ReadFull(connection, request)
+			}
+			if err == nil && string(request) != "guest-context: forged\n" {
+				err = fmt.Errorf("wrong guest bytes: %q", request)
+			}
+			if err == nil {
+				_, err = connection.Write([]byte(reference))
+			}
 			result <- err
-			return
+		}()
+		executed, err := backend.ExecuteBuffered(t.Context(), fixture.fence, execRequest)
+		if err != nil || executed.Terminal.GetExitCode() != 0 || string(executed.Stdout) != reference {
+			t.Fatalf("attributed command: %v stdout=%q stderr=%q terminal=%+v", err, executed.Stdout, executed.Stderr, executed.Terminal)
 		}
-		defer connection.Close()
-		attribution, err := egressattribution.ReadRunnerExecutionAttribution(connection, uint32(os.Getuid()), expiry)
-		if err == nil && (attribution.AssignmentID != fixture.fence.AssignmentId || attribution.SubjectRef != "owner-a" || attribution.AuthorizationRef != "authorization-a" || attribution.Generation != 1) {
-			err = fmt.Errorf("incorrect host attribution: %+v", attribution)
+		if err := <-result; err != nil {
+			t.Fatal(err)
 		}
-		if err == nil {
-			err = connection.SetDeadline(expiry)
+		if terminal := ordinaryQualificationExec(t, backend, fixture.fence, `endpoint=$(cat gateway-`+reference+`); nc -z -w 2 "${endpoint%:*}" "${endpoint##*:}"`); terminal.GetExitCode() == 0 {
+			t.Fatalf("closed attributed listener for %s stayed reachable", reference)
 		}
-		request := make([]byte, len("guest-context: forged\n"))
-		if err == nil {
-			_, err = io.ReadFull(connection, request)
-		}
-		if err == nil && string(request) != "guest-context: forged\n" {
-			err = fmt.Errorf("wrong guest bytes: %q", request)
-		}
-		if err == nil {
-			_, err = connection.Write([]byte("qualified-attributed"))
-		}
-		result <- err
-	}()
-	execRequest := &runnerprotocol.ExecOpen{
-		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", `endpoint=$SECONDBOX_EXECUTION_GATEWAY; printf 'guest-context: forged\n' | nc -w 2 "${endpoint%:*}" "${endpoint##*:}"`}}},
-		Cwd:     ".", DeadlineUnixMs: uint64(expiry.UnixMilli()), OutputLimitBytes: 1024,
 	}
-	executed, err := backend.ExecuteBuffered(t.Context(), fixture.fence, execRequest)
-	if err != nil || executed.Terminal.GetExitCode() != 0 || string(executed.Stdout) != "qualified-attributed" {
-		t.Fatalf("attributed command: %v stdout=%q stderr=%q terminal=%+v", err, executed.Stdout, executed.Stderr, executed.Terminal)
+	if terminal := ordinaryQualificationExec(t, backend, fixture.fence, `test "$(cat gateway-authorization-1)" != "$(cat gateway-authorization-2)"`); terminal.GetExitCode() != 0 {
+		t.Fatal("sequential attributed execs shared one listener")
 	}
-	if err := <-result; err != nil {
-		t.Fatal(err)
+	if terminal := ordinaryQualificationExec(t, backend, fixture.fence, `kill -0 "$(cat daemon.pid)"`); terminal.GetExitCode() != 0 {
+		t.Fatal("background daemon did not survive attributed execs")
 	}
-	if _, err := backend.ExecuteBuffered(t.Context(), fixture.fence, execRequest); err == nil {
-		t.Fatal("second command admitted in attributed generation")
-	}
-	stopped, err := backend.FenceAssignment(t.Context(), &runnerprotocol.FenceCommand{Fence: fixture.fence, DeadlineUnixMs: uint64(time.Now().Add(10 * time.Second).UnixMilli())})
-	if err != nil || stopped.Result != runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_STOPPED {
-		t.Fatalf("attributed teardown: %+v %v", stopped, err)
+	select {
+	case terminal := <-backend.InstanceTerminals():
+		t.Fatalf("attributed execs terminated the Instance: %+v", terminal)
+	default:
 	}
 }
 
+// Revoking a window closes an active relay held by a descendant process; the
+// Instance keeps running unless it is fenced.
 func TestQualifiedGVisorAttributedRevocation(t *testing.T) {
-	for _, trigger := range []string{"expiry", "fence", "supervisor-loss"} {
+	for _, trigger := range []string{"exec-end", "expiry", "fence"} {
 		t.Run(trigger, func(t *testing.T) {
-			lifetime := time.Minute
-			if trigger == "expiry" {
-				lifetime = 8 * time.Second
-			}
-			fixture, gateway, expiry := newAttributedComputeQualification(t, lifetime)
+			fixture, gateway := newAttributedComputeQualification(t)
 			backend := fixture.backend
 			t.Cleanup(func() {
-				err := backend.Shutdown(context.Background())
-				if trigger == "supervisor-loss" {
-					if err == nil || !strings.Contains(err.Error(), "supervisor teardown reported failure: signal: killed") {
-						t.Errorf("supervisor loss must report unconfirmed workspace cleanup: %v", err)
-					}
-				} else if err != nil {
+				if err := backend.Shutdown(context.Background()); err != nil {
 					t.Error(err)
 				}
 			})
+			lifetime, script := time.Minute, `endpoint=$SECONDBOX_EXECUTION_GATEWAY; ( { printf ready; sleep 120; } | nc "${endpoint%:*}" "${endpoint##*:}" ) & wait`
+			switch trigger {
+			case "exec-end":
+				script = `endpoint=$SECONDBOX_EXECUTION_GATEWAY; ( { printf ready; sleep 120; } | nc "${endpoint%:*}" "${endpoint##*:}" ) & sleep 3`
+			case "expiry":
+				lifetime = 8 * time.Second
+			}
+			execRequest, expiry := attributedQualificationExec("authorization-"+trigger, lifetime, script)
 			if err := gateway.SetDeadline(expiry); err != nil {
 				t.Fatal(err)
 			}
 			commandDone := make(chan struct{})
 			go func() {
 				defer close(commandDone)
-				// The descendant keeps an established connection open until host teardown.
-				_, _ = backend.ExecuteBuffered(t.Context(), fixture.fence, &runnerprotocol.ExecOpen{
-					Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", `endpoint=$SECONDBOX_EXECUTION_GATEWAY; ( { printf ready; sleep 120; } | nc "${endpoint%:*}" "${endpoint##*:}" ) & wait`}}},
-					Cwd:     ".", DeadlineUnixMs: uint64(expiry.UnixMilli()), OutputLimitBytes: 1024,
-				})
+				_, _ = backend.ExecuteBuffered(t.Context(), fixture.fence, execRequest)
 			}()
 			connection, err := gateway.AcceptUnix()
 			if err != nil {
@@ -169,18 +202,10 @@ func TestQualifiedGVisorAttributedRevocation(t *testing.T) {
 			if _, err := io.ReadFull(connection, ready); err != nil || string(ready) != "ready" {
 				t.Fatalf("descendant readiness: %q %v", ready, err)
 			}
-			switch trigger {
-			case "fence":
+			if trigger == "fence" {
 				stopped, err := backend.FenceAssignment(t.Context(), &runnerprotocol.FenceCommand{Fence: fixture.fence, DeadlineUnixMs: uint64(time.Now().Add(10 * time.Second).UnixMilli())})
 				if err != nil || stopped.Result != runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_STOPPED {
 					t.Fatalf("active attributed teardown: %+v %v", stopped, err)
-				}
-			case "supervisor-loss":
-				backend.mu.Lock()
-				active := backend.assignments[fixture.fence.AssignmentId]
-				backend.mu.Unlock()
-				if err := syscallKillGroup(active.handles.Command.Process.Pid); err != nil {
-					t.Fatal(err)
 				}
 			}
 			if n, err := connection.Read(make([]byte, 1)); n != 0 || err != io.EOF {
@@ -189,16 +214,11 @@ func TestQualifiedGVisorAttributedRevocation(t *testing.T) {
 			select {
 			case <-commandDone:
 			case <-time.After(15 * time.Second):
-				t.Fatal("attributed descendant command survived compute teardown")
+				t.Fatal("attributed exec did not return after revocation")
 			}
 			if trigger != "fence" {
-				select {
-				case terminal := <-backend.InstanceTerminals():
-					if !sameFence(terminal.Fence, fixture.fence) {
-						t.Fatalf("wrong revoked instance terminal: %+v", terminal)
-					}
-				case <-time.After(15 * time.Second):
-					t.Fatal("no compute terminal after attributed revocation")
+				if terminal := ordinaryQualificationExec(t, backend, fixture.fence, "true"); terminal.GetExitCode() != 0 {
+					t.Fatalf("Instance stopped serving after %s: %+v", trigger, terminal)
 				}
 			}
 		})
