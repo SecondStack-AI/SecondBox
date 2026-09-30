@@ -170,6 +170,10 @@ func TestAttributedExecutionNetworkQualification(t *testing.T) {
 	if err != nil || strings.Contains(string(output), "sbx_exec_") {
 		t.Fatalf("restart left execution rules: %v: %s", err, output)
 	}
+	// The restarted Runner has no in-memory policy for the reclaimed Instance.
+	if err := backend.enforcer.Remove(t.Context(), assignment.Fence.InstanceId); err != nil {
+		t.Fatal(err)
+	}
 	if err := crashed.Close(); err != nil {
 		t.Fatalf("closing a swept window = %v", err)
 	}
