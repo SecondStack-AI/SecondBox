@@ -622,8 +622,15 @@ func TestScenarioClosedGuestPortFailsOnlyItsPortSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	output, outcome := receiveScenarioExec(t, neighbour)
-	if len(output) != 1 || output[0] != (scenarioStreamOutput{stream: "stdout", data: "neighbour:survived\n"}) {
-		t.Fatalf("SecondBox scenario neighbouring Exec output after the PortSession refusal = %#v", output)
+	var after string
+	for _, chunk := range output {
+		if chunk.stream != "stdout" {
+			t.Fatalf("SecondBox scenario neighbouring Exec output after the PortSession refusal = %#v", output)
+		}
+		after += chunk.data
+	}
+	if after != "neighbour:survived\n" {
+		t.Fatalf("SecondBox scenario neighbouring Exec stdout after the PortSession refusal = %q", after)
 	}
 	assertScenarioExited(t, outcome, 0, "neighbour-ready\nneighbour:survived\n", "")
 }
