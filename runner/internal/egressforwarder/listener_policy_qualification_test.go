@@ -291,6 +291,7 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	// Instance and sweeps its interface installs nothing once it resumes.
 	var fenced atomic.Bool
 	fencedConfig := config
+	fencedConfig.Attribution.ExpiresAt = time.Now().UTC().Add(10 * time.Second).Truncate(time.Millisecond)
 	fencedConfig.Admission = func() error {
 		if fenced.Load() {
 			return errors.New("instance fenced")
@@ -310,7 +311,13 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 		}
 		fencedStartup <- err
 	}()
-	<-paused
+	select {
+	case <-paused:
+	case err := <-fencedStartup:
+		t.Fatalf("startup ended before the sweep lock: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("startup never reached the sweep lock")
+	}
 	executionListenerStartupHook = nil
 	fenced.Store(true)
 	if err := RemoveExecutionListenerRules(t.Context(), config.NFTPath, []string{policy.GuestInterface}); err != nil {
@@ -327,6 +334,7 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	// that fences during admission waits for the startup and then revokes it.
 	admitted, release := make(chan bool, 1), make(chan struct{})
 	overlapConfig := config
+	overlapConfig.Attribution.ExpiresAt = time.Now().UTC().Add(10 * time.Second).Truncate(time.Millisecond)
 	overlapConfig.Admission = func() error {
 		locked := !executionListenerTablesMu.TryLock()
 		if !locked {
@@ -345,9 +353,16 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 		forwarder, err := StartExecutionForwarder(t.Context(), overlapConfig)
 		overlapStartup <- startup{forwarder, err}
 	}()
-	if !<-admitted {
-		close(release)
-		t.Fatal("forwarder admission ran outside the sweep lock")
+	select {
+	case locked := <-admitted:
+		if !locked {
+			close(release)
+			t.Fatal("forwarder admission ran outside the sweep lock")
+		}
+	case failed := <-overlapStartup:
+		t.Fatalf("startup ended before admission: %v", failed.err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("startup never reached admission")
 	}
 	overlapSweep := make(chan error, 1)
 	go func() {
