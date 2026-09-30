@@ -570,7 +570,9 @@ func TestScenarioClosedGuestPortFailsOnlyItsPortSession(t *testing.T) {
 	spec.Ports = []contracts.PortPolicy{{
 		Name: "web", Port: 8080, Protocol: "tcp", MaximumSessions: 1, MaximumSessionSeconds: 30,
 	}}
-	profile := createScenarioProfile(t, fixture, "scenario-closed-guest-port", spec)
+	// The scenario authority holds at most 32 Profile grants, so this test
+	// replays the identical scenario-port-lease Profile.
+	profile := createScenarioProfile(t, fixture, "scenario-port-lease", spec)
 	portHandle, _ := createScenarioSandbox(t, fixture, profile, "closed-guest-port")
 	neighbourHandle, _ := createScenarioSandbox(t, fixture, profile, "closed-guest-port-neighbour")
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
