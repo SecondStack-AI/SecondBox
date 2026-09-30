@@ -228,6 +228,9 @@ printf 'guest-context: second\n' | nc -w 10 "${endpoint%:*}" "${endpoint##*:}"`,
 	if current.State != contracts.SandboxStateReady || current.Generation != ready.Generation || current.Instance == nil || current.Instance.ID != ready.Instance.ID {
 		t.Fatalf("attributed execs changed compute: before=%+v after=%+v", ready, current)
 	}
+	if content, err := handle.ReadFile(ctx, "endpoint-2", 1024, ""); err != nil || len(content) == 0 {
+		t.Fatalf("file read on the attributed generation: %q %v", content, err)
+	}
 	lease := acquireScenarioLease(t, ctx, fixture, handle, 60, "attributed-lease")
 	terminalSession, err := handle.CreateTerminal(ctx, secondboxclient.CreateTerminalRequest{
 		Command:     secondboxclient.Command{ShellCommand: &secondboxclient.ShellCommand{Mode: "shell", Command: "printf terminal-ready; sleep 5"}},
@@ -248,9 +251,6 @@ printf 'guest-context: second\n' | nc -w 10 "${endpoint%:*}" "${endpoint##*:}"`,
 	port := createScenarioPortSession(t, ctx, fixture, handle, lease.ID, "attributed-port")
 	if port.State != contracts.PortSessionStateOpen || port.Generation != ready.Generation {
 		t.Fatalf("Port session on the attributed generation = %+v", port)
-	}
-	if content, err := handle.ReadFile(ctx, "endpoint-2", 1024, ""); err != nil || len(content) == 0 {
-		t.Fatalf("file read on the attributed generation: %q %v", content, err)
 	}
 }
 
@@ -312,7 +312,23 @@ func TestScenarioAttributedWindowRevocation(t *testing.T) {
 			if current.Generation != ready.Generation || current.Instance == nil || current.Instance.ID != ready.Instance.ID {
 				t.Fatalf("attributed revocation on %s changed compute: before=%+v after=%+v", trigger, ready, current)
 			}
-			assertScenarioExited(t, executeScenarioCommand(t, ctx, handle, "printf still-running", 1024, "attributed-after-"+trigger), 0, "still-running", "")
+			// The Runner reconnects after the control plane restarts; until then
+			// data-plane admission reports the execution node unavailable.
+			for {
+				outcome, err := handle.Execute(ctx, scenarioExecRequest("printf still-running", 1024), uniqueScenarioKey(t, "attributed-after-"+trigger), "")
+				if err == nil {
+					assertScenarioExited(t, outcome, 0, "still-running", "")
+					break
+				}
+				if secondboxclient.ProblemCodeOf(err) != string(secondboxclient.ProblemCodeExecutionNodeUnavailable) {
+					t.Fatal(err)
+				}
+				select {
+				case <-ctx.Done():
+					t.Fatalf("Runner did not reconnect after %s: %v", trigger, err)
+				case <-time.After(500 * time.Millisecond):
+				}
+			}
 		})
 	}
 }
