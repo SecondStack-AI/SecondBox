@@ -15,23 +15,21 @@ import (
 	"time"
 )
 
-func TestSandboxStartSendsAttributedExecution(t *testing.T) {
-	request := StartSandboxRequest{Image: ExecutionImage{Reference: "registry.example/agents/coding:stable"}, AttributedExecution: &AttributedExecutionRequest{
-		AuthorizationRef: "command-sdk", ExpiresAt: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC),
-	}}
+func TestSandboxExecuteSendsAttributedExecution(t *testing.T) {
+	attribution := &AttributedExecutionRequest{AuthorizationRef: "command-sdk", ExpiresAt: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
-		if incoming.Method != http.MethodPost || incoming.URL.Path != "/v1/sandboxes/sandbox-start:start" ||
-			incoming.Header.Get("If-Match") != `"revision-7"` || incoming.Header.Get("Idempotency-Key") != "start-command-sdk" {
-			t.Errorf("start request = %s %s, headers = %v", incoming.Method, incoming.URL.Path, incoming.Header)
+		if incoming.Method != http.MethodPost || incoming.URL.Path != "/v1/sandboxes/sandbox-exec/exec" ||
+			incoming.Header.Get("SecondBox-Generation") != "3" || incoming.Header.Get("Idempotency-Key") != "exec-command-sdk" {
+			t.Errorf("exec request = %s %s, headers = %v", incoming.Method, incoming.URL.Path, incoming.Header)
 		}
-		var actual StartSandboxRequest
+		var actual BufferedExecRequest
 		if err := json.NewDecoder(incoming.Body).Decode(&actual); err != nil || actual.AttributedExecution == nil ||
-			*actual.AttributedExecution != *request.AttributedExecution || actual.Image.Reference != request.Image.Reference {
-			t.Errorf("start binding = %+v, error = %v", actual, err)
+			*actual.AttributedExecution != *attribution {
+			t.Errorf("exec binding = %+v, error = %v", actual, err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		if _, err := io.WriteString(writer, `{"id":"operation-start","state":"pending","kind":"start"}`); err != nil {
-			t.Errorf("write start response: %v", err)
+		if _, err := io.WriteString(writer, `{"kind":"exited","exitCode":0,"elapsedMilliseconds":1,"stdoutBase64":"","stderrBase64":""}`); err != nil {
+			t.Errorf("write exec response: %v", err)
 		}
 	}))
 	defer server.Close()
@@ -39,10 +37,13 @@ func TestSandboxStartSendsAttributedExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle := NewSandboxHandle(client, Sandbox{ID: "sandbox-start", Revision: 7})
-	operation, err := handle.Start(t.Context(), request, LifecycleOptions{IdempotencyKey: "start-command-sdk"})
-	if err != nil || operation.ID != "operation-start" {
-		t.Fatalf("start = %+v, error = %v", operation, err)
+	handle := NewSandboxHandle(client, Sandbox{ID: "sandbox-exec", Generation: 3})
+	command := Command{ShellCommand: &ShellCommand{Mode: "shell", Command: "true"}}
+	if _, err := handle.Execute(t.Context(), BufferedExecRequest{
+		Command: command, Environment: StringMap{}, DeadlineMilliseconds: 1000, MaximumOutputBytes: 64,
+		AttributedExecution: attribution,
+	}, "exec-command-sdk", ""); err != nil {
+		t.Fatal(err)
 	}
 }
 

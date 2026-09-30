@@ -12,25 +12,36 @@ import (
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
+// The enforcer renders a live attributed exec listener as one more exact
+// Runner-local gateway beside the ordinary policy.
 func TestRenderInetExecutionListenerPolicy(t *testing.T) {
-	compiled, err := networkpolicy.CompileExecutionListener(netip.MustParseAddrPort("169.254.104.1:41000"), networkpolicy.CompileOptions{
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode:         networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{{Protocol: networkpolicy.ProtocolHTTPS, Domain: "ordinary.internal", Port: 443}},
+	}, networkpolicy.CompileOptions{
 		MaximumPins: 1, MaximumTTL: time.Second,
-		RunnerGateways: map[string]netip.Addr{"ordinary.internal": netip.MustParseAddr("10.0.0.2")},
+		RunnerGateways: map[string]netip.Addr{"ordinary.internal": netip.MustParseAddr("169.254.104.1")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	gateways := append(compiled.RunnerGatewayDestinations(), networkpolicy.RunnerGatewayDestination{
+		Destination: networkpolicy.Destination{Protocol: networkpolicy.ProtocolTCP, Port: 41000},
+		Address:     netip.MustParseAddr("169.254.104.1"),
+	})
 	script := renderInetPolicy("sbx_execution", "gvh0", "169.254.104.2", netip.MustParseAddr("169.254.99.53"), compiled.AllowsDNS(),
-		compiled.ProtectedPrefixes(), compiled.Destinations(), compiled.RunnerGatewayDestinations(), nil)
+		compiled.ProtectedPrefixes(), compiled.Destinations(), gateways, nil)
 	for _, chain := range []string{"input", "forward"} {
-		allow := `add rule inet sbx_execution ` + chain + ` iifname "gvh0" ip daddr 169.254.104.1 tcp dport 41000 ct mark set 0x53425801 accept`
 		drop := `add rule inet sbx_execution ` + chain + ` iifname "gvh0" drop`
-		if !strings.Contains(script, allow) || strings.Index(script, drop) < strings.Index(script, allow) {
-			t.Fatalf("private endpoint must precede terminal drop in %s:\n%s", chain, script)
+		for _, port := range []string{"41000", "443"} {
+			allow := `add rule inet sbx_execution ` + chain + ` iifname "gvh0" ip daddr 169.254.104.1 tcp dport ` + port + ` ct mark set 0x53425801 accept`
+			if !strings.Contains(script, allow) || strings.Index(script, drop) < strings.Index(script, allow) {
+				t.Fatalf("exec listener and ordinary gateway must precede terminal drop in %s:\n%s", chain, script)
+			}
 		}
 	}
-	if strings.Contains(script, "dport 53 ") || strings.Contains(script, "daddr 10.0.0.2 ") {
-		t.Fatalf("private execution policy inherited DNS or ordinary gateway:\n%s", script)
+	if !strings.Contains(script, "dport 53 ") {
+		t.Fatalf("an exec window removed ordinary DNS:\n%s", script)
 	}
 }
 

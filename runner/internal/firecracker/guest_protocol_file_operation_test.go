@@ -292,7 +292,7 @@ func assertGuestFileFailureKeepsProtocolStreamUsable(
 	execResult, err := session.ExecuteBuffered(t.Context(), "assignment-recovery-exec", &guestv1.ExecRequest{
 		Command:          &guestv1.ExecRequest_Shell{Shell: "printf protocol-recovered"},
 		OutputLimitBytes: 1024,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("exec after failed file operation: %v", err)
 	}

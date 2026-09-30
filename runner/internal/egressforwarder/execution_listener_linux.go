@@ -2,6 +2,8 @@ package egressforwarder
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +28,9 @@ type ExecutionForwarderConfig struct {
 	Policy             ExecutionListenerPolicy
 	Attribution        egressattribution.ExecutionAttribution
 	MaximumConnections int
+	// Admission is checked under the listener table lock; Instance teardown
+	// fences it before sweeping the interface.
+	Admission func() error
 }
 
 type ExecutionForwarder struct {
@@ -39,13 +44,14 @@ type ExecutionForwarder struct {
 	rulesRemoved bool
 }
 
-// The caller owns exclusive Instance construction and must Close before releasing
-// its network slot. Wait reports forwarding failure separately from cleanup.
-func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfig) (_ *ExecutionForwarder, resultErr error) {
+// StartExecutionForwarder binds one attributed exec's listener and installs its
+// listener table before accepting. The caller must Close it before releasing the
+// Instance network. Wait reports forwarding failure separately from cleanup.
+func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfig) (*ExecutionForwarder, error) {
 	ctx, cancelStartup := context.WithDeadline(ctx, config.Attribution.ExpiresAt)
 	defer cancelStartup()
-	if !filepath.IsAbs(config.NFTPath) || config.MaximumConnections < 1 || config.MaximumConnections > 4096 || config.Policy.InstanceID != config.Attribution.InstanceID {
-		return nil, fmt.Errorf("attributed forwarder requires explicit nftables, matching Instance identity, and bounded connections")
+	if config.Admission == nil || !filepath.IsAbs(config.NFTPath) || config.MaximumConnections < 1 || config.MaximumConnections > 4096 || config.Policy.InstanceID != config.Attribution.InstanceID {
+		return nil, fmt.Errorf("attributed forwarder requires explicit nftables, an admission check, matching Instance identity, and bounded connections")
 	}
 	if err := networkpolicycontract.ValidateAttributedGatewaySocket(config.GatewaySocket); err != nil {
 		return nil, err
@@ -63,6 +69,11 @@ func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfi
 	if !executionListenerIPv4(config.Policy.ListenerAddress.Addr()) {
 		return nil, fmt.Errorf("attributed forwarder bind address is invalid")
 	}
+	var listenerID [8]byte
+	if _, err := rand.Read(listenerID[:]); err != nil {
+		return nil, fmt.Errorf("create attributed listener identity: %w", err)
+	}
+	config.Policy.ListenerID = hex.EncodeToString(listenerID[:])
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, unix.IPPROTO_TCP)
 	if err != nil {
 		return nil, fmt.Errorf("create attributed listener socket: %w", err)
@@ -82,20 +93,46 @@ func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfi
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if resultErr != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			resultErr = errors.Join(resultErr, RemoveExecutionListenerRules(cleanupCtx, config.NFTPath, []string{config.Policy.GuestInterface}))
-		}
+	// The admission check, the listener table, the listener, and the
+	// registration happen under the sweep lock, so an interface sweep either
+	// sees and revokes this forwarder or runs first and fences its admission.
+	if executionListenerStartupHook != nil {
+		executionListenerStartupHook()
+	}
+	executionListenerTablesMu.Lock()
+	defer executionListenerTablesMu.Unlock()
+	if err := config.Admission(); err != nil {
+		return nil, err
+	}
+	listener, err := installExecutionListener(ctx, config.NFTPath, rules, fd, file)
+	if err != nil {
+		// A failed nft invocation may still have applied the table.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		return nil, errors.Join(err, removeExecutionListenerTablesLocked(cleanupCtx, config.NFTPath, map[string]bool{
+			executionListenerTable(config.Policy.GuestInterface, config.Policy.ListenerID): true,
+		}, nil))
+	}
+	forwardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	forwarder := &ExecutionForwarder{address: config.Policy.ListenerAddress, nftPath: config.NFTPath, policy: config.Policy, cancel: cancel, done: make(chan struct{})}
+	liveExecutionForwarders.add(forwarder)
+	go func() {
+		defer close(forwarder.done)
+		defer liveExecutionForwarders.remove(forwarder)
+		forwarder.forwardErr = ForwardAttributedExecution(forwardCtx, listener, config.GatewaySocket, config.Attribution, config.MaximumConnections)
 	}()
-	if err := applyExecutionListenerRules(ctx, config.NFTPath, rules); err != nil {
+	return forwarder, nil
+}
+
+// installExecutionListener starts accepting only after the listener table
+// exists; bind alone reserves the port.
+func installExecutionListener(ctx context.Context, nftPath, rules string, fd int, file *os.File) (*net.TCPListener, error) {
+	if err := applyExecutionListenerRules(ctx, nftPath, rules); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Bind reserves the port without accepting connections until policy is installed.
 	if err := unix.Listen(fd, unix.SOMAXCONN); err != nil {
 		return nil, fmt.Errorf("listen on attributed socket: %w", err)
 	}
@@ -103,13 +140,52 @@ func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfi
 	if err != nil {
 		return nil, fmt.Errorf("open attributed TCP listener: %w", err)
 	}
-	forwardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	forwarder := &ExecutionForwarder{address: config.Policy.ListenerAddress, nftPath: config.NFTPath, policy: config.Policy, cancel: cancel, done: make(chan struct{})}
-	go func() {
-		defer close(forwarder.done)
-		forwarder.forwardErr = ForwardAttributedExecution(forwardCtx, listener.(*net.TCPListener), config.GatewaySocket, config.Attribution, config.MaximumConnections)
-	}()
-	return forwarder, nil
+	return listener.(*net.TCPListener), nil
+}
+
+// liveExecutionForwarders lets an interface sweep close every listener on the
+// interface before it deletes the tables that restrict those listeners.
+var liveExecutionForwarders = executionForwarderRegistry{forwarders: make(map[*ExecutionForwarder]struct{})}
+
+type executionForwarderRegistry struct {
+	mu         sync.Mutex
+	forwarders map[*ExecutionForwarder]struct{}
+}
+
+func (registry *executionForwarderRegistry) add(forwarder *ExecutionForwarder) {
+	registry.mu.Lock()
+	registry.forwarders[forwarder] = struct{}{}
+	registry.mu.Unlock()
+}
+
+func (registry *executionForwarderRegistry) remove(forwarder *ExecutionForwarder) {
+	registry.mu.Lock()
+	delete(registry.forwarders, forwarder)
+	registry.mu.Unlock()
+}
+
+// revoke closes the listener and relays of every forwarder on the interfaces
+// and waits until each has stopped.
+func (registry *executionForwarderRegistry) revoke(ctx context.Context, guestInterfaces map[string]bool) error {
+	registry.mu.Lock()
+	var revoked []*ExecutionForwarder
+	for forwarder := range registry.forwarders {
+		if guestInterfaces[forwarder.policy.GuestInterface] {
+			revoked = append(revoked, forwarder)
+		}
+	}
+	registry.mu.Unlock()
+	for _, forwarder := range revoked {
+		forwarder.Revoke()
+	}
+	for _, forwarder := range revoked {
+		select {
+		case <-forwarder.done:
+		case <-ctx.Done():
+			return fmt.Errorf("attributed listener revocation did not finish: %w", ctx.Err())
+		}
+	}
+	return nil
 }
 
 func (forwarder *ExecutionForwarder) ListenerAddress() netip.AddrPort { return forwarder.address }
@@ -136,25 +212,67 @@ func (forwarder *ExecutionForwarder) Close(ctx context.Context) error {
 	if forwarder.rulesRemoved {
 		return nil
 	}
-	if err := RemoveExecutionListenerRules(ctx, forwarder.nftPath, []string{forwarder.policy.GuestInterface}); err != nil {
+	if err := removeExecutionListenerTables(ctx, forwarder.nftPath, map[string]bool{
+		executionListenerTable(forwarder.policy.GuestInterface, forwarder.policy.ListenerID): true,
+	}, nil); err != nil {
 		return err
 	}
 	forwarder.rulesRemoved = true
 	return nil
 }
 
-// Call only after revoking the listener or reclaiming a stopped Runner's interfaces.
-// Table identity follows the exclusive interface, so restart needs no authority journal.
+// RemoveExecutionListenerRules closes every live listener of the given guest
+// interfaces, then sweeps their listener tables. Call it at Instance teardown
+// or when reclaiming a stopped Runner's interfaces. Table names derive from the
+// interface, so restart needs no authority journal.
 func RemoveExecutionListenerRules(ctx context.Context, nftPath string, guestInterfaces []string) error {
-	ownedTables := make(map[string]bool, len(guestInterfaces))
+	prefixes := make([]string, 0, len(guestInterfaces))
+	interfaces := make(map[string]bool, len(guestInterfaces))
 	for _, name := range guestInterfaces {
 		if !executionInterfaceName.MatchString(name) {
 			return fmt.Errorf("attributed listener cleanup requires valid guest interfaces")
 		}
-		ownedTables[executionListenerTable(name)] = true
+		prefixes = append(prefixes, executionListenerTablePrefix(name))
+		interfaces[name] = true
 	}
-	if len(ownedTables) == 0 {
+	if len(prefixes) == 0 {
 		return nil
+	}
+	executionListenerTablesMu.Lock()
+	defer executionListenerTablesMu.Unlock()
+	if err := liveExecutionForwarders.revoke(ctx, interfaces); err != nil {
+		return err
+	}
+	return removeExecutionListenerTablesLocked(ctx, nftPath, nil, prefixes)
+}
+
+// executionListenerTablesMu orders listener table creation, forwarder
+// registration, and table removal. A sweep therefore revokes every forwarder
+// whose table it deletes, and an exec window closing during a sweep cannot make
+// the sweep delete a table that no longer exists.
+var executionListenerTablesMu sync.Mutex
+
+// executionListenerStartupHook is nil outside tests; tests use it to pause a
+// startup just before it takes the sweep lock.
+var executionListenerStartupHook func()
+
+func removeExecutionListenerTables(ctx context.Context, nftPath string, exact map[string]bool, prefixes []string) error {
+	executionListenerTablesMu.Lock()
+	defer executionListenerTablesMu.Unlock()
+	return removeExecutionListenerTablesLocked(ctx, nftPath, exact, prefixes)
+}
+
+func removeExecutionListenerTablesLocked(ctx context.Context, nftPath string, exact map[string]bool, prefixes []string) error {
+	owned := func(table string) bool {
+		if exact[table] {
+			return true
+		}
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(table, prefix) {
+				return true
+			}
+		}
+		return false
 	}
 	output, err := exec.CommandContext(ctx, nftPath, "-j", "list", "tables").CombinedOutput()
 	if err != nil {
@@ -176,7 +294,7 @@ func RemoveExecutionListenerRules(ctx context.Context, nftPath string, guestInte
 	}
 	var rules strings.Builder
 	for _, entry := range document.NFTables {
-		if entry.Table == nil || !ownedTables[entry.Table.Name] {
+		if entry.Table == nil || !owned(entry.Table.Name) {
 			continue
 		}
 		if entry.Table.Family == "inet" || entry.Table.Family == "bridge" {

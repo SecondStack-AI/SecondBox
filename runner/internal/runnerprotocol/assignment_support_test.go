@@ -6,50 +6,71 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestAttributedExecutionAssignmentReplay(t *testing.T) {
+func TestAttributedExecutionPermissionAssignmentReplay(t *testing.T) {
 	fence := &AssignmentFence{AssignmentId: "assignment"}
-	binding := &AttributedExecution{TenantRef: "tenant", SubjectRef: "subject", AuthorizationRef: "authorization", ExpiresAtUnixMs: 1234, Gateway: "gateway", MaximumConnections: 10}
-	assignment := &AssignmentCommand{Fence: fence, AttributedExecution: proto.CloneOf(binding)}
-	if !SameAssignmentIdentity(fence, "", binding, assignment) {
-		t.Fatal("unchanged attribution did not replay")
+	permission := &AttributedExecutionPermission{Gateway: "gateway", MaximumConnections: 10}
+	assignment := &AssignmentCommand{Fence: fence, AttributedExecutionPermission: proto.CloneOf(permission)}
+	if !SameAssignmentIdentity(fence, "", permission, assignment) {
+		t.Fatal("unchanged permission did not replay")
 	}
 	for name, change := range map[string]func(*AssignmentCommand){
-		"mode":      func(a *AssignmentCommand) { a.AttributedExecution = nil },
-		"tenant":    func(a *AssignmentCommand) { a.AttributedExecution.TenantRef = "other" },
-		"subject":   func(a *AssignmentCommand) { a.AttributedExecution.SubjectRef = "other" },
-		"reference": func(a *AssignmentCommand) { a.AttributedExecution.AuthorizationRef = "other" },
-		"expiry":    func(a *AssignmentCommand) { a.AttributedExecution.ExpiresAtUnixMs++ },
-		"gateway":   func(a *AssignmentCommand) { a.AttributedExecution.Gateway = "other" },
-		"limit":     func(a *AssignmentCommand) { a.AttributedExecution.MaximumConnections++ },
+		"removed": func(a *AssignmentCommand) { a.AttributedExecutionPermission = nil },
+		"gateway": func(a *AssignmentCommand) { a.AttributedExecutionPermission.Gateway = "other" },
+		"limit":   func(a *AssignmentCommand) { a.AttributedExecutionPermission.MaximumConnections++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := proto.CloneOf(assignment)
 			change(changed)
-			if SameAssignmentIdentity(fence, "", binding, changed) {
-				t.Fatal("changed attribution replayed")
+			if SameAssignmentIdentity(fence, "", permission, changed) {
+				t.Fatal("changed permission replayed")
 			}
 		})
 	}
 	if SameAssignmentIdentity(fence, "", nil, assignment) {
-		t.Fatal("ordinary assignment gained attribution")
+		t.Fatal("ordinary assignment gained permission")
 	}
 }
 
-func TestAttributedExecutionCapabilityRequired(t *testing.T) {
-	for _, attributed := range []bool{false, true} {
+func TestAttributedExecutionPermissionRequiresCapabilityAndContext(t *testing.T) {
+	for _, permitted := range []bool{false, true} {
 		for _, capability := range []bool{false, true} {
-			assignment := &AssignmentCommand{Requirements: &ProfileRequirements{}}
-			if attributed {
-				assignment.AttributedExecution = &AttributedExecution{}
+			assignment := &AssignmentCommand{
+				Requirements:  &ProfileRequirements{RequiresTenantEgressContext: true},
+				EgressContext: "tenant",
+			}
+			if permitted {
+				assignment.AttributedExecutionPermission = &AttributedExecutionPermission{Gateway: "gateway", MaximumConnections: 2}
 			}
 			if capability {
-				assignment.Requirements.RequiredCapabilities = []string{"attributed-execution"}
+				assignment.Requirements.RequiredCapabilities = []string{"per-exec-attribution"}
 			}
-			err := ValidateAttributedExecutionCapability(assignment)
-			if (err == nil) != (attributed == capability) {
-				t.Fatalf("attributed=%v capability=%v: %v", attributed, capability, err)
+			err := ValidateAttributedExecutionPermission(assignment)
+			if (err == nil) != (permitted == capability) {
+				t.Fatalf("permitted=%v capability=%v: %v", permitted, capability, err)
 			}
 		}
+	}
+	for name, permission := range map[string]*AttributedExecutionPermission{
+		"gateway": {MaximumConnections: 2},
+		"zero":    {Gateway: "gateway"},
+		"excess":  {Gateway: "gateway", MaximumConnections: 4097},
+	} {
+		assignment := &AssignmentCommand{
+			Requirements: &ProfileRequirements{
+				RequiresTenantEgressContext: true, RequiredCapabilities: []string{"per-exec-attribution"},
+			},
+			EgressContext: "tenant", AttributedExecutionPermission: permission,
+		}
+		if ValidateAttributedExecutionPermission(assignment) == nil {
+			t.Fatalf("accepted %s permission", name)
+		}
+	}
+	unpinned := &AssignmentCommand{
+		Requirements:                  &ProfileRequirements{RequiredCapabilities: []string{"per-exec-attribution"}},
+		AttributedExecutionPermission: &AttributedExecutionPermission{Gateway: "gateway", MaximumConnections: 2},
+	}
+	if ValidateAttributedExecutionPermission(unpinned) == nil {
+		t.Fatal("accepted a permission without a pinned egress context")
 	}
 }
 

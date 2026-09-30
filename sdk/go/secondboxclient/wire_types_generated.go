@@ -73,9 +73,10 @@ type AttributedExecutionConnectionLimits = contracts.AttributedExecutionConnecti
 // AttributedExecutionConnectionObservation Prospective numeric policy for the next attributed Assignment; existing Assignments retain their admitted limit.
 type AttributedExecutionConnectionObservation = contracts.AttributedExecutionConnectionObservation
 
-// AttributedExecutionPolicy Permits one isolated exec through the named installation gateway. Requires the Tenant egress context; it does not extend ordinary generation network policy.
+// AttributedExecutionPolicy Lets execs in ordinary generations of this Profile request attribution through the named installation gateway. Requires the Tenant egress context. Each attributed exec gets its own Runner listener for its window; ordinary network policy is unchanged.
 type AttributedExecutionPolicy = contracts.AttributedExecutionPolicy
 
+// AttributedExecutionRequest Binds one non-PTY exec to an application authorization reference until an absolute expiry. The pinned Profile must permit attributed execution; the expiry must lie within its execution deadline and at or after the exec deadline. Omit it for ordinary execution; null is invalid.
 type AttributedExecutionRequest = contracts.AttributedExecutionRequest
 
 // AuditAttribution Attribution recorded for every management mutation and denial. Credential bearer and verifier material is never recorded.
@@ -144,12 +145,13 @@ type BootStageTimingSummary struct {
 type BootTiming = contracts.BootTiming
 
 type BufferedExecRequest struct {
-	Command              Command        `json:"command"`
-	Cwd                  *WorkspacePath `json:"cwd,omitempty"`
-	DeadlineMilliseconds int64          `json:"deadlineMilliseconds"`
-	Environment          StringMap      `json:"environment"`
-	MaximumOutputBytes   int64          `json:"maximumOutputBytes"`
-	StdinBase64          *string        `json:"stdinBase64,omitempty"`
+	AttributedExecution  *AttributedExecutionRequest `json:"attributedExecution,omitempty"`
+	Command              Command                     `json:"command"`
+	Cwd                  *WorkspacePath              `json:"cwd,omitempty"`
+	DeadlineMilliseconds int64                       `json:"deadlineMilliseconds"`
+	Environment          StringMap                   `json:"environment"`
+	MaximumOutputBytes   int64                       `json:"maximumOutputBytes"`
+	StdinBase64          *string                     `json:"stdinBase64,omitempty"`
 }
 
 type Command struct {
@@ -856,12 +858,13 @@ type StreamSignalFrame struct {
 }
 
 type StreamingExecRequest struct {
-	Command              Command        `json:"command"`
-	Cwd                  *WorkspacePath `json:"cwd,omitempty"`
-	DeadlineMilliseconds int64          `json:"deadlineMilliseconds"`
-	Environment          StringMap      `json:"environment"`
-	MaximumOutputBytes   int64          `json:"maximumOutputBytes"`
-	WindowBytes          int64          `json:"windowBytes"`
+	AttributedExecution  *AttributedExecutionRequest `json:"attributedExecution,omitempty"`
+	Command              Command                     `json:"command"`
+	Cwd                  *WorkspacePath              `json:"cwd,omitempty"`
+	DeadlineMilliseconds int64                       `json:"deadlineMilliseconds"`
+	Environment          StringMap                   `json:"environment"`
+	MaximumOutputBytes   int64                       `json:"maximumOutputBytes"`
+	WindowBytes          int64                       `json:"windowBytes"`
 }
 
 type StringMap = map[string]string

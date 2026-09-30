@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"sort"
 	"strings"
 	"sync"
@@ -15,7 +14,6 @@ import (
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
-	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
@@ -31,8 +29,6 @@ const (
 )
 
 type GuestProtocolNegotiation struct {
-	AttributedExecution *runtimemanager.AttributedExecutionGuard
-	ExecutionGateway    netip.AddrPort
 	// RunnerGateways are the logical gateway endpoints the assignment's
 	// compiled network policy resolved inside its pinned egress context.
 	RunnerGateways []networkpolicy.LogicalGatewayEndpoint
@@ -54,8 +50,6 @@ type GuestProtocolNegotiation struct {
 
 // GuestProtocolSession is one negotiated, assignment-bound guest connection.
 type GuestProtocolSession struct {
-	attributedExecution     *runtimemanager.AttributedExecutionGuard
-	executionGateway        netip.AddrPort
 	runnerGateways          []networkpolicy.LogicalGatewayEndpoint
 	Connection              *grpc.ClientConn
 	Stream                  guestv1.GuestAgent_ConnectClient
@@ -92,9 +86,6 @@ func guestProtocolConnectParams() grpc.ConnectParams {
 }
 
 func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiation) (*GuestProtocolSession, error) {
-	if err := validateExecutionGateway(request.AttributedExecution != nil, request.ExecutionGateway); err != nil {
-		return nil, err
-	}
 	if err := validateRunnerGateways(request.RunnerGateways); err != nil {
 		return nil, err
 	}
@@ -222,8 +213,6 @@ func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiatio
 		return closeWithError(ctx.Err())
 	}
 	return &GuestProtocolSession{
-		attributedExecution:     request.AttributedExecution,
-		executionGateway:        request.ExecutionGateway,
 		runnerGateways:          request.RunnerGateways,
 		Connection:              connection,
 		Stream:                  stream,

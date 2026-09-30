@@ -222,7 +222,7 @@ func TestQualifiedGVisorBackendBootsAgentAndWorkspace(t *testing.T) {
 	fixture := newQualificationFixture(t, "primary")
 	backend, fence := fixture.backend, fixture.fence
 	readiness, readinessErr := backend.Readiness(t.Context())
-	if readinessErr != nil || readiness.Capabilities.GetAttributedExecutionReady() {
+	if readinessErr != nil || readiness.Capabilities.GetPerExecAttributionReady() {
 		t.Fatalf("ordinary readiness: %+v %v", readiness, readinessErr)
 	}
 	t.Cleanup(func() { _ = backend.Shutdown(context.Background()) })

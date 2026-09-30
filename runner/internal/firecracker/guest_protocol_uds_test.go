@@ -89,7 +89,7 @@ func TestNegotiateGuestProtocolOverDirectUnixSocket(t *testing.T) {
 	execResult, err := session.ExecuteBuffered(context.Background(), "assignment-1", &guestv1.ExecRequest{
 		Command:          &guestv1.ExecRequest_Shell{Shell: "printf uds-exec"},
 		OutputLimitBytes: 1024,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("execute over direct Unix socket transport: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestDirectUnixSocketSupportsIndependentConcurrentConnections(t *testing.T) 
 		result, err := session.ExecuteBuffered(context.Background(), "assignment-1", &guestv1.ExecRequest{
 			Command:          &guestv1.ExecRequest_Shell{Shell: "printf concurrent"},
 			OutputLimitBytes: 1024,
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("connection %d exec: %v", index, err)
 		}
@@ -154,7 +154,7 @@ func TestDirectUnixSocketTransportLossFailsOperations(t *testing.T) {
 	_, err := session.ExecuteBuffered(context.Background(), "assignment-1", &guestv1.ExecRequest{
 		Command:          &guestv1.ExecRequest_Shell{Shell: "printf lost"},
 		OutputLimitBytes: 1024,
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("operation succeeded over a lost transport")
 	}

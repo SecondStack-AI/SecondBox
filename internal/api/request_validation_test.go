@@ -233,8 +233,13 @@ func TestDecodeStrictJSONLocatesContractsDecoderRefusals(t *testing.T) {
 		},
 		{
 			"timestamp behind a custom decoder boundary", `{"attributedExecution":{"authorizationRef":"authorization-a","expiresAt":"2026-13-01T00:00:00Z"}}`,
-			func() any { return new(contracts.StartSandboxRequest) },
+			func() any { return new(contracts.BufferedExecRequest) },
 			ports.InvalidFieldError{Field: "attributedExecution.expiresAt", Reason: "must be an RFC 3339 timestamp string"},
+		},
+		{
+			"null exec attribution", `{"attributedExecution":null}`,
+			func() any { return new(contracts.StreamingExecRequest) },
+			ports.InvalidFieldError{Field: "attributedExecution", Reason: "must be an object, not null"},
 		},
 		{
 			"Exec command mode", `{"command":{"mode":"script"}}`,

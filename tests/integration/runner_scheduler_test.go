@@ -192,7 +192,7 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 	for _, testCase := range []struct {
 		name                          string
 		snapshotResumeReady           bool
-		attributedExecutionReady      bool
+		perExecAttributionReady       bool
 		clientSelectedImageReady      bool
 		physicalStorageAdmissionReady bool
 		gvisor                        bool
@@ -232,7 +232,7 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 			}
 			registration.SupportedEgressContexts = []string{"tenant-blue", "tenant-green"}
 			registration.Capabilities.SnapshotResumeReady = testCase.snapshotResumeReady
-			registration.Capabilities.AttributedExecutionReady = testCase.attributedExecutionReady
+			registration.Capabilities.PerExecAttributionReady = testCase.perExecAttributionReady
 			registration.Capabilities.ClientSelectedImageReady = testCase.clientSelectedImageReady
 			registration.Capabilities.PhysicalStorageAdmissionReady = testCase.physicalStorageAdmissionReady
 			if duplicate, err := stateStore.RecordRegistration(
@@ -259,8 +259,8 @@ func TestRunnerRegistrationAdvertisesOptionalExecutionCapabilities(t *testing.T)
 				t.Fatalf("persisted egress contexts = %v, want %v", egressContexts, registration.SupportedEgressContexts)
 			}
 			advertised := slices.Contains(capabilities, contracts.RunnerCapabilitySnapshotResume)
-			if slices.Contains(capabilities, contracts.RunnerCapabilityAttributedExecution) != testCase.attributedExecutionReady {
-				t.Fatalf("wrong attributed-execution capability: %v", capabilities)
+			if slices.Contains(capabilities, contracts.RunnerCapabilityPerExecAttribution) != testCase.perExecAttributionReady {
+				t.Fatalf("wrong per-exec-attribution capability: %v", capabilities)
 			}
 			if slices.Contains(capabilities, contracts.RunnerCapabilityClientSelectedImage) != testCase.clientSelectedImageReady {
 				t.Fatalf("wrong client-selected-image capability: %v", capabilities)
@@ -348,7 +348,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatal(err)
 	}
 	requiredEgressContext := "tenant-blue"
-	if _, err := contextPool.Exec(t.Context(), `UPDATE secondbox.runners SET capabilities_json=capabilities_json || '["attributed-execution"]'::jsonb WHERE id=$1`, runnerID); err != nil {
+	if _, err := contextPool.Exec(t.Context(), `UPDATE secondbox.runners SET capabilities_json=capabilities_json || '["per-exec-attribution"]'::jsonb WHERE id=$1`, runnerID); err != nil {
 		t.Fatal(err)
 	}
 	// The Sandbox keeps its old gateway and two-connection pin while only the
@@ -410,7 +410,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 				Requirements: scheduler.Requirements{
 					PoolName: poolName, Architecture: "amd64", EgressContext: &requiredEgressContext,
 					RequiredCapabilities: []string{
-						"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution,
+						"local-workspace", "network-policy", contracts.RunnerCapabilityPerExecAttribution,
 						contracts.RunnerCapabilityClientSelectedImage,
 					},
 					Capacity: scheduler.Capacity{
@@ -419,12 +419,9 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					},
 				},
 				AssignmentCommand: &runnerv1.AssignmentCommand{
-					ExecutionImage: &runnerv1.ExecutionImage{Reference: testExecutionImage().Reference},
-					AttributedExecution: &runnerv1.AttributedExecution{
-						TenantRef: "task4-project", SubjectRef: "task4-subject", AuthorizationRef: "scheduler-command",
-						ExpiresAtUnixMs: uint64(now.Add(2 * time.Minute).UnixMilli()), Gateway: "gateway", MaximumConnections: 32,
-					},
-					WorkspaceId: workspaceID,
+					ExecutionImage:                &runnerv1.ExecutionImage{Reference: testExecutionImage().Reference},
+					AttributedExecutionPermission: &runnerv1.AttributedExecutionPermission{Gateway: "gateway", MaximumConnections: 32},
+					WorkspaceId:                   workspaceID,
 					Fence: &runnerv1.AssignmentFence{
 						AssignmentId: assignmentID, SandboxId: sandboxID, InstanceId: instanceID,
 						SandboxGeneration: 1, FencingToken: fencingToken,
@@ -433,7 +430,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					Requirements: &runnerv1.ProfileRequirements{
 						VcpuCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
 						Architecture: "amd64", RequiredCapabilities: []string{
-							"local-workspace", "network-policy", contracts.RunnerCapabilityAttributedExecution,
+							"local-workspace", "network-policy", contracts.RunnerCapabilityPerExecAttribution,
 							contracts.RunnerCapabilityClientSelectedImage,
 						},
 						MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
@@ -497,14 +494,6 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	if createdCount != 1 {
 		t.Fatalf("replica race created %d Assignments, want exactly 1", createdCount)
 	}
-	var executionReference string
-	var executionExpiry time.Time
-	if err := contextPool.QueryRow(t.Context(), `SELECT execution_authorization_ref,execution_expires_at FROM secondbox.assignments WHERE id=$1`, durableAssignment.ID).Scan(&executionReference, &executionExpiry); err != nil {
-		t.Fatal(err)
-	}
-	if executionReference != "scheduler-command" || !executionExpiry.Equal(now.Add(2*time.Minute)) {
-		t.Fatalf("durable execution binding = %q %s", executionReference, executionExpiry)
-	}
 	var originalPayload []byte
 	if err := contextPool.QueryRow(t.Context(), "SELECT payload FROM secondbox.runner_commands WHERE assignment_id=$1", durableAssignment.ID).Scan(&originalPayload); err != nil {
 		t.Fatal(err)
@@ -513,7 +502,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	if err := proto.Unmarshal(originalPayload, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if got := persisted.GetAssignment(); got.AttributedExecution.MaximumConnections != 128 || got.AttributedExecution.Gateway != "gateway" || got.ProfileRevisionId != profileRevisionID {
+	if got := persisted.GetAssignment(); got.AttributedExecutionPermission.MaximumConnections != 128 || got.AttributedExecutionPermission.Gateway != "gateway" || got.ProfileRevisionId != profileRevisionID {
 		t.Fatalf("numeric adoption crossed pin: %v", got)
 	}
 	if _, err := contextPool.Exec(t.Context(), `UPDATE secondbox.subjects SET sandbox_policy_json='{"profile":"task4-profile","lifecycle":{"idleSeconds":60,"maximumDurationSeconds":null},"attributedExecution":{"maximumConnections":1}}' WHERE tenant_ref='task4-project' AND ref='task4-subject'`); err != nil {
@@ -528,11 +517,6 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	if string(originalPayload) != string(replayPayload) {
 		t.Fatal("policy change rewrote admitted command")
-	}
-	admittedRequest.AssignmentCommand = proto.Clone(admittedRequest.AssignmentCommand).(*runnerv1.AssignmentCommand)
-	admittedRequest.AssignmentCommand.AttributedExecution.AuthorizationRef = "different-command"
-	if _, _, err := firstScheduler.Schedule(t.Context(), admittedRequest); !errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
-		t.Fatalf("assignment reuse with another command = %v", err)
 	}
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {

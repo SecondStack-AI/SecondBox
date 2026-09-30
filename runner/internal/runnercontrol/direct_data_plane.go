@@ -431,6 +431,9 @@ func validateDirectFirstMessage(
 		if frame == nil || frame.GetOpen() == nil {
 			return errors.New("SecondBox runner direct Exec stream must begin with Open")
 		}
+		if frame.GetOpen().AttributedExecution != nil {
+			return errors.New("SecondBox runner direct Exec stream cannot carry attribution")
+		}
 		fence, operationID, streamID, sequence = frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence
 	} else if session.kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY {
 		session.mu.Lock()

@@ -10,7 +10,7 @@ A runner presents the deployment's pre-shared Runner credential over a mutually 
 
 The shared credential is configured explicitly on the control plane and every trusted Runner; PostgreSQL stores neither the credential nor a credential lifecycle. `secondbox-deploy runner-init` issues one create-only client identity for an immutable manifest-declared Runner ID, and its certificate carries `spiffe://secondbox/runner/<runner-id>`. The RunnerPool is reported during registration and must already exist in a registration-accepting state. The control-plane server certificate is configured separately.
 
-The supported Runner protocol window is a compiled fact, not deployment configuration. Client-selected execution images advance both implementations to generation 5 exactly. Identical constants live beside both independently built generated protocol packages, the generation verifier rejects drift, and both implementations use those constants for negotiation. Generation 4 and every other adjacent version are rejected as unsupported; there is no mixed-generation or legacy-assignment fallback. The canonical descriptor and frozen fixture include `RUNNER_FEATURE_CLIENT_SELECTED_IMAGE` as generation-5 contract evidence.
+The supported Runner protocol window is a compiled fact, not deployment configuration. Per-exec attribution advances both implementations to generation 6 exactly. Identical constants live beside both independently built generated protocol packages, the generation verifier rejects drift, and both implementations use those constants for negotiation. Generation 5 and every other adjacent version are rejected as unsupported; there is no mixed-generation or legacy-assignment fallback. Generation 6 moves attribution from `AssignmentCommand` to `ExecOpen.attributed_execution`, adds `AssignmentCommand.attributed_execution_permission`, and replaces the `attributed_execution_ready` capability with `per_exec_attribution_ready`, recorded as `per-exec-attribution`.
 
 Unknown, empty, or mismatched shared credentials are rejected before protocol negotiation. CA verification and the certificate identity are also mandatory. Rotating the deployment-wide credential or Runner CA is an operator-coordinated replacement of the affected control-plane and Runner secret material; no database-backed enrollment, rotation, or revocation workflow exists.
 
@@ -64,7 +64,7 @@ An assignment command contains the immutable ProfileRevision requirements, exact
 A Profile that states `false` receives no assignment context even if its Tenant has one.
 Each component reference carries its verified artifact ID, component-manifest digest, signing-key ID, architecture, guest-protocol generation, and mandatory guest features.
 Network destinations carry one exact domain or CIDR plus protocol and port; Runner-local DNS pin bounds and protected management addresses remain local admission inputs rather than Profile-controlled exceptions.
-The assignment contains no platform token, end-user identity, registry credentials, or credential selectors.
+The assignment contains no platform token, end-user identity, registry credentials, or credential selectors. When the pinned Profile permits attributed execution, the assignment also carries `attributed_execution_permission`: the pinned logical gateway and the resolved per-exec connection limit, with no execution identity, and it requires the `per-exec-attribution` capability.
 
 The control plane derives the assignment context only from the Sandbox's creation-time pin and admits only a Runner that advertised that exact name. Subjects, end users, application requests, guest headers, guest source addresses, and domain suffixes do not participate. The Runner rejects a missing, unexpected, invalid, or unsupported assignment context before Workspace or compute mutation. No context match means a typed retryable availability failure, not selection of another context, automatic reassignment, or the v0.7.2 global gateway.
 
@@ -137,8 +137,18 @@ Heartbeat expiry marks the Runner unavailable and makes its Sandboxes unavailabl
 
 See [Service boundaries](service-boundaries.md), [Guest-agent protocol](guest-agent-protocol.md), and [Security](security.md).
 
-Attributed Assignment `maximum_connections` is resolved from the operator numeric
+The permission's `maximum_connections` is resolved from the operator numeric
 grant and delegated Subject selection when the control plane durably creates the
-Assignment. Only this numeric bound follows current policy; gateway and other
-execution authority stay pinned to the Sandbox revision. Replay and reconnection
-reuse the admitted command, and policy edits never resize a running forwarder.
+Assignment. Only this numeric bound follows current policy; the gateway stays
+pinned to the Sandbox revision. Replay and reconnection reuse the admitted command,
+and policy edits never resize a running forwarder.
+
+An attributed exec's `ExecOpen` carries `attributed_execution`: the Tenant,
+Subject, authorization reference, and expiry the control plane persisted with the
+data-plane session; the frame fence supplies Sandbox, Instance, Assignment, and
+generation. The Runner requires the Assignment permission, a non-PTY exec, and a
+deadline that ends at or before the expiry, then opens a per-exec window as
+described in [Networking and ports](networking-and-ports.md#attributed-execution).
+A direct data-plane stream never carries attribution, because its client supplies
+the `ExecOpen`; the control plane admits attributed exec streams only on the
+proxied transport.

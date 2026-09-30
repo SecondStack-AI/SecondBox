@@ -11,7 +11,7 @@ import (
 // SameAssignmentIdentity compares the durable replay identity shared by every
 // compute backend. The context-required bit is derived from the context name;
 // RunnerProtocolService rejects commands where those values disagree.
-func SameAssignmentIdentity(fence *AssignmentFence, egressContext string, executionBinding *AttributedExecution, assignment *AssignmentCommand) bool {
+func SameAssignmentIdentity(fence *AssignmentFence, egressContext string, permission *AttributedExecutionPermission, assignment *AssignmentCommand) bool {
 	if fence == nil || assignment == nil || assignment.Fence == nil {
 		return false
 	}
@@ -22,17 +22,27 @@ func SameAssignmentIdentity(fence *AssignmentFence, egressContext string, execut
 		fence.SandboxGeneration == assignment.Fence.SandboxGeneration &&
 		bytes.Equal(fence.FencingToken, assignment.Fence.FencingToken) &&
 		egressContext == assignment.EgressContext &&
-		proto.Equal(executionBinding, assignment.AttributedExecution) &&
+		proto.Equal(permission, assignment.AttributedExecutionPermission) &&
 		(egressContext != "") == requiresEgressContext
 }
 
-func ValidateAttributedExecutionCapability(assignment *AssignmentCommand) error {
+// ValidateAttributedExecutionPermission requires the permission exactly when
+// the per-exec attribution capability is required, and bounds its values.
+func ValidateAttributedExecutionPermission(assignment *AssignmentCommand) error {
 	if assignment == nil || assignment.Requirements == nil {
-		return fmt.Errorf("attributed execution capability requires assignment requirements")
+		return fmt.Errorf("attributed execution permission requires assignment requirements")
 	}
-	required := slices.Contains(assignment.Requirements.RequiredCapabilities, "attributed-execution")
-	if required != (assignment.AttributedExecution != nil) {
-		return fmt.Errorf("attributed execution binding and required capability disagree")
+	permission := assignment.AttributedExecutionPermission
+	required := slices.Contains(assignment.Requirements.RequiredCapabilities, "per-exec-attribution")
+	if required != (permission != nil) {
+		return fmt.Errorf("attributed execution permission and required capability disagree")
+	}
+	if permission == nil {
+		return nil
+	}
+	if permission.Gateway == "" || permission.MaximumConnections < 1 || permission.MaximumConnections > 4096 ||
+		!assignment.Requirements.RequiresTenantEgressContext || assignment.EgressContext == "" {
+		return fmt.Errorf("attributed execution permission requires a gateway, 1 to 4096 connections, and a pinned egress context")
 	}
 	return nil
 }

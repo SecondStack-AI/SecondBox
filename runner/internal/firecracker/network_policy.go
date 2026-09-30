@@ -31,6 +31,17 @@ type HostNetworkPolicyEnforcer interface {
 	Install(context.Context, PolicyNetworkConfig) error
 	Remove(context.Context, string) error
 	Close() error
+	ExecutionListenerPolicyEnforcer
+}
+
+// ExecutionListenerPolicyEnforcer admits one attributed exec's listener into an
+// installed Instance policy for exactly that exec's window. Instance teardown
+// fences admission before it sweeps the Instance's listeners.
+type ExecutionListenerPolicyEnforcer interface {
+	AllowExecutionListener(context.Context, string, netip.AddrPort) error
+	RevokeExecutionListener(context.Context, string, netip.AddrPort) error
+	FenceExecutionListeners(string)
+	ExecutionListenerAdmission(string) error
 }
 
 type nftScriptRunner func(context.Context, string, []string, string) ([]byte, error)
@@ -91,8 +102,42 @@ type nftPolicyInstance struct {
 	cfg    PolicyNetworkConfig
 	pins   map[int][]netip.Addr
 	expiry map[int]time.Time
-	cancel context.CancelFunc
-	ctx    context.Context
+	// executionListeners are live attributed exec endpoints on the Runner
+	// side of this Instance's interface.
+	executionListeners map[netip.AddrPort]struct{}
+	// listenersFenced refuses new listeners once teardown has begun.
+	listenersFenced bool
+	cancel          context.CancelFunc
+	ctx             context.Context
+}
+
+// runnerGatewayDestinations adds each live attributed exec listener to the
+// policy's logical gateway exceptions, in a stable order.
+func (instance nftPolicyInstance) runnerGatewayDestinations() []networkpolicy.RunnerGatewayDestination {
+	gateways := instance.cfg.Policy.RunnerGatewayDestinations()
+	listeners := make([]netip.AddrPort, 0, len(instance.executionListeners))
+	for listener := range instance.executionListeners {
+		listeners = append(listeners, listener)
+	}
+	sort.Slice(listeners, func(left, right int) bool {
+		return listeners[left].Compare(listeners[right]) < 0
+	})
+	for _, listener := range listeners {
+		gateways = append(gateways, networkpolicy.RunnerGatewayDestination{
+			Destination: networkpolicy.Destination{Protocol: networkpolicy.ProtocolTCP, Port: listener.Port()},
+			Address:     listener.Addr(),
+		})
+	}
+	return gateways
+}
+
+// replacementScript atomically replaces the Instance table with its current state.
+func (e *NFTablesNetworkPolicyEnforcer) replacementScript(instance nftPolicyInstance) string {
+	return e.deletePolicyTable(instance.table) + e.renderPolicy(
+		instance.table, instance.cfg.TapName, instance.cfg.GuestIP, instance.cfg.DNSAddress,
+		instance.cfg.Policy.AllowsDNS(), instance.cfg.Policy.ProtectedPrefixes(),
+		instance.cfg.Policy.Destinations(), instance.runnerGatewayDestinations(), instance.pins,
+	)
 }
 
 const allowedConnectionMark = "0x53425801"
@@ -327,17 +372,7 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 		e.mu.Unlock()
 		return fmt.Errorf("SecondBox DNS query domain %q is not allowed", domain)
 	}
-	script := fmt.Sprintf("%s%s", e.deletePolicyTable(instance.table), e.renderPolicy(
-		instance.table,
-		instance.cfg.TapName,
-		instance.cfg.GuestIP,
-		instance.cfg.DNSAddress,
-		instance.cfg.Policy.AllowsDNS(),
-		instance.cfg.Policy.ProtectedPrefixes(),
-		destinations,
-		instance.cfg.Policy.RunnerGatewayDestinations(),
-		instance.pins,
-	))
+	script := e.replacementScript(instance)
 	e.mu.Unlock()
 	updateContext, cancelUpdate := context.WithTimeout(instance.ctx, 5*time.Second)
 	defer cancelUpdate()
@@ -431,12 +466,7 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 			delete(instance.expiry, index)
 		}
 	}
-	script := fmt.Sprintf("%s%s", e.deletePolicyTable(instance.table), e.renderPolicy(
-		instance.table, instance.cfg.TapName, instance.cfg.GuestIP, instance.cfg.DNSAddress,
-		instance.cfg.Policy.AllowsDNS(),
-		instance.cfg.Policy.ProtectedPrefixes(), instance.cfg.Policy.Destinations(),
-		instance.cfg.Policy.RunnerGatewayDestinations(), instance.pins,
-	))
+	script := e.replacementScript(instance)
 	e.mu.Unlock()
 	if output, err := e.command(instance.ctx, e.nftPath, []string{"-f", "-"}, script); err != nil {
 		if instance.ctx.Err() != nil {
@@ -450,6 +480,97 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 		e.instances[instanceID] = instance
 	}
 	e.mu.Unlock()
+}
+
+func (e *NFTablesNetworkPolicyEnforcer) AllowExecutionListener(ctx context.Context, instanceID string, listener netip.AddrPort) error {
+	return e.updateExecutionListener(ctx, instanceID, listener, true)
+}
+
+// RevokeExecutionListener is a no-op once the Instance policy is removed. A
+// failed revocation cannot prove enforcement and terminates the Instance.
+func (e *NFTablesNetworkPolicyEnforcer) RevokeExecutionListener(ctx context.Context, instanceID string, listener netip.AddrPort) error {
+	return e.updateExecutionListener(ctx, instanceID, listener, false)
+}
+
+// FenceExecutionListeners refuses every later listener for the Instance. Its
+// installed policy is unchanged; the caller then sweeps the live listeners.
+func (e *NFTablesNetworkPolicyEnforcer) FenceExecutionListeners(instanceID string) {
+	e.mutationMu.Lock()
+	defer e.mutationMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if instance, found := e.instances[instanceID]; found {
+		instance.listenersFenced = true
+		e.instances[instanceID] = instance
+	}
+}
+
+// ExecutionListenerAdmission reports whether the Instance still admits new
+// listeners. Forwarder startup checks it under the listener table lock, so a
+// startup that follows a teardown sweep installs nothing.
+func (e *NFTablesNetworkPolicyEnforcer) ExecutionListenerAdmission(instanceID string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if instance, found := e.instances[instanceID]; !found || instance.listenersFenced {
+		return fmt.Errorf("SecondBox attributed exec listener has no admitting policy for %s", instanceID)
+	}
+	return nil
+}
+
+func (e *NFTablesNetworkPolicyEnforcer) updateExecutionListener(ctx context.Context, instanceID string, listener netip.AddrPort, allow bool) error {
+	if !listener.Addr().Is4() || listener.Port() == 0 {
+		return fmt.Errorf("SecondBox attributed exec listener must be an IPv4 endpoint with a nonzero port")
+	}
+	e.mutationMu.Lock()
+	var enforcementFailure error
+	var failureConfig PolicyNetworkConfig
+	defer func() {
+		e.mutationMu.Unlock()
+		if enforcementFailure != nil {
+			e.reportFailure(failureConfig, enforcementFailure)
+		}
+	}()
+	e.mu.Lock()
+	instance, found := e.instances[instanceID]
+	if !found || (allow && instance.listenersFenced) {
+		e.mu.Unlock()
+		if allow {
+			return fmt.Errorf("SecondBox attributed exec listener has no admitting policy for %s", instanceID)
+		}
+		return nil
+	}
+	listeners := make(map[netip.AddrPort]struct{}, len(instance.executionListeners)+1)
+	for existing := range instance.executionListeners {
+		listeners[existing] = struct{}{}
+	}
+	if allow {
+		listeners[listener] = struct{}{}
+	} else {
+		delete(listeners, listener)
+	}
+	instance.executionListeners = listeners
+	script := e.replacementScript(instance)
+	e.mu.Unlock()
+	updateContext, cancelUpdate := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelUpdate()
+	output, err := e.command(updateContext, e.nftPath, []string{"-f", "-"}, script)
+	if err != nil {
+		policyErr := fmt.Errorf("update attributed exec listener for %s: %w: %s", instanceID, err, strings.TrimSpace(string(output)))
+		if !allow && instance.ctx.Err() == nil {
+			// The atomic script left the previous table, which still admits
+			// the revoked endpoint.
+			failureConfig = instance.cfg
+			enforcementFailure = policyErr
+		}
+		return policyErr
+	}
+	e.mu.Lock()
+	if current, found := e.instances[instanceID]; found && current.ctx == instance.ctx {
+		current.executionListeners = listeners
+		e.instances[instanceID] = current
+	}
+	e.mu.Unlock()
+	return nil
 }
 
 func (e *NFTablesNetworkPolicyEnforcer) reportFailure(cfg PolicyNetworkConfig, err error) {

@@ -270,6 +270,13 @@ func (s *RunnerProtocolService) handleExecFrame(
 			))
 		}
 		if frame.GetOpen().AllocatePty {
+			if frame.GetOpen().AttributedExecution != nil {
+				return s.sendPTYTerminal(stream, state, runnerInfrastructureTerminal(
+					runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
+					runnerprotocol.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_ADMISSION,
+					false, "attributed execution does not admit a PTY",
+				))
+			}
 			if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY] {
 				return s.sendPTYTerminal(stream, state, runnerInfrastructureTerminal(
 					runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
@@ -755,7 +762,6 @@ func (s *RunnerProtocolService) executeStreamingOperation(
 	asyncErrors chan<- error,
 ) {
 	defer s.setActiveOperation(state.fence.AssignmentId, state.operationID, false)
-	ctx, finishAttributedExec := s.beginAttributedExec(ctx, state.fence, open.DeadlineUnixMs)
 	terminal, err := s.dataPlaneBackend.ExecuteStreaming(
 		ctx, cloneRunnerFence(state.fence), proto.Clone(open).(*runnerprotocol.ExecOpen),
 		state.controls,
@@ -791,12 +797,7 @@ func (s *RunnerProtocolService) executeStreamingOperation(
 			true, "runner execution bridge returned no terminal outcome",
 		)
 	}
-	stopErr := finishAttributedExec()
-	if stopErr != nil {
-		terminal = runnerInfrastructureTerminal(runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
-			runnerprotocol.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_EXECUTION_NODE, false, "attributed execution termination is unconfirmed")
-	}
-	if err := errors.Join(stopErr, s.sendExecTerminal(stream, state, terminal)); err != nil {
+	if err := s.sendExecTerminal(stream, state, terminal); err != nil {
 		reportRunnerAsyncError(asyncErrors, err)
 	}
 }
@@ -809,7 +810,6 @@ func (s *RunnerProtocolService) executeBufferedOperation(
 	asyncErrors chan<- error,
 ) {
 	defer s.setActiveOperation(state.fence.AssignmentId, state.operationID, false)
-	ctx, finishAttributedExec := s.beginAttributedExec(ctx, state.fence, open.DeadlineUnixMs)
 	result, err := s.dataPlaneBackend.ExecuteBuffered(
 		ctx, cloneRunnerFence(state.fence), proto.Clone(open).(*runnerprotocol.ExecOpen),
 	)
@@ -840,12 +840,7 @@ func (s *RunnerProtocolService) executeBufferedOperation(
 			true, "runner buffered execution returned no terminal outcome",
 		)
 	}
-	stopErr := finishAttributedExec()
-	if stopErr != nil {
-		result.Terminal = runnerInfrastructureTerminal(runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
-			runnerprotocol.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_EXECUTION_NODE, false, "attributed execution termination is unconfirmed")
-	}
-	if err := errors.Join(stopErr, s.sendExecBufferedResult(stream, state, result)); err != nil {
+	if err := s.sendExecBufferedResult(stream, state, result); err != nil {
 		reportRunnerAsyncError(asyncErrors, err)
 	}
 }

@@ -47,11 +47,11 @@ Select any explicit combination of `agent-compartment`, `durable-coding`, and `a
 
 For attributed execution, select an `agent-compartment` revision that declares
 `attributedExecution`, and configure its gateway's `attributed_socket` on the
-Runner host. Existing Sandboxes retain their pinned revision; an attributed generation resolves the numeric connection grant from the current Profile head on its next Assignment. Read the actual
+Runner host. Every Runner hosting such Sandboxes needs that route in the pinned context: an Assignment without it fails, and a home Runner without attributed routing cannot start them. Existing Sandboxes retain their pinned revision; each Assignment resolves the numeric connection grant from the current Profile head. Read the actual
 revision and spec digest from the selected release's standard bundle rather
 than deriving revision numbers from a version. The isolated Profile has no
 attributed permission. Read the public API and Runner protocol windows from the selected manifest
-(v0.18.0 uses version 1 and `[5,5]`). Attributed execution also requires the advertised `attributed-execution`
+(v0.18.0 uses version 1 and `[5,5]`; per-exec attribution requires `[6,6]`). Permitting Profiles also require the advertised `per-exec-attribution`
 capability. See [Profiles and authorization](../design/profiles-and-authorization.md).
 
 After readiness, log in with the platform token, create each Tenant and its tenant-controller authority, log in with the returned controller token, then create the Subject and application authority. Capture each bearer token from its successful creation response; it cannot be retrieved later. The source-free CLI sequence is documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). The repository scenario harness uses this same sequence and creates a separate application authority for the optional `sandbox:ports:direct` grant.
@@ -72,7 +72,7 @@ After publication, record the stable release and artifact-manifest URLs, the `SH
 Deploy a control plane and client with the delegated Subject connection contract,
 then explicitly apply the updated standard `agent-compartment` bundle. Its appended
 revision grants default 128 and ceiling 4096. Code deployment alone cannot raise an
-operator-owned grant. Existing attributed Sandboxes, including old two-connection
+operator-owned grant. Existing Sandboxes on permitting revisions, including old two-connection
 pins, adopt the new numeric default on their next Assignment without recreation;
 their pinned gateway and all other authority remain unchanged. Active Assignments
 retain their admitted limit. The existing runner protocol already transports the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -12,11 +13,128 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 )
 
-func TestNFTablesExecutionListenerPolicy(t *testing.T) {
-	compiled, err := networkpolicy.CompileExecutionListener(netip.MustParseAddrPort("198.18.43.1:41000"), networkpolicy.CompileOptions{
-		MaximumPins: 1, MaximumTTL: time.Second,
-		RunnerGateways: map[string]netip.Addr{"ordinary.internal": netip.MustParseAddr("10.0.0.2")},
+// An attributed exec listener joins the ordinary Instance policy only for its
+// window; ordinary DNS, gateways, and pins remain, and every other re-render
+// keeps the live listeners.
+func TestNFTablesExecutionListenerWindow(t *testing.T) {
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode: networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{
+			{Protocol: networkpolicy.ProtocolHTTPS, Domain: "ordinary.internal", Port: 443},
+			{Protocol: networkpolicy.ProtocolHTTPS, Domain: "api.example.com", Port: 443},
+		},
+	}, networkpolicy.CompileOptions{
+		MaximumPins: 2, MaximumTTL: time.Minute,
+		RunnerAddresses: []netip.Addr{netip.MustParseAddr("198.18.43.1")},
+		RunnerGateways:  map[string]netip.Addr{"ordinary.internal": netip.MustParseAddr("198.18.43.1")},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var script string
+	var failNext bool
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		run: func(_ context.Context, _ string, _ []string, stdin string) ([]byte, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if failNext {
+				failNext = false
+				return []byte("injected nft failure"), errors.New("exit status 1")
+			}
+			script = stdin
+			return nil, nil
+		},
+		nftPath: "/usr/sbin/nft",
+	}
+	failures := make(chan error, 1)
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "execution-test", TapName: "sbtap1", GuestIP: "198.18.43.2",
+		DNSAddress: netip.MustParseAddr("198.18.43.1"), Policy: compiled,
+		OnFailure: func(err error) { failures <- err },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return script
+	}
+	first, second := netip.MustParseAddrPort("198.18.43.1:41000"), netip.MustParseAddrPort("198.18.43.1:41001")
+	allow := func(listener netip.AddrPort) string {
+		return "ip daddr 198.18.43.1 tcp dport " + strconv.Itoa(int(listener.Port())) + " ct mark set 0x53425801 accept"
+	}
+	if strings.Contains(current(), "dport 41000") {
+		t.Fatalf("ordinary Instance policy admits an execution listener:\n%s", current())
+	}
+	for _, listener := range []netip.AddrPort{first, second} {
+		if err := enforcer.AllowExecutionListener(context.Background(), "execution-test", listener); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rendered := current()
+	if !strings.HasPrefix(rendered, "delete table bridge ") || strings.Count(rendered, allow(first)) != 1 || strings.Count(rendered, allow(second)) != 1 ||
+		strings.Index(rendered, allow(first)) > strings.Index(rendered, "ip daddr 198.18.43.1/32 drop") {
+		t.Fatalf("execution listeners must replace the table and precede protected drops:\n%s", rendered)
+	}
+	for _, retained := range []string{"dport 53 ", "tcp dport 443 ct mark", "arp daddr ip 198.18.43.1 accept"} {
+		if !strings.Contains(rendered, retained) {
+			t.Fatalf("attributed window removed ordinary authority %q:\n%s", retained, rendered)
+		}
+	}
+	if err := enforcer.ObserveDNSAnswer(context.Background(), "198.18.43.2", "api.example.com.",
+		[]netip.Addr{netip.MustParseAddr("93.184.216.34")}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if rendered := current(); !strings.Contains(rendered, "93.184.216.34") || !strings.Contains(rendered, allow(first)) {
+		t.Fatalf("DNS pin update dropped a live execution listener:\n%s", rendered)
+	}
+	if err := enforcer.RevokeExecutionListener(context.Background(), "execution-test", first); err != nil {
+		t.Fatal(err)
+	}
+	if rendered := current(); strings.Contains(rendered, allow(first)) || !strings.Contains(rendered, allow(second)) || !strings.Contains(rendered, "93.184.216.34") {
+		t.Fatalf("revocation must remove only its own listener:\n%s", rendered)
+	}
+
+	mu.Lock()
+	failNext = true
+	mu.Unlock()
+	third := netip.MustParseAddrPort("198.18.43.1:41002")
+	if err := enforcer.AllowExecutionListener(context.Background(), "execution-test", third); err == nil {
+		t.Fatal("failed listener admission reported success")
+	}
+	select {
+	case err := <-failures:
+		t.Fatalf("failed admission kept the previous table yet terminated the Instance: %v", err)
+	default:
+	}
+	mu.Lock()
+	failNext = true
+	mu.Unlock()
+	if err := enforcer.RevokeExecutionListener(context.Background(), "execution-test", second); err == nil {
+		t.Fatal("failed listener revocation reported success")
+	}
+	select {
+	case err := <-failures:
+		if !strings.Contains(err.Error(), "attributed exec listener") {
+			t.Fatalf("revocation failure = %v", err)
+		}
+	default:
+		t.Fatal("a failed revocation did not report unprovable enforcement")
+	}
+	if err := enforcer.Remove(context.Background(), "execution-test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := enforcer.RevokeExecutionListener(context.Background(), "execution-test", second); err != nil {
+		t.Fatalf("revocation after policy removal = %v", err)
+	}
+	if err := enforcer.AllowExecutionListener(context.Background(), "execution-test", second); err == nil {
+		t.Fatal("listener admitted without an installed Instance policy")
+	}
+}
+
+func TestNFTablesExecutionListenerOpensDenyAllInstance(t *testing.T) {
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,22 +147,16 @@ func TestNFTablesExecutionListenerPolicy(t *testing.T) {
 		nftPath: "/usr/sbin/nft",
 	}
 	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
-		InstanceID: "execution-test", TapName: "sbtap1", GuestIP: "198.18.43.2",
+		InstanceID: "deny-all", TapName: "sbtap2", GuestIP: "198.18.43.3",
 		DNSAddress: netip.MustParseAddr("198.18.43.1"), Policy: compiled,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	allow := "ip daddr 198.18.43.1 tcp dport 41000 ct mark set 0x53425801 accept"
-	if strings.Count(script, allow) != 1 || strings.Index(script, allow) > strings.Index(script, "ip daddr 198.18.0.0/15 drop") {
-		t.Fatalf("private endpoint must precede protected drops:\n%s", script)
+	if err := enforcer.AllowExecutionListener(context.Background(), "deny-all", netip.MustParseAddrPort("198.18.43.1:41000")); err != nil {
+		t.Fatal(err)
 	}
-	for _, arp := range []string{"arp daddr ip 198.18.43.1 accept", "arp saddr ip 198.18.43.1 accept"} {
-		if !strings.Contains(script, arp) {
-			t.Fatalf("private endpoint ARP missing:\n%s", script)
-		}
-	}
-	if strings.Contains(script, "dport 53 ") || strings.Contains(script, "daddr 10.0.0.2 ") {
-		t.Fatalf("private execution policy inherited DNS or ordinary gateway:\n%s", script)
+	if !strings.Contains(script, "ip daddr 198.18.43.1 tcp dport 41000 ct mark set 0x53425801 accept") || strings.Contains(script, "dport 53 ") {
+		t.Fatalf("deny-all Instance window:\n%s", script)
 	}
 }
 
@@ -683,5 +795,48 @@ func TestNFTablesNetworkPolicyExpiryFailureCallbackCanRemovePolicy(t *testing.T)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expiry failure callback deadlocked while removing policy")
+	}
+}
+
+// Teardown fences listener admission before it sweeps live listeners, so a
+// window that starts during teardown cannot enter the Instance policy.
+func TestNFTablesExecutionListenerFenceRefusesLaterWindows(t *testing.T) {
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var script string
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		run: func(_ context.Context, _ string, _ []string, stdin string) ([]byte, error) {
+			script = stdin
+			return nil, nil
+		},
+		nftPath: "/usr/sbin/nft",
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "fenced", TapName: "sbtap3", GuestIP: "198.18.43.4",
+		DNSAddress: netip.MustParseAddr("198.18.43.1"), Policy: compiled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admitted, late := netip.MustParseAddrPort("198.18.43.1:41000"), netip.MustParseAddrPort("198.18.43.1:41001")
+	if err := enforcer.AllowExecutionListener(context.Background(), "fenced", admitted); err != nil {
+		t.Fatal(err)
+	}
+	if err := enforcer.ExecutionListenerAdmission("fenced"); err != nil {
+		t.Fatal(err)
+	}
+	enforcer.FenceExecutionListeners("fenced")
+	if err := enforcer.ExecutionListenerAdmission("fenced"); err == nil {
+		t.Fatal("a fenced Instance still admits forwarder startup")
+	}
+	if err := enforcer.AllowExecutionListener(context.Background(), "fenced", late); err == nil {
+		t.Fatal("a fenced Instance admitted a new listener")
+	}
+	if err := enforcer.RevokeExecutionListener(context.Background(), "fenced", admitted); err != nil {
+		t.Fatalf("revoking an admitted listener after the fence = %v", err)
+	}
+	if strings.Contains(script, "dport 41000") || strings.Contains(script, "dport 41001") {
+		t.Fatalf("fenced Instance policy still admits a listener:\n%s", script)
 	}
 }

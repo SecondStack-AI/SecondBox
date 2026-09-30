@@ -66,7 +66,7 @@ not imply every use of that error code will resolve automatically. Once DELETE
 returns `202`, poll its Operation; an identical accepted request replays that
 Operation even after the Sandbox revision advances.
 
-Start accepts an optional `attributedExecution` body member with `authorizationRef` and `expiresAt`. Omission requests ordinary execution; explicit null or malformed attribution is invalid. The binding participates in idempotency, so reusing a key with a different command reference conflicts. Profile policy supplies routing and bounds, and an unsupported home Runner refuses admission. The Go SDK accepts `StartSandboxRequest` before `LifecycleOptions`; the TypeScript start options include the same optional member.
+Start accepts an optional `image` body member. The Go SDK accepts `StartSandboxRequest` before `LifecycleOptions`; the TypeScript start options include the same optional member.
 
 `get` and `list` return durable projections. `inspect` returns the latest generation-fenced guest heartbeat and active-session evidence persisted by the runner path; it does not renew activity or synthesize a fresh observation while no synchronous runner-effect broker exists. `ping` reports that same persisted guest liveness without touch. `touch` explicitly renews useful activity for the current generation and may carry a Lease. `drain` rejects new work immediately, waits only through the profile grace, and then allows stop to fence remaining work. `stop` removes compute without deleting the Sandbox or workspace. `delete` never occurs on connection loss.
 
@@ -83,6 +83,8 @@ Buffered execution uses a discriminated request:
 
 Both forms accept bounded cwd, environment, stdin, deadline, and output limits. Environment augments the profile-defined guest environment and cannot replace protected variables. Non-zero guest exit is an `exited` result.
 
+Buffered and streaming exec requests accept an optional `attributedExecution` member with `authorizationRef` and `expiresAt`; terminals do not. Omission requests ordinary execution; explicit null or malformed attribution is invalid. Admission requires `sandbox:exec` and the Profile grant, a pinned Profile that permits attributed execution, a pinned Tenant egress context, an `expiresAt` later than now and within the Profile's `execution.maximumDeadlineMilliseconds`, an exec deadline that ends at or before `expiresAt`, and a home Runner that advertises `per-exec-attribution`; the last refusal is `503 home_runner_unavailable`. The session persists the binding, which participates in idempotency, so reusing a key with a different binding conflicts. An attributed exec stream always uses the proxied transport. See [Networking and ports](networking-and-ports.md#attributed-execution).
+
 Terminal outcomes are a closed union: `exited`, `spawn_failed`, `deadline_exceeded`, `cancelled`, `output_exhausted`, and `infrastructure_failed`. Spawn failure further distinguishes executable not found, permission denied, invalid cwd, and malformed executable. Service outcomes are never synthetic exit codes.
 
 Streaming exec creates a durable, generation-fenced session and returns an
@@ -93,9 +95,9 @@ bytes; an empty payload is valid only for EOF, and later stdin is rejected.
 Input, credit, cancellation, output, and the terminal outcome flow through a
 bounded live stream. PostgreSQL retains session lifecycle, accounting, and
 terminal state, not payload frames. Exec output has no durable reconnect replay.
-Disconnect cancels the command; ordinary execution leaves the Sandbox intact,
-while an attributed generation retires its Instance. If the output limit is
-reached after bytes were emitted, those bytes precede `output_exhausted`.
+Disconnect cancels the command and leaves the Sandbox intact; an attributed
+exec's window closes with it. If the output limit is reached after bytes were
+emitted, those bytes precede `output_exhausted`.
 
 PTY creation pins the current tenant, subject, Sandbox generation, ready Assignment fence, active Lease, and ProfileRevision policy into one stable Terminal session ID. The returned endpoint accepts only authenticated `secondbox.terminal.v1` WebSocket upgrades for the same generation, and PostgreSQL grants only one active attachment. Client text frames are exactly one canonical-base64 `terminal_input`, positive `credit`, bounded `resize`, or `cancel` with one gap-free sequence shared across reconnects. The descriptor's `nextClientSequence` comes from the durable session producer-sequence projection. The Runner retains output and the single terminal outcome in a per-session in-memory replay ring bounded by the pinned stream window; a reconnect supplies its last acknowledged output sequence and receives exactly the later frames. A cursor older than the ring fails explicitly. The ring does not survive a Runner restart, which also terminates the microVM and leaves no useful PTY to reattach. Output cannot exceed credit, the pinned outstanding window, or the pinned response limit.
 

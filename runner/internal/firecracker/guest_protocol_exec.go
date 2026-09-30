@@ -7,9 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
-	"time"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"google.golang.org/protobuf/proto"
@@ -79,10 +79,17 @@ type GuestExecControl struct {
 }
 
 // ExecuteStreaming performs one bounded exec over the retained assignment-bound guest stream.
+// ExecutionGatewayOpener opens an attributed exec's window once the exec owns
+// the guest session. It returns the exec context, which the window cancels
+// when its forwarder fails, and the window's listener.
+type ExecutionGatewayOpener func(context.Context) (context.Context, netip.AddrPort, error)
+
+// openExecutionGateway is nil for an ordinary exec.
 func (s *GuestProtocolSession) ExecuteStreaming(
 	ctx context.Context,
 	assignmentID string,
 	request *guestv1.ExecRequest,
+	openExecutionGateway ExecutionGatewayOpener,
 	controls <-chan GuestExecControl,
 	emit func(guestv1.ExecOutputChannel, []byte) error,
 ) (result BufferedGuestExecResult, resultErr error) {
@@ -100,14 +107,19 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 	}
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
-	if s.attributedExecution != nil && request.Pty != nil {
-		return BufferedGuestExecResult{}, fmt.Errorf("attributed execution forbids PTY exec")
+	var executionGateway netip.AddrPort
+	if openExecutionGateway != nil {
+		if request.Pty != nil {
+			return BufferedGuestExecResult{}, fmt.Errorf("attributed execution does not admit a PTY")
+		}
+		var err error
+		ctx, executionGateway, err = openExecutionGateway(ctx)
+		if err != nil {
+			return BufferedGuestExecResult{}, err
+		}
 	}
-	request, err := s.prepareReservedGuestEnvironment(request)
+	request, err := s.prepareReservedGuestEnvironment(request, executionGateway)
 	if err != nil {
-		return BufferedGuestExecResult{}, err
-	}
-	if err := s.attributedExecution.AdmitExec(assignmentID, time.UnixMilli(int64(request.DeadlineUnixMs))); err != nil {
 		return BufferedGuestExecResult{}, err
 	}
 
@@ -239,6 +251,7 @@ func (s *GuestProtocolSession) ExecuteBuffered(
 	ctx context.Context,
 	assignmentID string,
 	request *guestv1.ExecRequest,
+	openExecutionGateway ExecutionGatewayOpener,
 ) (BufferedGuestExecResult, error) {
 	request = cloneGuestExecRequest(request)
 	request.Streaming = false
@@ -251,6 +264,7 @@ func (s *GuestProtocolSession) ExecuteBuffered(
 		ctx,
 		assignmentID,
 		request,
+		openExecutionGateway,
 		controls,
 		func(channel guestv1.ExecOutputChannel, data []byte) error {
 			switch channel {

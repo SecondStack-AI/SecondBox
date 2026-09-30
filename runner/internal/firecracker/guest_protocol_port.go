@@ -178,9 +178,6 @@ func newGuestPortConnection(
 func (session *GuestProtocolSession) openPortProtocolStream(
 	ctx context.Context,
 ) (guestv1.GuestAgent_ConnectClient, *guestv1.ConnectionBinding, error) {
-	if session.attributedExecution != nil {
-		return nil, nil, fmt.Errorf("attributed execution forbids ports")
-	}
 	nonce := make([]byte, guestConnectionNonceByteCount)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, nil, fmt.Errorf("create guest Port connection nonce: %w", err)

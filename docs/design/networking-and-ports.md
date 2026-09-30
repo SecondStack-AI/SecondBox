@@ -21,10 +21,6 @@ policy, not a DNS record: the proxy does not synthesize guest answers for the
 logical domain. Network-enabled production deployments must provide and qualify
 their own upstream resolution and gateway reachability.
 
-## Attributed command forwarding
-
-An attributed generation has its own TCP listener. The Runner sends its immutable execution identity to the configured Unix gateway before forwarding guest bytes. A peer reset, broken pipe, or close after a completed response ends only that connection; other requests retain the same authority. Gateway connection or identity-preface failure, listener failure, cancellation, and expiry still terminate forwarding and retire the generation. Ordinary stream closure does not authorize a replacement transport or bypass the gateway.
-
 ## Backend topologies
 
 The Firecracker backend implements the outbound contract with per-TAP bridge-family firewall
@@ -45,15 +41,16 @@ and startup reconciliation sweeps any profile-scoped leftovers, including orphan
 tables. DNS pinning, protected-destination precedence, and the deny-all default are identical
 across both backends.
 
-At its admitted connection limit, the forwarder closes newly accepted sockets before
-connecting to the gateway or sending bytes. Clients can observe an immediate EOF.
-This finite safety bound counts open TCP streams, including idle persistent streams;
-it does not parse HTTP requests or produce HTTP status codes. The first capacity
-refusal per generation emits a bounded diagnostic. Existing relays remain usable and
-release their slots when closed. Subject policy changes apply only to the next
-Assignment; see [connection policy](configurable-limits.md#attributed-connection-policy).
+At its admitted connection limit, an exec's forwarder closes newly accepted sockets
+before connecting to the gateway or sending bytes. Clients can observe an immediate
+EOF. This finite safety bound counts open TCP streams, including idle persistent
+streams; it does not parse HTTP requests or produce HTTP status codes. The first
+capacity refusal per exec emits a bounded diagnostic. Existing relays remain usable
+and release their slots when closed. The limit comes from the Assignment, so Subject
+policy changes apply only to the next Assignment; see
+[connection policy](configurable-limits.md#attributed-connection-policy).
 
-## Tenant contexts and attributed execution
+## Tenant contexts
 
 A network-enabled Profile requires a Tenant egress context. Sandbox creation
 pins that logical context; admission requires its exact name among the home
@@ -74,22 +71,57 @@ endpoints are routing information only, so application wrappers still choose
 the proxy variables and the HTTP semantics, and the application host no longer
 carries a Runner-host address in its own deployment configuration.
 
-An attributed generation uses a separate path. The immutable Profile permits
-one named gateway, and the Runner resolves its operator-configured Unix socket
-inside the pinned context. Firecracker and gVisor forward admitted connections
-through generation-owned listeners and prepend `SBXATTR1` attribution derived
-from the assignment. Guest headers and source addresses are not identity
-claims. The receiving gateway must authenticate the Unix peer before accepting
-the preface. Ordinary gateway routing is not a fallback for attributed traffic,
-so an attributed generation resolves no logical gateway and receives only
-`SECONDBOX_EXECUTION_GATEWAY`.
+## Attributed execution
 
-One attributed generation admits exactly one exec and its descendants. It
-rejects PTYs, Ports, writes through the file API, and another exec. Completion,
-expiry, cancellation, or connection loss retires its compute; the Runner closes
-listeners and active relays before releasing network resources. Only the
-Workspace carries forward. See [Profiles and authorization](profiles-and-authorization.md)
-and the [gateway deployment contract](../operations/deployment.md).
+Attribution belongs to one exec inside an ordinary, long-lived generation. The
+immutable Profile permits one named gateway. Every Assignment of such a Profile
+carries that gateway and its connection limit, and the Runner resolves the
+operator-configured Unix socket inside the pinned context when the Assignment
+starts; an unresolvable route fails the Assignment. The Assignment carries no
+execution identity, and its generation keeps its ordinary network policy, Runner
+gateways, PTYs, Ports, and file writes.
+
+A buffered or streaming exec admitted with `attributedExecution` opens a window.
+Firecracker and gVisor bind a new listener on an ephemeral port of the Runner side
+of the Instance interface: the bridge address for Firecracker and the host veth
+address for gVisor. The listener's own nftables table admits only that Instance's
+interface and guest address and refuses host-local clients. The Runner then
+atomically replaces the Instance policy table with one that also admits the
+listener, in the same way it applies DNS pin updates, and injects
+`SECONDBOX_EXECUTION_GATEWAY=<address:port>` into that exec's environment only.
+Callers still cannot supply this reserved name. Each accepted connection receives
+an `SBXATTR1` preface derived from the frame fence and the admitted binding:
+Tenant, Subject, Sandbox, Instance, Assignment, generation, authorization
+reference, and expiry. Guest headers and source addresses are not identity claims,
+and the receiving gateway must authenticate the Unix peer before it accepts the
+preface.
+
+Execs, terminals, and file operations on one Instance share its guest session
+and run one at a time. The Runner opens an attributed exec's window only when the
+exec takes the session, so a queued exec holds no listener. The window closes when the exec ends, is
+cancelled, reaches its deadline or `expiresAt`, or loses its control-plane
+connection, even if the guest has not yet returned the exec, and when its
+Instance is torn down. Closing revokes the listener and its active relays, then
+removes the listener from the Instance policy and deletes its listener table.
+Instance teardown first refuses new listeners for the Instance, then closes
+every live listener on its interface before it deletes their tables. The Instance
+keeps running. A gateway connection or identity-preface failure, or a listener
+failure, cancels the exec and reports a Runner failure. If the Runner cannot
+prove that the rule was removed, it terminates the Instance, as for any failed
+policy update. A peer reset, broken pipe, or close after a completed response
+ends only that connection. Listener tables are named per exec under a prefix of
+the Instance interface, so Instance teardown and Runner startup sweep every
+remaining table for a reclaimed interface.
+
+Any process in the Instance can reach an open window's listener, including a
+daemon started by an earlier exec, and its traffic carries that exec's identity.
+This is an accepted residual risk: the guest never holds real credentials, and
+the gateway and Integrations authorize each credentialed request. The attributed
+exec also keeps its generation's ordinary routes, including
+`SECONDBOX_RUNNER_GATEWAYS`; Integrations deny credential selectors on traffic
+that arrives without attribution. See [Threat model](threat-model.md),
+[Profiles and authorization](profiles-and-authorization.md), and the
+[gateway deployment contract](../operations/deployment.md).
 
 ## DNS
 

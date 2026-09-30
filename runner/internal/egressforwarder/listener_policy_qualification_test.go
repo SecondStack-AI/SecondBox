@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,9 +50,11 @@ func TestMain(m *testing.M) {
 }
 
 func TestExecutionListenerRecoveryKeepsOtherInterfaces(t *testing.T) {
-	for _, name := range []string{"ownedtap", "othertap"} {
-		policy := ExecutionListenerPolicy{InstanceID: name, GuestInterface: name, BridgeInterface: "execbr",
-			GuestAddress: netip.MustParseAddr("10.0.0.2"), ListenerAddress: netip.MustParseAddrPort("10.0.0.1:41000")}
+	type listener struct{ guestInterface, listenerID string }
+	listeners := []listener{{"ownedtap", "0000000000000001"}, {"ownedtap", "0000000000000002"}, {"othertap", "0000000000000003"}}
+	for _, owned := range listeners {
+		policy := ExecutionListenerPolicy{InstanceID: owned.guestInterface, GuestInterface: owned.guestInterface, BridgeInterface: "execbr",
+			GuestAddress: netip.MustParseAddr("10.0.0.2"), ListenerAddress: netip.MustParseAddrPort("10.0.0.1:41000"), ListenerID: owned.listenerID}
 		rules, err := RenderExecutionListenerPolicy(policy)
 		if err != nil {
 			t.Fatal(err)
@@ -59,7 +63,7 @@ func TestExecutionListenerRecoveryKeepsOtherInterfaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			if err := RemoveExecutionListenerRules(context.Background(), "/usr/sbin/nft", []string{name}); err != nil {
+			if err := RemoveExecutionListenerRules(context.Background(), "/usr/sbin/nft", []string{owned.guestInterface}); err != nil {
 				t.Error(err)
 			}
 		})
@@ -70,7 +74,8 @@ func TestExecutionListenerRecoveryKeepsOtherInterfaces(t *testing.T) {
 		}
 	}
 	output, err := exec.Command("nft", "list", "tables").CombinedOutput()
-	if err != nil || strings.Contains(string(output), executionListenerTable("ownedtap")) || strings.Count(string(output), executionListenerTable("othertap")) != 2 {
+	if err != nil || strings.Contains(string(output), executionListenerTablePrefix("ownedtap")) ||
+		strings.Count(string(output), executionListenerTable("othertap", "0000000000000003")) != 2 {
 		t.Fatalf("interface-scoped listener recovery: %v: %s", err, output)
 	}
 }
@@ -104,7 +109,7 @@ func TestExecutionListenerFirewallQualification(t *testing.T) {
 				command("ip", "-n", namespace, "link", "set", "attrg"+suffix, "up")
 				command("ip", "-n", namespace, "link", "set", "lo", "up")
 			}
-			policy := ExecutionListenerPolicy{InstanceID: t.Name(), GuestInterface: "attrha", GuestAddress: netip.MustParseAddr("10.73.1.2")}
+			policy := ExecutionListenerPolicy{InstanceID: t.Name(), GuestInterface: "attrha", GuestAddress: netip.MustParseAddr("10.73.1.2"), ListenerID: "00000000000000aa"}
 			if bridged {
 				policy.BridgeInterface = "attrbr"
 				command("ip", "link", "add", "attrbr", "type", "bridge")
@@ -176,9 +181,9 @@ func TestExecutionListenerFirewallQualification(t *testing.T) {
 			}
 			installed := true
 			removePolicy := func() {
-				command("nft", "delete", "table", "inet", executionListenerTable(policy.GuestInterface))
+				command("nft", "delete", "table", "inet", executionListenerTable(policy.GuestInterface, policy.ListenerID))
 				if bridged {
-					command("nft", "delete", "table", "bridge", executionListenerTable(policy.GuestInterface))
+					command("nft", "delete", "table", "bridge", executionListenerTable(policy.GuestInterface, policy.ListenerID))
 				}
 				installed = false
 			}
@@ -268,7 +273,7 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	}()
 	t.Cleanup(func() { gateway.Close(); <-gatewayDone })
 	policy.ListenerAddress = netip.AddrPortFrom(policy.ListenerAddress.Addr(), 0)
-	config := ExecutionForwarderConfig{NFTPath: "/usr/sbin/nft", GatewaySocket: gateway.Addr().String(), Policy: policy, Attribution: attribution, MaximumConnections: 2}
+	config := ExecutionForwarderConfig{NFTPath: "/usr/sbin/nft", GatewaySocket: gateway.Addr().String(), Policy: policy, Attribution: attribution, MaximumConnections: 2, Admission: func() error { return nil }}
 	marker := filepath.Join(directory, "installed")
 	failingNFT := filepath.Join(directory, "nft-fail-after-install")
 	script := "#!/bin/sh\nif [ \"$1\" = \"-f\" ] && [ ! -e \"" + marker + "\" ]; then\n/usr/sbin/nft \"$@\" || exit $?\n: > \"" + marker + "\"\nexit 42\nfi\nexec /usr/sbin/nft \"$@\"\n"
@@ -280,12 +285,149 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	if forwarder, err := StartExecutionForwarder(t.Context(), failedConfig); err == nil || forwarder != nil {
 		t.Fatal("startup succeeded after firewall command failure")
 	}
-	if output, err := exec.Command("nft", "list", "table", "inet", executionListenerTable(policy.GuestInterface)).CombinedOutput(); err == nil || !strings.Contains(string(output), "No such file") {
+	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
 		t.Fatalf("failed startup leaked firewall rules: %v: %s", err, output)
 	}
+	// A startup paused before the sweep lock while teardown fences the
+	// Instance and sweeps its interface installs nothing once it resumes.
+	var fenced atomic.Bool
+	fencedConfig := config
+	fencedConfig.Attribution.ExpiresAt = time.Now().UTC().Add(10 * time.Second).Truncate(time.Millisecond)
+	fencedConfig.Admission = func() error {
+		if fenced.Load() {
+			return errors.New("instance fenced")
+		}
+		return nil
+	}
+	paused, resume := make(chan struct{}), make(chan struct{})
+	var resumeOnce sync.Once
+	resumeStartup := func() { resumeOnce.Do(func() { close(resume) }) }
+	executionListenerStartupHook = func() {
+		close(paused)
+		<-resume
+	}
+	fencedStartup, fencedDone := make(chan error, 1), make(chan struct{})
+	t.Cleanup(func() {
+		resumeStartup()
+		<-fencedDone
+		executionListenerStartupHook = nil
+	})
+	go func() {
+		defer close(fencedDone)
+		forwarder, err := StartExecutionForwarder(t.Context(), fencedConfig)
+		if forwarder != nil {
+			err = errors.Join(errors.New("fenced startup returned a forwarder"), forwarder.Close(context.Background()))
+		}
+		fencedStartup <- err
+	}()
+	select {
+	case <-paused:
+	case err := <-fencedStartup:
+		t.Fatalf("startup ended before the sweep lock: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("startup never reached the sweep lock")
+	}
+	executionListenerStartupHook = nil
+	fenced.Store(true)
+	if err := RemoveExecutionListenerRules(t.Context(), config.NFTPath, []string{policy.GuestInterface}); err != nil {
+		t.Fatal(err)
+	}
+	resumeStartup()
+	if err := <-fencedStartup; err == nil || !strings.Contains(err.Error(), "instance fenced") {
+		t.Fatalf("startup after the teardown fence = %v", err)
+	}
+	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
+		t.Fatalf("fenced startup installed firewall rules: %v: %s", err, output)
+	}
+	// Admission runs while the startup holds the sweep lock, so a teardown
+	// that fences during admission waits for the startup and then revokes it.
+	admitted, release := make(chan bool, 1), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAdmission := func() { releaseOnce.Do(func() { close(release) }) }
+	overlapConfig := config
+	overlapConfig.Attribution.ExpiresAt = time.Now().UTC().Add(10 * time.Second).Truncate(time.Millisecond)
+	overlapConfig.Admission = func() error {
+		locked := !executionListenerTablesMu.TryLock()
+		if !locked {
+			executionListenerTablesMu.Unlock()
+		}
+		admitted <- locked
+		<-release
+		return nil
+	}
+	type startup struct {
+		forwarder *ExecutionForwarder
+		err       error
+	}
+	overlapStartup, overlapDone := make(chan startup, 1), make(chan struct{})
+	var overlapForwarder *ExecutionForwarder
+	t.Cleanup(func() {
+		releaseAdmission()
+		<-overlapDone
+		if overlapForwarder != nil {
+			if err := overlapForwarder.Close(context.Background()); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	go func() {
+		defer close(overlapDone)
+		forwarder, err := StartExecutionForwarder(t.Context(), overlapConfig)
+		overlapForwarder = forwarder
+		overlapStartup <- startup{forwarder, err}
+	}()
+	select {
+	case locked := <-admitted:
+		if !locked {
+			t.Fatal("forwarder admission ran outside the sweep lock")
+		}
+	case failed := <-overlapStartup:
+		t.Fatalf("startup ended before admission: %v", failed.err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("startup never reached admission")
+	}
+	overlapSweep := make(chan error, 1)
+	go func() {
+		overlapSweep <- RemoveExecutionListenerRules(t.Context(), config.NFTPath, []string{policy.GuestInterface})
+	}()
+	releaseAdmission()
+	overlapped := <-overlapStartup
+	if overlapped.err != nil {
+		t.Fatal(overlapped.err)
+	}
+	if err := <-overlapSweep; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-overlapped.forwarder.Done():
+	default:
+		t.Fatal("teardown sweep left an admitted forwarder running")
+	}
+	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
+		t.Fatalf("teardown sweep left an admitted forwarder's rules: %v: %s", err, output)
+	}
+	if err := overlapped.forwarder.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling exec window on the same interface keeps its own listener
+	// table when this window closes.
+	sibling, err := StartExecutionForwarder(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := sibling.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
 	forwarder, err := StartExecutionForwarder(t.Context(), config)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if forwarder.policy.ListenerID == sibling.policy.ListenerID || forwarder.ListenerAddress() == sibling.ListenerAddress() {
+		t.Fatalf("exec windows share listener identity: %s %s", forwarder.policy.ListenerID, forwarder.ListenerAddress())
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -338,7 +480,25 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 			t.Fatal("gateway relay did not close")
 		}
 	}
-	if output, err := exec.Command("nft", "list", "table", "inet", executionListenerTable(policy.GuestInterface)).CombinedOutput(); err == nil || !strings.Contains(string(output), "No such file") {
+	if output, err := exec.Command("nft", "list", "table", "inet", executionListenerTable(policy.GuestInterface, forwarder.policy.ListenerID)).CombinedOutput(); err == nil || !strings.Contains(string(output), "No such file") {
 		t.Fatalf("listener firewall remained after close: %v: %s", err, output)
+	}
+	if output, err := exec.Command("nft", "list", "table", "inet", executionListenerTable(policy.GuestInterface, sibling.policy.ListenerID)).CombinedOutput(); err != nil {
+		t.Fatalf("closing one exec window removed its sibling's listener firewall: %v: %s", err, output)
+	}
+	probe("attr-a", sibling.ListenerAddress(), true)
+	probe("attr-b", sibling.ListenerAddress(), false)
+	// Instance teardown sweeps the interface: the live listener closes before
+	// the table restricting it is deleted.
+	if err := RemoveExecutionListenerRules(ctx, "/usr/sbin/nft", []string{policy.GuestInterface}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sibling.Wait(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("swept listener outcome: %v", err)
+	}
+	probe("attr-a", sibling.ListenerAddress(), false)
+	probe("", sibling.ListenerAddress(), false)
+	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
+		t.Fatalf("interface sweep left listener tables: %v: %s", err, output)
 	}
 }

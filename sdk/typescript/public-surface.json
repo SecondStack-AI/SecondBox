@@ -124,6 +124,7 @@
       "maximumOutputBytes"
     ],
     "optional": [
+      "attributedExecution",
       "cwd",
       "stdinBase64"
     ]
@@ -962,7 +963,6 @@
   "StartSandboxRequest": {
     "required": [],
     "optional": [
-      "attributedExecution",
       "image"
     ]
   },
@@ -1038,6 +1038,7 @@
       "windowBytes"
     ],
     "optional": [
+      "attributedExecution",
       "cwd"
     ]
   },

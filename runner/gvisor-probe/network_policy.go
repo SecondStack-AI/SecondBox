@@ -388,7 +388,7 @@ func runNetcheck(
 		Cwd:              ".",
 		DeadlineUnixMs:   uint64(time.Now().Add(120 * time.Second).UnixMilli()),
 		OutputLimitBytes: 1 << 20,
-	})
+	}, nil)
 	if err != nil {
 		return nil, err
 	}

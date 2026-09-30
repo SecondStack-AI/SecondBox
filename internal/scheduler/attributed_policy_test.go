@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestAttributedAssignmentNumericPolicy(t *testing.T) {
+func TestAttributedExecutionPermissionNumericPolicy(t *testing.T) {
 	raw := os.Getenv("SECONDBOX_TEST_DATABASE_URL")
 	if raw == "" {
 		t.Skip("SECONDBOX_TEST_DATABASE_URL is required")
@@ -74,7 +74,7 @@ func TestAttributedAssignmentNumericPolicy(t *testing.T) {
 			if _, err := tx.Exec(t.Context(), `INSERT INTO secondbox.profile_revisions(id,profile_name,revision_number,spec_json,created_at) VALUES('pin','profile',1,'{"attributedExecution":{"gateway":"gateway","maximumConnections":2}}',now()),('head','profile',2,$1,now()); INSERT INTO secondbox.profiles(name,state,current_revision_id,revision,created_at,updated_at) VALUES('profile','disabled','head',2,now(),now()); INSERT INTO secondbox.subjects(tenant_ref,ref,state,cleanup_state,cleanup_operation_id,quota_json,metadata_json,sandbox_policy_json,revision,created_at,updated_at) VALUES('tenant','subject','active','none','','{}','{}',$2,1,now(),now())`, pgx.QueryExecModeSimpleProtocol, test.head, selection); err != nil {
 				t.Fatal(err)
 			}
-			command := &runnerv1.AttributedExecution{Gateway: test.gateway, MaximumConnections: 2}
+			command := &runnerv1.AttributedExecutionPermission{Gateway: test.gateway, MaximumConnections: 2}
 			locked := rowlock.SandboxWorkspace{ProfileRevisionID: "pin", TenantRef: "tenant", SubjectRef: "subject"}
 			err = resolveAttributedConnections(t.Context(), tx, locked, command)
 			if test.denied {

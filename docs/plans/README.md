@@ -33,10 +33,11 @@ for supported behavior and commands.
 | [Microsandbox spike](completed/2026-08-13-microsandbox-backend-spike.md) | Merged in #96; dual-platform functional evidence retained, production macOS signing unqualified. |
 | [Customer-shared tenancy](completed/2026-08-25-customer-shared-tenancy.md) | Completed and merged in #100; v0.6.0 clean-install boundary retained. |
 | [gVisor spike](completed/2026-08-25-gvisor-backend-spike.md) | Merged in #99; distribution followed in #117; host and pod evidence retained. |
-| [Attributed execution](completed/2026-09-10-attributed-command-execution.md) | Merged in #123 and corrected in #125; original unchecked experiments are not retroactively certified. |
+| [Attributed execution](completed/2026-09-10-attributed-command-execution.md) | Merged in #123 and corrected in #125; superseded by per-exec attribution. Original unchecked experiments are not retroactively certified. |
 | [Automated qualification and release](completed/2026-09-12-fast-qualification.md) | Completed; Task 5 supersedes the original full-matrix defaults. |
 | [Target Sandbox shape](completed/2026-09-12-target-sandbox-shape.md) | Merged in #126; later qualification records cover the integrated CLI path; deferred features remain deferred. |
 | [Release skill and worklog](completed/2026-09-15-release-skill-and-worklog.md) | Completed and merged in #145; release recovery, note preservation, and project skills. |
+| [Per-exec attribution](completed/2026-09-30-per-exec-attribution.md) | Replaces single-exec attributed generations with per-exec windows in ordinary generations; records the accepted residual risk. |
 
 ## Evidence and removed material
 

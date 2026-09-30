@@ -598,7 +598,7 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 		}
 		apiHandler.mutateSandboxLifecycle(
 			writer, request, sandboxID, action,
-			contracts.MergeExecutionImageMetadata(body.Image, body.AttributedExecution),
+			body.Image.LifecycleMetadata(),
 		)
 	case "drain", "stop":
 		if err := requireEmptyBody(request); err != nil {

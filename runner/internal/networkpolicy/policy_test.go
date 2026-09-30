@@ -536,13 +536,6 @@ func TestLogicalGatewayEndpointsProjectResolvedGatewaysWithoutExecutionListener(
 			t.Fatalf("logical gateway endpoint %d = %#v, want %#v", index, got[index], endpoint)
 		}
 	}
-	listener, err := CompileExecutionListener(netip.MustParseAddrPort("169.254.104.1:41000"), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if endpoints := listener.LogicalGatewayEndpoints(); len(endpoints) != 0 {
-		t.Fatalf("execution listener published logical gateway endpoints: %#v", endpoints)
-	}
 	denyAll, err := Compile(Policy{Mode: ModeDenyAll}, options)
 	if err != nil {
 		t.Fatal(err)

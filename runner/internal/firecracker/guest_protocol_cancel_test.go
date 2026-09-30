@@ -21,7 +21,7 @@ func TestGuestProtocolCancellationSendFailureIsReturned(t *testing.T) {
 				_, err := session.ExecuteBuffered(ctx, "assignment-1", &guestv1.ExecRequest{
 					Command:          &guestv1.ExecRequest_Shell{Shell: "sleep 60"},
 					OutputLimitBytes: 1024,
-				})
+				}, nil)
 				return err
 			},
 		},

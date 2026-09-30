@@ -1,8 +1,8 @@
 # Configurable limits
 
 This contract targets clean initialization and newly created resources.
-The attributed connection limit is the narrow exception: existing attributed Sandboxes
-adopt current numeric policy on their next Assignment. There is no Profile mutation,
+The attributed connection limit is the narrow exception: existing Sandboxes pinned to
+a permitting revision adopt current numeric policy on their next Assignment. There is no Profile mutation,
 workspace resize, or live hardware update.
 See the [deployment transition boundary](../operations/deployment.md#clean-initialization-boundary)
 before changing a deployment that already owns Workspaces.
@@ -74,7 +74,7 @@ Profiles and every Tenant/Subject quota are explicitly operator-selected.
 | `retention.snapshotRetentionSeconds` | seconds | Profile per Snapshot / 3600 | null means no automatic expiry | Snapshot creation and expiry worker | operator / new Sandbox, future Snapshot |
 | `ports[].maximumSessions` | count per named Sandbox port | Profile / no exposed ports | null | admission under Tenant/Subject locks | operator / new Sandbox |
 | `ports[].maximumSessionSeconds` | seconds | Profile / no exposed ports | unsupported: sessions require absolute expiry and renewable bound lease | port admission and runtime authority | operator / new Sandbox |
-| `attributedExecution.maximumConnections` | simultaneous open TCP connections | attributed generation / 128 | no: finite 1–4096 | attributed Runner forwarder | operator default/ceiling, delegated Subject selection / next Assignment |
+| `attributedExecution.maximumConnections` | simultaneous open TCP connections | attributed exec / 128 | no: finite 1–4096 | per-exec Runner forwarder | operator default/ceiling, delegated Subject selection / next Assignment |
 | `quota.maxSandboxes` | durable Sandbox count | Tenant + Subject / explicit | null | create admission; stopped Workspaces retain charge | platform / controller; immediate admission |
 | `quota.maxActiveInstances`, `maxVcpuCount`, `maxMemoryBytes` | count / CPUs / bytes | Tenant + Subject / explicit | null | accepted running intent and Instance admission | platform / controller; immediate admission |
 | `quota.maxSnapshots`, `maxPortSessions`, `maxConcurrentOperations` | count | Tenant + Subject / explicit | null | Snapshot, unexpired port and operation admission | platform / controller; immediate admission |
@@ -129,7 +129,7 @@ The latest standard `agent-compartment` and `agent-compartment-isolated` revisio
 60-second idle shutdown, null maximum runtime, and null delegated lifecycle ceilings.
 Published historical revision identities remain immutable. Existing Sandboxes retain their pinned lifecycle and execution authority. The latest
 `agent-compartment` revision additionally sets attributed connection default 128 and
-ceiling 4096, effective for existing attributed pins on their next Assignment.
+ceiling 4096, effective for existing permitting pins on their next Assignment.
 
 A newly requested finite lifecycle selection above its current Profile ceiling is rejected
 with `profile_policy_ceiling_exceeded`. If an operator subsequently publishes a tighter
@@ -182,8 +182,8 @@ latest standard Agent revision supplies default 128 and ceiling 4096 explicitly.
 Custom Profiles have no implicit 128 floor. These policy bounds are not throughput
 or capacity qualifications.
 
-A new attributed Assignment must retain permission and gateway from its Sandbox's
-pinned revision. Only the numeric grant is read from the current head of the same
+Each new Assignment of a Sandbox whose pinned revision permits attribution retains
+the permission and gateway from that revision. Only the numeric grant is read from the current head of the same
 Profile. If that head no longer permits attribution, the pinned default supplies
 both default and ceiling. One rule then applies: no matching selection uses the
 grant's default; a selection uses the minimum of its value and the grant's ceiling.
@@ -194,6 +194,7 @@ selection of 128 resolves to 2. A non-attributed pin never gains permission.
 Resolution and command persistence share the scheduler's serializable transaction
 and retry mechanism. Replaying an existing Assignment uses its persisted command.
 Changes affect the next Assignment, including a pending start not yet assigned;
-concurrent updates and scheduling may serialize in either order. Policy updates do
-not resize active listeners, terminate connections, or change pinned gateway,
-network, assets, deadlines, lifecycle, resources, or execution authority.
+concurrent updates and scheduling may serialize in either order. Every attributed
+exec in one Assignment uses its limit. Policy updates do not resize active
+listeners, terminate connections, or change pinned gateway, network, assets,
+deadlines, lifecycle, resources, or execution authority.

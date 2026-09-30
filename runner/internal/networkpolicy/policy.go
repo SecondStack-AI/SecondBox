@@ -115,7 +115,6 @@ type CompiledPolicy struct {
 	managementPrefixes []netip.Prefix
 	protectedAddresses map[netip.Addr]struct{}
 	runnerGateways     map[string]netip.Addr
-	executionListener  netip.AddrPort
 
 	mu   sync.Mutex
 	pins map[pinKey]DNSPin
@@ -127,12 +126,6 @@ func (policy *CompiledPolicy) RunnerGatewayDestinations() []RunnerGatewayDestina
 		return nil
 	}
 	result := make([]RunnerGatewayDestination, 0, len(policy.runnerGateways))
-	if policy.executionListener.IsValid() {
-		result = append(result, RunnerGatewayDestination{
-			Destination: Destination{Protocol: ProtocolTCP, Port: policy.executionListener.Port()},
-			Address:     policy.executionListener.Addr(),
-		})
-	}
 	for _, destination := range policy.destinations {
 		address, found := policy.runnerGateways[destination.Domain]
 		if !found {
@@ -155,9 +148,7 @@ type LogicalGatewayEndpoint struct {
 
 // LogicalGatewayEndpoints projects the logical gateways this policy resolved
 // inside the Sandbox's pinned egress context, sorted by logical name then port
-// and free of duplicates. The attributed execution listener carries no logical
-// name and is excluded: the Runner publishes it under its own reserved guest
-// environment name.
+// and free of duplicates.
 func (policy *CompiledPolicy) LogicalGatewayEndpoints() []LogicalGatewayEndpoint {
 	if policy == nil {
 		return nil
@@ -165,9 +156,6 @@ func (policy *CompiledPolicy) LogicalGatewayEndpoints() []LogicalGatewayEndpoint
 	seen := make(map[LogicalGatewayEndpoint]struct{}, len(policy.runnerGateways))
 	endpoints := make([]LogicalGatewayEndpoint, 0, len(policy.runnerGateways))
 	for _, gateway := range policy.RunnerGatewayDestinations() {
-		if gateway.Destination.Domain == "" {
-			continue
-		}
 		endpoint := LogicalGatewayEndpoint{
 			LogicalName: gateway.Destination.Domain,
 			Endpoint:    netip.AddrPortFrom(normalizeAddress(gateway.Address), gateway.Destination.Port),
@@ -447,10 +435,6 @@ func (policy *CompiledPolicy) AuthorizeIP(
 		return Decision{Reason: ReasonPolicyDenyAll}
 	}
 	address = normalizeAddress(address)
-	if protocol == ProtocolTCP && policy.executionListener.IsValid() &&
-		policy.executionListener == netip.AddrPortFrom(address, port) {
-		return Decision{Allowed: true, Reason: ReasonAllowedRunnerGateway}
-	}
 	if policy.isProtected(address) {
 		return Decision{Reason: ReasonProtectedDestination}
 	}
