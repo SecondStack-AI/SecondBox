@@ -575,24 +575,31 @@ func TestScenarioClosedGuestPortFailsOnlyItsPortSession(t *testing.T) {
 	neighbourHandle, _ := createScenarioSandbox(t, fixture, profile, "closed-guest-port-neighbour")
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	ready := waitForSandbox(t, ctx, portHandle, secondboxclient.SandboxStateReady)
+	portSandbox := waitForSandbox(t, ctx, portHandle, secondboxclient.SandboxStateReady)
 	waitForSandbox(t, ctx, neighbourHandle, secondboxclient.SandboxStateReady)
 
-	type neighbourResult struct {
-		outcome secondboxclient.ExecOutcome
-		err     error
+	// The neighbouring Exec announces itself and then waits for stdin, so it is
+	// running on the Runner for the whole PortSession refusal.
+	neighbour := createScenarioExecStream(
+		t, ctx, neighbourHandle,
+		`printf 'neighbour-ready\n'; read line; printf 'neighbour:%s\n' "$line"`,
+		65536, 65536, "closed-guest-port-neighbour",
+	)
+	defer neighbour.Close()
+	if err := neighbour.GrantOutput(65536); err != nil {
+		t.Fatal(err)
 	}
-	neighbour := make(chan neighbourResult, 1)
-	neighbourKey := uniqueScenarioKey(t, "closed-guest-port-neighbour-exec")
-	go func() {
-		outcome, err := neighbourHandle.Execute(
-			ctx, scenarioExecRequest("sleep 6; echo neighbour survived", 4096), neighbourKey, "",
-		)
-		neighbour <- neighbourResult{outcome: outcome, err: err}
-	}()
-	// The neighbouring Exec is admitted and running on the Runner before the
-	// PortSession is refused.
-	time.Sleep(2 * time.Second)
+	var ready string
+	for ready != "neighbour-ready\n" {
+		frame, err := neighbour.Receive()
+		if err != nil || frame.StreamOutputFrame == nil {
+			t.Fatalf("SecondBox scenario neighbouring Exec readiness frame=%#v error=%v output=%q", frame, err, ready)
+		}
+		ready += decodeScenarioOutput(t, frame.StreamOutputFrame.DataBase64)
+		if len(ready) > len("neighbour-ready\n") {
+			t.Fatalf("SecondBox scenario neighbouring Exec readiness output = %q", ready)
+		}
+	}
 
 	lease := acquireScenarioLease(t, ctx, fixture, portHandle, 30, "closed-guest-port-lease")
 	session := createScenarioPortSession(t, ctx, fixture, portHandle, lease.ID, "closed-guest-port-session")
@@ -606,17 +613,19 @@ func TestScenarioClosedGuestPortFailsOnlyItsPortSession(t *testing.T) {
 		t.Fatalf("SecondBox scenario closed guest Port tunnel read payload=%q error=%v", payload, err)
 	}
 	connection.Close()
-	waitForScenarioPortState(t, ctx, fixture, ready.ID, session.ID, contracts.PortSessionStateClosed)
+	waitForScenarioPortState(t, ctx, fixture, portSandbox.ID, session.ID, contracts.PortSessionStateClosed)
 
-	select {
-	case result := <-neighbour:
-		if result.err != nil {
-			t.Fatalf("SecondBox scenario neighbouring Exec failed while a PortSession was refused: %v", result.err)
-		}
-		assertScenarioExited(t, result.outcome, 0, "neighbour survived\n", "")
-	case <-ctx.Done():
-		t.Fatal("SecondBox scenario neighbouring Exec did not finish")
+	if err := neighbour.SendInputFrame([]byte("survived\n"), false); err != nil {
+		t.Fatalf("SecondBox scenario neighbouring Exec input after the PortSession refusal: %v", err)
 	}
+	if err := neighbour.CloseInput(); err != nil {
+		t.Fatal(err)
+	}
+	output, outcome := receiveScenarioExec(t, neighbour)
+	if len(output) != 1 || output[0] != (scenarioStreamOutput{stream: "stdout", data: "neighbour:survived\n"}) {
+		t.Fatalf("SecondBox scenario neighbouring Exec output after the PortSession refusal = %#v", output)
+	}
+	assertScenarioExited(t, outcome, 0, "neighbour-ready\nneighbour:survived\n", "")
 }
 
 func startScenarioNetworkTarget(t *testing.T, address string, response string) {

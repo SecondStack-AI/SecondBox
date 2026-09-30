@@ -248,17 +248,17 @@ func TestRunnerFileRefusedWriteDiscardsItsChunks(t *testing.T) {
 }
 
 // One Runner connection carries every tenant's operations. A Port session to a
-// guest port without a listener must fail by itself while an Exec that arrives
-// behind it on the same connection still runs.
+// guest port without a listener must fail by itself while an Exec already
+// running on the same connection keeps running and completes.
 func TestRunnerPortOpenFailureKeepsProtocolSessionForConcurrentExec(t *testing.T) {
 	fence := relayRunnerFence()
+	exec := relayExecOpen(fence, "neighbour-exec", "neighbour-exec-stream", "echo neighbour")
+	exec.GetOpen().Streaming = false
 	port := relayPortOpen(fence, "closed-port", "closed-port-stream")
 	portCredit := &runnerprotocol.PortFrame{
 		Fence: cloneRunnerFence(fence), OperationId: "closed-port", StreamId: "closed-port-stream", Sequence: 2,
 		Payload: &runnerprotocol.PortFrame_Credit{Credit: &runnerprotocol.StreamCredit{ByteCount: 1 << 20}},
 	}
-	exec := relayExecOpen(fence, "neighbour-exec", "neighbour-exec-stream", "echo neighbour")
-	exec.GetOpen().Streaming = false
 	welcome := runnerWelcomeFrame("connection-1")
 	welcome.GetWelcome().EnabledFeatures = append(welcome.GetWelcome().EnabledFeatures,
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
@@ -267,9 +267,12 @@ func TestRunnerPortOpenFailureKeepsProtocolSessionForConcurrentExec(t *testing.T
 	stream := &scriptedProtocolStream{
 		inbound: []*runnerprotocol.ControlPlaneToRunner{
 			welcome,
+			{Message: &runnerprotocol.ControlPlaneToRunner_Exec{Exec: exec}},
 			{Message: &runnerprotocol.ControlPlaneToRunner_Port{Port: port}},
 			{Message: &runnerprotocol.ControlPlaneToRunner_Port{Port: portCredit}},
-			{Message: &runnerprotocol.ControlPlaneToRunner_Exec{Exec: exec}},
+			// The receive loop is serial, so this marker's answer proves the
+			// refused stream's Credit was handled on a connection still up.
+			{Message: &runnerprotocol.ControlPlaneToRunner_Port{Port: relayPortOpen(fence, "marker-port", "marker-port-stream")}},
 		},
 		sent: make(chan *runnerprotocol.RunnerToControlPlane, 64),
 	}
@@ -279,12 +282,20 @@ func TestRunnerPortOpenFailureKeepsProtocolSessionForConcurrentExec(t *testing.T
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
 	)
+	// The Exec is admitted before the Port Open and cannot finish until the
+	// test has observed the Port refusal, so the two always overlap.
+	releaseExec := make(chan struct{})
 	backend := &refusingPortBackend{relayAssignmentBackend: relayAssignmentBackend{
-		exec: func(context.Context, *runnerprotocol.AssignmentFence, *runnerprotocol.ExecOpen) (BufferedExecResult, error) {
-			return BufferedExecResult{
-				Stdout:   []byte("neighbour\n"),
-				Terminal: &runnerprotocol.ExecTerminal{Kind: runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED},
-			}, nil
+		exec: func(ctx context.Context, _ *runnerprotocol.AssignmentFence, _ *runnerprotocol.ExecOpen) (BufferedExecResult, error) {
+			select {
+			case <-releaseExec:
+				return BufferedExecResult{
+					Stdout:   []byte("neighbour\n"),
+					Terminal: &runnerprotocol.ExecTerminal{Kind: runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED},
+				}, nil
+			case <-ctx.Done():
+				return BufferedExecResult{}, ctx.Err()
+			}
 		},
 	}}
 	service, err := NewRunnerProtocolService(config, backend, connector)
@@ -299,11 +310,14 @@ func TestRunnerPortOpenFailureKeepsProtocolSessionForConcurrentExec(t *testing.T
 	var portTerminal *runnerprotocol.PortTerminal
 	var execResult *runnerprotocol.ExecBufferedResult
 	timeout := time.After(5 * time.Second)
-	for portTerminal == nil || execResult == nil {
+	for execResult == nil {
 		select {
 		case message := <-stream.sent:
 			if frame := message.GetPort(); frame.GetOperationId() == "closed-port" && frame.GetTerminal() != nil {
 				portTerminal = frame.GetTerminal()
+			}
+			if frame := message.GetPort(); frame.GetOperationId() == "marker-port" && frame.GetTerminal() != nil {
+				close(releaseExec)
 			}
 			if frame := message.GetExec(); frame.GetOperationId() == "neighbour-exec" && frame.GetBufferedResult() != nil {
 				execResult = frame.GetBufferedResult()
@@ -314,8 +328,8 @@ func TestRunnerPortOpenFailureKeepsProtocolSessionForConcurrentExec(t *testing.T
 			t.Fatalf("Port terminal %v and neighbouring Exec result %v did not both arrive on one connection", portTerminal, execResult)
 		}
 	}
-	if portTerminal.Kind != runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE ||
-		portTerminal.SafeDetail != "guest port is unavailable" {
+	if portTerminal.GetKind() != runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE ||
+		portTerminal.GetSafeDetail() != "guest port is unavailable" {
 		t.Fatalf("closed guest Port terminal = %v", portTerminal)
 	}
 	if execResult.GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED ||
