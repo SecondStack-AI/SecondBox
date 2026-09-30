@@ -1505,8 +1505,11 @@ func (c *sequenceProtocolConnector) Connect(ctx context.Context) (RunnerProtocol
 	}
 	stream := c.streams[0]
 	c.streams = c.streams[1:]
-	if blocking, ok := stream.(*blockingProtocolStream); ok {
-		blocking.ctx = ctx
+	switch bound := stream.(type) {
+	case *blockingProtocolStream:
+		bound.ctx = ctx
+	case *scriptedProtocolStream:
+		bound.ctx = ctx
 	}
 	return stream, nil
 }

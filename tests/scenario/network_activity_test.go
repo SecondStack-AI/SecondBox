@@ -5,6 +5,7 @@ package scenario_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -556,6 +557,84 @@ func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *te
 	assertScenarioExited(t, enabledResponse, 0, "", "")
 	isolationOutcome := executeScenarioCommand(t, ctx, isolated, "test ! -e /workspace/network-response", 4096, "isolated-network-response-file")
 	assertScenarioExited(t, isolationOutcome, 0, "", "")
+}
+
+// One Runner connection carries every Sandbox's operations. A PortSession to an
+// approved guest port with no listener must end by itself while an Exec in
+// another Sandbox on the same Runner keeps running.
+func TestScenarioClosedGuestPortFailsOnlyItsPortSession(t *testing.T) {
+	fixture := newScenarioFixture(t)
+	ensureScenarioRunnerPool(t, fixture)
+	waitForScenarioRunner(t, fixture, 90*time.Second)
+	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
+	spec.Ports = []contracts.PortPolicy{{
+		Name: "web", Port: 8080, Protocol: "tcp", MaximumSessions: 1, MaximumSessionSeconds: 30,
+	}}
+	// The scenario authority holds at most 32 Profile grants, so this test
+	// replays the identical scenario-port-lease Profile.
+	profile := createScenarioProfile(t, fixture, "scenario-port-lease", spec)
+	portHandle, _ := createScenarioSandbox(t, fixture, profile, "closed-guest-port")
+	neighbourHandle, _ := createScenarioSandbox(t, fixture, profile, "closed-guest-port-neighbour")
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	portSandbox := waitForSandbox(t, ctx, portHandle, secondboxclient.SandboxStateReady)
+	waitForSandbox(t, ctx, neighbourHandle, secondboxclient.SandboxStateReady)
+
+	// The neighbouring Exec announces itself and then waits for stdin, so it is
+	// running on the Runner for the whole PortSession refusal.
+	neighbour := createScenarioExecStream(
+		t, ctx, neighbourHandle,
+		`printf 'neighbour-ready\n'; read line; printf 'neighbour:%s\n' "$line"`,
+		65536, 65536, "closed-guest-port-neighbour",
+	)
+	defer neighbour.Close()
+	if err := neighbour.GrantOutput(65536); err != nil {
+		t.Fatal(err)
+	}
+	var ready string
+	for ready != "neighbour-ready\n" {
+		frame, err := neighbour.Receive()
+		if err != nil || frame.StreamOutputFrame == nil {
+			t.Fatalf("SecondBox scenario neighbouring Exec readiness frame=%#v error=%v output=%q", frame, err, ready)
+		}
+		ready += decodeScenarioOutput(t, frame.StreamOutputFrame.DataBase64)
+		if len(ready) > len("neighbour-ready\n") {
+			t.Fatalf("SecondBox scenario neighbouring Exec readiness output = %q", ready)
+		}
+	}
+
+	lease := acquireScenarioLease(t, ctx, fixture, portHandle, 30, "closed-guest-port-lease")
+	session := createScenarioPortSession(t, ctx, fixture, portHandle, lease.ID, "closed-guest-port-session")
+	connection := dialScenarioPortTunnel(t, ctx, session.Endpoint)
+	if err := connection.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := connection.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) || closeErr.Text != "guest port is unavailable" {
+		t.Fatalf("SecondBox scenario closed guest Port tunnel read payload=%q error=%v", payload, err)
+	}
+	connection.Close()
+	waitForScenarioPortState(t, ctx, fixture, portSandbox.ID, session.ID, contracts.PortSessionStateClosed)
+
+	if err := neighbour.SendInputFrame([]byte("survived\n"), false); err != nil {
+		t.Fatalf("SecondBox scenario neighbouring Exec input after the PortSession refusal: %v", err)
+	}
+	if err := neighbour.CloseInput(); err != nil {
+		t.Fatal(err)
+	}
+	output, outcome := receiveScenarioExec(t, neighbour)
+	var after string
+	for _, chunk := range output {
+		if chunk.stream != "stdout" {
+			t.Fatalf("SecondBox scenario neighbouring Exec output after the PortSession refusal = %#v", output)
+		}
+		after += chunk.data
+	}
+	if after != "neighbour:survived\n" {
+		t.Fatalf("SecondBox scenario neighbouring Exec stdout after the PortSession refusal = %q", after)
+	}
+	assertScenarioExited(t, outcome, 0, "neighbour-ready\nneighbour:survived\n", "")
 }
 
 func startScenarioNetworkTarget(t *testing.T, address string, response string) {

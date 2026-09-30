@@ -244,16 +244,18 @@ func (s *RunnerProtocolService) handleExecFrame(
 		}
 		state.cancel = cancel
 		state.lastIncoming = bytes.Clone(encoded)
-		if len(s.execOperations) >= maxRunnerDataPlaneOperationStates {
-			s.operationMu.Unlock()
+		atCapacity := len(s.execOperations) >= maxRunnerDataPlaneOperationStates
+		// Every answered Open is tracked, a refused one as a terminal tombstone,
+		// so frames the control plane sent behind it meet a known stream.
+		s.execOperations[key] = state
+		s.operationMu.Unlock()
+		if atCapacity {
 			return s.sendRunnerExecOperationTerminal(stream, state, runnerInfrastructureTerminal(
 				runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
 				runnerprotocol.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_EXECUTION_NODE,
 				true, "runner Exec operation capacity is exhausted",
 			))
 		}
-		s.execOperations[key] = state
-		s.operationMu.Unlock()
 
 		if !s.hasActiveFence(frame.Fence) {
 			return s.sendRunnerExecOperationTerminal(stream, state, runnerInfrastructureTerminal(
@@ -444,7 +446,9 @@ func (s *RunnerProtocolService) handlePTYFrame(
 	terminal := state.terminal
 	s.operationMu.Unlock()
 	if terminal {
-		return fmt.Errorf("SecondBox runner PTY operation is terminal")
+		// Input, resize, and credit sent before the control plane observed the
+		// terminal are sequenced and discarded.
+		return nil
 	}
 	var control PTYControl
 	switch {
@@ -1061,15 +1065,16 @@ func (s *RunnerProtocolService) handleFileFrame(
 			ctx:          fileCtx,
 			cancel:       cancel,
 		}
-		if len(s.fileOperations) >= maxRunnerDataPlaneOperationStates {
-			s.operationMu.Unlock()
+		atCapacity := len(s.fileOperations) >= maxRunnerDataPlaneOperationStates
+		// A refused write is tracked too: its chunks are already in flight.
+		s.fileOperations[key] = state
+		s.operationMu.Unlock()
+		if atCapacity {
 			return s.sendFileTerminal(stream, state, &runnerprotocol.FileTerminal{
 				Kind:       runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FAILED,
 				SafeDetail: "runner File operation capacity is exhausted",
 			})
 		}
-		s.fileOperations[key] = state
-		s.operationMu.Unlock()
 
 		if !s.hasActiveFence(frame.Fence) {
 			return s.sendFileTerminal(stream, state, &runnerprotocol.FileTerminal{
@@ -1111,6 +1116,12 @@ func (s *RunnerProtocolService) handleFileFrame(
 	}
 	state.nextIncoming++
 	state.lastIncoming = bytes.Clone(encoded)
+	if state.terminal {
+		// A chunk behind a refused Open must not start the write, and credit or
+		// cancellation behind any terminal has nothing left to act on.
+		s.operationMu.Unlock()
+		return nil
+	}
 
 	switch {
 	case frame.GetCredit() != nil:
