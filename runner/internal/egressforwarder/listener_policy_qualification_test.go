@@ -287,8 +287,8 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
 		t.Fatalf("failed startup leaked firewall rules: %v: %s", err, output)
 	}
-	// A startup waiting on the sweep lock while teardown fences the Instance
-	// installs nothing once it acquires the lock.
+	// A startup paused before the sweep lock while teardown fences the
+	// Instance and sweeps its interface installs nothing once it resumes.
 	var fenced atomic.Bool
 	fencedConfig := config
 	fencedConfig.Admission = func() error {
@@ -297,7 +297,11 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 		}
 		return nil
 	}
-	executionListenerTablesMu.Lock()
+	paused, resume := make(chan struct{}), make(chan struct{})
+	executionListenerStartupHook = func() {
+		close(paused)
+		<-resume
+	}
 	fencedStartup := make(chan error, 1)
 	go func() {
 		forwarder, err := StartExecutionForwarder(t.Context(), fencedConfig)
@@ -306,9 +310,13 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 		}
 		fencedStartup <- err
 	}()
-	time.Sleep(50 * time.Millisecond)
+	<-paused
+	executionListenerStartupHook = nil
 	fenced.Store(true)
-	executionListenerTablesMu.Unlock()
+	if err := RemoveExecutionListenerRules(t.Context(), config.NFTPath, []string{policy.GuestInterface}); err != nil {
+		t.Fatal(err)
+	}
+	close(resume)
 	if err := <-fencedStartup; err == nil || !strings.Contains(err.Error(), "instance fenced") {
 		t.Fatalf("startup after the teardown fence = %v", err)
 	}

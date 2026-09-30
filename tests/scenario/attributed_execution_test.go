@@ -296,7 +296,10 @@ func TestScenarioAttributedWindowRevocation(t *testing.T) {
 					}(),
 				})
 			case "control-plane":
-				scenarioCompose(t, "restart", "--no-deps", "control-plane")
+				// The relay must close while the control plane is down, so only the
+				// Runner's disconnect handling can have revoked it.
+				scenarioCompose(t, "stop", "control-plane")
+				t.Cleanup(func() { scenarioCompose(t, "start", "control-plane") })
 			}
 			if err := accepted.connection.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 				t.Fatal(err)
@@ -305,6 +308,7 @@ func TestScenarioAttributedWindowRevocation(t *testing.T) {
 				t.Fatalf("attributed relay survived %s: bytes=%d error=%v", trigger, n, err)
 			}
 			if trigger == "control-plane" {
+				scenarioCompose(t, "start", "control-plane")
 				waitForScenarioControlPlaneReady(t, fixture, 60*time.Second)
 				waitForScenarioRunner(t, fixture, 90*time.Second)
 			}
@@ -312,6 +316,7 @@ func TestScenarioAttributedWindowRevocation(t *testing.T) {
 			// A control-plane outage longer than the scenario Runner heartbeat
 			// timeout (5s) lets the control plane retire the generation as Runner
 			// loss, so only expiry and cancellation prove the Instance survives.
+			// That retirement needs the reconnected Runner, after the relay closed.
 			if trigger != "control-plane" &&
 				(current.Generation != ready.Generation || current.Instance == nil || current.Instance.ID != ready.Instance.ID) {
 				t.Fatalf("attributed revocation on %s changed compute: before=%+v after=%+v", trigger, ready, current)

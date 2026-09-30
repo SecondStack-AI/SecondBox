@@ -96,6 +96,9 @@ func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfi
 	// The admission check, the listener table, the listener, and the
 	// registration happen under the sweep lock, so an interface sweep either
 	// sees and revokes this forwarder or runs first and fences its admission.
+	if executionListenerStartupHook != nil {
+		executionListenerStartupHook()
+	}
 	executionListenerTablesMu.Lock()
 	defer executionListenerTablesMu.Unlock()
 	if err := config.Admission(); err != nil {
@@ -248,6 +251,10 @@ func RemoveExecutionListenerRules(ctx context.Context, nftPath string, guestInte
 // whose table it deletes, and an exec window closing during a sweep cannot make
 // the sweep delete a table that no longer exists.
 var executionListenerTablesMu sync.Mutex
+
+// executionListenerStartupHook is nil outside tests; tests use it to pause a
+// startup just before it takes the sweep lock.
+var executionListenerStartupHook func()
 
 func removeExecutionListenerTables(ctx context.Context, nftPath string, exact map[string]bool, prefixes []string) error {
 	executionListenerTablesMu.Lock()
