@@ -35,10 +35,12 @@ type HostNetworkPolicyEnforcer interface {
 }
 
 // ExecutionListenerPolicyEnforcer admits one attributed exec's listener into an
-// installed Instance policy for exactly that exec's window.
+// installed Instance policy for exactly that exec's window. Instance teardown
+// fences admission before it sweeps the Instance's listeners.
 type ExecutionListenerPolicyEnforcer interface {
 	AllowExecutionListener(context.Context, string, netip.AddrPort) error
 	RevokeExecutionListener(context.Context, string, netip.AddrPort) error
+	FenceExecutionListeners(string)
 }
 
 type nftScriptRunner func(context.Context, string, []string, string) ([]byte, error)
@@ -102,8 +104,10 @@ type nftPolicyInstance struct {
 	// executionListeners are live attributed exec endpoints on the Runner
 	// side of this Instance's interface.
 	executionListeners map[netip.AddrPort]struct{}
-	cancel             context.CancelFunc
-	ctx                context.Context
+	// listenersFenced refuses new listeners once teardown has begun.
+	listenersFenced bool
+	cancel          context.CancelFunc
+	ctx             context.Context
 }
 
 // runnerGatewayDestinations adds each live attributed exec listener to the
@@ -487,6 +491,19 @@ func (e *NFTablesNetworkPolicyEnforcer) RevokeExecutionListener(ctx context.Cont
 	return e.updateExecutionListener(ctx, instanceID, listener, false)
 }
 
+// FenceExecutionListeners refuses every later listener for the Instance. Its
+// installed policy is unchanged; the caller then sweeps the live listeners.
+func (e *NFTablesNetworkPolicyEnforcer) FenceExecutionListeners(instanceID string) {
+	e.mutationMu.Lock()
+	defer e.mutationMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if instance, found := e.instances[instanceID]; found {
+		instance.listenersFenced = true
+		e.instances[instanceID] = instance
+	}
+}
+
 func (e *NFTablesNetworkPolicyEnforcer) updateExecutionListener(ctx context.Context, instanceID string, listener netip.AddrPort, allow bool) error {
 	if !listener.Addr().Is4() || listener.Port() == 0 {
 		return fmt.Errorf("SecondBox attributed exec listener must be an IPv4 endpoint with a nonzero port")
@@ -502,10 +519,10 @@ func (e *NFTablesNetworkPolicyEnforcer) updateExecutionListener(ctx context.Cont
 	}()
 	e.mu.Lock()
 	instance, found := e.instances[instanceID]
-	if !found {
+	if !found || (allow && instance.listenersFenced) {
 		e.mu.Unlock()
 		if allow {
-			return fmt.Errorf("SecondBox attributed exec listener has no installed policy for %s", instanceID)
+			return fmt.Errorf("SecondBox attributed exec listener has no admitting policy for %s", instanceID)
 		}
 		return nil
 	}

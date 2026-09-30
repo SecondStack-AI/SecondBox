@@ -296,3 +296,44 @@ func TestReservedGuestEnvironmentReachesRealGuestCommand(t *testing.T) {
 		})
 	}
 }
+
+// An attributed exec queued behind another operation on the guest session
+// opens its window only once it owns the session, before it dispatches.
+func TestExecutionGatewayOpensOnlyAfterSessionAcquisition(t *testing.T) {
+	stream := &captureExecutionGatewayStream{}
+	session := &GuestProtocolSession{
+		Stream: stream, Binding: &guestv1.ConnectionBinding{},
+		EnabledFeatures: map[guestv1.GuestFeature]bool{guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC: true},
+	}
+	session.operationMu.Lock() // another exec or terminal owns the session
+	opened := make(chan int, 1)
+	opener := func(ctx context.Context) (context.Context, netip.AddrPort, error) {
+		opened <- stream.sends
+		return ctx, testExecutionListener, nil
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := session.ExecuteBuffered(t.Context(), "assignment", &guestv1.ExecRequest{
+			DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024,
+		}, opener)
+		result <- err
+	}()
+	select {
+	case <-opened:
+		t.Fatal("a queued attributed exec opened its window")
+	case <-time.After(100 * time.Millisecond):
+	}
+	session.operationMu.Unlock()
+	select {
+	case sends := <-opened:
+		if sends != 0 {
+			t.Fatalf("window opened after %d dispatched frames", sends)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the exec never opened its window after acquiring the session")
+	}
+	if err := <-result; err == nil || !strings.Contains(err.Error(), "captured exec send") ||
+		string(stream.request.Environment[0].Value) != testExecutionListener.String() {
+		t.Fatalf("dispatch after the window opened: %v %+v", err, stream.request)
+	}
+}

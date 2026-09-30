@@ -797,3 +797,40 @@ func TestNFTablesNetworkPolicyExpiryFailureCallbackCanRemovePolicy(t *testing.T)
 		t.Fatal("expiry failure callback deadlocked while removing policy")
 	}
 }
+
+// Teardown fences listener admission before it sweeps live listeners, so a
+// window that starts during teardown cannot enter the Instance policy.
+func TestNFTablesExecutionListenerFenceRefusesLaterWindows(t *testing.T) {
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var script string
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		run: func(_ context.Context, _ string, _ []string, stdin string) ([]byte, error) {
+			script = stdin
+			return nil, nil
+		},
+		nftPath: "/usr/sbin/nft",
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "fenced", TapName: "sbtap3", GuestIP: "198.18.43.4",
+		DNSAddress: netip.MustParseAddr("198.18.43.1"), Policy: compiled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admitted, late := netip.MustParseAddrPort("198.18.43.1:41000"), netip.MustParseAddrPort("198.18.43.1:41001")
+	if err := enforcer.AllowExecutionListener(context.Background(), "fenced", admitted); err != nil {
+		t.Fatal(err)
+	}
+	enforcer.FenceExecutionListeners("fenced")
+	if err := enforcer.AllowExecutionListener(context.Background(), "fenced", late); err == nil {
+		t.Fatal("a fenced Instance admitted a new listener")
+	}
+	if err := enforcer.RevokeExecutionListener(context.Background(), "fenced", admitted); err != nil {
+		t.Fatalf("revoking an admitted listener after the fence = %v", err)
+	}
+	if strings.Contains(script, "dport 41000") || strings.Contains(script, "dport 41001") {
+		t.Fatalf("fenced Instance policy still admits a listener:\n%s", script)
+	}
+}

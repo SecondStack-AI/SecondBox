@@ -130,6 +130,8 @@ func (r *recordingHostNetworkPolicyEnforcer) RevokeExecutionListener(context.Con
 	return nil
 }
 
+func (r *recordingHostNetworkPolicyEnforcer) FenceExecutionListeners(string) {}
+
 func (r *recordingHostNetworkConfigurer) ConfigureTap(_ context.Context, cfg TapConfig) error {
 	r.tap = cfg
 	return nil

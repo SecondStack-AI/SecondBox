@@ -201,6 +201,9 @@ func bridgeAddress(cidr string) netip.Addr {
 
 func (m *Manager) cleanupNetworkChecked(ctx context.Context, instanceID, tapName string) error {
 	var cleanupErr error
+	if m.networkPolicy != nil && strings.TrimSpace(instanceID) != "" {
+		m.networkPolicy.FenceExecutionListeners(instanceID)
+	}
 	if m.cfg != nil && m.cfg.NetworkPolicyNFTPath != "" && tapName != "" {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		cleanupErr = m.cleanupExecutionListenerRules(cleanupCtx, tapName)

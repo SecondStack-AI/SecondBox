@@ -103,8 +103,8 @@ cancelled, reaches its deadline or `expiresAt`, or loses its control-plane
 connection, even if the guest has not yet returned the exec, and when its
 Instance is torn down. Closing revokes the listener and its active relays, then
 removes the listener from the Instance policy and deletes its listener table.
-Instance teardown closes every live listener on the Instance interface before
-it deletes their tables. The Instance
+Instance teardown first refuses new listeners for the Instance, then closes
+every live listener on its interface before it deletes their tables. The Instance
 keeps running. A gateway connection or identity-preface failure, or a listener
 failure, cancels the exec and reports a Runner failure. If the Runner cannot
 prove that the rule was removed, it terminates the Instance, as for any failed

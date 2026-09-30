@@ -1051,6 +1051,7 @@ const networkTeardownBound = 30 * time.Second
 func (backend *AssignmentBackend) teardownInstanceNetwork(instanceID string, network instanceNetwork) error {
 	ctx, cancel := context.WithTimeout(context.Background(), networkTeardownBound)
 	defer cancel()
+	backend.enforcer.FenceExecutionListeners(instanceID)
 	listenerErr := egressforwarder.RemoveExecutionListenerRules(ctx, backend.nftPath, []string{network.hostVeth})
 	removeErr := backend.enforcer.Remove(ctx, instanceID)
 	// The enforcer deletes both family tables in one atomic script, so a
