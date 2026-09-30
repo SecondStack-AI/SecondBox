@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -271,7 +272,7 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	}()
 	t.Cleanup(func() { gateway.Close(); <-gatewayDone })
 	policy.ListenerAddress = netip.AddrPortFrom(policy.ListenerAddress.Addr(), 0)
-	config := ExecutionForwarderConfig{NFTPath: "/usr/sbin/nft", GatewaySocket: gateway.Addr().String(), Policy: policy, Attribution: attribution, MaximumConnections: 2}
+	config := ExecutionForwarderConfig{NFTPath: "/usr/sbin/nft", GatewaySocket: gateway.Addr().String(), Policy: policy, Attribution: attribution, MaximumConnections: 2, Admission: func() error { return nil }}
 	marker := filepath.Join(directory, "installed")
 	failingNFT := filepath.Join(directory, "nft-fail-after-install")
 	script := "#!/bin/sh\nif [ \"$1\" = \"-f\" ] && [ ! -e \"" + marker + "\" ]; then\n/usr/sbin/nft \"$@\" || exit $?\n: > \"" + marker + "\"\nexit 42\nfi\nexec /usr/sbin/nft \"$@\"\n"
@@ -285,6 +286,34 @@ func qualifyOwnedExecutionForwarder(t *testing.T, policy ExecutionListenerPolicy
 	}
 	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
 		t.Fatalf("failed startup leaked firewall rules: %v: %s", err, output)
+	}
+	// A startup waiting on the sweep lock while teardown fences the Instance
+	// installs nothing once it acquires the lock.
+	var fenced atomic.Bool
+	fencedConfig := config
+	fencedConfig.Admission = func() error {
+		if fenced.Load() {
+			return errors.New("instance fenced")
+		}
+		return nil
+	}
+	executionListenerTablesMu.Lock()
+	fencedStartup := make(chan error, 1)
+	go func() {
+		forwarder, err := StartExecutionForwarder(t.Context(), fencedConfig)
+		if forwarder != nil {
+			err = errors.Join(errors.New("fenced startup returned a forwarder"), forwarder.Close(context.Background()))
+		}
+		fencedStartup <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	fenced.Store(true)
+	executionListenerTablesMu.Unlock()
+	if err := <-fencedStartup; err == nil || !strings.Contains(err.Error(), "instance fenced") {
+		t.Fatalf("startup after the teardown fence = %v", err)
+	}
+	if output, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil || strings.Contains(string(output), executionListenerTablePrefix(policy.GuestInterface)) {
+		t.Fatalf("fenced startup installed firewall rules: %v: %s", err, output)
 	}
 	// A sibling exec window on the same interface keeps its own listener
 	// table when this window closes.

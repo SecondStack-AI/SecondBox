@@ -16,5 +16,6 @@ func startAttributedExecForwarder(ctx context.Context, config AttributedExecWind
 		NFTPath: config.NFTPath, GatewaySocket: config.Gateway.Socket,
 		MaximumConnections: config.Gateway.MaximumConnections,
 		Policy:             config.Listener, Attribution: attribution,
+		Admission: func() error { return config.Policy.ExecutionListenerAdmission(config.PolicyInstanceID) },
 	})
 }

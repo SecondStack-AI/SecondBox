@@ -28,6 +28,9 @@ type ExecutionForwarderConfig struct {
 	Policy             ExecutionListenerPolicy
 	Attribution        egressattribution.ExecutionAttribution
 	MaximumConnections int
+	// Admission is checked under the listener table lock; Instance teardown
+	// fences it before sweeping the interface.
+	Admission func() error
 }
 
 type ExecutionForwarder struct {
@@ -47,8 +50,8 @@ type ExecutionForwarder struct {
 func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfig) (*ExecutionForwarder, error) {
 	ctx, cancelStartup := context.WithDeadline(ctx, config.Attribution.ExpiresAt)
 	defer cancelStartup()
-	if !filepath.IsAbs(config.NFTPath) || config.MaximumConnections < 1 || config.MaximumConnections > 4096 || config.Policy.InstanceID != config.Attribution.InstanceID {
-		return nil, fmt.Errorf("attributed forwarder requires explicit nftables, matching Instance identity, and bounded connections")
+	if config.Admission == nil || !filepath.IsAbs(config.NFTPath) || config.MaximumConnections < 1 || config.MaximumConnections > 4096 || config.Policy.InstanceID != config.Attribution.InstanceID {
+		return nil, fmt.Errorf("attributed forwarder requires explicit nftables, an admission check, matching Instance identity, and bounded connections")
 	}
 	if err := networkpolicycontract.ValidateAttributedGatewaySocket(config.GatewaySocket); err != nil {
 		return nil, err
@@ -90,11 +93,14 @@ func StartExecutionForwarder(ctx context.Context, config ExecutionForwarderConfi
 	if err != nil {
 		return nil, err
 	}
-	// The listener table, the listener, and the registration appear under the
-	// sweep lock, so an interface sweep either sees and revokes this forwarder
-	// or runs before its table exists.
+	// The admission check, the listener table, the listener, and the
+	// registration happen under the sweep lock, so an interface sweep either
+	// sees and revokes this forwarder or runs first and fences its admission.
 	executionListenerTablesMu.Lock()
 	defer executionListenerTablesMu.Unlock()
+	if err := config.Admission(); err != nil {
+		return nil, err
+	}
 	listener, err := installExecutionListener(ctx, config.NFTPath, rules, fd, file)
 	if err != nil {
 		// A failed nft invocation may still have applied the table.

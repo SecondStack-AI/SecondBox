@@ -823,7 +823,13 @@ func TestNFTablesExecutionListenerFenceRefusesLaterWindows(t *testing.T) {
 	if err := enforcer.AllowExecutionListener(context.Background(), "fenced", admitted); err != nil {
 		t.Fatal(err)
 	}
+	if err := enforcer.ExecutionListenerAdmission("fenced"); err != nil {
+		t.Fatal(err)
+	}
 	enforcer.FenceExecutionListeners("fenced")
+	if err := enforcer.ExecutionListenerAdmission("fenced"); err == nil {
+		t.Fatal("a fenced Instance still admits forwarder startup")
+	}
 	if err := enforcer.AllowExecutionListener(context.Background(), "fenced", late); err == nil {
 		t.Fatal("a fenced Instance admitted a new listener")
 	}

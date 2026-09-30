@@ -78,7 +78,8 @@ func (enforcer *fakeListenerEnforcer) AllowExecutionListener(_ context.Context, 
 	return nil
 }
 
-func (enforcer *fakeListenerEnforcer) FenceExecutionListeners(string) {}
+func (enforcer *fakeListenerEnforcer) FenceExecutionListeners(string)          {}
+func (enforcer *fakeListenerEnforcer) ExecutionListenerAdmission(string) error { return nil }
 
 func (enforcer *fakeListenerEnforcer) RevokeExecutionListener(_ context.Context, instanceID string, listener netip.AddrPort) error {
 	enforcer.events.record("revoke " + instanceID + " " + listener.String())

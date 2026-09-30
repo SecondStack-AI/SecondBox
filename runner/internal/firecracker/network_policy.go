@@ -41,6 +41,7 @@ type ExecutionListenerPolicyEnforcer interface {
 	AllowExecutionListener(context.Context, string, netip.AddrPort) error
 	RevokeExecutionListener(context.Context, string, netip.AddrPort) error
 	FenceExecutionListeners(string)
+	ExecutionListenerAdmission(string) error
 }
 
 type nftScriptRunner func(context.Context, string, []string, string) ([]byte, error)
@@ -502,6 +503,18 @@ func (e *NFTablesNetworkPolicyEnforcer) FenceExecutionListeners(instanceID strin
 		instance.listenersFenced = true
 		e.instances[instanceID] = instance
 	}
+}
+
+// ExecutionListenerAdmission reports whether the Instance still admits new
+// listeners. Forwarder startup checks it under the listener table lock, so a
+// startup that follows a teardown sweep installs nothing.
+func (e *NFTablesNetworkPolicyEnforcer) ExecutionListenerAdmission(instanceID string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if instance, found := e.instances[instanceID]; !found || instance.listenersFenced {
+		return fmt.Errorf("SecondBox attributed exec listener has no admitting policy for %s", instanceID)
+	}
+	return nil
 }
 
 func (e *NFTablesNetworkPolicyEnforcer) updateExecutionListener(ctx context.Context, instanceID string, listener netip.AddrPort, allow bool) error {
