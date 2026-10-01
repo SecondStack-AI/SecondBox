@@ -29,6 +29,10 @@ func TestNewServerRequiresEachConfiguredDataPlaneTransport(t *testing.T) {
 		t.Fatal("data-plane server accepted a nil live data-plane broker")
 	}
 	config.LiveDataPlane = NewLiveDataPlaneBroker()
+	if _, err := NewServer(config); err == nil {
+		t.Fatal("data-plane server accepted a nil cancellation confirmer")
+	}
+	config.CancelConfirmations = &recordingCancellationConfirmer{}
 	if _, err := NewServer(config); err != nil {
 		t.Fatalf("Exec server with live data plane: %v", err)
 	}

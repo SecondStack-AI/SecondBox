@@ -167,17 +167,6 @@ func (apiHandler *handler) serveSandboxExecStream(
 			defer stopCancel()
 			if err := stream.Cancel(cancelContext, "public streaming client disconnected"); err != nil {
 				apiHandler.logger.ErrorContext(cancelContext, "SecondBox Exec disconnect cancellation failed", "error", err, "session_id", session.ID)
-				return
-			}
-			for {
-				frame, _, err := stream.Receive(cancelContext)
-				if err != nil {
-					apiHandler.logger.ErrorContext(cancelContext, "SecondBox Exec disconnect terminal drain failed", "error", err, "session_id", session.ID)
-					return
-				}
-				if frame.Terminal != nil {
-					return
-				}
 			}
 		}
 	}()

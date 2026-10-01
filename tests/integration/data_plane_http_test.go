@@ -95,7 +95,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	}
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
-	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo)
+	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, relay, seed.RunnerID, seed.ConnectionTwo)
 	defer detachFake()
 	fake.beforeDelayedCompletion = func(ctx context.Context) error {
 		_, err := relay.SweepDataPlane(ctx, time.Now().UTC(), 100)
@@ -214,7 +214,23 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	// A buffered caller that disconnects cancels its guest work exactly as a
 	// public streaming disconnect does; it never runs on detached. No client
 	// receives the abandoned response, so it is outside the contract check.
-	abandonedServer := httptest.NewServer(handler)
+	var abandonedLog bytes.Buffer
+	abandonedHandler, err := api.NewHandler(api.HandlerConfig{
+		Service: dataPlaneService, PlatformToken: testPlatformToken,
+		Logger:                    slog.New(slog.NewTextHandler(&abandonedLog, nil)),
+		MaximumDataPlaneBodyBytes: 64 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	abandonedRequestEnded := make(chan struct{}, 1)
+	abandonedServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		abandonedHandler.ServeHTTP(writer, request)
+		select {
+		case abandonedRequestEnded <- struct{}{}:
+		default:
+		}
+	}))
 	t.Cleanup(abandonedServer.Close)
 	assertBufferedClientDisconnectCancels := func(
 		t *testing.T,
@@ -257,6 +273,16 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 		disconnect()
 		if err := <-finished; !errors.Is(err, context.Canceled) {
 			t.Fatalf("disconnected request error = %v, want context cancellation", err)
+		}
+		// The request records the cancellation and ends; it does not hold its
+		// handler waiting for the Runner, and the disconnect is not a failure.
+		select {
+		case <-abandonedRequestEnded:
+		case <-time.After(time.Second):
+			t.Fatal("disconnected request kept waiting for the Runner")
+		}
+		if logged := abandonedLog.String(); strings.Contains(logged, "SecondBox HTTP request failed") {
+			t.Fatalf("disconnected request logged a failure: %s", logged)
 		}
 		pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 		if err != nil {
@@ -315,7 +341,8 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 			cancelling.terminalDetail != "public buffered client disconnected" {
 			t.Fatalf("disconnected session = %s %s %q", cancelling.state, cancelling.terminalKind, cancelling.terminalDetail)
 		}
-		// The Runner confirms the cancellation on the operation's live route.
+		// The request's live route is gone; the Runner confirms the
+		// cancellation with the operation's terminal on its control connection.
 		fake.cancelTerminals <- cancelling.id
 		completed := waitForSession(func(observed disconnectedSession) bool {
 			return observed.state != "cancelling"
@@ -487,7 +514,7 @@ func TestBufferedExecTransportSetupFailureReleasesConcurrentOperationQuota(t *te
 
 	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	availableService := newDataPlaneService(liveDataPlane)
-	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo)
+	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, relay, seed.RunnerID, seed.ConnectionTwo)
 	defer detachFake()
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
@@ -581,7 +608,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	}
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
-	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo)
+	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, relay, seed.RunnerID, seed.ConnectionTwo)
 	defer detachFake()
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
@@ -850,6 +877,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 type relayFakeRunner struct {
 	beforeDelayedCompletion func(context.Context) error
 	broker                  *runnercontrol.LiveDataPlaneBroker
+	cancellations           runnercontrol.DataPlaneCancellationConfirmer
 	session                 *runnercontrol.Session
 	runnerID                string
 	connectionID            string
@@ -883,6 +911,7 @@ type fakeFileOperation struct {
 func newRelayFakeRunner(
 	t *testing.T,
 	broker *runnercontrol.LiveDataPlaneBroker,
+	cancellations runnercontrol.DataPlaneCancellationConfirmer,
 	runnerID string,
 	connectionID string,
 ) (*relayFakeRunner, func()) {
@@ -928,7 +957,8 @@ func newRelayFakeRunner(
 		t.Fatal(err)
 	}
 	fake := &relayFakeRunner{
-		broker: broker, session: session, runnerID: runnerID, connectionID: connectionID,
+		broker: broker, cancellations: cancellations, session: session,
+		runnerID: runnerID, connectionID: connectionID,
 		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
 		exec:     map[string]*runnerv1.ExecFrame{}, files: map[string]*fakeFileOperation{},
 		execStarted:     make(chan string, 1),
@@ -1169,7 +1199,7 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 }
 
 // confirmCancellation answers a durable cancellation the way the Runner does:
-// with the operation's cancelled terminal on its live route.
+// with the operation's cancelled terminal on its control connection.
 func (fake *relayFakeRunner) confirmCancellation(ctx context.Context, operationID string, now time.Time) error {
 	if opened := fake.exec[operationID]; opened != nil {
 		return fake.persist(ctx, &runnerv1.RunnerToControlPlane{
@@ -1297,7 +1327,7 @@ func (fake *relayFakeRunner) persist(ctx context.Context, message *runnerv1.Runn
 	if err != nil {
 		return err
 	}
-	return fake.broker.Deliver(ctx, event)
+	return runnercontrol.RouteRunnerOperationFrame(ctx, fake.broker, fake.cancellations, event, now)
 }
 
 func (fake *relayFakeRunner) assertObserved() error {

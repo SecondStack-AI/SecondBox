@@ -227,6 +227,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		LiveDataPlane:       liveDataPlane,
 		DirectPorts:         dataPlaneStore,
 		PortSessions:        dataPlaneStore,
+		CancelConfirmations: dataPlaneStore,
 		DirectDataPlane:     controlPlane,
 		WorkspaceTransfers:  workspaceTransfers,
 		Now:                 service.SystemClock,

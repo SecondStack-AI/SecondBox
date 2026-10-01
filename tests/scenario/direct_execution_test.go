@@ -5,6 +5,7 @@ package scenario_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -75,4 +76,65 @@ func TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota(t *testing.T
 		1024, "post-direct-disconnect",
 	)
 	assertScenarioExited(t, probe, 0, "done", "")
+
+	// A direct-transport command stopped by its client, or abandoned by a
+	// disconnect, must release the single operation slot once the Runner
+	// confirms the cancellation.
+	stopped := createScenarioExecStream(t, ctx, handle, "printf started; sleep 60", 4096, 4096, "direct-stop")
+	defer stopped.Close()
+	if err := stopped.GrantOutput(4096); err != nil {
+		t.Fatal(err)
+	}
+	if frame, err := stopped.Receive(); err != nil || frame.StreamOutputFrame == nil {
+		t.Fatalf("SecondBox scenario direct command did not start: %#v, %v", frame, err)
+	}
+	if err := stopped.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if _, outcome := receiveScenarioExec(t, stopped); outcome.ExecCancelled == nil {
+		t.Fatalf("SecondBox scenario stopped direct command outcome = %s", describeScenarioExecOutcome(outcome))
+	}
+	probe = executeScenarioCommandWhenSlotFree(t, ctx, handle, "printf stopped", "post-direct-stop")
+	assertScenarioExited(t, probe, 0, "stopped", "")
+
+	abandoned := createScenarioExecStream(t, ctx, handle, "printf started; sleep 60", 4096, 4096, "direct-abandon")
+	if err := abandoned.GrantOutput(4096); err != nil {
+		t.Fatal(err)
+	}
+	if frame, err := abandoned.Receive(); err != nil || frame.StreamOutputFrame == nil {
+		t.Fatalf("SecondBox scenario abandoned direct command did not start: %#v, %v", frame, err)
+	}
+	if err := abandoned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	probe = executeScenarioCommandWhenSlotFree(t, ctx, handle, "printf abandoned", "post-direct-abandon")
+	assertScenarioExited(t, probe, 0, "abandoned", "")
+}
+
+// executeScenarioCommandWhenSlotFree retries a buffered command refused only
+// because a cancelled operation still holds the Profile's operation slot.
+func executeScenarioCommandWhenSlotFree(
+	t *testing.T,
+	ctx context.Context,
+	handle *secondboxclient.SandboxHandle,
+	command string,
+	key string,
+) secondboxclient.ExecOutcome {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		outcome, err := handle.Execute(ctx, scenarioExecRequest(command, 1024), uniqueScenarioKey(t, key), "")
+		if err == nil {
+			return outcome
+		}
+		var apiError *secondboxclient.APIError
+		if !errors.As(err, &apiError) || apiError.Problem == nil ||
+			apiError.StatusCode != http.StatusTooManyRequests || apiError.Problem.Code != "quota_exceeded" {
+			t.Fatalf("SecondBox scenario buffered Exec: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("SecondBox scenario cancelled operation kept its operation slot")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

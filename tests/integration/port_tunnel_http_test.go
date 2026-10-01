@@ -572,7 +572,8 @@ func (fake *portTunnelFakeRunner) deliver(ctx context.Context, payload any) erro
 	}
 	// Port bytes and credit are routed in memory, exactly as the runner control
 	// server routes them; only a terminal is recorded durably.
-	return fake.broker.Deliver(ctx, event)
+	_, err = fake.broker.Deliver(ctx, event)
+	return err
 }
 
 func portFakeEventKind(frame *runnerv1.PortFrame) string {

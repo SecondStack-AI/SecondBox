@@ -101,7 +101,7 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 	server.Start()
 	t.Cleanup(server.Close)
 	fake, detachFake := newStreamingExecFakeRunner(
-		t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo,
+		t, liveDataPlane, relay, seed.RunnerID, seed.ConnectionTwo,
 	)
 	defer detachFake()
 	fake.beforeDelayedCompletion = func(ctx context.Context) error {
@@ -311,6 +311,27 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitStreamingRunnerEvent(t, fake.events, "cancel:disconnect")
+	// The disconnect closed the session's route before it recorded the
+	// cancellation, so the Runner's in-band terminal may have reached no
+	// reader. Applying the durable cancellation, the Runner reports the
+	// retained terminal on its control connection, which completes the session.
+	deadline := time.Now().Add(time.Second)
+	for {
+		detachedSession, err := relay.GetDataPlaneSession(
+			t.Context(), principal.TenantRef, principal.SubjectRef, string(detached.ID),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if detachedSession.State != "running" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("disconnected Exec stream recorded no cancellation")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	fake.durableCancellations <- string(detached.ID)
 	waitDataPlaneSessionState(
 		t, relay, principal.TenantRef, principal.SubjectRef,
 		string(detached.ID), "completed",
@@ -371,14 +392,17 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 }
 
 type streamingExecFakeRunner struct {
-	broker       *runnercontrol.LiveDataPlaneBroker
-	session      *runnercontrol.Session
-	runnerID     string
-	connectionID string
-	incoming     chan *runnerv1.ControlPlaneToRunner
-	events       chan string
-	mu           sync.Mutex
-	operations   map[string]*streamingFakeOperation
+	broker               *runnercontrol.LiveDataPlaneBroker
+	cancellations        runnercontrol.DataPlaneCancellationConfirmer
+	durableCancellations chan string
+	retainedTerminals    map[string]*runnerv1.RunnerToControlPlane
+	session              *runnercontrol.Session
+	runnerID             string
+	connectionID         string
+	incoming             chan *runnerv1.ControlPlaneToRunner
+	events               chan string
+	mu                   sync.Mutex
+	operations           map[string]*streamingFakeOperation
 
 	beforeDelayedCompletion func(context.Context) error
 }
@@ -395,6 +419,7 @@ type streamingFakeOperation struct {
 func newStreamingExecFakeRunner(
 	t *testing.T,
 	broker *runnercontrol.LiveDataPlaneBroker,
+	cancellations runnercontrol.DataPlaneCancellationConfirmer,
 	runnerID string,
 	connectionID string,
 ) (*streamingExecFakeRunner, func()) {
@@ -440,7 +465,10 @@ func newStreamingExecFakeRunner(
 		t.Fatal(err)
 	}
 	fake := &streamingExecFakeRunner{
-		broker: broker, session: session, runnerID: runnerID, connectionID: connectionID,
+		broker: broker, cancellations: cancellations,
+		durableCancellations: make(chan string, 1),
+		retainedTerminals:    map[string]*runnerv1.RunnerToControlPlane{},
+		session:              session, runnerID: runnerID, connectionID: connectionID,
 		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
 		events:   make(chan string, 32), operations: map[string]*streamingFakeOperation{},
 	}
@@ -463,6 +491,18 @@ func (fake *streamingExecFakeRunner) run(ctx context.Context) error {
 			return nil
 		case message := <-fake.incoming:
 			if err := fake.handle(ctx, message); err != nil {
+				return err
+			}
+		case operationID := <-fake.durableCancellations:
+			// A durable cancellation of an operation that already ended makes
+			// the Runner report its retained terminal again.
+			fake.mu.Lock()
+			terminal := fake.retainedTerminals[operationID]
+			fake.mu.Unlock()
+			if terminal == nil {
+				return fmt.Errorf("streaming fake runner has no terminal for %s", operationID)
+			}
+			if err := fake.deliver(ctx, terminal); err != nil {
 				return err
 			}
 		}
@@ -581,7 +621,7 @@ func (fake *streamingExecFakeRunner) terminal(
 	if kind == runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED {
 		terminal.LimitBytes = frame.GetOpen().OutputLimitBytes
 	}
-	return fake.deliver(ctx, &runnerv1.RunnerToControlPlane{
+	message := &runnerv1.RunnerToControlPlane{
 		Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
 			Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
 			Sequence: sequence, Correlation: frame.Correlation,
@@ -590,7 +630,9 @@ func (fake *streamingExecFakeRunner) terminal(
 				Terminal: terminal,
 			}},
 		}},
-	})
+	}
+	fake.retainedTerminals[frame.OperationId] = message
+	return fake.deliver(ctx, message)
 }
 
 func (fake *streamingExecFakeRunner) deliver(
@@ -601,7 +643,7 @@ func (fake *streamingExecFakeRunner) deliver(
 	if err != nil {
 		return err
 	}
-	return fake.broker.Deliver(ctx, event)
+	return runnercontrol.RouteRunnerOperationFrame(ctx, fake.broker, fake.cancellations, event, time.Now().UTC())
 }
 
 func createStreamingExecSession(
