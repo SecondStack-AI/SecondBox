@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -49,6 +50,7 @@ type GuestProtocolNegotiation struct {
 }
 
 // GuestProtocolSession is one negotiated, assignment-bound guest connection.
+// Stream carries only the negotiation; every operation opens its own stream.
 type GuestProtocolSession struct {
 	runnerGateways          []networkpolicy.LogicalGatewayEndpoint
 	Connection              *grpc.ClientConn
@@ -60,8 +62,106 @@ type GuestProtocolSession struct {
 	ImageManifestDigest     string
 	ToolchainManifestDigest string
 	cancel                  context.CancelFunc
-	operationMu             sync.Mutex
-	sendMu                  sync.Mutex
+	// connect opens one more raw guest protocol stream on Connection.
+	connect func(context.Context) (guestv1.GuestAgent_ConnectClient, error)
+}
+
+// guestOperationStream is the dedicated negotiated stream of one Exec, PTY, or
+// File operation. The guest serves each stream independently, so a running
+// command or open Terminal never holds up another operation on the Sandbox,
+// and a protocol failure ends only its own operation.
+type guestOperationStream struct {
+	stream     guestv1.GuestAgent_ConnectClient
+	connection *guestv1.ConnectionBinding
+	close      context.CancelFunc
+	sendMu     sync.Mutex
+}
+
+func (stream *guestOperationStream) send(message *guestv1.RunnerToGuest) error {
+	stream.sendMu.Lock()
+	defer stream.sendMu.Unlock()
+	return stream.stream.Send(message)
+}
+
+// openOperationStream negotiates an operation's stream. ctx bounds only the
+// negotiation: an operation cancels through its guest Cancel frame, so the
+// stream outlives ctx until the caller closes it after the terminal.
+func (s *GuestProtocolSession) openOperationStream(
+	ctx context.Context,
+	features ...guestv1.GuestFeature,
+) (*guestOperationStream, error) {
+	streamCtx, closeStream := context.WithCancel(context.Background())
+	stopNegotiationCancel := context.AfterFunc(ctx, closeStream)
+	stream, connection, err := s.openGuestStream(streamCtx, features)
+	if !stopNegotiationCancel() {
+		closeStream()
+		return nil, errors.Join(err, ctx.Err())
+	}
+	if err != nil {
+		closeStream()
+		return nil, err
+	}
+	return &guestOperationStream{stream: stream, connection: connection, close: closeStream}, nil
+}
+
+// openGuestStream negotiates one stream on the session's connection with
+// exactly the given features. It lives until ctx ends.
+func (s *GuestProtocolSession) openGuestStream(
+	ctx context.Context,
+	features []guestv1.GuestFeature,
+) (guestv1.GuestAgent_ConnectClient, *guestv1.ConnectionBinding, error) {
+	nonce := make([]byte, guestConnectionNonceByteCount)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, fmt.Errorf("create guest operation connection nonce: %w", err)
+	}
+	binding := &guestv1.ConnectionBinding{
+		InstanceId: s.Binding.InstanceId, SandboxId: s.Binding.SandboxId,
+		SandboxGeneration: s.Binding.SandboxGeneration, ConnectionNonce: nonce,
+	}
+	stream, err := s.connect(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open guest operation protocol stream: %w", err)
+	}
+	if err := stream.Send(&guestv1.RunnerToGuest{
+		Message: &guestv1.RunnerToGuest_Hello{Hello: &guestv1.Hello{
+			Binding: binding,
+			SupportedGenerations: &guestv1.ProtocolGenerationRange{
+				Minimum: currentGuestProtocolGeneration, Maximum: currentGuestProtocolGeneration,
+			},
+			RequestedFeatures:               append([]guestv1.GuestFeature(nil), features...),
+			MandatoryFeatures:               append([]guestv1.GuestFeature(nil), features...),
+			ExpectedImageManifestDigest:     s.ImageManifestDigest,
+			ExpectedToolchainManifestDigest: s.ToolchainManifestDigest,
+		}},
+	}); err != nil {
+		return nil, nil, fmt.Errorf("send guest operation protocol hello: %w", err)
+	}
+	first, err := stream.Recv()
+	if err != nil {
+		return nil, nil, fmt.Errorf("receive guest operation protocol welcome: %w", err)
+	}
+	welcome := first.GetWelcome()
+	if welcome == nil || welcome.SelectedGeneration != currentGuestProtocolGeneration ||
+		welcome.GuestBuildId != s.GuestBuildID ||
+		welcome.ImageManifestDigest != s.ImageManifestDigest ||
+		welcome.ToolchainManifestDigest != s.ToolchainManifestDigest ||
+		!sameConnectionBinding(welcome.Binding, binding) ||
+		!sameGuestFeatureSet(welcome.EnabledFeatures, features) {
+		return nil, nil, fmt.Errorf("guest operation protocol welcome is invalid")
+	}
+	return stream, binding, nil
+}
+
+func sameGuestFeatureSet(enabled, requested []guestv1.GuestFeature) bool {
+	if len(enabled) != len(requested) {
+		return false
+	}
+	for _, feature := range requested {
+		if !slices.Contains(enabled, feature) {
+			return false
+		}
+	}
+	return true
 }
 
 // guestProtocolConnectParams retries the guest vsock dial on a millisecond
@@ -142,7 +242,8 @@ func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiatio
 		sessionCancel()
 		return nil, errors.Join(err, connection.Close())
 	}
-	stream, err := guestv1.NewGuestAgentClient(connection).Connect(
+	client := guestv1.NewGuestAgentClient(connection)
+	stream, err := client.Connect(
 		sessionCtx,
 		grpc.WaitForReady(true),
 	)
@@ -223,6 +324,9 @@ func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiatio
 		ImageManifestDigest:     welcome.ImageManifestDigest,
 		ToolchainManifestDigest: welcome.ToolchainManifestDigest,
 		cancel:                  sessionCancel,
+		connect: func(ctx context.Context) (guestv1.GuestAgent_ConnectClient, error) {
+			return client.Connect(ctx)
+		},
 	}, nil
 }
 

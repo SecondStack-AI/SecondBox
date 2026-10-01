@@ -28,8 +28,9 @@ type recordedGuestFileWriteChunk struct {
 	firstByte *byte
 }
 
+// recordingGuestProtocolStream records the write chunks of every operation
+// stream the session opens.
 type recordingGuestProtocolStream struct {
-	guestv1.GuestAgent_ConnectClient
 	chunks []recordedGuestFileWriteChunk
 	// onMetadata runs once, immediately after the guest's metadata frame is
 	// received, so a test can cancel an operation exactly inside the window
@@ -37,13 +38,18 @@ type recordingGuestProtocolStream struct {
 	onMetadata func()
 }
 
-func (stream *recordingGuestProtocolStream) Send(frame *guestv1.RunnerToGuest) error {
+type recordedGuestOperationStream struct {
+	guestv1.GuestAgent_ConnectClient
+	recorder *recordingGuestProtocolStream
+}
+
+func (stream *recordedGuestOperationStream) Send(frame *guestv1.RunnerToGuest) error {
 	if chunk := frame.GetFile().GetChunk(); chunk != nil {
 		var firstByte *byte
 		if len(chunk.Data) > 0 {
 			firstByte = &chunk.Data[0]
 		}
-		stream.chunks = append(stream.chunks, recordedGuestFileWriteChunk{
+		stream.recorder.chunks = append(stream.recorder.chunks, recordedGuestFileWriteChunk{
 			sequence:  frame.GetFile().GetBinding().GetSequence(),
 			offset:    chunk.Offset,
 			dataSize:  len(chunk.Data),
@@ -53,11 +59,11 @@ func (stream *recordingGuestProtocolStream) Send(frame *guestv1.RunnerToGuest) e
 	return stream.GuestAgent_ConnectClient.Send(frame)
 }
 
-func (stream *recordingGuestProtocolStream) Recv() (*guestv1.GuestToRunner, error) {
+func (stream *recordedGuestOperationStream) Recv() (*guestv1.GuestToRunner, error) {
 	message, err := stream.GuestAgent_ConnectClient.Recv()
-	if err == nil && stream.onMetadata != nil && message.GetFile().GetMetadata() != nil {
-		hook := stream.onMetadata
-		stream.onMetadata = nil
+	if err == nil && stream.recorder.onMetadata != nil && message.GetFile().GetMetadata() != nil {
+		hook := stream.recorder.onMetadata
+		stream.recorder.onMetadata = nil
 		hook()
 	}
 	return message, err
@@ -122,8 +128,15 @@ func TestExecuteFileOperationChunksLargeWritesOverFirecrackerVsockTransport(t *t
 		}
 	})
 
-	recordingStream := &recordingGuestProtocolStream{GuestAgent_ConnectClient: session.Stream}
-	session.Stream = recordingStream
+	recordingStream := &recordingGuestProtocolStream{}
+	connect := session.connect
+	session.connect = func(ctx context.Context) (guestv1.GuestAgent_ConnectClient, error) {
+		stream, err := connect(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &recordedGuestOperationStream{GuestAgent_ConnectClient: stream, recorder: recordingStream}, nil
+	}
 
 	assertGuestFileWriteChunkBoundaries(t, session, recordingStream, workspace)
 	assertGuestLargeFileWrite(t, session, recordingStream, workspace)

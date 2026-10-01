@@ -51,13 +51,16 @@ func (s *GuestProtocolSession) ReadFile(
 	if maximumBytes == 0 {
 		return GuestFileReadResult{}, fmt.Errorf("guest file read maximum bytes must be positive")
 	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	binding, err := s.newFileOperationBinding(assignmentID)
+	stream, err := s.openOperationStream(ctx, guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM)
 	if err != nil {
 		return GuestFileReadResult{}, err
 	}
-	if err := s.Stream.Send(&guestv1.RunnerToGuest{
+	defer stream.close()
+	binding, err := newFileOperationBinding(stream, assignmentID)
+	if err != nil {
+		return GuestFileReadResult{}, err
+	}
+	if err := stream.send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_File{File: &guestv1.FileFrame{
 			Binding: binding,
 			Payload: &guestv1.FileFrame_Request{Request: &guestv1.FileRequest{
@@ -68,7 +71,7 @@ func (s *GuestProtocolSession) ReadFile(
 	}); err != nil {
 		return GuestFileReadResult{}, fmt.Errorf("send guest file read request: %w", err)
 	}
-	first, err := s.Stream.Recv()
+	first, err := stream.stream.Recv()
 	if err != nil {
 		return GuestFileReadResult{}, fmt.Errorf("receive guest file read metadata: %w", err)
 	}
@@ -84,7 +87,7 @@ func (s *GuestProtocolSession) ReadFile(
 		return GuestFileReadResult{}, fmt.Errorf("guest file read metadata exceeds requested limit")
 	}
 	binding.Sequence = 2
-	if err := s.Stream.Send(&guestv1.RunnerToGuest{
+	if err := stream.send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_File{File: &guestv1.FileFrame{
 			Binding: binding,
 			Payload: &guestv1.FileFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: maximumBytes}},
@@ -95,7 +98,7 @@ func (s *GuestProtocolSession) ReadFile(
 	result := GuestFileReadResult{Metadata: metadata}
 	expectedSequence := uint64(2)
 	for {
-		response, err := s.Stream.Recv()
+		response, err := stream.stream.Recv()
 		if err != nil {
 			return GuestFileReadResult{}, fmt.Errorf("receive guest file read response: %w", err)
 		}
@@ -124,7 +127,7 @@ func (s *GuestProtocolSession) ReadFile(
 }
 
 func (s *GuestProtocolSession) validateFileOperation(ctx context.Context, assignmentID, path string) error {
-	if s == nil || s.Stream == nil || s.Binding == nil {
+	if s == nil || s.connect == nil || s.Binding == nil {
 		return fmt.Errorf("guest protocol session is not ready")
 	}
 	if !s.EnabledFeatures[guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM] {
@@ -136,13 +139,13 @@ func (s *GuestProtocolSession) validateFileOperation(ctx context.Context, assign
 	return ctx.Err()
 }
 
-func (s *GuestProtocolSession) newFileOperationBinding(assignmentID string) (*guestv1.OperationBinding, error) {
+func newFileOperationBinding(stream *guestOperationStream, assignmentID string) (*guestv1.OperationBinding, error) {
 	operationID, err := randomGuestOperationID()
 	if err != nil {
 		return nil, err
 	}
 	return &guestv1.OperationBinding{
-		Connection:   cloneGuestConnectionBinding(s.Binding),
+		Connection:   cloneGuestConnectionBinding(stream.connection),
 		AssignmentId: assignmentID,
 		OperationId:  operationID,
 		StreamId:     operationID,

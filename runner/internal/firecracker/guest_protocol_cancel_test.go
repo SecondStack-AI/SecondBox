@@ -46,7 +46,6 @@ func TestGuestProtocolCancellationSendFailureIsReturned(t *testing.T) {
 				cancelSendFailure: cancelSendFailure,
 			}
 			session := &GuestProtocolSession{
-				Stream: stream,
 				Binding: &guestv1.ConnectionBinding{
 					InstanceId: "instance-1", SandboxId: "sandbox-1", SandboxGeneration: 1,
 					ConnectionNonce: []byte("01234567890123456789012345678901"),
@@ -56,11 +55,16 @@ func TestGuestProtocolCancellationSendFailureIsReturned(t *testing.T) {
 					guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM: true,
 				},
 			}
+			connectEveryOperationTo(session, stream)
 			done := make(chan error, 1)
 			go func() {
 				done <- test.run(ctx, session)
 			}()
-			<-stream.initialSend
+			select {
+			case <-stream.initialSend:
+			case err := <-done:
+				t.Fatalf("operation ended before dispatch: %v", err)
+			}
 			cancel()
 			err := <-done
 			if !errors.Is(err, cancelSendFailure) {

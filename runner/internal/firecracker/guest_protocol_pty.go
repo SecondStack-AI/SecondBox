@@ -36,14 +36,12 @@ func (sender *guestPTYOperationSender) send(frame *guestv1.PtyFrame) error {
 	frame.Binding = cloneGuestOperationBinding(sender.execSender.binding)
 	frame.Binding.Sequence = sender.execSender.nextSequence
 	sender.execSender.nextSequence++
-	sender.execSender.session.sendMu.Lock()
-	defer sender.execSender.session.sendMu.Unlock()
-	return sender.execSender.session.Stream.Send(&guestv1.RunnerToGuest{
+	return sender.execSender.stream.send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_Pty{Pty: frame},
 	})
 }
 
-// ExecutePTY runs one real terminal operation over the retained Firecracker guest stream.
+// ExecutePTY runs one real terminal operation on its own guest stream.
 func (s *GuestProtocolSession) ExecutePTY(
 	ctx context.Context,
 	assignmentID string,
@@ -51,7 +49,7 @@ func (s *GuestProtocolSession) ExecutePTY(
 	controls <-chan GuestPTYControl,
 	emit func([]byte) error,
 ) (result GuestPTYResult, resultErr error) {
-	if s == nil || s.Stream == nil || s.Binding == nil {
+	if s == nil || s.connect == nil || s.Binding == nil {
 		return GuestPTYResult{}, fmt.Errorf("guest protocol session is not ready")
 	}
 	if !s.EnabledFeatures[guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC] ||
@@ -73,12 +71,19 @@ func (s *GuestProtocolSession) ExecutePTY(
 	if err := ctx.Err(); err != nil {
 		return GuestPTYResult{}, err
 	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
 	request, err := s.prepareReservedGuestEnvironment(request, netip.AddrPort{})
 	if err != nil {
 		return GuestPTYResult{}, err
 	}
+	stream, err := s.openOperationStream(
+		ctx,
+		guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
+		guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
+	)
+	if err != nil {
+		return GuestPTYResult{}, err
+	}
+	defer stream.close()
 
 	operationID, err := randomGuestOperationID()
 	if err != nil {
@@ -86,25 +91,22 @@ func (s *GuestProtocolSession) ExecutePTY(
 	}
 	result.SessionID = operationID
 	binding := &guestv1.OperationBinding{
-		Connection:   cloneGuestConnectionBinding(s.Binding),
+		Connection:   cloneGuestConnectionBinding(stream.connection),
 		AssignmentId: assignmentID,
 		OperationId:  operationID,
 		StreamId:     operationID,
 		Sequence:     1,
 	}
-	s.sendMu.Lock()
-	err = s.Stream.Send(&guestv1.RunnerToGuest{
+	if err := stream.send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_Exec{Exec: &guestv1.ExecFrame{
 			Binding: binding,
 			Payload: &guestv1.ExecFrame_Request{Request: cloneGuestExecRequest(request)},
 		}},
-	})
-	s.sendMu.Unlock()
-	if err != nil {
+	}); err != nil {
 		return result, fmt.Errorf("send guest PTY request: %w", err)
 	}
 	sender := &guestPTYOperationSender{execSender: &guestExecOperationSender{
-		session: s, binding: binding, nextSequence: 2,
+		stream: stream, binding: binding, nextSequence: 2,
 	}}
 	cancellationSendError := make(chan error, 1)
 	stopCancellation := context.AfterFunc(ctx, func() {
@@ -120,7 +122,7 @@ func (s *GuestProtocolSession) ExecutePTY(
 		}
 	}()
 
-	first, err := s.Stream.Recv()
+	first, err := stream.stream.Recv()
 	if err != nil {
 		return result, fmt.Errorf("receive guest PTY admission: %w", err)
 	}
@@ -143,7 +145,7 @@ func (s *GuestProtocolSession) ExecutePTY(
 
 	expectedSequence := uint64(2)
 	for {
-		response, err := s.Stream.Recv()
+		response, err := stream.stream.Recv()
 		if err != nil {
 			select {
 			case controlErr := <-controlErrors:

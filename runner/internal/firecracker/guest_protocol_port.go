@@ -3,7 +3,6 @@ package firecracker
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"sync"
 
@@ -124,7 +123,9 @@ func OpenPortOverSession(
 		return nil, fmt.Errorf("SecondBox Firecracker guest Port feature was not negotiated")
 	}
 	portCtx, cancel := context.WithCancel(ctx)
-	stream, binding, err := session.openPortProtocolStream(portCtx)
+	stream, binding, err := session.openGuestStream(
+		portCtx, []guestv1.GuestFeature{guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY},
+	)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -173,52 +174,6 @@ func newGuestPortConnection(
 		credit: newGuestPortCredit(), opened: make(chan error, 1),
 		receiveReady: make(chan struct{}, 1),
 	}
-}
-
-func (session *GuestProtocolSession) openPortProtocolStream(
-	ctx context.Context,
-) (guestv1.GuestAgent_ConnectClient, *guestv1.ConnectionBinding, error) {
-	nonce := make([]byte, guestConnectionNonceByteCount)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, nil, fmt.Errorf("create guest Port connection nonce: %w", err)
-	}
-	binding := &guestv1.ConnectionBinding{
-		InstanceId: session.Binding.InstanceId, SandboxId: session.Binding.SandboxId,
-		SandboxGeneration: session.Binding.SandboxGeneration, ConnectionNonce: nonce,
-	}
-	stream, err := guestv1.NewGuestAgentClient(session.Connection).Connect(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open guest Port protocol stream: %w", err)
-	}
-	if err := stream.Send(&guestv1.RunnerToGuest{
-		Message: &guestv1.RunnerToGuest_Hello{Hello: &guestv1.Hello{
-			Binding: binding,
-			SupportedGenerations: &guestv1.ProtocolGenerationRange{
-				Minimum: currentGuestProtocolGeneration, Maximum: currentGuestProtocolGeneration,
-			},
-			RequestedFeatures:               []guestv1.GuestFeature{guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY},
-			MandatoryFeatures:               []guestv1.GuestFeature{guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY},
-			ExpectedImageManifestDigest:     session.ImageManifestDigest,
-			ExpectedToolchainManifestDigest: session.ToolchainManifestDigest,
-		}},
-	}); err != nil {
-		return nil, nil, fmt.Errorf("send guest Port protocol hello: %w", err)
-	}
-	first, err := stream.Recv()
-	if err != nil {
-		return nil, nil, fmt.Errorf("receive guest Port protocol welcome: %w", err)
-	}
-	welcome := first.GetWelcome()
-	if welcome == nil || welcome.SelectedGeneration != currentGuestProtocolGeneration ||
-		welcome.GuestBuildId != session.GuestBuildID ||
-		welcome.ImageManifestDigest != session.ImageManifestDigest ||
-		welcome.ToolchainManifestDigest != session.ToolchainManifestDigest ||
-		!sameConnectionBinding(welcome.Binding, binding) ||
-		len(welcome.EnabledFeatures) != 1 ||
-		welcome.EnabledFeatures[0] != guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY {
-		return nil, nil, fmt.Errorf("guest Port protocol welcome is invalid")
-	}
-	return stream, binding, nil
 }
 
 func (connection *guestPortConnection) receive(ctx context.Context) {
