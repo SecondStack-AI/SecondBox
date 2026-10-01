@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/portdirect"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"google.golang.org/protobuf/proto"
 )
@@ -142,6 +143,17 @@ func (registry *directDataPlaneRegistry) complete(operationID string) {
 			delete(registry.sessions, key)
 		}
 	}
+}
+
+func (registry *directDataPlaneRegistry) find(operationID string) *directDataPlaneSession {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for _, session := range registry.sessions {
+		if session.operationID == operationID {
+			return session
+		}
+	}
+	return nil
 }
 
 func (registry *directDataPlaneRegistry) closeAssignment(assignmentID string, reason string) {
@@ -300,10 +312,20 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 		return nil
 	}
 	key := runnerDataPlaneOperationKey(command.Fence, command.OperationId, command.StreamId)
+	admitted := s.directDataPlane.find(command.OperationId)
 	var retained *runnerprotocol.RunnerToControlPlane
+	var unopened *runnerprotocol.Correlation
 	running := false
 	s.operationMu.Lock()
-	if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC ||
+	if s.execOperations[key] == nil && s.fileOperations[key] == nil && admitted != nil &&
+		admitted.streamID == command.StreamId && admitted.kind == command.Kind &&
+		proto.Equal(admitted.fence, command.Fence) {
+		// The control plane counts an admitted direct session as running
+		// before its Open arrives. A cancelled terminal recorded now confirms
+		// the cancellation, and a late Open meets it and is discarded.
+		retained = s.recordCancelledBeforeOpenLocked(key, command, admitted.correlation)
+		unopened = admitted.correlation
+	} else if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC ||
 		command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY {
 		if state := s.execOperations[key]; state != nil {
 			switch {
@@ -337,10 +359,91 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 		// terminal there; a session whose Open has not arrived must not start.
 		s.directDataPlane.closeSession(command.OperationId, command.Reason)
 	}
+	if unopened != nil {
+		event := runnerevidence.EventExecTerminal
+		kind := runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String()
+		if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE {
+			event = runnerevidence.EventFileTerminal
+			kind = runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String()
+		}
+		if err := s.emitEvidence(
+			context.Background(), event, command.Fence, unopened, command.OperationId,
+			kind, terminalOutcome(kind),
+		); err != nil {
+			return err
+		}
+	}
 	if retained != nil {
 		return s.reportCancelledOperationTerminal(retained)
 	}
 	return nil
+}
+
+// recordCancelledBeforeOpenLocked retains a cancelled terminal for an
+// operation whose Open has not arrived, as the first frame of its stream.
+func (s *RunnerProtocolService) recordCancelledBeforeOpenLocked(
+	key string,
+	command *runnerprotocol.DataPlaneCancelCommand,
+	correlation *runnerprotocol.Correlation,
+) *runnerprotocol.RunnerToControlPlane {
+	fence := cloneRunnerFence(command.Fence)
+	switch command.Kind {
+	case runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE:
+		frame := &runnerprotocol.FileFrame{
+			Fence: fence, OperationId: command.OperationId, StreamId: command.StreamId, Sequence: 1,
+			Correlation: cloneRunnerCorrelation(correlation),
+			Payload: &runnerprotocol.FileFrame_Terminal{Terminal: &runnerprotocol.FileTerminal{
+				Kind: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED, SafeDetail: "filesystem operation cancelled",
+			}},
+		}
+		s.fileOperations[key] = &runnerFileOperation{
+			key: key, fence: cloneRunnerFence(fence), correlation: cloneRunnerCorrelation(correlation),
+			operationID: command.OperationId, streamID: command.StreamId,
+			nextIncoming: 1, nextOutgoing: 2, started: true, terminal: true,
+			terminalFrame: proto.Clone(frame).(*runnerprotocol.FileFrame),
+		}
+		s.retainFileTerminalLocked(key)
+		return &runnerprotocol.RunnerToControlPlane{Message: &runnerprotocol.RunnerToControlPlane_File{File: frame}}
+	case runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY:
+		frame := &runnerprotocol.PtyFrame{
+			Fence: fence, OperationId: command.OperationId, StreamId: command.StreamId, Sequence: 1,
+			Correlation: cloneRunnerCorrelation(correlation),
+			Payload: &runnerprotocol.PtyFrame_Terminal{Terminal: &runnerprotocol.ExecTerminal{
+				Kind: runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED, ExitCode: -1, SafeDetail: "Terminal cancelled",
+			}},
+		}
+		done := make(chan struct{})
+		close(done)
+		s.execOperations[key] = &runnerExecOperation{
+			key: key, fence: cloneRunnerFence(fence), correlation: cloneRunnerCorrelation(correlation),
+			operationID: command.OperationId, streamID: command.StreamId,
+			nextIncoming: 1, nextOutgoing: 2, done: done, pty: true, terminal: true,
+			ptyTerminalFrame: proto.Clone(frame).(*runnerprotocol.PtyFrame),
+			ptyReplay:        []*runnerprotocol.PtyFrame{proto.Clone(frame).(*runnerprotocol.PtyFrame)},
+		}
+		s.retainExecTerminalLocked(key)
+		return &runnerprotocol.RunnerToControlPlane{Message: &runnerprotocol.RunnerToControlPlane_Pty{Pty: frame}}
+	default:
+		frame := &runnerprotocol.ExecFrame{
+			Fence: fence, OperationId: command.OperationId, StreamId: command.StreamId, Sequence: 1,
+			Correlation: cloneRunnerCorrelation(correlation),
+			Payload: &runnerprotocol.ExecFrame_BufferedResult{BufferedResult: &runnerprotocol.ExecBufferedResult{
+				Terminal: &runnerprotocol.ExecTerminal{
+					Kind: runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED, ExitCode: -1, SafeDetail: "command cancelled",
+				},
+			}},
+		}
+		done := make(chan struct{})
+		close(done)
+		s.execOperations[key] = &runnerExecOperation{
+			key: key, fence: cloneRunnerFence(fence), correlation: cloneRunnerCorrelation(correlation),
+			operationID: command.OperationId, streamID: command.StreamId,
+			nextIncoming: 1, nextOutgoing: 2, done: done, terminal: true,
+			terminalFrame: proto.Clone(frame).(*runnerprotocol.ExecFrame),
+		}
+		s.retainExecTerminalLocked(key)
+		return &runnerprotocol.RunnerToControlPlane{Message: &runnerprotocol.RunnerToControlPlane_Exec{Exec: frame}}
+	}
 }
 
 func (s *RunnerProtocolService) serveDirectTypedConnection(

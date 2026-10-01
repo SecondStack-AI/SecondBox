@@ -326,6 +326,17 @@ func TestDirectDataPlaneCarriesTypedExecFileAndPTYMessages(t *testing.T) {
 	if _, err := portdirect.ReadTypedMessage(cancelConnection); err == nil {
 		t.Fatal("cancelled direct session remained connected before Open")
 	}
+	// The control plane counts an admitted session as running, so the
+	// cancellation is still confirmed although no operation ever started.
+	var confirmed *runnerprotocol.ExecTerminal
+	for _, message := range stream.messages() {
+		if message.GetExec().GetOperationId() == "direct-cancel" {
+			confirmed = message.GetExec().GetBufferedResult().GetTerminal()
+		}
+	}
+	if confirmed.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
+		t.Fatalf("cancellation before Open confirmed with %v", confirmed)
+	}
 }
 
 func TestDirectExecDeliversTerminalAfterExecutionDeadline(t *testing.T) {
@@ -403,6 +414,13 @@ func TestDurableCancellationReportsTheTerminalOnTheControlConnection(t *testing.
 			Streaming: true,
 		}},
 	}}
+	readOpen := &runnerprotocol.ControlPlaneToRunner_File{File: &runnerprotocol.FileFrame{
+		Sequence: 1,
+		Payload: &runnerprotocol.FileFrame_Open{Open: &runnerprotocol.FileOpen{
+			Operation: runnerprotocol.FileOperation_FILE_OPERATION_READ, WorkspaceRelativePath: "file",
+			ExpectedSize: 1024,
+		}},
+	}}
 	mkdirOpen := &runnerprotocol.ControlPlaneToRunner_File{File: &runnerprotocol.FileFrame{
 		Sequence: 1,
 		Payload: &runnerprotocol.FileFrame_Open{Open: &runnerprotocol.FileOpen{
@@ -414,6 +432,7 @@ func TestDurableCancellationReportsTheTerminalOnTheControlConnection(t *testing.
 		backend      func(started chan<- struct{}) *relayAssignmentBackend
 		kind         runnerprotocol.DataPlaneSessionKind
 		open         any
+		leading      int
 		cancelLive   bool
 		wantTerminal string
 	}{{
@@ -440,6 +459,24 @@ func TestDurableCancellationReportsTheTerminalOnTheControlConnection(t *testing.
 			}}
 		},
 		kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, open: mkdirOpen,
+		cancelLive: true, wantTerminal: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String(),
+	}, {
+		name: "File read waiting for response credit",
+		backend: func(started chan<- struct{}) *relayAssignmentBackend {
+			return &relayAssignmentBackend{file: func(
+				context.Context, *runnerprotocol.AssignmentFence, *runnerprotocol.FileOpen, []byte,
+			) (FileOperationResult, error) {
+				close(started)
+				return FileOperationResult{
+					Metadata: &runnerprotocol.FileMetadata{Exists: true, Size: 4},
+					Content:  []byte("data"),
+					Terminal: &runnerprotocol.FileTerminal{
+						Kind: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED,
+					},
+				}, nil
+			}}
+		},
+		kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, open: readOpen, leading: 1,
 		cancelLive: true, wantTerminal: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String(),
 	}, {
 		name: "File operation that finished before the cancellation",
@@ -514,6 +551,9 @@ func TestDurableCancellationReportsTheTerminalOnTheControlConnection(t *testing.
 				}); err != nil {
 					t.Fatal(err)
 				}
+			}
+			for range test.leading {
+				readDirectDataPlaneTestMessage(t, client)
 			}
 			if test.cancelLive {
 				cancel()

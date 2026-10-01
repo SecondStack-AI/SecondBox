@@ -1192,16 +1192,27 @@ func (s *RunnerProtocolService) executeFileOperation(
 		}
 		result.Terminal = &runnerprotocol.FileTerminal{Kind: kind, SafeDetail: detail}
 	}
+	var deliveryErr error
 	if result.Metadata != nil {
-		if err := s.sendFileMetadata(stream, state, result.Metadata); err != nil {
-			reportRunnerAsyncError(asyncErrors, err)
-			return
-		}
+		deliveryErr = s.sendFileMetadata(stream, state, result.Metadata)
 	}
-	if len(result.Content) > 0 {
-		if err := s.sendRunnerFileBytes(ctx, stream, state, result.Content); err != nil {
-			reportRunnerAsyncError(asyncErrors, err)
-			return
+	if deliveryErr == nil && len(result.Content) > 0 {
+		deliveryErr = s.sendRunnerFileBytes(ctx, stream, state, result.Content)
+	}
+	if deliveryErr != nil {
+		// The operation still ends with a retained terminal, which a durable
+		// cancellation confirms. Cancellation while the result waits for
+		// credit is an outcome, not a connection failure.
+		result.Terminal = &runnerprotocol.FileTerminal{
+			Kind:       runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FAILED,
+			SafeDetail: "runner filesystem result delivery failed",
+		}
+		if ctx.Err() != nil {
+			result.Terminal = &runnerprotocol.FileTerminal{
+				Kind:       runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED,
+				SafeDetail: "filesystem operation cancelled",
+			}
+			deliveryErr = nil
 		}
 	}
 	if result.Terminal == nil {
@@ -1210,7 +1221,7 @@ func (s *RunnerProtocolService) executeFileOperation(
 			SafeDetail: "runner filesystem bridge returned no terminal outcome",
 		}
 	}
-	if err := s.sendFileTerminal(stream, state, result.Terminal); err != nil {
+	if err := errors.Join(deliveryErr, s.sendFileTerminal(stream, state, result.Terminal)); err != nil {
 		reportRunnerAsyncError(asyncErrors, err)
 	}
 }

@@ -1025,7 +1025,7 @@ func TestPostgresRunnerCancellationConfirmationIsFenced(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	session, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
-		ID: "dps_cancellation_confirmation", StreamID: "stream_cancellation_confirmation",
+		ID: "dps_cancellation_confirmation_" + sandbox.ID, StreamID: "stream_cancellation_confirmation_" + sandbox.ID,
 		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
 		SubjectRef: principal.SubjectRef, Generation: sandbox.Generation,
 		RequestID: "request-cancellation-confirmation",

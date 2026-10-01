@@ -311,10 +311,10 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitStreamingRunnerEvent(t, fake.events, "cancel:disconnect")
-	// The disconnect closed the session's route before it recorded the
-	// cancellation, so the Runner's in-band terminal may have reached no
-	// reader. Applying the durable cancellation, the Runner reports the
-	// retained terminal on its control connection, which completes the session.
+	// The disconnect records the cancellation and closes the route, so the
+	// Runner's in-band terminal may have reached no reader. Applying the
+	// durable cancellation, the Runner reports the retained terminal on its
+	// control connection, which completes the session.
 	deadline := time.Now().Add(time.Second)
 	for {
 		detachedSession, err := relay.GetDataPlaneSession(

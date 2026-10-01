@@ -623,3 +623,52 @@ func runnerFileFrame(
 		}},
 	}
 }
+
+// Output a Terminal produces while detached stays in the Runner's replay ring,
+// so a Terminal's terminal can follow a sequence gap on this connection. Any
+// other gap or a step back still fails the stream.
+func TestSessionAcceptsDetachedTerminalGapOnlyBeforeItsTerminal(t *testing.T) {
+	session := negotiatedDataPlaneSession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	fence := dataPlaneTestFence()
+	ptyFrame := func(sequence uint64, payload any) *runnerv1.RunnerToControlPlane {
+		frame := &runnerv1.PtyFrame{Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: sequence}
+		switch typed := payload.(type) {
+		case *runnerv1.PtyFrame_AttachResult:
+			frame.Payload = typed
+		case *runnerv1.PtyFrame_Output:
+			frame.Payload = typed
+		case *runnerv1.PtyFrame_Terminal:
+			frame.Payload = typed
+		}
+		return &runnerv1.RunnerToControlPlane{Message: &runnerv1.RunnerToControlPlane_Pty{Pty: frame}}
+	}
+	output := &runnerv1.PtyFrame_Output{Output: &runnerv1.ExecOutput{
+		Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT, Data: []byte("x"),
+	}}
+	terminal := &runnerv1.PtyFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
+		Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED, ExitCode: -1,
+	}}
+	for _, frame := range []*runnerv1.RunnerToControlPlane{
+		ptyFrame(1, &runnerv1.PtyFrame_AttachResult{AttachResult: &runnerv1.PtyAttachResult{
+			Kind: runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED, AfterSequence: -1,
+		}}),
+		ptyFrame(1, output),
+		ptyFrame(2, output),
+	} {
+		if _, err := session.Accept(frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := session.Accept(ptyFrame(5, output)); !errors.Is(err, ErrSequenceReordered) {
+		t.Fatalf("gapped Terminal output error = %v, want ErrSequenceReordered", err)
+	}
+	if _, err := session.Accept(ptyFrame(1, terminal)); !errors.Is(err, ErrSequenceReordered) {
+		t.Fatalf("stale Terminal terminal error = %v, want ErrSequenceReordered", err)
+	}
+	if event, err := session.Accept(ptyFrame(7, terminal)); err != nil || event.Kind != EventPty {
+		t.Fatalf("Terminal terminal after detached output = %#v, %v", event, err)
+	}
+}

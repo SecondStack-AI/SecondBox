@@ -200,7 +200,8 @@ func (confirmer *recordingCancellationConfirmer) ConfirmDataPlaneCancellation(
 
 // A terminal that no live route takes is the only proof that a cancelled
 // operation stopped after its request ended, so it reaches the cancellation
-// confirmer. Routed frames and route-less output never touch PostgreSQL.
+// confirmer, as does a repeat of a terminal a route already holds. A first
+// routed terminal and route-less output never touch PostgreSQL.
 func TestRouteLessOperationTerminalConfirmsTheCancellation(t *testing.T) {
 	broker, detach := liveDataPlaneTestBroker(t)
 	defer detach()
@@ -238,6 +239,14 @@ func TestRouteLessOperationTerminalConfirmsTheCancellation(t *testing.T) {
 				Payload: &runnerv1.PtyFrame_Terminal{Terminal: cancelled},
 			},
 		}}},
+		// The Runner's confirmation repeats a terminal its live route already
+		// holds; the route's owner may abandon it unread.
+		{Kind: EventExec, Message: &runnerv1.RunnerToControlPlane{Message: &runnerv1.RunnerToControlPlane_Exec{
+			Exec: &runnerv1.ExecFrame{
+				Fence: fence, OperationId: "routed-operation", StreamId: "routed-stream", Sequence: 1,
+				Payload: &runnerv1.ExecFrame_BufferedResult{BufferedResult: &runnerv1.ExecBufferedResult{Terminal: cancelled}},
+			},
+		}}},
 	} {
 		event.RunnerID, event.ConnectionID = "runner-1", "connection-1"
 		if err := server.persistEvent(t.Context(), event, time.Now().UTC()); err != nil {
@@ -248,8 +257,8 @@ func TestRouteLessOperationTerminalConfirmsTheCancellation(t *testing.T) {
 	for _, frame := range confirmer.frames {
 		confirmed = append(confirmed, frame.GetExec().GetOperationId()+frame.GetFile().GetOperationId()+frame.GetPty().GetOperationId())
 	}
-	if strings.Join(confirmed, ",") != "exec,file,terminal" {
-		t.Fatalf("confirmed cancellations = %v, want exec,file,terminal", confirmed)
+	if strings.Join(confirmed, ",") != "exec,file,terminal,routed-operation" {
+		t.Fatalf("confirmed cancellations = %v, want exec,file,terminal,routed-operation", confirmed)
 	}
 	if message, err := routed.Receive(t.Context()); err != nil || message.GetExec().GetBufferedResult() == nil {
 		t.Fatalf("routed terminal = %v, %v", message, err)
