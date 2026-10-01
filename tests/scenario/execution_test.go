@@ -308,7 +308,7 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 		defer disconnect()
 		_, err := handle.Execute(
 			disconnectContext,
-			scenarioExecRequest("sleep 5; touch buffered-disconnect-survived", 1024),
+			scenarioExecRequest("touch buffered-disconnect-started; sleep 5; touch buffered-disconnect-survived", 1024),
 			uniqueScenarioKey(t, "buffered-disconnect"),
 			"",
 		)
@@ -319,10 +319,10 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 		time.Sleep(time.Until(started.Add(7 * time.Second)))
 		probe := executeScenarioCommand(
 			t, ctx, handle,
-			"if test -e buffered-disconnect-survived; then printf survived; else printf cancelled; fi",
+			"test -e buffered-disconnect-started || printf never-started; test -e buffered-disconnect-survived && printf survived; printf done",
 			1024, "buffered-disconnect-probe",
 		)
-		assertScenarioExited(t, probe, 0, "cancelled", "")
+		assertScenarioExited(t, probe, 0, "done", "")
 	})
 
 	t.Run("configured pair of concurrent executions completes", func(t *testing.T) {

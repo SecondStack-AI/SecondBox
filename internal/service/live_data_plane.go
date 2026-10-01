@@ -131,10 +131,7 @@ func (stream *proxiedDataPlaneStream) Close() error {
 
 type directDataPlaneStream struct {
 	connection net.Conn
-	// deliveryDeadline is restored before each Receive: a cancelled Receive
-	// moves the read deadline to now, and a later drain must still read.
-	deliveryDeadline time.Time
-	writeMu          sync.Mutex
+	writeMu    sync.Mutex
 }
 
 func (service *ControlPlaneService) openDirectDataPlaneStream(
@@ -183,7 +180,7 @@ func (service *ControlPlaneService) openDirectDataPlaneStream(
 		_ = connection.Close()
 		return nil, fmt.Errorf("SecondBox direct data-plane admission denied: %s", detail)
 	}
-	return &directDataPlaneStream{connection: connection, deliveryDeadline: deliveryDeadline}, nil
+	return &directDataPlaneStream{connection: connection}, nil
 }
 
 func (stream *directDataPlaneStream) Send(message *runnerv1.ControlPlaneToRunner) error {
@@ -197,23 +194,15 @@ func (stream *directDataPlaneStream) Send(message *runnerv1.ControlPlaneToRunner
 }
 
 func (stream *directDataPlaneStream) Receive(ctx context.Context) (*runnerv1.RunnerToControlPlane, error) {
-	if err := stream.connection.SetReadDeadline(stream.deliveryDeadline); err != nil {
-		return nil, err
-	}
 	finished := make(chan struct{})
-	stopped := make(chan struct{})
 	go func() {
-		defer close(stopped)
 		select {
 		case <-ctx.Done():
 			_ = stream.connection.SetReadDeadline(time.Now())
 		case <-finished:
 		}
 	}()
-	defer func() {
-		close(finished)
-		<-stopped
-	}()
+	defer close(finished)
 	payload, err := portdirect.ReadTypedMessage(stream.connection)
 	if err != nil {
 		return nil, err

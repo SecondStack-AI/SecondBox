@@ -54,14 +54,15 @@ func TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota(t *testing.T
 	probe := executeScenarioCommand(t, ctx, handle, "printf recovered", 1024, "post-direct-deadline")
 	assertScenarioExited(t, probe, 0, "recovered", "")
 
-	// The single operation slot is free again only if the disconnected
-	// buffered exec's cancellation completed its session.
+	// Buffered exec always uses the proxied transport. With one operation slot
+	// the probe runs only if the disconnected exec's cancellation completed
+	// its session and released the slot.
 	started := time.Now()
 	disconnectContext, disconnect := context.WithTimeout(ctx, 2*time.Second)
 	defer disconnect()
 	if _, err := handle.Execute(
 		disconnectContext,
-		scenarioExecRequest("sleep 5; touch direct-disconnect-survived", 1024),
+		scenarioExecRequest("touch direct-disconnect-started; sleep 5; touch direct-disconnect-survived", 1024),
 		uniqueScenarioKey(t, "direct-buffered-disconnect"),
 		"",
 	); !errors.Is(err, context.DeadlineExceeded) {
@@ -70,8 +71,8 @@ func TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota(t *testing.T
 	time.Sleep(time.Until(started.Add(7 * time.Second)))
 	probe = executeScenarioCommand(
 		t, ctx, handle,
-		"if test -e direct-disconnect-survived; then printf survived; else printf cancelled; fi",
+		"test -e direct-disconnect-started || printf never-started; test -e direct-disconnect-survived && printf survived; printf done",
 		1024, "post-direct-disconnect",
 	)
-	assertScenarioExited(t, probe, 0, "cancelled", "")
+	assertScenarioExited(t, probe, 0, "done", "")
 }
