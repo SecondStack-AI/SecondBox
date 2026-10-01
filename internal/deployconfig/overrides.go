@@ -34,13 +34,13 @@ func OverrideRegistry() []OverrideDefinition {
 		{"data_plane_maximum_session_bytes", "SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES", "", "Maximum data-plane session payload.", false, "DataPlaneMaximumSessionBytes"},
 		{"data_plane_poll_interval_milliseconds", "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS", "", "Data-plane polling, accounting, and session sweep cadence.", false, "DataPlanePollIntervalMilliseconds"},
 		{"idempotency_retention_seconds", "SECONDBOX_IDEMPOTENCY_RETENTION_SECONDS", "", "Retention for expired idempotency and activity-touch records.", false, "IdempotencyRetentionSeconds"},
-		{"lifecycle_reconcile_batch_size", "SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE", "", "Lifecycle rows reconciled per batch.", false, "LifecycleReconcileBatchSize"},
+		{"lifecycle_reconcile_batch_size", "SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE", "", "Lifecycle rows claimed and reconciled concurrently per batch.", false, "LifecycleReconcileBatchSize"},
 		{"lifecycle_reconcile_poll_interval_milliseconds", "SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS", "", "Lifecycle fallback polling cadence.", false, "LifecycleReconcilePollIntervalMilliseconds"},
 		{"lifecycle_reconcile_claim_duration_milliseconds", "SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS", "", "Lifecycle work claim duration.", false, "LifecycleReconcileClaimDurationMilliseconds"},
 		{"assignment_claim_duration_milliseconds", "SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS", "", "Assignment dispatch claim duration.", false, "AssignmentClaimDurationMilliseconds"},
 		{"assignment_deadline_milliseconds", "SECONDBOX_ASSIGNMENT_DEADLINE_MILLISECONDS", "", "Assignment readiness deadline.", false, "AssignmentDeadlineMilliseconds"},
 		{"assignment_retry_limit", "SECONDBOX_ASSIGNMENT_RETRY_LIMIT", "", "Assignment retry count.", true, "AssignmentRetryLimit"},
-		{"scheduler_serialization_retry_limit", "SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT", "", "Serializable scheduling retry count.", true, "SchedulerSerializationRetryLimit"},
+		{"scheduler_serialization_retry_limit", "SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT", "", "Scheduling retry count after a PostgreSQL deadlock.", true, "SchedulerSerializationRetryLimit"},
 	}
 	for index := range definitions {
 		definitions[index].Default = defaults[definitions[index].Environment]

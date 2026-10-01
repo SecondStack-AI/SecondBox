@@ -908,13 +908,17 @@ func (store *PostgresStateStore) RecordEvents(
 		return fmt.Errorf("SecondBox runner event batch transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var sandboxIDs []string
+	var sandboxIDs, batchSandboxIDs []string
 	for _, record := range records {
 		eventIDs, err := eventSandboxIDs(ctx, tx, record.Event)
 		if err != nil {
 			return fmt.Errorf("SecondBox runner event batch quota scope lookup: %w", err)
 		}
 		sandboxIDs = append(sandboxIDs, eventIDs...)
+		batchSandboxIDs = append(batchSandboxIDs, eventIDs...)
+		if sandboxID := assignmentEventSandboxID(record.Event); sandboxID != "" {
+			batchSandboxIDs = append(batchSandboxIDs, sandboxID)
+		}
 	}
 	if err := rowlock.SandboxQuotas(ctx, tx, sandboxIDs); err != nil && len(sandboxIDs) != 0 {
 		return fmt.Errorf("SecondBox runner event batch quota lock: %w", err)
@@ -930,6 +934,15 @@ func (store *PostgresStateStore) RecordEvents(
 	}
 	if storedRunnerID != runnerID || connectionState != "active" {
 		return errors.New("SecondBox runner event batch connection identity is inactive")
+	}
+	// Assignment events lock their Sandboxes without the quota ledgers, so the
+	// ledgers no longer serialize this batch with other multi-Sandbox writers.
+	// Lock every Sandbox the batch touches in the shared identity order before
+	// applying events in arrival order.
+	if len(batchSandboxIDs) > 1 {
+		if err := rowlock.SandboxesInOrder(ctx, tx, batchSandboxIDs); err != nil {
+			return fmt.Errorf("SecondBox runner event batch Sandbox lock: %w", err)
+		}
 	}
 	var containsDuplicate bool
 	if err := tx.QueryRow(ctx, `
@@ -1069,11 +1082,10 @@ func eventSandboxIDs(ctx context.Context, tx pgx.Tx, event Event) ([]string, err
 	var sandboxID string
 	switch event.Kind {
 	case EventAssignment:
-		if acknowledgement := event.Message.GetAssignmentAck(); acknowledgement != nil && acknowledgement.Fence != nil {
-			sandboxID = acknowledgement.Fence.SandboxId
-		} else if result := event.Message.GetAssignmentResult(); result != nil && result.Fence != nil {
-			sandboxID = result.Fence.SandboxId
-		}
+		// Assignment acknowledgement, progress, and results advance only the
+		// current Instance toward readiness or failure, which never increases
+		// quota usage, so they take no quota ledger lock.
+		return nil, nil
 	case EventFence:
 		if result := event.Message.GetFenceResult(); result != nil && result.Fence != nil {
 			sandboxID = result.Fence.SandboxId
@@ -1117,6 +1129,24 @@ func eventSandboxIDs(ctx context.Context, tx pgx.Tx, event Event) ([]string, err
 		return nil, nil
 	}
 	return []string{sandboxID}, nil
+}
+
+// assignmentEventSandboxID names the Sandbox an Assignment event's fence
+// targets, or "" for other events.
+func assignmentEventSandboxID(event Event) string {
+	if event.Kind != EventAssignment {
+		return ""
+	}
+	var fence *runnerv1.AssignmentFence
+	switch {
+	case event.Message.GetAssignmentAck() != nil:
+		fence = event.Message.GetAssignmentAck().Fence
+	case event.Message.GetAssignmentProgress() != nil:
+		fence = event.Message.GetAssignmentProgress().Fence
+	case event.Message.GetAssignmentResult() != nil:
+		fence = event.Message.GetAssignmentResult().Fence
+	}
+	return fence.GetSandboxId()
 }
 
 func recordLocalWorkspaceResult(
@@ -3425,6 +3455,13 @@ func (store *PostgresStateStore) beginOrderedMessage(
 			tx.Rollback(ctx),
 		)
 	}
+	// A message that touches several Sandboxes, such as Workspace
+	// reconciliation, takes them in the shared identity order.
+	if len(sandboxIDs) > 1 {
+		if err := rowlock.SandboxesInOrder(ctx, tx, sandboxIDs); err != nil {
+			return nil, false, errors.Join(err, tx.Rollback(ctx))
+		}
+	}
 	var priorSequence int64
 	err = tx.QueryRow(ctx, `
 		SELECT sequence FROM secondbox.runner_messages
@@ -4476,7 +4513,10 @@ func lockAndValidateFence(
 		len(fence.FencingToken) == 0 {
 		return ErrStaleAssignmentEvidence
 	}
-	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, fence.SandboxId)
+	// Fenced evidence advances or retires the current Instance and never
+	// increases quota usage; callers that also hold the quota ledgers lose
+	// nothing by this lock not requiring them.
+	locked, err := rowlock.SandboxWorkspaceForTransition(ctx, tx, fence.SandboxId, rowlock.NonIncreasingTransition)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner Sandbox/Workspace fence lookup: %w", err)
 	}

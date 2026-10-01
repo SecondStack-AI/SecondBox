@@ -33,8 +33,9 @@ func TenantQuota(ctx context.Context, tx pgx.Tx, tenantRef string) error {
 // TenantAndSubjectQuota establishes the global PostgreSQL mutation lock order:
 // tenant quota ledger, subject quota ledger, then domain rows such as Subject,
 // ApplicationAuthority, Sandbox, Workspace, Snapshot, PortSession, or data-plane
-// session. Trigger-backed quota accounting depends on every writer preserving
-// this order before it locks or changes a quota-bearing domain row.
+// session. Trigger-backed quota accounting depends on every writer that holds
+// the ledgers taking them before any domain row. Sandbox transitions that
+// cannot increase quota usage skip them through SandboxWorkspaceForTransition.
 func TenantAndSubjectQuota(
 	ctx context.Context,
 	tx pgx.Tx,

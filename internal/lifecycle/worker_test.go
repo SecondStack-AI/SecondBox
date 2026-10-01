@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,6 +226,40 @@ func TestReconcilerKeepsTransitionalWaitOnPollInterval(t *testing.T) {
 	}
 }
 
+// A starting Instance waits for Runner evidence that wakes the Sandbox itself,
+// so the Sandbox sleeps to its Assignment deadline instead of polling.
+func TestReconcilerSchedulesStartingInstanceAtAssignmentDeadline(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	deadline := now.Add(2 * time.Minute)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState:      contracts.SandboxStateStarting,
+		DesiredState:       contracts.SandboxDesiredStateRunning,
+		GuestLiveness:      contracts.GuestLivenessStarting,
+		HasInstance:        true,
+		AssignmentDeadline: &deadline,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
+	if err != nil || !found || decision.Action != ActionWait {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	if !store.nextReconcileAt.Equal(deadline) {
+		t.Fatalf("next reconciliation = %s, want Assignment deadline %s", store.nextReconcileAt, deadline)
+	}
+
+	// Past its deadline the Assignment reconciler owns recovery; keep polling.
+	store.claim.AssignmentDeadline = &now
+	if _, _, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify); err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(time.Second); !store.nextReconcileAt.Equal(want) {
+		t.Fatalf("next reconciliation = %s, want poll deadline %s", store.nextReconcileAt, want)
+	}
+}
+
 // The drain and finish-stop commits determine their own successor, so they
 // leave the Sandbox due at once instead of paying a recovery poll interval that
 // occupies no work. These four tests fix that boundary: the two transitions
@@ -408,8 +444,10 @@ func TestReconcilerParksSandboxesAtRest(t *testing.T) {
 	}
 }
 
-func TestReconcilerProcessesClaimBatchSequentially(t *testing.T) {
-	store := &fakeReconcileStore{batchClaims: []ports.LifecycleReconcileClaim{
+func TestReconcilerProcessesClaimBatchConcurrently(t *testing.T) {
+	var barrier sync.WaitGroup
+	barrier.Add(2)
+	store := &fakeReconcileStore{applyBarrier: &barrier, batchClaims: []ports.LifecycleReconcileClaim{
 		{
 			SandboxID: "sbx-batch-1", WorkerID: "worker-batch", Revision: 2,
 			ObservedState: contracts.SandboxStateCreating,
@@ -433,6 +471,7 @@ func TestReconcilerProcessesClaimBatchSequentially(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("batch reconciliation found=%t error=%v", found, err)
 	}
+	slices.Sort(store.appliedSandboxIDs)
 	if store.batchSize != 2 || len(store.appliedSandboxIDs) != 2 ||
 		store.appliedSandboxIDs[0] != "sbx-batch-1" ||
 		store.appliedSandboxIDs[1] != "sbx-batch-2" {
@@ -444,6 +483,8 @@ func TestReconcilerProcessesClaimBatchSequentially(t *testing.T) {
 }
 
 type fakeReconcileStore struct {
+	mu                sync.Mutex
+	applyBarrier      *sync.WaitGroup
 	applyErrors       map[string]error
 	claim             ports.LifecycleReconcileClaim
 	batchClaims       []ports.LifecycleReconcileClaim
@@ -502,6 +543,13 @@ func (store *fakeReconcileStore) ApplyLifecycleAction(
 	_ time.Time,
 	nextReconcileAt time.Time,
 ) error {
+	if store.applyBarrier != nil {
+		// Every claim of the cohort must reach its commit before any returns.
+		store.applyBarrier.Done()
+		store.applyBarrier.Wait()
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.action = action
 	store.appliedSandboxIDs = append(store.appliedSandboxIDs, claim.SandboxID)
 	store.nextReconcileAt = nextReconcileAt

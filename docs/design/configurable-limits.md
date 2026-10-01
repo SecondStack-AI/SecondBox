@@ -191,8 +191,7 @@ For example, an old two-connection pin with a current 128/4096 grant inherits 12
 If the head removes permission, a saved selection of 1 resolves to 1, and a saved
 selection of 128 resolves to 2. A non-attributed pin never gains permission.
 
-Resolution and command persistence share the scheduler's serializable transaction
-and retry mechanism. Replaying an existing Assignment uses its persisted command.
+Resolution and command persistence share the scheduler's placement transaction. Replaying an existing Assignment uses its persisted command.
 Changes affect the next Assignment, including a pending start not yet assigned;
 concurrent updates and scheduling may serialize in either order. Every attributed
 exec in one Assignment uses its limit. Policy updates do not resize active

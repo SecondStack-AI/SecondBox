@@ -36,6 +36,7 @@ type View struct {
 	DrainGrace                time.Duration
 	IdleTimeout               time.Duration
 	MaximumDuration           time.Duration
+	AssignmentDeadline        time.Time
 }
 
 // Decision is the single next action and any stable termination reason it establishes.

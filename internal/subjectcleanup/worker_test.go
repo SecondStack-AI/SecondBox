@@ -481,6 +481,11 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 				IdempotencyKey:  fmt.Sprintf("contention-%d", index),
 				RequestHash:     fmt.Sprintf("contention-hash-%d", index),
 				IdempotencyEnds: mutationAt.Add(time.Hour),
+				AuditEvent: contracts.AuditEvent{
+					ID:     fmt.Sprintf("audit-contention-%d-%s", index, suffix),
+					Action: "sandbox." + kind, ResourceKind: "sandbox", ResourceID: sandboxID,
+					TenantRef: tenantRef, SubjectRef: subjectRef, Outcome: "accepted", CreatedAt: mutationAt,
+				},
 			})
 			if err != nil {
 				errorsFound <- fmt.Errorf("lifecycle %s iteration %d: %w", kind, index, err)
@@ -803,4 +808,110 @@ func insertCleanupTestOperation(t *testing.T, pool *pgxpool.Pool, operationID, t
 	); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Subject cleanup holds several Sandboxes at once, as an Assignment event batch
+// does without the quota ledgers. Both take them in ascending identity order, so
+// neither can hold a later Sandbox while waiting for an earlier one.
+func TestCleanupLocksSandboxesInIdentityOrder(t *testing.T) {
+	pool, databaseURL := cleanupTestPool(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	suffix := fmt.Sprintf("%d", now.UnixNano())
+	tenantRef := "order-cleanup-tenant-" + suffix
+	subjectRef := "order-cleanup-subject-" + suffix
+	operationID := "op_order_cleanup_" + suffix
+	firstSandbox := "sandbox-order-a-" + suffix
+	secondSandbox := "sandbox-order-b-" + suffix
+	insertCleanupTestSubject(t, pool, tenantRef, subjectRef, "closed", "pending", now.Add(time.Hour), now)
+	insertCleanupTestOperation(t, pool, operationID, tenantRef, subjectRef, "pending", now)
+	// The later identity was created first, so creation order and identity
+	// order disagree.
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.subjects SET cleanup_operation_id=$3
+		WHERE tenant_ref=$1 AND ref=$2;
+		INSERT INTO secondbox.subject_cleanup_operations (
+			operation_id,tenant_ref,subject_ref,stage,reconcile_owner,
+			reconcile_claim_expires_at,next_reconcile_at,retry_count,retry_limit,
+			created_at,updated_at
+		) VALUES ($3,$1,$2,'stop_delete_sandboxes','',$4,$4,0,20,$4,$4);
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
+			logical_capacity_bytes,generation,mutation_kind,mutation_id,
+			mutation_effect_id,mutation_operation_id,mutation_expected_generation,
+			mutation_target_generation,mutation_state,local_receipt_json,created_at,updated_at
+		) VALUES
+			($5,$1,$2,$6,'runner-order','ready',1024,1,'','','','',1,1,'','{}',$4,$4),
+			($7,$1,$2,$8,'runner-order','ready',1024,1,'','','','',1,1,'','{}',$4,$4);
+		INSERT INTO secondbox.sandboxes (vcpu_count,memory_bytes,workspace_bytes,
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			revision,created_at,updated_at
+		) VALUES
+			(1,1073741824,1024,$6,$1,$2,'profile','revision','stopped','stopped',1,$5,'','{}','{}',1,$4,$4),
+			(1,1073741824,1024,$8,$1,$2,'profile','revision','stopped','stopped',1,$7,'','{}','{}',1,$9,$9)`,
+		pgx.QueryExecModeSimpleProtocol,
+		tenantRef, subjectRef, operationID, now,
+		"workspace-order-a-"+suffix, firstSandbox,
+		"workspace-order-b-"+suffix, secondSandbox, now.Add(-time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	worker := newCleanupTestWorker(t, databaseURL, "order-worker-"+suffix)
+	defer worker.Close()
+	// Deferred after the worker, so a failing test releases the Sandbox before
+	// closing the worker pool that the blocked cleanup pass still uses.
+	blocker, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if _, err := blocker.Exec(t.Context(), `SELECT id FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE`, firstSandbox); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, runErr := worker.RunOnce(t.Context(), now)
+		result <- runErr
+	}()
+	waitForSandboxLockWaiter(t, pool, tenantRef)
+	probe, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probe.Exec(t.Context(), `SELECT id FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE NOWAIT`, secondSandbox); err != nil {
+		_ = probe.Rollback(context.Background())
+		t.Fatalf("cleanup locked a later Sandbox while waiting for an earlier one: %v", err)
+	}
+	if err := probe.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := blocker.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitForSandboxLockWaiter waits until a session blocks on a Sandbox row lock
+// while it holds the Tenant's quota ledger.
+func waitForSandboxLockWaiter(t *testing.T, pool *pgxpool.Pool, tenantRef string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := pool.QueryRow(t.Context(), `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE wait_event_type='Lock' AND query LIKE '%FROM secondbox.sandboxes%FOR UPDATE%'
+			)`,
+		).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Subject cleanup for %s never waited on a Sandbox lock", tenantRef)
 }

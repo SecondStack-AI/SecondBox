@@ -9,6 +9,8 @@ if [[ "$scenario_backend" != "firecracker" && "$scenario_backend" != "microsandb
   exit 1
 fi
 export SECONDBOX_SCENARIO_COMPUTE_BACKEND="$scenario_backend"
+# Compose requires the runner backend in every mode, not only the suite.
+export SECONDBOX_COMPUTE_BACKEND="$scenario_backend"
 scenario_host_platform="${SECONDBOX_SCENARIO_HOST_PLATFORM:-linux}"
 if [[ "$scenario_host_platform" != "linux" && "$scenario_host_platform" != "darwin" ]]; then
   echo "SecondBox scenario prerequisite failed: SECONDBOX_SCENARIO_HOST_PLATFORM must be linux or darwin" >&2
@@ -148,7 +150,6 @@ fi
 
 if [[ "$scenario_mode" == "suite" ]]; then
   export SECONDBOX_RUNNER_ID=scenario-runner
-  export SECONDBOX_COMPUTE_BACKEND="$scenario_backend"
   export SECONDBOX_RUNNER_POOL_ID=standard-amd64
   export SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES=10
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS=20

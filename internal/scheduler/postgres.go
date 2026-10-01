@@ -65,6 +65,11 @@ type ScheduleRequest struct {
 	Now                     time.Time
 	EffectStartedAt         time.Time
 	PlanReadyAt             time.Time
+	// LifecycleClaimOwner is the lifecycle worker whose claim on the Sandbox
+	// this placement completes. While that worker still owns the claim, a new
+	// Assignment releases it and schedules the starting Sandbox at its
+	// operation deadline in the same transaction.
+	LifecycleClaimOwner string
 }
 
 // placementTiming records provider-neutral milestones for the successful
@@ -144,6 +149,7 @@ func (store *PostgresStore) Schedule(
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
+	increases, ledgerForced := rowlock.QuotaTransition(startIncreasesQuota), false
 	for attempt := 0; ; attempt++ {
 		attemptStartedAt, err := store.observeAtOrAfter(scheduleStartedAt)
 		if err != nil {
@@ -153,7 +159,14 @@ func (store *PostgresStore) Schedule(
 			scheduleStartedAt: scheduleStartedAt,
 			attemptStartedAt:  attemptStartedAt,
 		}
-		assignment, created, err := store.scheduleOnce(ctx, request, timing)
+		assignment, created, err := store.scheduleOnce(ctx, request, timing, increases)
+		if errors.Is(err, rowlock.ErrQuotaLedgerRequired) && !ledgerForced {
+			// The Sandbox reached a state the unlocked read did not show, from
+			// which starting it increases quota usage. Retry holding the ledgers;
+			// a forced attempt cannot report this again.
+			increases, ledgerForced = rowlock.AlwaysQuotaLedger, true
+			continue
+		}
 		if !isSerializationFailure(err) {
 			return assignment, created, err
 		}
@@ -201,12 +214,29 @@ func sleepWithContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
+// startIncreasesQuota reports whether committing `starting` adds to quota usage.
+// Starting a Sandbox admitted to run does not; restarting a failed one does.
+func startIncreasesQuota(state, desiredState string) bool {
+	return rowlock.QuotaUsageIncreases(state, desiredState, contracts.SandboxStateStarting, desiredState)
+}
+
 func (store *PostgresStore) scheduleOnce(
 	ctx context.Context,
 	request ScheduleRequest,
 	timing placementTiming,
+	increases rowlock.QuotaTransition,
 ) (DurableAssignment, bool, error) {
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	// Placement runs at READ COMMITTED. Every row it decides on is locked
+	// before it is read: the per-Sandbox advisory lock guards Assignment
+	// existence, the rowlock order covers the Sandbox and Workspace (and the
+	// quota ledgers when starting increases usage), and the home Runner row
+	// guards reserved capacity. Profile and
+	// Subject policy are read unlocked; their writers read no placement state,
+	// so a concurrent policy change orders before or after this placement.
+	// Serializable isolation added no protection here and aborted most
+	// placements in a burst, on the shared Runner row and on predicate locks
+	// between unrelated Sandboxes.
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler transaction: %w", err)
 	}
@@ -217,7 +247,10 @@ func (store *PostgresStore) scheduleOnce(
 	); err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox lock: %w", err)
 	}
-	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, request.SandboxID)
+	locked, err := rowlock.SandboxWorkspaceForTransition(ctx, tx, request.SandboxID, increases)
+	if errors.Is(err, rowlock.ErrQuotaLedgerRequired) {
+		return DurableAssignment{}, false, err
+	}
 	if err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox/Workspace lookup: %w", err)
 	}
@@ -270,7 +303,7 @@ func (store *PostgresStore) scheduleOnce(
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
-	runners, err := lockRunnerCandidates(ctx, tx, request.Requirements.PoolName)
+	runners, err := lockHomeRunner(ctx, tx, request.Requirements.PoolName, homeRunnerID)
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
@@ -433,11 +466,24 @@ func (store *PostgresStore) scheduleOnce(
 		SET reserved_capacity_json=$2,revision=revision+1,updated_at=$3 WHERE id=$1`,
 		selected.ID, reservedJSON, placementAt,
 	)
+	// The starting Sandbox waits for Runner evidence, which wakes it; its
+	// Assignment's operation deadline is only the recovery bound. A stop or
+	// delete intent that committed after the claim's start plan still wants
+	// reconciliation now, so the released claim leaves it due immediately.
 	orderedWrites.Queue(`
 		UPDATE secondbox.sandboxes
-		SET state='starting',current_instance_id=$2,revision=revision+1,updated_at=$3
+		SET state='starting',current_instance_id=$2,revision=revision+1,updated_at=$3,
+		    lifecycle_action=CASE WHEN reconcile_owner=$4 THEN 'start_instance' ELSE lifecycle_action END,
+		    next_reconcile_at=CASE
+		      WHEN reconcile_owner=$4 AND desired_state='running' THEN $5
+		      WHEN reconcile_owner=$4 THEN $3
+		      ELSE next_reconcile_at
+		    END,
+		    reconcile_claim_expires_at=CASE WHEN reconcile_owner=$4 THEN NULL ELSE reconcile_claim_expires_at END,
+		    reconcile_owner=CASE WHEN reconcile_owner=$4 THEN '' ELSE reconcile_owner END
 		WHERE id=$1`,
 		request.SandboxID, request.InstanceID, placementAt,
+		request.LifecycleClaimOwner, request.OperationDeadline.UTC(),
 	)
 	results := tx.SendBatch(ctx, orderedWrites)
 	var writeErr error
@@ -485,6 +531,7 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		request.WorkspaceID == "" || request.StartMutationID == "" ||
 		request.ProfileRevisionID == "" || request.Requirements.PoolName == "" ||
 		request.Requirements.Architecture == "" ||
+		request.LifecycleClaimOwner == "" ||
 		len(request.FencingToken) < 32 || request.ClaimExpiresAt.IsZero() ||
 		request.OperationDeadline.IsZero() || request.HeartbeatTimeout <= 0 ||
 		request.RetryLimit < 0 || request.SerializationRetryLimit < 0 || request.Now.IsZero() {
@@ -569,10 +616,14 @@ func isSerializationFailure(err error) bool {
 		(postgresError.Code == "40001" || postgresError.Code == "40P01")
 }
 
-func lockRunnerCandidates(
+// lockHomeRunner locks only the Sandbox's home Runner row. Ordinary lifecycle
+// placement never considers another Runner, so locking the rest of the pool
+// would serialize every concurrent start in the pool on rows it cannot use.
+func lockHomeRunner(
 	ctx context.Context,
 	tx pgx.Tx,
 	poolName string,
+	homeRunnerID string,
 ) ([]RunnerSnapshot, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id,pool_name,architectures_json,capabilities_json,capacity_json,
@@ -580,10 +631,10 @@ func lockRunnerCandidates(
 			guest_protocol_minimum,guest_protocol_maximum,backend_kind,
 			supported_egress_contexts_json
 		FROM secondbox.runners
-		WHERE pool_name=$1 AND state='ready'
-		ORDER BY id FOR UPDATE`, poolName)
+		WHERE id=$1 AND pool_name=$2 AND state='ready'
+		FOR UPDATE`, homeRunnerID, poolName)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox scheduler Runner candidate lock: %w", err)
+		return nil, fmt.Errorf("SecondBox scheduler home Runner lock: %w", err)
 	}
 	defer rows.Close()
 	runners := make([]RunnerSnapshot, 0)
@@ -596,7 +647,7 @@ func lockRunnerCandidates(
 			&cacheJSON, &runner.GuestProtocolMinimum, &runner.GuestProtocolMaximum, &runner.BackendKind,
 			&egressContextsJSON,
 		); err != nil {
-			return nil, fmt.Errorf("SecondBox scheduler Runner candidate scan: %w", err)
+			return nil, fmt.Errorf("SecondBox scheduler home Runner scan: %w", err)
 		}
 		var architectures []string
 		if err := json.Unmarshal(architecturesJSON, &architectures); err != nil || len(architectures) != 1 {
@@ -630,7 +681,7 @@ func lockRunnerCandidates(
 		runners = append(runners, runner)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("SecondBox scheduler Runner candidate iteration: %w", err)
+		return nil, fmt.Errorf("SecondBox scheduler home Runner iteration: %w", err)
 	}
 	return runners, nil
 }

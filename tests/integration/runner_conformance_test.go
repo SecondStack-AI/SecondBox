@@ -212,6 +212,7 @@ func (boundary *postgresConformanceBoundary) SeedAssignment(
 		RetryLimit: 2, SerializationRetryLimit: 2,
 		HeartbeatTimeout: 30 * time.Second, Now: now,
 		EffectStartedAt: now, PlanReadyAt: now,
+		LifecycleClaimOwner: "lifecycle-worker-test",
 	})
 	if err != nil {
 		return err
