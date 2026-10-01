@@ -131,7 +131,10 @@ func (stream *proxiedDataPlaneStream) Close() error {
 
 type directDataPlaneStream struct {
 	connection net.Conn
-	writeMu    sync.Mutex
+	// deliveryDeadline is restored before each Receive: a cancelled Receive
+	// moves the read deadline to now, and a later drain must still read.
+	deliveryDeadline time.Time
+	writeMu          sync.Mutex
 }
 
 func (service *ControlPlaneService) openDirectDataPlaneStream(
@@ -180,7 +183,7 @@ func (service *ControlPlaneService) openDirectDataPlaneStream(
 		_ = connection.Close()
 		return nil, fmt.Errorf("SecondBox direct data-plane admission denied: %s", detail)
 	}
-	return &directDataPlaneStream{connection: connection}, nil
+	return &directDataPlaneStream{connection: connection, deliveryDeadline: deliveryDeadline}, nil
 }
 
 func (stream *directDataPlaneStream) Send(message *runnerv1.ControlPlaneToRunner) error {
@@ -194,15 +197,23 @@ func (stream *directDataPlaneStream) Send(message *runnerv1.ControlPlaneToRunner
 }
 
 func (stream *directDataPlaneStream) Receive(ctx context.Context) (*runnerv1.RunnerToControlPlane, error) {
+	if err := stream.connection.SetReadDeadline(stream.deliveryDeadline); err != nil {
+		return nil, err
+	}
 	finished := make(chan struct{})
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		select {
 		case <-ctx.Done():
 			_ = stream.connection.SetReadDeadline(time.Now())
 		case <-finished:
 		}
 	}()
-	defer close(finished)
+	defer func() {
+		close(finished)
+		<-stopped
+	}()
 	payload, err := portdirect.ReadTypedMessage(stream.connection)
 	if err != nil {
 		return nil, err
@@ -304,8 +315,22 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 	}
 	defer stream.Close()
 	message, err := stream.Receive(operationCtx)
+	if err != nil && service.bufferedCallerDisconnected(ctx, operationCtx) {
+		drainCtx, stopDrain, cancelErr := service.cancelDisconnectedBufferedDataPlane(ctx, session)
+		if cancelErr != nil {
+			return runnercontrol.DataPlaneSession{}, errors.Join(err, cancelErr)
+		}
+		defer stopDrain()
+		message, err = stream.Receive(drainCtx)
+	}
 	if err != nil {
-		return service.bufferedDataPlaneReceiveFailure(ctx, operationCtx, session, err)
+		if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
+			return service.dataPlaneStore.ExpireDataPlaneSession(
+				context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
+				session.ID, service.now().UTC(),
+			)
+		}
+		return runnercontrol.DataPlaneSession{}, err
 	}
 	frame := message.GetExec()
 	if frame == nil || frame.Sequence != 1 || frame.OperationId != session.ID ||
@@ -318,33 +343,32 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 	})
 }
 
-// bufferedDataPlaneReceiveFailure settles a buffered Exec or File whose
-// completion did not arrive. Closing the live route does not reach the Runner,
-// so a disconnected caller cancels the guest work durably, as a public
-// streaming disconnect does.
-func (service *ControlPlaneService) bufferedDataPlaneReceiveFailure(
+// bufferedDisconnectDrain bounds how long a disconnected buffered request
+// keeps its live route open for the cancelled terminal, as a public streaming
+// disconnect does.
+const bufferedDisconnectDrain = 5 * time.Second
+
+func (service *ControlPlaneService) bufferedCallerDisconnected(ctx, operationCtx context.Context) bool {
+	return ctx.Err() != nil && !errors.Is(operationCtx.Err(), context.DeadlineExceeded)
+}
+
+// cancelDisconnectedBufferedDataPlane cancels the guest work of a buffered
+// Exec or File whose caller disconnected. The Runner confirms with the
+// cancelled terminal on this operation's live route only, so the caller keeps
+// receiving under the returned bounded context to complete the session and
+// release its operation quota.
+func (service *ControlPlaneService) cancelDisconnectedBufferedDataPlane(
 	ctx context.Context,
-	operationCtx context.Context,
 	session runnercontrol.DataPlaneSession,
-	receiveErr error,
-) (runnercontrol.DataPlaneSession, error) {
-	if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
-		return service.dataPlaneStore.ExpireDataPlaneSession(
-			context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
-			session.ID, service.now().UTC(),
-		)
-	}
-	if ctx.Err() == nil {
-		return runnercontrol.DataPlaneSession{}, receiveErr
-	}
-	_, cancelErr := service.dataPlaneStore.CancelDataPlaneSession(
+) (context.Context, context.CancelFunc, error) {
+	if _, err := service.dataPlaneStore.CancelDataPlaneSession(
 		context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
 		session.ID, "public buffered client disconnected", service.now().UTC(),
-	)
-	if cancelErr != nil {
-		cancelErr = fmt.Errorf("SecondBox buffered client disconnect cancellation: %w", cancelErr)
+	); err != nil {
+		return nil, nil, fmt.Errorf("SecondBox buffered client disconnect cancellation: %w", err)
 	}
-	return runnercontrol.DataPlaneSession{}, errors.Join(receiveErr, cancelErr)
+	drainCtx, stopDrain := context.WithTimeout(context.WithoutCancel(ctx), bufferedDisconnectDrain)
+	return drainCtx, stopDrain, nil
 }
 
 // SandboxExecStream forwards one public streaming Exec attachment without
@@ -1085,10 +1109,26 @@ func (service *ControlPlaneService) executeFileDataPlane(
 	}
 	result := &runnercontrol.FileCompletion{}
 	nextSequence := uint64(1)
+	receiveCtx := operationCtx
 	for {
-		message, err := stream.Receive(operationCtx)
+		message, err := stream.Receive(receiveCtx)
+		if err != nil && receiveCtx == operationCtx && service.bufferedCallerDisconnected(ctx, operationCtx) {
+			drainCtx, stopDrain, cancelErr := service.cancelDisconnectedBufferedDataPlane(ctx, session)
+			if cancelErr != nil {
+				return runnercontrol.DataPlaneSession{}, errors.Join(err, cancelErr)
+			}
+			defer stopDrain()
+			receiveCtx = drainCtx
+			continue
+		}
 		if err != nil {
-			return service.bufferedDataPlaneReceiveFailure(ctx, operationCtx, session, err)
+			if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
+				return service.dataPlaneStore.ExpireDataPlaneSession(
+					context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
+					session.ID, service.now().UTC(),
+				)
+			}
+			return runnercontrol.DataPlaneSession{}, err
 		}
 		frame := message.GetFile()
 		if frame == nil || frame.OperationId != session.ID || frame.StreamId != session.StreamID ||

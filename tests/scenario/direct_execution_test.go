@@ -4,6 +4,7 @@ package scenario_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -52,4 +53,25 @@ func TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota(t *testing.T
 	}
 	probe := executeScenarioCommand(t, ctx, handle, "printf recovered", 1024, "post-direct-deadline")
 	assertScenarioExited(t, probe, 0, "recovered", "")
+
+	// The single operation slot is free again only if the disconnected
+	// buffered exec's cancellation completed its session.
+	started := time.Now()
+	disconnectContext, disconnect := context.WithTimeout(ctx, 2*time.Second)
+	defer disconnect()
+	if _, err := handle.Execute(
+		disconnectContext,
+		scenarioExecRequest("sleep 5; touch direct-disconnect-survived", 1024),
+		uniqueScenarioKey(t, "direct-buffered-disconnect"),
+		"",
+	); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SecondBox scenario disconnected direct buffered Exec error = %v", err)
+	}
+	time.Sleep(time.Until(started.Add(7 * time.Second)))
+	probe = executeScenarioCommand(
+		t, ctx, handle,
+		"if test -e direct-disconnect-survived; then printf survived; else printf cancelled; fi",
+		1024, "post-direct-disconnect",
+	)
+	assertScenarioExited(t, probe, 0, "cancelled", "")
 }

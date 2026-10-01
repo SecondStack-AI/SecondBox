@@ -31,7 +31,6 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/gorilla/websocket"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 )
@@ -264,46 +263,72 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 			t.Fatal(err)
 		}
 		defer pool.Close()
-		deadline := time.Now().Add(2 * time.Second)
-		for {
-			var sessionID, state, terminalKind, terminalDetail string
-			if err := pool.QueryRow(t.Context(), `
-				SELECT id,state,terminal_kind,terminal_detail
-				FROM secondbox.data_plane_sessions
-				WHERE sandbox_id=$1 AND idempotency_key=$2`,
-				sandbox.ID, idempotencyKey,
-			).Scan(&sessionID, &state, &terminalKind, &terminalDetail); err != nil {
-				t.Fatal(err)
-			}
-			var payload []byte
-			commandErr := pool.QueryRow(t.Context(), `
-				SELECT payload FROM secondbox.runner_commands
-				WHERE id=$1 AND kind='data-plane-cancel'`, sessionID+"_cancel",
-			).Scan(&payload)
-			if commandErr == nil {
-				var message runnerv1.ControlPlaneToRunner
-				if err := proto.Unmarshal(payload, &message); err != nil {
+		type disconnectedSession struct {
+			id, state, terminalKind, terminalDetail string
+			cancellation                            []byte
+		}
+		waitForSession := func(done func(disconnectedSession) bool) disconnectedSession {
+			t.Helper()
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				var observed disconnectedSession
+				if err := pool.QueryRow(t.Context(), `
+					SELECT session.id,session.state,session.terminal_kind,session.terminal_detail,
+					       COALESCE(command.payload,''::bytea)
+					FROM secondbox.data_plane_sessions AS session
+					LEFT JOIN secondbox.runner_commands AS command
+					  ON command.id=session.id||'_cancel' AND command.kind='data-plane-cancel'
+					WHERE session.sandbox_id=$1 AND session.idempotency_key=$2`,
+					sandbox.ID, idempotencyKey,
+				).Scan(
+					&observed.id, &observed.state, &observed.terminalKind,
+					&observed.terminalDetail, &observed.cancellation,
+				); err != nil {
 					t.Fatal(err)
 				}
-				cancel := message.GetDataPlaneCancel()
-				if cancel == nil || cancel.Kind != wantKind ||
-					cancel.OperationId != sessionID ||
-					cancel.Reason != "public buffered client disconnected" {
-					t.Fatalf("disconnect cancellation = %#v", cancel)
+				if done(observed) {
+					return observed
 				}
-				if state != "cancelling" || terminalKind != wantTerminal ||
-					terminalDetail != "public buffered client disconnected" {
-					t.Fatalf("disconnected session = %s %s %q", state, terminalKind, terminalDetail)
+				if time.Now().After(deadline) {
+					t.Fatalf(
+						"disconnected session %s = %s %s %q, cancellation queued %t",
+						observed.id, observed.state, observed.terminalKind,
+						observed.terminalDetail, len(observed.cancellation) > 0,
+					)
 				}
-				return
+				time.Sleep(10 * time.Millisecond)
 			}
-			if !errors.Is(commandErr, pgx.ErrNoRows) {
-				t.Fatal(commandErr)
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("disconnected session %s stayed %s without a Runner cancellation", sessionID, state)
-			}
-			time.Sleep(10 * time.Millisecond)
+		}
+		cancelling := waitForSession(func(observed disconnectedSession) bool {
+			return len(observed.cancellation) > 0
+		})
+		var message runnerv1.ControlPlaneToRunner
+		if err := proto.Unmarshal(cancelling.cancellation, &message); err != nil {
+			t.Fatal(err)
+		}
+		cancel := message.GetDataPlaneCancel()
+		if cancel == nil || cancel.Kind != wantKind || cancel.OperationId != cancelling.id ||
+			cancel.Reason != "public buffered client disconnected" {
+			t.Fatalf("disconnect cancellation = %#v", cancel)
+		}
+		if cancelling.state != "cancelling" || cancelling.terminalKind != wantTerminal ||
+			cancelling.terminalDetail != "public buffered client disconnected" {
+			t.Fatalf("disconnected session = %s %s %q", cancelling.state, cancelling.terminalKind, cancelling.terminalDetail)
+		}
+		// The Runner confirms the cancellation on the operation's live route.
+		fake.cancelTerminals <- cancelling.id
+		completed := waitForSession(func(observed disconnectedSession) bool {
+			return observed.state != "cancelling"
+		})
+		if completed.state != "completed" || completed.terminalKind != wantTerminal {
+			t.Fatalf("confirmed disconnected session = %s %s", completed.state, completed.terminalKind)
+		}
+		usage, err := dataPlaneService.GetSubjectUsage(t.Context(), principal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if usage.Usage.ConcurrentOperations != 0 {
+			t.Fatalf("concurrent operations after a confirmed disconnect = %d", usage.Usage.ConcurrentOperations)
 		}
 	}
 	t.Run("client disconnect cancels buffered Exec", func(t *testing.T) {
@@ -845,6 +870,7 @@ type relayFakeRunner struct {
 	files                   map[string]*fakeFileOperation
 	execStarted             chan string
 	fileStarted             chan string
+	cancelTerminals         chan string
 }
 
 type fakeFileOperation struct {
@@ -905,9 +931,10 @@ func newRelayFakeRunner(
 		broker: broker, session: session, runnerID: runnerID, connectionID: connectionID,
 		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
 		exec:     map[string]*runnerv1.ExecFrame{}, files: map[string]*fakeFileOperation{},
-		execStarted:    make(chan string, 1),
-		fileStarted:    make(chan string, 1),
-		workspaceFiles: map[string][]byte{}, directories: map[string]bool{".": true},
+		execStarted:     make(chan string, 1),
+		fileStarted:     make(chan string, 1),
+		cancelTerminals: make(chan string, 1),
+		workspaceFiles:  map[string][]byte{}, directories: map[string]bool{".": true},
 		modifiedAt: map[string]time.Time{}, writeAttempts: map[string]int{},
 	}
 	detach, err := broker.AttachConnection(runnerID, connectionID, fake, session)
@@ -929,6 +956,10 @@ func (fake *relayFakeRunner) run(ctx context.Context) error {
 			return nil
 		case message := <-fake.incoming:
 			if err := fake.handle(ctx, message, time.Now().UTC()); err != nil {
+				return err
+			}
+		case operationID := <-fake.cancelTerminals:
+			if err := fake.confirmCancellation(ctx, operationID, time.Now().UTC()); err != nil {
 				return err
 			}
 		}
@@ -1135,6 +1166,30 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 		return fake.respondFileMetadata(ctx, operation.frame, operation.open, now)
 	}
 	return nil
+}
+
+// confirmCancellation answers a durable cancellation the way the Runner does:
+// with the operation's cancelled terminal on its live route.
+func (fake *relayFakeRunner) confirmCancellation(ctx context.Context, operationID string, now time.Time) error {
+	if opened := fake.exec[operationID]; opened != nil {
+		return fake.persist(ctx, &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: opened.Fence, OperationId: operationID, StreamId: opened.StreamId, Sequence: 1,
+				Payload: &runnerv1.ExecFrame_BufferedResult{BufferedResult: &runnerv1.ExecBufferedResult{
+					Terminal: &runnerv1.ExecTerminal{
+						Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED, ExitCode: -1,
+						SafeDetail: "command cancelled",
+					},
+				}},
+			}},
+		}, now)
+	}
+	if operation := fake.files[operationID]; operation != nil {
+		return fake.fileTerminalKind(
+			ctx, operation.frame, 1, runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED, now,
+		)
+	}
+	return fmt.Errorf("fake Runner has no operation %s to cancel", operationID)
 }
 
 func (fake *relayFakeRunner) respondFileMetadata(
