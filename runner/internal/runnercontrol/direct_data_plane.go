@@ -531,7 +531,7 @@ func (s *RunnerProtocolService) serveDirectTypedConnection(
 	if err := portdirect.WriteVerdict(connection, portdirect.VerdictAdmitted, ""); err != nil {
 		return err
 	}
-	stream := &directTypedStream{connection: connection}
+	stream := &directTypedStream{connection: connection, deadline: deliveryDeadline}
 	defer s.detachPTYAttachmentsForStream(stream)
 	enabled := map[runnerprotocol.RunnerFeature]bool{
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING: true,
@@ -668,8 +668,14 @@ func (s *RunnerProtocolService) consumeDirectDataPlaneCredential(
 	}
 }
 
+// Credit bounds queued bytes; this timeout bounds a socket write after the
+// peer stops reading. In particular, cancellation must be able to unwind a
+// blocked output write and confirm the operation on the control connection.
+const directDataPlaneWriteTimeout = 5 * time.Second
+
 type directTypedStream struct {
 	connection net.Conn
+	deadline   time.Time
 	mu         sync.Mutex
 }
 
@@ -679,6 +685,14 @@ func (stream *directTypedStream) Send(message *runnerprotocol.RunnerToControlPla
 		return fmt.Errorf("SecondBox runner direct data-plane message encoding: %w", err)
 	}
 	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	deadline := time.Now().Add(directDataPlaneWriteTimeout)
+	if !stream.deadline.IsZero() && stream.deadline.Before(deadline) {
+		deadline = stream.deadline
+	}
+	if err := stream.connection.SetWriteDeadline(deadline); err != nil {
+		return errors.Join(err, stream.connection.Close())
+	}
 	err = portdirect.WriteTypedMessage(stream.connection, payload)
 	terminal := message.GetExec().GetTerminal() != nil ||
 		message.GetExec().GetBufferedResult() != nil || message.GetPty().GetTerminal() != nil ||
@@ -686,7 +700,6 @@ func (stream *directTypedStream) Send(message *runnerprotocol.RunnerToControlPla
 	if terminal || err != nil {
 		err = errors.Join(err, stream.connection.Close())
 	}
-	stream.mu.Unlock()
 	return err
 }
 
