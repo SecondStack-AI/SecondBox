@@ -302,6 +302,29 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 		})
 	}
 
+	t.Run("buffered client disconnect cancels the guest command", func(t *testing.T) {
+		started := time.Now()
+		disconnectContext, disconnect := context.WithTimeout(ctx, 2*time.Second)
+		defer disconnect()
+		_, err := handle.Execute(
+			disconnectContext,
+			scenarioExecRequest("sleep 5; touch buffered-disconnect-survived", 1024),
+			uniqueScenarioKey(t, "buffered-disconnect"),
+			"",
+		)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("SecondBox scenario disconnected buffered Exec error = %v", err)
+		}
+		// Outlast the command so a surviving process would have left its marker.
+		time.Sleep(time.Until(started.Add(7 * time.Second)))
+		probe := executeScenarioCommand(
+			t, ctx, handle,
+			"if test -e buffered-disconnect-survived; then printf survived; else printf cancelled; fi",
+			1024, "buffered-disconnect-probe",
+		)
+		assertScenarioExited(t, probe, 0, "cancelled", "")
+	})
+
 	t.Run("configured pair of concurrent executions completes", func(t *testing.T) {
 		const executions = 2
 		outcomes := make([]secondboxclient.ExecOutcome, executions)
