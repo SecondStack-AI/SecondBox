@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -30,7 +31,9 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T) {
@@ -208,6 +211,117 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	if err := fake.assertObserved(); err != nil {
 		t.Fatal(err)
 	}
+
+	// A buffered caller that disconnects cancels its guest work exactly as a
+	// public streaming disconnect does; it never runs on detached. No client
+	// receives the abandoned response, so it is outside the contract check.
+	abandonedServer := httptest.NewServer(handler)
+	t.Cleanup(abandonedServer.Close)
+	assertBufferedClientDisconnectCancels := func(
+		t *testing.T,
+		route string,
+		idempotencyKey string,
+		body map[string]any,
+		started <-chan string,
+		wantKind runnerv1.DataPlaneSessionKind,
+		wantTerminal string,
+	) {
+		t.Helper()
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requestContext, disconnect := context.WithCancel(t.Context())
+		defer disconnect()
+		request, err := http.NewRequestWithContext(
+			requestContext, http.MethodPost,
+			abandonedServer.URL+"/v1/sandboxes/"+sandbox.ID+route, bytes.NewReader(encoded),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		setDataPlaneHeaders(t, request, key.Credential, sandbox.Generation, idempotencyKey)
+		request.Header.Set("Content-Type", "application/json")
+		finished := make(chan error, 1)
+		go func() {
+			response, err := http.DefaultClient.Do(request)
+			if err == nil {
+				response.Body.Close()
+			}
+			finished <- err
+		}()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("fake Runner did not observe the in-flight operation")
+		}
+		disconnect()
+		if err := <-finished; !errors.Is(err, context.Canceled) {
+			t.Fatalf("disconnected request error = %v, want context cancellation", err)
+		}
+		pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			var sessionID, state, terminalKind, terminalDetail string
+			if err := pool.QueryRow(t.Context(), `
+				SELECT id,state,terminal_kind,terminal_detail
+				FROM secondbox.data_plane_sessions
+				WHERE sandbox_id=$1 AND idempotency_key=$2`,
+				sandbox.ID, idempotencyKey,
+			).Scan(&sessionID, &state, &terminalKind, &terminalDetail); err != nil {
+				t.Fatal(err)
+			}
+			var payload []byte
+			commandErr := pool.QueryRow(t.Context(), `
+				SELECT payload FROM secondbox.runner_commands
+				WHERE id=$1 AND kind='data-plane-cancel'`, sessionID+"_cancel",
+			).Scan(&payload)
+			if commandErr == nil {
+				var message runnerv1.ControlPlaneToRunner
+				if err := proto.Unmarshal(payload, &message); err != nil {
+					t.Fatal(err)
+				}
+				cancel := message.GetDataPlaneCancel()
+				if cancel == nil || cancel.Kind != wantKind ||
+					cancel.OperationId != sessionID ||
+					cancel.Reason != "public buffered client disconnected" {
+					t.Fatalf("disconnect cancellation = %#v", cancel)
+				}
+				if state != "cancelling" || terminalKind != wantTerminal ||
+					terminalDetail != "public buffered client disconnected" {
+					t.Fatalf("disconnected session = %s %s %q", state, terminalKind, terminalDetail)
+				}
+				return
+			}
+			if !errors.Is(commandErr, pgx.ErrNoRows) {
+				t.Fatal(commandErr)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("disconnected session %s stayed %s without a Runner cancellation", sessionID, state)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	t.Run("client disconnect cancels buffered Exec", func(t *testing.T) {
+		assertBufferedClientDisconnectCancels(t, "/exec", "exec-client-disconnect-key", map[string]any{
+			"command":     map[string]any{"mode": "shell", "command": "wait-for-client-disconnect"},
+			"environment": map[string]string{}, "deadlineMilliseconds": 5000,
+			"maximumOutputBytes": 1024,
+		}, fake.execStarted,
+			runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC,
+			runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String())
+	})
+	t.Run("client disconnect cancels buffered File operation", func(t *testing.T) {
+		assertBufferedClientDisconnectCancels(t, "/directories", "mkdir-client-disconnect-key", map[string]any{
+			"path": "wait-for-client-disconnect", "recursive": true,
+		}, fake.fileStarted,
+			runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE,
+			runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String())
+	})
 
 	t.Run("in-flight Exec reports Runner unavailability", func(t *testing.T) {
 		body, err := json.Marshal(map[string]any{
@@ -730,6 +844,7 @@ type relayFakeRunner struct {
 	exec                    map[string]*runnerv1.ExecFrame
 	files                   map[string]*fakeFileOperation
 	execStarted             chan string
+	fileStarted             chan string
 }
 
 type fakeFileOperation struct {
@@ -791,6 +906,7 @@ func newRelayFakeRunner(
 		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
 		exec:     map[string]*runnerv1.ExecFrame{}, files: map[string]*fakeFileOperation{},
 		execStarted:    make(chan string, 1),
+		fileStarted:    make(chan string, 1),
 		workspaceFiles: map[string][]byte{}, directories: map[string]bool{".": true},
 		modifiedAt: map[string]time.Time{}, writeAttempts: map[string]int{},
 	}
@@ -828,7 +944,8 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 			fake.execOpen = open
 			fake.execObservedAt = now
 			fake.mu.Unlock()
-			if open.GetShell() == "wait-for-runner-loss" {
+			if open.GetShell() == "wait-for-runner-loss" ||
+				open.GetShell() == "wait-for-client-disconnect" {
 				fake.execStarted <- open.GetShell()
 				return nil
 			}
@@ -926,6 +1043,10 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 			fake.mu.Unlock()
 			return nil
 		case runnerv1.FileOperation_FILE_OPERATION_MKDIR:
+			if open.WorkspaceRelativePath == "wait-for-client-disconnect" {
+				fake.fileStarted <- open.WorkspaceRelativePath
+				return nil
+			}
 			fake.mu.Lock()
 			value := open.Recursive
 			fake.mkdirRecursive = &value

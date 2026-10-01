@@ -305,13 +305,7 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 	defer stream.Close()
 	message, err := stream.Receive(operationCtx)
 	if err != nil {
-		if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
-			return service.dataPlaneStore.ExpireDataPlaneSession(
-				context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
-				session.ID, service.now().UTC(),
-			)
-		}
-		return runnercontrol.DataPlaneSession{}, err
+		return service.bufferedDataPlaneReceiveFailure(ctx, operationCtx, session, err)
 	}
 	frame := message.GetExec()
 	if frame == nil || frame.Sequence != 1 || frame.OperationId != session.ID ||
@@ -322,6 +316,35 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 		TenantRef: session.TenantRef, SubjectRef: session.SubjectRef,
 		SessionID: session.ID, Exec: frame.GetBufferedResult(), Now: service.now().UTC(),
 	})
+}
+
+// bufferedDataPlaneReceiveFailure settles a buffered Exec or File whose
+// completion did not arrive. Closing the live route does not reach the Runner,
+// so a disconnected caller cancels the guest work durably, as a public
+// streaming disconnect does.
+func (service *ControlPlaneService) bufferedDataPlaneReceiveFailure(
+	ctx context.Context,
+	operationCtx context.Context,
+	session runnercontrol.DataPlaneSession,
+	receiveErr error,
+) (runnercontrol.DataPlaneSession, error) {
+	if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
+		return service.dataPlaneStore.ExpireDataPlaneSession(
+			context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
+			session.ID, service.now().UTC(),
+		)
+	}
+	if ctx.Err() == nil {
+		return runnercontrol.DataPlaneSession{}, receiveErr
+	}
+	_, cancelErr := service.dataPlaneStore.CancelDataPlaneSession(
+		context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
+		session.ID, "public buffered client disconnected", service.now().UTC(),
+	)
+	if cancelErr != nil {
+		cancelErr = fmt.Errorf("SecondBox buffered client disconnect cancellation: %w", cancelErr)
+	}
+	return runnercontrol.DataPlaneSession{}, errors.Join(receiveErr, cancelErr)
 }
 
 // SandboxExecStream forwards one public streaming Exec attachment without
@@ -1065,13 +1088,7 @@ func (service *ControlPlaneService) executeFileDataPlane(
 	for {
 		message, err := stream.Receive(operationCtx)
 		if err != nil {
-			if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
-				return service.dataPlaneStore.ExpireDataPlaneSession(
-					context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
-					session.ID, service.now().UTC(),
-				)
-			}
-			return runnercontrol.DataPlaneSession{}, err
+			return service.bufferedDataPlaneReceiveFailure(ctx, operationCtx, session, err)
 		}
 		frame := message.GetFile()
 		if frame == nil || frame.OperationId != session.ID || frame.StreamId != session.StreamID ||
