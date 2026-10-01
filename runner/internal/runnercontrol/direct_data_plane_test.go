@@ -584,6 +584,62 @@ func TestDurableCancellationReportsTheTerminalOnTheControlConnection(t *testing.
 	}
 }
 
+// The control plane counts a direct session as running from credential
+// consumption, so an admitted connection that closes before its Open must
+// still leave a terminal for a later cancellation to confirm.
+func TestDirectSessionClosedBeforeOpenConfirmsALaterCancellation(t *testing.T) {
+	control := &threadSafeRunnerStream{}
+	service, err := NewRunnerProtocolService(
+		testRunnerConfig(), &relayAssignmentBackend{}, staticProtocolConnector{stream: control},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.directDataPlane.bindStream(control)
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	credential := "unopened-direct-credential-0000000000000"
+	session := registerDirectDataPlaneTestSession(
+		t, service, fence, "unopened", "unopened-stream",
+		runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, credential,
+	)
+	session.consumed = true
+	client, runner := net.Pipe()
+	served := make(chan error, 1)
+	go func() {
+		served <- service.serveDirectTypedConnection(t.Context(), runner, portdirect.Credential{
+			SessionKind: portdirect.SessionKindFile, Value: credential,
+		})
+	}()
+	if verdict, detail, err := portdirect.ReadVerdict(client); err != nil || verdict != portdirect.VerdictAdmitted {
+		t.Fatalf("direct admission = %d/%q: %v", verdict, detail, err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+	if service.directDataPlane.find("unopened") != nil {
+		t.Fatal("closed direct session stayed admitted")
+	}
+	if err := service.handleDataPlaneCancel(&runnerprotocol.DataPlaneCancelCommand{
+		Fence: cloneRunnerFence(fence), OperationId: "unopened", StreamId: "unopened-stream",
+		Kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, Reason: "test cancellation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var reported []string
+	for _, message := range control.messages() {
+		if message.GetFile().GetOperationId() == "unopened" {
+			reported = append(reported, directOperationTerminalKind(message))
+		}
+	}
+	if len(reported) != 1 || reported[0] != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String() {
+		t.Fatalf("cancellation after a closed unopened session reported %v", reported)
+	}
+}
+
 func directOperationTerminalKind(message *runnerprotocol.RunnerToControlPlane) string {
 	switch {
 	case message.GetExec().GetBufferedResult() != nil:
