@@ -267,7 +267,7 @@ func (worker *Worker) stopDeleteSandboxes(ctx context.Context, item claim, now t
 	rows, err := tx.Query(ctx, `
 		SELECT id FROM secondbox.sandboxes
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted'
-		ORDER BY created_at,id FOR UPDATE`, item.tenantRef, item.subjectRef)
+		ORDER BY id FOR UPDATE`, item.tenantRef, item.subjectRef)
 	if err != nil {
 		return fmt.Errorf("SecondBox Subject cleanup Sandbox deletion lookup: %w", err)
 	}
@@ -360,8 +360,13 @@ func (worker *Worker) requestWorkspaceRemoval(ctx context.Context, item claim, n
 		return fmt.Errorf("SecondBox Subject cleanup Workspace quota lock: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.sandboxes SET next_reconcile_at=$3,updated_at=$3
-		WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted' AND desired_state='deleted'`,
+		WITH locked AS (
+			SELECT id FROM secondbox.sandboxes
+			WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted' AND desired_state='deleted'
+			ORDER BY id FOR UPDATE
+		)
+		UPDATE secondbox.sandboxes AS sandbox SET next_reconcile_at=$3,updated_at=$3
+		FROM locked WHERE sandbox.id=locked.id`,
 		item.tenantRef, item.subjectRef, now,
 	); err != nil {
 		return fmt.Errorf("SecondBox Subject cleanup Workspace removal wake: %w", err)

@@ -908,13 +908,17 @@ func (store *PostgresStateStore) RecordEvents(
 		return fmt.Errorf("SecondBox runner event batch transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var sandboxIDs []string
+	var sandboxIDs, batchSandboxIDs []string
 	for _, record := range records {
 		eventIDs, err := eventSandboxIDs(ctx, tx, record.Event)
 		if err != nil {
 			return fmt.Errorf("SecondBox runner event batch quota scope lookup: %w", err)
 		}
 		sandboxIDs = append(sandboxIDs, eventIDs...)
+		batchSandboxIDs = append(batchSandboxIDs, eventIDs...)
+		if sandboxID := assignmentEventSandboxID(record.Event); sandboxID != "" {
+			batchSandboxIDs = append(batchSandboxIDs, sandboxID)
+		}
 	}
 	if err := rowlock.SandboxQuotas(ctx, tx, sandboxIDs); err != nil && len(sandboxIDs) != 0 {
 		return fmt.Errorf("SecondBox runner event batch quota lock: %w", err)
@@ -931,20 +935,12 @@ func (store *PostgresStateStore) RecordEvents(
 	if storedRunnerID != runnerID || connectionState != "active" {
 		return errors.New("SecondBox runner event batch connection identity is inactive")
 	}
-	// Assignment events lock their Sandboxes without the quota ledgers. Lock
-	// every such Sandbox in identity order before applying events, so the batch
-	// cannot interleave with another multi-Sandbox lock in event order.
-	var assignmentSandboxIDs []string
-	for _, record := range records {
-		if sandboxID := assignmentEventSandboxID(record.Event); sandboxID != "" {
-			assignmentSandboxIDs = append(assignmentSandboxIDs, sandboxID)
-		}
-	}
-	if len(assignmentSandboxIDs) > 1 {
-		if _, err := tx.Exec(ctx, `
-			SELECT id FROM secondbox.sandboxes
-			WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE`, assignmentSandboxIDs,
-		); err != nil {
+	// Assignment events lock their Sandboxes without the quota ledgers, so the
+	// ledgers no longer serialize this batch with other multi-Sandbox writers.
+	// Lock every Sandbox the batch touches in the shared identity order before
+	// applying events in arrival order.
+	if len(batchSandboxIDs) > 1 {
+		if err := rowlock.SandboxesInOrder(ctx, tx, batchSandboxIDs); err != nil {
 			return fmt.Errorf("SecondBox runner event batch Sandbox lock: %w", err)
 		}
 	}
@@ -3458,6 +3454,13 @@ func (store *PostgresStateStore) beginOrderedMessage(
 			errors.New("SecondBox runner message connection identity is inactive"),
 			tx.Rollback(ctx),
 		)
+	}
+	// A message that touches several Sandboxes, such as Workspace
+	// reconciliation, takes them in the shared identity order.
+	if len(sandboxIDs) > 1 {
+		if err := rowlock.SandboxesInOrder(ctx, tx, sandboxIDs); err != nil {
+			return nil, false, errors.Join(err, tx.Rollback(ctx))
+		}
 	}
 	var priorSequence int64
 	err = tx.QueryRow(ctx, `

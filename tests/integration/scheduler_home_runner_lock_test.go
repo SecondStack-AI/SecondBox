@@ -54,75 +54,92 @@ func TestSchedulerPlacementOfFailedRestartWaitsForQuotaLedger(t *testing.T) {
 }
 
 type schedulerLockFixture struct {
-	pool            *pgxpool.Pool
-	scheduler       *scheduler.PostgresStore
-	request         scheduler.ScheduleRequest
-	homeRunnerID    string
-	siblingRunnerID string
+	pool             *pgxpool.Pool
+	stateStore       *runnercontrol.PostgresStateStore
+	scheduler        *scheduler.PostgresStore
+	request          scheduler.ScheduleRequest
+	now              time.Time
+	poolName         string
+	homeRunnerID     string
+	homeConnectionID string
+	siblingRunnerID  string
 }
 
 func newSchedulerLockFixture(t *testing.T) schedulerLockFixture {
 	t.Helper()
-	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	poolName := task4ID("home-lock-pool")
-	task4InsertRunnerPool(t, poolName, now)
-	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
-	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	fixture := schedulerLockFixture{
+		now:      time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC),
+		poolName: task4ID("home-lock-pool"),
+	}
+	task4InsertRunnerPool(t, fixture.poolName, fixture.now)
+	caCertificate, caPrivateKey := task4CertificateAuthority(t, fixture.now)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, fixture.now)
 	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(stateStore.Close)
-	register := func() string {
+	fixture.stateStore = stateStore
+	register := func() (string, string) {
 		runnerID := task4ID("runner")
 		connectionID := task4ID("connection")
 		issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := stateStore.OpenConnection(t.Context(), issued.Identity, connectionID, 1, now); err != nil {
+		if err := stateStore.OpenConnection(t.Context(), issued.Identity, connectionID, 1, fixture.now); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := stateStore.RecordRegistration(t.Context(), task4Registration(runnerID, connectionID, poolName), now); err != nil {
+		if _, err := stateStore.RecordRegistration(t.Context(), task4Registration(runnerID, connectionID, fixture.poolName), fixture.now); err != nil {
 			t.Fatal(err)
 		}
 		heartbeat := task4Heartbeat(runnerID, connectionID, "heartbeat-2", 2, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE)
-		if _, err := stateStore.RecordHeartbeat(t.Context(), heartbeat, now); err != nil {
+		if _, err := stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now); err != nil {
 			t.Fatal(err)
 		}
-		task4CompleteWorkspaceReconciliation(t, stateStore, runnerID, connectionID, 3, nil, now)
-		return runnerID
+		task4CompleteWorkspaceReconciliation(t, stateStore, runnerID, connectionID, 3, nil, fixture.now)
+		return runnerID, connectionID
 	}
-	homeRunnerID := register()
-	siblingRunnerID := register()
-
-	sandboxID := task4ID("sandbox")
-	profileRevisionID := task4ID("profile-revision")
-	workspaceID := task4InsertSchedulableSandbox(t, sandboxID, profileRevisionID, homeRunnerID, now)
+	fixture.homeRunnerID, fixture.homeConnectionID = register()
+	fixture.siblingRunnerID, _ = register()
 
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	schedulerStore, err := scheduler.NewPostgresStore(t.Context(), scheduler.PostgresStoreConfig{
+	fixture.pool = pool
+	fixedNow := fixture.now
+	fixture.scheduler, err = scheduler.NewPostgresStore(t.Context(), scheduler.PostgresStoreConfig{
 		DatabaseURL: integrationDatabaseURL,
-		Now:         func() time.Time { return now },
+		Now:         func() time.Time { return fixedNow },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(schedulerStore.Close)
+	t.Cleanup(fixture.scheduler.Close)
+	fixture.request = fixture.newSandboxRequest(t)
+	return fixture
+}
+
+// newSandboxRequest inserts another startable Sandbox homed on the fixture's
+// home Runner and returns its placement request.
+func (fixture schedulerLockFixture) newSandboxRequest(t *testing.T) scheduler.ScheduleRequest {
+	t.Helper()
+	now := fixture.now
+	sandboxID := task4ID("sandbox")
+	profileRevisionID := task4ID("profile-revision")
+	workspaceID := task4InsertSchedulableSandbox(t, sandboxID, profileRevisionID, fixture.homeRunnerID, now)
 	assignmentID := task4ID("assignment")
 	instanceID := task4ID("instance")
 	fencingToken := []byte("01234567890123456789012345678901")
 	requirements := []string{"local-workspace", "network-policy"}
-	request := scheduler.ScheduleRequest{
+	return scheduler.ScheduleRequest{
 		AssignmentID: assignmentID, AssignmentCommandID: task4ID("assignment-command"),
 		InstanceID: instanceID, SandboxID: sandboxID, ProfileRevisionID: profileRevisionID,
 		WorkspaceID: workspaceID, StartMutationID: task4ID("workspace-start"),
 		Requirements: scheduler.Requirements{
-			PoolName: poolName, Architecture: "amd64", RequiredCapabilities: requirements,
+			PoolName: fixture.poolName, Architecture: "amd64", RequiredCapabilities: requirements,
 			Capacity: scheduler.Capacity{
 				VCPUCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
 				Instances: 1, Operations: 1,
@@ -152,10 +169,6 @@ func newSchedulerLockFixture(t *testing.T) schedulerLockFixture {
 		HeartbeatTimeout: 30 * time.Second, Now: now,
 		EffectStartedAt: now, PlanReadyAt: now,
 		LifecycleClaimOwner: "lifecycle-worker-test",
-	}
-	return schedulerLockFixture{
-		pool: pool, scheduler: schedulerStore, request: request,
-		homeRunnerID: homeRunnerID, siblingRunnerID: siblingRunnerID,
 	}
 }
 

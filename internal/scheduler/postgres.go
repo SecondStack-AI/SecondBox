@@ -467,12 +467,18 @@ func (store *PostgresStore) scheduleOnce(
 		selected.ID, reservedJSON, placementAt,
 	)
 	// The starting Sandbox waits for Runner evidence, which wakes it; its
-	// Assignment's operation deadline is only the recovery bound.
+	// Assignment's operation deadline is only the recovery bound. A stop or
+	// delete intent that committed after the claim's start plan still wants
+	// reconciliation now, so the released claim leaves it due immediately.
 	orderedWrites.Queue(`
 		UPDATE secondbox.sandboxes
 		SET state='starting',current_instance_id=$2,revision=revision+1,updated_at=$3,
 		    lifecycle_action=CASE WHEN reconcile_owner=$4 THEN 'start_instance' ELSE lifecycle_action END,
-		    next_reconcile_at=CASE WHEN reconcile_owner=$4 THEN $5 ELSE next_reconcile_at END,
+		    next_reconcile_at=CASE
+		      WHEN reconcile_owner=$4 AND desired_state='running' THEN $5
+		      WHEN reconcile_owner=$4 THEN $3
+		      ELSE next_reconcile_at
+		    END,
 		    reconcile_claim_expires_at=CASE WHEN reconcile_owner=$4 THEN NULL ELSE reconcile_claim_expires_at END,
 		    reconcile_owner=CASE WHEN reconcile_owner=$4 THEN '' ELSE reconcile_owner END
 		WHERE id=$1`,

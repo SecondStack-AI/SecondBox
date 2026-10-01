@@ -598,7 +598,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	// takes no quota ledger lock.
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
-		SET lifecycle_action='start_instance',next_reconcile_at=$4,reconcile_owner='',
+		SET lifecycle_action='start_instance',
+		    next_reconcile_at=CASE WHEN desired_state='running' THEN $4 ELSE $3 END,
+		    reconcile_owner='',
 		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
 		WHERE id=$1 AND generation=$2 AND current_instance_id=$5
 		  AND reconcile_owner=$6`,

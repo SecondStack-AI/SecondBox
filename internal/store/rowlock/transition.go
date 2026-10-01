@@ -118,3 +118,20 @@ func SandboxWorkspaceForTransition(
 	locked.Workspace = workspace
 	return locked, nil
 }
+
+// SandboxesInOrder locks several Sandboxes in ascending identity order. A
+// transaction that holds more than one Sandbox row lock takes them in this
+// order, so two such transactions cannot wait on each other's Sandboxes
+// whether or not they also hold the quota ledgers.
+func SandboxesInOrder(ctx context.Context, tx pgx.Tx, sandboxIDs []string) error {
+	if len(sandboxIDs) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+		SELECT id FROM secondbox.sandboxes
+		WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE`, sandboxIDs,
+	); err != nil {
+		return fmt.Errorf("SecondBox ordered Sandbox lock failed: %w", err)
+	}
+	return nil
+}
