@@ -3,6 +3,7 @@
 package scenario_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -25,6 +26,16 @@ func TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
+	// A complete multi-chunk upload must hand cancellation ownership to the
+	// backend exactly once and release the same single operation slot.
+	content := bytes.Repeat([]byte("direct file upload\n"), 8192)
+	written := writeScenarioFile(t, ctx, fixture.subject, handle, "direct-upload", content)
+	if written.SizeBytes != int64(len(content)) {
+		t.Fatalf("direct File write size = %d, want %d", written.SizeBytes, len(content))
+	}
+	if got := readScenarioFile(t, ctx, fixture.subject, handle, "direct-upload"); !bytes.Equal(got, content) {
+		t.Fatal("direct File upload content changed")
+	}
 	streamCtx, stopStream := context.WithTimeout(ctx, 20*time.Second)
 	defer stopStream()
 	session, err := handle.CreateExecStream(streamCtx, secondboxclient.StreamingExecRequest{

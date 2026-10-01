@@ -326,10 +326,12 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 	key := runnerDataPlaneOperationKey(command.Fence, command.OperationId, command.StreamId)
 	var retained *runnerprotocol.RunnerToControlPlane
 	running := false
+	absent := false
 	s.operationMu.Lock()
 	if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC ||
 		command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY {
 		if state := s.execOperations[key]; state != nil {
+			absent = state.terminal && state.correlation == nil
 			switch {
 			case state.ptyTerminalFrame != nil:
 				retained = &runnerprotocol.RunnerToControlPlane{Message: &runnerprotocol.RunnerToControlPlane_Pty{
@@ -345,6 +347,7 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 			}
 		}
 	} else if state := s.fileOperations[key]; state != nil {
+		absent = state.terminal && state.correlation == nil
 		switch {
 		case state.terminalFrame != nil:
 			retained = &runnerprotocol.RunnerToControlPlane{Message: &runnerprotocol.RunnerToControlPlane_File{
@@ -355,6 +358,17 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 			state.cancel(context.Canceled)
 		}
 	}
+	if s.execOperations[key] == nil && s.fileOperations[key] == nil {
+		absent = true
+		// Active operations are never evicted. Absence under operationMu
+		// proves this fence has no worker; retain a terminal before a late
+		// Open can start one. Cancellation confirmation needs only identity,
+		// not the evicted result or its correlation.
+		retained = s.recordAbsentOperationTerminalLocked(key, &directDataPlaneSession{
+			fence: command.Fence, operationID: command.OperationId,
+			streamID: command.StreamId, kind: command.Kind,
+		})
+	}
 	s.operationMu.Unlock()
 	if !running {
 		// A running operation keeps its direct connection until it sends its
@@ -362,6 +376,15 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 		s.directDataPlane.closeSession(command.OperationId, command.Reason)
 	}
 	if retained != nil {
+		if absent {
+			// This is an observation of absence, not a reconstructed execution
+			// result. Repeat its audit on replay, including after a sink failure.
+			if err := s.emitEvidence(context.Background(), runnerevidence.EventOperationAbsent,
+				command.Fence, nil, command.OperationId, "OPERATION_ABSENT", "cancelled",
+			); err != nil {
+				return err
+			}
+		}
 		return s.reportCancelledOperationTerminal(retained)
 	}
 	return nil
@@ -381,7 +404,7 @@ func (s *RunnerProtocolService) retainUnopenedDirectOperation(
 		s.operationMu.Unlock()
 		return nil, nil
 	}
-	retained := s.recordUnopenedTerminalLocked(key, session)
+	retained := s.recordAbsentOperationTerminalLocked(key, session)
 	s.operationMu.Unlock()
 	event := runnerevidence.EventExecTerminal
 	kind := runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String()
@@ -395,7 +418,7 @@ func (s *RunnerProtocolService) retainUnopenedDirectOperation(
 	)
 }
 
-func (s *RunnerProtocolService) recordUnopenedTerminalLocked(
+func (s *RunnerProtocolService) recordAbsentOperationTerminalLocked(
 	key string,
 	session *directDataPlaneSession,
 ) *runnerprotocol.RunnerToControlPlane {

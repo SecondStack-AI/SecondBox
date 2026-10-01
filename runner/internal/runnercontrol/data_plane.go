@@ -118,23 +118,24 @@ type runnerPTYAttachment struct {
 }
 
 type runnerFileOperation struct {
-	key           string
-	fence         *runnerprotocol.AssignmentFence
-	correlation   *runnerprotocol.Correlation
-	operationID   string
-	streamID      string
-	open          *runnerprotocol.FileOpen
-	nextIncoming  uint64
-	lastIncoming  []byte
-	nextOutgoing  uint64
-	content       []byte
-	credit        *runnerCreditWindow
-	ctx           context.Context
-	cancel        context.CancelCauseFunc
-	started       bool
-	terminal      bool
-	confirmCancel bool
-	terminalFrame *runnerprotocol.FileFrame
+	key            string
+	fence          *runnerprotocol.AssignmentFence
+	correlation    *runnerprotocol.Correlation
+	operationID    string
+	streamID       string
+	open           *runnerprotocol.FileOpen
+	nextIncoming   uint64
+	lastIncoming   []byte
+	nextOutgoing   uint64
+	content        []byte
+	credit         *runnerCreditWindow
+	ctx            context.Context
+	cancel         context.CancelCauseFunc
+	started        bool
+	stopUploadWait func() bool
+	terminal       bool
+	confirmCancel  bool
+	terminalFrame  *runnerprotocol.FileFrame
 }
 
 type runnerCreditWindow struct {
@@ -307,7 +308,7 @@ func (s *RunnerProtocolService) handleExecFrame(
 		}
 		return nil
 	}
-	if frame.GetCorrelation() != nil && !proto.Equal(frame.GetCorrelation(), state.correlation) {
+	if frame.GetCorrelation() != nil && !(state.terminal && state.correlation == nil) && !proto.Equal(frame.GetCorrelation(), state.correlation) {
 		s.operationMu.Unlock()
 		return fmt.Errorf("SecondBox runner Exec correlation changed within the operation")
 	}
@@ -420,7 +421,7 @@ func (s *RunnerProtocolService) handlePTYFrame(
 		s.operationMu.Unlock()
 		return fmt.Errorf("SecondBox runner PTY operation is not active")
 	}
-	if frame.GetCorrelation() != nil && !proto.Equal(frame.GetCorrelation(), state.correlation) {
+	if frame.GetCorrelation() != nil && !(state.terminal && state.correlation == nil) && !proto.Equal(frame.GetCorrelation(), state.correlation) {
 		s.operationMu.Unlock()
 		return fmt.Errorf("SecondBox runner PTY correlation changed within the operation")
 	}
@@ -1100,13 +1101,36 @@ func (s *RunnerProtocolService) handleFileFrame(
 			})
 		}
 		s.setActiveOperation(frame.Fence.AssignmentId, frame.OperationId, true)
+		s.operationMu.Lock()
 		if open.Operation != runnerprotocol.FileOperation_FILE_OPERATION_WRITE || open.ExpectedSize == 0 {
 			state.started = true
+			s.operationMu.Unlock()
 			go s.executeFileOperation(fileCtx, stream, state, asyncErrors)
+		} else {
+			// Before the final chunk there is no backend worker to own cancellation.
+			state.stopUploadWait = context.AfterFunc(fileCtx, func() {
+				s.operationMu.Lock()
+				if state.started || state.terminal {
+					s.operationMu.Unlock()
+					return
+				}
+				state.started = true
+				state.content = nil
+				state.stopUploadWait = nil
+				s.operationMu.Unlock()
+				defer s.setActiveOperation(state.fence.AssignmentId, state.operationID, false)
+				if err := s.sendFileTerminal(stream, state, &runnerprotocol.FileTerminal{
+					Kind:       runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED,
+					SafeDetail: "filesystem upload cancelled",
+				}); err != nil {
+					reportRunnerAsyncError(asyncErrors, err)
+				}
+			})
+			s.operationMu.Unlock()
 		}
 		return nil
 	}
-	if frame.GetCorrelation() != nil && !proto.Equal(frame.GetCorrelation(), state.correlation) {
+	if frame.GetCorrelation() != nil && !(state.terminal && state.correlation == nil) && !proto.Equal(frame.GetCorrelation(), state.correlation) {
 		s.operationMu.Unlock()
 		return fmt.Errorf("SecondBox runner File correlation changed within the operation")
 	}
@@ -1144,6 +1168,10 @@ func (s *RunnerProtocolService) handleFileFrame(
 		state.cancel(context.Canceled)
 		return nil
 	case frame.GetChunk() != nil:
+		if state.ctx.Err() != nil {
+			s.operationMu.Unlock()
+			return nil
+		}
 		if state.open.Operation != runnerprotocol.FileOperation_FILE_OPERATION_WRITE {
 			s.operationMu.Unlock()
 			return fmt.Errorf("SecondBox runner File chunks are only accepted for writes")
@@ -1158,6 +1186,8 @@ func (s *RunnerProtocolService) handleFileFrame(
 		start := uint64(len(state.content)) == state.open.ExpectedSize && !state.started
 		if start {
 			state.started = true
+			state.stopUploadWait()
+			state.stopUploadWait = nil
 		}
 		s.operationMu.Unlock()
 		if start {
@@ -1366,8 +1396,7 @@ func (s *RunnerProtocolService) reportCancelledOperationTerminal(
 ) error {
 	stream := s.directDataPlane.currentStream()
 	if stream == nil {
-		// The control plane completes a session whose confirmation was lost
-		// with its connection once the session's Assignment ends.
+		// Delivered cancellation commands replay on the next control connection.
 		return nil
 	}
 	return s.sendRunnerFrame(stream, message)
