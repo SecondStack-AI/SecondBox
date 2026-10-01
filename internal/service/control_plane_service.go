@@ -732,11 +732,9 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 		Operation: operation, Now: now,
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
 		IdempotencyEnds: service.idempotencyExpiration(now), ExpectedRevision: expectedRevision,
+		AuditEvent: audit,
 	})
 	if err != nil {
-		return contracts.Operation{}, err
-	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
 		return contracts.Operation{}, err
 	}
 	if replayed != nil {

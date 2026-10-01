@@ -46,6 +46,9 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 	ctx context.Context,
 	input ports.LifecycleIntentInput,
 ) (contracts.Operation, error) {
+	if input.AuditEvent.ID == "" {
+		return contracts.Operation{}, errors.New("SecondBox lifecycle intent requires its audit event")
+	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle intent transaction failed: %w", err)
@@ -89,6 +92,9 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 				ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, `id=$3`, priorOperationID,
 			)
 			if err != nil {
+				return contracts.Operation{}, err
+			}
+			if err := insertAuditEvent(ctx, tx, input.AuditEvent); err != nil {
 				return contracts.Operation{}, err
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -245,6 +251,9 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 	); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle idempotency insert failed: %w", err)
 	}
+	if err := insertAuditEvent(ctx, tx, input.AuditEvent); err != nil {
+		return contracts.Operation{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle intent commit failed: %w", err)
 	}
@@ -305,7 +314,7 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 	// Sandbox has no further transition, and a Sandbox holding a lifecycle
 	// failure class waits for an operator rather than for this worker.
 	rows, err := tx.Query(ctx, `
-		SELECT sandbox.id,sandbox.tenant_ref,sandbox.subject_ref
+		SELECT sandbox.id
 		FROM secondbox.sandboxes AS sandbox
 		WHERE sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$1
 		  AND NOT (
@@ -322,16 +331,13 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		return nil, fmt.Errorf("SecondBox lifecycle claim candidate lookup failed: %w", err)
 	}
 	candidateSandboxIDs := make([]string, 0, batchSize)
-	var quotaScopes []rowlock.QuotaScope
 	for rows.Next() {
 		var sandboxID string
-		var quotaScope rowlock.QuotaScope
-		if err := rows.Scan(&sandboxID, &quotaScope.TenantRef, &quotaScope.SubjectRef); err != nil {
+		if err := rows.Scan(&sandboxID); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("SecondBox lifecycle claim candidate scan failed: %w", err)
 		}
 		candidateSandboxIDs = append(candidateSandboxIDs, sandboxID)
-		quotaScopes = append(quotaScopes, quotaScope)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -341,9 +347,9 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 	if len(candidateSandboxIDs) == 0 {
 		return nil, nil
 	}
-	if err := rowlock.QuotaScopes(ctx, tx, quotaScopes); err != nil {
-		return nil, fmt.Errorf("SecondBox lifecycle claim quota lock failed: %w", err)
-	}
+	// A claim records only its owner and expiry and expires the claimed
+	// Sandboxes' Leases. None of that changes quota usage, so the claim takes
+	// no quota ledger lock and does not serialize with admission.
 	rows, err = tx.Query(ctx, `
 		SELECT sandbox.id
 		FROM secondbox.sandboxes AS sandbox
@@ -409,6 +415,7 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		       COALESCE(instance.guest_liveness,''),
 		       COALESCE(instance.termination_reason,''),
 		       COALESCE(stop_effect.state,''),
+		       assignment.operation_deadline,
 		       (
 		         SELECT count(*)
 		         FROM secondbox.activity_sessions AS session
@@ -422,6 +429,9 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
 		LEFT JOIN secondbox.instances AS instance ON instance.id=sandbox.current_instance_id
+		LEFT JOIN secondbox.assignments AS assignment
+		  ON assignment.sandbox_id=sandbox.id AND assignment.generation=sandbox.generation
+		 AND assignment.instance_id=sandbox.current_instance_id
 		LEFT JOIN LATERAL (
 		  SELECT effect.state
 		  FROM secondbox.lifecycle_effects AS effect
@@ -442,6 +452,7 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 			specJSON                                []byte
 			intentKind                              sql.NullString
 			readyAt, lastActivityAt, drainStartedAt sql.NullTime
+			assignmentDeadline                      sql.NullTime
 		)
 		if err := rows.Scan(
 			&claim.SandboxID, &claim.ObservedState, &claim.DesiredState, &claim.Revision,
@@ -449,7 +460,7 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 			&readyAt, &lastActivityAt, &drainStartedAt,
 			&claim.HasInstance,
 			&claim.GuestLiveness, &claim.InstanceTerminationReason,
-			&claim.StopEffectState, &claim.ActiveSessions,
+			&claim.StopEffectState, &assignmentDeadline, &claim.ActiveSessions,
 		); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("SecondBox lifecycle claim scan failed: %w", err)
@@ -472,6 +483,9 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		}
 		if drainStartedAt.Valid {
 			claim.DrainStartedAt = &drainStartedAt.Time
+		}
+		if assignmentDeadline.Valid {
+			claim.AssignmentDeadline = &assignmentDeadline.Time
 		}
 		claims = append(claims, claim)
 	}
@@ -603,8 +617,18 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		return fmt.Errorf("SecondBox lifecycle action transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, claim.SandboxID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	// Only a transition that increases quota usage takes the quota ledgers. The
+	// claim's revision fixes the state the transition starts from, so a Sandbox
+	// that changed underneath the claim is a revision conflict either way.
+	increases := func(state, desiredState string) bool {
+		nextDesiredState := desiredState
+		if action == "drain" && (terminationReason == "idle_timeout" || terminationReason == "maximum_duration") {
+			nextDesiredState = contracts.SandboxDesiredStateStopped
+		}
+		return rowlock.QuotaUsageIncreases(state, desiredState, nextState, nextDesiredState)
+	}
+	locked, err := rowlock.SandboxWorkspaceForTransition(ctx, tx, claim.SandboxID, increases)
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, rowlock.ErrQuotaLedgerRequired) {
 		return ports.ErrRevisionConflict
 	}
 	if err != nil {

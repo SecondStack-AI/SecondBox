@@ -481,6 +481,11 @@ func TestConcurrentExecAdmissionLifecycleAndCleanupHaveNoDatabaseContentionError
 				IdempotencyKey:  fmt.Sprintf("contention-%d", index),
 				RequestHash:     fmt.Sprintf("contention-hash-%d", index),
 				IdempotencyEnds: mutationAt.Add(time.Hour),
+				AuditEvent: contracts.AuditEvent{
+					ID:     fmt.Sprintf("audit-contention-%d-%s", index, suffix),
+					Action: "sandbox." + kind, ResourceKind: "sandbox", ResourceID: sandboxID,
+					TenantRef: tenantRef, SubjectRef: subjectRef, Outcome: "accepted", CreatedAt: mutationAt,
+				},
 			})
 			if err != nil {
 				errorsFound <- fmt.Errorf("lifecycle %s iteration %d: %w", kind, index, err)

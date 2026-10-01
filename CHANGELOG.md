@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Upgrade notes
+
+- Migrations `0035_live_sandbox_quota_index` and `0036_sandbox_quota_ledger_on_increase` add an index and replace the Sandbox quota-ledger trigger. Rolling back to v0.21.0 requires the pre-update database backup.
+
+### Changed
+
+- Sandbox starts no longer queue behind each other on the control plane's quota bookkeeping. Each start used to take its Tenant's quota lock in about twenty separate transactions, so every start in a Tenant ran one at a time; now only admission and transitions that increase quota usage take it. On the lifecycle benchmark a burst of 32 starts finished at 1.8 s p50 and 2.7 s p95, down from 3.2 s and 4.4 s. Placement also locks only the Sandbox's home Runner rather than every Runner in the pool, runs without serializable isolation (which aborted and retried most placements in a burst), and releases the lifecycle claim in the same transaction. A starting Sandbox now waits for its Runner's evidence instead of being re-checked every 250 ms, and the lifecycle worker places the Sandboxes it claims concurrently.
+- Quota admission reads a partial index of live Sandboxes, so its cost no longer grows with the number of deleted Sandboxes a Tenant has retained.
+
 ### Fixed
 
 - A proxied PortSession to an approved guest port with no listener dropped its home Runner's whole control-plane connection, cancelling every in-flight exec, file, terminal, and Port operation on that Runner across all tenants (clients saw `409 execution_node_unavailable`) ([#194](https://github.com/SecondStack-AI/SecondBox/pull/194)). The Runner refused the Open but kept no record of the stream, so the Credit frame the control plane sends behind every Open was treated as a protocol violation. The PortSession now ends by itself with a `guest port is unavailable` tunnel close, and the Runner connection stays up. The same fix applies to Exec and File Opens refused for capacity, File write chunks behind a refused Open (which could also start the refused write), and PTY input, resize, or credit that arrives after the terminal's process has exited.

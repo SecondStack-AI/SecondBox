@@ -53,6 +53,8 @@ var postFenceMigrationFiles = []string{
 	"0032_port_stream_accounting.sql",
 	"0033_port_stream_in_memory.sql",
 	"0034_per_exec_attribution.sql",
+	"0035_live_sandbox_quota_index.sql",
+	"0036_sandbox_quota_ledger_on_increase.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

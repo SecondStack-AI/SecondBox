@@ -1,6 +1,8 @@
 // Package rowlock owns the invariant PostgreSQL lock order for durable resource
-// mutations. Every caller locks quota ledgers before Sandbox, then Workspace,
-// then Snapshot when present, before acquiring operation-specific rows.
+// mutations. Every caller locks Sandbox, then Workspace, then Snapshot when
+// present, before acquiring operation-specific rows. A caller that holds the
+// quota ledgers locks them before all of these; a Sandbox transition that can
+// increase quota usage must hold them (see SandboxWorkspaceForTransition).
 package rowlock
 
 import (

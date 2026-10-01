@@ -199,6 +199,9 @@ type LifecycleIntentInput struct {
 	RequestHash      string
 	IdempotencyEnds  time.Time
 	ExpectedRevision int64
+	// AuditEvent records this request, original or replayed, in the
+	// admission transaction.
+	AuditEvent contracts.AuditEvent
 }
 
 // WorkspaceRelocationInput admits one stopped-Sandbox home transfer.
@@ -353,4 +356,7 @@ type LifecycleReconcileClaim struct {
 	DrainGraceSeconds         int64
 	IdleSeconds               int64
 	MaximumDurationSeconds    int64
+	// AssignmentDeadline is the current Instance's Assignment operation
+	// deadline, when one exists.
+	AssignmentDeadline *time.Time
 }

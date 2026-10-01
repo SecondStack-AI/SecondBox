@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
@@ -71,7 +72,7 @@ func (reconciler Reconciler) RunOnce(
 	return decision, true, err
 }
 
-// RunBatch claims a bounded cohort and executes its effects sequentially.
+// RunBatch claims a bounded cohort and executes its effects concurrently.
 func (reconciler Reconciler) RunBatch(
 	ctx context.Context,
 	clock func() time.Time,
@@ -108,14 +109,32 @@ func (reconciler Reconciler) RunBatch(
 	if len(claims) > reconciler.BatchSize {
 		return false, errors.New("SecondBox lifecycle batch claim exceeded its bound")
 	}
-	var retryErrors []error
-	for _, claim := range claims {
-		if _, err := reconciler.reconcileClaim(ctx, claim, clock().UTC()); err != nil {
-			if ctx.Err() != nil || !IsRetryableReconcileError(err) {
-				return true, err
-			}
+	// Each claim names a distinct Sandbox and commits through its own fenced
+	// transactions, exactly as claims held by separate control-plane replicas
+	// do, so the cohort's effects run concurrently. The batch size bounds that
+	// concurrency. A burst otherwise waits behind one placement at a time.
+	claimErrors := make([]error, len(claims))
+	var group sync.WaitGroup
+	for index, claim := range claims {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, claimErrors[index] = reconciler.reconcileClaim(ctx, claim, clock().UTC())
+		}()
+	}
+	group.Wait()
+	var fatalErrors, retryErrors []error
+	for _, err := range claimErrors {
+		switch {
+		case err == nil:
+		case ctx.Err() != nil || !IsRetryableReconcileError(err):
+			fatalErrors = append(fatalErrors, err)
+		default:
 			retryErrors = append(retryErrors, err)
 		}
+	}
+	if len(fatalErrors) != 0 {
+		return true, errors.Join(fatalErrors...)
 	}
 	return true, errors.Join(retryErrors...)
 }
@@ -168,6 +187,9 @@ func (reconciler Reconciler) reconcileClaim(
 	}
 	if claim.DrainStartedAt != nil {
 		view.DrainStartedAt = claim.DrainStartedAt.UTC()
+	}
+	if claim.AssignmentDeadline != nil {
+		view.AssignmentDeadline = claim.AssignmentDeadline.UTC()
 	}
 	now = now.UTC()
 	decision := Decide(view, now)
@@ -232,6 +254,12 @@ func nextLifecycleReconcileAt(
 	if committedStateIsAtRest(view, decision) {
 		return time.Time{}
 	}
+	if startingInstanceAwaitsRunner(view, decision) {
+		if deadline := earlierFutureDeadline(view.AssignmentDeadline, time.Time{}, now); !deadline.IsZero() {
+			return deadline
+		}
+		return fallback
+	}
 	if decision.Action != ActionWait ||
 		view.Observed != contracts.SandboxStateReady ||
 		view.Desired != contracts.SandboxDesiredStateRunning ||
@@ -256,6 +284,21 @@ func nextLifecycleReconcileAt(
 		return fallback
 	}
 	return deadline
+}
+
+// startingInstanceAwaitsRunner reports whether a waiting decision depends only
+// on Runner evidence for the current Instance. Polling such a Sandbox finds
+// nothing new: the ready result projects readiness or wakes the Sandbox in its
+// own transaction, every failure result and terminal Assignment decision wakes
+// or fails the Sandbox, and a lifecycle intent schedules it with its desired
+// state. The Assignment's operation deadline remains as a recovery bound, since
+// that is when the Assignment reconciler acts on a Runner that never answered.
+func startingInstanceAwaitsRunner(view View, decision Decision) bool {
+	return decision.Action == ActionWait &&
+		view.Observed == contracts.SandboxStateStarting &&
+		view.Desired == contracts.SandboxDesiredStateRunning &&
+		view.HasInstance &&
+		view.GuestLiveness != contracts.GuestLivenessReady
 }
 
 // successorIsImmediatelyAvailable reports whether the state a decision commits

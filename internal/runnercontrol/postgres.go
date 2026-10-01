@@ -931,6 +931,23 @@ func (store *PostgresStateStore) RecordEvents(
 	if storedRunnerID != runnerID || connectionState != "active" {
 		return errors.New("SecondBox runner event batch connection identity is inactive")
 	}
+	// Assignment events lock their Sandboxes without the quota ledgers. Lock
+	// every such Sandbox in identity order before applying events, so the batch
+	// cannot interleave with another multi-Sandbox lock in event order.
+	var assignmentSandboxIDs []string
+	for _, record := range records {
+		if sandboxID := assignmentEventSandboxID(record.Event); sandboxID != "" {
+			assignmentSandboxIDs = append(assignmentSandboxIDs, sandboxID)
+		}
+	}
+	if len(assignmentSandboxIDs) > 1 {
+		if _, err := tx.Exec(ctx, `
+			SELECT id FROM secondbox.sandboxes
+			WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE`, assignmentSandboxIDs,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner event batch Sandbox lock: %w", err)
+		}
+	}
 	var containsDuplicate bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -1069,11 +1086,10 @@ func eventSandboxIDs(ctx context.Context, tx pgx.Tx, event Event) ([]string, err
 	var sandboxID string
 	switch event.Kind {
 	case EventAssignment:
-		if acknowledgement := event.Message.GetAssignmentAck(); acknowledgement != nil && acknowledgement.Fence != nil {
-			sandboxID = acknowledgement.Fence.SandboxId
-		} else if result := event.Message.GetAssignmentResult(); result != nil && result.Fence != nil {
-			sandboxID = result.Fence.SandboxId
-		}
+		// Assignment acknowledgement, progress, and results advance only the
+		// current Instance toward readiness or failure, which never increases
+		// quota usage, so they take no quota ledger lock.
+		return nil, nil
 	case EventFence:
 		if result := event.Message.GetFenceResult(); result != nil && result.Fence != nil {
 			sandboxID = result.Fence.SandboxId
@@ -1117,6 +1133,24 @@ func eventSandboxIDs(ctx context.Context, tx pgx.Tx, event Event) ([]string, err
 		return nil, nil
 	}
 	return []string{sandboxID}, nil
+}
+
+// assignmentEventSandboxID names the Sandbox an Assignment event's fence
+// targets, or "" for other events.
+func assignmentEventSandboxID(event Event) string {
+	if event.Kind != EventAssignment {
+		return ""
+	}
+	var fence *runnerv1.AssignmentFence
+	switch {
+	case event.Message.GetAssignmentAck() != nil:
+		fence = event.Message.GetAssignmentAck().Fence
+	case event.Message.GetAssignmentProgress() != nil:
+		fence = event.Message.GetAssignmentProgress().Fence
+	case event.Message.GetAssignmentResult() != nil:
+		fence = event.Message.GetAssignmentResult().Fence
+	}
+	return fence.GetSandboxId()
 }
 
 func recordLocalWorkspaceResult(
@@ -4476,7 +4510,10 @@ func lockAndValidateFence(
 		len(fence.FencingToken) == 0 {
 		return ErrStaleAssignmentEvidence
 	}
-	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, fence.SandboxId)
+	// Fenced evidence advances or retires the current Instance and never
+	// increases quota usage; callers that also hold the quota ledgers lose
+	// nothing by this lock not requiring them.
+	locked, err := rowlock.SandboxWorkspaceForTransition(ctx, tx, fence.SandboxId, rowlock.NonIncreasingTransition)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner Sandbox/Workspace fence lookup: %w", err)
 	}

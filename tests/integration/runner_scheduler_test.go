@@ -457,6 +457,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 				RetryLimit: 2, SerializationRetryLimit: 3,
 				HeartbeatTimeout: 30 * time.Second, Now: now,
 				EffectStartedAt: now, PlanReadyAt: now,
+				LifecycleClaimOwner: "lifecycle-worker-test",
 			}
 			assignment, created, err := schedulerStore.Schedule(t.Context(), request)
 			results <- result{assignment: assignment, created: created, err: err, request: request}

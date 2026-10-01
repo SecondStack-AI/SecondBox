@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,6 +125,7 @@ func TestLifecycleStartAdmissionOwnsWorkspaceMutationBeforeDesiredStateChanges(t
 		CreatedAt: now, UpdatedAt: now,
 	}
 	stored, err := store.SetSandboxDesiredState(t.Context(), ports.LifecycleIntentInput{
+		AuditEvent: testLifecycleAudit(),
 		Principal: contracts.Principal{
 			TenantRef: "tenant-local", SubjectRef: "subject-local",
 		},
@@ -176,6 +178,7 @@ func TestLifecycleStartAdmissionOwnsWorkspaceMutationBeforeDesiredStateChanges(t
 		CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second),
 	}
 	if _, err := store.SetSandboxDesiredState(t.Context(), ports.LifecycleIntentInput{
+		AuditEvent: testLifecycleAudit(),
 		Principal: contracts.Principal{
 			TenantRef: "tenant-local", SubjectRef: "subject-local",
 		},
@@ -216,6 +219,7 @@ func TestSandboxDeleteIntentDominatesPendingWorkspaceCreationWithoutReplacingIts
 	}
 	operation := localTestOperation("operation-delete-create", "delete", now)
 	if _, err := store.SetSandboxDesiredState(t.Context(), ports.LifecycleIntentInput{
+		AuditEvent: testLifecycleAudit(),
 		Principal: contracts.Principal{
 			TenantRef: "tenant-local", SubjectRef: "subject-local",
 		},
@@ -266,6 +270,7 @@ func TestConcurrentStartAndRestoreSerializeWithoutDeadlock(t *testing.T) {
 	go func() {
 		<-start
 		_, err := store.SetSandboxDesiredState(ctx, ports.LifecycleIntentInput{
+			AuditEvent: testLifecycleAudit(),
 			Principal: contracts.Principal{
 				TenantRef: "tenant-local", SubjectRef: "subject-local",
 			},
@@ -816,6 +821,7 @@ func TestConcurrentSandboxDeleteAndRestoreSerializeWithoutDeadlock(t *testing.T)
 	go func() {
 		<-start
 		_, err := store.SetSandboxDesiredState(ctx, ports.LifecycleIntentInput{
+			AuditEvent: testLifecycleAudit(),
 			Principal: contracts.Principal{
 				TenantRef: "tenant-local", SubjectRef: "subject-local",
 			},
@@ -1245,6 +1251,7 @@ func TestSnapshotRestoreMutationBlocksEveryConflictingSandboxAction(t *testing.T
 		{kind: "delete", desired: contracts.SandboxDesiredStateDeleted},
 	} {
 		_, err := store.SetSandboxDesiredState(t.Context(), ports.LifecycleIntentInput{
+			AuditEvent: testLifecycleAudit(),
 			Principal: contracts.Principal{
 				TenantRef:  "tenant-local",
 				SubjectRef: "subject-local",
@@ -1533,4 +1540,15 @@ func seedLocalWorkspace(
 		t.Fatal(err)
 	}
 	return workspaceID, sandboxID
+}
+
+var testLifecycleAuditSequence atomic.Int64
+
+// testLifecycleAudit returns a distinct audit event for one lifecycle request.
+func testLifecycleAudit() contracts.AuditEvent {
+	return contracts.AuditEvent{
+		ID:     fmt.Sprintf("audit-lifecycle-%d", testLifecycleAuditSequence.Add(1)),
+		Action: "sandbox.lifecycle", ResourceKind: "sandbox", Outcome: "accepted",
+		CreatedAt: time.Now().UTC(),
+	}
 }

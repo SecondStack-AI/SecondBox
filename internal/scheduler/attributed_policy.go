@@ -13,8 +13,8 @@ import (
 )
 
 // resolveAttributedConnections runs only for a new Assignment, inside its
-// serializable transaction. Policy reads participate in dependency tracking and
-// use Schedule's existing serialization retry, without changing row-lock order.
+// placement transaction. Policy reads take no row lock, so the row-lock order is
+// unchanged; a concurrent policy update applies to this or the next Assignment.
 func resolveAttributedConnections(ctx context.Context, tx pgx.Tx, locked rowlock.SandboxWorkspace, permission *runnerv1.AttributedExecutionPermission) error {
 	var pinnedJSON, currentJSON, selectionJSON []byte
 	var profileName string

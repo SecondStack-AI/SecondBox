@@ -117,10 +117,10 @@ These spans overlap and must not be added:
 | `placement_reconcile` | Lifecycle reconciliation start to effect execution. |
 | `placement_plan` | Effect execution to the complete provider-neutral start plan. |
 | `placement_handoff` | Complete start plan to scheduler entry. |
-| `placement_retry` | Scheduler entry to the successful serializable attempt; includes failed attempts and retry backoff. |
+| `placement_retry` | Scheduler entry to the successful attempt; includes attempts lost to a PostgreSQL deadlock and their retry backoff. |
 | `placement_sandbox_lock` | Successful attempt start through the ordered Sandbox and Workspace lock. |
 | `placement_assignment_check` | Sandbox and Workspace lock through the existing-Assignment and mutation checks. |
-| `placement_candidate_lock` | Assignment checks through locking the eligible runner candidates. |
+| `placement_candidate_lock` | Assignment checks through locking the Sandbox's home Runner row. |
 | `placement_candidate_select` | Locked candidates through provider-neutral runner selection. |
 | `placement_prepare` | Selected runner through the committed ordered placement writes. |
 | `startup_dispatch` | Placement ready to successful Assignment stream delivery. |
@@ -143,12 +143,12 @@ Workspace format/fsync/publish time. Runner-private details do not enter public
 schemas.
 
 The lifecycle worker claims an explicitly configured bounded cohort of
-oldest-due Sandboxes atomically, then processes its effects sequentially. This
-amortizes claim cleanup and selection without multiplying concurrent
-serializable scheduler transactions. `placement_pickup` includes time an item
-waits behind earlier effects in its claimed cohort; `placement_reconcile`
-starts when that specific item begins processing. Claim acquisition changes
-only the private owner and expiry fence, so it does not create a public Sandbox
+oldest-due Sandboxes atomically, then runs the cohort's effects concurrently,
+one per claimed Sandbox. This amortizes claim cleanup and selection, and the
+cohort size bounds concurrent placements. `placement_pickup` includes time an
+item waits for the claim that picks it up; `placement_reconcile` starts when
+that specific item begins processing. Claim acquisition changes only the
+private owner and expiry fence, so it does not create a public Sandbox
 revision or activity update.
 
 ## Teardown attribution
@@ -208,7 +208,7 @@ just test-lifecycle
 
 The deployment also requires
 `SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE`. The qualified scenario uses `8`;
-it is a bounded claim size, not a worker-concurrency setting. Treat changes as
+it bounds both the claim size and the concurrent effects of one worker. Treat changes as
 performance candidates and requalify both unsaturated and repeated-burst runs.
 
 Omitting `SECONDBOX_LIFECYCLE_CONFIG` uses `scripts/lifecycle-config.example.json`.

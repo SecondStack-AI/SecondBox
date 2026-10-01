@@ -13,8 +13,9 @@ func TestExpiredLifecycleIdempotencyDoesNotReplay(t *testing.T) {
 	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
 	_, sandboxID := seedLocalWorkspace(t, controlPlaneStore, "lifecycle-expiry", now)
 	input := ports.LifecycleIntentInput{
-		Principal: contracts.Principal{TenantRef: "tenant-local", SubjectRef: "subject-local"},
-		SandboxID: sandboxID, DesiredState: contracts.SandboxDesiredStateStopped,
+		AuditEvent: testLifecycleAudit(),
+		Principal:  contracts.Principal{TenantRef: "tenant-local", SubjectRef: "subject-local"},
+		SandboxID:  sandboxID, DesiredState: contracts.SandboxDesiredStateStopped,
 		Operation: localTestOperation("operation-lifecycle-expiry-first", "stop", now),
 		Now:       now, ExpectedRevision: 1, IdempotencyKey: "lifecycle-expiry",
 		RequestHash: "first", IdempotencyEnds: now.Add(time.Hour),
@@ -28,6 +29,7 @@ func TestExpiredLifecycleIdempotencyDoesNotReplay(t *testing.T) {
 	input.ExpectedRevision = 2
 	input.RequestHash = "second"
 	input.IdempotencyEnds = input.Now.Add(time.Hour)
+	input.AuditEvent = testLifecycleAudit()
 	second, err := controlPlaneStore.SetSandboxDesiredState(t.Context(), input)
 	if err != nil {
 		t.Fatal(err)

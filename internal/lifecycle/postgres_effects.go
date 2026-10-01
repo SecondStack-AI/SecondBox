@@ -546,7 +546,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	if err != nil {
 		return err
 	}
-	assignment, _, err := broker.scheduler.Schedule(ctx, scheduler.ScheduleRequest{
+	assignment, created, err := broker.scheduler.Schedule(ctx, scheduler.ScheduleRequest{
 		AssignmentID: assignmentID, AssignmentCommandID: commandID,
 		InstanceID: instanceID, SandboxID: claim.SandboxID,
 		WorkspaceID: plan.workspaceID, StartMutationID: startMutationID,
@@ -569,6 +569,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		SerializationRetryLimit: broker.config.SerializationRetryLimit,
 		HeartbeatTimeout:        broker.config.HeartbeatTimeout, Now: now.UTC(),
 		EffectStartedAt: effectStartedAt, PlanReadyAt: planReadyAt,
+		LifecycleClaimOwner: claim.WorkerID,
 	})
 	if err != nil {
 		if errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
@@ -582,21 +583,26 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		}
 		return err
 	}
+	if created {
+		// The new Assignment's transaction already released this claim.
+		return nil
+	}
+	// The Sandbox generation already had an Assignment, which Schedule replayed.
+	// Release this claim and schedule the Sandbox as a new Assignment would.
 	tx, err := broker.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("SecondBox lifecycle start completion transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := rowlock.SandboxQuota(ctx, tx, claim.SandboxID); err != nil {
-		return fmt.Errorf("SecondBox lifecycle start completion quota lock failed: %w", err)
-	}
+	// Completion changes only the schedule and claim, never quota usage, so it
+	// takes no quota ledger lock.
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET lifecycle_action='start_instance',next_reconcile_at=$4,reconcile_owner='',
 		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
 		WHERE id=$1 AND generation=$2 AND current_instance_id=$5
 		  AND reconcile_owner=$6`,
-		claim.SandboxID, plan.generation, now.UTC(), nextReconcileAt.UTC(),
+		claim.SandboxID, plan.generation, now.UTC(), assignment.OperationDeadline.UTC(),
 		assignment.InstanceID, claim.WorkerID,
 	)
 	if err != nil {
