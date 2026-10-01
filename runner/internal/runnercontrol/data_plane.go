@@ -94,6 +94,7 @@ type runnerExecOperation struct {
 	pty              bool
 	cancel           context.CancelCauseFunc
 	terminal         bool
+	confirmCancel    bool
 	terminalFrame    *runnerprotocol.ExecFrame
 	ptyTerminalFrame *runnerprotocol.PtyFrame
 	ptyAttachment    *runnerPTYAttachment
@@ -132,6 +133,7 @@ type runnerFileOperation struct {
 	cancel        context.CancelCauseFunc
 	started       bool
 	terminal      bool
+	confirmCancel bool
 	terminalFrame *runnerprotocol.FileFrame
 }
 
@@ -747,6 +749,7 @@ func (s *RunnerProtocolService) sendPTYTerminal(
 	state.terminal = true
 	close(state.done)
 	state.ptyTerminalFrame = proto.Clone(frame).(*runnerprotocol.PtyFrame)
+	confirmCancel := state.confirmCancel
 	s.retainExecTerminalLocked(state.key)
 	s.operationMu.Unlock()
 	retainErr := s.retainAndSendPTYFrame(state, frame)
@@ -755,7 +758,13 @@ func (s *RunnerProtocolService) sendPTYTerminal(
 		state.fence, state.correlation, state.operationID,
 		terminal.Kind.String(), terminalOutcome(terminal.Kind.String()),
 	)
-	return errors.Join(retainErr, evidenceErr)
+	var confirmErr error
+	if confirmCancel {
+		confirmErr = s.reportCancelledOperationTerminal(&runnerprotocol.RunnerToControlPlane{
+			Message: &runnerprotocol.RunnerToControlPlane_Pty{Pty: proto.Clone(frame).(*runnerprotocol.PtyFrame)},
+		})
+	}
+	return errors.Join(retainErr, evidenceErr, confirmErr)
 }
 
 func (s *RunnerProtocolService) executeStreamingOperation(
@@ -875,6 +884,7 @@ func (s *RunnerProtocolService) sendExecBufferedResult(
 	state.terminal = true
 	close(state.done)
 	state.terminalFrame = proto.Clone(frame).(*runnerprotocol.ExecFrame)
+	confirmCancel := state.confirmCancel
 	s.retainExecTerminalLocked(state.key)
 	s.operationMu.Unlock()
 	if err := s.emitEvidence(
@@ -884,9 +894,9 @@ func (s *RunnerProtocolService) sendExecBufferedResult(
 	); err != nil {
 		return err
 	}
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
+	return s.sendOperationTerminal(stream, &runnerprotocol.RunnerToControlPlane{
 		Message: &runnerprotocol.RunnerToControlPlane_Exec{Exec: frame},
-	})
+	}, confirmCancel)
 }
 
 func runnerInfrastructureTerminal(
@@ -987,6 +997,7 @@ func (s *RunnerProtocolService) sendExecTerminal(
 	close(state.done)
 	state.terminalFrame = proto.Clone(frame).(*runnerprotocol.ExecFrame)
 	state.stdout, state.stderr = nil, nil
+	confirmCancel := state.confirmCancel
 	s.retainExecTerminalLocked(state.key)
 	s.operationMu.Unlock()
 	if err := s.emitEvidence(
@@ -1000,9 +1011,9 @@ func (s *RunnerProtocolService) sendExecTerminal(
 	); err != nil {
 		return err
 	}
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
+	return s.sendOperationTerminal(stream, &runnerprotocol.RunnerToControlPlane{
 		Message: &runnerprotocol.RunnerToControlPlane_Exec{Exec: frame},
-	})
+	}, confirmCancel)
 }
 
 func (s *RunnerProtocolService) handleFileFrame(
@@ -1298,6 +1309,7 @@ func (s *RunnerProtocolService) sendFileTerminal(
 	state.nextOutgoing++
 	state.terminal = true
 	state.terminalFrame = proto.Clone(frame).(*runnerprotocol.FileFrame)
+	confirmCancel := state.confirmCancel
 	s.retainFileTerminalLocked(state.key)
 	s.operationMu.Unlock()
 	if err := s.emitEvidence(
@@ -1311,9 +1323,43 @@ func (s *RunnerProtocolService) sendFileTerminal(
 	); err != nil {
 		return err
 	}
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
+	return s.sendOperationTerminal(stream, &runnerprotocol.RunnerToControlPlane{
 		Message: &runnerprotocol.RunnerToControlPlane_File{File: frame},
-	})
+	}, confirmCancel)
+}
+
+// sendOperationTerminal sends a terminal on the operation's own stream and,
+// for a durably cancelled operation, on the control connection too.
+func (s *RunnerProtocolService) sendOperationTerminal(
+	stream RunnerProtocolStream,
+	message *runnerprotocol.RunnerToControlPlane,
+	confirmCancel bool,
+) error {
+	err := s.sendRunnerFrame(stream, message)
+	if confirmCancel {
+		err = errors.Join(err, s.reportCancelledOperationTerminal(
+			proto.Clone(message).(*runnerprotocol.RunnerToControlPlane),
+		))
+	}
+	return err
+}
+
+// reportCancelledOperationTerminal confirms a durable data-plane cancellation
+// on the control connection. The control plane may have closed the
+// operation's own route or direct connection when it recorded the
+// cancellation, so the terminal on that stream alone may never be read. An
+// exact duplicate of a terminal the control plane already recorded changes
+// nothing there.
+func (s *RunnerProtocolService) reportCancelledOperationTerminal(
+	message *runnerprotocol.RunnerToControlPlane,
+) error {
+	stream := s.directDataPlane.currentStream()
+	if stream == nil {
+		// The control plane completes a session whose confirmation was lost
+		// with its connection once the session's Assignment ends.
+		return nil
+	}
+	return s.sendRunnerFrame(stream, message)
 }
 
 func (s *RunnerProtocolService) retainExecTerminalLocked(key string) {

@@ -75,6 +75,13 @@ func (registry *directDataPlaneRegistry) bindStream(stream RunnerProtocolStream)
 	registry.mu.Unlock()
 }
 
+// currentStream is the Runner's control connection, or nil between connections.
+func (registry *directDataPlaneRegistry) currentStream() RunnerProtocolStream {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return registry.stream
+}
+
 func (registry *directDataPlaneRegistry) add(session *directDataPlaneSession) {
 	key := hex.EncodeToString(session.credentialDigest[:])
 	registry.mu.Lock()
@@ -292,22 +299,47 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 		s.operationMu.Unlock()
 		return nil
 	}
-	s.directDataPlane.closeSession(command.OperationId, command.Reason)
 	key := runnerDataPlaneOperationKey(command.Fence, command.OperationId, command.StreamId)
+	var retained *runnerprotocol.RunnerToControlPlane
+	running := false
 	s.operationMu.Lock()
 	if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC ||
 		command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY {
-		state := s.execOperations[key]
-		if state != nil && !state.terminal {
-			state.cancel(context.Canceled)
+		if state := s.execOperations[key]; state != nil {
+			switch {
+			case state.ptyTerminalFrame != nil:
+				retained = &runnerprotocol.RunnerToControlPlane{Message: &runnerprotocol.RunnerToControlPlane_Pty{
+					Pty: proto.Clone(state.ptyTerminalFrame).(*runnerprotocol.PtyFrame),
+				}}
+			case state.terminalFrame != nil:
+				retained = &runnerprotocol.RunnerToControlPlane{Message: &runnerprotocol.RunnerToControlPlane_Exec{
+					Exec: proto.Clone(state.terminalFrame).(*runnerprotocol.ExecFrame),
+				}}
+			case !state.terminal:
+				state.confirmCancel, running = true, true
+				state.cancel(context.Canceled)
+			}
 		}
-	} else {
-		state := s.fileOperations[key]
-		if state != nil && !state.terminal {
+	} else if state := s.fileOperations[key]; state != nil {
+		switch {
+		case state.terminalFrame != nil:
+			retained = &runnerprotocol.RunnerToControlPlane{Message: &runnerprotocol.RunnerToControlPlane_File{
+				File: proto.Clone(state.terminalFrame).(*runnerprotocol.FileFrame),
+			}}
+		case !state.terminal:
+			state.confirmCancel, running = true, true
 			state.cancel(context.Canceled)
 		}
 	}
 	s.operationMu.Unlock()
+	if !running {
+		// A running operation keeps its direct connection until it sends its
+		// terminal there; a session whose Open has not arrived must not start.
+		s.directDataPlane.closeSession(command.OperationId, command.Reason)
+	}
+	if retained != nil {
+		return s.reportCancelledOperationTerminal(retained)
+	}
 	return nil
 }
 
