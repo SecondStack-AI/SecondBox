@@ -23,7 +23,7 @@ type BufferedGuestExecResult struct {
 }
 
 type guestExecOperationSender struct {
-	session      *GuestProtocolSession
+	stream       *guestOperationStream
 	binding      *guestv1.OperationBinding
 	mu           sync.Mutex
 	nextSequence uint64
@@ -37,9 +37,7 @@ func (sender *guestExecOperationSender) send(payload guestExecPayload) error {
 	sender.nextSequence++
 	frame := &guestv1.ExecFrame{Binding: binding}
 	payload.apply(frame)
-	sender.session.sendMu.Lock()
-	defer sender.session.sendMu.Unlock()
-	return sender.session.Stream.Send(&guestv1.RunnerToGuest{
+	return sender.stream.send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_Exec{Exec: frame},
 	})
 }
@@ -78,12 +76,13 @@ type GuestExecControl struct {
 	Credit     uint64
 }
 
-// ExecuteStreaming performs one bounded exec over the retained assignment-bound guest stream.
-// ExecutionGatewayOpener opens an attributed exec's window once the exec owns
-// the guest session. It returns the exec context, which the window cancels
-// when its forwarder fails, and the window's listener.
+// ExecutionGatewayOpener opens an attributed exec's window once the exec's
+// guest stream is negotiated, immediately before dispatch. It returns the exec
+// context, which the window cancels when its forwarder fails, and the window's
+// listener.
 type ExecutionGatewayOpener func(context.Context) (context.Context, netip.AddrPort, error)
 
+// ExecuteStreaming performs one bounded exec on its own guest stream.
 // openExecutionGateway is nil for an ordinary exec.
 func (s *GuestProtocolSession) ExecuteStreaming(
 	ctx context.Context,
@@ -93,7 +92,7 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 	controls <-chan GuestExecControl,
 	emit func(guestv1.ExecOutputChannel, []byte) error,
 ) (result BufferedGuestExecResult, resultErr error) {
-	if s == nil || s.Stream == nil || s.Binding == nil {
+	if s == nil || s.connect == nil || s.Binding == nil {
 		return BufferedGuestExecResult{}, fmt.Errorf("guest protocol session is not ready")
 	}
 	if !s.EnabledFeatures[guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC] {
@@ -105,20 +104,22 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 	if err := ctx.Err(); err != nil {
 		return BufferedGuestExecResult{}, err
 	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
+	if openExecutionGateway != nil && request.Pty != nil {
+		return BufferedGuestExecResult{}, fmt.Errorf("attributed execution does not admit a PTY")
+	}
+	stream, err := s.openOperationStream(ctx, guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC)
+	if err != nil {
+		return BufferedGuestExecResult{}, err
+	}
+	defer stream.close()
 	var executionGateway netip.AddrPort
 	if openExecutionGateway != nil {
-		if request.Pty != nil {
-			return BufferedGuestExecResult{}, fmt.Errorf("attributed execution does not admit a PTY")
-		}
-		var err error
 		ctx, executionGateway, err = openExecutionGateway(ctx)
 		if err != nil {
 			return BufferedGuestExecResult{}, err
 		}
 	}
-	request, err := s.prepareReservedGuestEnvironment(request, executionGateway)
+	request, err = s.prepareReservedGuestEnvironment(request, executionGateway)
 	if err != nil {
 		return BufferedGuestExecResult{}, err
 	}
@@ -128,25 +129,22 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 		return BufferedGuestExecResult{}, err
 	}
 	binding := &guestv1.OperationBinding{
-		Connection:   cloneGuestConnectionBinding(s.Binding),
+		Connection:   cloneGuestConnectionBinding(stream.connection),
 		AssignmentId: assignmentID,
 		OperationId:  operationID,
 		StreamId:     operationID,
 		Sequence:     1,
 	}
-	s.sendMu.Lock()
-	err = s.Stream.Send(&guestv1.RunnerToGuest{
+	if err := stream.send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_Exec{Exec: &guestv1.ExecFrame{
 			Binding: binding,
 			Payload: &guestv1.ExecFrame_Request{Request: request},
 		}},
-	})
-	s.sendMu.Unlock()
-	if err != nil {
+	}); err != nil {
 		return BufferedGuestExecResult{}, fmt.Errorf("send guest exec request: %w", err)
 	}
 	sender := &guestExecOperationSender{
-		session: s, binding: binding, nextSequence: 2,
+		stream: stream, binding: binding, nextSequence: 2,
 	}
 	cancellationSendError := make(chan error, 1)
 	stopCancellation := context.AfterFunc(ctx, func() {
@@ -159,7 +157,7 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 			resultErr = errors.Join(resultErr, <-cancellationSendError)
 		}
 	}()
-	first, err := s.Stream.Recv()
+	first, err := stream.stream.Recv()
 	if err != nil {
 		return BufferedGuestExecResult{}, fmt.Errorf("receive guest exec admission: %w", err)
 	}
@@ -214,7 +212,7 @@ func (s *GuestProtocolSession) ExecuteStreaming(
 	}()
 	expectedSequence := uint64(2)
 	for {
-		response, err := s.Stream.Recv()
+		response, err := stream.stream.Recv()
 		if err != nil {
 			select {
 			case controlErr := <-controlErrors:

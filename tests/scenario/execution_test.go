@@ -325,6 +325,36 @@ func TestScenarioExecutesBufferedAndStreamingCommands(t *testing.T) {
 		assertScenarioExited(t, probe, 0, "done", "")
 	})
 
+	t.Run("operations do not wait for a running command", func(t *testing.T) {
+		stream := createScenarioExecStream(t, ctx, handle, "printf started; sleep 60", 4096, 4096, "stream-beside")
+		defer stream.Close()
+		if err := stream.GrantOutput(4096); err != nil {
+			t.Fatal(err)
+		}
+		if frame, err := stream.Receive(); err != nil || frame.StreamOutputFrame == nil {
+			t.Fatalf("SecondBox scenario running command did not start: %#v, %v", frame, err)
+		}
+		besideContext, stopBeside := context.WithTimeout(ctx, 10*time.Second)
+		defer stopBeside()
+		started := time.Now()
+		if err := handle.CreateDirectory(
+			besideContext, "beside-running-command", true, uniqueScenarioKey(t, "mkdir-beside"), "",
+		); err != nil {
+			t.Fatalf("SecondBox scenario mkdir beside a running command: %v", err)
+		}
+		probe := executeScenarioCommand(t, besideContext, handle, "printf beside", 1024, "exec-beside")
+		assertScenarioExited(t, probe, 0, "beside", "")
+		if elapsed := time.Since(started); elapsed > 5*time.Second {
+			t.Fatalf("SecondBox scenario operations beside a running command took %s", elapsed)
+		}
+		if err := stream.Cancel(); err != nil {
+			t.Fatal(err)
+		}
+		if _, outcome := receiveScenarioExec(t, stream); outcome.ExecCancelled == nil {
+			t.Fatalf("SecondBox scenario running command outcome = %s", describeScenarioExecOutcome(outcome))
+		}
+	})
+
 	t.Run("configured pair of concurrent executions completes", func(t *testing.T) {
 		const executions = 2
 		outcomes := make([]secondboxclient.ExecOutcome, executions)

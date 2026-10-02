@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,10 +13,6 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/backoff"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // proofAgentProtocol proves the guest-agent transport the backend design
@@ -145,105 +140,35 @@ func repeatHex(digit string) string {
 	return value
 }
 
-// negotiateOverUnixSocket mirrors the production NegotiateGuestProtocol flow
-// with a filesystem Unix-socket dialer in place of the Firecracker vsock
-// CONNECT framing, then hands the negotiated stream to the production
-// operation drivers through the exported session fields.
+// negotiateOverUnixSocket negotiates the production guest session over the
+// direct Unix-socket transport the gVisor backend uses.
 func negotiateOverUnixSocket(
 	ctx context.Context,
 	socketPath string,
 	identity agentIdentity,
 ) (*firecracker.GuestProtocolSession, error) {
-	nonce := make([]byte, 32)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-	binding := &guestv1.ConnectionBinding{
-		InstanceId:        identity.instanceID,
-		SandboxId:         identity.sandboxID,
-		SandboxGeneration: identity.generation,
-		ConnectionNonce:   nonce,
-	}
-	connection, err := grpc.NewClient(
-		"passthrough:///secondbox-gvisor-probe-guest",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			var dialer net.Dialer
-			return dialer.DialContext(ctx, "unix", socketPath)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithConnectParams(grpc.ConnectParams{
-			Backoff: backoff.Config{
-				BaseDelay:  10 * time.Millisecond,
-				Multiplier: 1.5,
-				Jitter:     0.2,
-				MaxDelay:   250 * time.Millisecond,
-			},
-			MinConnectTimeout: 20 * time.Second,
-		}),
-	)
-	if err != nil {
-		return nil, err
-	}
-	requested := []guestv1.GuestFeature{
-		guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
-		guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
-		guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM,
-		guestv1.GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS,
-		guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY,
-	}
-	stream, err := guestv1.NewGuestAgentClient(connection).Connect(ctx, grpc.WaitForReady(true))
-	if err != nil {
-		_ = connection.Close()
-		return nil, err
-	}
-	if err := stream.Send(&guestv1.RunnerToGuest{
-		Message: &guestv1.RunnerToGuest_Hello{Hello: &guestv1.Hello{
-			Binding:              binding,
-			SupportedGenerations: &guestv1.ProtocolGenerationRange{Minimum: 1, Maximum: 1},
-			RequestedFeatures:    requested,
-			MandatoryFeatures: []guestv1.GuestFeature{
-				guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
-				guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
-				guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY,
-			},
-			ExpectedImageManifestDigest:     identity.imageDigest,
-			ExpectedToolchainManifestDigest: identity.toolchainDigest,
-		}},
-	}); err != nil {
-		_ = connection.Close()
-		return nil, err
-	}
-	first, err := stream.Recv()
-	if err != nil {
-		_ = connection.Close()
-		return nil, err
-	}
-	if rejection := first.GetRejection(); rejection != nil {
-		_ = connection.Close()
-		return nil, fmt.Errorf("negotiation rejected (%s): %s", rejection.Kind, rejection.SafeDetail)
-	}
-	welcome := first.GetWelcome()
-	if welcome == nil || welcome.SelectedGeneration != 1 ||
-		welcome.GuestBuildId != identity.buildID ||
-		welcome.ImageManifestDigest != identity.imageDigest ||
-		welcome.ToolchainManifestDigest != identity.toolchainDigest {
-		_ = connection.Close()
-		return nil, fmt.Errorf("welcome identity mismatch: %+v", welcome)
-	}
-	enabled := make(map[guestv1.GuestFeature]bool, len(welcome.EnabledFeatures))
-	for _, feature := range welcome.EnabledFeatures {
-		enabled[feature] = true
-	}
-	return &firecracker.GuestProtocolSession{
-		Connection:              connection,
-		Stream:                  stream,
-		Binding:                 binding,
-		Generation:              welcome.SelectedGeneration,
-		EnabledFeatures:         enabled,
-		GuestBuildID:            welcome.GuestBuildId,
-		ImageManifestDigest:     welcome.ImageManifestDigest,
-		ToolchainManifestDigest: welcome.ToolchainManifestDigest,
-	}, nil
+	return firecracker.NegotiateGuestProtocol(ctx, firecracker.GuestProtocolNegotiation{
+		UDSPath:                         socketPath,
+		DirectUnixSocket:                true,
+		InstanceID:                      identity.instanceID,
+		SandboxID:                       identity.sandboxID,
+		SandboxGeneration:               identity.generation,
+		ExpectedGuestBuildID:            identity.buildID,
+		ExpectedImageManifestDigest:     identity.imageDigest,
+		ExpectedToolchainManifestDigest: identity.toolchainDigest,
+		RequestedFeatures: []guestv1.GuestFeature{
+			guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
+			guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
+			guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM,
+			guestv1.GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS,
+			guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY,
+		},
+		MandatoryFeatures: []guestv1.GuestFeature{
+			guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
+			guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
+			guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY,
+		},
+	})
 }
 
 func execDeadline() uint64 {

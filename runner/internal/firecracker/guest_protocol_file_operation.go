@@ -18,7 +18,7 @@ type GuestFileOperationResult struct {
 }
 
 type guestFileOperationSender struct {
-	session      *GuestProtocolSession
+	stream       *guestOperationStream
 	binding      *guestv1.OperationBinding
 	mu           sync.Mutex
 	nextSequence uint64
@@ -32,7 +32,7 @@ const oversizedGuestReadDetail = "file exceeds the admitted read bound"
 // sendCancel emits at most one cancellation frame for the operation. Context
 // cancellation and an oversized-read refusal both ask the guest to stop, and a
 // second cancellation can reach the guest after it retired the operation,
-// which fails the whole shared protocol connection.
+// which fails the operation's protocol stream.
 func (sender *guestFileOperationSender) sendCancel(reason string) error {
 	var err error
 	sender.cancelOnce.Do(func() {
@@ -49,9 +49,7 @@ func (sender *guestFileOperationSender) send(frame *guestv1.FileFrame) error {
 	frame.Binding = cloneGuestOperationBinding(sender.binding)
 	frame.Binding.Sequence = sender.nextSequence
 	sender.nextSequence++
-	sender.session.sendMu.Lock()
-	defer sender.session.sendMu.Unlock()
-	return sender.session.Stream.Send(&guestv1.RunnerToGuest{
+	return sender.stream.send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_File{File: frame},
 	})
 }
@@ -71,8 +69,8 @@ func (sender *guestFileOperationSender) sendWriteContent(content []byte) error {
 	return nil
 }
 
-// ExecuteFileOperation performs one serialized descriptor-pinned filesystem
-// operation while preserving the guest's typed terminal outcome.
+// ExecuteFileOperation performs one descriptor-pinned filesystem operation on
+// its own guest stream while preserving the guest's typed terminal outcome.
 func (s *GuestProtocolSession) ExecuteFileOperation(
 	ctx context.Context,
 	assignmentID string,
@@ -93,27 +91,27 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 		return GuestFileOperationResult{}, fmt.Errorf("guest file write content does not match declared size")
 	}
 
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	binding, err := s.newFileOperationBinding(assignmentID)
+	stream, err := s.openOperationStream(ctx, guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM)
 	if err != nil {
 		return GuestFileOperationResult{}, err
 	}
-	s.sendMu.Lock()
-	err = s.Stream.Send(&guestv1.RunnerToGuest{
+	defer stream.close()
+	binding, err := newFileOperationBinding(stream, assignmentID)
+	if err != nil {
+		return GuestFileOperationResult{}, err
+	}
+	if err := stream.send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_File{File: &guestv1.FileFrame{
 			Binding: binding,
 			Payload: &guestv1.FileFrame_Request{
 				Request: request,
 			},
 		}},
-	})
-	s.sendMu.Unlock()
-	if err != nil {
+	}); err != nil {
 		return GuestFileOperationResult{}, fmt.Errorf("send guest file request: %w", err)
 	}
 	sender := &guestFileOperationSender{
-		session: s, binding: binding, nextSequence: 2,
+		stream: stream, binding: binding, nextSequence: 2,
 	}
 	if request.Operation == guestv1.FileOperation_FILE_OPERATION_WRITE {
 		if err := sender.sendWriteContent(content); err != nil {
@@ -134,7 +132,7 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 		}()
 	}
 
-	first, err := s.Stream.Recv()
+	first, err := stream.stream.Recv()
 	if err != nil {
 		return GuestFileOperationResult{}, fmt.Errorf("receive guest file response: %w", err)
 	}
@@ -158,8 +156,8 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 		}
 		if metadata.Size > request.ExpectedSize {
 			// Refuse before granting content credit. The guest stops the read
-			// and answers with its own terminal frame, so the shared session
-			// stays in sequence and remains usable.
+			// and answers with its own terminal frame, so the stream stays in
+			// sequence through the typed refusal.
 			declined = true
 			if err := sender.sendCancel(oversizedGuestReadDetail); err != nil {
 				return GuestFileOperationResult{}, fmt.Errorf("send guest oversized read refusal: %w", err)
@@ -175,7 +173,7 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 		}
 	}
 	for {
-		response, err := s.Stream.Recv()
+		response, err := stream.stream.Recv()
 		if err != nil {
 			return GuestFileOperationResult{}, fmt.Errorf("receive guest file continuation: %w", err)
 		}

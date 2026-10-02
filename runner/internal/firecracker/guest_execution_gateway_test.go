@@ -65,10 +65,11 @@ func TestReservedGuestEnvironmentInjectedAtGuestDispatch(t *testing.T) {
 			expiry := time.Now().Add(time.Minute)
 			stream := &captureExecutionGatewayStream{}
 			session := &GuestProtocolSession{
-				Stream: stream, Binding: &guestv1.ConnectionBinding{},
+				Binding:         &guestv1.ConnectionBinding{},
 				EnabledFeatures: map[guestv1.GuestFeature]bool{guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC: true},
 				runnerGateways:  test.gateways(t),
 			}
+			connectEveryOperationTo(session, stream)
 			var executionGateway netip.AddrPort
 			if test.attributed {
 				executionGateway = testExecutionListener
@@ -110,13 +111,14 @@ func TestReservedGuestEnvironmentRefusedOnPTY(t *testing.T) {
 	} {
 		stream := &captureExecutionGatewayStream{}
 		session := &GuestProtocolSession{
-			Stream: stream, Binding: &guestv1.ConnectionBinding{},
+			Binding: &guestv1.ConnectionBinding{},
 			EnabledFeatures: map[guestv1.GuestFeature]bool{
 				guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC: true,
 				guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE:     true,
 			},
 			runnerGateways: testRunnerGateways,
 		}
+		connectEveryOperationTo(session, stream)
 		request := &guestv1.ExecRequest{
 			Pty: &guestv1.PtyDimensions{Rows: 24, Columns: 80}, Streaming: true, OutputLimitBytes: 1024,
 			DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()),
@@ -162,9 +164,10 @@ func TestRunnerGatewaysPublishCompiledPolicyProjection(t *testing.T) {
 func TestExecutionGatewayMustBeHostIPv4Listener(t *testing.T) {
 	stream := &captureExecutionGatewayStream{}
 	session := &GuestProtocolSession{
-		Stream: stream, Binding: &guestv1.ConnectionBinding{},
+		Binding:         &guestv1.ConnectionBinding{},
 		EnabledFeatures: map[guestv1.GuestFeature]bool{guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC: true},
 	}
+	connectEveryOperationTo(session, stream)
 	request := &guestv1.ExecRequest{DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024}
 	for _, endpoint := range []netip.AddrPort{
 		netip.MustParseAddrPort("127.0.0.1:123"), netip.MustParseAddrPort("[::1]:123"),
@@ -297,43 +300,44 @@ func TestReservedGuestEnvironmentReachesRealGuestCommand(t *testing.T) {
 	}
 }
 
-// An attributed exec queued behind another operation on the guest session
-// opens its window only once it owns the session, before it dispatches.
-func TestExecutionGatewayOpensOnlyAfterSessionAcquisition(t *testing.T) {
+// An attributed exec opens its window only once its own guest stream is
+// negotiated, immediately before it dispatches; a stream that cannot be
+// negotiated never opens one.
+func TestExecutionGatewayOpensOnlyAfterOperationStreamNegotiation(t *testing.T) {
 	stream := &captureExecutionGatewayStream{}
 	session := &GuestProtocolSession{
-		Stream: stream, Binding: &guestv1.ConnectionBinding{},
+		Binding:         &guestv1.ConnectionBinding{},
 		EnabledFeatures: map[guestv1.GuestFeature]bool{guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC: true},
 	}
-	session.operationMu.Lock() // another exec or terminal owns the session
-	opened := make(chan int, 1)
+	negotiated := false
+	session.connect = func(context.Context) (guestv1.GuestAgent_ConnectClient, error) {
+		negotiated = true
+		return &welcomingGuestStream{GuestAgent_ConnectClient: stream, session: session}, nil
+	}
+	opened := 0
 	opener := func(ctx context.Context) (context.Context, netip.AddrPort, error) {
-		opened <- stream.sends
+		if !negotiated || stream.sends != 0 {
+			t.Fatalf("window opened with negotiated=%t after %d dispatched frames", negotiated, stream.sends)
+		}
+		opened++
 		return ctx, testExecutionListener, nil
 	}
-	result := make(chan error, 1)
-	go func() {
-		_, err := session.ExecuteBuffered(t.Context(), "assignment", &guestv1.ExecRequest{
-			DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024,
-		}, opener)
-		result <- err
-	}()
-	select {
-	case <-opened:
-		t.Fatal("a queued attributed exec opened its window")
-	case <-time.After(100 * time.Millisecond):
+	request := &guestv1.ExecRequest{
+		DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024,
 	}
-	session.operationMu.Unlock()
-	select {
-	case sends := <-opened:
-		if sends != 0 {
-			t.Fatalf("window opened after %d dispatched frames", sends)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("the exec never opened its window after acquiring the session")
-	}
-	if err := <-result; err == nil || !strings.Contains(err.Error(), "captured exec send") ||
+	if _, err := session.ExecuteBuffered(t.Context(), "assignment", request, opener); err == nil ||
+		!strings.Contains(err.Error(), "captured exec send") ||
 		string(stream.request.Environment[0].Value) != testExecutionListener.String() {
 		t.Fatalf("dispatch after the window opened: %v %+v", err, stream.request)
+	}
+	session.connect = func(context.Context) (guestv1.GuestAgent_ConnectClient, error) {
+		return nil, errors.New("guest stream unavailable")
+	}
+	if _, err := session.ExecuteBuffered(t.Context(), "assignment", request, opener); err == nil ||
+		!strings.Contains(err.Error(), "guest stream unavailable") {
+		t.Fatalf("exec without a guest stream: %v", err)
+	}
+	if opened != 1 {
+		t.Fatalf("windows opened = %d, want only the negotiated exec's", opened)
 	}
 }
