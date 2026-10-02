@@ -645,7 +645,8 @@ func (fake *terminalHTTPFakeRunner) deliver(
 	if err != nil {
 		return err
 	}
-	return fake.broker.Deliver(ctx, event)
+	_, err = fake.broker.Deliver(ctx, event)
+	return err
 }
 
 func createTerminalSession(

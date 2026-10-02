@@ -66,6 +66,7 @@ type ServerConfig struct {
 	LiveDataPlane       *LiveDataPlaneBroker
 	DirectPorts         DirectPortAdmitter
 	PortSessions        PortSessionTerminalRecorder
+	CancelConfirmations DataPlaneCancellationConfirmer
 	DirectDataPlane     DirectDataPlaneAdmitter
 	WorkspaceTransfers  WorkspaceTransferBroker
 	SupportedVersions   VersionRange
@@ -137,8 +138,8 @@ func NewServer(config ServerConfig) (*Server, error) {
 		if (feature == runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING ||
 			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING ||
 			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PTY) &&
-			config.LiveDataPlane == nil {
-			return nil, errors.New("SecondBox runner control Exec, PTY, and File features require the live data-plane broker")
+			(config.LiveDataPlane == nil || config.CancelConfirmations == nil) {
+			return nil, errors.New("SecondBox runner control Exec, PTY, and File features require the live data-plane broker and cancellation confirmer")
 		}
 		if feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY &&
 			(config.LiveDataPlane == nil || config.PortSessions == nil) {
@@ -732,10 +733,12 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 		EventLocalWorkspace, EventImagePreparation:
 		return errors.New("SecondBox runner durable event bypassed the persistence batch")
 	case EventExec, EventPty, EventFile:
-		if server.config.LiveDataPlane == nil {
+		if server.config.LiveDataPlane == nil || server.config.CancelConfirmations == nil {
 			return ErrLiveDataPlaneUnavailable
 		}
-		return server.config.LiveDataPlane.Deliver(ctx, event)
+		return RouteRunnerOperationFrame(
+			ctx, server.config.LiveDataPlane, server.config.CancelConfirmations, event, receivedAt,
+		)
 	case EventPort:
 		if server.config.PortSessions == nil || server.config.LiveDataPlane == nil {
 			return errors.New("SecondBox runner control Port session recorder is not configured")
@@ -745,7 +748,8 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 		// Only a terminal outcome is durable, so the Runner connection never
 		// waits on PostgreSQL for a Port chunk.
 		if event.Message.GetPort().GetTerminal() == nil {
-			return server.config.LiveDataPlane.Deliver(ctx, event)
+			_, err := server.config.LiveDataPlane.Deliver(ctx, event)
+			return err
 		}
 		deliver, err := server.config.PortSessions.RecordPortSessionTerminal(ctx, RunnerDataPlaneFrame{
 			RunnerID:     event.RunnerID,
@@ -755,7 +759,8 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 		if err != nil || !deliver {
 			return err
 		}
-		return server.config.LiveDataPlane.Deliver(ctx, event)
+		_, err = server.config.LiveDataPlane.Deliver(ctx, event)
+		return err
 	default:
 		return fmt.Errorf("SecondBox runner control received unexpected event %q", event.Kind)
 	}

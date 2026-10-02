@@ -14,14 +14,17 @@ const (
 	EventAssignmentTerminal Event = "assignment_terminal"
 	EventExecTerminal       Event = "exec_terminal"
 	EventFileTerminal       Event = "file_terminal"
-	EventPortOpen           Event = "port_open"
-	EventPortTerminal       Event = "port_terminal"
-	EventFenceTerminal      Event = "fence_terminal"
-	EventNetworkFailure     Event = "network_failure"
-	EventStoragePressure    Event = "storage_pressure"
-	EventTeardownTerminal   Event = "teardown_terminal"
-	EventInstanceTerminal   Event = "instance_terminal"
-	EventLifecycleStage     Event = "lifecycle_stage"
+	// EventOperationAbsent proves no worker owns a cancelled operation. The
+	// original request correlation may never have arrived or may be evicted.
+	EventOperationAbsent  Event = "operation_absent"
+	EventPortOpen         Event = "port_open"
+	EventPortTerminal     Event = "port_terminal"
+	EventFenceTerminal    Event = "fence_terminal"
+	EventNetworkFailure   Event = "network_failure"
+	EventStoragePressure  Event = "storage_pressure"
+	EventTeardownTerminal Event = "teardown_terminal"
+	EventInstanceTerminal Event = "instance_terminal"
+	EventLifecycleStage   Event = "lifecycle_stage"
 )
 
 // Record intentionally contains only bounded classifications and correlation
@@ -111,7 +114,7 @@ func (record Record) Validate() error {
 	if record.Event == EventStoragePressure {
 		return nil
 	}
-	if record.RequestID == "" ||
+	if (record.RequestID == "" && record.Event != EventOperationAbsent) ||
 		record.OperationID == "" ||
 		record.SandboxID == "" ||
 		record.InstanceID == "" ||

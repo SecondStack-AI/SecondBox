@@ -998,3 +998,108 @@ func TestPostgresDataPlaneDistinguishesRetainedAndMissingSandbox(t *testing.T) {
 		})
 	}
 }
+
+// Only the home Runner's terminal under the session's own fence confirms a
+// cancellation, and only once the session is cancelling.
+func TestPostgresRunnerCancellationConfirmationIsFenced(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "cancellation-confirmation")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-cancellation-confirmation")
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "cancellation-confirmation-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	session, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
+		ID: "dps_cancellation_confirmation_" + sandbox.ID, StreamID: "stream_cancellation_confirmation_" + sandbox.ID,
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, Generation: sandbox.Generation,
+		RequestID: "request-cancellation-confirmation",
+		Kind:      "file", Operation: "mkdir", IdempotencyKey: "cancellation-confirmation",
+		RequestHash: "cancellation-confirmation-hash", DeadlineAt: now.Add(time.Minute),
+		MaximumResponseBytes: 1024, Request: map[string]any{"path": "dir"}, Now: now,
+		FileOpen: &runnerv1.FileOpen{
+			Operation: runnerv1.FileOperation_FILE_OPERATION_MKDIR, WorkspaceRelativePath: "dir",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relay.StartDataPlaneSession(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	terminal := func(runnerID string, fencingToken []byte) runnercontrol.RunnerDataPlaneFrame {
+		return runnercontrol.RunnerDataPlaneFrame{RunnerID: runnerID, Message: &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_File{File: &runnerv1.FileFrame{
+				Fence: &runnerv1.AssignmentFence{
+					AssignmentId: session.AssignmentID, SandboxId: session.SandboxID,
+					InstanceId: session.InstanceID, SandboxGeneration: uint64(session.Generation),
+					FencingToken: fencingToken,
+				},
+				OperationId: session.ID, StreamId: session.StreamID, Sequence: 1,
+				Payload: &runnerv1.FileFrame_Terminal{Terminal: &runnerv1.FileTerminal{
+					Kind: runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED,
+				}},
+			}},
+		}}
+	}
+	confirm := func(frame runnercontrol.RunnerDataPlaneFrame, wantState string) {
+		t.Helper()
+		if err := relay.ConfirmDataPlaneCancellation(t.Context(), frame, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		observed, err := relay.GetDataPlaneSession(
+			t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if observed.State != wantState {
+			t.Fatalf("session after confirmation from %s = %s, want %s", frame.RunnerID, observed.State, wantState)
+		}
+	}
+	confirm(terminal(session.RunnerID, session.FencingToken), "running")
+	if _, err := relay.CancelDataPlaneSession(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+		"test cancellation", time.Now().UTC(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	confirm(terminal("runner-other", session.FencingToken), "cancelling")
+	confirm(terminal(session.RunnerID, []byte("stale-fence")), "cancelling")
+	confirm(terminal(session.RunnerID, session.FencingToken), "completed")
+	confirm(terminal(session.RunnerID, session.FencingToken), "completed")
+	completed, err := relay.GetDataPlaneSession(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.TerminalKind != runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String() ||
+		completed.TerminalDetail != "test cancellation" {
+		t.Fatalf("confirmed session outcome = %s %q", completed.TerminalKind, completed.TerminalDetail)
+	}
+	usage, err := controlPlane.GetSubjectUsage(t.Context(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Usage.ConcurrentOperations != 0 {
+		t.Fatalf("concurrent operations after a confirmed cancellation = %d", usage.Usage.ConcurrentOperations)
+	}
+}

@@ -1764,6 +1764,11 @@ func (s *RunnerProtocolService) sendRunnerFrame(
 	stream RunnerProtocolStream,
 	message *runnerprotocol.RunnerToControlPlane,
 ) error {
+	if direct, ok := stream.(*directTypedStream); ok {
+		// A direct connection serializes its own writes. Its peer must never
+		// hold the control connection's heartbeat and durable-message lock.
+		return direct.Send(message)
+	}
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 	return stream.Send(message)

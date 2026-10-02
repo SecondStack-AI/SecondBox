@@ -7,6 +7,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 )
@@ -44,6 +45,7 @@ type liveDataPlaneRoute struct {
 	responseCredit    int64
 	requestCredit     int64
 	replayedThrough   uint64
+	terminalQueued    bool
 }
 
 // LiveDataPlaneBroker routes Exec, PTY, File, and Port frames through the process that owns
@@ -256,41 +258,77 @@ func (stream *LiveDataPlaneStream) Close() {
 	})
 }
 
-// Deliver routes one already validated Runner Exec or File event in memory.
+// Deliver routes one already validated Runner Exec, PTY, File, or Port event
+// in memory and reports whether a live route took it.
 func (broker *LiveDataPlaneBroker) Deliver(
 	ctx context.Context,
 	event Event,
-) error {
+) (bool, error) {
 	kind, operationID, streamID, err := liveDataPlaneMessageIdentity(event.Message)
 	if err != nil {
-		return err
+		return false, err
 	}
 	key, err := liveDataPlaneKey(kind, operationID, streamID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	broker.mu.Lock()
 	route := broker.routes[key]
 	broker.mu.Unlock()
 	if route == nil || route.runnerID != event.RunnerID {
 		broker.dropRouteNotFoundFrame()
-		return nil
+		return false, nil
 	}
 	if err := route.enqueue(event.Message); err != nil {
 		switch {
 		case errors.Is(err, ErrLiveDataPlaneRouteNotFound):
 			broker.dropRouteNotFoundFrame()
-			return nil
+			return false, nil
+		case errors.Is(err, errLiveDataPlaneRepeatedTerminal):
+			return false, nil
 		case errors.Is(err, ErrLiveDataPlaneCreditViolation),
 			errors.Is(err, ErrLiveDataPlaneBufferInvariant):
 			// A route-local protocol failure is observed by its owning stream. The
 			// authenticated connection remains valid for every other session.
-			return nil
+			return false, nil
 		default:
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return true, nil
+}
+
+// DataPlaneCancellationConfirmer completes a cancelling Exec, File, or
+// Terminal session from the terminal its home Runner reported.
+type DataPlaneCancellationConfirmer interface {
+	ConfirmDataPlaneCancellation(context.Context, RunnerDataPlaneFrame, time.Time) error
+}
+
+// RouteRunnerOperationFrame routes one accepted Runner Exec, PTY, or File
+// frame to its live route. The Runner repeats the terminal of a durably
+// cancelled operation on its control connection, because the request that
+// owns the route may stop reading. A terminal that no route takes, or that
+// repeats one its route already holds, therefore goes to the confirmer, which
+// completes the session only if it is cancelling.
+func RouteRunnerOperationFrame(
+	ctx context.Context,
+	broker *LiveDataPlaneBroker,
+	confirmer DataPlaneCancellationConfirmer,
+	event Event,
+	receivedAt time.Time,
+) error {
+	delivered, err := broker.Deliver(ctx, event)
+	if err != nil || delivered || !runnerOperationTerminal(event.Message) {
+		return err
+	}
+	return confirmer.ConfirmDataPlaneCancellation(ctx, RunnerDataPlaneFrame{
+		RunnerID: event.RunnerID, ConnectionID: event.ConnectionID, Message: event.Message,
+	}, receivedAt)
+}
+
+func runnerOperationTerminal(message *runnerv1.RunnerToControlPlane) bool {
+	return message.GetExec().GetTerminal() != nil || message.GetExec().GetBufferedResult() != nil ||
+		message.GetFile().GetTerminal() != nil || message.GetPty().GetTerminal() != nil
 }
 
 func (broker *LiveDataPlaneBroker) dropRouteNotFoundFrame() {
@@ -352,15 +390,22 @@ func liveDataPlaneStopFrame(message *runnerv1.ControlPlaneToRunner) bool {
 		message.GetPort() != nil && message.GetPort().GetCancel() != nil
 }
 
+// errLiveDataPlaneRepeatedTerminal reports a second terminal for one route.
+var errLiveDataPlaneRepeatedTerminal = errors.New("SecondBox live data-plane route already holds its terminal")
+
 func (route *liveDataPlaneRoute) enqueue(message *runnerv1.RunnerToControlPlane) error {
 	responseBytes, requestCredit, err := liveDataPlaneInboundFlow(message)
 	if err != nil {
 		return err
 	}
+	terminal := runnerOperationTerminal(message)
 	route.mu.Lock()
 	defer route.mu.Unlock()
 	if route.closeErr != nil {
 		return ErrLiveDataPlaneRouteNotFound
+	}
+	if terminal && route.terminalQueued {
+		return errLiveDataPlaneRepeatedTerminal
 	}
 	if frame := message.GetPty(); frame != nil && frame.GetOutput() != nil &&
 		frame.Sequence <= route.replayedThrough {
@@ -386,6 +431,7 @@ func (route *liveDataPlaneRoute) enqueue(message *runnerv1.RunnerToControlPlane)
 	}
 	route.responseCredit -= responseBytes
 	route.requestCredit += requestCredit
+	route.terminalQueued = route.terminalQueued || terminal
 	route.delivery = append(route.delivery, liveDataPlaneDelivery{message: message})
 	select {
 	case route.ready <- struct{}{}:

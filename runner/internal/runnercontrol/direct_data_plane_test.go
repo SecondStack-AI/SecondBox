@@ -326,6 +326,17 @@ func TestDirectDataPlaneCarriesTypedExecFileAndPTYMessages(t *testing.T) {
 	if _, err := portdirect.ReadTypedMessage(cancelConnection); err == nil {
 		t.Fatal("cancelled direct session remained connected before Open")
 	}
+	// The control plane counts an admitted session as running, so the
+	// cancellation is still confirmed although no operation ever started.
+	var confirmed *runnerprotocol.ExecTerminal
+	for _, message := range stream.messages() {
+		if message.GetExec().GetOperationId() == "direct-cancel" {
+			confirmed = message.GetExec().GetBufferedResult().GetTerminal()
+		}
+	}
+	if confirmed.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
+		t.Fatalf("cancellation before Open confirmed with %v", confirmed)
+	}
 }
 
 func TestDirectExecDeliversTerminalAfterExecutionDeadline(t *testing.T) {
@@ -384,6 +395,259 @@ func TestDirectExecDeliversTerminalAfterExecutionDeadline(t *testing.T) {
 	}
 	if err := <-served; err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatal(err)
+	}
+}
+
+// A durable cancellation is confirmed by the operation's terminal. The
+// control plane may already have closed the operation's own connection, so
+// the Runner also reports that terminal on its control connection, and a
+// running direct operation keeps its connection until the terminal is sent.
+func TestDurableCancellationReportsTheTerminalOnTheControlConnection(t *testing.T) {
+	blockUntilCancelled := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	execOpen := &runnerprotocol.ControlPlaneToRunner_Exec{Exec: &runnerprotocol.ExecFrame{
+		Sequence: 1,
+		Payload: &runnerprotocol.ExecFrame_Open{Open: &runnerprotocol.ExecOpen{
+			Command: &runnerprotocol.ExecOpen_Shell{Shell: "sleep 30"}, OutputLimitBytes: 1024,
+			Streaming: true,
+		}},
+	}}
+	readOpen := &runnerprotocol.ControlPlaneToRunner_File{File: &runnerprotocol.FileFrame{
+		Sequence: 1,
+		Payload: &runnerprotocol.FileFrame_Open{Open: &runnerprotocol.FileOpen{
+			Operation: runnerprotocol.FileOperation_FILE_OPERATION_READ, WorkspaceRelativePath: "file",
+			ExpectedSize: 1024,
+		}},
+	}}
+	mkdirOpen := &runnerprotocol.ControlPlaneToRunner_File{File: &runnerprotocol.FileFrame{
+		Sequence: 1,
+		Payload: &runnerprotocol.FileFrame_Open{Open: &runnerprotocol.FileOpen{
+			Operation: runnerprotocol.FileOperation_FILE_OPERATION_MKDIR, WorkspaceRelativePath: "dir",
+		}},
+	}}
+	for _, test := range []struct {
+		name         string
+		backend      func(started chan<- struct{}) *relayAssignmentBackend
+		kind         runnerprotocol.DataPlaneSessionKind
+		open         any
+		leading      int
+		cancelLive   bool
+		wantTerminal string
+	}{{
+		name: "running streaming Exec",
+		backend: func(started chan<- struct{}) *relayAssignmentBackend {
+			return &relayAssignmentBackend{streaming: func(
+				ctx context.Context, _ *runnerprotocol.AssignmentFence, _ *runnerprotocol.ExecOpen,
+				_ <-chan ExecControl, _ func(runnerprotocol.ExecOutputChannel, []byte) error,
+			) (*runnerprotocol.ExecTerminal, error) {
+				close(started)
+				return nil, blockUntilCancelled(ctx)
+			}}
+		},
+		kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC, open: execOpen,
+		cancelLive: true, wantTerminal: runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
+	}, {
+		name: "running File operation",
+		backend: func(started chan<- struct{}) *relayAssignmentBackend {
+			return &relayAssignmentBackend{file: func(
+				ctx context.Context, _ *runnerprotocol.AssignmentFence, _ *runnerprotocol.FileOpen, _ []byte,
+			) (FileOperationResult, error) {
+				close(started)
+				return FileOperationResult{}, blockUntilCancelled(ctx)
+			}}
+		},
+		kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, open: mkdirOpen,
+		cancelLive: true, wantTerminal: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String(),
+	}, {
+		name: "File read waiting for response credit",
+		backend: func(started chan<- struct{}) *relayAssignmentBackend {
+			return &relayAssignmentBackend{file: func(
+				context.Context, *runnerprotocol.AssignmentFence, *runnerprotocol.FileOpen, []byte,
+			) (FileOperationResult, error) {
+				close(started)
+				return FileOperationResult{
+					Metadata: &runnerprotocol.FileMetadata{Exists: true, Size: 4},
+					Content:  []byte("data"),
+					Terminal: &runnerprotocol.FileTerminal{
+						Kind: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED,
+					},
+				}, nil
+			}}
+		},
+		kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, open: readOpen, leading: 1,
+		cancelLive: true, wantTerminal: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String(),
+	}, {
+		name: "File operation that finished before the cancellation",
+		backend: func(started chan<- struct{}) *relayAssignmentBackend {
+			return &relayAssignmentBackend{file: func(
+				context.Context, *runnerprotocol.AssignmentFence, *runnerprotocol.FileOpen, []byte,
+			) (FileOperationResult, error) {
+				close(started)
+				return FileOperationResult{Terminal: &runnerprotocol.FileTerminal{
+					Kind: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED,
+				}}, nil
+			}}
+		},
+		kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, open: mkdirOpen,
+		wantTerminal: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED.String(),
+	}} {
+		t.Run(test.name, func(t *testing.T) {
+			started := make(chan struct{})
+			control := &threadSafeRunnerStream{}
+			service, err := NewRunnerProtocolService(
+				testRunnerConfig(), test.backend(started), staticProtocolConnector{stream: control},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.directDataPlane.bindStream(control)
+			fence := relayRunnerFence()
+			service.recordActiveAssignment(fence, "fc-instance-1")
+			credential := "durable-cancel-credential-000000000000"
+			session := registerDirectDataPlaneTestSession(
+				t, service, fence, "durable-cancel", "durable-cancel-stream", test.kind, credential,
+			)
+			session.consumed = true
+			client, runner := net.Pipe()
+			t.Cleanup(func() { _ = client.Close(); _ = runner.Close() })
+			if err := client.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			sessionKind := portdirect.SessionKindExec
+			if test.kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE {
+				sessionKind = portdirect.SessionKindFile
+			}
+			go func() {
+				_ = service.serveDirectTypedConnection(t.Context(), runner, portdirect.Credential{
+					SessionKind: sessionKind, Value: credential,
+				})
+				_ = runner.Close()
+			}()
+			if verdict, detail, err := portdirect.ReadVerdict(client); err != nil || verdict != portdirect.VerdictAdmitted {
+				t.Fatalf("direct admission = %d/%q: %v", verdict, detail, err)
+			}
+			open := &runnerprotocol.ControlPlaneToRunner{}
+			switch payload := test.open.(type) {
+			case *runnerprotocol.ControlPlaneToRunner_Exec:
+				frame := proto.Clone(payload.Exec).(*runnerprotocol.ExecFrame)
+				frame.Fence, frame.OperationId, frame.StreamId = cloneRunnerFence(fence), session.operationID, session.streamID
+				frame.Correlation = session.correlation
+				open.Message = &runnerprotocol.ControlPlaneToRunner_Exec{Exec: frame}
+			case *runnerprotocol.ControlPlaneToRunner_File:
+				frame := proto.Clone(payload.File).(*runnerprotocol.FileFrame)
+				frame.Fence, frame.OperationId, frame.StreamId = cloneRunnerFence(fence), session.operationID, session.streamID
+				frame.Correlation = session.correlation
+				open.Message = &runnerprotocol.ControlPlaneToRunner_File{File: frame}
+			}
+			writeDirectDataPlaneTestMessage(t, client, open)
+			<-started
+			cancel := func() {
+				t.Helper()
+				if err := service.handleDataPlaneCancel(&runnerprotocol.DataPlaneCancelCommand{
+					Fence: cloneRunnerFence(fence), OperationId: session.operationID,
+					StreamId: session.streamID, Kind: test.kind, Reason: "test durable cancellation",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range test.leading {
+				readDirectDataPlaneTestMessage(t, client)
+			}
+			if test.cancelLive {
+				cancel()
+			}
+			if got := directOperationTerminalKind(readDirectDataPlaneTestMessage(t, client)); got != test.wantTerminal {
+				t.Fatalf("direct connection terminal = %q, want %q", got, test.wantTerminal)
+			}
+			if !test.cancelLive {
+				cancel()
+			}
+			deadline := time.Now().Add(time.Second)
+			for {
+				var reported []string
+				for _, message := range control.messages() {
+					if kind := directOperationTerminalKind(message); kind != "" {
+						reported = append(reported, kind)
+					}
+				}
+				if len(reported) == 1 && reported[0] == test.wantTerminal {
+					return
+				}
+				if len(reported) > 1 || time.Now().After(deadline) {
+					t.Fatalf("control connection terminals = %v, want one %s", reported, test.wantTerminal)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		})
+	}
+}
+
+// The control plane counts a direct session as running from credential
+// consumption, so an admitted connection that closes before its Open must
+// still leave a terminal for a later cancellation to confirm.
+func TestDirectSessionClosedBeforeOpenConfirmsALaterCancellation(t *testing.T) {
+	control := &threadSafeRunnerStream{}
+	service, err := NewRunnerProtocolService(
+		testRunnerConfig(), &relayAssignmentBackend{}, staticProtocolConnector{stream: control},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.directDataPlane.bindStream(control)
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	credential := "unopened-direct-credential-0000000000000"
+	session := registerDirectDataPlaneTestSession(
+		t, service, fence, "unopened", "unopened-stream",
+		runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, credential,
+	)
+	session.consumed = true
+	client, runner := net.Pipe()
+	served := make(chan error, 1)
+	go func() {
+		served <- service.serveDirectTypedConnection(t.Context(), runner, portdirect.Credential{
+			SessionKind: portdirect.SessionKindFile, Value: credential,
+		})
+	}()
+	if verdict, detail, err := portdirect.ReadVerdict(client); err != nil || verdict != portdirect.VerdictAdmitted {
+		t.Fatalf("direct admission = %d/%q: %v", verdict, detail, err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+	if service.directDataPlane.find("unopened") != nil {
+		t.Fatal("closed direct session stayed admitted")
+	}
+	if err := service.handleDataPlaneCancel(&runnerprotocol.DataPlaneCancelCommand{
+		Fence: cloneRunnerFence(fence), OperationId: "unopened", StreamId: "unopened-stream",
+		Kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE, Reason: "test cancellation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var reported []string
+	for _, message := range control.messages() {
+		if message.GetFile().GetOperationId() == "unopened" {
+			reported = append(reported, directOperationTerminalKind(message))
+		}
+	}
+	if len(reported) != 1 || reported[0] != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String() {
+		t.Fatalf("cancellation after a closed unopened session reported %v", reported)
+	}
+}
+
+func directOperationTerminalKind(message *runnerprotocol.RunnerToControlPlane) string {
+	switch {
+	case message.GetExec().GetBufferedResult() != nil:
+		return message.GetExec().GetBufferedResult().GetTerminal().GetKind().String()
+	case message.GetFile().GetTerminal() != nil:
+		return message.GetFile().GetTerminal().GetKind().String()
+	default:
+		return ""
 	}
 }
 

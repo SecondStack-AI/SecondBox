@@ -1,6 +1,7 @@
 package runnercontrol
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -240,6 +241,65 @@ func (store *PostgresDataPlaneStore) finalizeUnconfirmedCancellation(
 	}
 	return nil
 }
+
+// ConfirmDataPlaneCancellation completes a cancelling Exec, File, or Terminal
+// session from a terminal its home Runner reported after the session's request
+// stopped reading it. The terminal proves the guest work stopped, so the
+// session completes with the outcome its cancellation recorded and releases
+// its operation admission. A terminal for any other session state, Runner,
+// or fence changes nothing.
+func (store *PostgresDataPlaneStore) ConfirmDataPlaneCancellation(
+	ctx context.Context,
+	input RunnerDataPlaneFrame,
+	now time.Time,
+) error {
+	kind, fence, operationID, streamID := "exec", input.Message.GetExec().GetFence(),
+		input.Message.GetExec().GetOperationId(), input.Message.GetExec().GetStreamId()
+	switch {
+	case input.Message.GetFile() != nil:
+		kind, fence = "file", input.Message.GetFile().GetFence()
+		operationID, streamID = input.Message.GetFile().GetOperationId(), input.Message.GetFile().GetStreamId()
+	case input.Message.GetPty() != nil:
+		kind, fence = "terminal", input.Message.GetPty().GetFence()
+		operationID, streamID = input.Message.GetPty().GetOperationId(), input.Message.GetPty().GetStreamId()
+	}
+	if fence == nil || operationID == "" || input.RunnerID == "" {
+		return errors.New("SecondBox Runner cancellation confirmation is incomplete")
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox Runner cancellation confirmation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := lockDataPlaneSessionQuota(ctx, tx, operationID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The session's retention already ended.
+			return tx.Commit(ctx)
+		}
+		return fmt.Errorf("SecondBox Runner cancellation confirmation quota lock: %w", err)
+	}
+	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
+		WHERE id=$1 FOR UPDATE`, operationID))
+	if err != nil {
+		return err
+	}
+	if session.State != "cancelling" || session.Kind != kind || session.RunnerID != input.RunnerID ||
+		session.StreamID != streamID || fence.AssignmentId != session.AssignmentID ||
+		fence.SandboxId != session.SandboxID || fence.InstanceId != session.InstanceID ||
+		int64(fence.SandboxGeneration) != session.Generation ||
+		!bytes.Equal(fence.FencingToken, session.FencingToken) {
+		return tx.Commit(ctx)
+	}
+	if err := completeCancelledSession(ctx, tx, session.ID, now, store.retention); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox Runner cancellation confirmation commit: %w", err)
+	}
+	return nil
+}
+
+var _ DataPlaneCancellationConfirmer = (*PostgresDataPlaneStore)(nil)
 
 // completeCancelledSession records the terminal outcome of a session whose
 // cancellation needs no Runner confirmation, keeping the terminal kind and

@@ -614,6 +614,52 @@ func TestRunnerDataPlanePTYDeadlineProducesTypedTerminal(t *testing.T) {
 	}
 }
 
+// A Terminal cancelled while detached has no attachment to carry its
+// terminal, so only the control-connection report can confirm the cancellation.
+func TestRunnerDataPlaneDetachedPTYCancellationReportsTerminalOnControlConnection(t *testing.T) {
+	backend := &relayAssignmentBackend{
+		pty: func(
+			ctx context.Context,
+			_ *runnerprotocol.AssignmentFence,
+			_ *runnerprotocol.ExecOpen,
+			_ <-chan PTYControl,
+			_ func([]byte) error,
+		) (*runnerprotocol.ExecTerminal, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	service := newRelayRunnerService(t, backend)
+	control := &threadSafeRunnerStream{}
+	service.directDataPlane.bindStream(control)
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	enabled := map[runnerprotocol.RunnerFeature]bool{
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING: true,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY:            true,
+	}
+	open := relayExecOpen(fence, "terminal-detached", "terminal-detached-stream", "sh")
+	open.GetOpen().AllocatePty = true
+	open.GetOpen().PtyRows = 24
+	open.GetOpen().PtyColumns = 80
+	if err := service.handleExecFrame(t.Context(), control, open, enabled, make(chan error, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.handleDataPlaneCancel(&runnerprotocol.DataPlaneCancelCommand{
+		Fence: cloneRunnerFence(fence), OperationId: "terminal-detached",
+		StreamId: "terminal-detached-stream", Kind: runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY,
+		Reason: "public Terminal cancellation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRunnerMessages(t, control, 1)
+	terminal := control.messages()[0].GetPty()
+	if terminal.GetOperationId() != "terminal-detached" ||
+		terminal.GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
+		t.Fatalf("detached PTY cancellation report = %v", terminal)
+	}
+}
+
 func TestRunnerDataPlaneFileBinaryWriteReadAndTypedOutcomes(t *testing.T) {
 	var written []byte
 	backend := &relayAssignmentBackend{

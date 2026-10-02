@@ -291,6 +291,12 @@ func (session *Session) acceptRunnerDataPlaneFrame(
 		key = dataPlaneStreamKey("pty", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
+		if previous, ok := session.inboundDataPlaneStreams[key]; ok &&
+			frame.GetTerminal() != nil && sequence > previous.sequence+1 {
+			// Output produced while the Terminal was detached stays in the
+			// Runner's replay ring, so its terminal may follow a gap here.
+			delete(session.inboundDataPlaneStreams, key)
+		}
 	case message.GetPort() != nil:
 		frame := message.GetPort()
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY] {

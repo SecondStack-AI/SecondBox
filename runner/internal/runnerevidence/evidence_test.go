@@ -95,3 +95,27 @@ func TestRecordJSONShapeCannotRepresentPayloadsOrSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestOnlyAbsenceEvidenceMayOmitOriginalRequest(t *testing.T) {
+	record := NewRecord(EventOperationAbsent, "cancelled", "OPERATION_ABSENT", time.Now())
+	record.RunnerID = "runner"
+	record.OperationID = "operation"
+	record.SandboxID = "sandbox"
+	record.InstanceID = "instance"
+	record.SandboxGeneration = 1
+	record.AssignmentID = "assignment"
+	if err := record.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []Event{EventExecTerminal, EventFileTerminal, EventPortTerminal} {
+		record.Event = event
+		if err := record.Validate(); err == nil {
+			t.Fatalf("%s evidence accepted missing request", event)
+		}
+	}
+	record.Event = EventOperationAbsent
+	record.AssignmentID = ""
+	if err := record.Validate(); err == nil {
+		t.Fatal("absence evidence accepted missing assignment")
+	}
+}
