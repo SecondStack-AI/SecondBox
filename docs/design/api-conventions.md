@@ -81,7 +81,7 @@ Buffered execution uses a discriminated request:
 - `shell` carries one shell string interpreted by the released guest shell;
 - `argv` carries a non-empty executable and exact argument array.
 
-Both forms accept bounded cwd, environment, stdin, deadline, and output limits. Environment augments the profile-defined guest environment and cannot replace protected variables. Non-zero guest exit is an `exited` result.
+Both forms accept bounded cwd, environment, stdin, deadline, and output limits. Environment augments the profile-defined guest environment and cannot replace protected variables. Non-zero guest exit is an `exited` result. A caller that disconnects from the request that is running a buffered exec or file operation cancels the guest work, and the session records `cancelled`.
 
 Buffered and streaming exec requests accept an optional `attributedExecution` member with `authorizationRef` and `expiresAt`; terminals do not. Omission requests ordinary execution; explicit null or malformed attribution is invalid. Admission requires `sandbox:exec` and the Profile grant, a pinned Profile that permits attributed execution, a pinned Tenant egress context, an `expiresAt` later than now and within the Profile's `execution.maximumDeadlineMilliseconds`, an exec deadline that ends at or before `expiresAt`, and a home Runner that advertises `per-exec-attribution`; the last refusal is `503 home_runner_unavailable`. The session persists the binding, which participates in idempotency, so reusing a key with a different binding conflicts. An attributed exec stream always uses the proxied transport. See [Networking and ports](networking-and-ports.md#attributed-execution).
 

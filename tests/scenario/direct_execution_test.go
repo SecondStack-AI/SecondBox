@@ -4,6 +4,7 @@ package scenario_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -52,4 +53,26 @@ func TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota(t *testing.T
 	}
 	probe := executeScenarioCommand(t, ctx, handle, "printf recovered", 1024, "post-direct-deadline")
 	assertScenarioExited(t, probe, 0, "recovered", "")
+
+	// Buffered exec always uses the proxied transport. With one operation slot
+	// the probe runs only if the disconnected exec's cancellation completed
+	// its session and released the slot.
+	started := time.Now()
+	disconnectContext, disconnect := context.WithTimeout(ctx, 2*time.Second)
+	defer disconnect()
+	if _, err := handle.Execute(
+		disconnectContext,
+		scenarioExecRequest("touch direct-disconnect-started; sleep 5; touch direct-disconnect-survived", 1024),
+		uniqueScenarioKey(t, "direct-buffered-disconnect"),
+		"",
+	); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SecondBox scenario disconnected direct buffered Exec error = %v", err)
+	}
+	time.Sleep(time.Until(started.Add(7 * time.Second)))
+	probe = executeScenarioCommand(
+		t, ctx, handle,
+		"test -e direct-disconnect-started || printf never-started; test -e direct-disconnect-survived && printf survived; printf done",
+		1024, "post-direct-disconnect",
+	)
+	assertScenarioExited(t, probe, 0, "done", "")
 }
