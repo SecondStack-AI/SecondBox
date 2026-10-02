@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.22.0 - 2026-10-02
+
+Sandbox operations run concurrently, disconnected callers cancel their guest work, and cancellation releases operation quota even after a lost connection or an evicted terminal. Sandbox starts also spend less time waiting on control-plane quota bookkeeping. Deployments from v0.14.0 onward update in place; back up the database before updating the control plane and Runners. The Runner protocol remains `[6,6]`, and the execution bundle, trust anchor, and standard Profile revisions are unchanged. See the [v0.22.0 release notes](docs/releases/v0.22.0.md).
+
 ### Upgrade notes
 
 - Migrations `0035_live_sandbox_quota_index` and `0036_sandbox_quota_ledger_on_increase` add an index and replace the Sandbox quota-ledger trigger. Rolling back to v0.21.0 requires the pre-update database backup.
@@ -13,6 +17,8 @@
 
 ### Fixed
 
+- Interrupted File uploads now discard their buffered content and complete cancellation before a backend worker starts. Delivered cancellation commands replay after the Runner reconnects, and a cancellation whose original terminal was evicted now confirms that no worker owns the fenced operation. Late Open frames cannot revive the cancelled operation ([#198](https://github.com/SecondStack-AI/SecondBox/pull/198)).
+- A stalled direct Exec, File, or PTY peer no longer blocks control-connection heartbeats or cancellation confirmation. Direct writes use their own connection lock and time out after five seconds, bounded by their delivery deadline ([#198](https://github.com/SecondStack-AI/SecondBox/pull/198)).
 - A cancelled exec, file, or Terminal operation could keep its session `cancelling`, and so its concurrent-operation slot, until the Sandbox stopped; on a Profile that allows one concurrent operation, every later exec and file operation failed with `429 quota_exceeded`. On Profiles with the direct data-plane transport the Runner closed the operation's connection as soon as it applied the cancellation, before the cancelled result was sent, and on either transport a result that arrived after the request had stopped waiting for it was dropped. The Runner now also reports a cancelled operation's result on its control connection, where the control plane completes the session, and a stopped direct-transport exec stream still receives its `cancelled` outcome. Control plane and Runners can be updated in either order; direct-transport sessions are confirmed once both are updated.
 - A client that disconnected from a buffered exec, such as a caller cancelling its HTTP request, left the guest command running to completion; its result was then discarded and the session ended only at its deadline. Disconnecting from a buffered exec or file operation now cancels the guest work as a streaming exec disconnect does, and the session records `cancelled`.
 - On Firecracker and gVisor Runners, a running exec or an open Terminal held up every other exec, file, and Terminal operation on the same Sandbox until it ended; a file operation behind a long command could fail with `409 operation_deadline_exceeded`. The Runner sent every operation over one shared guest stream and let only one use it at a time. Each operation now has its own guest stream, as Ports already did, so operations on one Sandbox run concurrently.
