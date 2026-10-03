@@ -57,7 +57,7 @@ The prepared source image must contain Python 3 and pip because the rootfs inven
 The builder always uses prepared OCI mode.
 `SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY` is `forbid` or `allow`. `forbid` fails the build when the rootfs contains a browser package, launcher, or runtime; `allow` builds a userspace that ships a browser on purpose and records `browserPolicy: allow` in the signed rootfs contract.
 Both output directories must be absent before the build starts.
-`SECONDBOX_CLIENT_IMAGE_ARCHITECTURE` is `amd64` or `arm64` and must match the builder's Docker platform, the source image platform, and the supplied kernel.
+`SECONDBOX_CLIENT_IMAGE_ARCHITECTURE` is `amd64` or `arm64` and must match the builder's Docker platform and the supplied kernel. The builder pulls and builds the source image for `linux/<architecture>`, refuses a source or rootfs image of another platform before signing, and packages the execution image for that platform.
 
 This example builds the amd64 builder on any Docker host and runs the privileged Linux work on the Docker daemon:
 

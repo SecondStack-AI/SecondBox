@@ -116,9 +116,9 @@ if [ ! -f "$rootfs_source_manifest" ]; then
 fi
 browser_policy="$(jq -er '.source.browserPolicy | select(. == "allow" or . == "forbid")' "$rootfs_source_manifest")"
 oci_mode="$(jq -er '.source.ociMode // "" | select(. == "" or . == "extend" or . == "prepared")' "$rootfs_source_manifest")"
-rootfs_debian_architecture="$(jq -r '.source.debianArchitecture // ""' "$rootfs_source_manifest")"
-if [ -n "$rootfs_debian_architecture" ] && [ "$rootfs_debian_architecture" != "$architecture" ]; then
-    echo "prepared rootfs is a $rootfs_debian_architecture Debian userspace, not $architecture" >&2
+rootfs_architecture="$(jq -r '.source.architecture // ""' "$rootfs_source_manifest")"
+if [ "$rootfs_architecture" != "$architecture" ]; then
+    echo "prepared rootfs userspace architecture '$rootfs_architecture' differs from $architecture; rebuild the rootfs source with SECONDBOX_RUNNER_MICROVM_ARCHITECTURE=$architecture" >&2
     exit 2
 fi
 if [ "$oci_mode" = "prepared" ]; then
