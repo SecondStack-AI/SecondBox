@@ -33,6 +33,7 @@ type candidateInput struct {
 	GVisorMaterializationDigest  string                          `json:"gvisorMaterializationDigest"`
 	GVisorFlatRootDigest         string                          `json:"gvisorFlatRootDigest"`
 	ImagePlatforms               []string                        `json:"imagePlatforms"`
+	GuestArchitecture            string                          `json:"guestArchitecture"`
 	GVisorRunscRelease           string                          `json:"gvisorRunscRelease"`
 }
 
@@ -44,8 +45,8 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) == 2 && args[0] == "standard-documents" {
-		return writeStandardDocuments(args[1])
+	if len(args) == 3 && args[0] == "standard-documents" {
+		return writeStandardDocuments(args[1], args[2])
 	}
 	if len(args) == 3 && args[0] == "manifest" {
 		return writeManifest(args[1], args[2])
@@ -56,7 +57,7 @@ func run(args []string) error {
 	if len(args) == 2 && args[0] == "installer-qualification-subject" {
 		return writeInstallerQualificationSubject(args[1])
 	}
-	return errors.New("usage: secondbox-release-tool {standard-documents OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|verify STAGING_DIR}")
+	return errors.New("usage: secondbox-release-tool {standard-documents ARCHITECTURE OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|verify STAGING_DIR}")
 }
 
 func writeInstallerQualificationSubject(path string) error {
@@ -76,8 +77,8 @@ func writeInstallerQualificationSubject(path string) error {
 	return err
 }
 
-func writeStandardDocuments(outputDirectory string) error {
-	documents, err := standardresources.Documents()
+func writeStandardDocuments(architecture, outputDirectory string) error {
+	documents, err := standardresources.Documents(architecture)
 	if err != nil {
 		return err
 	}
@@ -110,6 +111,10 @@ func writeManifest(inputPath, outputDirectory string) error {
 		return fmt.Errorf("release version: %w", err)
 	}
 	identity := releasecontract.Identity{Version: input.Version, Tag: tag, SourceCommit: input.SourceCommit}
+	if _, err := standardresources.StandardPool(input.GuestArchitecture); err != nil {
+		return fmt.Errorf("release guest architecture: %w", err)
+	}
+	guestPlatform := "linux/" + input.GuestArchitecture
 	ref := func(name string) (releasecontract.Reference, error) {
 		content, err := os.ReadFile(filepath.Join(outputDirectory, name))
 		if err != nil {
@@ -146,7 +151,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyQualificationEvidence(outputDirectory, input.Version, input.SourceCommit); err != nil {
+	if err := verifyQualificationEvidence(outputDirectory, input.Version, input.SourceCommit, input.GuestArchitecture); err != nil {
 		return err
 	}
 	qualificationEvidence, err := ref(fmt.Sprintf("secondbox-%s-qualification-evidence.json", input.Version))
@@ -167,20 +172,25 @@ func writeManifest(inputPath, outputDirectory string) error {
 	if err != nil {
 		return err
 	}
-	gvisorMaterialization, err := ref(fmt.Sprintf("secondbox-%s-gvisor-materialization.json", input.Version))
-	if err != nil {
-		return err
-	}
-	gvisorEvidence, err := ref(fmt.Sprintf("secondbox-%s-gvisor-qualification-evidence.json", input.Version))
-	if err != nil {
-		return err
-	}
-	var gvisorPodEvidence releasecontract.Reference
-	if len(input.ImagePlatforms) == 2 {
-		gvisorPodEvidence, err = ref(fmt.Sprintf("secondbox-%s-gvisor-pod-qualification-evidence.json", input.Version))
+	// gVisor ships for amd64 guests only.
+	var gvisor *releasecontract.GVisorArtifact
+	if input.GuestArchitecture == standardresources.ArchitectureAMD64 {
+		gvisorMaterialization, err := ref(fmt.Sprintf("secondbox-%s-gvisor-materialization.json", input.Version))
 		if err != nil {
 			return err
 		}
+		gvisorEvidence, err := ref(fmt.Sprintf("secondbox-%s-gvisor-qualification-evidence.json", input.Version))
+		if err != nil {
+			return err
+		}
+		var gvisorPodEvidence releasecontract.Reference
+		if len(input.ImagePlatforms) == 2 {
+			gvisorPodEvidence, err = ref(fmt.Sprintf("secondbox-%s-gvisor-pod-qualification-evidence.json", input.Version))
+			if err != nil {
+				return err
+			}
+		}
+		gvisor = &releasecontract.GVisorArtifact{Identity: identity, RunnerReference: releasecontract.GVisorRunnerImage + "@" + input.GVisorRunnerDigest, ImageReference: releasecontract.GVisorImage + "@" + input.GVisorImageDigest, Materialization: gvisorMaterialization, MaterializationDigest: input.GVisorMaterializationDigest, FlatRootDigest: input.GVisorFlatRootDigest, RunscRelease: input.GVisorRunscRelease, QualificationEvidence: gvisorEvidence, PodQualificationEvidence: gvisorPodEvidence}
 	}
 	bundles := make([]releasecontract.StandardBundleArtifact, 0, len(standardresources.BundleNames()))
 	for _, name := range standardresources.BundleNames() {
@@ -203,7 +213,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Identity: identity, Name: name, Document: bundleRef, Profiles: profiles})
 	}
-	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Candidate: input.Candidate, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: input.ImagePlatforms, Runner: []string{"linux/amd64"}, InstallerTools: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + input.InstallerToolsDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: input.PostgresImage}, InstallBootstrap: installBootstrap, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, SignedManifestDigest: input.MicroVMManifestDigest, SigningKeyFingerprint: "SHA256:" + strings.ToUpper(input.MicroVMSigningKeyFingerprint), RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, GVisor: &releasecontract.GVisorArtifact{Identity: identity, RunnerReference: releasecontract.GVisorRunnerImage + "@" + input.GVisorRunnerDigest, ImageReference: releasecontract.GVisorImage + "@" + input.GVisorImageDigest, Materialization: gvisorMaterialization, MaterializationDigest: input.GVisorMaterializationDigest, FlatRootDigest: input.GVisorFlatRootDigest, RunscRelease: input.GVisorRunscRelease, QualificationEvidence: gvisorEvidence, PodQualificationEvidence: gvisorPodEvidence}, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, QualificationEvidence: qualificationEvidence, InstallerQualificationEvidence: installerQualificationEvidence, StandardBundles: bundles}
+	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Candidate: input.Candidate, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: input.ImagePlatforms, Runner: []string{guestPlatform}, InstallerTools: []string{guestPlatform}, Guest: []string{guestPlatform}, QualifiedRunnerGuest: []string{guestPlatform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + input.InstallerToolsDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: input.PostgresImage}, InstallBootstrap: installBootstrap, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, SignedManifestDigest: input.MicroVMManifestDigest, SigningKeyFingerprint: "SHA256:" + strings.ToUpper(input.MicroVMSigningKeyFingerprint), RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, GVisor: gvisor, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, QualificationEvidence: qualificationEvidence, InstallerQualificationEvidence: installerQualificationEvidence, StandardBundles: bundles}
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
@@ -400,7 +410,11 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 	if err := json.Unmarshal(data, &packageMetadata); err != nil || packageMetadata.SchemaVersion != 1 || packageMetadata.Version != manifest.Version || packageMetadata.SourceCommit != manifest.SourceCommit {
 		return errors.New("release package metadata identity mismatch")
 	}
-	if err := verifyQualificationEvidence(directory, manifest.Version, manifest.SourceCommit); err != nil {
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return err
+	}
+	if err := verifyQualificationEvidence(directory, manifest.Version, manifest.SourceCommit, guestArchitecture); err != nil {
 		return err
 	}
 	if !manifest.Candidate {
@@ -408,13 +422,16 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 			return err
 		}
 	}
-	for filename, artifact := range map[string]releasecontract.OCIArtifact{
-		"control-plane.oci.json":    manifest.ControlPlane,
-		"runner.oci.json":           manifest.Runner,
-		"installer-tools.oci.json":  manifest.InstallerTools,
-		"runner-gvisor.oci.json":    {Identity: manifest.GVisor.Identity, Reference: manifest.GVisor.RunnerReference},
-		"gvisor-artifacts.oci.json": {Identity: manifest.GVisor.Identity, Reference: manifest.GVisor.ImageReference},
-	} {
+	artifacts := map[string]releasecontract.OCIArtifact{
+		"control-plane.oci.json":   manifest.ControlPlane,
+		"runner.oci.json":          manifest.Runner,
+		"installer-tools.oci.json": manifest.InstallerTools,
+	}
+	if manifest.GVisor != nil {
+		artifacts["runner-gvisor.oci.json"] = releasecontract.OCIArtifact{Identity: manifest.GVisor.Identity, Reference: manifest.GVisor.RunnerReference}
+		artifacts["gvisor-artifacts.oci.json"] = releasecontract.OCIArtifact{Identity: manifest.GVisor.Identity, Reference: manifest.GVisor.ImageReference}
+	}
+	for filename, artifact := range artifacts {
 		if err := verifySyntheticOCIMetadata(directory, filename, manifest.Identity, artifact.Reference); err != nil {
 			return err
 		}
@@ -422,7 +439,7 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 	return verifySyntheticOCIMetadata(directory, "microvm-artifacts.oci.json", manifest.Identity, manifest.MicroVM.ImageReference)
 }
 
-func verifyQualificationEvidence(directory, version, sourceCommit string) error {
+func verifyQualificationEvidence(directory, version, sourceCommit, guestArchitecture string) error {
 	filename := fmt.Sprintf("secondbox-%s-qualification-evidence.json", version)
 	data, err := os.ReadFile(filepath.Join(directory, filename))
 	if err != nil {
@@ -431,6 +448,9 @@ func verifyQualificationEvidence(directory, version, sourceCommit string) error 
 	evidence, err := releasecontract.DecodeQualificationEvidence(data)
 	if err != nil {
 		return err
+	}
+	if evidence.Host.Platform != "linux-"+guestArchitecture {
+		return fmt.Errorf("release qualification evidence host platform %s does not qualify %s guests", evidence.Host.Platform, guestArchitecture)
 	}
 	return evidence.ValidateForRelease(sourceCommit)
 }

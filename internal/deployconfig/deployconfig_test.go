@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -52,6 +53,16 @@ func TestComposeActionsRemoveOrphanedTopology(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hostStandardPool is the standard pool InitDevelopment selects on this host.
+func hostStandardPool(t *testing.T) string {
+	t.Helper()
+	pool, err := standardresources.StandardPool(runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pool
 }
 
 func initializedDevelopment(t *testing.T) string {
@@ -147,7 +158,10 @@ func TestDevelopmentInitializationAndRenderAreCompleteAndReproducible(t *testing
 }
 
 func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
-	manifest := developmentManifest("secrets/postgres-password", "secrets/platform-token", "secrets/runner-enrollment-credential")
+	manifest, err := developmentManifest(standardresources.ArchitectureAMD64, "secrets/postgres-password", "secrets/platform-token", "secrets/runner-enrollment-credential")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, pool := range manifest.StandardResources.RunnerPools {
 		if !slices.Contains(pool.Capabilities, "compute") {
 			t.Fatalf("development RunnerPool %q cannot admit compute", pool.Name)
@@ -235,7 +249,7 @@ func TestSelectedStandardBundlesShareOnePool(t *testing.T) {
 				t.Fatal(err)
 			}
 			document := resolved.ResourceDocument
-			if len(document.RunnerPools) != 1 || document.RunnerPools[0].Name != standardresources.PoolAMD64 || len(document.Profiles) != len(manifest.StandardResources.Bundles) {
+			if len(document.RunnerPools) != 1 || document.RunnerPools[0].Name != hostStandardPool(t) || len(document.Profiles) != len(manifest.StandardResources.Bundles) {
 				t.Fatalf("resolved standard resource selection = %#v", document)
 			}
 			for _, profile := range document.Profiles {
@@ -243,7 +257,7 @@ func TestSelectedStandardBundlesShareOnePool(t *testing.T) {
 					t.Fatalf("unselected Profile %s was materialized", profile.Name)
 				}
 				for _, revision := range profile.Revisions {
-					if revision.Spec.Pool != standardresources.PoolAMD64 {
+					if revision.Spec.Pool != hostStandardPool(t) {
 						t.Fatalf("Profile %s revision %d binds unexpected pool %s", profile.Name, revision.Number, revision.Spec.Pool)
 					}
 				}
@@ -253,10 +267,13 @@ func TestSelectedStandardBundlesShareOnePool(t *testing.T) {
 }
 
 func TestIsolatedStandardBundleCanBeSelectedWithoutGatewayMapping(t *testing.T) {
-	manifest := developmentManifest("secrets/postgres-password", "secrets/platform-token", "secrets/runner-enrollment-credential")
+	manifest, err := developmentManifest(standardresources.ArchitectureAMD64, "secrets/postgres-password", "secrets/platform-token", "secrets/runner-enrollment-credential")
+	if err != nil {
+		t.Fatal(err)
+	}
 	manifest.StandardResources.Bundles = []string{standardresources.AgentCompartmentIsolated}
 	runner := validTestRunner("runner-isolated", "remote")
-	runner.PoolID = standardresources.PoolAMD64
+	runner.PoolID = hostStandardPool(t)
 	runner.EgressContexts = nil
 	if err := validateStandardResources(manifest.StandardResources, []Runner{runner}); err != nil {
 		t.Fatalf("explicit isolated bundle selection: %v", err)
@@ -585,7 +602,7 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "standard bundle duplicate", want: "unique release-owned bundle names", mutate: func(manifest *ManifestV1) {
 			manifest.StandardResources.Bundles = []string{"agent-compartment", "agent-compartment"}
 		}},
-		{name: "standard bundle has no pool", want: "must declare pool standard-amd64", mutate: func(manifest *ManifestV1) {
+		{name: "standard bundle has no pool", want: "must declare the standard pool", mutate: func(manifest *ManifestV1) {
 			manifest.StandardResources.RunnerPools = nil
 		}},
 		{name: "standard pool declared twice", want: "declare each pool once", mutate: func(manifest *ManifestV1) {
@@ -593,7 +610,7 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		}},
 		{name: "standard gateway unresolved", want: "must resolve agent-gateway.secondbox.internal", mutate: func(manifest *ManifestV1) {
 			runner := validTestRunner("runner-a", "remote")
-			runner.PoolID = "standard-amd64"
+			runner.PoolID = manifest.StandardResources.RunnerPools[0].Name
 			runner.EgressContexts = []RunnerEgressContext{{Name: "secondstack-staging", Gateways: []RunnerLogicalGateway{{LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.1"}}}}
 			manifest.Runners = []Runner{runner}
 		}},
@@ -1065,7 +1082,7 @@ func TestProductionQualifiesBundledAndExternalDatabase(t *testing.T) {
 			if _, err := Resolve(automated); err != nil {
 				t.Fatal(err)
 			}
-			release, err := developmentReleaseManifest()
+			release, err := developmentReleaseManifest(runtime.GOARCH)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -579,8 +579,9 @@ func (evidence QualificationEvidence) Validate() error {
 }
 
 func validateQualificationHost(label string, host QualificationHostEvidence, requirePlatform bool) error {
-	if (requirePlatform && host.Platform != "linux-amd64") || (!requirePlatform && host.Platform != "" && host.Platform != "linux-amd64") {
-		return contractError("%s evidence host platform must be linux-amd64", label)
+	qualifiedPlatform := host.Platform == "linux-amd64" || host.Platform == "linux-arm64"
+	if (requirePlatform && !qualifiedPlatform) || (!requirePlatform && host.Platform != "" && !qualifiedPlatform) {
+		return contractError("%s evidence host platform must be linux-amd64 or linux-arm64", label)
 	}
 	for name, device := range map[string]QualificationDeviceEvidence{"KVM": host.KVM, "TUN": host.TUN} {
 		wantPath := "/dev/" + strings.ToLower(name)
@@ -673,8 +674,17 @@ func (manifest ArtifactManifest) Validate() error {
 		if order, err := CompareVersions(manifest.Version, "0.9.0"); err == nil && order >= 0 {
 			return contractError("artifact manifest %s must use schemaVersion %q", manifest.Tag, ArtifactManifestSchema)
 		}
-	} else if manifest.GVisor == nil {
+	}
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return err
+	}
+	// gVisor ships for amd64 guests only; an arm64 release cannot carry it.
+	if manifest.SchemaVersion == ArtifactManifestSchema && guestArchitecture == "amd64" && manifest.GVisor == nil {
 		return contractError("artifact manifest requires the gVisor artifact")
+	}
+	if guestArchitecture != "amd64" && manifest.GVisor != nil {
+		return contractError("artifact manifest for %s guests must not carry the amd64-only gVisor artifact", guestArchitecture)
 	}
 	if err := validateIdentity(manifest.Identity); err != nil {
 		return err
@@ -908,9 +918,24 @@ func validateWindow(name string, window ProtocolWindow) error {
 	return nil
 }
 
+// GuestArchitecture returns the one guest architecture a release's microVM
+// artifacts, Runner and standard Profiles target.
+func (manifest ArtifactManifest) GuestArchitecture() (string, error) {
+	if len(manifest.Platforms.Guest) != 1 {
+		return "", contractError("artifact manifest must target exactly one guest platform")
+	}
+	switch manifest.Platforms.Guest[0] {
+	case "linux/amd64":
+		return "amd64", nil
+	case "linux/arm64":
+		return "arm64", nil
+	}
+	return "", contractError("guest platform %q is not linux/amd64 or linux/arm64", manifest.Platforms.Guest[0])
+}
+
 func validatePlatforms(platforms PlatformMatrix) error {
-	if !slices.Equal(platforms.ControlPlane, []string{"linux/amd64"}) && !slices.Equal(platforms.ControlPlane, []string{"linux/amd64", "linux/arm64"}) {
-		return contractError("control-plane platforms must be linux/amd64 or linux/amd64,linux/arm64")
+	if !slices.Equal(platforms.ControlPlane, []string{"linux/amd64"}) && !slices.Equal(platforms.ControlPlane, []string{"linux/amd64", "linux/arm64"}) && !slices.Equal(platforms.ControlPlane, []string{"linux/arm64"}) {
+		return contractError("control-plane platforms must be linux/amd64, linux/arm64, or linux/amd64,linux/arm64")
 	}
 	sets := map[string][]string{
 		"host binary": platforms.HostBinaries, "control-plane": platforms.ControlPlane,

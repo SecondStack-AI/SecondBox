@@ -56,7 +56,7 @@ func TestManifestObjectsBindStandardBundleDocumentsByDigest(t *testing.T) {
 	signed := "sha256:" + strings.Repeat("a", 64)
 	runtimeDigest := "sha256:" + strings.Repeat("b", 64)
 	toolchainDigest := "sha256:" + strings.Repeat("c", 64)
-	documents, err := standardresources.Documents()
+	documents, err := standardresources.Documents(standardresources.ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@ import (
 )
 
 func TestDocumentRejectsLineageThatDiffersFromPolicy(t *testing.T) {
-	documents, err := Documents()
+	documents, err := Documents(ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func assertPublishedLineageConverges(t *testing.T, release, name string) {
 	if err := json.Unmarshal(content, &published); err != nil {
 		t.Fatal(err)
 	}
-	current, err := ProfileLineage(name)
+	current, err := ProfileLineage(name, ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func assertPublishedLineageConverges(t *testing.T, release, name string) {
 }
 
 func TestDocumentsContainThreeExplicitBundlesAndNoIsolatedGatewayDependency(t *testing.T) {
-	documents, err := Documents()
+	documents, err := Documents(ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,15 +121,15 @@ func TestDocumentsContainThreeExplicitBundlesAndNoIsolatedGatewayDependency(t *t
 }
 
 func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *testing.T) {
-	agent, err := ProfileLineage(AgentCompartment)
+	agent, err := ProfileLineage(AgentCompartment, ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	coding, err := ProfileLineage(DurableCoding)
+	coding, err := ProfileLineage(DurableCoding, ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	isolated, err := ProfileLineage(AgentCompartmentIsolated)
+	isolated, err := ProfileLineage(AgentCompartmentIsolated, ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,13 +201,13 @@ func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *te
 }
 
 func TestProfileLineageRejectsUnknownBundle(t *testing.T) {
-	if _, err := ProfileLineage("unknown"); err == nil {
+	if _, err := ProfileLineage("unknown", ArchitectureAMD64); err == nil {
 		t.Fatal("expected unknown bundle failure")
 	}
 }
 
 func TestAgentCompartmentPinsPortableResourceRevisionIdentity(t *testing.T) {
-	profile, err := ProfileLineage(AgentCompartment)
+	profile, err := ProfileLineage(AgentCompartment, ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestAgentCompartmentPinsPortableResourceRevisionIdentity(t *testing.T) {
 }
 
 func TestAgentCompartmentIsolatedCanonicalRevisionIdentity(t *testing.T) {
-	profile, err := ProfileLineage(AgentCompartmentIsolated)
+	profile, err := ProfileLineage(AgentCompartmentIsolated, ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestAgentCompartmentIsolatedCanonicalRevisionIdentity(t *testing.T) {
 // predecessor, and removing it would renumber every installed lineage.
 func TestProfileLineageKeepsRetiredBundleRevisionNumbers(t *testing.T) {
 	for name, repeated := range map[string]int{AgentCompartment: 2, DurableCoding: 1, AgentCompartmentIsolated: 1} {
-		profile, err := ProfileLineage(name)
+		profile, err := ProfileLineage(name, ArchitectureAMD64)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +243,7 @@ func TestProfileLineageKeepsRetiredBundleRevisionNumbers(t *testing.T) {
 
 func TestDevelopmentProfileLineageOmitsPublishedHistory(t *testing.T) {
 	for _, name := range BundleNames() {
-		profile, err := DevelopmentProfileLineage(name)
+		profile, err := DevelopmentProfileLineage(name, ArchitectureAMD64)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -258,7 +258,7 @@ func TestDevelopmentProfileLineageOmitsPublishedHistory(t *testing.T) {
 			t.Fatalf("development %s lineage = %#v", name, profile.Revisions)
 		}
 		spec := profile.Revisions[0].Spec
-		if name == AgentCompartment && !reflect.DeepEqual(spec, agentSpec(PoolAMD64, 900000)) {
+		if name == AgentCompartment && !reflect.DeepEqual(spec, agentSpec(PoolAMD64, ArchitectureAMD64, 900000)) {
 			t.Fatalf("attributed permission replaced development revision 1: %#v", spec)
 		}
 	}
@@ -270,7 +270,7 @@ func TestAttributedConnectionRevisionPreservesHistoricalPrefix(t *testing.T) {
 		if development {
 			build = DevelopmentProfileLineage
 		}
-		profile, err := build(AgentCompartment)
+		profile, err := build(AgentCompartment, ArchitectureAMD64)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -290,5 +290,24 @@ func TestAttributedConnectionRevisionPreservesHistoricalPrefix(t *testing.T) {
 		if !reflect.DeepEqual(latest, profile.Revisions[len(profile.Revisions)-2].Spec) {
 			t.Fatal("connection revision changed unrelated policy")
 		}
+	}
+}
+
+func TestProfileLineageBindsTheGuestArchitecturePool(t *testing.T) {
+	for architecture, pool := range map[string]string{ArchitectureAMD64: PoolAMD64, ArchitectureARM64: PoolARM64} {
+		for _, name := range BundleNames() {
+			profile, err := ProfileLineage(name, architecture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, revision := range profile.Revisions {
+				if revision.Spec.Pool != pool || revision.Spec.Architecture != architecture {
+					t.Fatalf("%s %s revision %d binds %s/%s", architecture, name, revision.Number, revision.Spec.Pool, revision.Spec.Architecture)
+				}
+			}
+		}
+	}
+	if _, err := ProfileLineage(AgentCompartment, "riscv64"); err == nil {
+		t.Fatal("unsupported guest architecture produced a lineage")
 	}
 }
