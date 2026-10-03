@@ -133,7 +133,7 @@ validate_installer_qualification_evidence() {
     echo "release staging requires installer qualification evidence at $installer_qualification_evidence_source; run just test-installer-qualified on the qualified host" >&2
     exit 1
   }
-  jq -e --arg schema "$installer_qualification_evidence_schema" --arg commit "$source_commit" --arg platform "linux-$guest_architecture" '
+  jq -e --arg schema "$installer_qualification_evidence_schema" --arg commit "$source_commit" --arg platform linux-amd64 '
     .schemaVersion == $schema and .sourceCommit == $commit and .repositoryDirty == false and
     .suite == "test-installer-qualified" and
     (.passCount | type == "number") and .passCount > 0 and .passCount == (.passCount | floor) and
@@ -424,17 +424,20 @@ if $with_gvisor; then
   if $full; then validate_gvisor_qualification_evidence "$output_dir/$gvisor_pod_qualification_evidence_name" test-scenario-gvisor-pod; fi
 fi
 
-if $test_mode && ! $candidate_mode; then
+# The guided installer installs amd64 releases only, so only a final amd64
+# release carries installer qualification evidence.
+with_installer_qualification=false
+! $candidate_mode && [[ "$guest_architecture" == amd64 ]] && with_installer_qualification=true
+if $test_mode && $with_installer_qualification; then
   jq -n \
     --arg schemaVersion "$installer_qualification_evidence_schema" \
     --arg sourceCommit "$source_commit" \
     --arg releaseManifestDigest "sha256:$(printf '%s' "$source_commit-installer-qualified" | sha256sum | awk '{print $1}')" \
-    --arg guestArchitecture "$guest_architecture" \
-    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:24,wallClockSeconds:1,host:{platform:("linux-"+$guestArchitecture),kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
-elif ! $candidate_mode; then
+    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:24,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
+elif $with_installer_qualification; then
 	install -m 0644 "$installer_qualification_evidence_source" "$output_dir/$installer_qualification_evidence_name"
 fi
-if ! $candidate_mode; then
+if $with_installer_qualification; then
 	validate_installer_qualification_evidence "$output_dir/$installer_qualification_evidence_name"
 fi
 
@@ -445,13 +448,13 @@ typescript_name="secondstack-ai-secondbox-${version}.tgz"
 go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
 artifact_manifest="$output_dir/secondbox-${version}-artifact-manifest.json"
 installer_qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$artifact_manifest")"
-if $test_mode && ! $candidate_mode; then
+if $test_mode && $with_installer_qualification; then
   jq --arg digest "$installer_qualification_subject" '.releaseManifestDigest = $digest' "$output_dir/$installer_qualification_evidence_name" >"$temporary/installer-qualification-evidence.json"
   mv "$temporary/installer-qualification-evidence.json" "$output_dir/$installer_qualification_evidence_name"
   go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
   installer_qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$artifact_manifest")"
 fi
-if ! $candidate_mode; then
+if $with_installer_qualification; then
 	[[ "$(jq -er '.releaseManifestDigest' "$output_dir/$installer_qualification_evidence_name")" == "$installer_qualification_subject" ]] || {
 		echo 'release installer qualification evidence was produced for different release bytes' >&2
 		exit 1

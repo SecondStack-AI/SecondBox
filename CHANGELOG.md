@@ -4,7 +4,7 @@
 
 ### Added
 
-- Linux arm64 hosts can run the Firecracker Runner. The guest kernel, microVM bundle, Runner image, and client execution-image builder take an explicit `amd64` or `arm64` architecture, an arm64 Debian definition builds the standard guest rootfs, and standard Profiles of an arm64 release bind the new `standard-arm64` RunnerPool. `init --mode development`, `just test-scenario`, and `just prepare-stress` follow the host architecture, and snapshot-resume templates load on arm64. `RELEASE_GUEST_ARCHITECTURE=arm64` stages an arm64 release, which carries no gVisor artifacts; gVisor and the guided single-host installer remain amd64-only.
+- Linux arm64 hosts can run the Firecracker Runner. The guest kernel, microVM bundle, Runner image, and client execution-image builder take an explicit `amd64` or `arm64` architecture, an arm64 Debian definition builds the standard guest rootfs, and standard Profiles of an arm64 release bind the new `standard-arm64` RunnerPool. `init --mode development`, `just test-scenario`, and `just prepare-stress` follow the host architecture, and snapshot-resume templates load on arm64. `RELEASE_GUEST_ARCHITECTURE=arm64` stages an arm64 release qualified by `linux-arm64` scenario evidence; it carries no gVisor artifacts and no installer qualification evidence, because gVisor and the guided single-host installer remain amd64-only, and the installer refuses arm64 releases.
 
 ### Fixed
 

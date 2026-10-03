@@ -164,7 +164,11 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 	references = append(references, manifest.SBOMs...)
 	references = append(references, manifest.ArtifactAttestations...)
 	references = append(references, manifest.QualificationEvidence)
-	if !manifest.Candidate {
+	requiresInstallerQualification, err := manifest.RequiresInstallerQualification()
+	if err != nil {
+		return err
+	}
+	if requiresInstallerQualification {
 		references = append(references, manifest.InstallerQualificationEvidence)
 	}
 	for _, bundle := range manifest.StandardBundles {
@@ -207,7 +211,7 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 			}
 		}
 	}
-	if !manifest.Candidate {
+	if requiresInstallerQualification {
 		installerEvidenceData := verifiedObjects[manifest.InstallerQualificationEvidence.Location]
 		qualificationSubject, err := manifest.InstallerQualificationSubjectDigest()
 		if err != nil {

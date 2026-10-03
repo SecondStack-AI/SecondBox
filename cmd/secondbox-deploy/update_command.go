@@ -185,6 +185,9 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 		if err != nil {
 			return err
 		}
+		if err := requireGuidedInstallerRelease(targetVerified); err != nil {
+			return err
+		}
 		targetPlan = releasePlan(targetVerified, targetLocation)
 	}
 	if check {

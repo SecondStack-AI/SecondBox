@@ -224,3 +224,11 @@ go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$work_dir/arm64"
 jq -e '.platforms.controlPlane == ["linux/arm64"] and .platforms.runner == ["linux/arm64"] and .platforms.guest == ["linux/arm64"] and .platforms.qualifiedRunnerGuest == ["linux/arm64"] and .gvisor == null' "$work_dir/arm64/secondbox-0.7.0-artifact-manifest.json" >/dev/null
 jq -e '.architecture == "arm64" and .runnerPoolSelector == "standard-arm64"' "$work_dir/arm64/agent-compartment.standard-bundle.json" >/dev/null
 [[ ! -e "$work_dir/arm64/secondbox-0.7.0-gvisor-qualification-evidence.json" && ! -e "$work_dir/arm64/runner-gvisor.oci.json" ]]
+# A final arm64 release is qualified by its linux-arm64 scenario evidence alone;
+# the guided installer installs amd64 releases only.
+SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$arm64_artifact_dir" RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 \
+  "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$work_dir/arm64-final" >/dev/null
+go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$work_dir/arm64-final"
+jq -e '(.candidate // false) == false and .installerQualificationEvidence == {location:"",digest:""} and .gvisor == null' "$work_dir/arm64-final/secondbox-0.7.0-artifact-manifest.json" >/dev/null
+jq -e '.host.platform == "linux-arm64"' "$work_dir/arm64-final/secondbox-0.7.0-qualification-evidence.json" >/dev/null
+[[ ! -e "$work_dir/arm64-final/secondbox-0.7.0-installer-qualification-evidence.json" ]]

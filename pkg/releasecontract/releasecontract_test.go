@@ -229,6 +229,11 @@ func TestInstallerQualificationEvidenceRequiresRebootAndPinnedRelease(t *testing
 		t.Fatal("installer evidence without reboot recovery was accepted")
 	}
 	decoded.RebootPassed = true
+	decoded.Host.Platform = "linux-arm64"
+	if err := decoded.Validate(); err == nil {
+		t.Fatal("linux-arm64 installer evidence was accepted; the guided installer installs amd64 releases only")
+	}
+	decoded.Host.Platform = "linux-amd64"
 	decoded.SchemaVersion = LegacyInstallerQualificationEvidenceSchema
 	decoded.Host.Platform = ""
 	if err := decoded.ValidateForRelease(testCommit, testDigest); err != nil {
@@ -370,6 +375,51 @@ func TestGVisorMaterializationVerification(t *testing.T) {
 		if err := mutated.VerifyGVisorMaterialization(data); err == nil {
 			t.Fatalf("%s mismatch accepted", name)
 		}
+	}
+}
+
+func arm64Manifest() ArtifactManifest {
+	manifest := validManifest()
+	manifest.Platforms.ControlPlane = []string{"linux/arm64"}
+	manifest.Platforms.Runner = []string{"linux/arm64"}
+	manifest.Platforms.InstallerTools = []string{"linux/arm64"}
+	manifest.Platforms.Guest = []string{"linux/arm64"}
+	manifest.Platforms.QualifiedRunnerGuest = []string{"linux/arm64"}
+	manifest.GVisor = nil
+	manifest.InstallerQualificationEvidence = Reference{}
+	return manifest
+}
+
+func TestArm64ReleaseCarriesNeitherGVisorNorInstallerQualification(t *testing.T) {
+	final := arm64Manifest()
+	if err := final.Validate(); err != nil {
+		t.Fatalf("final arm64 release: %v", err)
+	}
+	if required, err := final.RequiresInstallerQualification(); err != nil || required {
+		t.Fatalf("final arm64 release requires installer qualification = %v, %v", required, err)
+	}
+	candidate := final
+	candidate.Candidate = true
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("arm64 candidate: %v", err)
+	}
+	withInstaller := final
+	withInstaller.InstallerQualificationEvidence = validManifest().InstallerQualificationEvidence
+	if err := withInstaller.Validate(); err == nil || !strings.Contains(err.Error(), "must not claim installer qualification evidence") {
+		t.Fatalf("arm64 release with installer evidence error = %v", err)
+	}
+	withGVisor := final
+	withGVisor.GVisor = validManifest().GVisor
+	if err := withGVisor.Validate(); err == nil || !strings.Contains(err.Error(), "amd64-only gVisor") {
+		t.Fatalf("arm64 release with gVisor error = %v", err)
+	}
+	if required, err := validManifest().RequiresInstallerQualification(); err != nil || !required {
+		t.Fatalf("final amd64 release requires installer qualification = %v, %v", required, err)
+	}
+	amd64WithoutInstaller := validManifest()
+	amd64WithoutInstaller.InstallerQualificationEvidence = Reference{}
+	if err := amd64WithoutInstaller.Validate(); err == nil {
+		t.Fatal("final amd64 release without installer qualification evidence was accepted")
 	}
 }
 

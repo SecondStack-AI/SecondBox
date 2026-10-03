@@ -159,7 +159,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 		return err
 	}
 	var installerQualificationEvidence releasecontract.Reference
-	if !input.Candidate {
+	if !input.Candidate && input.GuestArchitecture == standardresources.ArchitectureAMD64 {
 		if err := verifyInstallerQualificationEvidenceSource(outputDirectory, input.Version, input.SourceCommit); err != nil {
 			return err
 		}
@@ -288,7 +288,11 @@ func verifyCandidate(directory string) error {
 	refs = append(refs, manifest.SBOMs...)
 	refs = append(refs, manifest.ArtifactAttestations...)
 	refs = append(refs, manifest.QualificationEvidence)
-	if !manifest.Candidate {
+	requiresInstallerQualification, err := manifest.RequiresInstallerQualification()
+	if err != nil {
+		return err
+	}
+	if requiresInstallerQualification {
 		refs = append(refs, manifest.InstallerQualificationEvidence)
 	}
 	if manifest.GVisor != nil {
@@ -417,7 +421,11 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 	if err := verifyQualificationEvidence(directory, manifest.Version, manifest.SourceCommit, guestArchitecture); err != nil {
 		return err
 	}
-	if !manifest.Candidate {
+	requiresInstallerQualification, err := manifest.RequiresInstallerQualification()
+	if err != nil {
+		return err
+	}
+	if requiresInstallerQualification {
 		if err := verifyInstallerQualificationEvidence(directory, manifest); err != nil {
 			return err
 		}
