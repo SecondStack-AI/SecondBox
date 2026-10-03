@@ -17,7 +17,18 @@ candidate_mode=false
 build_only=false
 from_build=''
 image_platforms="${RELEASE_IMAGE_PLATFORMS:-linux/amd64}"
-[[ "$image_platforms" == linux/amd64 || "$image_platforms" == linux/amd64,linux/arm64 ]] || { echo 'release image platforms must be linux/amd64 or linux/amd64,linux/arm64' >&2; exit 1; }
+# One release targets one guest architecture: its Runner, microVM artifacts and
+# standard Profiles. gVisor ships for amd64 guests only.
+guest_architecture="${RELEASE_GUEST_ARCHITECTURE:-amd64}"
+case "$guest_architecture" in
+  amd64) [[ "$image_platforms" == linux/amd64 || "$image_platforms" == linux/amd64,linux/arm64 ]] || { echo 'amd64 release image platforms must be linux/amd64 or linux/amd64,linux/arm64' >&2; exit 1; } ;;
+  arm64) [[ "$image_platforms" == linux/arm64 ]] || { echo 'arm64 release image platforms must be linux/arm64' >&2; exit 1; } ;;
+  *) echo 'RELEASE_GUEST_ARCHITECTURE must be amd64 or arm64' >&2; exit 1 ;;
+esac
+guest_platform="linux/$guest_architecture"
+with_gvisor=false
+[[ "$guest_architecture" != amd64 ]] || with_gvisor=true
+host_architecture="$(go env GOHOSTARCH)"
 full=false
 [[ "$image_platforms" != linux/amd64,linux/arm64 ]] || full=true
 while [[ "${1:-}" == --* ]]; do
@@ -71,12 +82,12 @@ validate_qualification_evidence() {
     echo "release qualification evidence was produced from a dirty repository; clean the checkout and rerun just test-scenario" >&2
     exit 1
   }
-  jq -e --arg schema "$qualification_evidence_schema" '
+  jq -e --arg schema "$qualification_evidence_schema" --arg platform "linux-$guest_architecture" '
     .schemaVersion == $schema and
     .suite == "test-scenario" and
     (.passCount | type == "number") and .passCount > 0 and .passCount == (.passCount | floor) and
     (.wallClockSeconds | type == "number") and .wallClockSeconds >= 0 and .wallClockSeconds == (.wallClockSeconds | floor) and
-    .host.platform == "linux-amd64" and
+    .host.platform == $platform and
     .host.kvm == {path:"/dev/kvm",present:true,readable:true,writable:true} and
     .host.tun == {path:"/dev/net/tun",present:true,readable:true,writable:true} and
     (.host.workspaceFilesystem.mount | type == "string") and (.host.workspaceFilesystem.mount | length) > 0 and
@@ -122,12 +133,12 @@ validate_installer_qualification_evidence() {
     echo "release staging requires installer qualification evidence at $installer_qualification_evidence_source; run just test-installer-qualified on the qualified host" >&2
     exit 1
   }
-  jq -e --arg schema "$installer_qualification_evidence_schema" --arg commit "$source_commit" '
+  jq -e --arg schema "$installer_qualification_evidence_schema" --arg commit "$source_commit" --arg platform "linux-$guest_architecture" '
     .schemaVersion == $schema and .sourceCommit == $commit and .repositoryDirty == false and
     .suite == "test-installer-qualified" and
     (.passCount | type == "number") and .passCount > 0 and .passCount == (.passCount | floor) and
     (.wallClockSeconds | type == "number") and .wallClockSeconds >= 0 and .wallClockSeconds == (.wallClockSeconds | floor) and
-    .host.platform == "linux-amd64" and
+    .host.platform == $platform and
     .host.kvm == {path:"/dev/kvm",present:true,readable:true,writable:true} and
     .host.tun == {path:"/dev/net/tun",present:true,readable:true,writable:true} and
     (.host.workspaceFilesystem.mount | type == "string") and (.host.workspaceFilesystem.mount | length) > 0 and
@@ -250,7 +261,7 @@ done
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go -C "$repo_root" build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$temporary/secondboxd_linux_${arch}" ./cmd/secondboxd
 done
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go -C "$repo_root/runner" build -trimpath -buildvcs=false -ldflags "-s -w -X main.releaseVersion=${version} -X main.sourceCommit=${source_commit}" -o "$temporary/secondbox-runner" ./cmd/secondbox-runner
+CGO_ENABLED=0 GOOS=linux GOARCH="$guest_architecture" go -C "$repo_root/runner" build -trimpath -buildvcs=false -ldflags "-s -w -X main.releaseVersion=${version} -X main.sourceCommit=${source_commit}" -o "$temporary/secondbox-runner" ./cmd/secondbox-runner
 
 verify_binary_identity() {
   local label="$1"
@@ -260,11 +271,13 @@ verify_binary_identity() {
     exit 1
   }
 }
-verify_binary_identity secondbox "$output_dir/secondbox_${version}_linux_amd64" version
-verify_binary_identity secondbox-deploy "$output_dir/secondbox-deploy_${version}_linux_amd64" version
-verify_binary_identity control-plane "$temporary/secondboxd_linux_amd64" --version
-verify_binary_identity Runner "$temporary/secondbox-runner" --version
-for binary in "$output_dir"/secondbox*_${version}_* "$temporary/secondboxd_linux_arm64"; do
+verify_binary_identity secondbox "$output_dir/secondbox_${version}_linux_${host_architecture}" version
+verify_binary_identity secondbox-deploy "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" version
+verify_binary_identity control-plane "$temporary/secondboxd_linux_${host_architecture}" --version
+if [[ "$guest_architecture" == "$host_architecture" ]]; then
+  verify_binary_identity Runner "$temporary/secondbox-runner" --version
+fi
+for binary in "$output_dir"/secondbox*_${version}_* "$temporary/secondboxd_linux_amd64" "$temporary/secondboxd_linux_arm64" "$temporary/secondbox-runner"; do
   if ! strings "$binary" | grep -Fx -- "$version" >/dev/null &&
      ! strings "$binary" | grep -Fx -- "_${version}" >/dev/null; then
     echo "binary lacks release version: $binary" >&2
@@ -293,6 +306,7 @@ if $test_mode; then
 else
   "$repo_root/runner/scripts/microvm-image/verify.sh" "$microvm_source" "$microvm_key" "$microvm_fingerprint"
 fi
+[[ "$(jq -er '.architecture' "$microvm_source/manifest.json")" == "$guest_architecture" ]] || { echo "microVM release bundle architecture differs from the $guest_architecture release guest architecture" >&2; exit 1; }
 microvm_manifest_digest="sha256:$(sha256sum "$microvm_source/manifest.json" | awk '{print $1}')"
 microvm_runtime_bundle="$(jq -ce '.runtimeBundle | {artifactId,manifestDigest,mandatoryGuestFeatures}' "$microvm_source/manifest.json")"
 microvm_toolchain_bundle="$(jq -ce '.toolchainBundle | {artifactId,manifestDigest,mandatoryGuestFeatures}' "$microvm_source/manifest.json")"
@@ -309,48 +323,56 @@ if $test_mode; then
 	runner_digest="sha256:$(sha256sum "$temporary/secondbox-runner" | awk '{print $1}')"
 	installer_tools_digest="sha256:$(sha256sum "$repo_root/deploy/installer-tools.Dockerfile" | awk '{print $1}')"
   microvm_image_digest="sha256:$(printf '%s\n' "${microvm_files[@]}" "$microvm_manifest_digest" | sha256sum | awk '{print $1}')"
-  gvisor_runner_digest="sha256:$(sha256sum "$repo_root/runner/Dockerfile.gvisor" | awk '{print $1}')"
-  gvisor_image_digest="sha256:$(sha256sum "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile" | awk '{print $1}')"
-  gvisor_runsc_release="$(sed -n 's/^readonly RUNSC_RELEASE="\([0-9.]*\)"$/\1/p' "$repo_root/runner/scripts/fetch-runsc.sh")"
-  gvisor_flat_root_digest="sha256:$(printf 'synthetic release-stage gVisor flat root' | sha256sum | awk '{print $1}')"
-  jq -cn --arg runsc "$gvisor_runsc_release" --arg flatRoot "$gvisor_flat_root_digest" --arg version "$version" '{schemaVersion:"secondbox.runner/backend-materialization/v1",key:{backendKind:"gvisor",guestArchitecture:"amd64",runtimeManifestDigest:("sha256:"+("0"*64)),toolchainManifestDigest:("sha256:"+("1"*64))},sourceOciManifestDigest:("sha256:"+("2"*64)),flatRootDigest:$flatRoot,launchArtifacts:[{id:"guest-agent",sha256:("sha256:"+("3"*64))},{id:"runsc",sha256:("sha256:"+("4"*64))}],agentProtocolGeneration:1,agentFeatures:["exec-streaming","file-streaming","port-proxy","pty"],backendBuildId:("secondbox-gvisor-release-"+$version),helperBuildId:("runsc-release-"+$runsc)}' >"$output_dir/secondbox-${version}-gvisor-materialization.json"
-  gvisor_materialization_digest="$(go -C "$repo_root/runner" run ./cmd/secondbox-materialization-digest "$output_dir/secondbox-${version}-gvisor-materialization.json")"
-  jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$gvisor_runner_digest" --arg contract "$public_contract_digest" '{image:"runner-gvisor",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],publicContractDigest:$contract}' >"$output_dir/runner-gvisor.oci.json"
-  jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$gvisor_image_digest" --arg materialization "$gvisor_materialization_digest" '{image:"gvisor-artifacts",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],materializationDigest:$materialization}' >"$output_dir/gvisor-artifacts.oci.json"
+  if $with_gvisor; then
+    gvisor_runner_digest="sha256:$(sha256sum "$repo_root/runner/Dockerfile.gvisor" | awk '{print $1}')"
+    gvisor_image_digest="sha256:$(sha256sum "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile" | awk '{print $1}')"
+    gvisor_runsc_release="$(sed -n 's/^readonly RUNSC_RELEASE="\([0-9.]*\)"$/\1/p' "$repo_root/runner/scripts/fetch-runsc.sh")"
+    gvisor_flat_root_digest="sha256:$(printf 'synthetic release-stage gVisor flat root' | sha256sum | awk '{print $1}')"
+    jq -cn --arg runsc "$gvisor_runsc_release" --arg flatRoot "$gvisor_flat_root_digest" --arg version "$version" '{schemaVersion:"secondbox.runner/backend-materialization/v1",key:{backendKind:"gvisor",guestArchitecture:"amd64",runtimeManifestDigest:("sha256:"+("0"*64)),toolchainManifestDigest:("sha256:"+("1"*64))},sourceOciManifestDigest:("sha256:"+("2"*64)),flatRootDigest:$flatRoot,launchArtifacts:[{id:"guest-agent",sha256:("sha256:"+("3"*64))},{id:"runsc",sha256:("sha256:"+("4"*64))}],agentProtocolGeneration:1,agentFeatures:["exec-streaming","file-streaming","port-proxy","pty"],backendBuildId:("secondbox-gvisor-release-"+$version),helperBuildId:("runsc-release-"+$runsc)}' >"$output_dir/secondbox-${version}-gvisor-materialization.json"
+    gvisor_materialization_digest="$(go -C "$repo_root/runner" run ./cmd/secondbox-materialization-digest "$output_dir/secondbox-${version}-gvisor-materialization.json")"
+    jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$gvisor_runner_digest" --arg contract "$public_contract_digest" '{image:"runner-gvisor",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],publicContractDigest:$contract}' >"$output_dir/runner-gvisor.oci.json"
+    jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$gvisor_image_digest" --arg materialization "$gvisor_materialization_digest" '{image:"gvisor-artifacts",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],materializationDigest:$materialization}' >"$output_dir/gvisor-artifacts.oci.json"
+  else
+    gvisor_runner_digest='' gvisor_image_digest='' gvisor_materialization_digest='' gvisor_flat_root_digest='' gvisor_runsc_release=''
+  fi
   jq -n --arg version "$version" --arg commit "$source_commit" --argjson platforms "$(jq -cn --arg platforms "$image_platforms" '$platforms|split(",")')" --arg digest "$control_plane_digest" --arg contract "$public_contract_digest" '{image:"control-plane",version:$version,sourceCommit:$commit,digest:$digest,platforms:$platforms,publicContractDigest:$contract}' >"$output_dir/control-plane.oci.json"
-	jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$runner_digest" --arg contract "$public_contract_digest" '{image:"runner",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],publicContractDigest:$contract}' >"$output_dir/runner.oci.json"
-	jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$installer_tools_digest" '{image:"installer-tools",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"]}' >"$output_dir/installer-tools.oci.json"
-  jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$microvm_image_digest" --arg manifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" '{image:"microvm-artifacts",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],signedManifestDigest:$manifest,signingKeyFingerprint:$fingerprint}' >"$output_dir/microvm-artifacts.oci.json"
+	jq -n --arg platform "$guest_platform" --arg version "$version" --arg commit "$source_commit" --arg digest "$runner_digest" --arg contract "$public_contract_digest" '{image:"runner",version:$version,sourceCommit:$commit,digest:$digest,platforms:[$platform],publicContractDigest:$contract}' >"$output_dir/runner.oci.json"
+	jq -n --arg platform "$guest_platform" --arg version "$version" --arg commit "$source_commit" --arg digest "$installer_tools_digest" '{image:"installer-tools",version:$version,sourceCommit:$commit,digest:$digest,platforms:[$platform]}' >"$output_dir/installer-tools.oci.json"
+  jq -n --arg platform "$guest_platform" --arg version "$version" --arg commit "$source_commit" --arg digest "$microvm_image_digest" --arg manifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" '{image:"microvm-artifacts",version:$version,sourceCommit:$commit,digest:$digest,platforms:[$platform],signedManifestDigest:$manifest,signingKeyFingerprint:$fingerprint}' >"$output_dir/microvm-artifacts.oci.json"
 else
   docker buildx build --platform "$image_platforms" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --output "type=oci,dest=$output_dir/control-plane.oci.tar" --metadata-file "$output_dir/control-plane.oci.json" "$repo_root"
-	docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --file "$repo_root/runner/Dockerfile" --output "type=oci,dest=$output_dir/runner.oci.tar" --metadata-file "$output_dir/runner.oci.json" "$repo_root"
-	docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --file "$repo_root/deploy/installer-tools.Dockerfile" --output "type=oci,dest=$output_dir/installer-tools.oci.tar" --metadata-file "$output_dir/installer-tools.oci.json" "$repo_root"
-  docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "SIGNED_MANIFEST_DIGEST=$microvm_manifest_digest" --file "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile" --output "type=oci,dest=$output_dir/microvm-artifacts.oci.tar" --metadata-file "$output_dir/microvm-artifacts.oci.json" "$microvm_source"
+	docker buildx build --platform "$guest_platform" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --file "$repo_root/runner/Dockerfile" --output "type=oci,dest=$output_dir/runner.oci.tar" --metadata-file "$output_dir/runner.oci.json" "$repo_root"
+	docker buildx build --platform "$guest_platform" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --file "$repo_root/deploy/installer-tools.Dockerfile" --output "type=oci,dest=$output_dir/installer-tools.oci.tar" --metadata-file "$output_dir/installer-tools.oci.json" "$repo_root"
+  docker buildx build --platform "$guest_platform" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "SIGNED_MANIFEST_DIGEST=$microvm_manifest_digest" --file "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile" --output "type=oci,dest=$output_dir/microvm-artifacts.oci.tar" --metadata-file "$output_dir/microvm-artifacts.oci.json" "$microvm_source"
   control_plane_digest="$(jq -er '."containerimage.digest"' "$output_dir/control-plane.oci.json")"
 	runner_digest="$(jq -er '."containerimage.digest"' "$output_dir/runner.oci.json")"
 	installer_tools_digest="$(jq -er '."containerimage.digest"' "$output_dir/installer-tools.oci.json")"
   microvm_image_digest="$(jq -er '."containerimage.digest"' "$output_dir/microvm-artifacts.oci.json")"
-  # The gVisor runner and its artifact transport are built from the
-  # repository and the pinned bases alone; the transport's metadata target
-  # exports the materialization the manifest records and the release ships.
-  docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --file "$repo_root/runner/Dockerfile.gvisor" --output "type=oci,dest=$output_dir/runner-gvisor.oci.tar" --metadata-file "$output_dir/runner-gvisor.oci.json" "$repo_root"
-  docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --file "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile" --target metadata --output "type=local,dest=$temporary/gvisor-metadata" "$repo_root"
-  docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --file "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile" --output "type=oci,dest=$output_dir/gvisor-artifacts.oci.tar" --metadata-file "$output_dir/gvisor-artifacts.oci.json" "$repo_root"
-  gvisor_runner_digest="$(jq -er '."containerimage.digest"' "$output_dir/runner-gvisor.oci.json")"
-  gvisor_image_digest="$(jq -er '."containerimage.digest"' "$output_dir/gvisor-artifacts.oci.json")"
-  cp "$temporary/gvisor-metadata/materialization.json" "$output_dir/secondbox-${version}-gvisor-materialization.json"
-  chmod 0644 "$output_dir/secondbox-${version}-gvisor-materialization.json"
-  gvisor_materialization_digest="$(jq -er '.materializationDigest' "$temporary/gvisor-metadata/identity.json")"
-  gvisor_flat_root_digest="$(jq -er '.flatRootDigest' "$temporary/gvisor-metadata/identity.json")"
-  gvisor_runsc_release="$(jq -er '.runscRelease' "$temporary/gvisor-metadata/identity.json")"
-  [[ "$(go -C "$repo_root/runner" run ./cmd/secondbox-materialization-digest "$output_dir/secondbox-${version}-gvisor-materialization.json")" == "$gvisor_materialization_digest" ]] || { echo "gVisor materialization digest differs from the transport identity" >&2; exit 1; }
+  if $with_gvisor; then
+    # The gVisor runner and its artifact transport are built from the
+    # repository and the pinned bases alone; the transport's metadata target
+    # exports the materialization the manifest records and the release ships.
+    docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --file "$repo_root/runner/Dockerfile.gvisor" --output "type=oci,dest=$output_dir/runner-gvisor.oci.tar" --metadata-file "$output_dir/runner-gvisor.oci.json" "$repo_root"
+    docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --file "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile" --target metadata --output "type=local,dest=$temporary/gvisor-metadata" "$repo_root"
+    docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --file "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile" --output "type=oci,dest=$output_dir/gvisor-artifacts.oci.tar" --metadata-file "$output_dir/gvisor-artifacts.oci.json" "$repo_root"
+    gvisor_runner_digest="$(jq -er '."containerimage.digest"' "$output_dir/runner-gvisor.oci.json")"
+    gvisor_image_digest="$(jq -er '."containerimage.digest"' "$output_dir/gvisor-artifacts.oci.json")"
+    cp "$temporary/gvisor-metadata/materialization.json" "$output_dir/secondbox-${version}-gvisor-materialization.json"
+    chmod 0644 "$output_dir/secondbox-${version}-gvisor-materialization.json"
+    gvisor_materialization_digest="$(jq -er '.materializationDigest' "$temporary/gvisor-metadata/identity.json")"
+    gvisor_flat_root_digest="$(jq -er '.flatRootDigest' "$temporary/gvisor-metadata/identity.json")"
+    gvisor_runsc_release="$(jq -er '.runscRelease' "$temporary/gvisor-metadata/identity.json")"
+    [[ "$(go -C "$repo_root/runner" run ./cmd/secondbox-materialization-digest "$output_dir/secondbox-${version}-gvisor-materialization.json")" == "$gvisor_materialization_digest" ]] || { echo "gVisor materialization digest differs from the transport identity" >&2; exit 1; }
+  else
+    gvisor_runner_digest='' gvisor_image_digest='' gvisor_materialization_digest='' gvisor_flat_root_digest='' gvisor_runsc_release=''
+  fi
 fi
 
-go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$output_dir"
+go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$guest_architecture" "$output_dir"
 
 jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
 jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"
-jq -n --argjson imagePlatforms "$(jq -cn --arg platforms "$image_platforms" '$platforms|split(",")')" --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" --arg gvisorRunner "$gvisor_runner_digest" --arg gvisorImage "$gvisor_image_digest" --arg gvisorMaterialization "$gvisor_materialization_digest" --arg gvisorFlatRoot "$gvisor_flat_root_digest" --arg gvisorRunsc "$gvisor_runsc_release" '{imagePlatforms:$imagePlatforms,candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain,gvisorRunnerDigest:$gvisorRunner,gvisorImageDigest:$gvisorImage,gvisorMaterializationDigest:$gvisorMaterialization,gvisorFlatRootDigest:$gvisorFlatRoot,gvisorRunscRelease:$gvisorRunsc}' >"$temporary/candidate-input.json"
+jq -n --argjson imagePlatforms "$(jq -cn --arg platforms "$image_platforms" '$platforms|split(",")')" --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" --arg gvisorRunner "$gvisor_runner_digest" --arg gvisorImage "$gvisor_image_digest" --arg gvisorMaterialization "$gvisor_materialization_digest" --arg gvisorFlatRoot "$gvisor_flat_root_digest" --arg gvisorRunsc "$gvisor_runsc_release" --arg guestArchitecture "$guest_architecture" '{imagePlatforms:$imagePlatforms,guestArchitecture:$guestArchitecture,candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain,gvisorRunnerDigest:$gvisorRunner,gvisorImageDigest:$gvisorImage,gvisorMaterializationDigest:$gvisorMaterialization,gvisorFlatRootDigest:$gvisorFlatRoot,gvisorRunscRelease:$gvisorRunsc}' >"$temporary/candidate-input.json"
 fi
 if $build_only; then
   cp "$temporary/candidate-input.json" "$output_dir/.release-build.json"
@@ -362,6 +384,7 @@ if $test_mode; then
 	jq -n \
     --arg schemaVersion "$qualification_evidence_schema" \
     --arg sourceCommit "$source_commit" \
+    --arg guestArchitecture "$guest_architecture" \
     '{
       schemaVersion: $schemaVersion,
       sourceCommit: $sourceCommit,
@@ -370,7 +393,7 @@ if $test_mode; then
       passCount: 16,
       wallClockSeconds: 1,
       host: {
-        platform: "linux-amd64",
+        platform: ("linux-" + $guestArchitecture),
         kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
         tun: {path: "/dev/net/tun", present: true, readable: true, writable: true},
         workspaceFilesystem: {mount: "/synthetic/qualification xfs", type: "xfs"}
@@ -382,29 +405,32 @@ else
 fi
 validate_qualification_evidence "$output_dir/$qualification_evidence_name"
 
-gvisor_qualification_evidence_name="secondbox-${version}-gvisor-qualification-evidence.json"
-gvisor_pod_qualification_evidence_name="secondbox-${version}-gvisor-pod-qualification-evidence.json"
-if $test_mode; then
-  suites=(test-scenario-gvisor)
-  if $full; then suites+=(test-scenario-gvisor-pod); fi
-  for suite in "${suites[@]}"; do
-    target="$output_dir/$gvisor_qualification_evidence_name"
-    [[ "$suite" == test-scenario-gvisor ]] || target="$output_dir/$gvisor_pod_qualification_evidence_name"
-    jq -n --arg schemaVersion "$qualification_evidence_schema" --arg sourceCommit "$source_commit" --arg suite "$suite" '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:$suite,backend:"gvisor",passCount:16,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{required:false,present:false},tun:{required:false},workspaceFilesystem:{mount:"/synthetic/qualification xfs",type:"xfs"}},qualifiedAt:"1970-01-01T00:00:00Z"}' >"$target"
-  done
-else
-  install -m 0644 "${SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_qualification_evidence_name"
-  if $full; then install -m 0644 "${SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-pod-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_pod_qualification_evidence_name"; fi
+if $with_gvisor; then
+  gvisor_qualification_evidence_name="secondbox-${version}-gvisor-qualification-evidence.json"
+  gvisor_pod_qualification_evidence_name="secondbox-${version}-gvisor-pod-qualification-evidence.json"
+  if $test_mode; then
+    suites=(test-scenario-gvisor)
+    if $full; then suites+=(test-scenario-gvisor-pod); fi
+    for suite in "${suites[@]}"; do
+      target="$output_dir/$gvisor_qualification_evidence_name"
+      [[ "$suite" == test-scenario-gvisor ]] || target="$output_dir/$gvisor_pod_qualification_evidence_name"
+      jq -n --arg schemaVersion "$qualification_evidence_schema" --arg sourceCommit "$source_commit" --arg suite "$suite" '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:$suite,backend:"gvisor",passCount:16,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{required:false,present:false},tun:{required:false},workspaceFilesystem:{mount:"/synthetic/qualification xfs",type:"xfs"}},qualifiedAt:"1970-01-01T00:00:00Z"}' >"$target"
+    done
+  else
+    install -m 0644 "${SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_qualification_evidence_name"
+    if $full; then install -m 0644 "${SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE:-$repo_root/.tmp/gvisor-pod-linux-scenario-qualification-evidence.json}" "$output_dir/$gvisor_pod_qualification_evidence_name"; fi
+  fi
+  validate_gvisor_qualification_evidence "$output_dir/$gvisor_qualification_evidence_name" test-scenario-gvisor
+  if $full; then validate_gvisor_qualification_evidence "$output_dir/$gvisor_pod_qualification_evidence_name" test-scenario-gvisor-pod; fi
 fi
-validate_gvisor_qualification_evidence "$output_dir/$gvisor_qualification_evidence_name" test-scenario-gvisor
-if $full; then validate_gvisor_qualification_evidence "$output_dir/$gvisor_pod_qualification_evidence_name" test-scenario-gvisor-pod; fi
 
 if $test_mode && ! $candidate_mode; then
   jq -n \
     --arg schemaVersion "$installer_qualification_evidence_schema" \
     --arg sourceCommit "$source_commit" \
     --arg releaseManifestDigest "sha256:$(printf '%s' "$source_commit-installer-qualified" | sha256sum | awk '{print $1}')" \
-    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:24,wallClockSeconds:1,host:{platform:"linux-amd64",kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
+    --arg guestArchitecture "$guest_architecture" \
+    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:24,wallClockSeconds:1,host:{platform:("linux-"+$guestArchitecture),kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
 elif ! $candidate_mode; then
 	install -m 0644 "$installer_qualification_evidence_source" "$output_dir/$installer_qualification_evidence_name"
 fi
@@ -448,12 +474,12 @@ deployment_dir="$source_less_consumer/deployment"
 mkdir "$source_less_consumer"
 (
   cd "$source_less_consumer"
-  "$output_dir/secondbox-deploy_${version}_linux_amd64" runner-template >runner.toml
+  "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" runner-template >runner.toml
   grep -q '^egress_context_config_path = ' runner.toml
   grep -q '^egress_contexts = \[\]$' runner.toml
   ! grep -q 'network_policy_runner_gateways' runner.toml
-  "$output_dir/secondbox-deploy_${version}_linux_amd64" init --mode development "$deployment_dir" >/dev/null
-  "$output_dir/secondbox-deploy_${version}_linux_amd64" inspect "$deployment_dir/secondbox.toml" >/dev/null
+  "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" init --mode development "$deployment_dir" >/dev/null
+  "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" inspect "$deployment_dir/secondbox.toml" >/dev/null
 )
 
 echo "$output_dir"
