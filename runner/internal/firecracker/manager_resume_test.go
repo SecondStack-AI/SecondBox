@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -86,7 +87,7 @@ func newResumeKeyManager(t *testing.T) *Manager {
 	}
 	manifest := `{
   "artifactVersion": "secondbox-resume-key-test",
-  "architecture": "amd64",
+  "architecture": "` + goruntime.GOARCH + `",
   "guestProtocol": {"minimum": 1, "maximum": 1},
   "runtimeBundle": {"artifactId": "runtime", "path": "runtime-manifest.json", "manifestDigest": "` + resumeKeyComponentDigest(resumeKeyRuntimeComponent) + `"},
   "toolchainBundle": {"artifactId": "toolchain", "path": "toolchain-manifest.json", "manifestDigest": "` + resumeKeyComponentDigest(resumeKeyToolchainComponent) + `"},
@@ -149,7 +150,7 @@ func TestSnapshotResumeTemplateKeyReadsImageDigestsFromTheSignedManifest(t *test
 		key.SharedImageSHA256 != strings.Repeat("5", 64) {
 		t.Fatalf("launch image digests = %+v", key)
 	}
-	if key.ArtifactVersion != "secondbox-resume-key-test" || key.Architecture != "amd64" {
+	if key.ArtifactVersion != "secondbox-resume-key-test" || key.Architecture != goruntime.GOARCH {
 		t.Fatalf("bundle identity = %q %q", key.ArtifactVersion, key.Architecture)
 	}
 	if key.NetworkInterfaceID != snapshotResumeNetworkInterfaceID ||

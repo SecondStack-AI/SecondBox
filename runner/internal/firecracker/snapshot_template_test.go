@@ -556,6 +556,7 @@ func TestSnapshotTemplateCachePublishRejectsForeignStagingDirectory(t *testing.T
 }
 
 func TestHostCPUCompatibilityFingerprintFrom(t *testing.T) {
+	amd64 := hostCPUCompatibilityFields("amd64")
 	cpuinfo := "processor\t: 0\n" +
 		"vendor_id\t: GenuineIntel\n" +
 		"cpu family\t: 6\n" +
@@ -570,19 +571,19 @@ func TestHostCPUCompatibilityFingerprintFrom(t *testing.T) {
 		"model\t\t: 158\n" +
 		"stepping\t: 10\n" +
 		"flags\t\t: fpu vme de\n"
-	first, err := hostCPUCompatibilityFingerprintFrom(bufio.NewScanner(strings.NewReader(cpuinfo)))
+	first, err := hostCPUCompatibilityFingerprintFields(bufio.NewScanner(strings.NewReader(cpuinfo)), amd64)
 	if err != nil {
 		t.Fatalf("fingerprint: %v", err)
 	}
-	second, err := hostCPUCompatibilityFingerprintFrom(bufio.NewScanner(strings.NewReader(cpuinfo)))
+	second, err := hostCPUCompatibilityFingerprintFields(bufio.NewScanner(strings.NewReader(cpuinfo)), amd64)
 	if err != nil {
 		t.Fatalf("second fingerprint: %v", err)
 	}
 	if first != second {
 		t.Fatalf("fingerprint is not deterministic: %q vs %q", first, second)
 	}
-	changed, err := hostCPUCompatibilityFingerprintFrom(
-		bufio.NewScanner(strings.NewReader(strings.Replace(cpuinfo, "stepping\t: 10", "stepping\t: 11", 1))),
+	changed, err := hostCPUCompatibilityFingerprintFields(
+		bufio.NewScanner(strings.NewReader(strings.Replace(cpuinfo, "stepping\t: 10", "stepping\t: 11", 1))), amd64,
 	)
 	if err != nil {
 		t.Fatalf("changed fingerprint: %v", err)
@@ -590,10 +591,26 @@ func TestHostCPUCompatibilityFingerprintFrom(t *testing.T) {
 	if changed == first {
 		t.Fatal("a different stepping produced the same fingerprint")
 	}
-	if _, err := hostCPUCompatibilityFingerprintFrom(
-		bufio.NewScanner(strings.NewReader("processor\t: 0\nvendor_id\t: GenuineIntel\n")),
+	if _, err := hostCPUCompatibilityFingerprintFields(
+		bufio.NewScanner(strings.NewReader("processor\t: 0\nvendor_id\t: GenuineIntel\n")), amd64,
 	); err == nil {
 		t.Fatal("an incomplete cpuinfo produced a fingerprint")
+	}
+}
+
+func TestHostCPUCompatibilityFingerprintUsesARM64Identity(t *testing.T) {
+	cpuinfo := "processor\t: 0\nBogoMIPS\t: 2000.00\nFeatures\t: fp asimd sve2\nCPU implementer\t: 0x41\nCPU architecture: 8\nCPU variant\t: 0x1\nCPU part\t: 0xd85\nCPU revision\t: 1\n"
+	arm64 := hostCPUCompatibilityFields("arm64")
+	first, err := hostCPUCompatibilityFingerprintFields(bufio.NewScanner(strings.NewReader(cpuinfo)), arm64)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	other, err := hostCPUCompatibilityFingerprintFields(bufio.NewScanner(strings.NewReader(strings.Replace(cpuinfo, "0xd85", "0xd87", 1))), arm64)
+	if err != nil {
+		t.Fatalf("other part fingerprint: %v", err)
+	}
+	if other == first {
+		t.Fatal("a different CPU part produced the same fingerprint")
 	}
 }
 
