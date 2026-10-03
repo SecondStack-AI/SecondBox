@@ -9,7 +9,9 @@ The Firecracker backend consumes three versioned artifacts:
 
 `runner/scripts/microvm-image/build.sh --help` lists every required build input. The builder has no environment defaults. For a supplied kernel, set both the kernel path and its config path explicitly and set `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=false`. For the pinned kernel, set `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=true`, explicitly set the kernel path and config variables to empty strings, and provide the four kernel-builder inputs shown by `build-kernel.sh --help`.
 
-The pinned-kernel path downloads the exact kernel tarball from the locked URL, verifies its SHA-256, builds `vmlinux` with reproducible Kbuild metadata, and copies the kernel `.config` into the build output.
+`SECONDBOX_RUNNER_MICROVM_ARCHITECTURE` selects the guest architecture, `amd64` or `arm64`; it sets the guest agent build, the manifest architecture, and the kernel requirements.
+The pinned-kernel path downloads the exact kernel tarball from the locked URL, verifies its SHA-256, builds the Firecracker boot image with reproducible Kbuild metadata, and copies the kernel `.config` into the build output.
+The boot image is `vmlinux` on amd64 and the PE `Image` on arm64; `kernel-required-<architecture>.config` adds the Firecracker platform devices of that architecture.
 
 The build writes `kernel-provenance.json`, `rootfs-source-manifest.json`, `secondbox-rootfs-contract.json`, the package and license inventories, `manifest.json`, `SHA256SUMS`, `manifest.sig`, and `signing.pub` alongside the artifacts in the explicitly configured output directory.
 `manifest.json` records `/init` as the guest entrypoint and
@@ -55,6 +57,7 @@ The prepared source image must contain Python 3 and pip because the rootfs inven
 The builder always uses prepared OCI mode.
 `SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY` is `forbid` or `allow`. `forbid` fails the build when the rootfs contains a browser package, launcher, or runtime; `allow` builds a userspace that ships a browser on purpose and records `browserPolicy: allow` in the signed rootfs contract.
 Both output directories must be absent before the build starts.
+`SECONDBOX_CLIENT_IMAGE_ARCHITECTURE` is `amd64` or `arm64` and must match the builder's Docker platform, the source image platform, and the supplied kernel.
 
 This example builds the amd64 builder on any Docker host and runs the privileged Linux work on the Docker daemon:
 
@@ -69,6 +72,7 @@ docker run --rm --privileged --platform linux/amd64 \
   -v /absolute/output-parent:/output \
   -v /absolute/kernel-parent:/kernel:ro \
   -v /absolute/signing-parent:/signing:ro \
+  -e SECONDBOX_CLIENT_IMAGE_ARCHITECTURE=amd64 \
   -e SECONDBOX_CLIENT_IMAGE_ARTIFACT_VERSION=local \
   -e SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY=forbid \
   -e SECONDBOX_CLIENT_IMAGE_BUNDLE_DIR=/output/bundle \
