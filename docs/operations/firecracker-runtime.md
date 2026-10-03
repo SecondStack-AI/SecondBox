@@ -87,6 +87,10 @@ probes during every Sandbox boot. Verbose kernel output also serializes boot
 messages through Firecracker's emulated UART. The deployment validator rejects
 kernel arguments that omit these latency-critical flags.
 
+## Host architectures
+
+A Runner runs on a Linux amd64 or arm64 host and boots signed microVM bundles of the same architecture. The Runner image, guest agent, guest kernel, and bundle are built per architecture; standard Profiles of an arm64 release bind `standard-arm64`. Firecracker CPU templates such as `T2` exist only on x86_64, so arm64 Runners use `None`. The Runner adds `noxsave` and requests Firecracker's `clock_realtime` snapshot restore only on amd64; on arm64 the guest agent alone sets the restored guest clock at bind. The validator still requires `pci=off` and the `i8042.*` arguments on arm64, where the guest kernel ignores them. Snapshot-resume templates key host compatibility on `/proc/cpuinfo`: vendor, family, model, stepping, and flags on amd64, and the MIDR fields and features on arm64. Both read the first listed CPU, so on arm64 hosts that mix core types the key does not describe every core. gVisor has no arm64 support.
+
 `SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL` bounds resident Firecracker Instances. `SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS` independently bounds transient assignment-start work and must not exceed the resident limit. `SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL` advertises runner-wide data-plane operation capacity; scheduling reserves each active Sandbox's immutable Profile limit against it.
 
 `SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES` bounds formatting of

@@ -15,7 +15,7 @@ A Profile declaration contains its complete ordered lineage. Every revision carr
 
 Documents written before v0.19.0 carry `runtimeBundleDigest` and `toolchainBundleDigest` in every revision spec. Delete both fields from each revision, keep the revision numbers, and replace each `specDigest` with the value `secondbox resources check` reports as `spec is sha256:…` for that revision. Migration `0031_profile_execution_assets_unpinned` removes the same fields from installed revisions, so the updated document converges on the installed history without new revisions.
 
-The release owns three amd64 standard bundles:
+The release owns three standard bundles for its guest architecture, `amd64` or `arm64`:
 
 - `agent-compartment` defaults to 60-second idle shutdown and unlimited maximum runtime, has no public Ports or Snapshots, and can reach only `agent-gateway.secondbox.internal` over HTTPS.
 - `durable-coding` is a bounded long-lived workspace with Snapshots, terminal detach, and the named `development-http` Port; it can reach only `platform-gateway.secondbox.internal` over HTTPS.
@@ -30,7 +30,7 @@ Standard Profiles name no execution bundle; each Instance boots the signed bundl
 
 ## Deployment selection
 
-`secondbox.toml` requires an explicit `[standard_resources]` section with the verified artifact-manifest path, selected bundle names, apply readiness bound, and typed RunnerPool inventory declared once by name. All three standard bundles use `standard-amd64`, so any combination of them shares one `[[standard_resources.runner_pools]]` declaration. Duplicate pool names are rejected. Production uses the same shape and accepts no generated development authority.
+`secondbox.toml` requires an explicit `[standard_resources]` section with the verified artifact-manifest path, selected bundle names, apply readiness bound, and typed RunnerPool inventory declared once by name. All three standard bundles use the standard pool of the release guest architecture, `standard-amd64` or `standard-arm64`, so any combination of them shares one `[[standard_resources.runner_pools]]` declaration whose `architectures` include that architecture. `init --mode development` declares the pool of the host that runs it. Duplicate pool names are rejected. Production uses the same shape and accepts no generated development authority.
 
 Logical gateway addresses remain Runner-local deployment configuration. Every declared Runner in a selected pool that should admit a network-enabled standard Profile must advertise one or more contexts and map that Profile's logical name inside each applicable context. This example declares a remote configuration path; omit `egress_context_config_path` for same-host placement:
 
