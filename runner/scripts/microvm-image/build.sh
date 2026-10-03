@@ -100,8 +100,14 @@ if [ "${SECONDBOX_RUNNER_MICROVM_FAKEROOT_ACTIVE-}" != "true" ]; then
         echo "missing required command: fakeroot" >&2
         exit 2
     }
+    # The kernel was built above; the re-executed build consumes it instead of
+    # compiling it again under fakeroot.
     exec fakeroot -i "$rootfs_source_fakeroot_state" -- \
-        env SECONDBOX_RUNNER_MICROVM_FAKEROOT_ACTIVE=true "$0" "$@"
+        env SECONDBOX_RUNNER_MICROVM_FAKEROOT_ACTIVE=true \
+        SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=false \
+        SECONDBOX_RUNNER_MICROVM_KERNEL_PATH="$kernel_path" \
+        SECONDBOX_RUNNER_MICROVM_KERNEL_CONFIG="$kernel_config" \
+        "$0" "$@"
 fi
 rootfs_source_manifest="$rootfs_source_dir/usr/share/secondbox/image-provenance/rootfs-source-manifest.json"
 if [ ! -f "$rootfs_source_manifest" ]; then
