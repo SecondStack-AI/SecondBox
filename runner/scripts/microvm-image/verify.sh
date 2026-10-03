@@ -113,8 +113,8 @@ for component in runtime toolchain; do
         exit 1
     fi
 done
-if ! grep -Eq '"architecture"[[:space:]]*:[[:space:]]*"amd64"' "$dir/manifest.json"; then
-    echo "manifest architecture must be amd64" >&2
+if ! grep -Eq '"architecture"[[:space:]]*:[[:space:]]*"(amd64|arm64)"' "$dir/manifest.json"; then
+    echo "manifest architecture must be amd64 or arm64" >&2
     exit 1
 fi
 if ! grep -Eq '"minimum"[[:space:]]*:[[:space:]]*1' "$dir/manifest.json" ||

@@ -6,35 +6,44 @@ FROM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161a
 
 ARG RELEASE_VERSION
 ARG SOURCE_COMMIT
+ARG TARGETARCH
 
 WORKDIR /src/runner
 COPY runner/go.mod runner/go.sum ./
 RUN go mod download && go mod verify
 COPY runner/ ./
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false \
       -ldflags="-X main.releaseVersion=${RELEASE_VERSION} -X main.sourceCommit=${SOURCE_COMMIT}" \
       -o /out/secondbox-runner ./cmd/secondbox-runner \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false \
       -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false \
       -o /out/secondbox-image-fetcher ./cmd/secondbox-image-fetcher
 
 FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c AS firecracker-release
 
+ARG TARGETARCH
 ARG FIRECRACKER_VERSION=1.16.1
-ARG FIRECRACKER_ARCHIVE_SHA256=382a02a869e4d6d5cb14c40577f9545e8458021ea8b0b2d3fc10ec14d9c242e6
+# Official release asset digests for each supported Runner architecture.
+ARG FIRECRACKER_ARCHIVE_SHA256_X86_64=382a02a869e4d6d5cb14c40577f9545e8458021ea8b0b2d3fc10ec14d9c242e6
+ARG FIRECRACKER_ARCHIVE_SHA256_AARCH64=8d0e69f6d6f9a1724551f607f18504052c16c1828ee3d4d7b6e6c73380871e0e
 
-RUN apt-get update \
+RUN case "${TARGETARCH}" in \
+      amd64) firecracker_arch=x86_64; firecracker_sha256="${FIRECRACKER_ARCHIVE_SHA256_X86_64}" ;; \
+      arm64) firecracker_arch=aarch64; firecracker_sha256="${FIRECRACKER_ARCHIVE_SHA256_AARCH64}" ;; \
+      *) echo "SecondBox Runner image does not support architecture ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && curl --fail --show-error --silent --location \
-      "https://github.com/firecracker-microvm/firecracker/releases/download/v${FIRECRACKER_VERSION}/firecracker-v${FIRECRACKER_VERSION}-x86_64.tgz" \
+      "https://github.com/firecracker-microvm/firecracker/releases/download/v${FIRECRACKER_VERSION}/firecracker-v${FIRECRACKER_VERSION}-${firecracker_arch}.tgz" \
       --output /tmp/firecracker.tgz \
-    && echo "${FIRECRACKER_ARCHIVE_SHA256}  /tmp/firecracker.tgz" | sha256sum --check --strict \
+    && echo "${firecracker_sha256}  /tmp/firecracker.tgz" | sha256sum --check --strict \
     && mkdir /tmp/firecracker \
     && tar --extract --gzip --file /tmp/firecracker.tgz --directory /tmp/firecracker --strip-components=1 \
-    && install -m 0755 "/tmp/firecracker/firecracker-v${FIRECRACKER_VERSION}-x86_64" /out-firecracker \
-    && install -m 0755 "/tmp/firecracker/jailer-v${FIRECRACKER_VERSION}-x86_64" /out-jailer \
+    && install -m 0755 "/tmp/firecracker/firecracker-v${FIRECRACKER_VERSION}-${firecracker_arch}" /out-firecracker \
+    && install -m 0755 "/tmp/firecracker/jailer-v${FIRECRACKER_VERSION}-${firecracker_arch}" /out-jailer \
     && install -m 0644 /tmp/firecracker/LICENSE /out-LICENSE \
     && install -m 0644 /tmp/firecracker/NOTICE /out-NOTICE \
     && install -m 0644 /tmp/firecracker/THIRD-PARTY /out-THIRD-PARTY

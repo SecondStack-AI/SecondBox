@@ -9,9 +9,11 @@ usage() {
 Usage: build-kernel.sh <output-dir>
 
 Builds the pinned Firecracker guest kernel described by kernel.lock. The output
-directory receives vmlinux, config, System.map, and kernel-provenance.json.
+directory receives the boot image (vmlinux on amd64, the arm64 Image on arm64),
+config, System.map, and kernel-provenance.json.
 
 Environment:
+  SECONDBOX_RUNNER_MICROVM_ARCHITECTURE      Guest architecture: amd64 or arm64.
   SECONDBOX_RUNNER_MICROVM_KERNEL_LOCK       Lock file with KERNEL_VERSION/URL/SHA256.
   SECONDBOX_RUNNER_MICROVM_KERNEL_CACHE      Download cache directory.
   SECONDBOX_RUNNER_MICROVM_KERNEL_JOBS       Parallel make jobs.
@@ -28,6 +30,7 @@ if [ "$#" -ne 1 ] || [ -z "$1" ]; then
     exit 2
 fi
 for required_name in \
+    SECONDBOX_RUNNER_MICROVM_ARCHITECTURE \
     SECONDBOX_RUNNER_MICROVM_KERNEL_LOCK \
     SECONDBOX_RUNNER_MICROVM_KERNEL_CACHE \
     SECONDBOX_RUNNER_MICROVM_KERNEL_JOBS \
@@ -43,6 +46,13 @@ lock_file="$SECONDBOX_RUNNER_MICROVM_KERNEL_LOCK"
 cache_dir="$SECONDBOX_RUNNER_MICROVM_KERNEL_CACHE"
 jobs="$SECONDBOX_RUNNER_MICROVM_KERNEL_JOBS"
 verify_only="$SECONDBOX_RUNNER_MICROVM_KERNEL_VERIFY_ONLY"
+architecture="$SECONDBOX_RUNNER_MICROVM_ARCHITECTURE"
+# Firecracker boots an uncompressed ELF vmlinux on x86_64 and the PE Image on aarch64.
+case "$architecture" in
+    amd64) kernel_arch=x86_64; kernel_target=vmlinux; kernel_build_output=vmlinux ;;
+    arm64) kernel_arch=arm64; kernel_target=Image; kernel_build_output=arch/arm64/boot/Image ;;
+    *) echo "SECONDBOX_RUNNER_MICROVM_ARCHITECTURE must be amd64 or arm64" >&2; exit 2 ;;
+esac
 if [ ! -f "$lock_file" ]; then
     echo "kernel lock file not found: $lock_file" >&2
     exit 2
@@ -82,7 +92,7 @@ src_dir="$work_dir/linux-$KERNEL_VERSION"
 build_dir="$work_dir/build"
 mkdir -p "$build_dir"
 
-export ARCH=x86_64
+export ARCH="$kernel_arch"
 export KBUILD_BUILD_USER="secondbox-runner"
 export KBUILD_BUILD_HOST="secondbox-runner-ci"
 export KBUILD_BUILD_TIMESTAMP
@@ -104,7 +114,6 @@ config_file="$build_dir/.config"
     --enable EROFS_FS \
     --enable FUSE_FS \
     --enable IPC_NS \
-    --enable KVM_GUEST \
     --enable MEMCG \
     --enable NAMESPACES \
     --enable NET \
@@ -130,22 +139,36 @@ config_file="$build_dir/.config"
     --enable VSOCKETS \
     --set-str SYSTEM_TRUSTED_KEYS "" \
     --set-str SYSTEM_REVOCATION_KEYS ""
+# Firecracker exposes a paravirtual clock on x86_64, and an FDT-described 8250
+# UART and PL031 RTC on aarch64.
+case "$architecture" in
+    amd64)
+        "$config_tool" --file "$config_file" --enable KVM_GUEST
+        ;;
+    arm64)
+        "$config_tool" --file "$config_file" \
+            --enable SERIAL_OF_PLATFORM \
+            --enable RTC_CLASS \
+            --enable RTC_DRV_PL031
+        ;;
+esac
 
 make -C "$src_dir" O="$build_dir" olddefconfig >/dev/null
-"$script_dir/check-kernel-config.sh" "$config_file"
-make -C "$src_dir" O="$build_dir" -j"$jobs" vmlinux >/dev/null
+"$script_dir/check-kernel-config.sh" "$config_file" "$architecture"
+make -C "$src_dir" O="$build_dir" -j"$jobs" "$kernel_target" >/dev/null
 
-install -m 0644 "$build_dir/vmlinux" "$out_dir/vmlinux"
+install -m 0644 "$build_dir/$kernel_build_output" "$out_dir/$kernel_target"
 install -m 0644 "$config_file" "$out_dir/config"
 install -m 0644 "$build_dir/System.map" "$out_dir/System.map"
 
-kernel_sha="$(sha256sum "$out_dir/vmlinux" | awk '{print $1}')"
+kernel_sha="$(sha256sum "$out_dir/$kernel_target" | awk '{print $1}')"
 config_sha="$(sha256sum "$out_dir/config" | awk '{print $1}')"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 git_commit="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
 cat > "$out_dir/kernel-provenance.json" <<EOF
 {
   "mode": "pinned-source-build",
+  "architecture": "$architecture",
   "createdAt": "$created_at",
   "source": {
     "version": "$KERNEL_VERSION",
@@ -159,7 +182,7 @@ cat > "$out_dir/kernel-provenance.json" <<EOF
     "kbuildBuildTimestamp": "$KBUILD_BUILD_TIMESTAMP"
   },
   "outputs": {
-    "kernel": {"path": "vmlinux", "sha256": "$kernel_sha"},
+    "kernel": {"path": "$kernel_target", "sha256": "$kernel_sha"},
     "config": {"path": "config", "sha256": "$config_sha"}
   },
   "builder": {
@@ -169,4 +192,4 @@ cat > "$out_dir/kernel-provenance.json" <<EOF
 }
 EOF
 
-echo "$out_dir/vmlinux"
+echo "$out_dir/$kernel_target"

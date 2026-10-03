@@ -150,7 +150,8 @@ fi
 
 if [[ "$scenario_mode" == "suite" ]]; then
   export SECONDBOX_RUNNER_ID=scenario-runner
-  export SECONDBOX_RUNNER_POOL_ID=standard-amd64
+  # The scenario Runner is the qualification host, so its standard pool follows the host.
+  export SECONDBOX_RUNNER_POOL_ID="standard-$(go env GOHOSTARCH)"
   export SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES=10
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS=20
   export SECONDBOX_SCENARIO_SUBJECT_MAX_VCPU_COUNT=100000
@@ -426,8 +427,8 @@ if [[ "$native_macos" == "true" ]]; then
   [[ "$architecture" == "arm64" ]] ||
     fail "native macOS scenario requires arm64 local artifacts"
 else
-  [[ "$architecture" == "amd64" ]] ||
-    fail "Linux scenario requires amd64 local artifacts"
+  [[ "$architecture" == "$(go env GOHOSTARCH)" ]] ||
+    fail "Linux scenario requires $(go env GOHOSTARCH) local artifacts for this host"
 fi
 export SECONDBOX_SCENARIO_ARCHITECTURE="$architecture"
 
@@ -440,17 +441,17 @@ if [[ -n "$scenario_shard_pattern" ]]; then
   export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_EVIDENCE="$run_dir/snapshot-resume.json"
   export SECONDBOX_SCENARIO_MICROSANDBOX_COLD_START_EVIDENCE="$run_dir/cold-starts.json"
 fi
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build \
   -trimpath -buildvcs=false -o "$scenario_build_dir/secondboxd" "$repo_root/cmd/secondboxd"
 chmod 0755 "$scenario_build_dir/secondboxd"
 runner_dockerfile="$repo_root/runner/Dockerfile"
 if [[ "$scenario_backend" != "firecracker" && "$native_macos" != "true" ]]; then
   (
     cd "$repo_root/runner"
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build \
       -trimpath -buildvcs=false -o "$scenario_build_dir/secondbox-runner" \
       ./cmd/secondbox-runner
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build \
       -trimpath -buildvcs=false -o "$scenario_build_dir/secondbox-image-fetcher" \
       ./cmd/secondbox-image-fetcher
   )
@@ -467,7 +468,7 @@ if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" && "$S
   # build host.
   (
     cd "$repo_root/runner"
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c ./internal/firecracker \
+    CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go test -c ./internal/firecracker \
       -o "$scenario_build_dir/snapshot-template-publish.test"
   )
   chmod 0755 "$scenario_build_dir/snapshot-template-publish.test"
@@ -930,6 +931,7 @@ cleanup() {
       --arg suite "$evidence_suite" \
       --arg backend "$scenario_backend" \
       --arg hostPlatform "$scenario_host_platform" \
+      --arg architecture "$architecture" \
       --argjson kvmPresent "$([[ -e /dev/kvm ]] && echo true || echo false)" \
       --argjson passCount "$scenario_pass_count" \
       --argjson skipped "$scenario_skipped" \
@@ -952,7 +954,7 @@ cleanup() {
           kvm: {required: false},
           tun: {required: false}
         } else {
-          platform: "linux-amd64",
+          platform: ("linux-" + $architecture),
           kvm: (if $backend == "gvisor" then {required: false, present: $kvmPresent}
             else {path: "/dev/kvm", present: true, readable: true, writable: true} end),
           tun: (if $backend == "firecracker" then

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -86,7 +87,7 @@ func newResumeKeyManager(t *testing.T) *Manager {
 	}
 	manifest := `{
   "artifactVersion": "secondbox-resume-key-test",
-  "architecture": "amd64",
+  "architecture": "` + goruntime.GOARCH + `",
   "guestProtocol": {"minimum": 1, "maximum": 1},
   "runtimeBundle": {"artifactId": "runtime", "path": "runtime-manifest.json", "manifestDigest": "` + resumeKeyComponentDigest(resumeKeyRuntimeComponent) + `"},
   "toolchainBundle": {"artifactId": "toolchain", "path": "toolchain-manifest.json", "manifestDigest": "` + resumeKeyComponentDigest(resumeKeyToolchainComponent) + `"},
@@ -149,7 +150,7 @@ func TestSnapshotResumeTemplateKeyReadsImageDigestsFromTheSignedManifest(t *test
 		key.SharedImageSHA256 != strings.Repeat("5", 64) {
 		t.Fatalf("launch image digests = %+v", key)
 	}
-	if key.ArtifactVersion != "secondbox-resume-key-test" || key.Architecture != "amd64" {
+	if key.ArtifactVersion != "secondbox-resume-key-test" || key.Architecture != goruntime.GOARCH {
 		t.Fatalf("bundle identity = %q %q", key.ArtifactVersion, key.Architecture)
 	}
 	if key.NetworkInterfaceID != snapshotResumeNetworkInterfaceID ||
@@ -463,8 +464,8 @@ func TestSnapshotResumeLoadRequestUsesChrootRelativePaths(t *testing.T) {
 	if !request.ResumeVM {
 		t.Fatal("resume request does not resume the VM")
 	}
-	if !request.ClockRealtime {
-		t.Fatal("resume request does not correct the guest clock from the host")
+	if request.ClockRealtime != (goruntime.GOARCH == "amd64") {
+		t.Fatal("resume request clock correction differs from the host architecture")
 	}
 	if request.VsockOverride == nil || request.VsockOverride.UDSPath != vsockUDSName {
 		t.Fatalf("vsock override = %+v", request.VsockOverride)
@@ -507,7 +508,7 @@ func TestResumeSnapshotTemplateLoadsAndResumesInOneCall(t *testing.T) {
 		t.Fatalf("resume snapshot template: %v", err)
 	}
 	call := drainAPICalls(seen, 1)[0]
-	if call.Path != "/snapshot/load" || call.Body["resume_vm"] != true || call.Body["clock_realtime"] != true {
+	if call.Path != "/snapshot/load" || call.Body["resume_vm"] != true || (call.Body["clock_realtime"] == true) != (goruntime.GOARCH == "amd64") {
 		t.Fatalf("resume load call = %#v", call)
 	}
 	select {

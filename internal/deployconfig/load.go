@@ -617,24 +617,35 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 		if _, duplicate := bindings[pool.Name]; duplicate {
 			return manifestError(prefix+" repeats pool "+pool.Name+"; declare each pool once", nil)
 		}
-		if pool.Name != standardresources.PoolAMD64 || pool.State == "" || len(pool.Architectures) == 0 || !slices.Contains(pool.Architectures, "amd64") || len(pool.Capabilities) == 0 {
-			return manifestError(prefix+" requires name, ready state, capabilities and amd64 architecture inventory", nil)
+		if !standardPoolArchitectureMatches(pool) || pool.State == "" || len(pool.Capabilities) == 0 {
+			return manifestError(prefix+" requires a standard-amd64 or standard-arm64 name, ready state, capabilities and the matching architecture inventory", nil)
 		}
 		bindings[pool.Name] = pool
 	}
+	// The release artifact manifest selects which declared pool binds the bundles; see
+	// resolveStandardResources.
+	if len(bindings) == 0 {
+		return manifestError("standard_resources.runner_pools must declare the standard pool of the release guest architecture", nil)
+	}
 	for _, bundle := range resources.Bundles {
-		pool, exists := bindings[standardresources.PoolAMD64]
-		if !exists {
-			return manifestError("standard_resources.runner_pools must declare pool "+standardresources.PoolAMD64+" for selected bundle "+bundle, nil)
-		}
 		gateway := map[string]string{standardresources.AgentCompartment: standardresources.AgentGateway, standardresources.DurableCoding: standardresources.PlatformGateway}[bundle]
 		for runnerIndex, runner := range runners {
-			if gateway != "" && runner.PoolID == pool.Name && !runnerGatewayNames(runner.EgressContexts)[gateway] {
+			if _, standard := bindings[runner.PoolID]; gateway != "" && standard && !runnerGatewayNames(runner.EgressContexts)[gateway] {
 				return manifestError(fmt.Sprintf("runners[%d].egress_contexts must resolve %s for selected bundle %s", runnerIndex, gateway, bundle), nil)
 			}
 		}
 	}
 	return nil
+}
+
+func standardPoolArchitectureMatches(pool StandardRunnerPool) bool {
+	for _, architecture := range []string{standardresources.ArchitectureAMD64, standardresources.ArchitectureARM64} {
+		name, err := standardresources.StandardPool(architecture)
+		if err == nil && pool.Name == name {
+			return slices.Contains(pool.Architectures, architecture)
+		}
+	}
+	return false
 }
 
 func runnerGatewayNames(contexts []RunnerEgressContext) map[string]bool {
@@ -956,10 +967,18 @@ func resolveStandardResources(base string, manifest ManifestV1) (resourceapply.D
 	if err != nil {
 		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
 	}
+	guestArchitecture, err := releaseManifest.GuestArchitecture()
+	if err != nil {
+		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+	}
+	standardPool, err := standardresources.StandardPool(guestArchitecture)
+	if err != nil {
+		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+	}
 	expectedKeyID := strings.ToLower(strings.TrimPrefix(releaseManifest.MicroVM.SigningKeyFingerprint, "SHA256:"))
 	if manifest.Deployment.Mode == "production" {
 		for index, runner := range manifest.Runners {
-			if runner.PoolID == standardresources.PoolAMD64 && runner.ArtifactPublicKeySHA256 != expectedKeyID {
+			if runner.PoolID == standardPool && runner.ArtifactPublicKeySHA256 != expectedKeyID {
 				return resourceapply.Document{}, manifestError(fmt.Sprintf("runners[%d].artifact_public_key_sha256 differs from standard_resources artifact manifest signing identity", index), nil)
 			}
 		}
@@ -968,9 +987,12 @@ func resolveStandardResources(base string, manifest ManifestV1) (resourceapply.D
 	for _, configured := range manifest.StandardResources.RunnerPools {
 		pools[configured.Name] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State}
 	}
+	if _, declared := pools[standardPool]; !declared {
+		return resourceapply.Document{}, manifestError("standard_resources.runner_pools must declare pool "+standardPool+" for the "+guestArchitecture+" release", nil)
+	}
 	selectedPools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.Bundles))
 	for _, bundle := range manifest.StandardResources.Bundles {
-		selectedPools[bundle] = pools[standardresources.PoolAMD64]
+		selectedPools[bundle] = pools[standardPool]
 	}
 	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: selectedPools})
 	if err != nil {

@@ -18,10 +18,11 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/internal/install"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testing.T) {
-	release, err := developmentReleaseManifest()
+	release, err := developmentReleaseManifest(standardresources.ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}

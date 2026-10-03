@@ -334,7 +334,7 @@ Firecracker validation requires a dedicated Linux host with KVM and the configur
 just test-firecracker
 ```
 
-The external scenario gate joins the HTTP API, PostgreSQL, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux x86-64 machine with writable KVM and TUN devices, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
+The external scenario gate joins the HTTP API, PostgreSQL, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux amd64 or arm64 machine with writable KVM and TUN devices, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
 
 ```sh
 SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 just test-scenario

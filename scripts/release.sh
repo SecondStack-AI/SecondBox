@@ -24,6 +24,7 @@ set +a
 tier=release
 installer_flags=()
 export RELEASE_IMAGE_PLATFORMS=linux/amd64
+export RELEASE_GUEST_ARCHITECTURE=amd64
 if $full; then
   tier=nightly
   installer_flags=(--full)

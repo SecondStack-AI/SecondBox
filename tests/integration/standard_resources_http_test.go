@@ -166,15 +166,15 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 
 func liveStandardDocument(t *testing.T) resourceapply.Document {
 	t.Helper()
-	agent, err := standardresources.ProfileLineage(standardresources.AgentCompartment)
+	agent, err := standardresources.ProfileLineage(standardresources.AgentCompartment, standardresources.ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	coding, err := standardresources.ProfileLineage(standardresources.DurableCoding)
+	coding, err := standardresources.ProfileLineage(standardresources.DurableCoding, standardresources.ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	isolated, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated)
+	isolated, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated, standardresources.ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}

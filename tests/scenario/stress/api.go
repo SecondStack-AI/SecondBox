@@ -17,12 +17,14 @@ import (
 )
 
 type stressDriver struct {
-	config     stressConfig
-	admin      *secondboxclient.Client
-	client     *secondboxclient.Client
-	guestCIDR  string
-	bootMu     sync.Mutex
-	bootStages map[string][]time.Duration
+	config    stressConfig
+	admin     *secondboxclient.Client
+	client    *secondboxclient.Client
+	guestCIDR string
+	// architecture is the guest architecture of the scenario Runner's bundle.
+	architecture string
+	bootMu       sync.Mutex
+	bootStages   map[string][]time.Duration
 }
 
 func (driver *stressDriver) prepare(ctx context.Context) error {
@@ -30,7 +32,7 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 		ctx, driver.admin, "createRunnerPool", secondboxclient.CallOptions{
 			Body: scenarioharness.JSONBody(secondboxclient.CreateRunnerPoolRequest{
 				Name: driver.config.RunnerPoolName, State: "ready",
-				Architectures: []string{"amd64"},
+				Architectures: []string{driver.architecture},
 				Capabilities: []string{
 					"cleanup", "compute", "local-workspace", "network-policy", "storage",
 				},
@@ -49,7 +51,7 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 			Body: scenarioharness.JSONBody(secondboxclient.CreateProfileRequest{
 				Name: driver.config.ProfileName,
 				Spec: secondboxclient.ProfileRevisionSpec{
-					Pool: driver.config.RunnerPoolName, Architecture: "amd64",
+					Pool: driver.config.RunnerPoolName, Architecture: driver.architecture,
 					Resources: secondboxclient.ResourcePolicy{
 						VCPUCount:      driver.config.Profile.VCPUCount,
 						MemoryBytes:    driver.config.Profile.MemoryBytes,

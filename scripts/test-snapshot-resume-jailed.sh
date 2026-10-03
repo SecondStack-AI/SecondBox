@@ -86,7 +86,7 @@ PREREQUISITES
   exit 1
 fi
 
-for command in awk chmod docker findmnt git go id mktemp openssl realpath sha256sum uname; do
+for command in awk chmod docker findmnt git go jq id mktemp openssl realpath sha256sum uname; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
 [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] ||
@@ -94,7 +94,9 @@ done
 [[ -c /dev/net/tun && -r /dev/net/tun && -w /dev/net/tun ]] ||
   fail "/dev/net/tun must be a readable and writable character device"
 [[ -r /sys/fs/cgroup/cgroup.controllers ]] || fail "a cgroup v2 host is required"
-[[ "$(go env GOARCH)" == "amd64" ]] || fail "qualification currently requires an amd64 host"
+host_architecture="$(go env GOARCH)"
+[[ "$host_architecture" == amd64 || "$host_architecture" == arm64 ]] ||
+  fail "qualification requires an amd64 or arm64 host, got $host_architecture"
 
 : "${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?jailed resume qualification requires SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR}"
 : "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?jailed resume qualification requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY}"
@@ -144,6 +146,8 @@ done
 openssl dgst -sha256 -verify "$public_key" \
   -signature "$artifacts_dir/manifest.sig" "$artifacts_dir/manifest.json" >/dev/null ||
   fail "artifact manifest signature verification failed"
+[[ "$(jq -er '.architecture' "$artifacts_dir/manifest.json")" == "$host_architecture" ]] ||
+  fail "artifact bundle architecture differs from the $host_architecture host"
 actual_key_fingerprint="$(
   openssl pkey -pubin -in "$public_key" -outform DER 2>/dev/null |
     sha256sum |

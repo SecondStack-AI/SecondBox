@@ -127,4 +127,26 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 	if !strings.Contains(string(output), "just prepare-stress") {
 		t.Fatalf("stress prerequisite failure did not name the preparation command:\n%s", output)
 	}
+
+	// Preparation accepts the amd64 and arm64 hosts it can build for and stops
+	// at the next prerequisite, which a relative root fails before any build.
+	// Stub tools keep the outcome independent of the host's disk utilities.
+	toolDir := t.TempDir()
+	for _, tool := range []string{"blkid", "debugfs", "findmnt", "install", "jq", "openssl", "realpath", "sha256sum"} {
+		if err := os.WriteFile(filepath.Join(toolDir, tool), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command = exec.Command(filepath.Join(
+		repositoryRootForDeploymentPolicy(t), "scripts", "prepare-stress.sh",
+	))
+	command.Env = []string{
+		"PATH=" + toolDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"SECONDBOX_STRESS_LOCAL_ROOT=relative/stress",
+	}
+	output, err = command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "SECONDBOX_STRESS_LOCAL_ROOT must be a narrow absolute path") {
+		t.Fatalf("stress preparation on this host = (%v, %q), want the local root prerequisite after the host architecture check", err, output)
+	}
 }

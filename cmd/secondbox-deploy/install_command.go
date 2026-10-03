@@ -147,6 +147,9 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 	if err := activity.Complete(cliui.StatusComplete, "manifest and referenced release objects verified"); err != nil {
 		return err
 	}
+	if err := requireGuidedInstallerRelease(verified); err != nil {
+		return &deployExitError{code: 3, err: err}
+	}
 	home, err := dependencies.HomeDirectory()
 	if err != nil {
 		return fmt.Errorf("SecondBox installer home directory: %w", err)
@@ -373,6 +376,20 @@ func installerFormError(err error) error {
 		return &deployExitError{code: 130, err: errors.New("SecondBox installer: installation cancelled")}
 	}
 	return err
+}
+
+// requireGuidedInstallerRelease refuses a release the guided installer cannot
+// install: it installs amd64 releases only, which alone carry installer
+// qualification evidence.
+func requireGuidedInstallerRelease(verified releaseverify.VerifiedRelease) error {
+	architecture, err := verified.Manifest.GuestArchitecture()
+	if err != nil {
+		return err
+	}
+	if architecture != standardresources.ArchitectureAMD64 {
+		return fmt.Errorf("SecondBox installer: release %s targets %s guests; the guided installer installs amd64 releases only", verified.Manifest.Version, architecture)
+	}
+	return nil
 }
 
 func releasePlan(verified releaseverify.VerifiedRelease, location string) install.ReleasePlan {

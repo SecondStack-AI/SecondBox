@@ -10,6 +10,7 @@ usage() {
 Usage: build.sh
 
 Environment:
+  SECONDBOX_RUNNER_MICROVM_ARCHITECTURE      Required guest architecture: amd64 or arm64.
   SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL      Build the pinned kernel from kernel.lock when true.
   SECONDBOX_RUNNER_MICROVM_KERNEL_PATH       Required path to the guest kernel image unless SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=true.
   SECONDBOX_RUNNER_MICROVM_KERNEL_CONFIG     Optional kernel .config to validate.
@@ -31,6 +32,7 @@ if [ "${1-}" = "-h" ] || [ "${1-}" = "--help" ]; then
     exit 0
 fi
 for required_name in \
+    SECONDBOX_RUNNER_MICROVM_ARCHITECTURE \
     SECONDBOX_RUNNER_MICROVM_ARTIFACT_VERSION \
     SECONDBOX_RUNNER_MICROVM_OUT_DIR \
     SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR \
@@ -53,6 +55,11 @@ if [ -z "${SECONDBOX_RUNNER_MICROVM_KERNEL_PATH+x}" ] ||
     echo "SECONDBOX_RUNNER_MICROVM_KERNEL_PATH and SECONDBOX_RUNNER_MICROVM_KERNEL_CONFIG must be explicitly set" >&2
     exit 2
 fi
+architecture="$SECONDBOX_RUNNER_MICROVM_ARCHITECTURE"
+case "$architecture" in
+    amd64|arm64) ;;
+    *) echo "SECONDBOX_RUNNER_MICROVM_ARCHITECTURE must be amd64 or arm64" >&2; exit 2 ;;
+esac
 artifact_version="$SECONDBOX_RUNNER_MICROVM_ARTIFACT_VERSION"
 out_dir="$SECONDBOX_RUNNER_MICROVM_OUT_DIR"
 rootfs_source_dir="$SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR"
@@ -93,8 +100,14 @@ if [ "${SECONDBOX_RUNNER_MICROVM_FAKEROOT_ACTIVE-}" != "true" ]; then
         echo "missing required command: fakeroot" >&2
         exit 2
     }
+    # The kernel was built above; the re-executed build consumes it instead of
+    # compiling it again under fakeroot.
     exec fakeroot -i "$rootfs_source_fakeroot_state" -- \
-        env SECONDBOX_RUNNER_MICROVM_FAKEROOT_ACTIVE=true "$0" "$@"
+        env SECONDBOX_RUNNER_MICROVM_FAKEROOT_ACTIVE=true \
+        SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=false \
+        SECONDBOX_RUNNER_MICROVM_KERNEL_PATH="$kernel_path" \
+        SECONDBOX_RUNNER_MICROVM_KERNEL_CONFIG="$kernel_config" \
+        "$0" "$@"
 fi
 rootfs_source_manifest="$rootfs_source_dir/usr/share/secondbox/image-provenance/rootfs-source-manifest.json"
 if [ ! -f "$rootfs_source_manifest" ]; then
@@ -103,6 +116,11 @@ if [ ! -f "$rootfs_source_manifest" ]; then
 fi
 browser_policy="$(jq -er '.source.browserPolicy | select(. == "allow" or . == "forbid")' "$rootfs_source_manifest")"
 oci_mode="$(jq -er '.source.ociMode // "" | select(. == "" or . == "extend" or . == "prepared")' "$rootfs_source_manifest")"
+rootfs_architecture="$(jq -r '.source.architecture // ""' "$rootfs_source_manifest")"
+if [ "$rootfs_architecture" != "$architecture" ]; then
+    echo "prepared rootfs userspace architecture '$rootfs_architecture' differs from $architecture; rebuild the rootfs source with SECONDBOX_RUNNER_MICROVM_ARCHITECTURE=$architecture" >&2
+    exit 2
+fi
 if [ "$oci_mode" = "prepared" ]; then
     rootfs_surface_contract="prepared-oci"
 else
@@ -126,7 +144,7 @@ for cmd in blkid debugfs go sha256sum openssl mkfs.ext4 tar; do
 done
 
 if [ -n "$kernel_config" ]; then
-    "$script_dir/check-kernel-config.sh" "$kernel_config"
+    "$script_dir/check-kernel-config.sh" "$kernel_config" "$architecture"
 fi
 
 work_dir="$(mktemp -d)"
@@ -161,7 +179,7 @@ install -m 0755 "$script_dir/init" "$root_dir/init"
 
 echo "Building guest supervisor" >&2
 install -d -m 0755 "$root_dir/usr/local/bin"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" \
     go -C "$runner_root" build \
         -o "$root_dir/usr/local/bin/secondbox-guest-agent" \
         ./cmd/secondbox-guest-agent
@@ -300,7 +318,7 @@ python_licenses_sha="$(sha256sum "$out_dir/rootfs-python-license-inventory.json"
 cat > "$out_dir/runtime-manifest.json" <<EOF
 {
   "artifactId": "${artifact_version}-runtime",
-  "architecture": "amd64",
+  "architecture": "$architecture",
   "guestProtocol": {"minimum": 1, "maximum": 1},
   "kernelSha256": "$kernel_sha",
   "rootfsSha256": "$rootfs_sha",
@@ -310,7 +328,7 @@ EOF
 cat > "$out_dir/toolchain-manifest.json" <<EOF
 {
   "artifactId": "${artifact_version}-toolchain",
-  "architecture": "amd64",
+  "architecture": "$architecture",
   "guestProtocol": {"minimum": 1, "maximum": 1},
   "sharedImageSha256": "$shared_sha",
   "debianPackagesSha256": "$debian_packages_sha",
@@ -327,7 +345,7 @@ toolchain_manifest_sha="$(sha256sum "$out_dir/toolchain-manifest.json" | awk '{p
 cat > "$out_dir/manifest.json" <<EOF
 {
   "artifactVersion": "$artifact_version",
-  "architecture": "amd64",
+  "architecture": "$architecture",
   "guestProtocol": {"minimum": 1, "maximum": 1},
   "runtimeBundle": {
     "artifactId": "${artifact_version}-runtime",

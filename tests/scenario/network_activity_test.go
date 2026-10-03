@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -504,13 +505,13 @@ func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *te
 	startScenarioNetworkTarget(t, gatewayAddress, gatewayContext)
 	startScenarioNetworkTarget(t, managementAddress, "management-network")
 
-	isolatedLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated)
+	isolatedLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated, runtime.GOARCH)
 	if err != nil {
 		t.Fatal(err)
 	}
 	isolatedProfile := createScenarioProfile(t, fixture, standardresources.AgentCompartmentIsolated, isolatedLineage.Revisions[len(isolatedLineage.Revisions)-1].Spec)
 
-	networkLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartment)
+	networkLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartment, runtime.GOARCH)
 	if err != nil {
 		t.Fatal(err)
 	}

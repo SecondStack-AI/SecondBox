@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,10 +24,17 @@ import (
 	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
-const (
-	scenarioRunnerPool = standardresources.PoolAMD64
-	scenarioRunnerID   = "scenario-runner"
-)
+const scenarioRunnerID = "scenario-runner"
+
+// The scenario Runner runs on the qualification host, so its standard pool
+// follows the host architecture.
+var scenarioRunnerPool = func() string {
+	pool, err := standardresources.StandardPool(runtime.GOARCH)
+	if err != nil {
+		panic(err)
+	}
+	return pool
+}()
 
 // A cleanup delete competes with whatever lifecycle work the control plane
 // decided for itself while the test was running, so it reissues against the

@@ -22,7 +22,7 @@ func guidedFacts() install.HostFacts {
 
 func fakeGuidedRelease() releaseverify.VerifiedRelease {
 	fingerprint := "SHA256:" + strings.Repeat("A", 64)
-	return releaseverify.VerifiedRelease{Manifest: releasecontract.ArtifactManifest{Identity: releasecontract.Identity{Version: "0.4.0", Tag: "v0.4.0", SourceCommit: strings.Repeat("a", 40)}, ControlPlane: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/control-plane@sha256:" + strings.Repeat("b", 64)}, Runner: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/runner@sha256:" + strings.Repeat("c", 64)}, InstallerTools: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:" + strings.Repeat("1", 64)}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@sha256:" + strings.Repeat("2", 64)}, MicroVM: releasecontract.MicroVMArtifact{ImageReference: "ghcr.io/secondstack-ai/secondbox/microvm-artifacts@sha256:" + strings.Repeat("d", 64), SigningKeyFingerprint: fingerprint}, Binaries: []releasecontract.BinaryArtifact{{Name: "secondbox", Platform: "linux/amd64", SHA256: strings.Repeat("e", 64)}, {Name: "secondbox-deploy", Platform: "linux/amd64", SHA256: strings.Repeat("f", 64)}}}, ManifestBytes: []byte("verified manifest bytes")}
+	return releaseverify.VerifiedRelease{Manifest: releasecontract.ArtifactManifest{Identity: releasecontract.Identity{Version: "0.4.0", Tag: "v0.4.0", SourceCommit: strings.Repeat("a", 40)}, ControlPlane: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/control-plane@sha256:" + strings.Repeat("b", 64)}, Runner: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/runner@sha256:" + strings.Repeat("c", 64)}, InstallerTools: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:" + strings.Repeat("1", 64)}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@sha256:" + strings.Repeat("2", 64)}, MicroVM: releasecontract.MicroVMArtifact{ImageReference: "ghcr.io/secondstack-ai/secondbox/microvm-artifacts@sha256:" + strings.Repeat("d", 64), SigningKeyFingerprint: fingerprint}, Binaries: []releasecontract.BinaryArtifact{{Name: "secondbox", Platform: "linux/amd64", SHA256: strings.Repeat("e", 64)}, {Name: "secondbox-deploy", Platform: "linux/amd64", SHA256: strings.Repeat("f", 64)}}, Platforms: releasecontract.PlatformMatrix{Guest: []string{"linux/amd64"}}}, ManifestBytes: []byte("verified manifest bytes")}
 }
 
 func usePublishedGuidedReleaseBuild(t *testing.T) {
@@ -341,5 +341,17 @@ func TestUnattendedTenancySelection(t *testing.T) {
 				t.Fatalf("form tenancy=%t", selected)
 			}
 		}
+	}
+}
+
+func TestGuidedInstallerRefusesNonAMD64Releases(t *testing.T) {
+	release := func(platform string) releaseverify.VerifiedRelease {
+		return releaseverify.VerifiedRelease{Manifest: releasecontract.ArtifactManifest{Identity: releasecontract.Identity{Version: "1.2.3"}, Platforms: releasecontract.PlatformMatrix{Guest: []string{platform}}}}
+	}
+	if err := requireGuidedInstallerRelease(release("linux/amd64")); err != nil {
+		t.Fatalf("amd64 release refused: %v", err)
+	}
+	if err := requireGuidedInstallerRelease(release("linux/arm64")); err == nil || !strings.Contains(err.Error(), "installs amd64 releases only") {
+		t.Fatalf("arm64 release error = %v", err)
 	}
 }

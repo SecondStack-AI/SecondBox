@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -269,6 +270,11 @@ func waitForUnixSocket(ctx context.Context, path string, timeout time.Duration) 
 	}
 }
 
+// snapshotLoadClockRealtime is true where Firecracker can advance the restored
+// guest clock to host realtime; it rejects clock_realtime on aarch64. The guest
+// agent sets the wall clock from the host at bind on every architecture.
+var snapshotLoadClockRealtime = goruntime.GOARCH == "amd64"
+
 // snapshotResumeLoadRequest is the exact request that restores an Instance. The
 // template's guest CID and vsock port numbers are compatibility-keyed
 // constants; only the socket path, the TAP device, and the wall clock change
@@ -282,7 +288,7 @@ func snapshotResumeLoadRequest(launch snapshotResumeLaunch, tapName string) snap
 		},
 		ResumeVM:      true,
 		VsockOverride: &vsockOverride{UDSPath: launch.vsockResolvedPath},
-		ClockRealtime: true,
+		ClockRealtime: snapshotLoadClockRealtime,
 	}
 	if tapName = strings.TrimSpace(tapName); tapName != "" {
 		request.NetworkOverrides = []networkOverride{{

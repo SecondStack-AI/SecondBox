@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -886,8 +887,9 @@ func effectiveKernelArgs(cfg *config.Config, guestIP string) string {
 	args := strings.TrimSpace(cfg.MicroVMKernelArgs)
 	// Firecracker snapshot restore on this kernel/CPU combination faults in the
 	// guest FPU restore path when XSAVE state is enabled. Disable guest XSAVE
-	// until the image/kernel snapshot path can safely support it.
-	if !hasKernelArg(args, "noxsave") {
+	// until the image/kernel snapshot path can safely support it. XSAVE is
+	// x86-only; an arm64 guest kernel would pass the word to init.
+	if goruntime.GOARCH == "amd64" && !hasKernelArg(args, "noxsave") {
 		args += " noxsave"
 	}
 	if ipArg := guestIPBootArg(cfg, guestIP); ipArg != "" && !strings.Contains(args, "ip=") {

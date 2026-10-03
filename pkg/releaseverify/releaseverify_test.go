@@ -56,7 +56,7 @@ func TestManifestObjectsBindStandardBundleDocumentsByDigest(t *testing.T) {
 	signed := "sha256:" + strings.Repeat("a", 64)
 	runtimeDigest := "sha256:" + strings.Repeat("b", 64)
 	toolchainDigest := "sha256:" + strings.Repeat("c", 64)
-	documents, err := standardresources.Documents()
+	documents, err := standardresources.Documents(standardresources.ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestManifestObjectsBindStandardBundleDocumentsByDigest(t *testing.T) {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Name: document.Name, Document: releasecontract.Reference{Location: location, Digest: releasecontract.Digest(data)}, Profiles: profiles})
 	}
-	manifest := releasecontract.ArtifactManifest{Identity: releasecontract.Identity{SourceCommit: sourceCommit}, OpenAPI: releasecontract.OpenAPIArtifact{Reference: baseReference}, GoSDK: releasecontract.SDKArtifact{Package: baseReference}, TypeScriptSDK: releasecontract.SDKArtifact{Package: baseReference}, InstallBootstrap: baseReference, SourceFreeSuite: baseReference, QualificationEvidence: evidenceReference, InstallerQualificationEvidence: installerEvidenceReference, MicroVM: releasecontract.MicroVMArtifact{SignedManifestDigest: signed, RuntimeBundle: releasecontract.SignedComponent{ManifestDigest: runtimeDigest}, ToolchainBundle: releasecontract.SignedComponent{ManifestDigest: toolchainDigest}}, StandardBundles: bundles}
+	manifest := releasecontract.ArtifactManifest{Identity: releasecontract.Identity{SourceCommit: sourceCommit}, OpenAPI: releasecontract.OpenAPIArtifact{Reference: baseReference}, GoSDK: releasecontract.SDKArtifact{Package: baseReference}, TypeScriptSDK: releasecontract.SDKArtifact{Package: baseReference}, InstallBootstrap: baseReference, SourceFreeSuite: baseReference, QualificationEvidence: evidenceReference, InstallerQualificationEvidence: installerEvidenceReference, MicroVM: releasecontract.MicroVMArtifact{SignedManifestDigest: signed, RuntimeBundle: releasecontract.SignedComponent{ManifestDigest: runtimeDigest}, ToolchainBundle: releasecontract.SignedComponent{ManifestDigest: toolchainDigest}}, Platforms: releasecontract.PlatformMatrix{Guest: []string{"linux/amd64"}}, StandardBundles: bundles}
 	// The installer evidence binds the whole manifest, so every manifest edit
 	// below must be requalified before its objects are verified.
 	requalify := func() {

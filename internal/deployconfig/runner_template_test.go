@@ -38,7 +38,7 @@ func TestRunnerTemplateSubstitutionValidatesAsSameHostTopology(t *testing.T) {
 	}
 
 	runner := validSameHostTestRunner("runner-template-test")
-	runner.PoolID = "standard-amd64"
+	runner.PoolID = hostStandardPool(t)
 	runner.IdentityHostDirectory = filepath.Join(hostRoot, "identity")
 	runner.ArtifactHostDirectory = filepath.Join(storageDirectory, "release", "artifacts")
 	runner.StateHostDirectory = storageDirectory
@@ -106,7 +106,7 @@ func TestRunnerTemplateSubstitutionValidatesAsSameHostTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("substituted Runner template failed validate semantics: %v", err)
 	}
-	if got := resolved.Environment["SECONDBOX_RUNNER_POOL_ID"]; got != "standard-amd64" {
+	if got := resolved.Environment["SECONDBOX_RUNNER_POOL_ID"]; got != hostStandardPool(t) {
 		t.Fatalf("resolved Runner pool = %q", got)
 	}
 }

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Build a prepared SecondBox guest rootfs from exactly one explicit, immutable
-# source: a content-addressed OCI image or a declarative Debian image definition.
+# source: a content-addressed OCI image or a declarative Debian image definition,
+# for the explicit guest architecture SECONDBOX_RUNNER_MICROVM_ARCHITECTURE.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../../.." && pwd)"
@@ -150,6 +151,7 @@ write_secondbox_source_manifest() {
     BASE_IMAGE_ID="$base_image_id" \
     DEBIAN_SUITE="$debian_suite" \
     DEBIAN_ARCHITECTURE="$debian_arch" \
+    ARCHITECTURE="$architecture" \
     DEBIAN_SNAPSHOT="$debian_snapshot" \
     GUEST_PROTOCOL_MINIMUM="$guest_protocol_minimum" \
     GUEST_PROTOCOL_MAXIMUM="$guest_protocol_maximum" \
@@ -168,6 +170,7 @@ manifest = {
     "schemaVersion": 1,
     "source": {
         "kind": os.environ["SOURCE_KIND"],
+        "architecture": os.environ["ARCHITECTURE"],
         "ociMode": os.environ["OCI_MODE"] or None,
         "browserPolicy": os.environ["BROWSER_POLICY"],
         "ociReference": os.environ["SOURCE_REFERENCE"],
@@ -202,6 +205,7 @@ Path(sys.argv[1]).write_text(
 PY
 }
 
+architecture="${SECONDBOX_RUNNER_MICROVM_ARCHITECTURE-}"
 oci_base_reference="${SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE-}"
 oci_mode="${SECONDBOX_RUNNER_MICROVM_OCI_MODE-}"
 browser_policy="${SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY-}"
@@ -261,6 +265,19 @@ else
     fail_secondbox_image_build \
         "an immutable OCI base reference or explicit SecondBox image definition is required"
 fi
+case "$architecture" in
+    amd64|arm64) ;;
+    "")
+        fail_secondbox_image_build "SECONDBOX_RUNNER_MICROVM_ARCHITECTURE is required"
+        ;;
+    *)
+        fail_secondbox_image_build "SECONDBOX_RUNNER_MICROVM_ARCHITECTURE must be amd64 or arm64"
+        ;;
+esac
+if [ "$source_kind" = "secondbox_image_definition" ] && [ "$debian_arch" != "$architecture" ]; then
+    fail_secondbox_image_build \
+        "image definition architecture $debian_arch differs from SECONDBOX_RUNNER_MICROVM_ARCHITECTURE $architecture"
+fi
 case "$browser_policy" in
     allow|forbid) ;;
     "")
@@ -277,9 +294,9 @@ case "${1-}" in
     --validate-inputs-only)
         [ "$#" -eq 1 ] || fail_secondbox_image_build "unexpected arguments"
         if [ "$source_kind" = "oci" ]; then
-            echo "SecondBox image pipeline inputs valid: oci ($oci_mode, browser=$browser_policy)"
+            echo "SecondBox image pipeline inputs valid: oci ($oci_mode, browser=$browser_policy, $architecture)"
         else
-            echo "SecondBox image pipeline inputs valid: $source_kind (browser=$browser_policy)"
+            echo "SecondBox image pipeline inputs valid: $source_kind (browser=$browser_policy, $architecture)"
         fi
         exit 0
         ;;
@@ -333,8 +350,11 @@ trap cleanup_secondbox_image_build EXIT
 
 if [ "$source_kind" = "oci" ]; then
     echo "[1/4] Resolving immutable OCI base $oci_base_reference" >&2
-    docker pull "$oci_base_reference"
+    docker pull --platform "linux/$architecture" "$oci_base_reference"
     base_image_id="$(docker image inspect --format '{{.Id}}' "$oci_base_reference")"
+    base_image_platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$base_image_id")"
+    [ "$base_image_platform" = "linux/$architecture" ] ||
+        fail_secondbox_image_build "OCI base $oci_base_reference resolved to $base_image_platform, not linux/$architecture"
     base_image_reference="$oci_base_reference"
 else
     require_secondbox_build_command debootstrap
@@ -356,7 +376,7 @@ else
     base_image_id="$(
         run_secondbox_build_as_root tar \
             -C "$stage_dir" --owner=0 --group=0 --numeric-owner -cf - . |
-            docker import -
+            docker import --platform "linux/$architecture" -
     )"
     imported_base_image_id="$base_image_id"
     base_image_tag="secondbox-local-rootfs-base:build-$$"
@@ -370,6 +390,7 @@ echo "[2/4] Building SecondBox guest rootfs from $base_image_reference ($base_im
 built_image_id_file="$(mktemp)"
 build_command=(
     docker build
+    --platform "linux/$architecture"
     --file "$dockerfile_path"
     --build-arg "BASE_IMAGE=$base_image_reference"
     --iidfile "$built_image_id_file"
@@ -382,6 +403,9 @@ build_command+=("$script_dir")
 built_image_id="$(<"$built_image_id_file")"
 rm -f "$built_image_id_file"
 built_image_id_file=""
+built_image_platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$built_image_id")"
+[ "$built_image_platform" = "linux/$architecture" ] ||
+    fail_secondbox_image_build "built rootfs image is $built_image_platform, not linux/$architecture"
 
 echo "[3/4] Exporting prepared rootfs to $out_dir" >&2
 mkdir -p "$out_dir"
