@@ -442,8 +442,8 @@ func TestPinnedKernelBuilderWritesOnlyTheKernelPathToStandardOutput(t *testing.T
 	if !strings.Contains(builder, `sha256sum -c - >/dev/null`) {
 		t.Fatal("kernel source checksum diagnostics must not contaminate the returned kernel path")
 	}
-	if !strings.Contains(builder, `echo "$out_dir/vmlinux"`) {
-		t.Fatal("kernel builder must return the built vmlinux path")
+	if !strings.Contains(builder, `echo "$out_dir/$kernel_target"`) {
+		t.Fatal("kernel builder must return the built kernel image path")
 	}
 }
 
