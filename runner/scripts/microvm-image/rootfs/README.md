@@ -46,16 +46,21 @@ microVM bundle from that rootfs source with the same
 # amd64 guests
 SECONDBOX_RUNNER_MICROVM_ARCHITECTURE=amd64 \
 SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="$PWD/runner/scripts/microvm-image/rootfs/secondbox-debian-image-definition.json" \
+SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY=forbid \
 SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR="$PWD/tmp/secondbox-rootfs-source" \
 runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh
 
 # arm64 guests
 SECONDBOX_RUNNER_MICROVM_ARCHITECTURE=arm64 \
 SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="$PWD/runner/scripts/microvm-image/rootfs/secondbox-debian-image-definition-arm64.json" \
+SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY=forbid \
 SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR="$PWD/tmp/secondbox-rootfs-source" \
 runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh
 ```
 
+`SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY` is required: `forbid` rejects a
+rootfs that ships a browser, `allow` records `browserPolicy: allow` in the
+rootfs contract.
 debootstrap runs natively, so build each architecture on a host of that
 architecture.
 
@@ -64,6 +69,7 @@ An approved OCI base is supplied by immutable manifest digest:
 ```sh
 SECONDBOX_RUNNER_MICROVM_ARCHITECTURE=amd64 \
 SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE="registry.example/secondbox/rootfs@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY=forbid \
 SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR="$PWD/tmp/secondbox-rootfs-source" \
 runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh
 ```

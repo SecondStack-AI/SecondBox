@@ -130,11 +130,18 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 
 	// Preparation accepts the amd64 and arm64 hosts it can build for and stops
 	// at the next prerequisite, which a relative root fails before any build.
+	// Stub tools keep the outcome independent of the host's disk utilities.
+	toolDir := t.TempDir()
+	for _, tool := range []string{"blkid", "debugfs", "findmnt", "install", "jq", "openssl", "realpath", "sha256sum"} {
+		if err := os.WriteFile(filepath.Join(toolDir, tool), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	command = exec.Command(filepath.Join(
 		repositoryRootForDeploymentPolicy(t), "scripts", "prepare-stress.sh",
 	))
 	command.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=" + toolDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
 		"SECONDBOX_STRESS_LOCAL_ROOT=relative/stress",
 	}
