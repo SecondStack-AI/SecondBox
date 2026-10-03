@@ -127,4 +127,19 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 	if !strings.Contains(string(output), "just prepare-stress") {
 		t.Fatalf("stress prerequisite failure did not name the preparation command:\n%s", output)
 	}
+
+	// Preparation accepts the amd64 and arm64 hosts it can build for and stops
+	// at the next prerequisite, which a relative root fails before any build.
+	command = exec.Command(filepath.Join(
+		repositoryRootForDeploymentPolicy(t), "scripts", "prepare-stress.sh",
+	))
+	command.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"SECONDBOX_STRESS_LOCAL_ROOT=relative/stress",
+	}
+	output, err = command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "SECONDBOX_STRESS_LOCAL_ROOT must be a narrow absolute path") {
+		t.Fatalf("stress preparation on this host = (%v, %q), want the local root prerequisite after the host architecture check", err, output)
+	}
 }
