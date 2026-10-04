@@ -176,6 +176,9 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 	if err := decoded.ValidateForRelease(testCommit, "amd64"); err != nil {
 		t.Fatalf("legacy v1 qualification evidence = %v", err)
 	}
+	if err := decoded.ValidateForRelease(testCommit, "arm64"); err == nil || !strings.Contains(err.Error(), "does not qualify arm64 guests") {
+		t.Fatalf("legacy v1 evidence for an arm64 release error = %v", err)
+	}
 	decoded.SchemaVersion = QualificationEvidenceSchema
 	decoded.Host.Platform = "linux-amd64"
 	decoded.RepositoryDirty = true
