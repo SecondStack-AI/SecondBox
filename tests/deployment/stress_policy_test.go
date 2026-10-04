@@ -142,7 +142,9 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 	))
 	command.Env = []string{
 		"PATH=" + toolDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"HOME=" + t.TempDir(),
+		// The script asks the Go toolchain for the host architecture. A temporary
+		// HOME made the toolchain's background telemetry writer race its cleanup.
+		"HOME=" + os.Getenv("HOME"),
 		"SECONDBOX_STRESS_LOCAL_ROOT=relative/stress",
 	}
 	output, err = command.CombinedOutput()
