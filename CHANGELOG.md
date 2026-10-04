@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+## 0.23.0 - 2026-10-04
+
+Linux arm64 hosts can run the Firecracker Runner from a locally staged arm64 release. The published release remains amd64: deployments from v0.14.0 onward update in place with no migration, and public API v1, Runner protocol `[6,6]`, the execution bundle, trust anchor, and standard Profile revisions are unchanged. Image build automation must now name its architecture. See the [v0.23.0 release notes](docs/releases/v0.23.0.md).
+
 ### Added
 
-- Linux arm64 hosts can run the Firecracker Runner. The guest kernel, microVM bundle, Runner image, and client execution-image builder take an explicit `amd64` or `arm64` architecture, an arm64 Debian definition builds the standard guest rootfs, and standard Profiles of an arm64 release bind the new `standard-arm64` RunnerPool. `init --mode development`, `just test-scenario`, and `just prepare-stress` follow the host architecture, and snapshot-resume templates load on arm64. `RELEASE_GUEST_ARCHITECTURE=arm64` stages an arm64 release qualified by `linux-arm64` scenario evidence; it carries no gVisor artifacts and no installer qualification evidence, because gVisor and the guided single-host installer remain amd64-only, and the installer refuses arm64 releases.
+- Linux arm64 hosts can run the Firecracker Runner. The guest kernel, microVM bundle, Runner image, and client execution-image builder take an explicit `amd64` or `arm64` architecture, an arm64 Debian definition builds the standard guest rootfs, and standard Profiles of an arm64 release bind the new `standard-arm64` RunnerPool. `init --mode development`, `just test-scenario`, and `just prepare-stress` follow the host architecture, and snapshot-resume templates load on arm64. `RELEASE_GUEST_ARCHITECTURE=arm64` stages an arm64 release qualified by `linux-arm64` scenario evidence; it carries no gVisor artifacts and no installer qualification evidence, because gVisor and the guided single-host installer remain amd64-only, and the installer refuses arm64 releases ([#201](https://github.com/SecondStack-AI/SecondBox/pull/201)).
 
 ### Changed
 
