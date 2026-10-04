@@ -82,8 +82,9 @@ recipes below remain available for hosts without this automation.
 
 ## Qualified host
 
-Use a dedicated Linux x86-64 host with:
+Use a dedicated Linux amd64 or arm64 host with:
 
+- a signed microVM bundle of the host architecture; the scenario Runner joins `standard-amd64` or `standard-arm64` accordingly;
 - readable and writable character devices at `/dev/kvm` and `/dev/net/tun`;
 - cgroup v2 mounted for the privileged runner container;
 - Docker Engine and Docker Compose v2, with permission to start privileged, host-networked containers and create host mounts;
@@ -172,7 +173,7 @@ usable. The isolated/network-enabled concurrency test runs in the same suite.
 
 The harness removes `.tmp/scenario-qualification-evidence.json` when any scenario run starts. Only a complete, unfiltered `test-scenario` suite whose teardown also succeeds writes a replacement. Focused, failed, stress, and lifecycle runs leave no release qualification evidence.
 
-The JSON records schema `secondbox.release/qualification-evidence/v2`, the full source commit, whether the repository was dirty, suite name, top-level pass count, total wall-clock seconds, UTC completion time, qualified host platform, KVM and TUN availability, and the checked workspace mount and filesystem type. It contains no token, Tenant, Subject, authority, Sandbox, Runner credential, or metric sample. `release-stage` requires the file to name `HEAD` exactly through its embedded `sourceCommit`, record `linux-amd64` as the qualified release platform, and record a clean repository. It stages the document as `secondbox-<version>-qualification-evidence.json` and binds its digest in the artifact manifest and `SHA256SUMS`. Recorded-release verification still decodes valid v1 evidence, which predates the required platform field; staging a new release accepts only v2.
+The JSON records schema `secondbox.release/qualification-evidence/v2`, the full source commit, whether the repository was dirty, suite name, top-level pass count, total wall-clock seconds, UTC completion time, qualified host platform, KVM and TUN availability, and the checked workspace mount and filesystem type. It contains no token, Tenant, Subject, authority, Sandbox, Runner credential, or metric sample. `release-stage` requires the file to name `HEAD` exactly through its embedded `sourceCommit`, record `linux-<architecture>` for the release guest architecture as the qualified platform, and record a clean repository. It stages the document as `secondbox-<version>-qualification-evidence.json` and binds its digest in the artifact manifest and `SHA256SUMS`. Recorded-release verification still decodes valid v1 evidence, which predates the required platform field; staging a new release accepts only v2.
 
 Preserve the beginning and end of the command output. A qualified run prints:
 

@@ -23,15 +23,20 @@ type BundleDocument struct {
 	ParameterSchema    json.RawMessage       `json:"parameterSchema"`
 }
 
-func Documents() ([]BundleDocument, error) {
+// Documents returns the release-owned standard bundles of one guest architecture.
+func Documents(architecture string) ([]BundleDocument, error) {
+	pool, err := StandardPool(architecture)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]BundleDocument, 0, len(BundleNames()))
 	for _, name := range BundleNames() {
-		profile, err := ProfileLineage(name)
+		profile, err := ProfileLineage(name, architecture)
 		if err != nil {
 			return nil, err
 		}
 		gateway := logicalGateway(name)
-		document := BundleDocument{SchemaVersion: BundleSchemaVersion, Name: name, Architecture: ArchitectureAMD64, RunnerPoolSelector: PoolAMD64, LogicalGateway: gateway, Profile: profile, ParameterSchema: poolParameterSchema()}
+		document := BundleDocument{SchemaVersion: BundleSchemaVersion, Name: name, Architecture: architecture, RunnerPoolSelector: pool, LogicalGateway: gateway, Profile: profile, ParameterSchema: poolParameterSchema(architecture)}
 		if err := document.Validate(); err != nil {
 			return nil, err
 		}
@@ -72,14 +77,18 @@ func decodeStrictDocument(data []byte, target any) error {
 }
 
 func (document BundleDocument) Validate() error {
-	if document.SchemaVersion != BundleSchemaVersion || !slices.Contains(BundleNames(), document.Name) || document.Architecture != ArchitectureAMD64 || document.RunnerPoolSelector != PoolAMD64 || len(document.ParameterSchema) == 0 {
+	pool, err := StandardPool(document.Architecture)
+	if err != nil {
+		return err
+	}
+	if document.SchemaVersion != BundleSchemaVersion || !slices.Contains(BundleNames(), document.Name) || document.RunnerPoolSelector != pool || len(document.ParameterSchema) == 0 {
 		return errors.New("SecondBox standard bundle identity or parameter schema is incomplete")
 	}
 	wantGateway := logicalGateway(document.Name)
 	if document.LogicalGateway != wantGateway {
 		return fmt.Errorf("SecondBox standard bundle %q logical gateway differs from release policy", document.Name)
 	}
-	want, err := ProfileLineage(document.Name)
+	want, err := ProfileLineage(document.Name, document.Architecture)
 	if err != nil {
 		return err
 	}
@@ -97,8 +106,8 @@ func (document BundleDocument) Validate() error {
 	return nil
 }
 
-func poolParameterSchema() json.RawMessage {
-	return json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["architectures","capabilities","state"],"properties":{"architectures":{"type":"array","contains":{"const":"amd64"}},"capabilities":{"type":"array","minItems":1,"items":{"type":"string"}},"state":{"const":"ready"}}}`)
+func poolParameterSchema(architecture string) json.RawMessage {
+	return json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["architectures","capabilities","state"],"properties":{"architectures":{"type":"array","contains":{"const":"` + architecture + `"}},"capabilities":{"type":"array","minItems":1,"items":{"type":"string"}},"state":{"const":"ready"}}}`)
 }
 
 func logicalGateway(name string) string {

@@ -149,30 +149,44 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := decoded.ValidateForRelease(testCommit); err != nil {
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err != nil {
 		t.Fatal(err)
 	}
+	if err := decoded.ValidateForRelease(testCommit, "arm64"); err == nil || !strings.Contains(err.Error(), "does not qualify arm64 guests") {
+		t.Fatalf("amd64 evidence for an arm64 release error = %v", err)
+	}
+	decoded.Host.Platform = "linux-arm64"
+	if err := decoded.ValidateForRelease(testCommit, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err == nil || !strings.Contains(err.Error(), "does not qualify amd64 guests") {
+		t.Fatalf("arm64 evidence for an amd64 release error = %v", err)
+	}
+	decoded.Host.Platform = "linux-amd64"
 	if decoded.PassCount != 16 || len(decoded.Skipped) != 1 || decoded.Skipped[0] != evidence.Skipped[0] {
 		t.Fatalf("skipped qualification groups were lost: %#v", decoded)
 	}
 	decoded.Host.Platform = ""
-	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "host platform") {
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err == nil || !strings.Contains(err.Error(), "host platform") {
 		t.Fatalf("missing host platform error = %v", err)
 	}
 	decoded.Host.Platform = "linux-amd64"
 	decoded.SchemaVersion = LegacyQualificationEvidenceSchema
 	decoded.Host.Platform = ""
-	if err := decoded.ValidateForRelease(testCommit); err != nil {
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err != nil {
 		t.Fatalf("legacy v1 qualification evidence = %v", err)
+	}
+	if err := decoded.ValidateForRelease(testCommit, "arm64"); err == nil || !strings.Contains(err.Error(), "does not qualify arm64 guests") {
+		t.Fatalf("legacy v1 evidence for an arm64 release error = %v", err)
 	}
 	decoded.SchemaVersion = QualificationEvidenceSchema
 	decoded.Host.Platform = "linux-amd64"
 	decoded.RepositoryDirty = true
-	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "dirty repository") {
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err == nil || !strings.Contains(err.Error(), "dirty repository") {
 		t.Fatalf("dirty qualification evidence error = %v", err)
 	}
 	decoded.RepositoryDirty = false
-	if err := decoded.ValidateForRelease(strings.Repeat("f", 40)); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if err := decoded.ValidateForRelease(strings.Repeat("f", 40), "amd64"); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("commit-mismatched qualification evidence error = %v", err)
 	}
 }
@@ -229,6 +243,11 @@ func TestInstallerQualificationEvidenceRequiresRebootAndPinnedRelease(t *testing
 		t.Fatal("installer evidence without reboot recovery was accepted")
 	}
 	decoded.RebootPassed = true
+	decoded.Host.Platform = "linux-arm64"
+	if err := decoded.Validate(); err == nil {
+		t.Fatal("linux-arm64 installer evidence was accepted; the guided installer installs amd64 releases only")
+	}
+	decoded.Host.Platform = "linux-amd64"
 	decoded.SchemaVersion = LegacyInstallerQualificationEvidenceSchema
 	decoded.Host.Platform = ""
 	if err := decoded.ValidateForRelease(testCommit, testDigest); err != nil {
@@ -370,6 +389,51 @@ func TestGVisorMaterializationVerification(t *testing.T) {
 		if err := mutated.VerifyGVisorMaterialization(data); err == nil {
 			t.Fatalf("%s mismatch accepted", name)
 		}
+	}
+}
+
+func arm64Manifest() ArtifactManifest {
+	manifest := validManifest()
+	manifest.Platforms.ControlPlane = []string{"linux/arm64"}
+	manifest.Platforms.Runner = []string{"linux/arm64"}
+	manifest.Platforms.InstallerTools = []string{"linux/arm64"}
+	manifest.Platforms.Guest = []string{"linux/arm64"}
+	manifest.Platforms.QualifiedRunnerGuest = []string{"linux/arm64"}
+	manifest.GVisor = nil
+	manifest.InstallerQualificationEvidence = Reference{}
+	return manifest
+}
+
+func TestArm64ReleaseCarriesNeitherGVisorNorInstallerQualification(t *testing.T) {
+	final := arm64Manifest()
+	if err := final.Validate(); err != nil {
+		t.Fatalf("final arm64 release: %v", err)
+	}
+	if required, err := final.RequiresInstallerQualification(); err != nil || required {
+		t.Fatalf("final arm64 release requires installer qualification = %v, %v", required, err)
+	}
+	candidate := final
+	candidate.Candidate = true
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("arm64 candidate: %v", err)
+	}
+	withInstaller := final
+	withInstaller.InstallerQualificationEvidence = validManifest().InstallerQualificationEvidence
+	if err := withInstaller.Validate(); err == nil || !strings.Contains(err.Error(), "must not claim installer qualification evidence") {
+		t.Fatalf("arm64 release with installer evidence error = %v", err)
+	}
+	withGVisor := final
+	withGVisor.GVisor = validManifest().GVisor
+	if err := withGVisor.Validate(); err == nil || !strings.Contains(err.Error(), "amd64-only gVisor") {
+		t.Fatalf("arm64 release with gVisor error = %v", err)
+	}
+	if required, err := validManifest().RequiresInstallerQualification(); err != nil || !required {
+		t.Fatalf("final amd64 release requires installer qualification = %v, %v", required, err)
+	}
+	amd64WithoutInstaller := validManifest()
+	amd64WithoutInstaller.InstallerQualificationEvidence = Reference{}
+	if err := amd64WithoutInstaller.Validate(); err == nil {
+		t.Fatal("final amd64 release without installer qualification evidence was accepted")
 	}
 }
 

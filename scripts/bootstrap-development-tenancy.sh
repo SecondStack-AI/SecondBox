@@ -44,9 +44,9 @@ SECONDBOX_CONFIG="$platform_config" "$cli_binary" --output json tenant create \
   --file "$bootstrap_directory/tenant.json" --idempotency-key "development-tenant-$tenant_ref" >/dev/null
 
 jq -n --arg expiresAt "$expires_at" '{expiresAt:$expiresAt,metadata:{bootstrap:"development-post-start"}}' \
-  >"$bootstrap_directory/controller.json"
+  >"$bootstrap_directory/controller-request.json"
 controller_response="$(SECONDBOX_CONFIG="$platform_config" "$cli_binary" --output json tenant controller-authority create \
-  "$tenant_ref" --file "$bootstrap_directory/controller.json" --idempotency-key "development-controller-$tenant_ref")"
+  "$tenant_ref" --file "$bootstrap_directory/controller-request.json" --idempotency-key "development-controller-$tenant_ref")"
 controller_token="$(jq -er '.bearerToken' <<<"$controller_response")"
 
 SECONDBOX_CONFIG="$controller_config" SECONDBOX_URL="$endpoint" SECONDBOX_TOKEN="$controller_token" \
@@ -63,9 +63,9 @@ jq -n \
   --arg profile "$profile" \
   --arg expiresAt "$expires_at" \
   '{subjectRef:$subjectRef,scopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],profileGrants:[$profile],expiresAt:$expiresAt,metadata:{bootstrap:"development-post-start"}}' \
-  >"$bootstrap_directory/application.json"
+  >"$bootstrap_directory/application-request.json"
 application_response="$(SECONDBOX_CONFIG="$controller_config" "$cli_binary" --output json application-authority create \
-  --file "$bootstrap_directory/application.json" --idempotency-key "development-application-$tenant_ref-$subject_ref")"
+  --file "$bootstrap_directory/application-request.json" --idempotency-key "development-application-$tenant_ref-$subject_ref")"
 application_token="$(jq -er '.bearerToken' <<<"$application_response")"
 
 SECONDBOX_CONFIG="$application_config" SECONDBOX_URL="$endpoint" SECONDBOX_TOKEN="$application_token" \

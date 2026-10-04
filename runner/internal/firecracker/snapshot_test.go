@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func TestCreateGoldenSnapshotPausesSnapshotsResumesAndWritesManifest(t *testing.
 	if manifest.InstanceID != instanceID || manifest.SandboxID != "agent-1" || manifest.Machine.VCPUCount != 2 || manifest.Machine.MemSizeMiB != 2048 || manifest.Machine.CPUTemplate != "None" {
 		t.Fatalf("manifest = %#v", manifest)
 	}
-	if !strings.Contains(manifest.KernelArgs, "noxsave") {
+	if strings.Contains(manifest.KernelArgs, "noxsave") != (goruntime.GOARCH == "amd64") {
 		t.Fatalf("manifest kernel args = %q", manifest.KernelArgs)
 	}
 	if manifest.KernelSHA256 == "" || manifest.RootfsSHA256 == "" || manifest.SharedSHA256 == "" {

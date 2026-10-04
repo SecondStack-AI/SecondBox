@@ -8,8 +8,21 @@ fi
 
 target_directory="$1"
 version="35.1"
-archive_name="protoc-${version}-linux-x86_64.zip"
-archive_sha256="6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7"
+# Official release asset digests for each supported Linux host architecture.
+case "$(uname -m)" in
+  x86_64)
+    archive_name="protoc-${version}-linux-x86_64.zip"
+    archive_sha256="6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7"
+    ;;
+  aarch64)
+    archive_name="protoc-${version}-linux-aarch_64.zip"
+    archive_sha256="01bf9d08808c7f96678b63f4bd8efa559bb4f83d5a7a270d5edaf507f9d5d9cf"
+    ;;
+  *)
+    echo "SecondBox protoc has no pinned archive for $(uname -m)" >&2
+    exit 1
+    ;;
+esac
 archive_url="https://github.com/protocolbuffers/protobuf/releases/download/v${version}/${archive_name}"
 
 work_directory="$(mktemp -d)"

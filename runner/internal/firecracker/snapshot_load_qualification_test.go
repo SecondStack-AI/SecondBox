@@ -384,7 +384,7 @@ func runSnapshotLoadSample(
 			},
 			ResumeVM:      true,
 			VsockOverride: &vsockOverride{UDSPath: vsockPath},
-			ClockRealtime: true,
+			ClockRealtime: snapshotLoadClockRealtime,
 		},
 	); err != nil {
 		return sample, err

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -702,7 +703,8 @@ func syncSnapshotTemplateFile(path string) error {
 // template captured on an incompatible processor is a cache miss rather than a
 // restore that faults in the guest. Firecracker restores the exact guest CPUID
 // it captured, so vendor, family, model, and stepping are the compatibility
-// boundary.
+// boundary. On arm64 the MIDR fields (implementer, variant, part, revision)
+// and the feature list play the same role.
 func hostCPUCompatibilityFingerprint() (string, error) {
 	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
@@ -713,12 +715,20 @@ func hostCPUCompatibilityFingerprint() (string, error) {
 }
 
 func hostCPUCompatibilityFingerprintFrom(scanner *bufio.Scanner) (string, error) {
-	wanted := map[string]string{
-		"vendor_id":  "",
-		"cpu family": "",
-		"model":      "",
-		"stepping":   "",
-		"flags":      "",
+	return hostCPUCompatibilityFingerprintFields(scanner, hostCPUCompatibilityFields(goruntime.GOARCH))
+}
+
+func hostCPUCompatibilityFields(architecture string) []string {
+	if architecture == "arm64" {
+		return []string{"CPU implementer", "CPU architecture", "CPU variant", "CPU part", "CPU revision", "Features"}
+	}
+	return []string{"vendor_id", "cpu family", "model", "stepping", "flags"}
+}
+
+func hostCPUCompatibilityFingerprintFields(scanner *bufio.Scanner, fields []string) (string, error) {
+	wanted := make(map[string]string, len(fields))
+	for _, field := range fields {
+		wanted[field] = ""
 	}
 	for scanner.Scan() {
 		key, value, found := strings.Cut(scanner.Text(), ":")

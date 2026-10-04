@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -734,7 +735,7 @@ func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 	if !strings.Contains(got.BootSource.BootArgs, "init=/init") {
 		t.Fatalf("boot args missing generated image init: %q", got.BootSource.BootArgs)
 	}
-	if !strings.Contains(got.BootSource.BootArgs, "noxsave") {
+	if strings.Contains(got.BootSource.BootArgs, "noxsave") != (goruntime.GOARCH == "amd64") {
 		t.Fatalf("boot args missing noxsave: %q", got.BootSource.BootArgs)
 	}
 	if got.Machine.VCPUCount != 2 || got.Machine.MemSizeMiB != 2048 || got.Machine.SMT || got.Machine.CPUTemplate != "None" {
@@ -1757,7 +1758,7 @@ func TestBuildFirecrackerConfigAddsGuestIPBootArg(t *testing.T) {
 	if !strings.Contains(got.BootSource.BootArgs, "ip=10.0.0.7::10.0.0.1:255.255.255.0::eth0:off") {
 		t.Fatalf("boot args missing per-VM ip=: %q", got.BootSource.BootArgs)
 	}
-	if !strings.Contains(got.BootSource.BootArgs, "noxsave") {
+	if strings.Contains(got.BootSource.BootArgs, "noxsave") != (goruntime.GOARCH == "amd64") {
 		t.Fatalf("boot args missing noxsave: %q", got.BootSource.BootArgs)
 	}
 }

@@ -568,7 +568,7 @@ func (evidence QualificationEvidence) Validate() error {
 	if evidence.Suite != "test-scenario" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 {
 		return contractError("qualification evidence must describe a complete test-scenario run")
 	}
-	if err := validateQualificationHost("qualification", evidence.Host, evidence.SchemaVersion == QualificationEvidenceSchema); err != nil {
+	if err := validateQualificationHost("qualification", evidence.Host, evidence.SchemaVersion == QualificationEvidenceSchema, "linux-amd64", "linux-arm64"); err != nil {
 		return err
 	}
 	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
@@ -578,9 +578,10 @@ func (evidence QualificationEvidence) Validate() error {
 	return nil
 }
 
-func validateQualificationHost(label string, host QualificationHostEvidence, requirePlatform bool) error {
-	if (requirePlatform && host.Platform != "linux-amd64") || (!requirePlatform && host.Platform != "" && host.Platform != "linux-amd64") {
-		return contractError("%s evidence host platform must be linux-amd64", label)
+func validateQualificationHost(label string, host QualificationHostEvidence, requirePlatform bool, platforms ...string) error {
+	qualifiedPlatform := slices.Contains(platforms, host.Platform)
+	if (requirePlatform && !qualifiedPlatform) || (!requirePlatform && host.Platform != "" && !qualifiedPlatform) {
+		return contractError("%s evidence host platform must be %s", label, strings.Join(platforms, " or "))
 	}
 	for name, device := range map[string]QualificationDeviceEvidence{"KVM": host.KVM, "TUN": host.TUN} {
 		wantPath := "/dev/" + strings.ToLower(name)
@@ -598,9 +599,19 @@ func validateQualificationHost(label string, host QualificationHostEvidence, req
 	return nil
 }
 
-func (evidence QualificationEvidence) ValidateForRelease(sourceCommit string) error {
+// ValidateForRelease binds the evidence to one release: its source commit and
+// its guest architecture. Legacy evidence records no host platform; it predates
+// arm64 releases and qualifies amd64 guests only.
+func (evidence QualificationEvidence) ValidateForRelease(sourceCommit, guestArchitecture string) error {
 	if err := evidence.Validate(); err != nil {
 		return err
+	}
+	platform := evidence.Host.Platform
+	if platform == "" {
+		platform = "linux-amd64"
+	}
+	if platform != "linux-"+guestArchitecture {
+		return contractError("qualification evidence host platform %s does not qualify %s guests", platform, guestArchitecture)
 	}
 	if evidence.SourceCommit != sourceCommit {
 		return contractError("qualification evidence source commit does not match release")
@@ -618,7 +629,8 @@ func (evidence InstallerQualificationEvidence) Validate() error {
 	if !commitPattern.MatchString(evidence.SourceCommit) || evidence.Suite != "test-installer-qualified" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 || !digestPattern.MatchString(evidence.ReleaseManifestDigest) || strings.TrimSpace(evidence.FilesystemIdentity) == "" || !evidence.RebootPassed {
 		return contractError("installer qualification evidence must describe a complete qualified installer run")
 	}
-	if err := validateQualificationHost("installer qualification", evidence.Host, evidence.SchemaVersion == InstallerQualificationEvidenceSchema); err != nil {
+	// The guided installer installs amd64 releases only.
+	if err := validateQualificationHost("installer qualification", evidence.Host, evidence.SchemaVersion == InstallerQualificationEvidenceSchema, "linux-amd64"); err != nil {
 		return err
 	}
 	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
@@ -673,8 +685,17 @@ func (manifest ArtifactManifest) Validate() error {
 		if order, err := CompareVersions(manifest.Version, "0.9.0"); err == nil && order >= 0 {
 			return contractError("artifact manifest %s must use schemaVersion %q", manifest.Tag, ArtifactManifestSchema)
 		}
-	} else if manifest.GVisor == nil {
+	}
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return err
+	}
+	// gVisor ships for amd64 guests only; an arm64 release cannot carry it.
+	if manifest.SchemaVersion == ArtifactManifestSchema && guestArchitecture == "amd64" && manifest.GVisor == nil {
 		return contractError("artifact manifest requires the gVisor artifact")
+	}
+	if guestArchitecture != "amd64" && manifest.GVisor != nil {
+		return contractError("artifact manifest for %s guests must not carry the amd64-only gVisor artifact", guestArchitecture)
 	}
 	if err := validateIdentity(manifest.Identity); err != nil {
 		return err
@@ -830,6 +851,10 @@ func (manifest ArtifactManifest) Validate() error {
 		if manifest.InstallerQualificationEvidence != (Reference{}) {
 			return contractError("release candidate must not claim installer qualification evidence")
 		}
+	} else if guestArchitecture != "amd64" {
+		if manifest.InstallerQualificationEvidence != (Reference{}) {
+			return contractError("artifact manifest for %s guests must not claim installer qualification evidence; the guided installer supports amd64 releases only", guestArchitecture)
+		}
 	} else {
 		if err := validateReference("installer qualification evidence", manifest.InstallerQualificationEvidence); err != nil {
 			return err
@@ -908,9 +933,35 @@ func validateWindow(name string, window ProtocolWindow) error {
 	return nil
 }
 
+// RequiresInstallerQualification reports whether the release carries installer
+// qualification evidence: final releases for amd64 guests, the only releases
+// the guided installer installs.
+func (manifest ArtifactManifest) RequiresInstallerQualification() (bool, error) {
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return false, err
+	}
+	return !manifest.Candidate && guestArchitecture == "amd64", nil
+}
+
+// GuestArchitecture returns the one guest architecture a release's microVM
+// artifacts, Runner and standard Profiles target.
+func (manifest ArtifactManifest) GuestArchitecture() (string, error) {
+	if len(manifest.Platforms.Guest) != 1 {
+		return "", contractError("artifact manifest must target exactly one guest platform")
+	}
+	switch manifest.Platforms.Guest[0] {
+	case "linux/amd64":
+		return "amd64", nil
+	case "linux/arm64":
+		return "arm64", nil
+	}
+	return "", contractError("guest platform %q is not linux/amd64 or linux/arm64", manifest.Platforms.Guest[0])
+}
+
 func validatePlatforms(platforms PlatformMatrix) error {
-	if !slices.Equal(platforms.ControlPlane, []string{"linux/amd64"}) && !slices.Equal(platforms.ControlPlane, []string{"linux/amd64", "linux/arm64"}) {
-		return contractError("control-plane platforms must be linux/amd64 or linux/amd64,linux/arm64")
+	if !slices.Equal(platforms.ControlPlane, []string{"linux/amd64"}) && !slices.Equal(platforms.ControlPlane, []string{"linux/amd64", "linux/arm64"}) && !slices.Equal(platforms.ControlPlane, []string{"linux/arm64"}) {
+		return contractError("control-plane platforms must be linux/amd64, linux/arm64, or linux/amd64,linux/arm64")
 	}
 	sets := map[string][]string{
 		"host binary": platforms.HostBinaries, "control-plane": platforms.ControlPlane,

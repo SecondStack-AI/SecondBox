@@ -17,6 +17,7 @@ type runtimeInputs struct {
 	platformToken    string
 	applicationToken string
 	guestCIDR        string
+	architecture     string
 	sourceCommit     string
 	goVersion        string
 	artifactManifest string
@@ -81,7 +82,7 @@ func runMain(arguments []string) error {
 		return err
 	}
 	driver := &lifecycleDriver{
-		config: config, admin: clients.Admin, client: clients.Subject,
+		config: config, admin: clients.Admin, client: clients.Subject, architecture: inputs.architecture,
 	}
 	switch *mode {
 	case "prepare":
@@ -271,6 +272,14 @@ func readRuntimeInputs(mode string) (runtimeInputs, error) {
 	}
 	if inputs.guestCIDR, err = required("SECONDBOX_SCENARIO_GUEST_CIDR"); err != nil {
 		return runtimeInputs{}, err
+	}
+	// The RunnerPool and Profile take the architecture of the signed bundle the
+	// scenario Runner boots.
+	if inputs.architecture, err = required("SECONDBOX_SCENARIO_ARCHITECTURE"); err != nil {
+		return runtimeInputs{}, err
+	}
+	if inputs.architecture != "amd64" && inputs.architecture != "arm64" {
+		return runtimeInputs{}, fmt.Errorf("SecondBox lifecycle driver SECONDBOX_SCENARIO_ARCHITECTURE must be amd64 or arm64, got %q", inputs.architecture)
 	}
 	if mode == "run" {
 		if inputs.sourceCommit, err = required("SECONDBOX_SCENARIO_SOURCE_COMMIT"); err != nil {

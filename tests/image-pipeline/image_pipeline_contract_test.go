@@ -20,6 +20,7 @@ func TestSecondBoxImagePipelineRequiresExplicitImmutableInput(t *testing.T) {
 		"PATH=" + os.Getenv("PATH"),
 		"SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR=" + outputDir,
 		"SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY=forbid",
+		"SECONDBOX_RUNNER_MICROVM_ARCHITECTURE=amd64",
 	}
 
 	output, err := runSecondBoxInputValidation(t, baseEnvironment)
@@ -42,7 +43,7 @@ func TestSecondBoxImagePipelineRequiresExplicitImmutableInput(t *testing.T) {
 		"SECONDBOX_RUNNER_MICROVM_OCI_MODE=extend",
 	)
 	output, err = runSecondBoxInputValidation(t, immutableEnvironment)
-	if err != nil || !strings.Contains(output, "inputs valid: oci (extend, browser=forbid)") {
+	if err != nil || !strings.Contains(output, "inputs valid: oci (extend, browser=forbid, amd64)") {
 		t.Fatalf("immutable OCI source = (%v, %q), want acceptance", err, output)
 	}
 
@@ -98,6 +99,7 @@ func TestSecondBoxImagePipelineRequiresExplicitOCIModeAndBrowserPolicy(t *testin
 		"PATH=" + os.Getenv("PATH"),
 		"SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR=" + outputDir,
 		"SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE=" + immutableOCIReference,
+		"SECONDBOX_RUNNER_MICROVM_ARCHITECTURE=amd64",
 	}
 
 	output, err := runSecondBoxInputValidation(t, baseEnvironment)
@@ -119,7 +121,7 @@ func TestSecondBoxImagePipelineRequiresExplicitOCIModeAndBrowserPolicy(t *testin
 		"SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY=allow",
 	)
 	output, err = runSecondBoxInputValidation(t, preparedEnvironment)
-	if err != nil || !strings.Contains(output, "inputs valid: oci (prepared, browser=allow)") {
+	if err != nil || !strings.Contains(output, "inputs valid: oci (prepared, browser=allow, amd64)") {
 		t.Fatalf("prepared OCI source = (%v, %q), want acceptance", err, output)
 	}
 
@@ -144,10 +146,77 @@ func TestSecondBoxImagePipelineRequiresExplicitOCIModeAndBrowserPolicy(t *testin
 	}
 }
 
+func TestSecondBoxImagePipelineBindsTheGuestArchitecture(t *testing.T) {
+	definition := func(architecture string) string {
+		name := "secondbox-debian-image-definition.json"
+		if architecture == "arm64" {
+			name = "secondbox-debian-image-definition-arm64.json"
+		}
+		return filepath.Join(repositoryRoot(t), "runner/scripts/microvm-image/rootfs", name)
+	}
+	environment := func(extra ...string) []string {
+		return append([]string{
+			"PATH=" + os.Getenv("PATH"),
+			"SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR=" + filepath.Join(t.TempDir(), "prepared-rootfs"),
+			"SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY=forbid",
+		}, extra...)
+	}
+	output, err := runSecondBoxInputValidation(t, environment(
+		"SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE="+immutableOCIReference,
+		"SECONDBOX_RUNNER_MICROVM_OCI_MODE=prepared",
+	))
+	if err == nil || !strings.Contains(output, "SECONDBOX_RUNNER_MICROVM_ARCHITECTURE is required") {
+		t.Fatalf("missing guest architecture = (%v, %q), want explicit rejection", err, output)
+	}
+	for _, architecture := range []string{"amd64", "arm64"} {
+		output, err = runSecondBoxInputValidation(t, environment(
+			"SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="+definition(architecture),
+			"SECONDBOX_RUNNER_MICROVM_ARCHITECTURE="+architecture,
+		))
+		if err != nil || !strings.Contains(output, "browser=forbid, "+architecture+")") {
+			t.Fatalf("%s image definition = (%v, %q), want acceptance", architecture, err, output)
+		}
+	}
+	output, err = runSecondBoxInputValidation(t, environment(
+		"SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="+definition("arm64"),
+		"SECONDBOX_RUNNER_MICROVM_ARCHITECTURE=amd64",
+	))
+	if err == nil || !strings.Contains(output, "image definition architecture arm64 differs") {
+		t.Fatalf("mismatched image definition = (%v, %q), want rejection", err, output)
+	}
+
+	rootfsBuilder := readRepositoryFile(t, "runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh")
+	for _, required := range []string{
+		`docker pull --platform "linux/$architecture"`,
+		`docker import --platform "linux/$architecture" -`,
+		`--platform "linux/$architecture"`,
+		`resolved to $base_image_platform, not linux/$architecture`,
+		`built rootfs image is $built_image_platform, not linux/$architecture`,
+		`"architecture": os.environ["ARCHITECTURE"]`,
+	} {
+		if !strings.Contains(rootfsBuilder, required) {
+			t.Errorf("rootfs source builder must bind the guest architecture with %q", required)
+		}
+	}
+	if !strings.Contains(readRepositoryFile(t, "runner/scripts/microvm-image/build.sh"), `jq -r '.source.architecture // ""'`) {
+		t.Error("the microVM builder must refuse a rootfs source of another architecture before signing")
+	}
+	clientBuilder := readRepositoryFile(t, "scripts/build-client-execution-image.sh")
+	for _, required := range []string{
+		`SECONDBOX_RUNNER_MICROVM_ARCHITECTURE="$SECONDBOX_CLIENT_IMAGE_ARCHITECTURE" \
+SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE=`,
+		`--platform "linux/$SECONDBOX_CLIENT_IMAGE_ARCHITECTURE"`,
+	} {
+		if !strings.Contains(clientBuilder, required) {
+			t.Errorf("client execution image builder must bind the guest architecture with %q", required)
+		}
+	}
+}
+
 func TestClientExecutionImageBuilderRequiresExplicitBrowserPolicy(t *testing.T) {
 	environment := []string{"PATH=" + os.Getenv("PATH"), "SECONDBOX_CLIENT_IMAGE_KERNEL_CONFIG="}
 	for _, name := range []string{
-		"ARTIFACT_VERSION", "BUNDLE_DIR", "KERNEL_PATH", "OUTPUT_REFERENCE", "PUBLIC_KEY",
+		"ARCHITECTURE", "ARTIFACT_VERSION", "BUNDLE_DIR", "KERNEL_PATH", "OUTPUT_REFERENCE", "PUBLIC_KEY",
 		"PUBLIC_KEY_SHA256", "ROOTFS_SIZE_MIB", "ROOTFS_SOURCE_DIR", "ROOTFS_UUID",
 		"SHARED_FORMAT", "SHARED_SIZE_MIB", "SIGNING_KEY", "SOURCE_COMMIT", "SOURCE_REFERENCE",
 	} {
@@ -163,6 +232,9 @@ func TestClientExecutionImageBuilderRequiresExplicitBrowserPolicy(t *testing.T) 
 	builder := readRepositoryFile(t, "scripts/build-client-execution-image.sh")
 	if !strings.Contains(builder, `SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY="$SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY"`) {
 		t.Fatal("the client builder must pass the caller's browser policy to the rootfs source builder")
+	}
+	if !strings.Contains(builder, `SECONDBOX_RUNNER_MICROVM_ARCHITECTURE="$SECONDBOX_CLIENT_IMAGE_ARCHITECTURE"`) {
+		t.Fatal("the client builder must pass the caller's guest architecture to the microVM builder")
 	}
 }
 
@@ -442,8 +514,8 @@ func TestPinnedKernelBuilderWritesOnlyTheKernelPathToStandardOutput(t *testing.T
 	if !strings.Contains(builder, `sha256sum -c - >/dev/null`) {
 		t.Fatal("kernel source checksum diagnostics must not contaminate the returned kernel path")
 	}
-	if !strings.Contains(builder, `echo "$out_dir/vmlinux"`) {
-		t.Fatal("kernel builder must return the built vmlinux path")
+	if !strings.Contains(builder, `echo "$out_dir/$kernel_target"`) {
+		t.Fatal("kernel builder must return the built kernel image path")
 	}
 }
 

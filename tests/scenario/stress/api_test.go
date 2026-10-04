@@ -1,11 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
+	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
 func TestRetryableCleanupErrorIsLimitedToLifecycleRaces(t *testing.T) {
@@ -128,5 +133,54 @@ func TestFinishStressSnapshotCycleStartsSandboxAfterDeletion(t *testing.T) {
 	}
 	if state != secondboxclient.SandboxStateReady {
 		t.Fatalf("Snapshot cycle ended in state %s, want ready", state)
+	}
+}
+
+// preparedArchitectures runs prepare against a recording API and returns the
+// RunnerPool architectures and Profile architecture it requested.
+func preparedArchitectures(t *testing.T, prepare func(admin, subject *secondboxclient.Client) error) ([]string, string) {
+	t.Helper()
+	var pool secondboxclient.CreateRunnerPoolRequest
+	var profile secondboxclient.CreateProfileRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/runner-pools":
+			if err := json.NewDecoder(request.Body).Decode(&pool); err != nil {
+				t.Error(err)
+			}
+			writer.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(writer).Encode(secondboxclient.RunnerPool{Name: pool.Name, State: pool.State, Architectures: pool.Architectures})
+		case "/v1/profiles":
+			if err := json.NewDecoder(request.Body).Decode(&profile); err != nil {
+				t.Error(err)
+			}
+			writer.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(writer).Encode(map[string]any{"name": profile.Name, "currentRevision": map[string]any{"id": "prv_test"}})
+		default:
+			t.Errorf("unexpected request %s %s", request.Method, request.URL.Path)
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	clients, err := scenarioharness.NewClients(server.URL, "platform-token", "application-token", "tenant", "subject", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepare(clients.Admin, clients.Subject); err != nil {
+		t.Fatal(err)
+	}
+	return pool.Architectures, profile.Spec.Architecture
+}
+
+func TestStressPrepareBindsPoolAndProfileToTheBundleArchitecture(t *testing.T) {
+	for _, architecture := range []string{"amd64", "arm64"} {
+		pools, profile := preparedArchitectures(t, func(admin, subject *secondboxclient.Client) error {
+			driver := &stressDriver{config: validStressConfig(), admin: admin, client: subject, architecture: architecture}
+			return driver.prepare(t.Context())
+		})
+		if !slices.Equal(pools, []string{architecture}) || profile != architecture {
+			t.Fatalf("%s stress preparation requested pool %v and Profile %q", architecture, pools, profile)
+		}
 	}
 }

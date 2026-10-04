@@ -22,6 +22,8 @@ type lifecycleDriver struct {
 	config lifecycleConfig
 	admin  *secondboxclient.Client
 	client *secondboxclient.Client
+	// architecture is the guest architecture of the scenario Runner's bundle.
+	architecture string
 
 	readyCount   atomic.Int64
 	inFlight     atomic.Int64
@@ -56,7 +58,7 @@ func (driver *lifecycleDriver) prepare(ctx context.Context) error {
 		ctx, driver.admin, "createRunnerPool", secondboxclient.CallOptions{
 			Body: scenarioharness.JSONBody(secondboxclient.CreateRunnerPoolRequest{
 				Name: driver.config.RunnerPoolName, State: "ready",
-				Architectures: []string{"amd64"},
+				Architectures: []string{driver.architecture},
 				Capabilities: []string{
 					"cleanup", "compute", "local-workspace", "network-policy", "storage",
 				},
@@ -72,7 +74,7 @@ func (driver *lifecycleDriver) prepare(ctx context.Context) error {
 			Body: scenarioharness.JSONBody(secondboxclient.CreateProfileRequest{
 				Name: driver.config.ProfileName,
 				Spec: secondboxclient.ProfileRevisionSpec{
-					Pool: driver.config.RunnerPoolName, Architecture: "amd64",
+					Pool: driver.config.RunnerPoolName, Architecture: driver.architecture,
 					Resources: secondboxclient.ResourcePolicy{
 						VCPUCount:      driver.config.Profile.VCPUCount,
 						MemoryBytes:    driver.config.Profile.MemoryBytes,

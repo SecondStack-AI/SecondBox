@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -92,7 +93,7 @@ func InitDevelopment(directory string) (string, error) {
 	if err := generateRunnerPKI(pkiDirectory, "control-plane", 825); err != nil {
 		return "", err
 	}
-	developmentRelease, err := developmentReleaseManifest()
+	developmentRelease, err := developmentReleaseManifest(developmentArchitecture())
 	if err != nil {
 		return "", err
 	}
@@ -103,7 +104,10 @@ func InitDevelopment(directory string) (string, error) {
 	if err := writeAtomic(filepath.Join(absolute, "development-artifact-manifest.json"), append(releaseManifest, '\n'), 0o644, false); err != nil {
 		return "", err
 	}
-	manifest := developmentManifest(postgresPassword, platformToken, runnerCredential)
+	manifest, err := developmentManifest(developmentArchitecture(), postgresPassword, platformToken, runnerCredential)
+	if err != nil {
+		return "", err
+	}
 	imageKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return "", err
@@ -133,24 +137,34 @@ func InitDevelopment(directory string) (string, error) {
 	return manifestPath, nil
 }
 
-func developmentManifest(postgresPassword, platformToken, runnerCredential string) ManifestV1 {
-	pool := StandardRunnerPool{Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: []string{"client-selected-image", "compute", "evidence", "exec-streaming", "file-streaming", "local-workspace", "port-proxy", "pty"}, State: "ready"}
-	return ManifestV1{SchemaVersion: 1, Deployment: Deployment{Mode: "development", ComposeProjectName: DefaultComposeProjectName, PublicBaseURL: "http://127.0.0.1:8080", TLSTermination: "development-loopback", ControlPlaneImage: "secondbox-control-plane:development", RunnerImage: "secondbox-runner:development", PostgresImage: "docker.io/library/postgres:18.4-bookworm", APIBindIP: "127.0.0.1", APIPublishedPort: integer(8080), RunnerBindIP: "127.0.0.1", RunnerPublishedPort: integer(9443), LogPath: "/var/log/secondbox/control-plane.jsonl", DevelopmentWaitSeconds: integer(180)}, Database: Database{Mode: "bundled", BindIP: "127.0.0.1", PublishedPort: integer(5432), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword}, RunnerTrust: RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: "secrets/runner-pki/runner-ca.crt", CAPrivateKeyFile: "secrets/runner-pki/runner-ca.key", ServerCertificateFile: "secrets/runner-pki/server.crt", ServerPrivateKeyFile: "secrets/runner-pki/server.key", ServerName: "control-plane", CertificateLifetimeDays: integer(825)}, Applications: Applications{PlatformTokenFile: platformToken}, StandardResources: StandardResources{ArtifactManifest: "development-artifact-manifest.json", Bundles: standardresources.BundleNames(), RunnerPools: []StandardRunnerPool{pool}, ApplyWaitSeconds: integer(180)}, Policy: Policy{DataPlaneRetentionSeconds: integer(86400), RunnerEnabledFeatures: "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy,client-selected-image"}}
+// developmentArchitecture is the guest architecture of the reviewed development
+// topology: its same-host Runner runs on the machine that initializes it.
+func developmentArchitecture() string {
+	return runtime.GOARCH
 }
 
-func developmentReleaseManifest() (releasecontract.ArtifactManifest, error) {
+func developmentManifest(architecture, postgresPassword, platformToken, runnerCredential string) (ManifestV1, error) {
+	poolName, err := standardresources.StandardPool(architecture)
+	if err != nil {
+		return ManifestV1{}, manifestError("development topology", err)
+	}
+	pool := StandardRunnerPool{Name: poolName, Architectures: []string{architecture}, Capabilities: []string{"client-selected-image", "compute", "evidence", "exec-streaming", "file-streaming", "local-workspace", "port-proxy", "pty"}, State: "ready"}
+	return ManifestV1{SchemaVersion: 1, Deployment: Deployment{Mode: "development", ComposeProjectName: DefaultComposeProjectName, PublicBaseURL: "http://127.0.0.1:8080", TLSTermination: "development-loopback", ControlPlaneImage: "secondbox-control-plane:development", RunnerImage: "secondbox-runner:development", PostgresImage: "docker.io/library/postgres:18.4-bookworm", APIBindIP: "127.0.0.1", APIPublishedPort: integer(8080), RunnerBindIP: "127.0.0.1", RunnerPublishedPort: integer(9443), LogPath: "/var/log/secondbox/control-plane.jsonl", DevelopmentWaitSeconds: integer(180)}, Database: Database{Mode: "bundled", BindIP: "127.0.0.1", PublishedPort: integer(5432), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword}, RunnerTrust: RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: "secrets/runner-pki/runner-ca.crt", CAPrivateKeyFile: "secrets/runner-pki/runner-ca.key", ServerCertificateFile: "secrets/runner-pki/server.crt", ServerPrivateKeyFile: "secrets/runner-pki/server.key", ServerName: "control-plane", CertificateLifetimeDays: integer(825)}, Applications: Applications{PlatformTokenFile: platformToken}, StandardResources: StandardResources{ArtifactManifest: "development-artifact-manifest.json", Bundles: standardresources.BundleNames(), RunnerPools: []StandardRunnerPool{pool}, ApplyWaitSeconds: integer(180)}, Policy: Policy{DataPlaneRetentionSeconds: integer(86400), RunnerEnabledFeatures: "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy,client-selected-image"}}, nil
+}
+
+func developmentReleaseManifest(architecture string) (releasecontract.ArtifactManifest, error) {
 	identity := releasecontract.Identity{Version: "0.0.0-development", Tag: "v0.0.0-development", SourceCommit: strings.Repeat("d", 40)}
 	reference := func(name string) releasecontract.Reference {
 		return releasecontract.Reference{Location: "https://example.invalid/secondbox-development/" + name, Digest: developmentBundleDigest}
 	}
-	platform := "linux/amd64"
+	platform := "linux/" + architecture
 	binaries := []releasecontract.BinaryArtifact{}
 	for _, name := range []string{"secondbox", "secondbox-deploy"} {
 		binaries = append(binaries, releasecontract.BinaryArtifact{Identity: identity, Name: name, Platform: platform, Location: releasecontract.BinaryLocation(identity.Version, name, platform), SHA256: strings.Repeat("d", 64)})
 	}
 	bundles := []releasecontract.StandardBundleArtifact{}
 	for _, name := range standardresources.BundleNames() {
-		profile, err := standardresources.DevelopmentProfileLineage(name)
+		profile, err := standardresources.DevelopmentProfileLineage(name, architecture)
 		if err != nil {
 			return releasecontract.ArtifactManifest{}, err
 		}
@@ -160,7 +174,14 @@ func developmentReleaseManifest() (releasecontract.ArtifactManifest, error) {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Identity: identity, Name: name, Document: reference(name + ".json"), Profiles: profiles})
 	}
-	return releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: reference("openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{platform}, ControlPlane: []string{platform}, Runner: []string{platform}, InstallerTools: []string{platform}, Guest: []string{platform}, QualifiedRunnerGuest: []string{platform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: reference("go-sdk")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: reference("typescript-sdk")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + developmentBundleDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + developmentBundleDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + developmentBundleDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@" + developmentBundleDigest}, InstallBootstrap: releasecontract.Reference{Location: releasecontract.InstallBootstrapLocation(identity.Version), Digest: developmentBundleDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + developmentBundleDigest, SignedManifestDigest: developmentBundleDigest, SigningKeyFingerprint: "SHA256:" + strings.Repeat("D", 64), RuntimeBundle: releasecontract.SignedComponent{ArtifactID: "secondbox-development-runtime", ManifestDigest: developmentRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: releasecontract.SignedComponent{ArtifactID: "secondbox-development-toolchain", ManifestDigest: developmentToolchainDigest, MandatoryGuestFeatures: []string{}}}, GVisor: &releasecontract.GVisorArtifact{Identity: identity, RunnerReference: releasecontract.GVisorRunnerImage + "@" + developmentBundleDigest, ImageReference: releasecontract.GVisorImage + "@" + developmentBundleDigest, Materialization: releasecontract.Reference{Location: releasecontract.GVisorMaterializationLocation(identity.Version), Digest: developmentBundleDigest}, MaterializationDigest: developmentBundleDigest, FlatRootDigest: developmentBundleDigest, RunscRelease: "development", QualificationEvidence: releasecontract.Reference{Location: releasecontract.GVisorQualificationEvidenceLocation(identity.Version, false), Digest: developmentBundleDigest}, PodQualificationEvidence: releasecontract.Reference{Location: releasecontract.GVisorQualificationEvidenceLocation(identity.Version, true), Digest: developmentBundleDigest}}, Binaries: binaries, SBOMs: []releasecontract.Reference{reference("sbom.json")}, ArtifactAttestations: []releasecontract.Reference{reference("attestation.json")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: developmentBundleDigest}, QualificationEvidence: releasecontract.Reference{Location: releasecontract.QualificationEvidenceLocation(identity.Version), Digest: developmentBundleDigest}, InstallerQualificationEvidence: releasecontract.Reference{Location: releasecontract.InstallerQualificationEvidenceLocation(identity.Version), Digest: developmentBundleDigest}, StandardBundles: bundles}, nil
+	// gVisor and the guided installer serve amd64 guests only.
+	var gvisor *releasecontract.GVisorArtifact
+	var installerEvidence releasecontract.Reference
+	if architecture == standardresources.ArchitectureAMD64 {
+		installerEvidence = releasecontract.Reference{Location: releasecontract.InstallerQualificationEvidenceLocation(identity.Version), Digest: developmentBundleDigest}
+		gvisor = &releasecontract.GVisorArtifact{Identity: identity, RunnerReference: releasecontract.GVisorRunnerImage + "@" + developmentBundleDigest, ImageReference: releasecontract.GVisorImage + "@" + developmentBundleDigest, Materialization: releasecontract.Reference{Location: releasecontract.GVisorMaterializationLocation(identity.Version), Digest: developmentBundleDigest}, MaterializationDigest: developmentBundleDigest, FlatRootDigest: developmentBundleDigest, RunscRelease: "development", QualificationEvidence: releasecontract.Reference{Location: releasecontract.GVisorQualificationEvidenceLocation(identity.Version, false), Digest: developmentBundleDigest}, PodQualificationEvidence: releasecontract.Reference{Location: releasecontract.GVisorQualificationEvidenceLocation(identity.Version, true), Digest: developmentBundleDigest}}
+	}
+	return releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: reference("openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{platform}, ControlPlane: []string{platform}, Runner: []string{platform}, InstallerTools: []string{platform}, Guest: []string{platform}, QualifiedRunnerGuest: []string{platform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: reference("go-sdk")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: reference("typescript-sdk")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + developmentBundleDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + developmentBundleDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + developmentBundleDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@" + developmentBundleDigest}, InstallBootstrap: releasecontract.Reference{Location: releasecontract.InstallBootstrapLocation(identity.Version), Digest: developmentBundleDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + developmentBundleDigest, SignedManifestDigest: developmentBundleDigest, SigningKeyFingerprint: "SHA256:" + strings.Repeat("D", 64), RuntimeBundle: releasecontract.SignedComponent{ArtifactID: "secondbox-development-runtime", ManifestDigest: developmentRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: releasecontract.SignedComponent{ArtifactID: "secondbox-development-toolchain", ManifestDigest: developmentToolchainDigest, MandatoryGuestFeatures: []string{}}}, GVisor: gvisor, Binaries: binaries, SBOMs: []releasecontract.Reference{reference("sbom.json")}, ArtifactAttestations: []releasecontract.Reference{reference("attestation.json")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: developmentBundleDigest}, QualificationEvidence: releasecontract.Reference{Location: releasecontract.QualificationEvidenceLocation(identity.Version), Digest: developmentBundleDigest}, InstallerQualificationEvidence: installerEvidence, StandardBundles: bundles}, nil
 }
 
 func encodeManifest(manifest ManifestV1) ([]byte, error) {

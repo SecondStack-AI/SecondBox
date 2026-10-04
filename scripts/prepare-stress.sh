@@ -3,6 +3,13 @@ set -Eeuo pipefail
 umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The stress bundle boots on this host, so it targets the host architecture.
+architecture="$(go -C "$repo_root" env GOHOSTARCH)"
+case "$architecture" in
+  amd64) image_definition="$repo_root/runner/scripts/microvm-image/rootfs/secondbox-debian-image-definition.json" ;;
+  arm64) image_definition="$repo_root/runner/scripts/microvm-image/rootfs/secondbox-debian-image-definition-arm64.json" ;;
+  *) echo "SecondBox stress preparation does not support host architecture $architecture" >&2; exit 1 ;;
+esac
 local_root="${SECONDBOX_STRESS_LOCAL_ROOT:-$repo_root/.secondbox/stress}"
 artifacts_dir="$local_root/artifacts"
 trust_dir="$local_root/trust"
@@ -37,8 +44,6 @@ for command in blkid debugfs findmnt install jq openssl realpath sha256sum; do
   command -v "$command" >/dev/null 2>&1 ||
     fail "missing required command: $command"
 done
-[[ "$(uname -m)" == "x86_64" ]] ||
-  fail "the Firecracker artifact builder currently requires an x86-64 host"
 [[ "$local_root" == /* && "$local_root" != "/" ]] ||
   fail "SECONDBOX_STRESS_LOCAL_ROOT must be a narrow absolute path"
 
@@ -147,12 +152,14 @@ echo "Preparing the standard SecondBox guest rootfs"
 env \
   -u SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE \
   -u SECONDBOX_RUNNER_MICROVM_OCI_MODE \
-  SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="$repo_root/runner/scripts/microvm-image/rootfs/secondbox-debian-image-definition.json" \
+  SECONDBOX_RUNNER_MICROVM_ARCHITECTURE="$architecture" \
+  SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="$image_definition" \
   SECONDBOX_RUNNER_MICROVM_BROWSER_POLICY=forbid \
   SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR="$rootfs_source" \
   "$repo_root/runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh"
 
 echo "Building and signing the reusable SecondBox microVM bundle"
+SECONDBOX_RUNNER_MICROVM_ARCHITECTURE="$architecture" \
 SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=true \
 SECONDBOX_RUNNER_MICROVM_KERNEL_PATH= \
 SECONDBOX_RUNNER_MICROVM_KERNEL_CONFIG= \

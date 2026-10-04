@@ -27,7 +27,7 @@ func TestDurableCodingFlexibleOperatorDocument(t *testing.T) {
 		t.Fatalf("operator Profile=%+v", profile)
 	}
 	revision := profile.Revisions[0]
-	base, err := ProfileLineage(DurableCoding)
+	base, err := ProfileLineage(DurableCoding, ArchitectureAMD64)
 	if err != nil {
 		t.Fatal(err)
 	}
