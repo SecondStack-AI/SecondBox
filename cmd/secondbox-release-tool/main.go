@@ -457,10 +457,7 @@ func verifyQualificationEvidence(directory, version, sourceCommit, guestArchitec
 	if err != nil {
 		return err
 	}
-	if evidence.Host.Platform != "linux-"+guestArchitecture {
-		return fmt.Errorf("release qualification evidence host platform %s does not qualify %s guests", evidence.Host.Platform, guestArchitecture)
-	}
-	return evidence.ValidateForRelease(sourceCommit)
+	return evidence.ValidateForRelease(sourceCommit, guestArchitecture)
 }
 
 func verifyInstallerQualificationEvidenceSource(directory, version, sourceCommit string) error {

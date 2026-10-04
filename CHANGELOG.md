@@ -6,6 +6,13 @@
 
 - Linux arm64 hosts can run the Firecracker Runner. The guest kernel, microVM bundle, Runner image, and client execution-image builder take an explicit `amd64` or `arm64` architecture, an arm64 Debian definition builds the standard guest rootfs, and standard Profiles of an arm64 release bind the new `standard-arm64` RunnerPool. `init --mode development`, `just test-scenario`, and `just prepare-stress` follow the host architecture, and snapshot-resume templates load on arm64. `RELEASE_GUEST_ARCHITECTURE=arm64` stages an arm64 release qualified by `linux-arm64` scenario evidence; it carries no gVisor artifacts and no installer qualification evidence, because gVisor and the guided single-host installer remain amd64-only, and the installer refuses arm64 releases.
 
+### Changed
+
+- The image build scripts require an explicit architecture, also for amd64. `scripts/build-client-execution-image.sh` requires `SECONDBOX_CLIENT_IMAGE_ARCHITECTURE`, and the microVM kernel, rootfs-source and bundle builders require `SECONDBOX_RUNNER_MICROVM_ARCHITECTURE`. A prepared rootfs source built before this release records no architecture and must be rebuilt. The amd64 release manifest format and standard Profile revisions are unchanged, and amd64 releases keep the existing signed execution bundle.
+- The Go helpers `standardresources.Documents`, `ProfileLineage` and `DevelopmentProfileLineage`, and `releasecontract.QualificationEvidence.ValidateForRelease`, take the guest architecture.
+- `secondbox-deploy init --mode development` writes the standard pool of the machine that runs it, so an arm64 machine no longer generates an amd64 development topology.
+- Release verification requires scenario qualification evidence from a host of the release guest architecture.
+
 ### Fixed
 
 - `BUILD_KERNEL=true` microVM builds compiled the pinned kernel twice, the second time under `fakeroot`.

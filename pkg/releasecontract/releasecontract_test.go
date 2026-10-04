@@ -149,30 +149,41 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := decoded.ValidateForRelease(testCommit); err != nil {
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err != nil {
 		t.Fatal(err)
 	}
+	if err := decoded.ValidateForRelease(testCommit, "arm64"); err == nil || !strings.Contains(err.Error(), "does not qualify arm64 guests") {
+		t.Fatalf("amd64 evidence for an arm64 release error = %v", err)
+	}
+	decoded.Host.Platform = "linux-arm64"
+	if err := decoded.ValidateForRelease(testCommit, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err == nil || !strings.Contains(err.Error(), "does not qualify amd64 guests") {
+		t.Fatalf("arm64 evidence for an amd64 release error = %v", err)
+	}
+	decoded.Host.Platform = "linux-amd64"
 	if decoded.PassCount != 16 || len(decoded.Skipped) != 1 || decoded.Skipped[0] != evidence.Skipped[0] {
 		t.Fatalf("skipped qualification groups were lost: %#v", decoded)
 	}
 	decoded.Host.Platform = ""
-	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "host platform") {
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err == nil || !strings.Contains(err.Error(), "host platform") {
 		t.Fatalf("missing host platform error = %v", err)
 	}
 	decoded.Host.Platform = "linux-amd64"
 	decoded.SchemaVersion = LegacyQualificationEvidenceSchema
 	decoded.Host.Platform = ""
-	if err := decoded.ValidateForRelease(testCommit); err != nil {
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err != nil {
 		t.Fatalf("legacy v1 qualification evidence = %v", err)
 	}
 	decoded.SchemaVersion = QualificationEvidenceSchema
 	decoded.Host.Platform = "linux-amd64"
 	decoded.RepositoryDirty = true
-	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "dirty repository") {
+	if err := decoded.ValidateForRelease(testCommit, "amd64"); err == nil || !strings.Contains(err.Error(), "dirty repository") {
 		t.Fatalf("dirty qualification evidence error = %v", err)
 	}
 	decoded.RepositoryDirty = false
-	if err := decoded.ValidateForRelease(strings.Repeat("f", 40)); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if err := decoded.ValidateForRelease(strings.Repeat("f", 40), "amd64"); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("commit-mismatched qualification evidence error = %v", err)
 	}
 }

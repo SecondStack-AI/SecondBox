@@ -189,7 +189,11 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 	if err != nil {
 		return err
 	}
-	if err := evidence.ValidateForRelease(manifest.SourceCommit); err != nil {
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return err
+	}
+	if err := evidence.ValidateForRelease(manifest.SourceCommit, guestArchitecture); err != nil {
 		return err
 	}
 	if manifest.GVisor != nil {

@@ -599,9 +599,14 @@ func validateQualificationHost(label string, host QualificationHostEvidence, req
 	return nil
 }
 
-func (evidence QualificationEvidence) ValidateForRelease(sourceCommit string) error {
+// ValidateForRelease binds the evidence to one release: its source commit and
+// its guest architecture. Legacy evidence records no host platform.
+func (evidence QualificationEvidence) ValidateForRelease(sourceCommit, guestArchitecture string) error {
 	if err := evidence.Validate(); err != nil {
 		return err
+	}
+	if evidence.Host.Platform != "" && evidence.Host.Platform != "linux-"+guestArchitecture {
+		return contractError("qualification evidence host platform %s does not qualify %s guests", evidence.Host.Platform, guestArchitecture)
 	}
 	if evidence.SourceCommit != sourceCommit {
 		return contractError("qualification evidence source commit does not match release")

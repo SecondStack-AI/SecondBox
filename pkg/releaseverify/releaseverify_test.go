@@ -145,6 +145,17 @@ func TestManifestObjectsBindStandardBundleDocumentsByDigest(t *testing.T) {
 	if fetchCalls[evidenceLocation] != 1 || fetchCalls[installerEvidenceLocation] != 1 {
 		t.Fatalf("qualification evidence fetches = scenario %d installer %d", fetchCalls[evidenceLocation], fetchCalls[installerEvidenceLocation])
 	}
+	// Scenario evidence from another architecture does not qualify the release.
+	foreignEvidenceData := []byte(strings.Replace(string(evidenceData), "linux-amd64", "linux-arm64", 1))
+	objects[evidenceLocation] = foreignEvidenceData
+	manifest.QualificationEvidence.Digest = releasecontract.Digest(foreignEvidenceData)
+	requalify()
+	if err := verifyManifestObjects(t.Context(), manifest, fetch); err == nil || !strings.Contains(err.Error(), "does not qualify amd64 guests") {
+		t.Fatalf("arm64 evidence for an amd64 release error = %v", err)
+	}
+	objects[evidenceLocation] = evidenceData
+	manifest.QualificationEvidence.Digest = releasecontract.Digest(evidenceData)
+	requalify()
 	recorded, err := os.ReadFile(filepath.Join("..", "standardresources", "testdata", "v0.18.1", "durable-coding.standard-bundle.json"))
 	if err != nil {
 		t.Fatal(err)
