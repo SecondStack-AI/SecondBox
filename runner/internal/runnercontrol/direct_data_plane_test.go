@@ -276,6 +276,9 @@ func TestDirectDataPlaneCarriesTypedExecFileAndPTYMessages(t *testing.T) {
 		ptyTerminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
 		t.Fatalf("direct PTY completion = %#v/%#v", ptyOutput, ptyTerminal)
 	}
+	if err := ptyReconnect.Close(); err != nil {
+		t.Fatal(err)
+	}
 	waitDirectDataPlaneSessionReleased(t, ptySession)
 	ptyTerminalReplay, err := tls.Dial("tcp", service.dataPlane.address(), tlsConfig)
 	if err != nil {

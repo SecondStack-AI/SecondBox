@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- A File read over the direct data-plane transport intermittently failed with `500 internal_error` after the Runner had delivered the complete result. The Runner closed the connection right after the terminal, so the credit that the control plane granted for the last chunk failed to send, or the reset discarded the unread terminal. The Runner now keeps reading until the control plane closes, and a File request whose transport is lost while it sends chunks or credit waits for the terminal ([#203](https://github.com/SecondStack-AI/SecondBox/issues/203)).
+- A failed write to a direct data-plane connection now reports the retryable `execution_node_unavailable`, as on the proxied transport, instead of `internal_error`.
+
 ## 0.23.0 - 2026-10-04
 
 Linux arm64 hosts can run the Firecracker Runner from a locally staged arm64 release. The published release remains amd64: deployments from v0.14.0 onward update in place with no migration, and public API v1, Runner protocol `[6,6]`, the execution bundle, trust anchor, and standard Profile revisions are unchanged. Image build automation must now name its architecture. See the [v0.23.0 release notes](docs/releases/v0.23.0.md).
