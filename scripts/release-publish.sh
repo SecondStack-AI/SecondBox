@@ -9,8 +9,15 @@ manifest="$input/secondbox-${version}-artifact-manifest.json"
 arm64_manifest="$input/secondbox-${version}-arm64-artifact-manifest.json"
 
 [[ -f "$manifest" && -f "$arm64_manifest" ]] || { echo "release input does not contain both the amd64 and the arm64 artifact manifest" >&2; exit 1; }
-jq -e '.candidate != true' "$manifest" "$arm64_manifest" >/dev/null || { echo "release input is an installer candidate, not a publishable final release" >&2; exit 1; }
-jq -e --slurpfile amd64 "$manifest" '.sourceCommit == $amd64[0].sourceCommit' "$arm64_manifest" >/dev/null || { echo "the amd64 and arm64 artifact sets were staged from different commits" >&2; exit 1; }
+jq -s -e 'all(.[]; .candidate != true)' "$manifest" "$arm64_manifest" >/dev/null || { echo "release input is an installer candidate, not a publishable final release" >&2; exit 1; }
+jq -s -e '.[0].sourceCommit == .[1].sourceCommit' "$manifest" "$arm64_manifest" >/dev/null || { echo "the amd64 and arm64 artifact sets were staged from different commits" >&2; exit 1; }
+# Each set is uploaded from its own host; publish only when both are complete.
+for allowlist in candidate-allowlist.json candidate-allowlist-arm64.json; do
+  [[ -f "$input/$allowlist" ]] || { echo "release input lacks $allowlist" >&2; exit 1; }
+  while IFS= read -r name; do
+    [[ -f "$input/$name" ]] || { echo "release input lacks $name listed in $allowlist" >&2; exit 1; }
+  done < <(jq -er '.files[]' "$input/$allowlist")
+done
 
 # The arm64 artifact set publishes its images under the -arm64 tag suffix.
 printf '%s' "$GH_TOKEN" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin

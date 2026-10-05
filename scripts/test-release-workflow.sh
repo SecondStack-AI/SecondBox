@@ -120,6 +120,8 @@ export PATH="$fixture/bin:$PATH"
   printf '{}\n' >"$fixture/output/secondbox-1.2.4-artifact-manifest.json"
   printf '{}\n' >"$fixture/output-arm64/secondbox-1.2.3-arm64-artifact-manifest.json"
   cp "$fixture/output/secondbox-1.2.3-artifact-manifest.json" "$fixture/output-arm64/secondbox-1.2.3-arm64-artifact-manifest.json" "$fixture/both/"
+  printf '%s\n' '{"files":["candidate-allowlist.json","secondbox-1.2.3-artifact-manifest.json"]}' >"$fixture/both/candidate-allowlist.json"
+  printf '%s\n' '{"files":["candidate-allowlist-arm64.json","secondbox-1.2.3-arm64-artifact-manifest.json","runner-arm64.oci.tar"]}' >"$fixture/both/candidate-allowlist-arm64.json"
   if "$uploader" 1.2.3 "$fixture/both"; then
     echo 'release upload accepted a directory with both artifact sets' >&2; exit 1
   fi
@@ -149,6 +151,18 @@ export PATH="$fixture/bin:$PATH"
   if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/output"; then
     echo 'release publisher accepted a release without the arm64 artifact set' >&2; exit 1
   fi
+  # Neither an incomplete set nor a candidate in either set publishes anything.
+  : >"$RELEASE_TEST_STATE/calls"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
+    echo 'release publisher accepted an incomplete arm64 artifact set' >&2; exit 1
+  fi
+  printf 'runner\n' >"$fixture/both/runner-arm64.oci.tar"
+  printf '{"candidate":true}\n' >"$fixture/both/secondbox-1.2.3-artifact-manifest.json"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
+    echo 'release publisher accepted an amd64 installer candidate beside a final arm64 set' >&2; exit 1
+  fi
+  ! rg -q '^release (edit|delete-asset)' "$RELEASE_TEST_STATE/calls"
+  printf '{}\n' >"$fixture/both/secondbox-1.2.3-artifact-manifest.json"
   GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"
   test "$(cat "$RELEASE_TEST_STATE/draft")" = false
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
