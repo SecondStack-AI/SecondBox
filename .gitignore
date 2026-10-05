@@ -10,3 +10,4 @@ node_modules/
 
 /.worklog/
 /.claude/worktrees/
+/secondbox-deploy
