@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -56,6 +58,20 @@ func TestFileExchangeFailsAtOnceOnNonTransportSendError(t *testing.T) {
 	)
 	if !errors.Is(err, violation) {
 		t.Fatalf("File exchange error = %v, want %v", err, violation)
+	}
+}
+
+func TestDirectDataPlaneSendFailureIsTransportLoss(t *testing.T) {
+	client, runner := net.Pipe()
+	if err := runner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	err := (&directDataPlaneStream{connection: client}).Send(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{OperationId: "session"}},
+	})
+	if !errors.Is(err, runnercontrol.ErrLiveDataPlaneUnavailable) || !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("direct data-plane send error = %v, want transport loss wrapping the write error", err)
 	}
 }
 
