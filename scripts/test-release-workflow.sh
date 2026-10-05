@@ -90,7 +90,7 @@ case "$1 $2" in
     for file in "${@:4}"; do [[ "$file" == --clobber ]] || basename "$file" >>"$RELEASE_TEST_STATE/assets"; done
     ;;
   'release delete-asset'|'workflow run') ;;
-  'run list') cat "$RELEASE_TEST_STATE/runs" 2>/dev/null || true ;;
+  'run list') if [[ -f "$RELEASE_TEST_STATE/runs-fail" ]]; then exit 1; fi; cat "$RELEASE_TEST_STATE/runs" 2>/dev/null || true ;;
   *) echo "unexpected gh invocation" >&2; exit 1 ;;
 esac
 GH
@@ -138,8 +138,13 @@ export PATH="$fixture/bin:$PATH"
   if "$uploader" 1.2.3 "$fixture/output-arm64"; then
     echo 'release upload accepted an arm64 set while the publisher runs' >&2; exit 1
   fi
-  # Recovery after a failed publication restores the arm64 set, then amd64.
   rm "$RELEASE_TEST_STATE/runs"
+  touch "$RELEASE_TEST_STATE/runs-fail"
+  if "$uploader" 1.2.3 "$fixture/output-arm64"; then
+    echo 'release upload accepted an arm64 set without knowing the publisher state' >&2; exit 1
+  fi
+  rm "$RELEASE_TEST_STATE/runs-fail"
+  # Recovery after a failed publication restores the arm64 set, then amd64.
   "$uploader" 1.2.3 "$fixture/output-arm64"
   rg -q '^# Tagged notes$' "$RELEASE_TEST_STATE/body"
   if rg -q 'uncommitted wrong notes' "$RELEASE_TEST_STATE/body"; then echo 'release upload used checkout notes' >&2; exit 1; fi
