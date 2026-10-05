@@ -5,6 +5,7 @@
 ### Added
 
 - A release can publish an arm64 artifact set beside the amd64 one under the same tag: `secondbox-VERSION-arm64-artifact-manifest.json` with its linux-arm64 scenario evidence and `standard-arm64` standard bundles, and the control-plane, Runner, installer-tools and microVM-artifact images under `vVERSION-arm64` tags. It shares the SDKs, binaries, OpenAPI document and install bootstrap with the amd64 set. `just release-arm64 VERSION AMD64_RELEASE_DIR` stages it on a Linux arm64 KVM host, which uploads it before the amd64 host uploads its own output and starts the publisher. A release without an arm64 set publishes amd64 alone.
+- `POST /v1/sandboxes/{sandboxId}:switch-profile` repins a stopped Sandbox to another Profile's current revision while keeping its ID, Workspace, home Runner, resources, and egress-context pin. The next start builds its Instance from the new revision, so an application can, for example, move a conversation's Workspace between an online and an offline network policy without losing its files. The Sandbox must be stopped with no retained Snapshot, the target must share its RunnerPool, architecture, startup mode, and egress-context requirement and admit its resources, and an application authority must hold grants for both Profiles. Lifecycle policy re-resolves against the target. Refusals use the new `profile_incompatible` (with the mismatching property as a detail) and `profile_switch_snapshots_present` codes. The Go and TypeScript SDKs add `SandboxHandle.SwitchProfile` and `switchProfile`, and the CLI adds `secondbox sandboxes switch-profile`.
 
 ### Changed
 
@@ -14,6 +15,7 @@
 
 - A File read over the direct data-plane transport intermittently failed with `500 internal_error` after the Runner had delivered the complete result. The Runner closed the connection right after the terminal, so the credit that the control plane granted for the last chunk failed to send, or the reset discarded the unread terminal. The Runner now keeps reading until the control plane closes, and a File request whose transport is lost while it sends chunks or credit waits for the terminal ([#203](https://github.com/SecondStack-AI/SecondBox/issues/203)).
 - A failed write to a direct data-plane connection now reports the retryable `execution_node_unavailable`, as on the proxied transport, instead of `internal_error`.
+- An application authority's Profile grant for exec, file, Terminal, and Port requests is now checked again inside admission, against the Sandbox's Profile as read under the admission lock. It was previously checked only on an earlier read, which a concurrent Profile switch could make stale.
 
 ## 0.23.0 - 2026-10-04
 

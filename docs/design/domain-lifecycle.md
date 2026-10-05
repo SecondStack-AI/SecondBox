@@ -9,7 +9,7 @@ All identifiers are server-generated opaque strings. Timestamps are UTC RFC 3339
 | Record | Owner and lifecycle |
 | --- | --- |
 | `Profile` | Operator-owned stable name and mutable head. It is enabled or disabled and points to its current immutable ProfileRevision. There is no implicit profile. |
-| `ProfileRevision` | Immutable resolved policy, resources, and runner-pool selector. The execution bundle is whatever its home Runner has installed. A Sandbox pins one revision for its lifetime. |
+| `ProfileRevision` | Immutable resolved policy, resources, and runner-pool selector. The execution bundle is whatever its home Runner has installed. A Sandbox pins one revision at creation and keeps it until an explicit stopped-Sandbox Profile switch repins it. |
 | `Sandbox` | Belongs to one asserted tenant/subject pair and one ProfileRevision. It owns a Workspace, desired and observed state, current generation, lifecycle timestamps, bounded client metadata, and optional current Instance. |
 | `Instance` | Belongs to one Sandbox generation. It records state, Assignment, start/ready/stop timestamps, and one stable termination reason. It contains no public backend or host location. |
 | `Assignment` | Internal authority joining one Sandbox generation to one Runner. It contains the fencing token, capability snapshot, selected-image assets, state, and proof of release. |
@@ -40,6 +40,22 @@ requirements as initial placement before the source image is sealed or any byte
 moves. Source seal, bounded transfer, checksum-verified target import, atomic
 home change, and source deletion are separate receipt-backed phases under the
 one Workspace mutation slot.
+
+`POST /v1/sandboxes/{sandboxId}:switch-profile` is a synchronous,
+revision-sensitive repin of a stopped Sandbox to the named Profile's current
+revision. It requires `Idempotency-Key` and `If-Match`, and it refuses a Sandbox
+that is not stopped with desired state `stopped` and no Instance, a Workspace
+that is not ready at the current generation or has a pending mutation, and any
+non-deleted Snapshot. The target must be enabled and keep the pinned pool,
+architecture, startup mode, and egress-context requirement; it must admit the
+pinned resources without re-rounding them, and the home Runner must advertise
+every capability its Assignments need. The Sandbox keeps its identity,
+Workspace, home Runner, generation, resources, and egress-context pin. Its
+lifecycle policy re-resolves against the target as creation would, and the next
+start builds its Assignment from the new revision. A Sandbox already pinned to
+the target's current revision is returned unchanged, so a caller that lost the
+response can converge by repeating the request. The switch writes no Operation:
+it completes in one transaction with its audit event.
 
 Drain rejects new exec, filesystem transfer, PTY, port, and Lease admission. Already admitted operations receive the profile's bounded drain grace. Stop flushes and detaches compute, durably advances the local Workspace generation, then commits that exact generation in PostgreSQL. It does not create a Snapshot, hash an image, or transfer Workspace bytes off the Runner. Delete drains and stops, asks the home Runner to delete all local Workspace and Snapshot state, and only then tombstones the Sandbox. Deletion is never implied by a client disconnect or Flue harness close.
 

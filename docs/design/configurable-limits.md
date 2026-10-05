@@ -2,8 +2,10 @@
 
 This contract targets clean initialization and newly created resources.
 The attributed connection limit is the narrow exception: existing Sandboxes pinned to
-a permitting revision adopt current numeric policy on their next Assignment. There is no Profile mutation,
-workspace resize, or live hardware update.
+a permitting revision adopt current numeric policy on their next Assignment. An explicit
+[Profile switch](profiles-and-authorization.md#profile-switch) of a stopped Sandbox repins it
+to another revision and re-resolves its lifecycle as creation would. There is no in-place
+Profile mutation, workspace resize, or live hardware update.
 See the [deployment transition boundary](../operations/deployment.md#clean-initialization-boundary)
 before changing a deployment that already owns Workspaces.
 
@@ -23,7 +25,8 @@ Subject quota or lifecycle selection. UI roles in a consuming product do not
 grant SecondBox authority.
 
 Profile defaults and allowed lifecycle ceilings are immutable. Subject lifecycle selections
-apply only at future Sandbox creation; the effective lifecycle is pinned with that Sandbox.
+apply only at future Sandbox creation and Profile switch; the effective lifecycle is pinned
+with that Sandbox until a switch re-resolves it against the target revision.
 The optional `lifecycleCeiling` object sets both delegated dimensions. If omitted, the
 Profile's `lifecycle.idleSeconds` and `lifecycle.maximumDurationSeconds` are also the
 ceilings. When supplied, both fields are required; explicit `null` removes that Profile
@@ -127,14 +130,15 @@ fit the implementation's duration clock. These representation bounds are not unl
 
 The latest standard `agent-compartment` and `agent-compartment-isolated` revisions use
 60-second idle shutdown, null maximum runtime, and null delegated lifecycle ceilings.
-Published historical revision identities remain immutable. Existing Sandboxes retain their pinned lifecycle and execution authority. The latest
+Published historical revision identities remain immutable. Existing Sandboxes retain their pinned lifecycle and execution authority until a Profile switch repins them. The latest
 `agent-compartment` revision additionally sets attributed connection default 128 and
 ceiling 4096, effective for existing permitting pins on their next Assignment.
 
 A newly requested finite lifecycle selection above its current Profile ceiling is rejected
 with `profile_policy_ceiling_exceeded`. If an operator subsequently publishes a tighter
 Profile ceiling, future effective policy is the minimum of the stored selection and that
-ceiling. Existing Sandboxes still retain their creation policy.
+ceiling. Existing Sandboxes still retain their creation policy, unless a Profile switch
+re-resolves it against its target.
 
 ## Attributed connection policy
 
