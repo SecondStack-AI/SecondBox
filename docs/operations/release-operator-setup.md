@@ -126,7 +126,7 @@ publication. Neither command is run automatically.
 
 ## The arm64 artifact set
 
-Every release also publishes an arm64 artifact set, staged on a separate Linux arm64 host with writable KVM and TUN after `just release VERSION` succeeds on the amd64 host.
+A release can also publish an arm64 artifact set, staged on a separate Linux arm64 host with writable KVM and TUN after `just release VERSION` succeeds on the amd64 host. Without an arm64 host, the release publishes amd64 alone.
 Configure that host from `deploy/release-arm64.env.example` as `~/.config/secondbox/release.env`, with a release checkout on the same reflink filesystem as its scenario workspace root and bundle, the same Buildx builder setup, and `npm ci --ignore-scripts`.
 Its microVM bundle is built for `arm64` by the [microVM image pipeline](microvm-image-pipeline.md) and signed with the same release key as the amd64 bundle; staging refuses another anchor.
 Rebuild it under the same rules as the amd64 bundle.
@@ -145,14 +145,16 @@ A failed run is repeated from the start after removing its own output directory.
 
 ## Publication
 
-After both stagings succeed, review their manifests and qualification logs, push
+After the stagings succeed, review their manifests and qualification logs, push
 the tag from the amd64 host, and run the printed `release-upload` on each host
-for its own output directory. Do not create a release through independent tag,
-candidate, or upload commands.
+for its own output directory: the arm64 host first, if it staged a set, then the
+amd64 host. Do not create a release through independent tag, candidate, or
+upload commands.
 
 Upload accepts one staged directory holding either the amd64 or the arm64
-manifest, and adds its files to the draft. The second upload dispatches the
-publisher, which needs both sets from one commit. Upload reads the tag's
+manifest, and adds its files to the draft. The amd64 upload dispatches the
+publisher; an arm64 upload is refused while a publisher run is queued or in progress. The publisher requires
+complete sets from one commit. Upload reads the tag's
 `docs/releases/vVERSION.md` when present, otherwise uses a placeholder; an
 optional third `NOTES_FILE` argument supplies the body, and must be the same on
 both hosts. It appends the install and SDK footer and refreshes the draft on retry. The publisher
@@ -166,7 +168,7 @@ gh run list --workflow release.yml --limit 1
 gh run watch --exit-status
 ```
 
-Keep both staged outputs until publication succeeds. If publication fails while
-the release is still a draft, fix the cause and retry the uploads of both staged
-outputs, because the publisher may already have deleted archives of either set. Never move a published tag;
+Keep the staged outputs until publication succeeds. If publication fails while
+the release is still a draft, fix the cause and retry the uploads of every staged
+output in the same order, because the publisher may already have deleted archives of either set. Never move a published tag;
 use a new patch version for changed artifacts.

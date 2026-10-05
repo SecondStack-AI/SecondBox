@@ -13,6 +13,7 @@
 - `secondbox-deploy compose-update-check --from VERSION` checks a Compose-managed in-place update against the binary's own release version. It exits 2 when the applied release predates the v0.14.0 database migration baseline or is newer than the binary, and 3 when the binary carries the unstamped development identity; `--output json` reports the verdict.
 
 - `deploy/host-cli.Dockerfile` builds `secondbox` and `secondbox-deploy` for linux and darwin on amd64 and arm64 with the release flags into one image laid out as `/secondbox/bin/<os>-<arch>/` with `/secondbox/identity.json`, for deployments built from source.
+- A release can publish an arm64 artifact set beside the amd64 one under the same tag: `secondbox-VERSION-arm64-artifact-manifest.json` with its linux-arm64 scenario evidence and `standard-arm64` standard bundles, and the control-plane, Runner, installer-tools and microVM-artifact images under `vVERSION-arm64` tags. It shares the SDKs, binaries, OpenAPI document and install bootstrap with the amd64 set. `just release-arm64 VERSION AMD64_RELEASE_DIR` stages it on a Linux arm64 KVM host, which uploads it before the amd64 host uploads its own output and starts the publisher. A release without an arm64 set publishes amd64 alone.
 
 ### Changed
 
