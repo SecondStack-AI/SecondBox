@@ -9,6 +9,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/internal/install"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
@@ -48,7 +49,7 @@ func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
 		}
 	}
 	plan := install.InstallPlan{
-		Release: install.ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), SigningKeyFingerprint: release.MicroVM.SigningKeyFingerprint, Images: images, BinaryDigests: binaries},
+		Release: install.ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version, standardresources.ArchitectureAMD64), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), SigningKeyFingerprint: release.MicroVM.SigningKeyFingerprint, Images: images, BinaryDigests: binaries},
 		Paths: []install.PlannedPath{
 			{Name: "release-artifact-manifest", Path: releasePath, Kind: install.ResourceFile, Mode: 0o600, OwnerUID: int64(os.Getuid()), OwnerGID: int64(os.Getgid())},
 			{Name: "signed-asset-catalog", Path: catalogPath, Kind: install.ResourceFile, Mode: 0o600, OwnerUID: int64(os.Getuid()), OwnerGID: int64(os.Getgid())},

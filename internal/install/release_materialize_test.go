@@ -16,6 +16,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 func TestSystemReleaseMaterializerExtractMicroVMImageOverridesMissingImageCommand(t *testing.T) {
@@ -315,7 +316,7 @@ func releasePlanForMaterializer(release releasecontract.ArtifactManifest, releas
 			binaries[binary.Name] = binary.SHA256
 		}
 	}
-	return ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), SigningKeyFingerprint: release.MicroVM.SigningKeyFingerprint, Images: map[string]string{"control-plane": release.ControlPlane.Reference, "runner": release.Runner.Reference, "microvm-artifacts": release.MicroVM.ImageReference, "installer-tools": release.InstallerTools.Reference, "postgres": release.BundledServices.Postgres}, BinaryDigests: binaries, ExpectedDownloadBytes: ExecutionBundleEstimateBytes}
+	return ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version, standardresources.ArchitectureAMD64), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), SigningKeyFingerprint: release.MicroVM.SigningKeyFingerprint, Images: map[string]string{"control-plane": release.ControlPlane.Reference, "runner": release.Runner.Reference, "microvm-artifacts": release.MicroVM.ImageReference, "installer-tools": release.InstallerTools.Reference, "postgres": release.BundledServices.Postgres}, BinaryDigests: binaries, ExpectedDownloadBytes: ExecutionBundleEstimateBytes}
 }
 
 func lastStageForTest(receipt InstallReceipt) Stage {

@@ -135,7 +135,7 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 	if _, err := releasecontract.ParseTag("v" + buildinfo.Version); err != nil {
 		return &deployExitError{code: 3, err: fmt.Errorf("SecondBox installer: guided installation requires a versioned release binary, got %q", buildinfo.Version)}
 	}
-	location := releasecontract.ArtifactManifestLocation(buildinfo.Version)
+	location := releasecontract.ArtifactManifestLocation(buildinfo.Version, standardresources.ArchitectureAMD64)
 	activity, err := renderer.StartActivity(ctx, "Verify release "+buildinfo.Version)
 	if err != nil {
 		return err

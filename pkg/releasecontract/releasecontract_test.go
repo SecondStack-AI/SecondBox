@@ -293,7 +293,7 @@ func validManifest() ArtifactManifest {
 		SBOMs:                          []Reference{ref("sbom.spdx.json")},
 		ArtifactAttestations:           []Reference{ref("provenance.intoto.jsonl")},
 		SourceFreeSuite:                Reference{Location: SourceFreeSuiteLocation(identity.Version), Digest: testDigest},
-		QualificationEvidence:          Reference{Location: QualificationEvidenceLocation(identity.Version), Digest: testDigest},
+		QualificationEvidence:          Reference{Location: QualificationEvidenceLocation(identity.Version, "amd64"), Digest: testDigest},
 		InstallerQualificationEvidence: Reference{Location: InstallerQualificationEvidenceLocation(identity.Version), Digest: testDigest},
 		StandardBundles: []StandardBundleArtifact{
 			{Identity: identity, Name: "agent-compartment", Document: ref("agent-compartment.json"), Profiles: []StandardProfileIdentity{{Name: "agent-compartment", Revision: 1, SpecDigest: testDigest}}},
@@ -330,7 +330,7 @@ func TestLegacyManifestKeepsItsRecordedShape(t *testing.T) {
 	}
 	legacy.InstallBootstrap.Location = InstallBootstrapLocation("0.8.3")
 	legacy.SourceFreeSuite.Location = SourceFreeSuiteLocation("0.8.3")
-	legacy.QualificationEvidence.Location = QualificationEvidenceLocation("0.8.3")
+	legacy.QualificationEvidence.Location = QualificationEvidenceLocation("0.8.3", "amd64")
 	legacy.InstallerQualificationEvidence.Location = InstallerQualificationEvidenceLocation("0.8.3")
 	legacy.GVisor = nil
 	if err := legacy.Validate(); err != nil {
@@ -401,7 +401,25 @@ func arm64Manifest() ArtifactManifest {
 	manifest.Platforms.QualifiedRunnerGuest = []string{"linux/arm64"}
 	manifest.GVisor = nil
 	manifest.InstallerQualificationEvidence = Reference{}
+	manifest.QualificationEvidence.Location = QualificationEvidenceLocation(manifest.Version, "arm64")
 	return manifest
+}
+
+func TestArchitectureQualifiedReleaseFileNames(t *testing.T) {
+	if got := ArtifactManifestLocation("1.2.3", "amd64"); got != "https://github.com/SecondStack-AI/SecondBox/releases/download/v1.2.3/secondbox-1.2.3-artifact-manifest.json" {
+		t.Fatalf("amd64 manifest location = %s", got)
+	}
+	if got := ArtifactManifestFileName("1.2.3", "arm64"); got != "secondbox-1.2.3-arm64-artifact-manifest.json" {
+		t.Fatalf("arm64 manifest name = %s", got)
+	}
+	if got := StandardBundleFileName("agent-compartment", "arm64"); got != "agent-compartment-arm64.standard-bundle.json" {
+		t.Fatalf("arm64 standard bundle name = %s", got)
+	}
+	unqualified := arm64Manifest()
+	unqualified.QualificationEvidence.Location = QualificationEvidenceLocation(unqualified.Version, "amd64")
+	if err := unqualified.Validate(); err == nil || !strings.Contains(err.Error(), "qualification evidence location is not canonical") {
+		t.Fatalf("arm64 release with the amd64 evidence location error = %v", err)
+	}
 }
 
 func TestArm64ReleaseCarriesNeitherGVisorNorInstallerQualification(t *testing.T) {

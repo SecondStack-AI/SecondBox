@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Each release publishes an arm64 artifact set beside the amd64 one under the same tag: `secondbox-VERSION-arm64-artifact-manifest.json` with its linux-arm64 scenario evidence and `standard-arm64` standard bundles, and the control-plane, Runner, installer-tools and microVM-artifact images under `vVERSION-arm64` tags. It shares the SDKs, binaries, OpenAPI document and install bootstrap with the amd64 set. `just release-arm64 VERSION AMD64_RELEASE_DIR` stages it on a Linux arm64 KVM host, each host uploads its own output, and the publisher starts once the draft holds both sets.
+
+### Changed
+
+- `releasecontract.ArtifactManifestLocation` and `QualificationEvidenceLocation` take the guest architecture. Files of a non-amd64 artifact set, including its standard bundles, staging checksums and OCI archives, carry the architecture suffix; amd64 names are unchanged.
+
 ### Fixed
 
 - A File read over the direct data-plane transport intermittently failed with `500 internal_error` after the Runner had delivered the complete result. The Runner closed the connection right after the terminal, so the credit that the control plane granted for the last chunk failed to send, or the reset discarded the unread terminal. The Runner now keeps reading until the control plane closes, and a File request whose transport is lost while it sends chunks or credit waits for the terminal ([#203](https://github.com/SecondStack-AI/SecondBox/issues/203)).

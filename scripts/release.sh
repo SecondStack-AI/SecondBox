@@ -149,7 +149,10 @@ export SECONDBOX_INSTALLER_RELEASE_DIRECTORY="$candidate"
 stage installer /usr/bin/just test-installer-qualified "${installer_flags[@]}"
 stage stage scripts/release-stage.sh --from-build "$build" "$version" "$output"
 [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'source changed during release'
-printf 'Staged release: %s\nPublish explicitly:\n' "$output"
+printf 'Staged amd64 release: %s\n' "$output"
+printf 'Copy it without its *.oci.tar files to the arm64 release host and stage the arm64 artifact set there:\n'
+printf '/usr/bin/just release-arm64 %q AMD64_RELEASE_COPY\n' "$version"
+printf 'Publish explicitly after both stagings succeed; each host uploads its own output:\n'
 printf 'git push origin refs/tags/%q\n' "$tag"
 printf '/usr/bin/just release-upload %q %q\n' "$version" "$output"
 if git cat-file -e "refs/tags/$tag:docs/releases/$tag.md" 2>/dev/null; then

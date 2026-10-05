@@ -62,7 +62,7 @@ fi
 # The fixture repository distinguishes immutable tag notes from checkout edits.
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
-mkdir -p "$fixture/bin" "$fixture/repo/docs/releases" "$fixture/output" "$fixture/state"
+mkdir -p "$fixture/bin" "$fixture/repo/docs/releases" "$fixture/output" "$fixture/output-arm64" "$fixture/both" "$fixture/state"
 export RELEASE_TEST_STATE="$fixture/state"
 cat >"$fixture/bin/gh" <<'GH'
 #!/usr/bin/env bash
@@ -72,10 +72,11 @@ case "$1 $2" in
   'auth status') ;;
   'release view')
     test -f "$RELEASE_TEST_STATE/draft"
-    if [[ " $* " == *' --jq '* ]]; then cat "$RELEASE_TEST_STATE/draft"; fi
+    if [[ " $* " == *' --json assets '* ]]; then cat "$RELEASE_TEST_STATE/assets"
+    elif [[ " $* " == *' --jq '* ]]; then cat "$RELEASE_TEST_STATE/draft"; fi
     ;;
   'release create'|'release edit')
-    if [[ "$2" == create ]]; then echo true >"$RELEASE_TEST_STATE/draft"; fi
+    if [[ "$2" == create ]]; then echo true >"$RELEASE_TEST_STATE/draft"; : >"$RELEASE_TEST_STATE/assets"; fi
     while (($#)); do
       case "$1" in
         --notes-file) cp "$2" "$RELEASE_TEST_STATE/body"; shift ;;
@@ -85,7 +86,10 @@ case "$1 $2" in
       shift
     done
     ;;
-  'release upload'|'release delete-asset'|'workflow run') ;;
+  'release upload')
+    for file in "${@:4}"; do [[ "$file" == --clobber ]] || basename "$file" >>"$RELEASE_TEST_STATE/assets"; done
+    ;;
+  'release delete-asset'|'workflow run') ;;
   *) echo "unexpected gh invocation" >&2; exit 1 ;;
 esac
 GH
@@ -114,11 +118,21 @@ export PATH="$fixture/bin:$PATH"
   printf 'uncommitted wrong notes\n' >docs/releases/v1.2.3.md
   printf '{}\n' >"$fixture/output/secondbox-1.2.3-artifact-manifest.json"
   printf '{}\n' >"$fixture/output/secondbox-1.2.4-artifact-manifest.json"
+  printf '{}\n' >"$fixture/output-arm64/secondbox-1.2.3-arm64-artifact-manifest.json"
+  cp "$fixture/output/secondbox-1.2.3-artifact-manifest.json" "$fixture/output-arm64/secondbox-1.2.3-arm64-artifact-manifest.json" "$fixture/both/"
+  if "$uploader" 1.2.3 "$fixture/both"; then
+    echo 'release upload accepted a directory with both artifact sets' >&2; exit 1
+  fi
+  # The publisher starts only once the draft holds both artifact sets.
   "$uploader" 1.2.3 "$fixture/output"
+  ! rg -q '^workflow run' "$RELEASE_TEST_STATE/calls"
+  "$uploader" 1.2.3 "$fixture/output-arm64"
+  test "$(rg -c '^workflow run release.yml --ref main -f version=1.2.3$' "$RELEASE_TEST_STATE/calls")" = 1
   rg -q '^# Tagged notes$' "$RELEASE_TEST_STATE/body"
   ! rg -q 'uncommitted wrong notes' "$RELEASE_TEST_STATE/body"
   rg -q -F 'releases/download/v1.2.3/install.sh | sh' "$RELEASE_TEST_STATE/body"
   rg -q -F '`npm install @secondstack-ai/secondbox@1.2.3`' "$RELEASE_TEST_STATE/body"
+  rg -q -F '`secondbox-1.2.3-arm64-artifact-manifest.json`' "$RELEASE_TEST_STATE/body"
   cp "$RELEASE_TEST_STATE/body" "$fixture/expected"
   "$uploader" 1.2.3 "$fixture/output"
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
@@ -132,7 +146,10 @@ export PATH="$fixture/bin:$PATH"
     echo 'release upload accepted absent explicit notes' >&2; exit 1
   fi
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
-  GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/output"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/output"; then
+    echo 'release publisher accepted a release without the arm64 artifact set' >&2; exit 1
+  fi
+  GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"
   test "$(cat "$RELEASE_TEST_STATE/draft")" = false
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
   if "$uploader" 1.2.3 "$fixture/output"; then

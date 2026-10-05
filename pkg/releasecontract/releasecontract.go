@@ -485,16 +485,44 @@ func CompareVersions(left, right string) (int, error) {
 	return len(leftIdentifiers) - len(rightIdentifiers), nil
 }
 
-func ArtifactManifestLocation(version string) string {
-	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-artifact-manifest.json", version, version)
+// ArchitectureAssetSuffix qualifies the release files that belong to one guest
+// architecture. A release publishes one artifact set per guest architecture
+// under the same tag: amd64 keeps the unqualified names and shares its
+// architecture-neutral files (SDKs, binaries, OpenAPI, SBOM) with the others.
+func ArchitectureAssetSuffix(guestArchitecture string) string {
+	if guestArchitecture == "amd64" {
+		return ""
+	}
+	return "-" + guestArchitecture
+}
+
+func ArtifactManifestFileName(version, guestArchitecture string) string {
+	return fmt.Sprintf("secondbox-%s%s-artifact-manifest.json", version, ArchitectureAssetSuffix(guestArchitecture))
+}
+
+func QualificationEvidenceFileName(version, guestArchitecture string) string {
+	return fmt.Sprintf("secondbox-%s%s-qualification-evidence.json", version, ArchitectureAssetSuffix(guestArchitecture))
+}
+
+func StandardBundleFileName(name, guestArchitecture string) string {
+	return name + ArchitectureAssetSuffix(guestArchitecture) + ".standard-bundle.json"
+}
+
+// ReleaseFileLocation is the public download location of one release file.
+func ReleaseFileLocation(version, name string) string {
+	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/%s", version, name)
+}
+
+func ArtifactManifestLocation(version, guestArchitecture string) string {
+	return ReleaseFileLocation(version, ArtifactManifestFileName(version, guestArchitecture))
 }
 
 func SourceFreeSuiteLocation(version string) string {
 	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-source-free-qualify", version, version)
 }
 
-func QualificationEvidenceLocation(version string) string {
-	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-qualification-evidence.json", version, version)
+func QualificationEvidenceLocation(version, guestArchitecture string) string {
+	return ReleaseFileLocation(version, QualificationEvidenceFileName(version, guestArchitecture))
 }
 
 func InstallerQualificationEvidenceLocation(version string) string {
@@ -844,7 +872,7 @@ func (manifest ArtifactManifest) Validate() error {
 	if err := validateReference("qualification evidence", manifest.QualificationEvidence); err != nil {
 		return err
 	}
-	if manifest.QualificationEvidence.Location != QualificationEvidenceLocation(manifest.Version) {
+	if manifest.QualificationEvidence.Location != QualificationEvidenceLocation(manifest.Version, guestArchitecture) {
 		return contractError("qualification evidence location is not canonical for %s", manifest.Tag)
 	}
 	if manifest.Candidate {

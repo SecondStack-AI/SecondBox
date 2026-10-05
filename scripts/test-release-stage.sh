@@ -205,8 +205,11 @@ go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$work_dir/lean"
 jq -e '.platforms.controlPlane == ["linux/amd64"] and (.platforms.hostBinaries | length == 4) and .gvisor.podQualificationEvidence == {location:"",digest:""}' "$work_dir/lean/secondbox-0.7.0-artifact-manifest.json" >/dev/null
 [[ ! -e "$work_dir/lean/secondbox-0.7.0-gvisor-pod-qualification-evidence.json" ]]
 
-# An arm64 release carries an arm64 bundle, arm64 standard Profiles and no gVisor.
-if RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.7.0 "$work_dir/arm64-with-amd64-bundle" >/dev/null 2>&1; then
+# The arm64 artifact set carries an arm64 bundle, arm64 standard Profiles and no
+# gVisor, and reuses the architecture-neutral files of the final amd64 release.
+amd64_final="$work_dir/bound-final"
+arm64_stage() { RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 "$repo_root/scripts/release-stage.sh" --test-mode "$@"; }
+if arm64_stage --shared-from "$amd64_final" 0.7.0 "$work_dir/arm64-with-amd64-bundle" >/dev/null 2>&1; then
   echo "release staging accepted an amd64 microVM bundle for an arm64 release" >&2
   exit 1
 fi
@@ -218,17 +221,52 @@ jq '.architecture = "arm64"' "$artifact_dir/manifest.json" >"$arm64_artifact_dir
   sha256sum kernel kernel-provenance.json rootfs-debian-license-inventory.json rootfs-debian-packages.lock rootfs-python-license-inventory.json rootfs-python.freeze rootfs-source-manifest.json rootfs.ext4 runtime-manifest.json secondbox-rootfs-contract.json shared.img toolchain-manifest.json manifest.json >SHA256SUMS
 )
 openssl dgst -sha256 -sign "$work_dir/private.pem" -out "$arm64_artifact_dir/manifest.sig" "$arm64_artifact_dir/manifest.json"
-SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$arm64_artifact_dir" RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 \
-  "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.7.0 "$work_dir/arm64" >/dev/null
+export SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$arm64_artifact_dir"
+for rejected in "--candidate --shared-from $amd64_final" "--shared-from $stage_installer_candidate" ""; do
+  # shellcheck disable=SC2086
+  if arm64_stage $rejected 0.7.0 "$work_dir/arm64-rejected" >/dev/null 2>&1; then
+    echo "arm64 staging accepted options: ${rejected:-none}" >&2
+    exit 1
+  fi
+  rm -rf "$work_dir/arm64-rejected"
+done
+arm64_stage --shared-from "$amd64_final" 0.7.0 "$work_dir/arm64" >/dev/null
+arm64_stage --shared-from "$amd64_final" 0.7.0 "$work_dir/arm64-again" >/dev/null
+diff -r "$work_dir/arm64" "$work_dir/arm64-again"
 go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$work_dir/arm64"
-jq -e '.platforms.controlPlane == ["linux/arm64"] and .platforms.runner == ["linux/arm64"] and .platforms.guest == ["linux/arm64"] and .platforms.qualifiedRunnerGuest == ["linux/arm64"] and .gvisor == null' "$work_dir/arm64/secondbox-0.7.0-artifact-manifest.json" >/dev/null
-jq -e '.architecture == "arm64" and .runnerPoolSelector == "standard-arm64"' "$work_dir/arm64/agent-compartment.standard-bundle.json" >/dev/null
-[[ ! -e "$work_dir/arm64/secondbox-0.7.0-gvisor-qualification-evidence.json" && ! -e "$work_dir/arm64/runner-gvisor.oci.json" ]]
-# A final arm64 release is qualified by its linux-arm64 scenario evidence alone;
-# the guided installer installs amd64 releases only.
-SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$arm64_artifact_dir" RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 \
-  "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$work_dir/arm64-final" >/dev/null
-go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$work_dir/arm64-final"
-jq -e '(.candidate // false) == false and .installerQualificationEvidence == {location:"",digest:""} and .gvisor == null' "$work_dir/arm64-final/secondbox-0.7.0-artifact-manifest.json" >/dev/null
-jq -e '.host.platform == "linux-arm64"' "$work_dir/arm64-final/secondbox-0.7.0-qualification-evidence.json" >/dev/null
-[[ ! -e "$work_dir/arm64-final/secondbox-0.7.0-installer-qualification-evidence.json" ]]
+arm64_manifest="$work_dir/arm64/secondbox-0.7.0-arm64-artifact-manifest.json"
+[[ ! -e "$work_dir/arm64/secondbox-0.7.0-artifact-manifest.json" && -f "$work_dir/arm64/SHA256SUMS-arm64" && -f "$work_dir/arm64/candidate-allowlist-arm64.json" ]]
+jq -e --slurpfile amd64 "$amd64_final/secondbox-0.7.0-artifact-manifest.json" '
+  (.candidate // false) == false and .gvisor == null and .installerQualificationEvidence == {location:"",digest:""} and
+  .platforms.controlPlane == ["linux/arm64"] and .platforms.runner == ["linux/arm64"] and .platforms.guest == ["linux/arm64"] and .platforms.qualifiedRunnerGuest == ["linux/arm64"] and
+  (.qualificationEvidence.location | endswith("/v0.7.0/secondbox-0.7.0-arm64-qualification-evidence.json")) and
+  ([.standardBundles[].document.location | endswith("-arm64.standard-bundle.json")] | all) and
+  .openapi == $amd64[0].openapi and .goSdk == $amd64[0].goSdk and .typeScriptSdk == $amd64[0].typeScriptSdk and .binaries == $amd64[0].binaries and
+  .installBootstrap == $amd64[0].installBootstrap and .sboms == $amd64[0].sboms and .bundledServices == $amd64[0].bundledServices and
+  .microvm.signingKeyFingerprint == $amd64[0].microvm.signingKeyFingerprint' "$arm64_manifest" >/dev/null
+jq -e '.architecture == "arm64" and .runnerPoolSelector == "standard-arm64"' "$work_dir/arm64/agent-compartment-arm64.standard-bundle.json" >/dev/null
+jq -e '.host.platform == "linux-arm64"' "$work_dir/arm64/secondbox-0.7.0-arm64-qualification-evidence.json" >/dev/null
+for image in control-plane runner installer-tools microvm-artifacts; do [[ -f "$work_dir/arm64/$image-arm64.oci.json" ]]; done
+[[ -z "$(find "$work_dir/arm64" -name '*gvisor*' -o -name '*installer-qualification-evidence*' -o -name 'agent-compartment.standard-bundle.json')" ]]
+# Both artifact sets publish under one tag: every shared name carries identical bytes.
+while IFS= read -r name; do
+  [[ ! -e "$amd64_final/$name" ]] || cmp -s "$amd64_final/$name" "$work_dir/arm64/$name" || { echo "arm64 artifact set changed shared file $name" >&2; exit 1; }
+done < <(ls "$work_dir/arm64")
+cp -a "$amd64_final" "$work_dir/amd64-tampered"
+printf 'tampered' >>"$work_dir/amd64-tampered/secondbox_0.7.0_linux_arm64"
+if arm64_stage --shared-from "$work_dir/amd64-tampered" 0.7.0 "$work_dir/arm64-tampered" >/dev/null 2>&1; then
+  echo "arm64 staging accepted a shared binary that differs from the amd64 manifest" >&2
+  exit 1
+fi
+other_key_dir="$work_dir/microvm-arm64-other-key"
+cp -a "$arm64_artifact_dir" "$other_key_dir"
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work_dir/other-private.pem" >/dev/null 2>&1
+openssl pkey -in "$work_dir/other-private.pem" -pubout -out "$work_dir/other-public.pem" >/dev/null 2>&1
+cp "$work_dir/other-public.pem" "$other_key_dir/signing.pub"
+openssl dgst -sha256 -sign "$work_dir/other-private.pem" -out "$other_key_dir/manifest.sig" "$other_key_dir/manifest.json"
+if SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$other_key_dir" SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY="$work_dir/other-public.pem" \
+  SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$(openssl pkey -pubin -in "$work_dir/other-public.pem" -outform DER | sha256sum | awk '{print $1}')" \
+  arm64_stage --shared-from "$amd64_final" 0.7.0 "$work_dir/arm64-other-key" >/dev/null 2>&1; then
+  echo "arm64 staging accepted a bundle signed by another trust anchor than the amd64 release" >&2
+  exit 1
+fi
