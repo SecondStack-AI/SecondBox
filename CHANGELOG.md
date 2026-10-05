@@ -4,7 +4,7 @@
 
 ## 0.24.0 - 2026-10-05
 
-A stopped Sandbox can switch to another compatible Profile while keeping its Workspace, and one Subject Sandbox policy now names a set of Profiles so a switched Sandbox keeps the same lifecycle and connection limits. The Subject policy body changes from `profile` to `profiles`. Deployments from v0.14.0 onward update in place; back up PostgreSQL first, because migration `0037_subject_sandbox_policy_profiles` makes rollback a database restore, and update Subject policy clients with the control plane. The Runner protocol remains `[6,6]`, Runners need no change, and the execution bundle, trust anchor, and standard Profile revisions are unchanged. See the [v0.24.0 release notes](docs/releases/v0.24.0.md).
+A stopped Sandbox can switch to another compatible Profile while keeping its Workspace, and one Subject Sandbox policy now names a set of Profiles so a switched Sandbox keeps the same lifecycle and connection limits. The Subject policy body changes from `profile` to `profiles`. Deployments from v0.14.0 onward update in place; back up PostgreSQL first, because migration `0037_subject_sandbox_policy_profiles` makes rollback a database restore, and update Subject policy clients with the control plane. The Runner protocol remains `[6,6]` and peers connect in either update order; update Runners to receive the direct File transport fix. The execution bundle, trust anchor, and standard Profile revisions are unchanged. See the [v0.24.0 release notes](docs/releases/v0.24.0.md).
 
 ### Added
 
@@ -14,7 +14,7 @@ A stopped Sandbox can switch to another compatible Profile while keeping its Wor
 ### Upgrade notes
 
 - Migration `0037_subject_sandbox_policy_profiles` rewrites every stored Subject Sandbox policy from `profile` to a one-element `profiles` set, without changing its values or the Subject revision. Rolling back requires the pre-update database backup.
-- Control planes before and after the migration do not share Subject Sandbox policies: an older control plane ignores a migrated policy and resolves Profile defaults, and a policy it writes with `profile` is ignored by an updated one. Stop every older control-plane process before the migration runs, pause Subject policy writes, update the control plane, then resume them only from clients that send `profiles`. Runners need no change.
+- Control planes before and after the migration do not share Subject Sandbox policies: an older control plane ignores a migrated policy and resolves Profile defaults, and a policy it writes with `profile` is ignored by an updated one. Stop every older control-plane process before the migration runs, pause Subject policy writes, update the control plane, then resume them only from clients that send `profiles`. Runners are unaffected by this migration.
 
 ### Changed
 
