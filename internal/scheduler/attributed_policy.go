@@ -61,7 +61,7 @@ func resolveAttributedConnections(ctx context.Context, tx pgx.Tx, locked rowlock
 		}
 	}
 	var requested *contracts.AttributedExecutionConnectionLimits
-	if selection.Profile == profileName {
+	if selection.Selects(profileName) {
 		requested = selection.AttributedExecution
 	}
 	resolved, err := grant.Resolve(requested)

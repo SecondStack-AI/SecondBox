@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -21,11 +22,17 @@ func (limits *SandboxLifecycleLimits) UnmarshalJSON(data []byte) error {
 }
 
 // SubjectSandboxPolicy selects lifecycle for future Sandboxes and connection
-// policy for future attributed Assignments of one Profile.
+// policy for future attributed Assignments of every Profile it names. A
+// Sandbox switched between named Profiles keeps the same selection.
 type SubjectSandboxPolicy struct {
-	Profile             string                               `json:"profile"`
+	Profiles            []string                             `json:"profiles"`
 	Lifecycle           SandboxLifecycleLimits               `json:"lifecycle"`
 	AttributedExecution *AttributedExecutionConnectionLimits `json:"attributedExecution,omitempty"`
+}
+
+// Selects reports whether the policy applies to Sandboxes of profile.
+func (policy SubjectSandboxPolicy) Selects(profile string) bool {
+	return slices.Contains(policy.Profiles, profile)
 }
 
 type SubjectSandboxPolicyObservation struct {

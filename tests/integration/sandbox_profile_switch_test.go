@@ -367,6 +367,58 @@ func TestSandboxProfileSwitchRepinsStoppedSandboxForItsNextStart(t *testing.T) {
 	}
 }
 
+// TestSandboxProfileSwitchKeepsSubjectPolicyOfNamedProfiles proves one Subject
+// policy naming both Profiles selects the same lifecycle at creation and after
+// a switch, and the same connection limit for the switched Assignment, while a
+// Profile outside the set keeps its own defaults.
+func TestSandboxProfileSwitchKeepsSubjectPolicyOfNamedProfiles(t *testing.T) {
+	fixture := newProfileSwitchFixture(t, "switch-policy")
+	ceilings := func(spec contracts.ProfileRevisionSpec) contracts.ProfileRevisionSpec {
+		spec.Lifecycle.MaximumDurationSeconds = contracts.Unlimited
+		spec.LifecycleCeiling = &contracts.SandboxLifecycleLimits{IdleSeconds: 900, MaximumDurationSeconds: contracts.Unlimited}
+		spec.AttributedExecutionCeiling = contracts.AttributedExecutionConnectionLimits{MaximumConnections: 256}
+		return spec
+	}
+	online := fixture.createProfile(t, "profile-switch-policy-online", ceilings(fixture.onlineWorkspaceSpec()))
+	offline := fixture.createProfile(t, "profile-switch-policy-offline", ceilings(fixture.offlineWorkspaceSpec()))
+	unnamedSpec := ceilings(fixture.offlineWorkspaceSpec())
+	unnamedSpec.Lifecycle.IdleSeconds = 120
+	unnamed := fixture.createProfile(t, "profile-switch-policy-unnamed", unnamedSpec)
+	policy := `{"profiles":["profile-switch-policy-online","profile-switch-policy-offline"],"lifecycle":{"idleSeconds":450,"maximumDurationSeconds":null},"attributedExecution":{"maximumConnections":64}}`
+	tag, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.subjects SET sandbox_policy_json=$3
+		WHERE tenant_ref=$1 AND ref=$2`,
+		fixture.principal.TenantRef, fixture.principal.SubjectRef, policy,
+	)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("seed Subject policy = %d rows, %v", tag.RowsAffected(), err)
+	}
+
+	sandbox := fixture.createReadySandbox(t, online.Name, "switch-policy-create")
+	if sandbox.Lifecycle.IdleSeconds != 450 {
+		t.Fatalf("created lifecycle = %#v, want selected idle 450", sandbox.Lifecycle)
+	}
+	switched, _, err := fixture.switchProfile(t.Context(), sandbox.ID, "switch-policy-offline", sandbox.Revision, offline.Name)
+	if err != nil || switched.Lifecycle.IdleSeconds != 450 {
+		t.Fatalf("switched lifecycle = %#v, error %v", switched.Lifecycle, err)
+	}
+	assignment := fixture.startAssignment(t, switched, "switch-policy-offline-start", fixture.now.Add(10*time.Second))
+	if assignment.ProfileRevisionId != offline.CurrentRevision.ID ||
+		assignment.AttributedExecutionPermission.GetMaximumConnections() != 64 {
+		t.Fatalf("Assignment after switch = %#v", assignment)
+	}
+
+	member := fixture.createReadySandbox(t, offline.Name, "switch-policy-member-create")
+	if member.Lifecycle.IdleSeconds != 450 {
+		t.Fatalf("second member lifecycle = %#v, want selected idle 450", member.Lifecycle)
+	}
+	other := fixture.createReadySandbox(t, online.Name, "switch-policy-unnamed-create")
+	other, _, err = fixture.switchProfile(t.Context(), other.ID, "switch-policy-unnamed", other.Revision, unnamed.Name)
+	if err != nil || other.Lifecycle.IdleSeconds != 120 {
+		t.Fatalf("unnamed target lifecycle = %#v, error %v", other.Lifecycle, err)
+	}
+}
+
 // TestSandboxProfileSwitchRefusesUnsafeTargets leaves the Sandbox untouched for
 // every refused precondition.
 func TestSandboxProfileSwitchRefusesUnsafeTargets(t *testing.T) {

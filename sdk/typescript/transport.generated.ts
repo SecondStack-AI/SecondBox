@@ -957,11 +957,11 @@ export interface SubjectQuota {
   readonly maxVcpuCount: PolicyLimit;
 }
 
-/** Complete replacement. Unchanged lifecycle or attributed blocks may retain stored desired values for the same Profile after grant tightening; effective policy still enforces current grants. New or changed blocks and Profile switches validate current grants. Lifecycle is required; omitted or null attributedExecution clears that selection. */
+/** Complete replacement. One lifecycle and attributed selection applies to every named Profile, so a Sandbox switched between them resolves the same selection. Unchanged lifecycle or attributed blocks may retain stored desired values for a Profile the stored policy already named after grant tightening; effective policy still enforces current grants. New or changed blocks and newly named Profiles validate current grants of every named Profile. Lifecycle is required; omitted or null attributedExecution clears that selection. */
 export interface SubjectSandboxPolicy {
   readonly attributedExecution?: AttributedExecutionConnectionLimits | null;
   readonly lifecycle: SandboxLifecycleLimits;
-  readonly profile: ProfileName;
+  readonly profiles: readonly ProfileName[];
 }
 
 export interface SubjectSandboxPolicyObservation {

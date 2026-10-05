@@ -1246,10 +1246,10 @@ test("tenant controller policy updates omit application ownership headers and pr
   assert.equal(request.headers.get("X-SecondBox-Subject-Ref"),null);
   assert.equal(request.headers.get("If-Match"),'"revision-4"');
   assert.equal(request.headers.get("Idempotency-Key"),"policy-update");
-  assert.deepEqual(await request.json(),{profile:"agent",lifecycle:{idleSeconds:60,maximumDurationSeconds:null}});
+  assert.deepEqual(await request.json(),{profiles:["agent"],lifecycle:{idleSeconds:60,maximumDurationSeconds:null}});
   return Response.json({revision:5});
  }, "tenant", "subject", "tenant_controller");
- const result = await new SecondBox(transport).updateSubjectSandboxPolicy("subject",4,{profile:"agent",lifecycle:{idleSeconds:60,maximumDurationSeconds:null}},"policy-update");
+ const result = await new SecondBox(transport).updateSubjectSandboxPolicy("subject",4,{profiles:["agent"],lifecycle:{idleSeconds:60,maximumDurationSeconds:null}},"policy-update");
  assert.equal(result.revision,5);
 });
 
@@ -1303,7 +1303,7 @@ test("Subject connection policy preserves finite selection, null inheritance and
       assert.deepEqual(body.attributedExecution, selection);
       return Response.json({ revision: 8, attributedExecution: { defaultMaximumConnections: 128, maximumConnections: selection?.maximumConnections ?? 128, maximumConnectionsCeiling: 4096 } });
     }, "tenant", "subject", "tenant_controller"));
-    const result = await api.updateSubjectSandboxPolicy("subject", 7, { profile: "agent", lifecycle: { idleSeconds: 60, maximumDurationSeconds: null }, attributedExecution: selection }, "connections");
+    const result = await api.updateSubjectSandboxPolicy("subject", 7, { profiles: ["agent"], lifecycle: { idleSeconds: 60, maximumDurationSeconds: null }, attributedExecution: selection }, "connections");
     assert.equal(result.attributedExecution?.maximumConnections, selection?.maximumConnections ?? 128);
     assert.equal(result.attributedExecution?.maximumConnectionsCeiling, 4096);
   }

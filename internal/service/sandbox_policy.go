@@ -25,8 +25,8 @@ func (service *ControlPlaneService) UpdateSubjectSandboxPolicy(ctx context.Conte
 	if err := validateOwnershipRef("subjectRef", subjectRef); err != nil {
 		return contracts.SubjectSandboxPolicyObservation{}, false, err
 	}
-	if !profileNamePattern.MatchString(request.Profile) {
-		return contracts.SubjectSandboxPolicyObservation{}, false, invalidField("profile", "must match ^[a-z][a-z0-9-]{0,79}$")
+	if err := validateProfileGrants("profiles", request.Profiles); err != nil {
+		return contracts.SubjectSandboxPolicyObservation{}, false, err
 	}
 	if revision < 1 {
 		return contracts.SubjectSandboxPolicyObservation{}, false, invalidField("If-Match", "must contain a positive revision ETag")

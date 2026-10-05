@@ -99,7 +99,9 @@ retain their admitted limit. The existing runner protocol already transports the
 finite numeric bound; retain normal compatible control-plane/runner release pins.
 
 CT writes the complete Subject Sandbox policy, preserving lifecycle and connection
-selections when editing either. Its first compatible upstream release must include
+selections when editing either. One policy names, in `profiles`, every Profile its
+Sandboxes may be created in or switched between, so a switched Sandbox keeps the
+same selection. Its first compatible upstream release must include
 the unchanged-block allowance for both lifecycle and attributed selections: a saved
 value for the same Profile remains valid in a complete PUT after operator tightening
 or removal of attributed permission. Effective resolution still enforces the grant.

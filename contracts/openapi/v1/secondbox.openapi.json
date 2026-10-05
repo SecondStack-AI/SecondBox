@@ -4588,7 +4588,7 @@
             "tenantControllerBearer": []
           }
         ],
-        "description": "Selects lifecycle policy for future Sandboxes of one granted Profile. Existing Sandbox policies remain immutable. Explicit null is bounded by the Profile lifecycle ceiling. Requires Subject revision and idempotency.",
+        "description": "Selects lifecycle and attributed connection policy for future Sandboxes and Assignments of a set of granted Profiles. Existing Sandbox policies remain immutable. Explicit null is bounded by the Profile lifecycle ceiling. Requires Subject revision and idempotency.",
         "parameters": [
           {
             "$ref": "#/components/parameters/SubjectRefPath"
@@ -4615,7 +4615,7 @@
         },
         "responses": {
           "200": {
-            "description": "Effective policy for future Sandbox creation.",
+            "description": "Effective policy of the first named Profile for future Sandbox creation.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestID"
@@ -10823,16 +10823,23 @@
         }
       },
       "SubjectSandboxPolicy": {
-        "description": "Complete replacement. Unchanged lifecycle or attributed blocks may retain stored desired values for the same Profile after grant tightening; effective policy still enforces current grants. New or changed blocks and Profile switches validate current grants. Lifecycle is required; omitted or null attributedExecution clears that selection.",
+        "description": "Complete replacement. One lifecycle and attributed selection applies to every named Profile, so a Sandbox switched between them resolves the same selection. Unchanged lifecycle or attributed blocks may retain stored desired values for a Profile the stored policy already named after grant tightening; effective policy still enforces current grants. New or changed blocks and newly named Profiles validate current grants of every named Profile. Lifecycle is required; omitted or null attributedExecution clears that selection.",
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "profile",
+          "profiles",
           "lifecycle"
         ],
         "properties": {
-          "profile": {
-            "$ref": "#/components/schemas/ProfileName"
+          "profiles": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "description": "Granted, enabled Profiles this selection applies to. The PUT response observes the first.",
+            "items": {
+              "$ref": "#/components/schemas/ProfileName"
+            }
           },
           "lifecycle": {
             "$ref": "#/components/schemas/SandboxLifecycleLimits"

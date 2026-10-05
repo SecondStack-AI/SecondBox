@@ -1093,7 +1093,7 @@
   "SubjectSandboxPolicy": {
     "required": [
       "lifecycle",
-      "profile"
+      "profiles"
     ],
     "optional": [
       "attributedExecution"

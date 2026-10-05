@@ -55,6 +55,7 @@ var postFenceMigrationFiles = []string{
 	"0034_per_exec_attribution.sql",
 	"0035_live_sandbox_quota_index.sql",
 	"0036_sandbox_quota_ledger_on_increase.sql",
+	"0037_subject_sandbox_policy_profiles.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

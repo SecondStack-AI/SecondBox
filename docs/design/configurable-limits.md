@@ -108,16 +108,23 @@ unsaved or unapplied desired configuration.
 `GET /v1/subject-policy?profile=NAME` requires an application authority with `sandbox:read`
 and that Profile grant. It returns only its own Subject policy and applicable Tenant limits.
 Controller `GET` and `PUT /v1/subjects/{subjectRef}/sandbox-policy` select lifecycle limits
-for that Subject and Profile. PUT requires the complete `{profile,lifecycle}` object,
+for that Subject and a set of Profiles. PUT requires the complete `{profiles,lifecycle}` object,
 `If-Match`, and `Idempotency-Key`; replay returns the original result, stale revisions fail.
-A Subject has one selected Profile policy; creation with another granted Profile inherits
-that Profile's defaults. Reads do not apply desired configuration.
+A Subject has one selected policy, and `profiles` names the 1 to 32 Profiles it applies to.
+Every named Profile must be granted to the Tenant (`403 grant_escalation_denied`), enabled,
+and admit the selection. Creation, Assignment, and a Profile switch with a named Profile
+resolve the same selection, so a Sandbox switched between named Profiles keeps its Subject
+lifecycle and connection limit, each still bounded by its own Profile's ceilings. Creation
+with another granted Profile inherits that Profile's defaults. GET observes one Profile,
+selected by its `profile` query; the PUT response observes the first named Profile.
+Reads do not apply desired configuration.
 
 A complete PUT may preserve an unchanged desired lifecycle or attributed-connection
-block for the same selected Profile, even after its operator ceiling tightens or
-attributed permission is removed. Equality compares all numeric values in that
-block. New or changed blocks must satisfy current grants; switching Profiles cannot
-carry this exception across. Both effective resolvers still enforce current grants,
+block for a Profile the stored policy already names, even after its operator ceiling
+tightens or attributed permission is removed. Equality compares all numeric values in that
+block. New or changed blocks must satisfy the current grants of every named Profile, and a
+newly named Profile must satisfy them for both blocks; the exception does not carry
+across to it. Both effective resolvers still enforce current grants,
 so retaining desired values adds no execution authority. Subject revision checks and
 idempotency still apply. Lifecycle remains required; omission or null clears only
 the optional attributed selection. Once cleared, reintroducing it is a new selection.
@@ -148,7 +155,7 @@ numeric selection. It retains the Subject revision (`If-Match: "revision-8"`),
 
 ```json
 {
-  "profile": "agent-compartment",
+  "profiles": ["agent-compartment", "agent-compartment-offline"],
   "lifecycle": {"idleSeconds": 60, "maximumDurationSeconds": null},
   "attributedExecution": {"maximumConnections": 256}
 }
@@ -160,7 +167,9 @@ the complete selection, so clients must preserve a saved connection selection wh
 editing lifecycle alone. A gateway selector, null numeric value, or unlimited value
 is invalid. A new selection above the current Profile ceiling returns
 `profile_policy_ceiling_exceeded`; a new or changed selection without current attributed permission
-returns `invalid_request`. An unchanged stored selection may be preserved as above. Subject selection still applies to only its selected Profile.
+returns `invalid_request`; a non-null selection therefore requires every named Profile to
+permit attributed execution. An unchanged stored selection may be preserved as above.
+Subject selection applies to only its named Profiles.
 
 Both controller and application policy reads add nullable `attributedExecution`:
 
