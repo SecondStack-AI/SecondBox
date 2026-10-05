@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -323,7 +324,7 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 				environment[name] = value
 			}
 			environment["SECONDBOX_SAME_HOST_RUNNER_ENABLED"] = "true"
-			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
+			composeFiles = append(composeFiles, sameHostRunnerComposeFiles(runner.hasInstalledBundle())...)
 		} else {
 			remote[runner.RunnerID] = runnerEnvironment
 		}
@@ -669,6 +670,25 @@ func runnerGatewayNames(contexts []RunnerEgressContext) map[string]bool {
 }
 
 func validateRunner(prefix string, r Runner) error {
+	if r.FirecrackerInstalledBundle == nil {
+		return manifestError(prefix+".firecracker_installed_bundle is required", nil)
+	}
+	if !*r.FirecrackerInstalledBundle {
+		// A Runner without an installed bundle boots only client-selected
+		// execution images, so every bundle location and trust field is absent.
+		bundleFields := map[string]string{
+			"artifact_host_directory":    r.ArtifactHostDirectory,
+			"artifact_public_key_sha256": r.ArtifactPublicKeySHA256,
+		}
+		for _, path := range r.installedBundlePaths() {
+			bundleFields[path.name] = *path.field
+		}
+		for _, name := range slices.Sorted(maps.Keys(bundleFields)) {
+			if bundleFields[name] != "" {
+				return manifestError(prefix+"."+name+" must be omitted when firecracker_installed_bundle is false", nil)
+			}
+		}
+	}
 	if r.Placement == "same-host" {
 		for _, path := range r.packagedPaths() {
 			if *path.field != "" {
@@ -678,7 +698,7 @@ func validateRunner(prefix string, r Runner) error {
 	}
 
 	r = r.withPackagedPaths()
-	required := map[string]string{"pool_id": r.PoolID, "software_version": r.SoftwareVersion, "control_plane_address": r.ControlPlaneAddress, "control_plane_server_name": r.ControlPlaneServerName, "identity_directory": r.IdentityDirectory, "log_path": r.LogPath, "firecracker_path": r.FirecrackerPath, "firecracker_jailer_path": r.FirecrackerJailerPath, "firecracker_jail_root": r.FirecrackerJailRoot, "firecracker_cgroup_parent": r.FirecrackerCgroupParent, "firecracker_kernel_path": r.FirecrackerKernelPath, "firecracker_rootfs_path": r.FirecrackerRootFSPath, "firecracker_shared_image_path": r.FirecrackerSharedImagePath, "firecracker_kernel_args": r.FirecrackerKernelArgs, "firecracker_cpu_template": r.FirecrackerCPUTemplate, "firecracker_run_directory": r.FirecrackerRunDirectory, "firecracker_log_directory": r.FirecrackerLogDirectory, "snapshot_template_cache_root": r.SnapshotTemplateCacheRoot, "artifact_public_key": r.ArtifactPublicKey, "artifact_public_key_sha256": r.ArtifactPublicKeySHA256, "workspace_root": r.WorkspaceRoot, "sandbox_guest_ip": r.SandboxGuestIP, "sandbox_bridge_name": r.SandboxBridgeName, "sandbox_bridge_cidr": r.SandboxBridgeCIDR, "sandbox_guest_cidr": r.SandboxGuestCIDR, "sandbox_tap_prefix": r.SandboxTapPrefix, "sandbox_network_state_directory": r.SandboxNetworkStateDir, "network_policy_nft_path": r.NetworkPolicyNFTPath, "network_policy_max_dns_ttl": r.NetworkPolicyMaxDNSTTL, "network_policy_runner_addresses": r.NetworkPolicyRunnerAddresses, "network_policy_management_cidrs": r.NetworkPolicyManagementCIDRs, "egress_context_config_path": r.EgressContextConfigPath, "network_policy_dns_upstream": r.NetworkPolicyDNSUpstream, "guest_heartbeat_interval": r.GuestHeartbeatInterval, "data_plane_listen_address": r.DataPlaneListenAddress, "data_plane_advertised_address": r.DataPlaneAdvertisedAddress}
+	required := map[string]string{"pool_id": r.PoolID, "software_version": r.SoftwareVersion, "control_plane_address": r.ControlPlaneAddress, "control_plane_server_name": r.ControlPlaneServerName, "identity_directory": r.IdentityDirectory, "log_path": r.LogPath, "firecracker_path": r.FirecrackerPath, "firecracker_jailer_path": r.FirecrackerJailerPath, "firecracker_jail_root": r.FirecrackerJailRoot, "firecracker_cgroup_parent": r.FirecrackerCgroupParent, "firecracker_kernel_args": r.FirecrackerKernelArgs, "firecracker_cpu_template": r.FirecrackerCPUTemplate, "firecracker_run_directory": r.FirecrackerRunDirectory, "firecracker_log_directory": r.FirecrackerLogDirectory, "snapshot_template_cache_root": r.SnapshotTemplateCacheRoot, "workspace_root": r.WorkspaceRoot, "sandbox_guest_ip": r.SandboxGuestIP, "sandbox_bridge_name": r.SandboxBridgeName, "sandbox_bridge_cidr": r.SandboxBridgeCIDR, "sandbox_guest_cidr": r.SandboxGuestCIDR, "sandbox_tap_prefix": r.SandboxTapPrefix, "sandbox_network_state_directory": r.SandboxNetworkStateDir, "network_policy_nft_path": r.NetworkPolicyNFTPath, "network_policy_max_dns_ttl": r.NetworkPolicyMaxDNSTTL, "network_policy_runner_addresses": r.NetworkPolicyRunnerAddresses, "network_policy_management_cidrs": r.NetworkPolicyManagementCIDRs, "egress_context_config_path": r.EgressContextConfigPath, "network_policy_dns_upstream": r.NetworkPolicyDNSUpstream, "guest_heartbeat_interval": r.GuestHeartbeatInterval, "data_plane_listen_address": r.DataPlaneListenAddress, "data_plane_advertised_address": r.DataPlaneAdvertisedAddress}
 	required["execution_image_registries"] = r.ExecutionImageRegistries
 	required["execution_image_registry_config_directory"] = r.ExecutionImageRegistryConfigDirectory
 	if !filepath.IsAbs(r.ExecutionImageRegistryConfigDirectory) || strings.ContainsAny(r.ExecutionImageRegistryConfigDirectory, "<>") {
@@ -687,6 +707,13 @@ func validateRunner(prefix string, r Runner) error {
 	required["execution_image_public_key"] = r.ExecutionImagePublicKey
 	required["execution_image_public_key_sha256"] = r.ExecutionImagePublicKeySHA256
 	required["log_directory"] = r.LogDirectory
+	if r.hasInstalledBundle() {
+		required["firecracker_kernel_path"] = r.FirecrackerKernelPath
+		required["firecracker_rootfs_path"] = r.FirecrackerRootFSPath
+		required["firecracker_shared_image_path"] = r.FirecrackerSharedImagePath
+		required["artifact_public_key"] = r.ArtifactPublicKey
+		required["artifact_public_key_sha256"] = r.ArtifactPublicKeySHA256
+	}
 	for name, value := range required {
 		if strings.TrimSpace(value) == "" {
 			return manifestError(prefix+"."+name+" is required", nil)
@@ -716,26 +743,28 @@ func validateRunner(prefix string, r Runner) error {
 	if *r.ExecutionImageMaxCacheBytes < *r.ExecutionImageMaxExpandedBytes {
 		return manifestError(prefix+".execution_image_max_cache_bytes must be at least execution_image_max_expanded_bytes", nil)
 	}
-	for name, value := range map[string]string{
+	absolutePaths := map[string]string{
 		"identity_directory":              r.IdentityDirectory,
 		"log_path":                        r.LogPath,
 		"log_directory":                   r.LogDirectory,
 		"firecracker_path":                r.FirecrackerPath,
 		"firecracker_jailer_path":         r.FirecrackerJailerPath,
 		"firecracker_jail_root":           r.FirecrackerJailRoot,
-		"firecracker_kernel_path":         r.FirecrackerKernelPath,
-		"firecracker_rootfs_path":         r.FirecrackerRootFSPath,
-		"firecracker_shared_image_path":   r.FirecrackerSharedImagePath,
 		"firecracker_run_directory":       r.FirecrackerRunDirectory,
 		"firecracker_log_directory":       r.FirecrackerLogDirectory,
 		"snapshot_template_cache_root":    r.SnapshotTemplateCacheRoot,
-		"artifact_public_key":             r.ArtifactPublicKey,
 		"execution_image_public_key":      r.ExecutionImagePublicKey,
 		"workspace_root":                  r.WorkspaceRoot,
 		"sandbox_network_state_directory": r.SandboxNetworkStateDir,
 		"network_policy_nft_path":         r.NetworkPolicyNFTPath,
 		"egress_context_config_path":      r.EgressContextConfigPath,
-	} {
+	}
+	if r.hasInstalledBundle() {
+		for _, path := range r.installedBundlePaths() {
+			absolutePaths[path.name] = *path.field
+		}
+	}
+	for name, value := range absolutePaths {
 		if !filepath.IsAbs(value) {
 			return manifestError(prefix+"."+name+" must be an absolute Runner-host path", nil)
 		}
@@ -755,7 +784,11 @@ func validateRunner(prefix string, r Runner) error {
 		}
 	}
 	if r.Placement == "same-host" {
-		for name, value := range map[string]string{"identity_host_directory": r.IdentityHostDirectory, "artifact_host_directory": r.ArtifactHostDirectory, "state_host_directory": r.StateHostDirectory} {
+		hostDirectories := map[string]string{"identity_host_directory": r.IdentityHostDirectory, "state_host_directory": r.StateHostDirectory}
+		if r.hasInstalledBundle() {
+			hostDirectories["artifact_host_directory"] = r.ArtifactHostDirectory
+		}
+		for name, value := range hostDirectories {
 			if !filepath.IsAbs(value) {
 				return manifestError(prefix+"."+name+" must be absolute", nil)
 			}
@@ -799,7 +832,7 @@ func validateRunner(prefix string, r Runner) error {
 			return manifestError(prefix+" guest control and protocol vsock ports must be distinct integers from 1 through 65535", nil)
 		}
 	}
-	if !artifactKeyPattern.MatchString(r.ArtifactPublicKeySHA256) || r.ArtifactPublicKeySHA256 == strings.Repeat("0", 64) {
+	if r.hasInstalledBundle() && (!artifactKeyPattern.MatchString(r.ArtifactPublicKeySHA256) || r.ArtifactPublicKeySHA256 == strings.Repeat("0", 64)) {
 		return manifestError(prefix+".artifact_public_key_sha256 must identify a provisioned signed artifact key", nil)
 	}
 	if !artifactKeyPattern.MatchString(r.ExecutionImagePublicKeySHA256) || r.ExecutionImagePublicKeySHA256 == strings.Repeat("0", 64) {
@@ -1149,7 +1182,7 @@ func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
 
 func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	r = r.withPackagedPaths()
-	env := map[string]string{"SECONDBOX_RUNNER_ID": r.RunnerID, "SECONDBOX_RUNNER_POOL_ID": r.PoolID, "SECONDBOX_RUNNER_SOFTWARE_VERSION": r.SoftwareVersion, "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": r.ControlPlaneAddress, "SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": r.ControlPlaneServerName, "SECONDBOX_RUNNER_CREDENTIAL": credential, "SECONDBOX_RUNNER_LOG_PATH": r.LogPath, "SECONDBOX_RUNNER_FIRECRACKER_PATH": r.FirecrackerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH": r.FirecrackerJailerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT": r.FirecrackerJailRoot, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT": r.FirecrackerCgroupParent, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH": r.FirecrackerKernelPath, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH": r.FirecrackerRootFSPath, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH": r.FirecrackerSharedImagePath, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS": r.FirecrackerKernelArgs, "SECONDBOX_RUNNER_FIRECRACKER_CPU_TEMPLATE": r.FirecrackerCPUTemplate, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR": r.FirecrackerRunDirectory, "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR": r.FirecrackerLogDirectory, "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT": r.SnapshotTemplateCacheRoot, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY": r.ArtifactPublicKey, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256": r.ArtifactPublicKeySHA256, "SECONDBOX_RUNNER_WORKSPACE_ROOT": r.WorkspaceRoot, "SECONDBOX_RUNNER_SANDBOX_GUEST_IP": r.SandboxGuestIP, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME": r.SandboxBridgeName, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR": r.SandboxBridgeCIDR, "SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR": r.SandboxGuestCIDR, "SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX": r.SandboxTapPrefix, "SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR": r.SandboxNetworkStateDir, "SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH": r.NetworkPolicyNFTPath, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL": r.NetworkPolicyMaxDNSTTL, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": r.NetworkPolicyRunnerAddresses, "SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS": r.NetworkPolicyManagementCIDRs, "SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG": r.EgressContextConfigPath, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM": r.NetworkPolicyDNSUpstream, "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL": r.GuestHeartbeatInterval, "SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS": r.DataPlaneListenAddress, "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS": r.DataPlaneAdvertisedAddress}
+	env := map[string]string{"SECONDBOX_RUNNER_ID": r.RunnerID, "SECONDBOX_RUNNER_POOL_ID": r.PoolID, "SECONDBOX_RUNNER_SOFTWARE_VERSION": r.SoftwareVersion, "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": r.ControlPlaneAddress, "SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": r.ControlPlaneServerName, "SECONDBOX_RUNNER_CREDENTIAL": credential, "SECONDBOX_RUNNER_LOG_PATH": r.LogPath, "SECONDBOX_RUNNER_FIRECRACKER_PATH": r.FirecrackerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH": r.FirecrackerJailerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT": r.FirecrackerJailRoot, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT": r.FirecrackerCgroupParent, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS": r.FirecrackerKernelArgs, "SECONDBOX_RUNNER_FIRECRACKER_CPU_TEMPLATE": r.FirecrackerCPUTemplate, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR": r.FirecrackerRunDirectory, "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR": r.FirecrackerLogDirectory, "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT": r.SnapshotTemplateCacheRoot, "SECONDBOX_RUNNER_WORKSPACE_ROOT": r.WorkspaceRoot, "SECONDBOX_RUNNER_SANDBOX_GUEST_IP": r.SandboxGuestIP, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME": r.SandboxBridgeName, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR": r.SandboxBridgeCIDR, "SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR": r.SandboxGuestCIDR, "SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX": r.SandboxTapPrefix, "SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR": r.SandboxNetworkStateDir, "SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH": r.NetworkPolicyNFTPath, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL": r.NetworkPolicyMaxDNSTTL, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": r.NetworkPolicyRunnerAddresses, "SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS": r.NetworkPolicyManagementCIDRs, "SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG": r.EgressContextConfigPath, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM": r.NetworkPolicyDNSUpstream, "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL": r.GuestHeartbeatInterval, "SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS": r.DataPlaneListenAddress, "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS": r.DataPlaneAdvertisedAddress}
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"] = "/var/lib/secondbox-runner/execution-images"
 	env["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"] = "/run/secondbox-image-fetcher/fetcher.sock"
 	env["SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR"] = r.ExecutionImageRegistryConfigDirectory
@@ -1161,6 +1194,14 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxExpandedBytes)
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxCacheBytes)
 	env["SECONDBOX_COMPUTE_BACKEND"] = "firecracker"
+	env["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"] = strconv.FormatBool(r.hasInstalledBundle())
+	if r.hasInstalledBundle() {
+		env["SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"] = r.FirecrackerKernelPath
+		env["SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"] = r.FirecrackerRootFSPath
+		env["SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"] = r.FirecrackerSharedImagePath
+		env["SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"] = r.ArtifactPublicKey
+		env["SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"] = r.ArtifactPublicKeySHA256
+	}
 	env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] = r.StorageAdmissionMode
 	if env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] == "" {
 		env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] = "logical"
@@ -1178,7 +1219,9 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	env["SECONDBOX_RUNNER_SANDBOX_DELETE_BRIDGE"] = strconv.FormatBool(*r.SandboxDeleteBridge)
 	if r.Placement == "same-host" {
 		env["SECONDBOX_RUNNER_IDENTITY_HOST_DIR"] = r.IdentityHostDirectory
-		env["SECONDBOX_RUNNER_ARTIFACT_HOST_DIR"] = r.ArtifactHostDirectory
+		if r.hasInstalledBundle() {
+			env["SECONDBOX_RUNNER_ARTIFACT_HOST_DIR"] = r.ArtifactHostDirectory
+		}
 		env["SECONDBOX_RUNNER_STATE_HOST_DIR"] = r.StateHostDirectory
 	}
 	return env

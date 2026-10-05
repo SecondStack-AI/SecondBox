@@ -1454,3 +1454,63 @@ func TestGVisorRegistrationRequiresOCIMaterializationEvidence(t *testing.T) {
 		t.Fatalf("pool sealed to %q by a rejected registration", sealedKind)
 	}
 }
+
+// TestRunnerWithoutInstalledBundleRegistersOnlyForSelectedImages proves a
+// Runner that proves no materialization registers only when it boots
+// client-selected images, and that it records an empty materialization list
+// placement decodes as "no installed bundle".
+func TestRunnerWithoutInstalledBundleRegistersOnlyForSelectedImages(t *testing.T) {
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	poolName := task4ID("bundle-less-pool")
+	task4InsertRunnerPool(t, poolName, now)
+	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+	databasePool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databasePool.Close)
+	register := func(clientSelectedImageReady bool) (string, error) {
+		runnerID, connectionID := task4ID("bundle-less-runner"), task4ID("bundle-less-connection")
+		issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := stateStore.OpenConnection(t.Context(), issued.Identity, connectionID, 1, now); err != nil {
+			t.Fatal(err)
+		}
+		registration := task4Registration(runnerID, connectionID, poolName)
+		registration.Materializations = nil
+		registration.Capabilities.ClientSelectedImageReady = clientSelectedImageReady
+		_, err = stateStore.RecordRegistration(t.Context(), registration, now)
+		return runnerID, err
+	}
+	if _, err := register(false); !errors.Is(err, runnercontrol.ErrRunnerPrerequisites) {
+		t.Fatalf("Runner with neither materialization nor selected images = %v", err)
+	}
+	runnerID, err := register(true)
+	if err != nil {
+		t.Fatalf("bundle-less Runner registration = %v", err)
+	}
+	var state string
+	var cacheJSON []byte
+	if err := databasePool.QueryRow(t.Context(), `
+		SELECT state,artifact_cache_json FROM secondbox.runners WHERE id=$1`, runnerID,
+	).Scan(&state, &cacheJSON); err != nil {
+		t.Fatal(err)
+	}
+	var cache struct {
+		Materializations []json.RawMessage `json:"materializations"`
+	}
+	if err := json.Unmarshal(cacheJSON, &cache); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ready" || cache.Materializations == nil || len(cache.Materializations) != 0 {
+		t.Fatalf("bundle-less Runner state=%q cache=%s", state, cacheJSON)
+	}
+}

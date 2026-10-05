@@ -64,6 +64,7 @@ func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
 		JailerPath:                       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),

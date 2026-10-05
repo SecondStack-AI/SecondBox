@@ -64,7 +64,7 @@ func TestVerifierRefusesUnpinnedTrustAndHasNoFixedBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := verifier.VerifyLocal(t.Context(), nil, noVerifierProgress); err == nil ||
-		!strings.Contains(err.Error(), "no fixed signed bundle") {
+		!strings.Contains(err.Error(), "has no installed execution bundle") {
 		t.Fatalf("fixed-bundle request on a verifier error = %v", err)
 	}
 }

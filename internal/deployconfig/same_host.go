@@ -25,12 +25,15 @@ func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error 
 			return fmt.Errorf("inspect host account assignment for firecracker jailer UID %d: %w", uid, err)
 		}
 	}
-	for name, path := range map[string]string{
+	hostDirectories := map[string]string{
 		"identity_host_directory":         runner.IdentityHostDirectory,
-		"artifact_host_directory":         runner.ArtifactHostDirectory,
 		"state_host_directory":            runner.StateHostDirectory,
 		"state_host_directory/workspaces": runner.workspaceHostDirectory(),
-	} {
+	}
+	if runner.hasInstalledBundle() {
+		hostDirectories["artifact_host_directory"] = runner.ArtifactHostDirectory
+	}
+	for name, path := range hostDirectories {
 		info, err := os.Lstat(path)
 		if err != nil {
 			return fmt.Errorf("%s must be an existing absolute non-symbolic-link directory: %w", name, err)
@@ -51,15 +54,20 @@ func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error 
 	if err != nil {
 		return fmt.Errorf("inspect workspace host filesystem: %w", err)
 	}
-	artifactDevice, err := filesystemDevice(runner.ArtifactHostDirectory)
-	if err != nil {
-		return fmt.Errorf("inspect artifact host filesystem: %w", err)
-	}
 	if storageDevice == rootDevice {
 		return fmt.Errorf("state_host_directory must use a dedicated non-root filesystem")
 	}
-	if workspaceDevice != storageDevice || artifactDevice != storageDevice {
-		return fmt.Errorf("artifact_host_directory, state_host_directory, and its workspaces child must use one filesystem")
+	if workspaceDevice != storageDevice {
+		return fmt.Errorf("state_host_directory and its workspaces child must use one filesystem")
+	}
+	if runner.hasInstalledBundle() {
+		artifactDevice, err := filesystemDevice(runner.ArtifactHostDirectory)
+		if err != nil {
+			return fmt.Errorf("inspect artifact host filesystem: %w", err)
+		}
+		if artifactDevice != storageDevice {
+			return fmt.Errorf("artifact_host_directory, state_host_directory, and its workspaces child must use one filesystem")
+		}
 	}
 
 	identityCAPath, err := resolveRegularReference("", filepath.Join(runner.IdentityHostDirectory, "runner-ca.crt"))

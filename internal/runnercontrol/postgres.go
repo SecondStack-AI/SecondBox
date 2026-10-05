@@ -416,7 +416,16 @@ func (store *PostgresStateStore) RecordRegistration(
 			Digest          string `json:"digest"`
 		} `json:"materializations"`
 	}{ArtifactDigests: make([]string, 0, len(registration.Materializations)*2)}
-	if len(registration.Materializations) == 0 {
+	cache.Materializations = make([]struct {
+		BackendKind     string `json:"backendKind"`
+		Architecture    string `json:"architecture"`
+		RuntimeDigest   string `json:"runtimeDigest"`
+		ToolchainDigest string `json:"toolchainDigest"`
+		Digest          string `json:"digest"`
+	}, 0, len(registration.Materializations))
+	// A Runner without an installed bundle proves no materialization and
+	// serves only client-selected images, so it must advertise them.
+	if len(registration.Materializations) == 0 && !registration.Capabilities.ClientSelectedImageReady {
 		return false, ErrRunnerPrerequisites
 	}
 	for _, evidence := range registration.Materializations {

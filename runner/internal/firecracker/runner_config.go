@@ -80,26 +80,34 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	kernelPath, err := required("SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH")
+	installedBundle, err := requiredBool("SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE")
 	if err != nil {
 		return nil, err
 	}
-	rootfsPath, err := required("SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH")
-	if err != nil {
-		return nil, err
+	installedBundleSettings := []string{
+		"SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH",
+		"SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH",
+		"SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH",
+		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY",
+		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256",
 	}
-	sharedImagePath, err := required("SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH")
-	if err != nil {
-		return nil, err
+	installedBundleValues := make(map[string]string, len(installedBundleSettings))
+	for _, name := range installedBundleSettings {
+		if installedBundle {
+			value, err := required(name)
+			if err != nil {
+				return nil, err
+			}
+			installedBundleValues[name] = value
+		} else if _, present := os.LookupEnv(name); present {
+			return nil, fmt.Errorf("SecondBox Firecracker config must not set %s when SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE is false", name)
+		}
 	}
-	publicKeyPath, err := required("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY")
-	if err != nil {
-		return nil, err
-	}
-	publicKeySHA256, err := required("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256")
-	if err != nil {
-		return nil, err
-	}
+	kernelPath := installedBundleValues["SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"]
+	rootfsPath := installedBundleValues["SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"]
+	sharedImagePath := installedBundleValues["SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"]
+	publicKeyPath := installedBundleValues["SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"]
+	publicKeySHA256 := installedBundleValues["SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"]
 	executionImagePublicKeyPath, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY")
 	if err != nil {
 		return nil, err
@@ -306,6 +314,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMJailerGID:                           jailerGID,
 		MicroVMJailerCgroupVersion:                 cgroupVersion,
 		MicroVMJailerParentCgroup:                  cgroupParent,
+		MicroVMInstalledBundle:                     installedBundle,
 		MicroVMKernelPath:                          kernelPath,
 		MicroVMRootfsPath:                          rootfsPath,
 		MicroVMToolRootfsPath:                      rootfsPath,

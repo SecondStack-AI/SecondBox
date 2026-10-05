@@ -417,8 +417,9 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	homeRunnerID := ""
+	executionImageSelected := input.LifecycleRequestMetadata["executionImageReference"] != ""
 	if input.SourceSnapshotID == "" {
-		homeRunnerID, err = selectInitialHomeRunner(ctx, tx, placementSpec, tenantEgressContext)
+		homeRunnerID, err = selectInitialHomeRunner(ctx, tx, placementSpec, executionImageSelected, tenantEgressContext)
 	} else {
 		homeRunnerID, err = selectSnapshotCloneHomeRunner(
 			ctx,
@@ -426,6 +427,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			input.Principal,
 			input.SourceSnapshotID,
 			placementSpec,
+			executionImageSelected,
 			tenantEgressContext,
 			input.Sandbox.CreatedAt,
 		)
@@ -1334,6 +1336,7 @@ func selectInitialHomeRunner(
 	ctx context.Context,
 	tx pgx.Tx,
 	spec contracts.ProfileRevisionSpec,
+	executionImageSelected bool,
 	egressContexts ...*string,
 ) (string, error) {
 	var egressContext *string
@@ -1341,9 +1344,10 @@ func selectInitialHomeRunner(
 		egressContext = egressContexts[0]
 	}
 	return selectRunnerForPlacement(ctx, tx, spec, runnerPlacementOptions{
-		unavailable:           ports.ErrHomeRunnerUnavailable,
-		errorPrefix:           "SecondBox initial home Runner",
-		requiredEgressContext: egressContext,
+		unavailable:            ports.ErrHomeRunnerUnavailable,
+		errorPrefix:            "SecondBox initial home Runner",
+		requiredEgressContext:  egressContext,
+		executionImageSelected: executionImageSelected,
 	})
 }
 
@@ -1361,6 +1365,7 @@ func selectSnapshotCloneHomeRunner(
 	principal contracts.Principal,
 	snapshotID string,
 	spec contracts.ProfileRevisionSpec,
+	executionImageSelected bool,
 	egressContext *string,
 	now time.Time,
 ) (string, error) {
@@ -1386,10 +1391,11 @@ func selectSnapshotCloneHomeRunner(
 		return "", ports.ErrSnapshotUnavailable
 	}
 	return selectRunnerForPlacement(ctx, tx, spec, runnerPlacementOptions{
-		exactRunnerID:         homeRunnerID,
-		unavailable:           ports.ErrHomeRunnerUnavailable,
-		errorPrefix:           "SecondBox Snapshot home Runner",
-		requiredEgressContext: egressContext,
+		exactRunnerID:          homeRunnerID,
+		unavailable:            ports.ErrHomeRunnerUnavailable,
+		errorPrefix:            "SecondBox Snapshot home Runner",
+		requiredEgressContext:  egressContext,
+		executionImageSelected: executionImageSelected,
 	})
 }
 

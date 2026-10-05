@@ -239,7 +239,9 @@ The control-plane container runs as UID/GID 65532 with a read-only root, dropped
 
 Every `[[runners]]` entry is keyed by immutable `runner_id`. At most one may use `placement = "same-host"`; any number may use `placement = "remote"`.
 
-For same-host placement, set `identity_host_directory`, `artifact_host_directory`, and `state_host_directory` to explicit host paths. The compiler supplies all seventeen fixed container paths: identity and egress configuration, workspace root, Runner logs, Firecracker and jailer executables, jail root, kernel/rootfs/shared assets, runtime and Firecracker logs, snapshot-template cache, signing-key file, network state, and nft executable. Remove `workspace_host_directory` from existing manifests and omit the path fields marked remote-only in the Runner template from same-host declarations. Nonempty values are rejected instead of silently ignored. The signing-key fingerprint stays explicit; only its packaged file location is derived. The existing `state_host_directory/workspaces` directory remains authoritative and must exist on the qualified storage filesystem; resolution never creates or relocates it. Remote declarations still require explicit paths. Existing custom state or asset layouts must be reconciled with the documented packaged paths before adopting this schema; compilation does not move their files.
+Every Runner declaration states `firecracker_installed_bundle`. Set `true` for a Runner with an installed signed execution bundle: Sandboxes that select no execution image boot that bundle, and the bundle settings (`artifact_host_directory` for same-host placement, `artifact_public_key_sha256`, and for remote placement `artifact_public_key`, `firecracker_kernel_path`, `firecracker_rootfs_path`, and `firecracker_shared_image_path`) are required. Set `false` for a Runner that boots only client-selected execution images: omit every one of those settings, because the compiler rejects them, and do not materialize the `microvm-artifacts` image. Such a Runner advertises the `client-selected-image` capability and no materialization, so the control plane homes on it only Sandboxes created with an execution image; a Sandbox created without one is placed on a Runner with an installed bundle or refused with `home_runner_unavailable`. The Runner refuses an Assignment that selects no execution image with `SecondBox Runner has no installed execution bundle`, and it never advertises snapshot-resume capacity, because resume templates are built from the installed bundle. A same-host Runner with an installed bundle adds `compose.same-host-runner-installed-bundle.yml`, which mounts `artifact_host_directory` and names the bundle files; without one the compiler selects only `compose.same-host-runner.yml`.
+
+For same-host placement, set `identity_host_directory` and `state_host_directory`, and with an installed bundle `artifact_host_directory`, to explicit host paths. The compiler supplies all fixed container paths: identity and egress configuration, workspace root, Runner logs, Firecracker and jailer executables, jail root, kernel/rootfs/shared assets, runtime and Firecracker logs, snapshot-template cache, signing-key file, network state, and nft executable. The kernel/rootfs/shared asset and signing-key paths exist only for a Runner with an installed bundle. Remove `workspace_host_directory` from existing manifests and omit the path fields marked remote-only in the Runner template from same-host declarations. Nonempty values are rejected instead of silently ignored. The signing-key fingerprint stays explicit; only its packaged file location is derived. The existing `state_host_directory/workspaces` directory remains authoritative and must exist on the qualified storage filesystem; resolution never creates or relocates it. Remote declarations still require explicit paths. Existing custom state or asset layouts must be reconciled with the documented packaged paths before adopting this schema; compilation does not move their files.
 
 Packaged deployments always use the Firecracker jailer for both placements. Remove `firecracker_allow_unjailed` from existing Runner declarations; the compiler emits the fixed `false` runtime value.
 
@@ -322,7 +324,9 @@ identity_directory = ''
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
 
 # Artifact trust
-# Execution-asset directory on the Runner host; absolute when set and required for same-host placement.
+# Whether this Runner has an installed signed execution bundle; required, so replace this string with a Boolean. With true, assignments that select no execution image boot the installed bundle, and the bundle settings below are required. With false, the Runner boots only client-selected execution images and artifact_host_directory, artifact_public_key, artifact_public_key_sha256, firecracker_kernel_path, firecracker_rootfs_path, and firecracker_shared_image_path must be omitted.
+firecracker_installed_bundle = '<replace-with-boolean>'
+# Installed-bundle directory on the Runner host; absolute when set and required for same-host placement with an installed bundle.
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'
 # Registry hosts allowed for client-selected execution images.
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
@@ -338,9 +342,9 @@ execution_image_max_download_bytes = 0
 execution_image_max_expanded_bytes = 0
 # Maximum retained expanded image cache size.
 execution_image_max_cache_bytes = 0
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/signing.pub.
+# Remote placement with an installed bundle requires this absolute Runner-host path. Leave empty for same-host placement, where the package uses /opt/secondbox-artifacts/signing.pub, and for a Runner without an installed bundle.
 artifact_public_key = ''
-# Provisioned signed-artifact key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
+# Installed-bundle signing-key fingerprint; with an installed bundle, exactly 64 lowercase hexadecimal characters and not all zeroes. Omit it for a Runner without an installed bundle.
 artifact_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
 
 # Runner storage
@@ -383,11 +387,11 @@ firecracker_jailer_gid = 0
 firecracker_cgroup_version = 0
 # Host cgroup parent used by the jailer; required.
 firecracker_cgroup_parent = ''
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/kernel.
+# Remote placement with an installed bundle requires this absolute Runner-host path. Leave empty for same-host placement, where the package uses /opt/secondbox-artifacts/kernel, and for a Runner without an installed bundle.
 firecracker_kernel_path = ''
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/rootfs.ext4.
+# Remote placement with an installed bundle requires this absolute Runner-host path. Leave empty for same-host placement, where the package uses /opt/secondbox-artifacts/rootfs.ext4, and for a Runner without an installed bundle.
 firecracker_rootfs_path = ''
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/shared.img.
+# Remote placement with an installed bundle requires this absolute Runner-host path. Leave empty for same-host placement, where the package uses /opt/secondbox-artifacts/shared.img, and for a Runner without an installed bundle.
 firecracker_shared_image_path = ''
 # Kernel arguments; must include console=ttyS0, reboot=k, panic=1, pci=off, root=/dev/vda, rw, quiet, loglevel=1, i8042.noaux, i8042.nomux, i8042.nopnp, i8042.dumbkbd, and init=/init.
 firecracker_kernel_args = ''

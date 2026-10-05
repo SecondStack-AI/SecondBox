@@ -218,9 +218,9 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness close KVM probe: %w", err)
 	}
 	cfg := b.manager.cfg
-	manifest, err := loadSignedArtifactManifest(filepath.Join(filepath.Dir(cfg.MicroVMKernelPath), "manifest.json"))
+	advertised, err := b.installedBundleAdvertisement(cfg, time.Now().UTC())
 	if err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness signed compatibility metadata: %w", err)
+		return runnercontrol.BackendReadiness{}, err
 	}
 	if strings.TrimSpace(cfg.MicroVMJailerChrootBaseDir) == "" ||
 		cfg.MicroVMJailerUIDStart < 1 ||
@@ -287,39 +287,73 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	if err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness host kernel evidence: %w", err)
 	}
-	snapshotResumeReady, err := b.snapshotResumeReady(cfg, manifest)
-	if err != nil {
-		return runnercontrol.BackendReadiness{}, err
-	}
-	materializations, err := firecrackerMaterializationEvidence(manifest, time.Now().UTC())
-	if err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness materialization: %w", err)
-	}
 	return runnercontrol.BackendReadiness{
 		Architecture: runtime.GOARCH,
 		Capacity:     runnerAllocatableCapacity(cfg),
 		Reserved:     &runnerprotocol.Capacity{},
 		Capabilities: &runnerprotocol.RunnerCapabilities{
-			Architecture:          runtime.GOARCH,
-			KernelRelease:         strings.TrimSpace(string(kernelRelease)),
-			ComputeBackendVersion: expectedFirecrackerVersionString(),
-			HypervisorReady:       true,
-			IsolationReady:        firecrackerIsolationReady(cfg),
-			ResourceLimitsReady:   true,
-			NetworkPolicyReady:    true,
-			StorageReady:          true,
-			CleanupReady:          true,
-			GuestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{
-				Minimum: manifest.GuestProtocol.Minimum,
-				Maximum: manifest.GuestProtocol.Maximum,
-			},
-			SnapshotResumeReady:           snapshotResumeReady,
+			Architecture:                  runtime.GOARCH,
+			KernelRelease:                 strings.TrimSpace(string(kernelRelease)),
+			ComputeBackendVersion:         expectedFirecrackerVersionString(),
+			HypervisorReady:               true,
+			IsolationReady:                firecrackerIsolationReady(cfg),
+			ResourceLimitsReady:           true,
+			NetworkPolicyReady:            true,
+			StorageReady:                  true,
+			CleanupReady:                  true,
+			GuestProtocolGenerations:      advertised.guestProtocolGenerations,
+			SnapshotResumeReady:           advertised.snapshotResumeReady,
 			PerExecAttributionReady:       b.manager.cfg.NetworkPolicyEgressContexts.HasAttributedGateway(),
 			ClientSelectedImageReady:      true,
 			PhysicalStorageAdmissionReady: cfg.MicroVMStorageAdmissionMode == "physical",
 		},
 		BackendKind:      runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
-		Materializations: materializations,
+		Materializations: advertised.materializations,
+	}, nil
+}
+
+// installedBundleReadiness is the part of readiness that the installed signed
+// bundle decides.
+type installedBundleReadiness struct {
+	guestProtocolGenerations *runnerprotocol.ProtocolVersionRange
+	snapshotResumeReady      bool
+	materializations         []*runnerprotocol.BackendMaterializationEvidence
+}
+
+// installedBundleAdvertisement derives guest compatibility, snapshot-resume
+// capacity and materialization evidence from the installed signed bundle. A
+// Runner without one advertises the guest protocol generation its host side
+// speaks, no snapshot-resume capacity and no materialization: the control
+// plane then homes on it only Sandboxes that select an execution image, and
+// each selected image proves its own guest generation at assignment.
+func (b *AssignmentBackend) installedBundleAdvertisement(cfg *config.Config, verifiedAt time.Time) (installedBundleReadiness, error) {
+	if !cfg.MicroVMInstalledBundle {
+		return installedBundleReadiness{
+			guestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{
+				Minimum: currentGuestProtocolGeneration,
+				Maximum: currentGuestProtocolGeneration,
+			},
+		}, nil
+	}
+	manifest, err := loadSignedArtifactManifest(filepath.Join(filepath.Dir(cfg.MicroVMKernelPath), "manifest.json"))
+	if err != nil {
+		return installedBundleReadiness{}, fmt.Errorf("SecondBox Firecracker readiness signed compatibility metadata: %w", err)
+	}
+	snapshotResumeReady, err := b.snapshotResumeReady(cfg, manifest)
+	if err != nil {
+		return installedBundleReadiness{}, err
+	}
+	materializations, err := firecrackerMaterializationEvidence(manifest, verifiedAt)
+	if err != nil {
+		return installedBundleReadiness{}, fmt.Errorf("SecondBox Firecracker readiness materialization: %w", err)
+	}
+	return installedBundleReadiness{
+		guestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{
+			Minimum: manifest.GuestProtocol.Minimum,
+			Maximum: manifest.GuestProtocol.Maximum,
+		},
+		snapshotResumeReady: snapshotResumeReady,
+		materializations:    materializations,
 	}, nil
 }
 
@@ -565,6 +599,13 @@ func (b *AssignmentBackend) validateAssignmentStartupMode(mode string) (runtimem
 	case assignmentStartupModeColdBoot:
 		return runtimemanager.StartupModeColdBoot, nil
 	case assignmentStartupModeSnapshotResume:
+		if !b.manager.cfg.MicroVMInstalledBundle {
+			return "", fmt.Errorf(
+				"%w: %w: snapshot resume boots a template built from the installed bundle",
+				ErrSnapshotTemplateUnavailable,
+				config.ErrNoInstalledExecutionBundle,
+			)
+		}
 		if b.manager.cfg.MicroVMAllowUnjailed {
 			return "", fmt.Errorf(
 				"%w: snapshot resume requires the jailer, so SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED must be false",
@@ -899,6 +940,9 @@ func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerproto
 	if assignment.ExecutionImage == nil {
 		if len(assignment.Assets) != 0 {
 			return SignedBundleGuestStart{}, fmt.Errorf("SecondBox default-image assignment must not select assets")
+		}
+		if !b.manager.cfg.MicroVMInstalledBundle {
+			return SignedBundleGuestStart{}, fmt.Errorf("%w: a default-image assignment must select an execution image", config.ErrNoInstalledExecutionBundle)
 		}
 		return InstalledSignedBundleGuestStart(filepath.Dir(b.manager.cfg.MicroVMKernelPath))
 	}

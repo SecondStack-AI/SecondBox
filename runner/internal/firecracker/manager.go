@@ -126,6 +126,7 @@ type instance struct {
 	workspacePath          string
 	workspaceAttachment    workspacestore.ComputeAttachment
 	sharedImagePath        string
+	kernelPath             string
 	guestIP                string
 	cmd                    *exec.Cmd
 	startedAt              time.Time
@@ -237,6 +238,21 @@ func New(cfg *config.Config) (*Manager, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
 	}
+	if !cfg.MicroVMInstalledBundle {
+		for label, value := range map[string]string{
+			"kernel path":            cfg.MicroVMKernelPath,
+			"rootfs path":            cfg.MicroVMRootfsPath,
+			"tool rootfs path":       cfg.MicroVMToolRootfsPath,
+			"shared image path":      cfg.MicroVMSharedImagePath,
+			"tool shared image path": cfg.MicroVMToolSharedImagePath,
+			"artifact public key":    cfg.MicroVMPublicKeyPath,
+			"artifact key SHA-256":   cfg.MicroVMPublicKeySHA256,
+		} {
+			if value != "" {
+				return nil, fmt.Errorf("microVM %s must be empty for a Runner without an installed execution bundle", label)
+			}
+		}
+	}
 	warnIfFirecrackerUnjailed(cfg.MicroVMAllowUnjailed)
 	if err := requireExecutable("firecracker", cfg.FirecrackerPath); err != nil {
 		return nil, err
@@ -254,10 +270,11 @@ func New(cfg *config.Config) (*Manager, error) {
 			return nil, err
 		}
 	}
-	for label, path := range map[string]string{
-		"kernel": cfg.MicroVMKernelPath,
-		"rootfs": cfg.MicroVMRootfsPath,
-	} {
+	installedBundlePaths := map[string]string{}
+	if cfg.MicroVMInstalledBundle {
+		installedBundlePaths = map[string]string{"kernel": cfg.MicroVMKernelPath, "rootfs": cfg.MicroVMRootfsPath}
+	}
+	for label, path := range installedBundlePaths {
 		if strings.TrimSpace(path) == "" {
 			return nil, fmt.Errorf("microVM %s path is required", label)
 		}
@@ -1005,6 +1022,7 @@ type launchedInstanceFiles struct {
 	rootfsImagePath string
 	workspacePath   string
 	sharedImagePath string
+	kernelPath      string
 }
 
 // registerLaunchedInstance takes ownership of a started VMM process. It builds
@@ -1042,6 +1060,7 @@ func (m *Manager) registerLaunchedInstance(
 		workspacePath:       files.workspacePath,
 		workspaceAttachment: opts.WorkspaceAttachment,
 		sharedImagePath:     files.sharedImagePath,
+		kernelPath:          files.kernelPath,
 		guestIP:             host.guestIP,
 		cmd:                 cmd,
 		startedAt:           time.Now().UTC(),
@@ -1220,6 +1239,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 			rootfsImagePath: image.RootfsPath,
 			workspacePath:   launch.workspacePath,
 			sharedImagePath: launchImage.SharedImagePath,
+			kernelPath:      launchImage.KernelPath,
 		},
 		cmd,
 		onRegisteredLocked,

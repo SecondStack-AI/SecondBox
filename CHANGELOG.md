@@ -4,6 +4,7 @@
 
 ### Added
 
+- A Firecracker Runner can run without an installed signed execution bundle and boot only client-selected execution images. Set `firecracker_installed_bundle = false` and omit `artifact_host_directory`, `artifact_public_key`, `artifact_public_key_sha256`, and the kernel, rootfs, and shared-image paths; no `microvm-artifacts` image is needed. Such a Runner advertises no materialization and no snapshot-resume capacity, the control plane homes on it only Sandboxes created with an execution image, and it refuses an Assignment that selects no image with `SecondBox Runner has no installed execution bundle`.
 - Each release publishes an arm64 artifact set beside the amd64 one under the same tag: `secondbox-VERSION-arm64-artifact-manifest.json` with its linux-arm64 scenario evidence and `standard-arm64` standard bundles, and the control-plane, Runner, installer-tools and microVM-artifact images under `vVERSION-arm64` tags. It shares the SDKs, binaries, OpenAPI document and install bootstrap with the amd64 set. `just release-arm64 VERSION AMD64_RELEASE_DIR` stages it on a Linux arm64 KVM host, each host uploads its own output, and the publisher starts once the draft holds both sets.
 
 - `[standard_resources]` accepts `guest_architecture = "amd64"` or `"arm64"` in place of `artifact_manifest` for a deployment built from source. `secondbox-deploy` then builds the standard documents from its own code, selecting the development lineage for an unstamped build and the full published lineage for a stamped one, and skips the release signing-identity and Profile-identity checks that need a manifest. Exactly one of the two fields must be set.
@@ -15,6 +16,7 @@
 ### Changed
 
 - The control-plane, Runner, gVisor Runner, gVisor artifact and installer-tools images refuse to build unless `RELEASE_VERSION` is SemVer without build metadata other than `0.0.0-development` and `SOURCE_COMMIT` is a full 40-character commit, so no image ships binaries that silently report the development identity. Local, CI and qualification builds pass `0.0.0-local`, `0.0.0-ci` or `0.0.0-qualification` with the checked-out commit.
+- **`firecracker_installed_bundle` is a new required key in every `[[runners]]` declaration**, rendered as the required `SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE` Runner variable. Existing Runners with an installed bundle set `true`. The same-host bundle mount and settings moved from `compose.same-host-runner.yml` into `compose.same-host-runner-installed-bundle.yml`, which the compiler selects only for a Runner with an installed bundle. Hosts that launch the Runner from their own environment add `SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE=true`.
 - `releasecontract.ArtifactManifestLocation` and `QualificationEvidenceLocation` take the guest architecture. Files of a non-amd64 artifact set, including its standard bundles, staging checksums and OCI archives, carry the architecture suffix; amd64 names are unchanged.
 
 ### Fixed

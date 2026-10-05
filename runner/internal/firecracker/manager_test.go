@@ -348,8 +348,9 @@ func TestPrepareLaunchImageUsesVerifiedExecutionImageTrust(t *testing.T) {
 		image.VerifiedArtifacts = append(image.VerifiedArtifacts, identity)
 	}
 	manager := &Manager{cfg: &config.Config{
-		MicroVMPublicKeyPath: "/fixed-release-authority/public.pem",
-		MicroVMKernelPath:    "/fixed-release-bundle/kernel",
+		MicroVMPublicKeyPath:   "/fixed-release-authority/public.pem",
+		MicroVMInstalledBundle: true,
+		MicroVMKernelPath:      "/fixed-release-bundle/kernel",
 	}}
 	staged, err := manager.prepareLaunchImage(t.TempDir(), image)
 	if err != nil {
@@ -716,6 +717,7 @@ func TestCreateAndStartRequiresCIDRForSecondCompartment(t *testing.T) {
 
 func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 	cfg := &config.Config{
+		MicroVMInstalledBundle: true,
 		MicroVMKernelPath:      "/artifacts/vmlinux",
 		MicroVMSharedImagePath: "/artifacts/shared.erofs",
 		MicroVMKernelArgs:      "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init",
@@ -775,6 +777,7 @@ func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 
 func TestMicroVMImageForStartSelectsToolExecutorImage(t *testing.T) {
 	m := &Manager{cfg: &config.Config{
+		MicroVMInstalledBundle:     true,
 		MicroVMRootfsPath:          "/images/agent-rootfs.ext4",
 		MicroVMSharedImagePath:     "/images/agent-shared.img",
 		MicroVMToolRootfsPath:      "/images/tool-rootfs.ext4",
@@ -812,9 +815,10 @@ func TestPrepareLaunchImageResolvesFallbackBeforeSettingDestination(t *testing.T
 
 func TestBuildFirecrackerConfigIncludesTapInterface(t *testing.T) {
 	cfg := &config.Config{
-		MicroVMKernelPath: "/artifacts/vmlinux",
-		MicroVMVCPUs:      1,
-		MicroVMMemoryMiB:  512,
+		MicroVMInstalledBundle: true,
+		MicroVMKernelPath:      "/artifacts/vmlinux",
+		MicroVMVCPUs:           1,
+		MicroVMMemoryMiB:       512,
 	}
 	got := buildFirecrackerConfig(cfg, cfg.MicroVMKernelPath, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/guest.vsock", "agfc123456", "")
 	if len(got.NetworkIfaces) != 1 {
@@ -831,11 +835,12 @@ func TestBuildFirecrackerConfigIncludesTapInterface(t *testing.T) {
 func TestPrepareLaunchUnjailedIncludesInstanceID(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{cfg: &config.Config{
-		MicroVMAllowUnjailed: true,
-		FirecrackerPath:      "firecracker",
-		MicroVMVCPUs:         1,
-		MicroVMMemoryMiB:     512,
-		MicroVMKernelPath:    "/kernel",
+		MicroVMAllowUnjailed:   true,
+		FirecrackerPath:        "firecracker",
+		MicroVMVCPUs:           1,
+		MicroVMMemoryMiB:       512,
+		MicroVMInstalledBundle: true,
+		MicroVMKernelPath:      "/kernel",
 	}}
 	workspace := managerTestAttachment(t, filepath.Join(t.TempDir(), "workspace.ext4"))
 	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", workspace, "", "", "", os.Getuid(), false, nil)
@@ -916,6 +921,7 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	m := &Manager{cfg: &config.Config{
 		FirecrackerPath:            filepath.Join(dir, "firecracker"),
 		JailerPath:                 filepath.Join(dir, "jailer"),
+		MicroVMInstalledBundle:     true,
 		MicroVMKernelPath:          kernel,
 		MicroVMSharedImagePath:     shared,
 		MicroVMJailerChrootBaseDir: filepath.Join(dir, "jailer-root"),
@@ -1180,6 +1186,7 @@ func TestCopyFilePreservesContentAndMode(t *testing.T) {
 func TestNewFailsClosedWhenFirecrackerMissing(t *testing.T) {
 	_, err := New(&config.Config{
 		FirecrackerPath:         filepath.Join(t.TempDir(), "missing-firecracker"),
+		MicroVMInstalledBundle:  true,
 		MicroVMKernelPath:       "/missing/kernel",
 		MicroVMRootfsPath:       "/missing/rootfs",
 		MicroVMRunDir:           t.TempDir(),
@@ -1819,12 +1826,13 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	}
 	m := &Manager{
 		cfg: &config.Config{
-			MicroVMRunDir:        runDir,
-			MicroVMLogDir:        logDir,
-			MicroVMRootfsPath:    filepath.Join(root, "missing-rootfs.ext4"),
-			MicroVMBridgeName:    "agbr0",
-			MicroVMBridgeCIDR:    "10.0.0.1/24",
-			MicroVMAllowUnjailed: true,
+			MicroVMInstalledBundle: true,
+			MicroVMRunDir:          runDir,
+			MicroVMLogDir:          logDir,
+			MicroVMRootfsPath:      filepath.Join(root, "missing-rootfs.ext4"),
+			MicroVMBridgeName:      "agbr0",
+			MicroVMBridgeCIDR:      "10.0.0.1/24",
+			MicroVMAllowUnjailed:   true,
 		},
 		instances: map[string]*instance{},
 		guestIPs:  map[string]string{},

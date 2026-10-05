@@ -88,7 +88,7 @@ func (m *Manager) CreateGoldenSnapshot(ctx context.Context, instanceID, outDir s
 		CreatedAt:          time.Now().UTC().Format(time.RFC3339),
 		SnapshotPath:       snapshotPath,
 		MemFilePath:        memPath,
-		KernelPath:         m.cfg.MicroVMKernelPath,
+		KernelPath:         firstNonEmpty(inst.kernelPath, m.cfg.MicroVMKernelPath),
 		KernelArgs:         effectiveKernelArgs(m.cfg, firstNonEmpty(inst.guestIP, m.guestIP(inst.id))),
 		RootfsPath:         firstNonEmpty(inst.rootfsPath, m.cfg.MicroVMRootfsPath),
 		WorkspacePath:      inst.workspacePath,

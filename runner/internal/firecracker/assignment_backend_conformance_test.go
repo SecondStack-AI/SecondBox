@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -234,6 +235,7 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 	keyID := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	manager := &Manager{
 		cfg: &config.Config{
+			MicroVMInstalledBundle:                     true,
 			MicroVMKernelPath:                          filepath.Join(artifactDir, "kernel"),
 			MicroVMPublicKeySHA256:                     keyID,
 			MicroVMVCPUs:                               2,
@@ -512,4 +514,61 @@ func (attachment *conformanceComputeAttachment) Close() error {
 	err := attachment.image.Close()
 	attachment.image = nil
 	return err
+}
+
+func withoutInstalledBundleForTest(backend *AssignmentBackend) {
+	backend.manager.cfg.MicroVMInstalledBundle = false
+	backend.manager.cfg.MicroVMKernelPath = ""
+	backend.manager.cfg.MicroVMPublicKeySHA256 = ""
+}
+
+// A Runner without an installed bundle serves only client-selected images: a
+// default-image assignment is refused before any Workspace, TAP, or jail, and
+// a selected image is still checked against its own signed manifest.
+func TestRunnerWithoutInstalledBundleRejectsDefaultImageAssignment(t *testing.T) {
+	fixture := newFirecrackerConformanceFixture(t)
+	backend := fixture.Backend.(*AssignmentBackend)
+	selectedDirectory := filepath.Dir(backend.manager.cfg.MicroVMKernelPath)
+	withoutInstalledBundleForTest(backend)
+	defaultImage := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+	defaultImage.ExecutionImage = nil
+	defaultImage.Assets = nil
+	err := backend.ValidateAssignment(t.Context(), defaultImage)
+	if !errors.Is(err, config.ErrNoInstalledExecutionBundle) ||
+		!strings.Contains(err.Error(), "SecondBox Runner has no installed execution bundle: a default-image assignment must select an execution image") {
+		t.Fatalf("default-image assignment without an installed bundle = %v", err)
+	}
+	if err := backend.ValidateAssignment(t.Context(), fixture.Assignment); err != nil {
+		t.Fatalf("selected-image assignment without an installed bundle = %v", err)
+	}
+	if _, err := backend.assignmentGuestProtocolStart(fixture.Assignment, selectedDirectory); err != nil {
+		t.Fatalf("selected-image guest authority without an installed bundle = %v", err)
+	}
+	unsupported := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+	unsupported.Assets[0].GuestProtocolGeneration = currentGuestProtocolGeneration + 1
+	if _, err := backend.assignmentGuestProtocolStart(unsupported, selectedDirectory); err == nil {
+		t.Fatal("selected image declaring an unsupported guest generation was accepted")
+	}
+	if _, err := backend.validateAssignmentStartupMode(assignmentStartupModeSnapshotResume); !errors.Is(err, config.ErrNoInstalledExecutionBundle) ||
+		!errors.Is(err, ErrSnapshotTemplateUnavailable) {
+		t.Fatalf("snapshot resume without an installed bundle = %v", err)
+	}
+}
+
+func TestReadinessWithoutInstalledBundleAdvertisesCompiledGuestGeneration(t *testing.T) {
+	fixture := newFirecrackerConformanceFixture(t)
+	backend := fixture.Backend.(*AssignmentBackend)
+	withoutInstalledBundleForTest(backend)
+	absent, err := backend.installedBundleAdvertisement(backend.manager.cfg, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absent.guestProtocolGenerations.GetMinimum() != currentGuestProtocolGeneration ||
+		absent.guestProtocolGenerations.GetMaximum() != currentGuestProtocolGeneration ||
+		len(absent.materializations) != 0 || absent.snapshotResumeReady {
+		t.Fatalf("bundle-less advertisement = %+v", absent)
+	}
+	if err := backend.manager.VerifyArtifactHealth(); err != nil {
+		t.Fatalf("bundle-less artifact health = %v", err)
+	}
 }

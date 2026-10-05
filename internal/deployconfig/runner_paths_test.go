@@ -71,6 +71,7 @@ func TestSameHostDerivedPathsMatchComposeMounts(t *testing.T) {
 	}
 	want := map[string]string{
 		"SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED":    "false",
+		"SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE":  "true",
 		"SECONDBOX_RUNNER_LOG_PATH":                      "/var/lib/secondbox-runner/state/logs/runner.jsonl",
 		"SECONDBOX_RUNNER_LOG_DIR":                       "/var/lib/secondbox-runner/state/logs",
 		"SECONDBOX_RUNNER_FIRECRACKER_PATH":              "/usr/local/bin/firecracker",
@@ -205,6 +206,166 @@ func TestRemoteRunnerPathsSurviveEnvironmentRendering(t *testing.T) {
 	for name, value := range want {
 		if env[name] != value {
 			t.Errorf("remote %s = %q, want %q", name, env[name], value)
+		}
+	}
+}
+
+func withoutInstalledBundleForTest(runner Runner) Runner {
+	runner.FirecrackerInstalledBundle = boolean(false)
+	runner.ArtifactHostDirectory = ""
+	runner.ArtifactPublicKeySHA256 = ""
+	for _, path := range runner.installedBundlePaths() {
+		*path.field = ""
+	}
+	return runner
+}
+
+func TestRunnerInstalledBundleChoiceIsExplicit(t *testing.T) {
+	runner := validTestRunner("runner-remote", "remote")
+	runner.FirecrackerInstalledBundle = nil
+	if err := validateRunner("runners[0]", runner); err == nil || !strings.Contains(err.Error(), "runners[0].firecracker_installed_bundle is required") {
+		t.Fatalf("absent installed-bundle choice = %v", err)
+	}
+	for _, placement := range []string{"remote", "same-host"} {
+		runner := validTestRunner("runner-"+placement, placement)
+		if placement == "same-host" {
+			runner = validSameHostTestRunner("runner-" + placement)
+		}
+		if err := validateRunner("runners[0]", withoutInstalledBundleForTest(runner)); err != nil {
+			t.Fatalf("%s Runner without an installed bundle = %v", placement, err)
+		}
+	}
+}
+
+func TestRunnerWithoutInstalledBundleRejectsEveryBundleSetting(t *testing.T) {
+	fields := []struct {
+		name string
+		set  func(*Runner)
+	}{
+		{"artifact_host_directory", func(r *Runner) { r.ArtifactHostDirectory = "/var/lib/secondbox/artifacts" }},
+		{"artifact_public_key", func(r *Runner) { r.ArtifactPublicKey = "/opt/secondbox/manifest-public.pem" }},
+		{"artifact_public_key_sha256", func(r *Runner) { r.ArtifactPublicKeySHA256 = strings.Repeat("a", 64) }},
+		{"firecracker_kernel_path", func(r *Runner) { r.FirecrackerKernelPath = "/opt/secondbox/kernel" }},
+		{"firecracker_rootfs_path", func(r *Runner) { r.FirecrackerRootFSPath = "/opt/secondbox/rootfs.ext4" }},
+		{"firecracker_shared_image_path", func(r *Runner) { r.FirecrackerSharedImagePath = "/opt/secondbox/shared.img" }},
+	}
+	for _, field := range fields {
+		for _, placement := range []string{"remote", "same-host"} {
+			t.Run(placement+"/"+field.name, func(t *testing.T) {
+				runner := validTestRunner("runner-"+placement, placement)
+				if placement == "same-host" {
+					runner = validSameHostTestRunner("runner-" + placement)
+				}
+				runner = withoutInstalledBundleForTest(runner)
+				field.set(&runner)
+				want := "runners[0]." + field.name + " must be omitted when firecracker_installed_bundle is false"
+				if err := validateRunner("runners[0]", runner); err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("bundle setting without an installed bundle = %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRunnerEnvironmentStatesInstalledBundleChoice(t *testing.T) {
+	bundleSettings := []string{
+		"SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH",
+		"SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH",
+		"SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH",
+		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY",
+		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256",
+		"SECONDBOX_RUNNER_ARTIFACT_HOST_DIR",
+	}
+	for _, placement := range []string{"remote", "same-host"} {
+		runner := validTestRunner("runner-"+placement, placement)
+		if placement == "same-host" {
+			runner = validSameHostTestRunner("runner-" + placement)
+		}
+		installed := resolveRunnerEnvironment(runner, "runner-credential")
+		if installed["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"] != "true" {
+			t.Fatalf("%s installed-bundle environment = %q", placement, installed["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"])
+		}
+		for _, name := range bundleSettings {
+			if name == "SECONDBOX_RUNNER_ARTIFACT_HOST_DIR" && placement == "remote" {
+				continue
+			}
+			if installed[name] == "" {
+				t.Errorf("%s Runner with an installed bundle omits %s", placement, name)
+			}
+		}
+		absent := resolveRunnerEnvironment(withoutInstalledBundleForTest(runner), "runner-credential")
+		if absent["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"] != "false" {
+			t.Fatalf("%s bundle-less environment = %q", placement, absent["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"])
+		}
+		for _, name := range bundleSettings {
+			if _, exists := absent[name]; exists {
+				t.Errorf("%s Runner without an installed bundle renders %s", placement, name)
+			}
+		}
+	}
+}
+
+func TestSameHostRunnerWithoutInstalledBundleSelectsNoBundleMount(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	runner := provisionSameHostTestRunner(t, manifestPath, "runner-local")
+	if err := os.RemoveAll(runner.ArtifactHostDirectory); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Runners[0] = withoutInstalledBundleForTest(manifest.Runners[0])
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	envPath := filepath.Join(filepath.Dir(manifestPath), "generated.env")
+	resolved, err := Render(manifestPath, envPath)
+	if err != nil {
+		t.Fatalf("same-host Runner without an installed bundle: %v", err)
+	}
+	for _, file := range resolved.ComposeFiles {
+		if strings.HasSuffix(file, "compose.same-host-runner-installed-bundle.yml") {
+			t.Fatalf("bundle-less Runner selected the installed-bundle overlay: %v", resolved.ComposeFiles)
+		}
+	}
+	if resolved.Environment["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"] != "false" {
+		t.Fatalf("rendered installed-bundle choice = %q", resolved.Environment["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"])
+	}
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skip("Docker Compose v2 is unavailable")
+	}
+	arguments := []string{"compose", "--project-name", "secondbox-bundle-less-test", "--env-file", envPath}
+	for _, file := range resolved.ComposeFiles {
+		arguments = append(arguments, "--file", file)
+	}
+	output, err := exec.Command("docker", append(arguments, "config", "--format", "json")...).Output()
+	if err != nil {
+		t.Fatalf("Compose config: %v", err)
+	}
+	var model struct {
+		Services map[string]struct {
+			Environment map[string]string
+			Volumes     []struct{ Source, Target string }
+		}
+	}
+	if err := json.Unmarshal(output, &model); err != nil {
+		t.Fatal(err)
+	}
+	service := model.Services["same-host-runner"]
+	if service.Environment["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"] != "false" {
+		t.Fatalf("Compose installed-bundle choice = %q", service.Environment["SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"])
+	}
+	if _, exists := service.Environment["SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"]; exists {
+		t.Fatal("bundle-less Compose model names an installed kernel")
+	}
+	for _, volume := range service.Volumes {
+		if volume.Target == "/opt/secondbox-artifacts" {
+			t.Fatalf("bundle-less Compose model mounts an installed bundle from %s", volume.Source)
 		}
 	}
 }

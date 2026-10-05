@@ -258,6 +258,9 @@ func verifyAndCaptureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroV
 // VerifyArtifactHealth proves that the artifact set verified during manager
 // startup has not been replaced or modified in place.
 func (m *Manager) VerifyArtifactHealth() error {
+	if m != nil && m.cfg != nil && !m.cfg.MicroVMInstalledBundle {
+		return nil
+	}
 	if m == nil || m.trustedArtifacts == nil {
 		return fmt.Errorf("trusted microVM artifacts are not configured")
 	}
@@ -430,6 +433,9 @@ func (m *Manager) microVMImageForStart(opts runtimemanager.StartOpts) (microVMIm
 				VerifiedExecutionImage: true,
 				VerifiedArtifacts:      opts.ExecutionImageArtifacts,
 			}, nil
+		}
+		if !m.cfg.MicroVMInstalledBundle {
+			return microVMImageSelection{}, fmt.Errorf("%w: a start that selects no execution image cannot boot", config.ErrNoInstalledExecutionBundle)
 		}
 		rootfsPath := firstNonEmpty(m.cfg.MicroVMToolRootfsPath, m.cfg.MicroVMRootfsPath)
 		sharedImagePath := firstNonEmpty(m.cfg.MicroVMToolSharedImagePath, m.cfg.MicroVMSharedImagePath)

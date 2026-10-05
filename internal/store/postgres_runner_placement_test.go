@@ -25,7 +25,7 @@ func TestConcurrentHomePlacementDoesNotOversubscribeOneRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer first.Rollback(t.Context())
-	selected, err := selectInitialHomeRunner(t.Context(), first, spec)
+	selected, err := selectInitialHomeRunner(t.Context(), first, spec, false)
 	if err != nil || selected != "runner-placement-capacity" {
 		t.Fatalf("first placement selected=%q error=%v", selected, err)
 	}
@@ -42,7 +42,7 @@ func TestConcurrentHomePlacementDoesNotOversubscribeOneRunner(t *testing.T) {
 	defer cancel()
 	selection := make(chan runnerPlacementResult, 1)
 	go func() {
-		runnerID, err := selectInitialHomeRunner(secondContext, second, spec)
+		runnerID, err := selectInitialHomeRunner(secondContext, second, spec, false)
 		selection <- runnerPlacementResult{runnerID: runnerID, err: err}
 	}()
 	select {
@@ -70,7 +70,7 @@ func TestConcurrentHomePlacementDoesNotOversubscribeOneRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer afterCommit.Rollback(t.Context())
-	if selected, err := selectInitialHomeRunner(t.Context(), afterCommit, spec); !errors.Is(err, ports.ErrHomeRunnerUnavailable) || selected != "" {
+	if selected, err := selectInitialHomeRunner(t.Context(), afterCommit, spec, false); !errors.Is(err, ports.ErrHomeRunnerUnavailable) || selected != "" {
 		t.Fatalf("post-commit placement selected=%q error=%v", selected, err)
 	}
 	var reservations int
@@ -112,7 +112,7 @@ func TestPhysicalStorageAdmissionIgnoresRetainedLogicalWorkspaceCapacity(t *test
 		t.Fatal(err)
 	}
 	defer second.Rollback(t.Context())
-	selected, err := selectInitialHomeRunner(t.Context(), second, spec)
+	selected, err := selectInitialHomeRunner(t.Context(), second, spec, false)
 	if err != nil || selected != runnerID {
 		t.Fatalf("physical storage placement selected=%q error=%v", selected, err)
 	}
@@ -122,7 +122,7 @@ func TestPhysicalStorageAdmissionIgnoresRetainedLogicalWorkspaceCapacity(t *test
 		WHERE id=$1`, runnerID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := selectInitialHomeRunner(t.Context(), second, spec); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+	if _, err := selectInitialHomeRunner(t.Context(), second, spec, false); !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		t.Fatalf("physical admission exceeded Firecracker per-Instance disk ceiling: %v", err)
 	}
 }
@@ -145,7 +145,7 @@ func TestDurableHomeReservationIsDiskOnlyAndReportedComputeStillApplies(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected, err := selectInitialHomeRunner(t.Context(), first, spec)
+	selected, err := selectInitialHomeRunner(t.Context(), first, spec, false)
 	if err != nil || selected != runnerID {
 		t.Fatalf("first placement selected=%q error=%v", selected, err)
 	}
@@ -168,7 +168,7 @@ func TestDurableHomeReservationIsDiskOnlyAndReportedComputeStillApplies(t *testi
 	if reserved != (runnerCapacity{DiskBytes: spec.Resources.WorkspaceBytes}) {
 		t.Fatalf("durable home reservation = %#v", reserved)
 	}
-	selected, err = selectInitialHomeRunner(t.Context(), read, spec)
+	selected, err = selectInitialHomeRunner(t.Context(), read, spec, false)
 	if err != nil || selected != runnerID {
 		t.Fatalf("stopped-home compute admission selected=%q error=%v", selected, err)
 	}
@@ -187,7 +187,7 @@ func TestDurableHomeReservationIsDiskOnlyAndReportedComputeStillApplies(t *testi
 		t.Fatal(err)
 	}
 	defer reported.Rollback(t.Context())
-	if selected, err := selectInitialHomeRunner(t.Context(), reported, spec); !errors.Is(err, ports.ErrHomeRunnerUnavailable) || selected != "" {
+	if selected, err := selectInitialHomeRunner(t.Context(), reported, spec, false); !errors.Is(err, ports.ErrHomeRunnerUnavailable) || selected != "" {
 		t.Fatalf("reported compute reservation selected=%q error=%v", selected, err)
 	}
 }
@@ -204,7 +204,7 @@ func TestConcurrentHomePlacementOnDistinctRunnersDoesNotWaitForFleet(t *testing.
 		t.Fatal(err)
 	}
 	defer first.Rollback(t.Context())
-	selected, err := selectInitialHomeRunner(t.Context(), first, spec)
+	selected, err := selectInitialHomeRunner(t.Context(), first, spec, false)
 	if err != nil || selected != "runner-placement-distinct-a" {
 		t.Fatalf("first placement selected=%q error=%v", selected, err)
 	}
@@ -216,7 +216,7 @@ func TestConcurrentHomePlacementOnDistinctRunnersDoesNotWaitForFleet(t *testing.
 	defer second.Rollback(t.Context())
 	secondContext, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	selected, err = selectInitialHomeRunner(secondContext, second, spec)
+	selected, err = selectInitialHomeRunner(secondContext, second, spec, false)
 	if err != nil || selected != "runner-placement-distinct-b" {
 		t.Fatalf("non-blocking second placement selected=%q error=%v", selected, err)
 	}
@@ -254,7 +254,7 @@ func TestHomePlacementWaitsWhenEveryCompatibleRunnerIsLocked(t *testing.T) {
 	defer cancel()
 	selection := make(chan runnerPlacementResult, 1)
 	go func() {
-		selected, err := selectInitialHomeRunner(waitContext, waiter, spec)
+		selected, err := selectInitialHomeRunner(waitContext, waiter, spec, false)
 		selection <- runnerPlacementResult{runnerID: selected, err: err}
 	}()
 	select {
@@ -660,5 +660,46 @@ func TestScanRunnerPlacementCandidateSeparatesLegacyFromMalformedCache(t *testin
 	current, err := scanRunnerPlacementCandidate(placementScanFixture{cacheJSON: placementTestCacheJSON}, "test", false)
 	if err != nil || len(current.materializations) != 1 {
 		t.Fatalf("current cache candidate = %#v, %v", current, err)
+	}
+}
+
+// TestRunnerPlacementHomesSelectedImagesOnRunnersWithoutInstalledBundle pins
+// the placement of a Runner without an installed bundle: it proves no
+// materialization, so it homes only Sandboxes pinned to a client-selected
+// image, and a default-image Sandbox still needs a materialized home.
+func TestRunnerPlacementHomesSelectedImagesOnRunnersWithoutInstalledBundle(t *testing.T) {
+	bundleLess := runnerPlacementCandidate{
+		id: "runner-bundle-less", poolName: "pool", state: "ready", drainPhase: "active",
+		activeConnectionID: "connection", backendKind: "firecracker",
+		architectures:    []string{"amd64"},
+		capabilities:     []string{"compute", "local-workspace", contracts.RunnerCapabilityClientSelectedImage},
+		materializations: []placementMaterialization{},
+		allocatable: runnerCapacity{
+			VCPUCount: 4, MemoryBytes: 8 << 30, DiskBytes: 8 << 30, Instances: 4, Operations: 8,
+		},
+	}
+	withoutSelectedImages := bundleLess
+	withoutSelectedImages.capabilities = []string{"compute", "local-workspace"}
+	spec := placementTestSpec("pool")
+	for _, testCase := range []struct {
+		name          string
+		candidate     runnerPlacementCandidate
+		selectedImage bool
+		want          bool
+	}{
+		{"selected image on bundle-less Runner", bundleLess, true, true},
+		{"default image on bundle-less Runner", bundleLess, false, false},
+		{"selected image without the capability", withoutSelectedImages, true, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			options := runnerPlacementOptions{executionImageSelected: testCase.selectedImage}
+			if got := runnerPlacementCompatible(testCase.candidate, spec, options, runnerCapacity{}); got != testCase.want {
+				t.Fatalf("compatibility = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+	candidate, err := scanRunnerPlacementCandidate(placementScanFixture{cacheJSON: `{"artifactDigests":[],"materializations":[]}`}, "test", false)
+	if err != nil || len(candidate.materializations) != 0 {
+		t.Fatalf("bundle-less Runner cache evidence = %#v, %v", candidate.materializations, err)
 	}
 }
