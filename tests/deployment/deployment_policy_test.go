@@ -121,7 +121,7 @@ func TestReleaseStagingRequiresQualificationEvidenceAndHostedPublishRemainsPubli
 	for _, required := range []string{
 		".tmp/scenario-qualification-evidence.json",
 		".tmp/installer-qualification-evidence.json",
-		"secondbox-${version}-qualification-evidence.json",
+		"secondbox-${version}${asset_suffix}-qualification-evidence.json",
 		"secondbox-${version}-installer-qualification-evidence.json",
 		"validate_qualification_evidence",
 		"validate_installer_qualification_evidence",
