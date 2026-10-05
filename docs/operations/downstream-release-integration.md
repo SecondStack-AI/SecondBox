@@ -83,7 +83,17 @@ go get github.com/SecondStack-AI/SecondBox@vVERSION
 npm install @secondstack-ai/secondbox@VERSION
 ```
 
-Production configuration must retain the digest-pinned control-plane and Runner image references and the installed verified artifact manifest. The independently configured microVM trust and asset identity must remain consistent with that manifest. Never replace release facts with version tags, `latest`, local builds, a source checkout, copied SDK files, copied Compose files, or consumer-owned standard-resource reconciliation.
+A release-backed production configuration must retain the digest-pinned control-plane and Runner image references and the installed verified artifact manifest. The independently configured microVM trust and asset identity must remain consistent with that manifest. Never replace release facts with version tags, `latest`, local builds, a source checkout, copied SDK files, copied Compose files, or consumer-owned standard-resource reconciliation.
+
+## Source-built deployments
+
+A consumer may instead build SecondBox from a pinned source commit. It then has no artifact manifest and owns its own image and binary identity:
+
+- Build every image with explicit `RELEASE_VERSION` (SemVer without build metadata, not `0.0.0-development`) and `SOURCE_COMMIT` (the full 40-character commit) build arguments; the Dockerfiles refuse anything else before compiling.
+- Build the host CLIs from `deploy/host-cli.Dockerfile` with the same two arguments. The image cross-compiles `secondbox` and `secondbox-deploy` with the release flags and contains `/secondbox/bin/<os>-<arch>/{secondbox,secondbox-deploy}` for `linux-amd64`, `linux-arm64`, `darwin-amd64` and `darwin-arm64`, plus `/secondbox/identity.json` (`{"version","sourceCommit"}`) and the `org.opencontainers.image.version` and `revision` labels.
+- Set `[standard_resources].guest_architecture` instead of `artifact_manifest`. The stamped `secondbox-deploy` builds the full published standard Profile lineage for that architecture.
+- Before a Compose-managed in-place update, run `secondbox-deploy compose-update-check --from APPLIED_VERSION` with the target `secondbox-deploy`; see [deployment](deployment.md#release-upgrade-boundary).
+
 
 After publication, record the stable release and artifact-manifest URLs, the `SHA256SUMS` and artifact-manifest digests, npm integrity, OCI digests, binary checksums, standard Profile revision/spec digests, platform matrix, and protocol windows. Those immutable values are the canonical inputs to downstream SecondStack Agent Platform and Agent Claude integration work.
 

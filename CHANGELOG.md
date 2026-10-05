@@ -10,6 +10,8 @@
 
 - `secondbox-deploy compose-update-check --from VERSION` checks a Compose-managed in-place update against the binary's own release version. It exits 2 when the applied release predates the v0.14.0 database migration baseline or is newer than the binary, and 3 when the binary carries the unstamped development identity; `--output json` reports the verdict.
 
+- `deploy/host-cli.Dockerfile` builds `secondbox` and `secondbox-deploy` for linux and darwin on amd64 and arm64 with the release flags into one image laid out as `/secondbox/bin/<os>-<arch>/` with `/secondbox/identity.json`, for deployments built from source.
+
 ### Changed
 
 - The control-plane, Runner, gVisor Runner, gVisor artifact and installer-tools images refuse to build unless `RELEASE_VERSION` is SemVer without build metadata other than `0.0.0-development` and `SOURCE_COMMIT` is a full 40-character commit, so no image ships binaries that silently report the development identity. Local, CI and qualification builds pass `0.0.0-local`, `0.0.0-ci` or `0.0.0-qualification` with the checked-out commit.
