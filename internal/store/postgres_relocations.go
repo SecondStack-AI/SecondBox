@@ -150,12 +150,20 @@ func (store *PostgresControlPlaneStore) RelocateSandbox(
 	if input.RunnerPool != "" && input.RunnerPool != spec.Pool {
 		return contracts.Operation{}, ports.ErrRelocationTargetUnavailable
 	}
+	var executionImageReference string
+	if err := tx.QueryRow(ctx, `
+		SELECT execution_image_reference FROM secondbox.sandboxes WHERE id=$1`,
+		locked.SandboxID,
+	).Scan(&executionImageReference); err != nil {
+		return contracts.Operation{}, fmt.Errorf("SecondBox Workspace relocation execution image lookup failed: %w", err)
+	}
 	targetRunnerID, err := selectWorkspaceRelocationTarget(
 		ctx,
 		tx,
 		spec,
 		workspace.HomeRunnerID,
 		input.TargetRunnerID,
+		executionImageReference != "",
 		locked.EgressContext,
 	)
 	if err != nil {
@@ -260,6 +268,7 @@ func selectWorkspaceRelocationTarget(
 	spec contracts.ProfileRevisionSpec,
 	sourceRunnerID string,
 	exactRunnerID string,
+	executionImageSelected bool,
 	egressContexts ...*string,
 ) (string, error) {
 	var egressContext *string
@@ -270,6 +279,7 @@ func selectWorkspaceRelocationTarget(
 		exactRunnerID:            exactRunnerID,
 		excludedRunnerID:         sourceRunnerID,
 		requireWorkspaceTransfer: true,
+		executionImageSelected:   executionImageSelected,
 		unavailable:              ports.ErrRelocationTargetUnavailable,
 		errorPrefix:              "SecondBox Workspace relocation target",
 		requiredEgressContext:    egressContext,

@@ -87,7 +87,7 @@ func TestUnlimitedSnapshotRetentionPersistsReadsClonesAndSurvivesExpiry(t *testi
 	defer tx.Rollback(t.Context())
 	home, err := selectSnapshotCloneHomeRunner(t.Context(), tx, contracts.Principal{
 		TenantRef: "tenant-local", SubjectRef: "subject-local",
-	}, snapshot.ID, spec, nil, later)
+	}, snapshot.ID, spec, false, nil, later)
 	if err != nil || home != "runner-unlimited-retention" {
 		t.Fatalf("unlimited Snapshot clone home = %q, %v", home, err)
 	}

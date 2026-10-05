@@ -20,6 +20,10 @@ type runnerPlacementOptions struct {
 	unavailable              error
 	errorPrefix              string
 	requiredEgressContext    *string
+	// executionImageSelected states that the Sandbox boots a client-selected
+	// execution image, so its home needs that capability rather than a
+	// materialized installed bundle.
+	executionImageSelected bool
 }
 
 type runnerPlacementCandidate struct {
@@ -287,10 +291,16 @@ func runnerPlacementCompatible(
 		!contains(candidate.capabilities, contracts.RunnerCapabilitySnapshotResume) {
 		return false
 	}
-	// A Sandbox is homed permanently, so the home must already hold a verified
-	// execution bundle for the Profile architecture on its sealed backend. The
-	// bundle itself is whatever release the Runner runs, now and after upgrades.
-	if !placementHasMaterialization(candidate, spec) {
+	// A Sandbox is homed permanently. A default-image Sandbox boots the home's
+	// installed bundle, so the home must already hold a verified bundle for the
+	// Profile architecture on its sealed backend; the bundle itself is whatever
+	// release the Runner runs, now and after upgrades. A Sandbox pinned to a
+	// client-selected image needs a home that boots selected images instead.
+	if options.executionImageSelected {
+		if !contains(candidate.capabilities, contracts.RunnerCapabilityClientSelectedImage) {
+			return false
+		}
+	} else if !placementHasMaterialization(candidate, spec) {
 		return false
 	}
 	physicalStorage := contains(candidate.capabilities, contracts.RunnerCapabilityPhysicalStorageAdmission)
