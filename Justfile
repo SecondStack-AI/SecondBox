@@ -204,6 +204,10 @@ qualify *args:
 release version *flags:
     scripts/release.sh "{{version}}" {{flags}}
 
+# On the arm64 release host, after `just release VERSION` staged the amd64 set.
+release-arm64 version amd64_release_dir:
+    scripts/release-arm64.sh "{{version}}" "{{amd64_release_dir}}"
+
 # Detached qualification workers survive timer/session exits; failures propagate.
 nightly:
     scripts/qualify.sh --tier nightly

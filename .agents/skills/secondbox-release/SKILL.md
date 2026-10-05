@@ -22,6 +22,10 @@ it. Prepare a reviewable result before requesting any missing authorization.
   are immutable. Retract a bad Go release in `go.mod`, document it in the
   changelog and release notes, then issue the next patch; never move the tag.
   Leave v0.13.0 intact: its off-main tag has the re-landed tree and downstream pins.
+- Every release publishes an amd64 and an arm64 artifact set from one commit.
+  `just release-arm64 VERSION AMD64_RELEASE_DIR` stages the arm64 set on the
+  arm64 KVM host from a copy of the final amd64 output (without `*.oci.tar`);
+  each host uploads its own output and the second upload dispatches the publisher.
 - Reserve the host for one release. Inspect `secondbox-suite-*` user units,
   `sbq-*` libvirt domains, matching containers, `.tmp/release/checkout.lock`, and
   `RELEASE_OUTPUT_ROOT/VERSION{,-build,-candidate}`. Identify owners and wait for
@@ -77,25 +81,33 @@ it. Prepare a reviewable result before requesting any missing authorization.
    and final directories first. A code change must land on main first and
    invalidates all commit-bound evidence. Delete a local tag only after checking
    the remote has no such tag; then relaunch the entire flow at the new merged commit.
-7. After successful staging, execute the printed tag push and then
-   `just release-upload X.Y.Z OUTPUT` in order within publication authorization.
+7. Stage the arm64 set: copy the final amd64 output without `*.oci.tar` to the
+   arm64 host, reserve it like the amd64 host, and launch
+   `just release-arm64 X.Y.Z COPY` from clean `main` at the same commit under a
+   user service. A failure there means rerunning that command after removing its
+   own `X.Y.Z-arm64` output; `TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota`
+   is a known flake on that host too. A code fix restarts both stagings at the new commit.
+   After both stagings succeed, execute the printed tag push and then
+   `just release-upload X.Y.Z OUTPUT` on each host for its own output, in order
+   within publication authorization.
    Upload reads `docs/releases/vX.Y.Z.md` from the tag automatically, or accepts
    an explicit third `NOTES_FILE` argument. Do not edit the published body as
    routine close-out. Locate the dispatched `release.yml` run for this version
    (do not assume the newest run is yours) and watch its ID with `--exit-status`.
 8. Verify `gh release view vX.Y.Z --json isDraft,isPrerelease,body,assets`: stable,
    expected notes plus fenced install and SDK footer, complete assets matching the staged
-   manifest. Historical counts were 29 lean / 30 full; derive expectations from
-   this release instead of treating those counts as permanent. Check
+   manifests. Historical counts were 29 lean / 30 full before the arm64 set;
+   derive expectations from this release instead of treating counts as permanent. Check
    `npm view @secondstack-ai/secondbox@X.Y.Z version`, and use a fresh temporary
    `GOMODCACHE` with `GOFLAGS=-mod=mod GOPROXY=https://proxy.golang.org go list -m
    github.com/SecondStack-AI/SecondBox@vX.Y.Z`. Inspect all six GHCR version tags
    with `docker buildx imagetools inspect` (control-plane, runner, installer-tools,
-   microvm-artifacts, runner-gvisor, gvisor-artifacts). Verify the latest
+   microvm-artifacts, runner-gvisor, gvisor-artifacts) and the four `vX.Y.Z-arm64`
+   tags (control-plane, runner, installer-tools, microvm-artifacts). Verify the latest
    downloaded `install.sh` embeds the new version; do not execute it to check.
 9. Append timings, coordinates and lessons to the worklog; Claude also updates
    memory. Supply the [downstream hand-off](../../../docs/operations/downstream-release-integration.md):
-   manifest URL/digest, SHA256SUMS digest, npm integrity, OCI and binary digests,
+   both manifest URLs/digests, SHA256SUMS digests, npm integrity, OCI and binary digests,
    Profile revision/spec digests, platform matrix and protocol window. State
    whether deployments may update or must reinstall. After success remove this
    run's build/candidate directories and temporary worktrees it created, within

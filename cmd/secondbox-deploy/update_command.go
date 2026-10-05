@@ -18,6 +18,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 // Guided updates begin at the customer-shared-tenancy clean-install boundary.
@@ -126,7 +127,7 @@ func runUpdateCommand(ctx context.Context, arguments []string, renderer cliui.Re
 		arguments = arguments[:len(arguments)-2]
 		publicVerify := dependencies.VerifyRelease
 		dependencies.VerifyRelease = func(ctx context.Context, location string) (releaseverify.VerifiedRelease, error) {
-			if location == releasecontract.ArtifactManifestLocation(dependencies.TargetVersion) {
+			if location == releasecontract.ArtifactManifestLocation(dependencies.TargetVersion, standardresources.ArchitectureAMD64) {
 				return verifyCandidateDirectory(ctx, candidateDirectory)
 			}
 			return publicVerify(ctx, location)
@@ -180,7 +181,7 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 	var targetVerified releaseverify.VerifiedRelease
 	var targetPlan install.ReleasePlan
 	if !resume {
-		targetLocation := releasecontract.ArtifactManifestLocation(dependencies.TargetVersion)
+		targetLocation := releasecontract.ArtifactManifestLocation(dependencies.TargetVersion, standardresources.ArchitectureAMD64)
 		targetVerified, err = dependencies.VerifyRelease(ctx, targetLocation)
 		if err != nil {
 			return err

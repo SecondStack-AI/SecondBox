@@ -124,16 +124,38 @@ are `RELEASE_OUTPUT_ROOT/VERSION-candidate` and `RELEASE_OUTPUT_ROOT/VERSION`;
 command prints the exact tag-push and `release-upload` commands for explicit
 publication. Neither command is run automatically.
 
+## The arm64 artifact set
+
+Every release also publishes an arm64 artifact set, staged on a separate Linux arm64 host with writable KVM and TUN after `just release VERSION` succeeds on the amd64 host.
+Configure that host from `deploy/release-arm64.env.example` as `~/.config/secondbox/release.env`, with a release checkout on the same reflink filesystem as its scenario workspace root and bundle, the same Buildx builder setup, and `npm ci --ignore-scripts`.
+Its microVM bundle is built for `arm64` by the [microVM image pipeline](microvm-image-pipeline.md) and signed with the same release key as the amd64 bundle; staging refuses another anchor.
+Rebuild it under the same rules as the amd64 bundle.
+
+Copy the final amd64 release directory without its `*.oci.tar` files to the arm64 host, then run from clean `main` at the same commit:
+
+```sh
+rsync -a --exclude '*.oci.tar' AMD64_HOST:RELEASE_OUTPUT_ROOT/VERSION/ /path/to/amd64-VERSION/
+just release-arm64 VERSION /path/to/amd64-VERSION
+```
+
+It creates the same local tag when absent, runs `just test-scenario` for `linux-arm64` evidence, and stages `RELEASE_OUTPUT_ROOT/VERSION-arm64`.
+Staging verifies the copied files against the amd64 manifest and binds them unchanged into the arm64 manifest.
+Logs are under `.tmp/release/RUN-arm64/`.
+A failed run is repeated from the start after removing its own output directory.
+
 ## Publication
 
-After `just release VERSION` succeeds, review its final manifest and qualification
-logs, then use the exact tag-push and upload continuation it prints. Both must
-refer to that successful run's version and output directory. Do not create a
-release through independent tag, candidate, or upload commands.
+After both stagings succeed, review their manifests and qualification logs, push
+the tag from the amd64 host, and run the printed `release-upload` on each host
+for its own output directory. Do not create a release through independent tag,
+candidate, or upload commands.
 
-Upload reads the tag's `docs/releases/vVERSION.md` when present, otherwise uses
-a placeholder; an optional third `NOTES_FILE` argument supplies the body. It
-appends the install and SDK footer and refreshes the draft on retry. The publisher
+Upload accepts one staged directory holding either the amd64 or the arm64
+manifest, and adds its files to the draft. The second upload dispatches the
+publisher, which needs both sets from one commit. Upload reads the tag's
+`docs/releases/vVERSION.md` when present, otherwise uses a placeholder; an
+optional third `NOTES_FILE` argument supplies the body, and must be the same on
+both hosts. It appends the install and SDK footer and refreshes the draft on retry. The publisher
 preserves that body. Use the [release skill](../../.agents/skills/secondbox-release/SKILL.md)
 for release decisions, recovery, and verification.
 
@@ -144,6 +166,7 @@ gh run list --workflow release.yml --limit 1
 gh run watch --exit-status
 ```
 
-If publication fails while the release is still a draft, fix the cause and retry
-the same upload from the successful staged run. Never move a published tag;
+Keep both staged outputs until publication succeeds. If publication fails while
+the release is still a draft, fix the cause and retry the uploads of both staged
+outputs, because the publisher may already have deleted archives of either set. Never move a published tag;
 use a new patch version for changed artifacts.

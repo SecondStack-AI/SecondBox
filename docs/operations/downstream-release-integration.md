@@ -22,6 +22,20 @@ For [v0.17.0](../releases/v0.17.0.md), the new signed Firecracker bundle changes
 Historically, [v0.16.0](../releases/v0.16.0.md) allowed v0.15.0 to update in place, and [v0.15.0](../releases/v0.15.0.md) accepted the exact v0.14.0 migration baseline. Other clean-install boundaries still require the procedure in their target release notes.
 The Go module's `retract` directives identify withdrawn versions.
 
+## Linux arm64 hosts
+
+Each release also publishes an arm64 artifact set under the same tag, described by `secondbox-VERSION-arm64-artifact-manifest.json`.
+It names the arm64 Runner, microVM artifacts, control-plane and installer-tools images, and the standard Profile revisions of the `standard-arm64` RunnerPool.
+Its SDK, binary, OpenAPI and install-bootstrap entries are identical to the amd64 manifest.
+A consumer that deploys on both architectures pins both manifests and selects by host architecture; standard Profile revisions match, but their spec digests differ by RunnerPool.
+Verify it the same way:
+
+```text
+secondbox-deploy verify artifact-manifest https://github.com/SecondStack-AI/SecondBox/releases/download/vVERSION/secondbox-VERSION-arm64-artifact-manifest.json
+```
+
+The guided installer and gVisor remain amd64-only.
+
 ## gVisor and the v6 artifact manifest
 
 The current artifact manifest uses schema `secondbox.release/artifact-manifest/v6`, and downstream consumers that deploy the gVisor backend track its `gvisor` section in addition to the Firecracker `microvm` bundle:

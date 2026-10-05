@@ -57,7 +57,74 @@ func run(args []string) error {
 	if len(args) == 2 && args[0] == "installer-qualification-subject" {
 		return writeInstallerQualificationSubject(args[1])
 	}
-	return errors.New("usage: secondbox-release-tool {standard-documents ARCHITECTURE OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|verify STAGING_DIR}")
+	if len(args) == 4 && args[0] == "shared-artifacts" {
+		return writeSharedArtifacts(args[1], args[2], args[3])
+	}
+	return errors.New("usage: secondbox-release-tool {standard-documents ARCHITECTURE OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|shared-artifacts AMD64_RELEASE_DIR VERSION SOURCE_COMMIT|verify STAGING_DIR}")
+}
+
+// Staging-only files of one guest architecture's artifact set carry the same
+// suffix as its published files, so two sets can share one release.
+func checksumsFileName(guestArchitecture string) string {
+	return "SHA256SUMS" + releasecontract.ArchitectureAssetSuffix(guestArchitecture)
+}
+
+func allowlistFileName(guestArchitecture string) string {
+	return "candidate-allowlist" + releasecontract.ArchitectureAssetSuffix(guestArchitecture) + ".json"
+}
+
+func ociMetadataFileName(image, guestArchitecture string) string {
+	return image + releasecontract.ArchitectureAssetSuffix(guestArchitecture) + ".oci.json"
+}
+
+// writeSharedArtifacts verifies the final amd64 release staged for version and
+// sourceCommit and prints the architecture-neutral files that another guest
+// architecture's artifact set reuses byte for byte.
+func writeSharedArtifacts(directory, version, sourceCommit string) error {
+	data, err := os.ReadFile(filepath.Join(directory, releasecontract.ArtifactManifestFileName(version, standardresources.ArchitectureAMD64)))
+	if err != nil {
+		return fmt.Errorf("shared amd64 release manifest: %w", err)
+	}
+	manifest, err := releasecontract.DecodeArtifactManifest(data)
+	if err != nil {
+		return err
+	}
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return err
+	}
+	if manifest.Version != version || manifest.SourceCommit != sourceCommit || manifest.Candidate || guestArchitecture != standardresources.ArchitectureAMD64 {
+		return fmt.Errorf("shared release is not the final amd64 release v%s of %s", version, sourceCommit)
+	}
+	if err := verifyPackageMetadata(directory, manifest); err != nil {
+		return err
+	}
+	names := []string{fmt.Sprintf("secondbox-%s-package-metadata.json", version)}
+	for _, reference := range append([]releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}, manifest.SBOMs...) {
+		name := filepath.Base(reference.Location)
+		content, err := os.ReadFile(filepath.Join(directory, name))
+		if err != nil {
+			return fmt.Errorf("shared release object %s: %w", name, err)
+		}
+		if releasecontract.Digest(content) != reference.Digest {
+			return fmt.Errorf("shared release object %s digest mismatch", name)
+		}
+		names = append(names, name)
+	}
+	for _, binary := range manifest.Binaries {
+		name := filepath.Base(binary.Location)
+		content, err := os.ReadFile(filepath.Join(directory, name))
+		if err != nil {
+			return fmt.Errorf("shared release binary %s: %w", name, err)
+		}
+		if strings.TrimPrefix(releasecontract.Digest(content), "sha256:") != binary.SHA256 {
+			return fmt.Errorf("shared release binary %s digest mismatch", name)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	_, err = fmt.Fprintln(os.Stdout, strings.Join(names, "\n"))
+	return err
 }
 
 func writeInstallerQualificationSubject(path string) error {
@@ -87,7 +154,7 @@ func writeStandardDocuments(architecture, outputDirectory string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(outputDirectory, document.Name+".standard-bundle.json"), append(data, '\n'), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(outputDirectory, releasecontract.StandardBundleFileName(document.Name, architecture)), append(data, '\n'), 0o644); err != nil {
 			return err
 		}
 	}
@@ -120,7 +187,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 		if err != nil {
 			return releasecontract.Reference{}, err
 		}
-		return releasecontract.Reference{Location: releasecontract.ArtifactManifestLocation(input.Version)[:strings.LastIndex(releasecontract.ArtifactManifestLocation(input.Version), "/")+1] + name, Digest: releasecontract.Digest(content)}, nil
+		return releasecontract.Reference{Location: releasecontract.ReleaseFileLocation(input.Version, name), Digest: releasecontract.Digest(content)}, nil
 	}
 	openapiName := fmt.Sprintf("secondbox-%s-openapi.json", input.Version)
 	openapi, err := ref(openapiName)
@@ -154,7 +221,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 	if err := verifyQualificationEvidence(outputDirectory, input.Version, input.SourceCommit, input.GuestArchitecture); err != nil {
 		return err
 	}
-	qualificationEvidence, err := ref(fmt.Sprintf("secondbox-%s-qualification-evidence.json", input.Version))
+	qualificationEvidence, err := ref(releasecontract.QualificationEvidenceFileName(input.Version, input.GuestArchitecture))
 	if err != nil {
 		return err
 	}
@@ -194,7 +261,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 	}
 	bundles := make([]releasecontract.StandardBundleArtifact, 0, len(standardresources.BundleNames()))
 	for _, name := range standardresources.BundleNames() {
-		filename := name + ".standard-bundle.json"
+		filename := releasecontract.StandardBundleFileName(name, input.GuestArchitecture)
 		bundleRef, err := ref(filename)
 		if err != nil {
 			return err
@@ -221,7 +288,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(outputDirectory, fmt.Sprintf("secondbox-%s-artifact-manifest.json", input.Version)), append(encoded, '\n'), 0o644)
+	return os.WriteFile(filepath.Join(outputDirectory, releasecontract.ArtifactManifestFileName(input.Version, input.GuestArchitecture)), append(encoded, '\n'), 0o644)
 }
 
 func verifyCandidate(directory string) error {
@@ -229,7 +296,34 @@ func verifyCandidate(directory string) error {
 	if err != nil {
 		return err
 	}
-	allowlistData, err := os.ReadFile(filepath.Join(directory, "candidate-allowlist.json"))
+	var manifestPath string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), "-artifact-manifest.json") {
+			if manifestPath != "" {
+				return errors.New("release candidate contains multiple artifact manifests")
+			}
+			manifestPath = filepath.Join(directory, entry.Name())
+		}
+	}
+	if manifestPath == "" {
+		return errors.New("release candidate artifact manifest is absent")
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	manifest, err := releasecontract.DecodeArtifactManifest(data)
+	if err != nil {
+		return err
+	}
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return err
+	}
+	if filepath.Base(manifestPath) != releasecontract.ArtifactManifestFileName(manifest.Version, guestArchitecture) {
+		return errors.New("release candidate artifact manifest filename differs from its version and guest architecture")
+	}
+	allowlistData, err := os.ReadFile(filepath.Join(directory, allowlistFileName(guestArchitecture)))
 	if err != nil {
 		return fmt.Errorf("release candidate allowlist: %w", err)
 	}
@@ -258,30 +352,10 @@ func verifyCandidate(directory string) error {
 	if strings.Join(actualFiles, "\x00") != strings.Join(expectedFiles, "\x00") {
 		return errors.New("release candidate contains missing or unknown files")
 	}
-	if err := verifyChecksums(directory, allowlist.Files); err != nil {
+	if err := verifyChecksums(directory, allowlist.Files, guestArchitecture); err != nil {
 		return err
 	}
-	var manifestPath string
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), "-artifact-manifest.json") {
-			if manifestPath != "" {
-				return errors.New("release candidate contains multiple artifact manifests")
-			}
-			manifestPath = filepath.Join(directory, entry.Name())
-		}
-	}
-	if manifestPath == "" {
-		return errors.New("release candidate artifact manifest is absent")
-	}
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return err
-	}
-	manifest, err := releasecontract.DecodeArtifactManifest(data)
-	if err != nil {
-		return err
-	}
-	if err := verifyCandidateMetadata(directory, manifest); err != nil {
+	if err := verifyCandidateMetadata(directory, manifest, guestArchitecture); err != nil {
 		return err
 	}
 	refs := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}
@@ -355,8 +429,9 @@ func verifyCandidate(directory string) error {
 	return nil
 }
 
-func verifyChecksums(directory string, allowlist []string) error {
-	file, err := os.Open(filepath.Join(directory, "SHA256SUMS"))
+func verifyChecksums(directory string, allowlist []string, guestArchitecture string) error {
+	checksumsName := checksumsFileName(guestArchitecture)
+	file, err := os.Open(filepath.Join(directory, checksumsName))
 	if err != nil {
 		return fmt.Errorf("release candidate checksums: %w", err)
 	}
@@ -365,7 +440,7 @@ func verifyChecksums(directory string, allowlist []string) error {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) != 2 || len(fields[0]) != 64 || filepath.Base(fields[1]) != fields[1] || fields[1] == "SHA256SUMS" {
+		if len(fields) != 2 || len(fields[0]) != 64 || filepath.Base(fields[1]) != fields[1] || fields[1] == checksumsName {
 			return errors.New("release candidate checksums are malformed")
 		}
 		if _, exists := checksums[fields[1]]; exists {
@@ -379,7 +454,7 @@ func verifyChecksums(directory string, allowlist []string) error {
 	want := append([]string(nil), allowlist...)
 	sort.Strings(want)
 	for _, name := range want {
-		if name == "SHA256SUMS" || name == "candidate-allowlist.json" || strings.HasSuffix(name, ".oci.tar") {
+		if name == checksumsName || name == allowlistFileName(guestArchitecture) || strings.HasSuffix(name, ".oci.tar") {
 			continue
 		}
 		digest, ok := checksums[name]
@@ -401,7 +476,7 @@ func verifyChecksums(directory string, allowlist []string) error {
 	return nil
 }
 
-func verifyCandidateMetadata(directory string, manifest releasecontract.ArtifactManifest) error {
+func verifyPackageMetadata(directory string, manifest releasecontract.ArtifactManifest) error {
 	packageMetadata := struct {
 		SchemaVersion int    `json:"schemaVersion"`
 		Version       string `json:"version"`
@@ -414,8 +489,11 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 	if err := json.Unmarshal(data, &packageMetadata); err != nil || packageMetadata.SchemaVersion != 1 || packageMetadata.Version != manifest.Version || packageMetadata.SourceCommit != manifest.SourceCommit {
 		return errors.New("release package metadata identity mismatch")
 	}
-	guestArchitecture, err := manifest.GuestArchitecture()
-	if err != nil {
+	return nil
+}
+
+func verifyCandidateMetadata(directory string, manifest releasecontract.ArtifactManifest, guestArchitecture string) error {
+	if err := verifyPackageMetadata(directory, manifest); err != nil {
 		return err
 	}
 	if err := verifyQualificationEvidence(directory, manifest.Version, manifest.SourceCommit, guestArchitecture); err != nil {
@@ -431,9 +509,9 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 		}
 	}
 	artifacts := map[string]releasecontract.OCIArtifact{
-		"control-plane.oci.json":   manifest.ControlPlane,
-		"runner.oci.json":          manifest.Runner,
-		"installer-tools.oci.json": manifest.InstallerTools,
+		ociMetadataFileName("control-plane", guestArchitecture):   manifest.ControlPlane,
+		ociMetadataFileName("runner", guestArchitecture):          manifest.Runner,
+		ociMetadataFileName("installer-tools", guestArchitecture): manifest.InstallerTools,
 	}
 	if manifest.GVisor != nil {
 		artifacts["runner-gvisor.oci.json"] = releasecontract.OCIArtifact{Identity: manifest.GVisor.Identity, Reference: manifest.GVisor.RunnerReference}
@@ -444,12 +522,11 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 			return err
 		}
 	}
-	return verifySyntheticOCIMetadata(directory, "microvm-artifacts.oci.json", manifest.Identity, manifest.MicroVM.ImageReference)
+	return verifySyntheticOCIMetadata(directory, ociMetadataFileName("microvm-artifacts", guestArchitecture), manifest.Identity, manifest.MicroVM.ImageReference)
 }
 
 func verifyQualificationEvidence(directory, version, sourceCommit, guestArchitecture string) error {
-	filename := fmt.Sprintf("secondbox-%s-qualification-evidence.json", version)
-	data, err := os.ReadFile(filepath.Join(directory, filename))
+	data, err := os.ReadFile(filepath.Join(directory, releasecontract.QualificationEvidenceFileName(version, guestArchitecture)))
 	if err != nil {
 		return fmt.Errorf("release qualification evidence: %w", err)
 	}

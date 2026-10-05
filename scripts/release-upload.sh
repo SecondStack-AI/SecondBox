@@ -11,10 +11,18 @@ tag="v${version}"
   exit 1
 }
 [[ -d "$output" ]] || { echo "release output directory does not exist: $output" >&2; exit 1; }
-[[ -f "$output/secondbox-${version}-artifact-manifest.json" ]] || {
-  echo "release output does not contain the v${version} artifact manifest" >&2
+# A release publishes an amd64 and an arm64 artifact set, each staged and
+# uploaded from its own host; the publisher starts once both are in the draft.
+amd64_manifest="secondbox-${version}-artifact-manifest.json"
+arm64_manifest="secondbox-${version}-arm64-artifact-manifest.json"
+if [[ -f "$output/$amd64_manifest" && ! -e "$output/$arm64_manifest" ]]; then
+  architecture=amd64
+elif [[ -f "$output/$arm64_manifest" && ! -e "$output/$amd64_manifest" ]]; then
+  architecture=arm64
+else
+  echo "release output must contain exactly one of the v${version} amd64 and arm64 artifact manifests" >&2
   exit 1
-}
+fi
 
 notes="$(mktemp)"
 trap 'rm -f "$notes"' EXIT
@@ -41,6 +49,8 @@ Guided Linux amd64 install:
 curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/download/$tag/install.sh | sh
 \`\`\`
 
+Linux arm64 hosts deploy from \`secondbox-$version-arm64-artifact-manifest.json\`; the guided installer is amd64-only.
+
 SDKs: \`npm install @secondstack-ai/secondbox@$version\` and \`go get github.com/SecondStack-AI/SecondBox@$tag\`
 FOOTER
 
@@ -56,5 +66,10 @@ else
 fi
 
 gh release upload "$tag" "$output"/* --clobber
-gh workflow run release.yml --ref main -f version="$version"
-echo "Uploaded $tag and dispatched the GitHub publisher."
+assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+if grep -Fxq "$amd64_manifest" <<<"$assets" && grep -Fxq "$arm64_manifest" <<<"$assets"; then
+  gh workflow run release.yml --ref main -f version="$version"
+  echo "Uploaded the $architecture artifact set of $tag and dispatched the GitHub publisher."
+else
+  echo "Uploaded the $architecture artifact set of $tag; upload the other architecture's staged release to publish."
+fi

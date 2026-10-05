@@ -49,7 +49,7 @@ func TestBootstrapTenancyCommandRecordsNoSecrets(t *testing.T) {
 	defer server.Close()
 	root := t.TempDir()
 	operation := filepath.Join(root, "operation")
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now().UTC(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(root, "bin"), CLIConfigPath: filepath.Join(root, "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(fakeGuidedRelease(), releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: standardresources.BundleNames(), RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now().UTC(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(root, "bin"), CLIConfigPath: filepath.Join(root, "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(fakeGuidedRelease(), releasecontract.ArtifactManifestLocation("0.4.0", standardresources.ArchitectureAMD64)), StorageChoice: install.StorageBtrfsImage, StandardBundles: standardresources.BundleNames(), RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}

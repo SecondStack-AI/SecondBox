@@ -4,16 +4,18 @@ Release inputs may describe multiple backend materializations, but each is stric
 
 A SecondBox release is a SemVer Git tag plus the locally built files attached to its stable GitHub Release. GitHub Actions publishes those supplied files without rebuilding them.
 
+Each release carries two artifact sets under its one tag: the amd64 set and the arm64 set. The arm64 set has its own artifact manifest, qualification evidence, standard bundles and images, and reuses the architecture-neutral files of the amd64 set (SDKs, CLI and deploy binaries, OpenAPI document, SBOM, install bootstrap) byte for byte. Its own files carry an `-arm64` suffix, and its images an `-arm64` tag suffix.
+
 ## Public coordinates
 
 | Artifact | Coordinate |
 | --- | --- |
 | TypeScript SDK | `@secondstack-ai/secondbox@VERSION` |
 | Go module and SDK | `github.com/SecondStack-AI/SecondBox@vVERSION` |
-| Control plane | `ghcr.io/secondstack-ai/secondbox/control-plane:vVERSION` |
-| Runner | `ghcr.io/secondstack-ai/secondbox/runner:vVERSION` |
-| Installer tools | `ghcr.io/secondstack-ai/secondbox/installer-tools:vVERSION` |
-| microVM artifacts | `ghcr.io/secondstack-ai/secondbox/microvm-artifacts:vVERSION` |
+| Control plane | `ghcr.io/secondstack-ai/secondbox/control-plane:vVERSION`; arm64 set `:vVERSION-arm64` |
+| Runner | `ghcr.io/secondstack-ai/secondbox/runner:vVERSION`; arm64 set `:vVERSION-arm64` |
+| Installer tools | `ghcr.io/secondstack-ai/secondbox/installer-tools:vVERSION`; arm64 set `:vVERSION-arm64` |
+| microVM artifacts | `ghcr.io/secondstack-ai/secondbox/microvm-artifacts:vVERSION`; arm64 set `:vVERSION-arm64` |
 | gVisor runner | `ghcr.io/secondstack-ai/secondbox/runner-gvisor:vVERSION` |
 | gVisor artifacts | `ghcr.io/secondstack-ai/secondbox/gvisor-artifacts:vVERSION` |
 | gVisor materialization | `secondbox-VERSION-gvisor-materialization.json` |
@@ -26,7 +28,14 @@ The release also includes checksums, the OpenAPI document, the Go module archive
 
 ## Supported platforms
 
-`secondbox` and `secondbox-deploy` ship for `linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64`. The guided installer, gVisor Runner, and gVisor artifacts support `linux/amd64` only. Each release targets one guest architecture: its Firecracker Runner, installer-tools image, microVM artifacts, and standard Profiles are all `linux/amd64` or all `linux/arm64`. `just release` stages amd64 releases; `RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 scripts/release-stage.sh` stages an arm64 release. Its final staging requires `just test-scenario` evidence from a `linux-arm64` KVM host and nothing else: it carries no gVisor artifacts and no installer qualification evidence, because the guided installer installs amd64 releases only. Release verification enforces both rules, and `secondbox-deploy install` and `update` refuse an arm64 release before planning. Default amd64 releases build the control-plane image for `linux/amd64`; `just release VERSION --full` also builds `linux/arm64`. Read the selected release manifest for its actual image platform matrix.
+`secondbox` and `secondbox-deploy` ship for `linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64`. The guided installer, gVisor Runner, and gVisor artifacts support `linux/amd64` only. Each artifact set targets one guest architecture: its Firecracker Runner, installer-tools image, microVM artifacts, and standard Profiles are all `linux/amd64` or all `linux/arm64`, and its manifest names the set:
+
+| Guest architecture | Artifact manifest | Qualification |
+| --- | --- | --- |
+| amd64 | `secondbox-VERSION-artifact-manifest.json` | `just test-scenario` on a `linux-amd64` KVM host, gVisor host evidence, installer evidence |
+| arm64 | `secondbox-VERSION-arm64-artifact-manifest.json` | `just test-scenario` on a `linux-arm64` KVM host only |
+
+The arm64 set carries no gVisor artifacts and no installer qualification evidence, because the guided installer installs amd64 releases only. Release verification enforces both rules, and `secondbox-deploy install` and `update` refuse an arm64 set before planning. Its microVM bundle is signed by the trust anchor of the amd64 set. The amd64 set builds the control-plane image for `linux/amd64` (`just release VERSION --full` also builds `linux/arm64`); the arm64 set builds its own `linux/arm64` control-plane image. Read the selected manifest for its actual image platform matrix.
 
 ## Qualification and publication
 
@@ -45,8 +54,11 @@ Choose the default or full tier for a new version; use `--resume` only to recove
 a gate-only failure with the retained build and commit-exact scenario evidence. The flow creates the local tag,
 qualifies the source, builds the artifacts, stages a non-publishable installer
 candidate, qualifies those bytes in disposable guests, and stages the final
-manifest. Publication remains an explicit continuation printed by the successful
-flow; do not independently tag or upload an unqualified build.
+amd64 manifest. On a Linux arm64 KVM host, `just release-arm64 VERSION AMD64_RELEASE_DIR`
+then qualifies the same commit with `just test-scenario` and stages the arm64 set
+beside a copy of the final amd64 release. Publication remains an explicit
+continuation printed by the successful flows; do not independently tag or upload
+an unqualified build.
 
 The default tier qualifies Firecracker and local gVisor, builds amd64 images,
 and runs the Btrfs-image installer guest. The full tier adds the nightly scenario
@@ -56,7 +68,8 @@ installer modes. A default release does not claim the full tier's coverage.
 Candidate and final staging require evidence for the selected tier and exact
 source commit. Installer evidence binds the candidate's qualification-subject
 digest to the final manifest. Staging rejects absent or mismatched evidence;
-the publisher rejects candidate manifests. GitHub Actions publishes the staged
+the publisher rejects candidate manifests and starts only when the draft holds
+both artifact sets of one commit. GitHub Actions publishes the staged
 bytes and supplies npm provenance without rebuilding or qualifying them.
 
 Upload reads `docs/releases/vVERSION.md` from the tag when present, otherwise

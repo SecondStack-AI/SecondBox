@@ -62,7 +62,7 @@ fi
 # The fixture repository distinguishes immutable tag notes from checkout edits.
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
-mkdir -p "$fixture/bin" "$fixture/repo/docs/releases" "$fixture/output" "$fixture/state"
+mkdir -p "$fixture/bin" "$fixture/repo/docs/releases" "$fixture/output" "$fixture/output-arm64" "$fixture/both" "$fixture/state"
 export RELEASE_TEST_STATE="$fixture/state"
 cat >"$fixture/bin/gh" <<'GH'
 #!/usr/bin/env bash
@@ -72,10 +72,11 @@ case "$1 $2" in
   'auth status') ;;
   'release view')
     test -f "$RELEASE_TEST_STATE/draft"
-    if [[ " $* " == *' --jq '* ]]; then cat "$RELEASE_TEST_STATE/draft"; fi
+    if [[ " $* " == *' --json assets '* ]]; then cat "$RELEASE_TEST_STATE/assets"
+    elif [[ " $* " == *' --jq '* ]]; then cat "$RELEASE_TEST_STATE/draft"; fi
     ;;
   'release create'|'release edit')
-    if [[ "$2" == create ]]; then echo true >"$RELEASE_TEST_STATE/draft"; fi
+    if [[ "$2" == create ]]; then echo true >"$RELEASE_TEST_STATE/draft"; : >"$RELEASE_TEST_STATE/assets"; fi
     while (($#)); do
       case "$1" in
         --notes-file) cp "$2" "$RELEASE_TEST_STATE/body"; shift ;;
@@ -85,7 +86,10 @@ case "$1 $2" in
       shift
     done
     ;;
-  'release upload'|'release delete-asset'|'workflow run') ;;
+  'release upload')
+    for file in "${@:4}"; do [[ "$file" == --clobber ]] || basename "$file" >>"$RELEASE_TEST_STATE/assets"; done
+    ;;
+  'release delete-asset'|'workflow run') ;;
   *) echo "unexpected gh invocation" >&2; exit 1 ;;
 esac
 GH
@@ -93,6 +97,7 @@ cat >"$fixture/bin/skopeo" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == login ]]; then cat >/dev/null; fi
+if [[ "$1" == copy ]]; then test -f "${3#oci-archive:}"; printf 'skopeo %s %s\n' "$(basename "${3#oci-archive:}")" "$4" >>"$RELEASE_TEST_STATE/calls"; fi
 SH
 cat >"$fixture/bin/npm" <<'SH'
 #!/usr/bin/env bash
@@ -114,11 +119,25 @@ export PATH="$fixture/bin:$PATH"
   printf 'uncommitted wrong notes\n' >docs/releases/v1.2.3.md
   printf '{}\n' >"$fixture/output/secondbox-1.2.3-artifact-manifest.json"
   printf '{}\n' >"$fixture/output/secondbox-1.2.4-artifact-manifest.json"
+  printf '{}\n' >"$fixture/output-arm64/secondbox-1.2.3-arm64-artifact-manifest.json"
+  cp "$fixture/output/secondbox-1.2.3-artifact-manifest.json" "$fixture/output-arm64/secondbox-1.2.3-arm64-artifact-manifest.json" "$fixture/both/"
+  for image in control-plane runner installer-tools microvm-artifacts runner-gvisor gvisor-artifacts; do printf '%s amd64\n' "$image" >"$fixture/both/$image.oci.tar"; done
+  for image in control-plane installer-tools microvm-artifacts; do printf '%s arm64\n' "$image" >"$fixture/both/$image-arm64.oci.tar"; done
+  (cd "$fixture/both" && ls | jq -R . | jq -s '{schemaVersion:1,files:(. + ["candidate-allowlist.json"])}' >candidate-allowlist.json)
+  printf '%s\n' '{"files":["candidate-allowlist-arm64.json","secondbox-1.2.3-arm64-artifact-manifest.json","runner-arm64.oci.tar"]}' >"$fixture/both/candidate-allowlist-arm64.json"
+  if "$uploader" 1.2.3 "$fixture/both"; then
+    echo 'release upload accepted a directory with both artifact sets' >&2; exit 1
+  fi
+  # The publisher starts only once the draft holds both artifact sets.
   "$uploader" 1.2.3 "$fixture/output"
+  if rg -q '^workflow run' "$RELEASE_TEST_STATE/calls"; then echo 'release upload dispatched the publisher with one artifact set' >&2; exit 1; fi
+  "$uploader" 1.2.3 "$fixture/output-arm64"
+  test "$(rg -c '^workflow run release.yml --ref main -f version=1.2.3$' "$RELEASE_TEST_STATE/calls")" = 1
   rg -q '^# Tagged notes$' "$RELEASE_TEST_STATE/body"
-  ! rg -q 'uncommitted wrong notes' "$RELEASE_TEST_STATE/body"
+  if rg -q 'uncommitted wrong notes' "$RELEASE_TEST_STATE/body"; then echo 'release upload used checkout notes' >&2; exit 1; fi
   rg -q -F 'releases/download/v1.2.3/install.sh | sh' "$RELEASE_TEST_STATE/body"
   rg -q -F '`npm install @secondstack-ai/secondbox@1.2.3`' "$RELEASE_TEST_STATE/body"
+  rg -q -F '`secondbox-1.2.3-arm64-artifact-manifest.json`' "$RELEASE_TEST_STATE/body"
   cp "$RELEASE_TEST_STATE/body" "$fixture/expected"
   "$uploader" 1.2.3 "$fixture/output"
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
@@ -132,7 +151,44 @@ export PATH="$fixture/bin:$PATH"
     echo 'release upload accepted absent explicit notes' >&2; exit 1
   fi
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
-  GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/output"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/output"; then
+    echo 'release publisher accepted a release without the arm64 artifact set' >&2; exit 1
+  fi
+  # Neither an incomplete set nor a candidate in either set publishes anything.
+  : >"$RELEASE_TEST_STATE/calls"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
+    echo 'release publisher accepted an incomplete arm64 artifact set' >&2; exit 1
+  fi
+  printf 'runner arm64\n' >"$fixture/both/runner-arm64.oci.tar"
+  cp "$fixture/both/candidate-allowlist-arm64.json" "$fixture/arm64-allowlist.json"
+  for malformed in '{"files":[]}' '{}' 'not json'; do
+    printf '%s\n' "$malformed" >"$fixture/both/candidate-allowlist-arm64.json"
+    if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
+      echo "release publisher accepted the allowlist $malformed" >&2; exit 1
+    fi
+  done
+  cp "$fixture/arm64-allowlist.json" "$fixture/both/candidate-allowlist-arm64.json"
+  printf '{"candidate":true}\n' >"$fixture/both/secondbox-1.2.3-artifact-manifest.json"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
+    echo 'release publisher accepted an amd64 installer candidate beside a final arm64 set' >&2; exit 1
+  fi
+  if rg -q '^(skopeo|release edit|release delete-asset)' "$RELEASE_TEST_STATE/calls"; then
+    echo 'release publisher changed the release before rejecting its input' >&2; exit 1
+  fi
+  printf '{}\n' >"$fixture/both/secondbox-1.2.3-artifact-manifest.json"
+  GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"
+  diff -u <(printf '%s\n' \
+    'skopeo control-plane.oci.tar docker://ghcr.io/secondstack-ai/secondbox/control-plane:v1.2.3' \
+    'skopeo runner.oci.tar docker://ghcr.io/secondstack-ai/secondbox/runner:v1.2.3' \
+    'skopeo installer-tools.oci.tar docker://ghcr.io/secondstack-ai/secondbox/installer-tools:v1.2.3' \
+    'skopeo microvm-artifacts.oci.tar docker://ghcr.io/secondstack-ai/secondbox/microvm-artifacts:v1.2.3' \
+    'skopeo runner-gvisor.oci.tar docker://ghcr.io/secondstack-ai/secondbox/runner-gvisor:v1.2.3' \
+    'skopeo gvisor-artifacts.oci.tar docker://ghcr.io/secondstack-ai/secondbox/gvisor-artifacts:v1.2.3' \
+    'skopeo control-plane-arm64.oci.tar docker://ghcr.io/secondstack-ai/secondbox/control-plane:v1.2.3-arm64' \
+    'skopeo runner-arm64.oci.tar docker://ghcr.io/secondstack-ai/secondbox/runner:v1.2.3-arm64' \
+    'skopeo installer-tools-arm64.oci.tar docker://ghcr.io/secondstack-ai/secondbox/installer-tools:v1.2.3-arm64' \
+    'skopeo microvm-artifacts-arm64.oci.tar docker://ghcr.io/secondstack-ai/secondbox/microvm-artifacts:v1.2.3-arm64') \
+    <(rg '^skopeo ' "$RELEASE_TEST_STATE/calls")
   test "$(cat "$RELEASE_TEST_STATE/draft")" = false
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
   if "$uploader" 1.2.3 "$fixture/output"; then

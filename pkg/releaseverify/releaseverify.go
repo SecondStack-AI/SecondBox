@@ -93,10 +93,14 @@ func CandidateDirectory(ctx context.Context, directory string) (VerifiedRelease,
 	if !manifest.Candidate {
 		return VerifiedRelease{}, errors.New("SecondBox release verification: candidate directory manifest is not marked as a candidate")
 	}
-	if manifestNames[0] != fmt.Sprintf("secondbox-%s-artifact-manifest.json", manifest.Version) {
-		return VerifiedRelease{}, errors.New("SecondBox release verification: candidate artifact manifest filename differs from its version")
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return VerifiedRelease{}, err
 	}
-	return ArtifactManifest(ctx, releasecontract.ArtifactManifestLocation(manifest.Version), DirectoryFetcher(directory))
+	if manifestNames[0] != releasecontract.ArtifactManifestFileName(manifest.Version, guestArchitecture) {
+		return VerifiedRelease{}, errors.New("SecondBox release verification: candidate artifact manifest filename differs from its version and guest architecture")
+	}
+	return ArtifactManifest(ctx, releasecontract.ArtifactManifestLocation(manifest.Version, guestArchitecture), DirectoryFetcher(directory))
 }
 
 func HTTPFetcher(client *http.Client) FetchFunc {
@@ -137,8 +141,12 @@ func ArtifactManifest(ctx context.Context, location string, fetch FetchFunc) (Ve
 	if err != nil {
 		return VerifiedRelease{}, err
 	}
-	if location != releasecontract.ArtifactManifestLocation(manifest.Version) {
-		return VerifiedRelease{}, fmt.Errorf("SecondBox release verification: artifact manifest location is not canonical for %s", manifest.Tag)
+	guestArchitecture, err := manifest.GuestArchitecture()
+	if err != nil {
+		return VerifiedRelease{}, err
+	}
+	if location != releasecontract.ArtifactManifestLocation(manifest.Version, guestArchitecture) {
+		return VerifiedRelease{}, fmt.Errorf("SecondBox release verification: artifact manifest location is not canonical for %s %s guests", manifest.Tag, guestArchitecture)
 	}
 	if err := verifyManifestObjects(ctx, manifest, fetch); err != nil {
 		return VerifiedRelease{}, err
