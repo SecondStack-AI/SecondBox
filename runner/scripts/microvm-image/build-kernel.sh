@@ -114,8 +114,8 @@ KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${KERNEL_SOURCE_DATE_EPOCH:?kernel lock m
 export SOURCE_DATE_EPOCH="$KERNEL_SOURCE_DATE_EPOCH"
 # The arm64 defconfig emits debug info; strip the random work directory from it
 # so the linked build ID, which the boot image carries, does not vary per build.
-export KCFLAGS="-Wno-error=date-time -ffile-prefix-map=$work_dir/="
-export KAFLAGS="-ffile-prefix-map=$work_dir/="
+export KCFLAGS="-Wno-error=date-time -fdebug-prefix-map=$work_dir/="
+export KAFLAGS="-fdebug-prefix-map=$work_dir/="
 
 make -C "$src_dir" O="$build_dir" defconfig >/dev/null
 config_tool="$src_dir/scripts/config"
