@@ -18,6 +18,10 @@ Environment:
   SECONDBOX_RUNNER_MICROVM_KERNEL_CACHE      Download cache directory.
   SECONDBOX_RUNNER_MICROVM_KERNEL_JOBS       Parallel make jobs.
   SECONDBOX_RUNNER_MICROVM_KERNEL_VERIFY_ONLY Verify the locked source tarball and exit.
+  SECONDBOX_RUNNER_MICROVM_KERNEL_CROSS_COMPILE
+                                             Toolchain prefix such as x86_64-linux-gnu-; required
+                                             and may be empty to use the host compiler, which
+                                             then must match the guest architecture.
 USAGE
 }
 
@@ -41,18 +45,27 @@ do
         exit 2
     fi
 done
+if [ "${SECONDBOX_RUNNER_MICROVM_KERNEL_CROSS_COMPILE+x}" != x ]; then
+    echo "SECONDBOX_RUNNER_MICROVM_KERNEL_CROSS_COMPILE is required and may be empty" >&2
+    exit 2
+fi
 out_dir="$1"
 lock_file="$SECONDBOX_RUNNER_MICROVM_KERNEL_LOCK"
 cache_dir="$SECONDBOX_RUNNER_MICROVM_KERNEL_CACHE"
 jobs="$SECONDBOX_RUNNER_MICROVM_KERNEL_JOBS"
 verify_only="$SECONDBOX_RUNNER_MICROVM_KERNEL_VERIFY_ONLY"
 architecture="$SECONDBOX_RUNNER_MICROVM_ARCHITECTURE"
+cross_compile="$SECONDBOX_RUNNER_MICROVM_KERNEL_CROSS_COMPILE"
 # Firecracker boots an uncompressed ELF vmlinux on x86_64 and the PE Image on aarch64.
 case "$architecture" in
-    amd64) kernel_arch=x86_64; kernel_target=vmlinux; kernel_build_output=vmlinux ;;
-    arm64) kernel_arch=arm64; kernel_target=Image; kernel_build_output=arch/arm64/boot/Image ;;
+    amd64) kernel_arch=x86_64; guest_machine=x86_64; kernel_target=vmlinux; kernel_build_output=vmlinux ;;
+    arm64) kernel_arch=arm64; guest_machine=aarch64; kernel_target=Image; kernel_build_output=arch/arm64/boot/Image ;;
     *) echo "SECONDBOX_RUNNER_MICROVM_ARCHITECTURE must be amd64 or arm64" >&2; exit 2 ;;
 esac
+if [ -z "$cross_compile" ] && [ "$(uname -m)" != "$guest_machine" ]; then
+    echo "host $(uname -m) cannot build the $architecture guest kernel without SECONDBOX_RUNNER_MICROVM_KERNEL_CROSS_COMPILE" >&2
+    exit 2
+fi
 if [ ! -f "$lock_file" ]; then
     echo "kernel lock file not found: $lock_file" >&2
     exit 2
@@ -64,7 +77,7 @@ fi
 : "${KERNEL_URL:?kernel lock missing KERNEL_URL}"
 : "${KERNEL_SHA256:?kernel lock missing KERNEL_SHA256}"
 
-for cmd in curl make sha256sum tar xz; do
+for cmd in curl make sha256sum tar xz "${cross_compile}gcc" "${cross_compile}ld"; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 2; }
 done
 
@@ -93,12 +106,16 @@ build_dir="$work_dir/build"
 mkdir -p "$build_dir"
 
 export ARCH="$kernel_arch"
+export CROSS_COMPILE="$cross_compile"
 export KBUILD_BUILD_USER="secondbox-runner"
 export KBUILD_BUILD_HOST="secondbox-runner-ci"
 export KBUILD_BUILD_TIMESTAMP
 KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${KERNEL_SOURCE_DATE_EPOCH:?kernel lock missing KERNEL_SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S')"
 export SOURCE_DATE_EPOCH="$KERNEL_SOURCE_DATE_EPOCH"
-export KCFLAGS="-Wno-error=date-time"
+# The arm64 defconfig emits debug info; strip the random work directory from it
+# so the linked build ID, which the boot image carries, does not vary per build.
+export KCFLAGS="-Wno-error=date-time -ffile-prefix-map=$work_dir/="
+export KAFLAGS="-ffile-prefix-map=$work_dir/="
 
 make -C "$src_dir" O="$build_dir" defconfig >/dev/null
 config_tool="$src_dir/scripts/config"
@@ -163,6 +180,7 @@ install -m 0644 "$build_dir/System.map" "$out_dir/System.map"
 
 kernel_sha="$(sha256sum "$out_dir/$kernel_target" | awk '{print $1}')"
 config_sha="$(sha256sum "$out_dir/config" | awk '{print $1}')"
+compiler_version="$(sed -n 's/^CONFIG_CC_VERSION_TEXT="\(.*\)"$/\1/p' "$out_dir/config")"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 git_commit="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
 cat > "$out_dir/kernel-provenance.json" <<EOF
@@ -174,6 +192,10 @@ cat > "$out_dir/kernel-provenance.json" <<EOF
     "version": "$KERNEL_VERSION",
     "url": "$KERNEL_URL",
     "sha256": "$KERNEL_SHA256"
+  },
+  "toolchain": {
+    "crossCompile": "$CROSS_COMPILE",
+    "compiler": "$compiler_version"
   },
   "reproducibility": {
     "sourceDateEpoch": "${SOURCE_DATE_EPOCH}",
