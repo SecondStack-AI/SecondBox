@@ -10,6 +10,12 @@ FROM docker.io/library/alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e6
 
 FROM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS tools
 
+ARG RELEASE_VERSION
+ARG SOURCE_COMMIT
+
+RUN --mount=type=bind,source=scripts/require-image-build-identity.sh,target=/run/secondbox/require-image-build-identity.sh \
+    sh /run/secondbox/require-image-build-identity.sh "${RELEASE_VERSION}" "${SOURCE_COMMIT}"
+
 WORKDIR /src/runner
 COPY runner/go.mod runner/go.sum ./
 RUN go mod download && go mod verify

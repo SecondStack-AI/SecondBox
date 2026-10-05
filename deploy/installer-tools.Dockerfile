@@ -3,6 +3,9 @@ FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959a
 ARG RELEASE_VERSION
 ARG SOURCE_COMMIT
 
+RUN --mount=type=bind,source=scripts/require-image-build-identity.sh,target=/run/secondbox/require-image-build-identity.sh \
+    sh /run/secondbox/require-image-build-identity.sh "${RELEASE_VERSION}" "${SOURCE_COMMIT}"
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends btrfs-progs \
     && rm -rf /var/lib/apt/lists/*

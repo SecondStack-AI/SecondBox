@@ -477,6 +477,8 @@ if [[ "$native_macos" != "true" ]]; then
   runner_build_arguments=(--quiet --file "$runner_dockerfile" --tag "$runner_image")
   if [[ "$scenario_backend" != "firecracker" ]]; then
     runner_build_arguments+=(--build-context "scenario=$scenario_build_dir")
+  else
+    runner_build_arguments+=(--build-arg RELEASE_VERSION=0.0.0-qualification --build-arg "SOURCE_COMMIT=$scenario_source_commit")
   fi
   docker build "${runner_build_arguments[@]}" "$repo_root" >/dev/null
 else

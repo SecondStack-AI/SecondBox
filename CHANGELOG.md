@@ -12,6 +12,7 @@
 
 ### Changed
 
+- The control-plane, Runner, gVisor Runner, gVisor artifact and installer-tools images refuse to build unless `RELEASE_VERSION` is SemVer without build metadata other than `0.0.0-development` and `SOURCE_COMMIT` is a full 40-character commit, so no image ships binaries that silently report the development identity. Local, CI and qualification builds pass `0.0.0-local`, `0.0.0-ci` or `0.0.0-qualification` with the checked-out commit.
 - `releasecontract.ArtifactManifestLocation` and `QualificationEvidenceLocation` take the guest architecture. Files of a non-amd64 artifact set, including its standard bundles, staging checksums and OCI archives, carry the architecture suffix; amd64 names are unchanged.
 
 ### Fixed

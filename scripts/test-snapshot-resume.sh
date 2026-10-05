@@ -146,7 +146,8 @@ run_alias="/tmp/sq$$"
 [[ ! -e "$run_alias" && ! -L "$run_alias" ]] || fail "short qualification run alias already exists: $run_alias"
 ln -s "$qualification_root/run" "$run_alias"
 
-docker build --quiet --file "$repo_root/runner/Dockerfile" --tag "$runner_image" "$repo_root" >/dev/null
+docker build --quiet --build-arg RELEASE_VERSION=0.0.0-qualification --build-arg "SOURCE_COMMIT=$(git -C "$repo_root" rev-parse HEAD)" \
+  --file "$repo_root/runner/Dockerfile" --tag "$runner_image" "$repo_root" >/dev/null
 container_id="$(docker create "$runner_image")"
 docker cp "$container_id:/usr/local/bin/firecracker" "$tools_root/firecracker"
 docker rm "$container_id" >/dev/null

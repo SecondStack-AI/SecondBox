@@ -167,7 +167,8 @@ qualification_root="$(mktemp -d "$workspace_root/secondbox-resume-jailed.XXXXXX"
 chmod 0755 "$qualification_root"
 mkdir -p "$qualification_root"/{run,j,tmp,out}
 
-docker build --quiet --file "$repo_root/runner/Dockerfile" --tag "$runner_image" "$repo_root" >/dev/null
+docker build --quiet --build-arg RELEASE_VERSION=0.0.0-qualification --build-arg "SOURCE_COMMIT=$(git -C "$repo_root" rev-parse HEAD)" \
+  --file "$repo_root/runner/Dockerfile" --tag "$runner_image" "$repo_root" >/dev/null
 
 # The gate is compiled on the host, where the module cache lives, and executed
 # inside the container. CGO is disabled so an Arch-built binary runs on the

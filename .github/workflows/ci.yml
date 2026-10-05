@@ -177,13 +177,13 @@ jobs:
           # docker-container builder can.
           docker buildx create --name secondbox-oci --driver docker-container --use
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-            --build-arg "RELEASE_VERSION=ci" --build-arg "SOURCE_COMMIT=${GITHUB_SHA}" \
+            --build-arg "RELEASE_VERSION=0.0.0-ci" --build-arg "SOURCE_COMMIT=${GITHUB_SHA}" \
             --file runner/Dockerfile.gvisor \
             --output "type=oci,dest=/tmp/runner-gvisor.oci.tar" \
             --metadata-file /tmp/runner-gvisor.oci.json .
           echo "gVisor runner image digest: $(jq -er '."containerimage.digest"' /tmp/runner-gvisor.oci.json)"
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-            --build-arg "RELEASE_VERSION=ci" --build-arg "SOURCE_COMMIT=${GITHUB_SHA}" \
+            --build-arg "RELEASE_VERSION=0.0.0-ci" --build-arg "SOURCE_COMMIT=${GITHUB_SHA}" \
             --file runner/deploy/gvisor-artifact-transport.Dockerfile --target metadata \
             --output "type=local,dest=/tmp/gvisor-metadata" .
           echo "gVisor materialization: $(jq -c . /tmp/gvisor-metadata/identity.json)"

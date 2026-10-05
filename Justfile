@@ -184,7 +184,7 @@ deploy-development-up directory:
       fi
       go run ./cmd/secondbox-deploy init --mode development "{{directory}}"
     fi
-    docker build --tag secondbox-control-plane:development .
+    docker build --build-arg RELEASE_VERSION=0.0.0-local --build-arg "SOURCE_COMMIT=$(git rev-parse HEAD)" --tag secondbox-control-plane:development .
     go run ./cmd/secondbox-deploy compose "$manifest" config
     go run ./cmd/secondbox-deploy compose "$manifest" prepare
     go run ./cmd/secondbox-deploy compose "$manifest" up

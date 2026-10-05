@@ -11,6 +11,9 @@ ARG SOURCE_COMMIT
 ARG TARGETOS
 ARG TARGETARCH
 
+RUN --mount=type=bind,source=scripts/require-image-build-identity.sh,target=/run/secondbox/require-image-build-identity.sh \
+    sh /run/secondbox/require-image-build-identity.sh "${RELEASE_VERSION}" "${SOURCE_COMMIT}"
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

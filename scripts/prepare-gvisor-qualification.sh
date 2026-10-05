@@ -56,7 +56,7 @@ trap 'rm -rf -- "$temporary"' EXIT
 # BuildKit invalidates the guest build on source changes, including dirty trees.
 docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
   --file "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile" --target assemble \
-  --build-arg RELEASE_VERSION=qualification --build-arg "SOURCE_COMMIT=$(git -C "$repo_root" rev-parse HEAD)" \
+  --build-arg RELEASE_VERSION=0.0.0-qualification --build-arg "SOURCE_COMMIT=$(git -C "$repo_root" rev-parse HEAD)" \
   --load --iidfile "$temporary/image-id" "$repo_root" >&2
 image="$(cat "$temporary/image-id")"
 [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]] || fail 'builder returned an invalid image identity'
