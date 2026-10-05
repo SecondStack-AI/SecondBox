@@ -17,6 +17,11 @@ if [[ -e "$arm64_manifest" ]]; then
   with_arm64=true
   manifests+=("$arm64_manifest")
   allowlists+=(candidate-allowlist-arm64.json)
+else
+  # An interrupted arm64 upload can leave its files without the manifest.
+  for name in "$input"/*-arm64.oci.* "$input"/*-arm64.standard-bundle.json "$input"/*-arm64.json "$input"/SHA256SUMS-arm64 "$input/secondbox-${version}-arm64-"*; do
+    [[ ! -e "$name" ]] || { echo "release input holds arm64 artifact set file $(basename "$name") without its manifest" >&2; exit 1; }
+  done
 fi
 jq -s -e 'all(.[]; .candidate != true)' "${manifests[@]}" >/dev/null || { echo "release input is an installer candidate, not a publishable final release" >&2; exit 1; }
 jq -s -e '.[0].sourceCommit as $commit | all(.[]; .sourceCommit == $commit)' "${manifests[@]}" >/dev/null || { echo "the amd64 and arm64 artifact sets were staged from different commits" >&2; exit 1; }

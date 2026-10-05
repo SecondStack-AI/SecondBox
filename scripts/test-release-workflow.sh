@@ -90,6 +90,7 @@ case "$1 $2" in
     for file in "${@:4}"; do [[ "$file" == --clobber ]] || basename "$file" >>"$RELEASE_TEST_STATE/assets"; done
     ;;
   'release delete-asset'|'workflow run') ;;
+  'run list') cat "$RELEASE_TEST_STATE/runs" 2>/dev/null || true ;;
   *) echo "unexpected gh invocation" >&2; exit 1 ;;
 esac
 GH
@@ -133,9 +134,13 @@ export PATH="$fixture/bin:$PATH"
   if rg -q '^workflow run' "$RELEASE_TEST_STATE/calls"; then echo 'release upload dispatched the publisher without the amd64 set' >&2; exit 1; fi
   "$uploader" 1.2.3 "$fixture/output"
   test "$(rg -c '^workflow run release.yml --ref main -f version=1.2.3$' "$RELEASE_TEST_STATE/calls")" = 1
+  echo in_progress >"$RELEASE_TEST_STATE/runs"
   if "$uploader" 1.2.3 "$fixture/output-arm64"; then
-    echo 'release upload accepted an arm64 set after the amd64 set dispatched the publisher' >&2; exit 1
+    echo 'release upload accepted an arm64 set while the publisher runs' >&2; exit 1
   fi
+  # Recovery after a failed publication restores the arm64 set, then amd64.
+  rm "$RELEASE_TEST_STATE/runs"
+  "$uploader" 1.2.3 "$fixture/output-arm64"
   rg -q '^# Tagged notes$' "$RELEASE_TEST_STATE/body"
   if rg -q 'uncommitted wrong notes' "$RELEASE_TEST_STATE/body"; then echo 'release upload used checkout notes' >&2; exit 1; fi
   rg -q -F 'releases/download/v1.2.3/install.sh | sh' "$RELEASE_TEST_STATE/body"
@@ -222,5 +227,9 @@ export PATH="$fixture/bin:$PATH"
   GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/amd64-only"
   test "$(rg -c '^skopeo .*:v1\.2\.3$' "$RELEASE_TEST_STATE/calls")" = 6
   if rg -q 'arm64' "$RELEASE_TEST_STATE/calls"; then echo 'amd64-only publication touched arm64 assets' >&2; exit 1; fi
+  printf 'partial\n' >"$fixture/amd64-only/runner-arm64.oci.tar"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/amd64-only"; then
+    echo 'release publisher accepted arm64 set files without their manifest' >&2; exit 1
+  fi
 )
 echo 'Release upload and publication notes regression checks passed.'

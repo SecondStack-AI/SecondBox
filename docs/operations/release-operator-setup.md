@@ -153,7 +153,7 @@ upload commands.
 
 Upload accepts one staged directory holding either the amd64 or the arm64
 manifest, and adds its files to the draft. The amd64 upload dispatches the
-publisher, so an arm64 upload after it is refused. The publisher requires
+publisher; an arm64 upload is refused while a publisher run is queued or in progress. The publisher requires
 complete sets from one commit. Upload reads the tag's
 `docs/releases/vVERSION.md` when present, otherwise uses a placeholder; an
 optional third `NOTES_FILE` argument supplies the body, and must be the same on

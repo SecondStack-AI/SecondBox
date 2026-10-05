@@ -36,8 +36,9 @@ if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
   draft=true
   assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
 fi
-if [[ "$architecture" == arm64 ]] && grep -Fxq "$amd64_manifest" <<<"$assets"; then
-  echo "the draft already holds the amd64 set, which dispatched the publisher; upload the arm64 set before the amd64 set" >&2
+# An arm64 upload must not race a publisher that the amd64 upload dispatched.
+if [[ "$architecture" == arm64 ]] && [[ -n "$(gh run list --workflow release.yml --json status --jq '.[] | select(.status != "completed") | .status')" ]]; then
+  echo "a release publisher run is queued or in progress; upload the arm64 set before the amd64 set, or after that run ends" >&2
   exit 1
 fi
 arm64_footer=''
