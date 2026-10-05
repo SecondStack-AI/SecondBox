@@ -92,7 +92,7 @@ The command prints the two one-time bearer tokens in one JSON response. Capture 
 6. `standard_resources`: verified release manifest or, for a source build, the guest architecture; explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
 7. `policy` and `overrides`: data-plane retention, enabled Runner features, and intentionally selected tuning overrides.
 
-Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
+Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
 
 Validate and inspect without rendering:
 
@@ -188,7 +188,7 @@ just deploy-init-production /secure/secondbox-deployment
 
 An incomplete production initialization is intentionally unusable and reports every unresolved decision group in one error. Before validation, production operators must supply:
 
-- digest-pinned control-plane and Runner images, public HTTPS ingress, and external TLS termination;
+- control-plane and Runner images, public HTTPS ingress, and external TLS termination;
 - bundled or external database authority, with `sslmode=verify-full` for an external database;
 - zero or more explicit immutable Runner declarations and their placement;
 - a verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
@@ -203,7 +203,7 @@ secondbox-deploy init --mode production \
   /secure/secondbox-deployment
 ```
 
-Production initialization materializes only the explicitly supplied platform authority. It creates no implicit Tenant, Subject, tenant controller, or application authority. After startup, use the authenticated management CLI sequence documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). No generated development authority is accepted as a production default. Any dependency image selected in production is immutable by digest.
+Production initialization materializes only the explicitly supplied platform authority. It creates no implicit Tenant, Subject, tenant controller, or application authority. After startup, use the authenticated management CLI sequence documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). No generated development authority is accepted as a production default. The operator chooses every image reference; a release-backed deployment uses the digests of its artifact manifest.
 
 ## Rendering and Compose
 
@@ -239,7 +239,7 @@ The control-plane container runs as UID/GID 65532 with a read-only root, dropped
 
 Every `[[runners]]` entry is keyed by immutable `runner_id`. At most one may use `placement = "same-host"`; any number may use `placement = "remote"`.
 
-Every Runner declaration states `firecracker_installed_bundle`. Set `true` for a Runner with an installed signed execution bundle: Sandboxes that select no execution image boot that bundle, and the bundle settings (`artifact_host_directory` for same-host placement, `artifact_public_key_sha256`, and for remote placement `artifact_public_key`, `firecracker_kernel_path`, `firecracker_rootfs_path`, and `firecracker_shared_image_path`) are required. Set `false` for a Runner that boots only client-selected execution images: omit every one of those settings, because the compiler rejects them, and do not materialize the `microvm-artifacts` image. Such a Runner advertises the `client-selected-image` capability and no materialization, so the control plane homes on it only Sandboxes created with an execution image; a Sandbox created without one is placed on a Runner with an installed bundle or refused with `home_runner_unavailable`. The Runner refuses an Assignment that selects no execution image with `SecondBox Runner has no installed execution bundle`, and it never advertises snapshot-resume capacity, because resume templates are built from the installed bundle. A same-host Runner with an installed bundle adds `compose.same-host-runner-installed-bundle.yml`, which mounts `artifact_host_directory` and names the bundle files; without one the compiler selects only `compose.same-host-runner.yml`.
+`firecracker_installed_bundle` is optional and defaults to `true`, a Runner with an installed signed execution bundle: Sandboxes that select no execution image boot that bundle, and the bundle settings (`artifact_host_directory` for same-host placement, `artifact_public_key_sha256`, and for remote placement `artifact_public_key`, `firecracker_kernel_path`, `firecracker_rootfs_path`, and `firecracker_shared_image_path`) are required. Set `false` for a Runner that boots only client-selected execution images: omit every one of those settings, because the compiler rejects them, and do not materialize the `microvm-artifacts` image. Such a Runner advertises the `client-selected-image` capability and no materialization, so the control plane homes on it only Sandboxes created with an execution image; a Sandbox created without one is placed on a Runner with an installed bundle or refused with `home_runner_unavailable`. The Runner refuses an Assignment that selects no execution image with `SecondBox Runner has no installed execution bundle`, and it never advertises snapshot-resume capacity, because resume templates are built from the installed bundle. A same-host Runner with an installed bundle adds `compose.same-host-runner-installed-bundle.yml`, which mounts `artifact_host_directory` and names the bundle files; without one the compiler selects only `compose.same-host-runner.yml`.
 
 For same-host placement, set `identity_host_directory` and `state_host_directory`, and with an installed bundle `artifact_host_directory`, to explicit host paths. The compiler supplies all fixed container paths: identity and egress configuration, workspace root, Runner logs, Firecracker and jailer executables, jail root, kernel/rootfs/shared assets, runtime and Firecracker logs, snapshot-template cache, signing-key file, network state, and nft executable. The kernel/rootfs/shared asset and signing-key paths exist only for a Runner with an installed bundle. Remove `workspace_host_directory` from existing manifests and omit the path fields marked remote-only in the Runner template from same-host declarations. Nonempty values are rejected instead of silently ignored. The signing-key fingerprint stays explicit; only its packaged file location is derived. The existing `state_host_directory/workspaces` directory remains authoritative and must exist on the qualified storage filesystem; resolution never creates or relocates it. Remote declarations still require explicit paths. Existing custom state or asset layouts must be reconciled with the documented packaged paths before adopting this schema; compilation does not move their files.
 
@@ -324,7 +324,7 @@ identity_directory = ''
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
 
 # Artifact trust
-# Whether this Runner has an installed signed execution bundle; required, so replace this string with a Boolean. With true, assignments that select no execution image boot the installed bundle, and the bundle settings below are required. With false, the Runner boots only client-selected execution images and artifact_host_directory, artifact_public_key, artifact_public_key_sha256, firecracker_kernel_path, firecracker_rootfs_path, and firecracker_shared_image_path must be omitted.
+# Whether this Runner has an installed signed execution bundle; a declaration without this key has one. Replace this string with a Boolean. With true, assignments that select no execution image boot the installed bundle, and the bundle settings below are required. With false, the Runner boots only client-selected execution images and artifact_host_directory, artifact_public_key, artifact_public_key_sha256, firecracker_kernel_path, firecracker_rootfs_path, and firecracker_shared_image_path must be omitted.
 firecracker_installed_bundle = '<replace-with-boolean>'
 # Installed-bundle directory on the Runner host; absolute when set and required for same-host placement with an installed bundle.
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'

@@ -22,7 +22,7 @@ identity_directory = ''
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
 
 # Artifact trust
-# Whether this Runner has an installed signed execution bundle; required, so replace this string with a Boolean. With true, assignments that select no execution image boot the installed bundle, and the bundle settings below are required. With false, the Runner boots only client-selected execution images and artifact_host_directory, artifact_public_key, artifact_public_key_sha256, firecracker_kernel_path, firecracker_rootfs_path, and firecracker_shared_image_path must be omitted.
+# Whether this Runner has an installed signed execution bundle; a declaration without this key has one. Replace this string with a Boolean. With true, assignments that select no execution image boot the installed bundle, and the bundle settings below are required. With false, the Runner boots only client-selected execution images and artifact_host_directory, artifact_public_key, artifact_public_key_sha256, firecracker_kernel_path, firecracker_rootfs_path, and firecracker_shared_image_path must be omitted.
 firecracker_installed_bundle = '<replace-with-boolean>'
 # Installed-bundle directory on the Runner host; absolute when set and required for same-host placement with an installed bundle.
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'

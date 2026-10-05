@@ -1042,13 +1042,13 @@ func TestProductionQualifiesBundledAndExternalDatabase(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			digestRef := "registry.example/secondbox@sha256:" + strings.Repeat("a", 64)
+			// Production accepts tag references; the reference is the operator's choice.
 			manifest.Deployment.Mode = "production"
 			manifest.Deployment.PublicBaseURL = "https://secondbox.example.com"
 			manifest.Deployment.TLSTermination = "external"
-			manifest.Deployment.ControlPlaneImage = digestRef
-			manifest.Deployment.RunnerImage = digestRef
-			manifest.Deployment.PostgresImage = digestRef
+			manifest.Deployment.ControlPlaneImage = "registry.example/secondbox-control-plane:1.2.3"
+			manifest.Deployment.RunnerImage = "secondbox-runner:local"
+			manifest.Deployment.PostgresImage = "docker.io/library/postgres:18.4-bookworm"
 			if databaseMode == "external" {
 				urlPath := filepath.Join(filepath.Dir(manifestPath), "secrets", "database-url-production")
 				if err := os.WriteFile(urlPath, []byte("postgres://secondbox:secret@database.example/secondbox?sslmode=verify-full\n"), 0o600); err != nil {

@@ -220,11 +220,15 @@ func withoutInstalledBundleForTest(runner Runner) Runner {
 	return runner
 }
 
-func TestRunnerInstalledBundleChoiceIsExplicit(t *testing.T) {
+func TestRunnerInstalledBundleDefaultsToTrue(t *testing.T) {
 	runner := validTestRunner("runner-remote", "remote")
 	runner.FirecrackerInstalledBundle = nil
-	if err := validateRunner("runners[0]", runner); err == nil || !strings.Contains(err.Error(), "runners[0].firecracker_installed_bundle is required") {
+	if err := validateRunner("runners[0]", runner); err != nil || !runner.hasInstalledBundle() {
 		t.Fatalf("absent installed-bundle choice = %v", err)
+	}
+	runner.FirecrackerKernelPath = ""
+	if err := validateRunner("runners[0]", runner); err == nil || !strings.Contains(err.Error(), "runners[0].firecracker_kernel_path is required") {
+		t.Fatalf("defaulted installed bundle without a kernel path = %v", err)
 	}
 	for _, placement := range []string{"remote", "same-host"} {
 		runner := validTestRunner("runner-"+placement, placement)

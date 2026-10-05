@@ -92,6 +92,7 @@ A consumer may instead build SecondBox from a pinned source commit. It then has 
 - Build every image with explicit `RELEASE_VERSION` (SemVer without build metadata, not `0.0.0-development`) and `SOURCE_COMMIT` (the full 40-character commit) build arguments; the Dockerfiles refuse anything else before compiling.
 - Build the host CLIs from `deploy/host-cli.Dockerfile` with the same two arguments. The image cross-compiles `secondbox` and `secondbox-deploy` with the release flags and contains `/secondbox/bin/<os>-<arch>/{secondbox,secondbox-deploy}` for `linux-amd64`, `linux-arm64`, `darwin-amd64` and `darwin-arm64`, plus `/secondbox/identity.json` (`{"version","sourceCommit"}`) and the `org.opencontainers.image.version` and `revision` labels.
 - Set `[standard_resources].guest_architecture` instead of `artifact_manifest`. The stamped `secondbox-deploy` builds the full published standard Profile lineage for that architecture.
+- Reference the control-plane, Runner and bundled database images by local tag or by digest, in either deployment mode. A remote Runner host must be able to pull its `runner_image`.
 - Before a Compose-managed in-place update, run `secondbox-deploy compose-update-check --from APPLIED_VERSION` with the target `secondbox-deploy`; see [deployment](deployment.md#release-upgrade-boundary).
 
 

@@ -80,9 +80,11 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	installedBundle, err := requiredBool("SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE")
-	if err != nil {
-		return nil, err
+	installedBundle := true
+	if raw, present := os.LookupEnv("SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE"); present {
+		if installedBundle, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("SecondBox Firecracker config requires boolean SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE")
+		}
 	}
 	installedBundleSettings := []string{
 		"SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH",

@@ -426,14 +426,6 @@ func validateManifestShape(manifest ManifestV1) error {
 		if d.TLSTermination != "external" || parsedURL.Scheme != "https" {
 			return manifestError("production requires external TLS and an HTTPS public_base_url", nil)
 		}
-		for path, image := range map[string]string{"deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage} {
-			if !strings.Contains(image, "@sha256:") {
-				return manifestError(path+" must be an immutable digest reference in production", nil)
-			}
-		}
-		if manifest.Database.Mode == "bundled" && !strings.Contains(d.PostgresImage, "@sha256:") {
-			return manifestError("deployment.postgres_image must be an immutable digest reference for a production bundled database", nil)
-		}
 	}
 
 	db := manifest.Database
@@ -670,10 +662,7 @@ func runnerGatewayNames(contexts []RunnerEgressContext) map[string]bool {
 }
 
 func validateRunner(prefix string, r Runner) error {
-	if r.FirecrackerInstalledBundle == nil {
-		return manifestError(prefix+".firecracker_installed_bundle is required", nil)
-	}
-	if !*r.FirecrackerInstalledBundle {
+	if !r.hasInstalledBundle() {
 		// A Runner without an installed bundle boots only client-selected
 		// execution images, so every bundle location and trust field is absent.
 		bundleFields := map[string]string{

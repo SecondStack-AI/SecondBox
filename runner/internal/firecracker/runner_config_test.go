@@ -72,10 +72,11 @@ func TestRunnerConfigLoadsInstalledBundle(t *testing.T) {
 	}
 }
 
-func TestRunnerConfigRequiresExplicitInstalledBundleChoice(t *testing.T) {
+func TestRunnerConfigInstalledBundleDefaultsToTrue(t *testing.T) {
 	setRenderedRunnerEnvironment(t)
 	unsetForTest(t, "SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE")
-	if _, err := LoadRunnerFirecrackerConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "missing required SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE") {
+	cfg, err := LoadRunnerFirecrackerConfigFromEnv()
+	if err != nil || !cfg.MicroVMInstalledBundle {
 		t.Fatalf("absent installed-bundle choice = %v", err)
 	}
 	t.Setenv("SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE", "sometimes")

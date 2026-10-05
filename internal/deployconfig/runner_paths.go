@@ -45,9 +45,9 @@ func (r *Runner) installedBundlePaths() []packagedRunnerPath {
 	}
 }
 
-// hasInstalledBundle reports the validated firecracker_installed_bundle choice.
+// hasInstalledBundle reports firecracker_installed_bundle, which defaults to true.
 func (r *Runner) hasInstalledBundle() bool {
-	return r.FirecrackerInstalledBundle != nil && *r.FirecrackerInstalledBundle
+	return r.FirecrackerInstalledBundle == nil || *r.FirecrackerInstalledBundle
 }
 
 func (r Runner) withPackagedPaths() Runner {
