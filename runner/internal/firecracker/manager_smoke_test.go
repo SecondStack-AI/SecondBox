@@ -32,6 +32,7 @@ func TestSmokeBootFirecracker(t *testing.T) {
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		RunnerWorkspaceRoot:              filepath.Join(workDir, "durable-workspaces"),
@@ -131,6 +132,7 @@ func TestSmokeTenantEgressContextIsolation(t *testing.T) {
 	}
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		RunnerWorkspaceRoot:              filepath.Join(workDir, "durable-workspaces"),
@@ -402,6 +404,7 @@ func TestSmokeGeneratedImageBootsControlAndRuntime(t *testing.T) {
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
@@ -470,6 +473,7 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	sharedImagePath := requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH")
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                rootfsPath,
 		MicroVMSharedImagePath:           sharedImagePath,
@@ -756,6 +760,7 @@ func TestSmokeRunnerLocalSnapshotRestore(t *testing.T) {
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
@@ -980,6 +985,7 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
@@ -1260,6 +1266,7 @@ func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
@@ -1323,6 +1330,7 @@ func TestSmokeJailedTapGeneratedImage(t *testing.T) {
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
 		JailerPath:                       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH"),
+		MicroVMInstalledBundle:           true,
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),

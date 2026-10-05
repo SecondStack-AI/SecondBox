@@ -3,10 +3,12 @@ package executionimage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
@@ -14,7 +16,7 @@ import (
 func (manager *Manager) VerifyLocal(ctx context.Context, image *runnerprotocol.ExecutionImage, progress func(runnerprotocol.AssignmentProgressStage) error) (PreparedImage, error) {
 	if image == nil {
 		if manager.fixedDirectory == "" {
-			return PreparedImage{}, errors.New("SecondBox execution image verifier has no fixed signed bundle")
+			return PreparedImage{}, fmt.Errorf("%w: a default-image assignment must select an execution image", config.ErrNoInstalledExecutionBundle)
 		}
 		// Persisted pre-selection Sandboxes retain their immutable Profile assets.
 		artifacts, err := manager.verifiedBundleArtifacts(ctx, manager.fixedDirectory, manager.fixedPublicKeyPath, manager.fixedPublicKeySHA256)

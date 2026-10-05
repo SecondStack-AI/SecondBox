@@ -243,6 +243,7 @@ func signedArtifactFixture(t *testing.T) (*Config, string) {
 		t.Fatal(err)
 	}
 	cfg := &Config{
+		MicroVMInstalledBundle: true,
 		MicroVMKernelPath:      filepath.Join(dir, "kernel"),
 		MicroVMRootfsPath:      filepath.Join(dir, "rootfs.ext4"),
 		MicroVMSharedImagePath: filepath.Join(dir, "shared.img"),

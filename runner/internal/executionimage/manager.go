@@ -76,8 +76,12 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	if err := os.MkdirAll(cfg.ExecutionImageRegistryCertificates, 0o700); err != nil {
 		return nil, fmt.Errorf("SecondBox execution image registry certificate directory creation failed: %w", err)
 	}
+	fixedDirectory := ""
+	if cfg.MicroVMInstalledBundle {
+		fixedDirectory = filepath.Dir(cfg.MicroVMKernelPath)
+	}
 	return &Manager{
-		fixedDirectory:       filepath.Dir(cfg.MicroVMKernelPath),
+		fixedDirectory:       fixedDirectory,
 		fixedPublicKeyPath:   cfg.MicroVMPublicKeyPath,
 		fixedPublicKeySHA256: cfg.MicroVMPublicKeySHA256,
 		cacheRoot:            cfg.ExecutionImageCacheRoot,

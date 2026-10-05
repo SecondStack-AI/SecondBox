@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -54,6 +55,11 @@ type Config struct {
 	MicroVMStoragePressureAdmissionDenyPercent int
 	MicroVMStorageAdmissionMode                string
 	MicroVMAllowUnjailed                       bool
+	// MicroVMInstalledBundle states whether the Runner has an installed signed
+	// execution bundle. Only with it are the kernel, rootfs, shared-image and
+	// artifact-key fields set, and only then can an assignment that selects no
+	// execution image boot.
+	MicroVMInstalledBundle bool
 	// MicroVMSnapshotTemplateCacheRoot is the operator-owned runner-local root
 	// for immutable snapshot-resume templates. It is required, so an operator
 	// always states where resume templates live; the runner advertises resume
@@ -85,6 +91,10 @@ type Config struct {
 	ExecutionImageMaximumExpandedBytes   int64
 	ExecutionImageMaximumCacheBytes      int64
 }
+
+// ErrNoInstalledExecutionBundle refuses work that boots the installed signed
+// execution bundle on a Runner configured without one.
+var ErrNoInstalledExecutionBundle = errors.New("SecondBox Runner has no installed execution bundle")
 
 // VerifyMicroVMArtifactDirectory verifies one selected bundle against operator trust.
 func VerifyMicroVMArtifactDirectory(ctx context.Context, directory, publicKeyPath, publicKeySHA256 string) error {

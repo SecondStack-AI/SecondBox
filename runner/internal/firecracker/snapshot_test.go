@@ -31,6 +31,7 @@ func TestCreateGoldenSnapshotPausesSnapshotsResumesAndWritesManifest(t *testing.
 	m := &Manager{
 		cfg: &config.Config{
 			FirecrackerPath:        "/usr/bin/firecracker",
+			MicroVMInstalledBundle: true,
 			MicroVMKernelPath:      kernel,
 			MicroVMRootfsPath:      rootfs,
 			MicroVMSharedImagePath: shared,

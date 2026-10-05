@@ -63,6 +63,9 @@ func TestSmokePublishSnapshotResumeTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load Runner configuration: %v", err)
 	}
+	if !cfg.MicroVMInstalledBundle {
+		t.Fatal("a snapshot-resume template is built from the installed bundle; this Runner sets SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE=false")
+	}
 	if cfg.MicroVMAllowUnjailed {
 		t.Fatal("a template must be captured under the jailer: an unjailed capture records absolute drive paths no Instance can own")
 	}
