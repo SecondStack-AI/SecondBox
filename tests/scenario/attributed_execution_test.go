@@ -515,7 +515,7 @@ func TestScenarioAttributedConnectionPolicyAdoptsNextGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selection := contracts.SubjectSandboxPolicy{Profile: profile.Name, Lifecycle: contracts.SandboxLifecycleLimits{IdleSeconds: policy.Effective.IdleSeconds, MaximumDurationSeconds: policy.Effective.MaximumDurationSeconds}}
+	selection := contracts.SubjectSandboxPolicy{Profiles: []string{profile.Name}, Lifecycle: contracts.SandboxLifecycleLimits{IdleSeconds: policy.Effective.IdleSeconds, MaximumDurationSeconds: policy.Effective.MaximumDurationSeconds}}
 	for _, count := range []int{8, 3} {
 		selection.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: int64(count)}
 		policy, err = controller.UpdateSubjectSandboxPolicy(ctx, subject, selection, policy.Revision, uniqueScenarioKey(t, "connection-selection"))

@@ -105,6 +105,7 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 		RequestID:  requestID,
 		LeaseID:    leaseID, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		CredentialDigest: digest[:], Now: now,
+		ProfileGrants: applicationProfileGrants(ctx),
 	})
 	if err != nil {
 		return contracts.PortSession{}, false, err

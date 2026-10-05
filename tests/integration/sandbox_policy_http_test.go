@@ -3,6 +3,7 @@ package integration_test
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -78,7 +79,7 @@ func TestSandboxPolicyHTTPPinsFutureLifecycleAndDelegatedBounds(t *testing.T) {
 	if err != nil || capacity.Available.Sandboxes != secondboxclient.Unlimited || capacity.ConstrainingScopes.Sandboxes != "none" || capacity.Available.Snapshots != 0 {
 		t.Fatalf("unlimited parent = %+v, %v", capacity, err)
 	}
-	selection := secondboxclient.SubjectSandboxPolicy{Profile: name, Lifecycle: secondboxclient.SandboxLifecycleLimits{IdleSeconds: 60, MaximumDurationSeconds: secondboxclient.Unlimited}}
+	selection := secondboxclient.SubjectSandboxPolicy{Profiles: []string{name}, Lifecycle: secondboxclient.SandboxLifecycleLimits{IdleSeconds: 60, MaximumDurationSeconds: secondboxclient.Unlimited}}
 	selected, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, initial.Revision, name+"-policy")
 	if err != nil || selected.Effective.IdleSeconds != 60 {
 		t.Fatalf("selected = %+v, %v", selected, err)
@@ -212,7 +213,7 @@ func assertSandboxPolicyPreservesUnchangedBlocks(t *testing.T, operator, control
 			t.Fatalf("want %s, got %v", code, err)
 		}
 	}
-	selection := contracts.SubjectSandboxPolicy{Profile: name, Lifecycle: contracts.SandboxLifecycleLimits{IdleSeconds: 300, MaximumDurationSeconds: 240}, AttributedExecution: &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 64}}
+	selection := contracts.SubjectSandboxPolicy{Profiles: []string{name}, Lifecycle: contracts.SandboxLifecycleLimits{IdleSeconds: 300, MaximumDurationSeconds: 240}, AttributedExecution: &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 64}}
 	apply(selection)
 	spec.Lifecycle.IdleSeconds = 60
 	spec.Lifecycle.MaximumDurationSeconds = 120
@@ -235,7 +236,7 @@ func assertSandboxPolicyPreservesUnchangedBlocks(t *testing.T, operator, control
 	changed := selection
 	changed.Lifecycle.IdleSeconds = 301
 	refuse(changed, "profile_policy_ceiling_exceeded")
-	// Switching Profile cannot carry either block's prior exception with it.
+	// A newly named Profile cannot inherit either block's prior exception.
 	otherSpec := spec
 	otherSpec.AttributedExecution = &contracts.AttributedExecutionPolicy{Gateway: "gateway", MaximumConnections: 32}
 	otherSpec.AttributedExecutionCeiling = contracts.AttributedExecutionConnectionLimits{MaximumConnections: 32}
@@ -243,7 +244,10 @@ func assertSandboxPolicyPreservesUnchangedBlocks(t *testing.T, operator, control
 		t.Fatal(err)
 	}
 	changed = selection
-	changed.Profile = name + "-other"
+	changed.Profiles = []string{name + "-other"}
+	refuse(changed, "profile_policy_ceiling_exceeded")
+	// Adding it beside an already named Profile validates the newcomer alone.
+	changed.Profiles = []string{name, name + "-other"}
 	refuse(changed, "profile_policy_ceiling_exceeded")
 	// A lifecycle edit can likewise preserve a now-above-ceiling connection value.
 	spec.AttributedExecution = &contracts.AttributedExecutionPolicy{Gateway: "gateway", MaximumConnections: 32}
@@ -255,7 +259,7 @@ func assertSandboxPolicyPreservesUnchangedBlocks(t *testing.T, operator, control
 		t.Fatalf("connection preservation: %+v", selected)
 	}
 	changed = selection
-	changed.Profile = name + "-other"
+	changed.Profiles = []string{name + "-other"}
 	refuse(changed, "profile_policy_ceiling_exceeded")
 	changed = selection
 	changed.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 95}
@@ -279,4 +283,101 @@ func assertSandboxPolicyPreservesUnchangedBlocks(t *testing.T, operator, control
 	}
 	selection.AttributedExecution = &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 96}
 	refuse(selection, "invalid_request")
+}
+
+// TestSandboxPolicyHTTPSelectsEveryNamedProfile proves one Subject policy names
+// a set of granted Profiles: every member observes the same selection, and each
+// member must be granted and admit it. Creation, switch and Assignment use of
+// the set is covered by TestSandboxProfileSwitchKeepsSubjectPolicyOfNamedProfiles.
+func TestSandboxPolicyHTTPSelectsEveryNamedProfile(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	databaseStore, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databaseStore.Close)
+	controlPlane := newManagementControlPlane(t, databaseStore, now)
+	server := contractServer(t, persistedHTTPHandler(t, controlPlane, databaseStore))
+	operator, err := secondboxclient.NewSecondBoxClient(server.URL, testPlatformToken, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := fmt.Sprintf("policy-set-%d", integrationIdentitySequence.Add(1))
+	online, offline, plain := name+"-online", name+"-offline", name+"-plain"
+	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{Name: name, State: contracts.RunnerPoolStateReady, Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"}, ReadyRunnerCount: 1, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	seedFixtureHomeRunner(t, name, name)
+	spec := testProfileSpec(1)
+	spec.Pool = name
+	spec.Lifecycle.MaximumDurationSeconds = contracts.Unlimited
+	spec.LifecycleCeiling = &contracts.SandboxLifecycleLimits{IdleSeconds: 600, MaximumDurationSeconds: contracts.Unlimited}
+	plainSpec := spec
+	requiresContext := true
+	spec.Network.RequiresTenantEgressContext = &requiresContext
+	spec.AttributedExecution = &contracts.AttributedExecutionPolicy{Gateway: "gateway", MaximumConnections: 128}
+	spec.AttributedExecutionCeiling = contracts.AttributedExecutionConnectionLimits{MaximumConnections: 256}
+	offlineSpec := spec
+	offlineSpec.LifecycleCeiling = &contracts.SandboxLifecycleLimits{IdleSeconds: 300, MaximumDurationSeconds: contracts.Unlimited}
+	for profile, profileSpec := range map[string]contracts.ProfileRevisionSpec{online: spec, offline: offlineSpec, plain: plainSpec} {
+		if _, _, err := controlPlane.CreateProfileIdempotent(t.Context(), contracts.Principal{Kind: "platform", ID: "operator"}, profile, contracts.CreateProfileRequest{Name: profile, Spec: profileSpec}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tenantRequest := persistedHTTPTenantRequest(name)
+	tenantRequest.AllowedProfileGrants = []string{online, offline, plain}
+	if _, err := operator.CreateTenant(t.Context(), tenantRequest, name); err != nil {
+		t.Fatal(err)
+	}
+	credential, err := operator.CreateTenantControllerAuthority(t.Context(), name, secondboxclient.CreateTenantControllerAuthorityRequest{ExpiresAt: now.Add(time.Hour), Metadata: map[string]string{}}, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := secondboxclient.NewSecondBoxTenantControllerClient(server.URL, credential.BearerToken, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	quota := secondboxclient.SubjectQuota{MaxSandboxes: secondboxclient.Unlimited, MaxActiveInstances: secondboxclient.Unlimited, MaxVcpuCount: secondboxclient.Unlimited, MaxMemoryBytes: secondboxclient.Unlimited, MaxSnapshots: 0, MaxPortSessions: secondboxclient.Unlimited, MaxConcurrentOperations: secondboxclient.Unlimited}
+	subject, err := controller.CreateSubject(t.Context(), secondboxclient.CreateSubjectRequest{Ref: name, Quota: quota, Metadata: map[string]string{}}, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := subject.Revision
+	sequence := 0
+	refuse := func(selection contracts.SubjectSandboxPolicy, code string) {
+		t.Helper()
+		sequence++
+		if _, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, revision, fmt.Sprintf("%s-refuse-%d", name, sequence)); secondboxclient.ProblemCodeOf(err) != code {
+			t.Fatalf("%v: want %s, got %v", selection.Profiles, code, err)
+		}
+	}
+	selection := contracts.SubjectSandboxPolicy{Profiles: []string{online, offline}, Lifecycle: contracts.SandboxLifecycleLimits{IdleSeconds: 240, MaximumDurationSeconds: contracts.Unlimited}, AttributedExecution: &contracts.AttributedExecutionConnectionLimits{MaximumConnections: 64}}
+	for _, invalid := range [][]string{{}, {online, online}, {"Invalid"}} {
+		changed := selection
+		changed.Profiles = invalid
+		refuse(changed, "invalid_request")
+	}
+	changed := selection
+	changed.Profiles = []string{online, name + "-ungranted"}
+	refuse(changed, "grant_escalation_denied")
+	changed.Profiles = []string{online, plain}
+	refuse(changed, "invalid_request")
+	changed = selection
+	changed.Lifecycle.IdleSeconds = 400
+	refuse(changed, "profile_policy_ceiling_exceeded")
+
+	selected, err := controller.UpdateSubjectSandboxPolicy(t.Context(), name, selection, revision, name+"-set")
+	if err != nil || selected.Profile != online || selected.Desired == nil || !slices.Equal(selected.Desired.Profiles, selection.Profiles) || selected.Effective.IdleSeconds != 240 {
+		t.Fatalf("selected set = %+v, %v", selected, err)
+	}
+	revision = selected.Revision
+	for _, profile := range []string{online, offline} {
+		observed, err := controller.GetSubjectSandboxPolicy(t.Context(), name, profile)
+		if err != nil || observed.Profile != profile || observed.Desired == nil || observed.Effective.IdleSeconds != 240 || observed.AttributedExecution.MaximumConnections != 64 {
+			t.Fatalf("%s observation = %+v, %v", profile, observed, err)
+		}
+	}
+	if observed, err := controller.GetSubjectSandboxPolicy(t.Context(), name, plain); err != nil || observed.Desired != nil || observed.AttributedExecution != nil {
+		t.Fatalf("unnamed Profile observation = %+v, %v", observed, err)
+	}
 }

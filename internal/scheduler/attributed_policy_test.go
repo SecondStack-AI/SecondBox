@@ -66,7 +66,8 @@ func TestAttributedExecutionPermissionNumericPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer tx.Rollback(context.Background())
-			selection := `{"profile":"profile","lifecycle":{"idleSeconds":60,"maximumDurationSeconds":null}`
+			// The pinned Profile is any member of the selected set, not only the first.
+			selection := `{"profiles":["other-profile","profile"],"lifecycle":{"idleSeconds":60,"maximumDurationSeconds":null}`
 			if test.selection != "" {
 				selection += "," + test.selection
 			}
@@ -86,7 +87,7 @@ func TestAttributedExecutionPermissionNumericPolicy(t *testing.T) {
 			if err != nil || command.MaximumConnections != test.want || command.Gateway != "gateway" {
 				t.Fatalf("resolved %v, %v", command, err)
 			}
-			if _, err := tx.Exec(t.Context(), `UPDATE secondbox.subjects SET sandbox_policy_json=jsonb_set(sandbox_policy_json,'{profile}','"other-profile"')`); err != nil {
+			if _, err := tx.Exec(t.Context(), `UPDATE secondbox.subjects SET sandbox_policy_json=jsonb_set(sandbox_policy_json,'{profiles}','["other-profile"]')`); err != nil {
 				t.Fatal(err)
 			}
 			if err := resolveAttributedConnections(t.Context(), tx, locked, command); err != nil {

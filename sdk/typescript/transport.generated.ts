@@ -582,7 +582,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "snapshot_name_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "image_preparation_targets_exceeded" | "image_preparation_failed" | "resources_exceed_profile" | "resources_fixed_by_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired" | "profile_policy_ceiling_exceeded" | "file_not_found" | "workspace_full";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "snapshot_name_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "profile_incompatible" | "profile_switch_snapshots_present" | "quota_exceeded" | "image_preparation_targets_exceeded" | "image_preparation_failed" | "resources_exceed_profile" | "resources_fixed_by_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired" | "profile_policy_ceiling_exceeded" | "file_not_found" | "workspace_full";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -957,11 +957,11 @@ export interface SubjectQuota {
   readonly maxVcpuCount: PolicyLimit;
 }
 
-/** Complete replacement. Unchanged lifecycle or attributed blocks may retain stored desired values for the same Profile after grant tightening; effective policy still enforces current grants. New or changed blocks and Profile switches validate current grants. Lifecycle is required; omitted or null attributedExecution clears that selection. */
+/** Complete replacement. One lifecycle and attributed selection applies to every named Profile, so a Sandbox switched between them resolves the same selection. Unchanged lifecycle or attributed blocks may retain stored desired values for a Profile the stored policy already named after grant tightening; effective policy still enforces current grants. New or changed blocks and newly named Profiles validate current grants of every named Profile. Lifecycle is required; omitted or null attributedExecution clears that selection. */
 export interface SubjectSandboxPolicy {
   readonly attributedExecution?: AttributedExecutionConnectionLimits | null;
   readonly lifecycle: SandboxLifecycleLimits;
-  readonly profile: ProfileName;
+  readonly profiles: readonly ProfileName[];
 }
 
 export interface SubjectSandboxPolicyObservation {
@@ -988,6 +988,10 @@ export interface SubjectUsage {
   readonly limits: SubjectQuota;
   readonly subjectRef: OwnershipRef;
   readonly usage: QuotaUsage;
+}
+
+export interface SwitchSandboxProfileRequest {
+  readonly profile: ProfileName;
 }
 
 export interface Tenant {
@@ -1265,6 +1269,7 @@ export type OperationID =
   | "statSandboxFile"
   | "stopSandbox"
   | "suspendTenant"
+  | "switchSandboxProfile"
   | "touchSandbox"
   | "updateRunnerPool"
   | "updateSandboxMetadata"
@@ -1359,6 +1364,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   statSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:stat" },
   stopSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:stop" },
   suspendTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:suspend" },
+  switchSandboxProfile: { method: "POST", path: "/v1/sandboxes/{sandboxId}:switch-profile", contentType: "application/json" },
   touchSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:touch" },
   updateRunnerPool: { method: "PATCH", path: "/v1/runner-pools/{runnerPoolName}", contentType: "application/json" },
   updateSandboxMetadata: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/metadata", contentType: "application/json" },

@@ -66,6 +66,7 @@ type SandboxStore interface {
 	UpdateSubjectSandboxPolicy(context.Context, string, string, contracts.SubjectSandboxPolicy, int64, time.Time, ports.AdminIdempotencyInput) (contracts.SubjectSandboxPolicyObservation, ports.AdminIdempotencyResult, error)
 	GetSubjectCapacity(ctx context.Context, tenantRef, subjectRef string, observedAt time.Time) (contracts.SubjectCapacity, error)
 	RelocateSandbox(ctx context.Context, input ports.WorkspaceRelocationInput) (contracts.Operation, error)
+	SwitchSandboxProfile(ctx context.Context, input ports.SwitchSandboxProfileInput) (contracts.Sandbox, bool, error)
 }
 
 // ActivityStore owns lifecycle intent, leases, and useful-activity evidence.
@@ -688,6 +689,48 @@ func (service *ControlPlaneService) RelocateSandbox(
 		return contracts.Operation{}, false, err
 	}
 	return stored, stored.ID != operation.ID, nil
+}
+
+// SwitchSandboxProfile repins one stopped Sandbox to the target Profile's
+// current revision, keeping its identity, Workspace, and egress-context pin.
+// The bool reports an idempotent replay.
+func (service *ControlPlaneService) SwitchSandboxProfile(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	idempotencyKey string,
+	expectedRevision int64,
+	request contracts.SwitchSandboxProfileRequest,
+) (contracts.Sandbox, bool, error) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
+		return contracts.Sandbox{}, false, ports.ErrAuthorizationDenied
+	}
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Sandbox{}, false, err
+	}
+	if expectedRevision < 1 {
+		return contracts.Sandbox{}, false,
+			invalidField("If-Match", "must contain a positive revision ETag")
+	}
+	if !profileNamePattern.MatchString(request.Profile) {
+		return contracts.Sandbox{}, false, invalidField("profile", "must match ^[a-z][a-z0-9-]{0,79}$")
+	}
+	requestHash, err := hashCanonicalRequest(request)
+	if err != nil {
+		return contracts.Sandbox{}, false, err
+	}
+	now := service.now().UTC()
+	return service.store.SwitchSandboxProfile(ctx, ports.SwitchSandboxProfileInput{
+		Principal: principal, SandboxID: sandboxID, Profile: request.Profile,
+		ProfileGrants:    applicationProfileGrants(ctx),
+		ExpectedRevision: expectedRevision,
+		IdempotencyKey:   idempotencyKey, RequestHash: requestHash,
+		IdempotencyEnds: service.idempotencyExpiration(now),
+		AuditEvent: service.newAudit(
+			ctx, principal, "sandbox.profile.switched", "sandbox", sandboxID, principal.TenantRef, now,
+		),
+		Now: now,
+	})
 }
 
 func (service *ControlPlaneService) setSandboxDesiredState(

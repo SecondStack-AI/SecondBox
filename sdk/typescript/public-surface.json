@@ -1093,7 +1093,7 @@
   "SubjectSandboxPolicy": {
     "required": [
       "lifecycle",
-      "profile"
+      "profiles"
     ],
     "optional": [
       "attributedExecution"
@@ -1125,6 +1125,12 @@
       "limits",
       "subjectRef",
       "usage"
+    ],
+    "optional": []
+  },
+  "SwitchSandboxProfileRequest": {
+    "required": [
+      "profile"
     ],
     "optional": []
   },

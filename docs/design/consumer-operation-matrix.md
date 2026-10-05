@@ -13,6 +13,7 @@ bodies, or response decoders.
 | List Sandboxes | `ListSandboxes` | `listSandboxes` | Typed bounded pagination with Metadata, state, and ID filters bound to the cursor. |
 | Replace Metadata | `SandboxHandle.UpdateMetadata` | `SandboxHandle.updateMetadata` | Fence against the handle's observed resource revision; never refresh and replay. |
 | Lifecycle | `Start`, `Drain`, `Stop`, `Relocate`, `Restore`, `Delete` | matching handle methods | Generate one idempotency key when absent and use the observed revision unless an explicit expected revision is supplied. |
+| Switch Profile | `SandboxHandle.SwitchProfile` | `SandboxHandle.switchProfile` | Repin a stopped Sandbox to the named Profile's current revision; same idempotency and revision defaults as lifecycle; retain the returned Sandbox. Repeating a switch that already committed returns the Sandbox unchanged. |
 | Wait/poll | `Wait`, `WaitFor`, `WaitOperation` | matching methods | Require caller cancellation/deadline and bounded individual polls; surface terminal failures. |
 | Buffered execution | `Execute`, `DecodeExecOutcome`, `Run` | `exec`, `decodeExecOutcome`, `run` | Fence the observed generation, bound output/deadline, preserve terminal output and caller-owned Sandbox lifetime. |
 | Streaming execution | `CreateExecStream`, `ConnectExecStream` | matching methods plus an injected connector | Preserve sequence, flow-control, EOF, cancellation and terminal outcome. Closing cancels process work, not the Sandbox. |

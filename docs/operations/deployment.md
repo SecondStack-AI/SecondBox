@@ -541,6 +541,8 @@ Before replacement, take and verify a PostgreSQL backup and quiescent backups of
 
 Every `secondboxd` applies the embedded ordered migration lineage under a PostgreSQL advisory lock before opening listeners. Use coordinated replacement unless the exact deployment has independently proven mixed-version operation.
 
+Migration `0037_subject_sandbox_policy_profiles` rewrites stored Subject Sandbox policies from `profile` to `profiles`, and control planes on either side of it do not share them: an older control plane ignores a rewritten policy and resolves Profile defaults, and a policy it writes with `profile` is ignored afterwards. When updating across it, verify the PostgreSQL backup, pause Subject Sandbox policy writes, stop every older control-plane process before any updated one starts, update the control plane, deploy policy clients that send and read `profiles`, then resume policy writes. Runners need no change.
+
 ## Runtime checks
 
 ```sh

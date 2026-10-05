@@ -325,6 +325,13 @@ var operations = map[string]OperationMetadata{
 	"suspendTenant": {
 		OperationID: "suspendTenant", Method: "POST", PathTemplate: "/v1/tenants/{tenantRef}:suspend",
 	},
+	"switchSandboxProfile": {
+		OperationID: "switchSandboxProfile", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:switch-profile",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "SwitchSandboxProfileRequest"},
+		},
+		RequestBodyRequired: true,
+	},
 	"touchSandbox": {
 		OperationID: "touchSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:touch",
 	},

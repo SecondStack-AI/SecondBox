@@ -598,6 +598,8 @@ const (
 	ProblemCodeSandboxNotStopped                    ProblemCode = "sandbox_not_stopped"
 	ProblemCodeWorkspaceRelocationSnapshotsPresent  ProblemCode = "workspace_relocation_snapshots_present"
 	ProblemCodeWorkspaceRelocationTargetUnavailable ProblemCode = "workspace_relocation_target_unavailable"
+	ProblemCodeProfileIncompatible                  ProblemCode = "profile_incompatible"
+	ProblemCodeProfileSwitchSnapshotsPresent        ProblemCode = "profile_switch_snapshots_present"
 	ProblemCodeQuotaExceeded                        ProblemCode = "quota_exceeded"
 	ProblemCodeImagePreparationTargetsExceeded      ProblemCode = "image_preparation_targets_exceeded"
 	ProblemCodeImagePreparationFailed               ProblemCode = "image_preparation_failed"
@@ -917,7 +919,7 @@ type SubjectQuota struct {
 	MaxVcpuCount            PolicyLimit `json:"maxVcpuCount"`
 }
 
-// SubjectSandboxPolicy Complete replacement. Unchanged lifecycle or attributed blocks may retain stored desired values for the same Profile after grant tightening; effective policy still enforces current grants. New or changed blocks and Profile switches validate current grants. Lifecycle is required; omitted or null attributedExecution clears that selection.
+// SubjectSandboxPolicy Complete replacement. One lifecycle and attributed selection applies to every named Profile, so a Sandbox switched between them resolves the same selection. Unchanged lifecycle or attributed blocks may retain stored desired values for a Profile the stored policy already named after grant tightening; effective policy still enforces current grants. New or changed blocks and newly named Profiles validate current grants of every named Profile. Lifecycle is required; omitted or null attributedExecution clears that selection.
 type SubjectSandboxPolicy = contracts.SubjectSandboxPolicy
 
 type SubjectSandboxPolicyObservation = contracts.SubjectSandboxPolicyObservation
@@ -935,6 +937,10 @@ type SubjectUsage struct {
 	Limits     SubjectQuota `json:"limits"`
 	SubjectRef OwnershipRef `json:"subjectRef"`
 	Usage      QuotaUsage   `json:"usage"`
+}
+
+type SwitchSandboxProfileRequest struct {
+	Profile ProfileName `json:"profile"`
 }
 
 type Tenant struct {

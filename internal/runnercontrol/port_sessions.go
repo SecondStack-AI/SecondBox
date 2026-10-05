@@ -24,7 +24,10 @@ type PortSessionAdmission struct {
 	// home Runner can reject a mismatch locally without ever holding the
 	// credential itself.
 	CredentialDigest []byte
-	Now              time.Time
+	// ProfileGrants is nil for a caller without an application authority and
+	// otherwise must name the Sandbox's Profile as read under the admission lock.
+	ProfileGrants []string
+	Now           time.Time
 }
 
 // PortTunnel is the private assignment-bound projection consumed by the proxy.

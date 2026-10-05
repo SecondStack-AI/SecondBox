@@ -84,3 +84,22 @@ func sandboxPlacementSpec(spec contracts.ProfileRevisionSpec, resources contract
 	spec.Resources.WorkspaceBytes = resources.WorkspaceBytes
 	return spec
 }
+
+// sandboxResourcesFitProfile reports whether an already resolved allocation is
+// one the Profile revision could have resolved: its fixed size for
+// snapshot_resume, and otherwise within its ceiling, or its defaults when it
+// states no ceiling. The allocation itself is never re-rounded.
+func sandboxResourcesFitProfile(spec contracts.ProfileRevisionSpec, resources contracts.SandboxResources) bool {
+	policy := spec.Resources
+	defaults := contracts.SandboxResources{VCPUCount: policy.VCPUCount, MemoryBytes: policy.MemoryBytes, WorkspaceBytes: policy.WorkspaceBytes}
+	if spec.Startup.Mode == contracts.StartupModeSnapshotResume {
+		return resources == defaults
+	}
+	ceiling := contracts.SandboxResourceRequest{VCPUCount: &policy.VCPUCount, MemoryBytes: &policy.MemoryBytes, WorkspaceBytes: &policy.WorkspaceBytes}
+	if spec.ResourceCeiling != nil {
+		ceiling = contracts.SandboxResourceRequest{VCPUCount: spec.ResourceCeiling["vcpuCount"], MemoryBytes: spec.ResourceCeiling["memoryBytes"], WorkspaceBytes: spec.ResourceCeiling["workspaceBytes"]}
+	}
+	return (ceiling.VCPUCount == nil || resources.VCPUCount <= *ceiling.VCPUCount) &&
+		(ceiling.MemoryBytes == nil || resources.MemoryBytes <= *ceiling.MemoryBytes) &&
+		(ceiling.WorkspaceBytes == nil || resources.WorkspaceBytes <= *ceiling.WorkspaceBytes)
+}
