@@ -42,6 +42,7 @@ SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000
 SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID
 SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION
 SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT
+SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE
 SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH
 SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH
 SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH
@@ -77,6 +78,8 @@ SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES
 SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
 SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS
 ```
+
+`SECONDBOX_RUNNER_FIRECRACKER_INSTALLED_BUNDLE` states whether the Runner has an installed signed execution bundle. With `true`, the kernel, rootfs, shared-image, and artifact-key settings are required, and Assignments that select no execution image boot that bundle. With `false`, those five settings must be absent; the Runner verifies no installed bundle, boots only client-selected execution images, advertises the guest-protocol generation its host side speaks with no materialization and no snapshot-resume capacity, and refuses an Assignment that selects no execution image with `SecondBox Runner has no installed execution bundle`.
 
 Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=false`. The jailer UID range supplies one unprivileged identity per live Instance; its count must cover `SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL`. The start must be at least 1000 unless `SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000=true` explicitly acknowledges intentional use of the host's system-UID space. UID 0 and ranges that exceed unsigned 32-bit UIDs are rejected. Same-host preflight also rejects UIDs assigned to host accounts. The GID remains one positive shared group identity. The runner remains root so it can create jail roots, cgroups, TAP devices, and the required jailed file bindings.
 

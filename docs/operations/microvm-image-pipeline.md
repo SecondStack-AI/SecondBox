@@ -107,11 +107,14 @@ Firecracker Runners boot its kernel and rootfs; gVisor Runners use only its sign
 
 The signed bundle is approximately 11 GB and is not embedded in the source-less GitHub release zip. Local release preparation reads an independently signed bundle from the absolute path configured by `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR`, verifies it against `SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256`, and builds the exact allowlist as the dedicated `microvm-artifacts` OCI archive. The hosted publisher pushes that supplied archive without rebuilding it. Image labels and the artifact manifest bind the verified public-key fingerprint and `manifest.json` digest.
 
-For a manual deployment, materialize the release's digest-pinned
-`microvm-artifacts` image into the operator-selected artifact directory and
-verify it with the independent public key before enrolling the Runner. Set
-`artifact_host_directory` and the matching trust and asset pins in the Runner
-declaration; [deployment operations](deployment.md) documents that contract.
+For a manual deployment with an installed bundle, materialize the release's
+digest-pinned `microvm-artifacts` image into the operator-selected artifact
+directory and verify it with the independent public key before enrolling the
+Runner. Set `firecracker_installed_bundle = true`, `artifact_host_directory`,
+and the matching trust and asset pins in the Runner declaration;
+[deployment operations](deployment.md) documents that contract. A Runner that
+boots only client-selected execution images sets
+`firecracker_installed_bundle = false` and needs no materialized bundle.
 `secondbox-deploy runner-init` issues Runner identity and configuration, not
 execution assets.
 
