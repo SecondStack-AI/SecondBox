@@ -6,6 +6,8 @@
 
 - Each release publishes an arm64 artifact set beside the amd64 one under the same tag: `secondbox-VERSION-arm64-artifact-manifest.json` with its linux-arm64 scenario evidence and `standard-arm64` standard bundles, and the control-plane, Runner, installer-tools and microVM-artifact images under `vVERSION-arm64` tags. It shares the SDKs, binaries, OpenAPI document and install bootstrap with the amd64 set. `just release-arm64 VERSION AMD64_RELEASE_DIR` stages it on a Linux arm64 KVM host, each host uploads its own output, and the publisher starts once the draft holds both sets.
 
+- `[standard_resources]` accepts `guest_architecture = "amd64"` or `"arm64"` in place of `artifact_manifest` for a deployment built from source. `secondbox-deploy` then builds the standard documents from its own code, selecting the development lineage for an unstamped build and the full published lineage for a stamped one, and skips the release signing-identity and Profile-identity checks that need a manifest. Exactly one of the two fields must be set.
+
 ### Changed
 
 - `releasecontract.ArtifactManifestLocation` and `QualificationEvidenceLocation` take the guest architecture. Files of a non-amd64 artifact set, including its standard bundles, staging checksums and OCI archives, carry the architecture suffix; amd64 names are unchanged.

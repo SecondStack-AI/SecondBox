@@ -1,5 +1,6 @@
 // Package standardresources materializes release-owned resource bundles from a
-// verified release artifact manifest and explicit deployment bindings.
+// verified release artifact manifest, or from the build identity of a
+// source-built deployment tool, and explicit deployment bindings.
 package standardresources
 
 import (
@@ -7,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
 	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
@@ -74,6 +76,37 @@ func Build(manifest releasecontract.ArtifactManifest, selection Selection) (reso
 	if err != nil {
 		return resourceapply.Document{}, err
 	}
+	return buildSelection(architecture, selection, func(name string) (resourceapply.Profile, error) {
+		profile, err := profileLineageForManifest(manifest, name, architecture)
+		if err != nil {
+			return resourceapply.Profile{}, err
+		}
+		if err := validateManifestIdentity(manifest, profile); err != nil {
+			return resourceapply.Profile{}, err
+		}
+		return profile, nil
+	})
+}
+
+// BuildForBuildIdentity returns the code-owned Profile lineages of the selected
+// bundles for one guest architecture without a release artifact manifest. The
+// build identity of the calling binary owns the documents: the development
+// sentinel selects DevelopmentProfileLineage, any stamped identity ProfileLineage.
+func BuildForBuildIdentity(architecture string, identity buildinfo.Identity, selection Selection) (resourceapply.Document, error) {
+	development, err := identity.Development()
+	if err != nil {
+		return resourceapply.Document{}, err
+	}
+	lineage := ProfileLineage
+	if development {
+		lineage = DevelopmentProfileLineage
+	}
+	return buildSelection(architecture, selection, func(name string) (resourceapply.Profile, error) {
+		return lineage(name, architecture)
+	})
+}
+
+func buildSelection(architecture string, selection Selection, lineage func(name string) (resourceapply.Profile, error)) (resourceapply.Document, error) {
 	pool, err := StandardPool(architecture)
 	if err != nil {
 		return resourceapply.Document{}, err
@@ -97,11 +130,8 @@ func Build(manifest releasecontract.ArtifactManifest, selection Selection) (reso
 			return resourceapply.Document{}, err
 		}
 		document.RunnerPools = updatedPools
-		profile, err := profileLineageForManifest(manifest, name, architecture)
+		profile, err := lineage(name)
 		if err != nil {
-			return resourceapply.Document{}, err
-		}
-		if err := validateManifestIdentity(manifest, profile); err != nil {
 			return resourceapply.Document{}, err
 		}
 		document.Profiles = append(document.Profiles, profile)

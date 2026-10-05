@@ -80,7 +80,7 @@ The command prints the two one-time bearer tokens in one JSON response. Capture 
 3. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
 4. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
 5. `applications`: the platform-token secret reference;
-6. `standard_resources`: verified release manifest, explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
+6. `standard_resources`: verified release manifest or, for a source build, the guest architecture; explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
 7. `policy` and `overrides`: data-plane retention, enabled Runner features, and intentionally selected tuning overrides.
 
 Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.

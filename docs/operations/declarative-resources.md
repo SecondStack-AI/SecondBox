@@ -30,7 +30,12 @@ Standard Profiles name no execution bundle; each Instance boots the signed bundl
 
 ## Deployment selection
 
-`secondbox.toml` requires an explicit `[standard_resources]` section with the verified artifact-manifest path, selected bundle names, apply readiness bound, and typed RunnerPool inventory declared once by name. All three standard bundles use the standard pool of the release guest architecture, `standard-amd64` or `standard-arm64`, so any combination of them shares one `[[standard_resources.runner_pools]]` declaration whose `architectures` include that architecture. `init --mode development` declares the pool of the host that runs it. Duplicate pool names are rejected. Production uses the same shape and accepts no generated development authority.
+`secondbox.toml` requires an explicit `[standard_resources]` section with selected bundle names, apply readiness bound, typed RunnerPool inventory declared once by name, and exactly one source of the release guest architecture:
+
+- `artifact_manifest`: the path of the verified release artifact manifest. The manifest names the guest architecture, the standard lineages must equal the Profile identities it released, and in production every standard-pool Runner's `artifact_public_key_sha256` must equal its microVM signing fingerprint.
+- `guest_architecture`: `amd64` or `arm64`, for a deployment built from source that has no release artifact manifest. `secondbox-deploy` builds the standard documents from its own code for that architecture. Its build identity selects the lineage: the unstamped development identity selects the short development lineage, and any stamped release identity selects the full published lineage. A binary that stamps only one of version and source commit is rejected. Each Runner keeps its own explicit `artifact_public_key_sha256`.
+
+Setting both or neither fails validation. All three standard bundles use the standard pool of the release guest architecture, `standard-amd64` or `standard-arm64`, so any combination of them shares one `[[standard_resources.runner_pools]]` declaration whose `architectures` include that architecture. `init --mode development` declares the pool of the host that runs it. Duplicate pool names are rejected. Production uses the same shape and accepts no generated development authority.
 
 Logical gateway addresses remain Runner-local deployment configuration. Every declared Runner in a selected pool that should admit a network-enabled standard Profile must advertise one or more contexts and map that Profile's logical name inside each applicable context. This example declares a remote configuration path; omit `egress_context_config_path` for same-host placement:
 

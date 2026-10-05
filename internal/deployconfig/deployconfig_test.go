@@ -598,7 +598,7 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 			manifest.Policy.RunnerEnabledFeatures = "local-workspace,unsupported-feature"
 		}},
 		{name: "Runner features omit local workspace", want: "runner features require local-workspace", mutate: func(manifest *ManifestV1) { manifest.Policy.RunnerEnabledFeatures = "evidence" }},
-		{name: "standard resources absent", want: "standard_resources.artifact_manifest is required", mutate: func(manifest *ManifestV1) { manifest.StandardResources = StandardResources{} }},
+		{name: "standard resources absent", want: "standard_resources requires exactly one of artifact_manifest", mutate: func(manifest *ManifestV1) { manifest.StandardResources = StandardResources{} }},
 		{name: "standard bundle duplicate", want: "unique release-owned bundle names", mutate: func(manifest *ManifestV1) {
 			manifest.StandardResources.Bundles = []string{"agent-compartment", "agent-compartment"}
 		}},

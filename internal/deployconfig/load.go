@@ -26,6 +26,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	controlconfig "github.com/SecondStack-AI/SecondBox/internal/config"
 	"github.com/SecondStack-AI/SecondBox/internal/runnerfeatures"
+	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/pkg/networkpolicycontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
@@ -595,8 +596,15 @@ func validatePolicy(p Policy) error {
 }
 
 func validateStandardResources(resources StandardResources, runners []Runner) error {
-	if strings.TrimSpace(resources.ArtifactManifest) == "" {
-		return manifestError("standard_resources.artifact_manifest is required", nil)
+	hasArtifactManifest := strings.TrimSpace(resources.ArtifactManifest) != ""
+	hasGuestArchitecture := strings.TrimSpace(resources.GuestArchitecture) != ""
+	if hasArtifactManifest == hasGuestArchitecture {
+		return manifestError("standard_resources requires exactly one of artifact_manifest (a verified release) or guest_architecture (a source build)", nil)
+	}
+	if hasGuestArchitecture {
+		if _, err := standardresources.StandardPool(resources.GuestArchitecture); err != nil {
+			return manifestError("standard_resources.guest_architecture must be amd64 or arm64", err)
+		}
 	}
 	if len(resources.Bundles) == 0 {
 		return manifestError("standard_resources.bundles must explicitly select at least one bundle", nil)
@@ -622,8 +630,8 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 		}
 		bindings[pool.Name] = pool
 	}
-	// The release artifact manifest selects which declared pool binds the bundles; see
-	// resolveStandardResources.
+	// The release guest architecture selects which declared pool binds the
+	// bundles; see resolveStandardResources.
 	if len(bindings) == 0 {
 		return manifestError("standard_resources.runner_pools must declare the standard pool of the release guest architecture", nil)
 	}
@@ -955,28 +963,34 @@ func addPolicyEnvironment(environment map[string]string, p Policy) {
 }
 
 func resolveStandardResources(base string, manifest ManifestV1) (resourceapply.Document, error) {
-	path, err := resolveRegularReference(base, manifest.StandardResources.ArtifactManifest)
-	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
-	}
-	releaseManifest, err := releasecontract.DecodeArtifactManifest(data)
-	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
-	}
-	guestArchitecture, err := releaseManifest.GuestArchitecture()
-	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+	var releaseManifest releasecontract.ArtifactManifest
+	guestArchitecture := manifest.StandardResources.GuestArchitecture
+	if manifest.StandardResources.ArtifactManifest != "" {
+		path, err := resolveRegularReference(base, manifest.StandardResources.ArtifactManifest)
+		if err != nil {
+			return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		}
+		releaseManifest, err = releasecontract.DecodeArtifactManifest(data)
+		if err != nil {
+			return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		}
+		guestArchitecture, err = releaseManifest.GuestArchitecture()
+		if err != nil {
+			return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		}
 	}
 	standardPool, err := standardresources.StandardPool(guestArchitecture)
 	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		return resourceapply.Document{}, manifestError("standard_resources", err)
 	}
-	expectedKeyID := strings.ToLower(strings.TrimPrefix(releaseManifest.MicroVM.SigningKeyFingerprint, "SHA256:"))
-	if manifest.Deployment.Mode == "production" {
+	// A source build has no release signing identity to compare: its Runners
+	// pin their own provisioned artifact keys.
+	if manifest.StandardResources.ArtifactManifest != "" && manifest.Deployment.Mode == "production" {
+		expectedKeyID := strings.ToLower(strings.TrimPrefix(releaseManifest.MicroVM.SigningKeyFingerprint, "SHA256:"))
 		for index, runner := range manifest.Runners {
 			if runner.PoolID == standardPool && runner.ArtifactPublicKeySHA256 != expectedKeyID {
 				return resourceapply.Document{}, manifestError(fmt.Sprintf("runners[%d].artifact_public_key_sha256 differs from standard_resources artifact manifest signing identity", index), nil)
@@ -994,7 +1008,13 @@ func resolveStandardResources(base string, manifest ManifestV1) (resourceapply.D
 	for _, bundle := range manifest.StandardResources.Bundles {
 		selectedPools[bundle] = pools[standardPool]
 	}
-	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: selectedPools})
+	selection := standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: selectedPools}
+	var document resourceapply.Document
+	if manifest.StandardResources.ArtifactManifest != "" {
+		document, err = standardresources.Build(releaseManifest, selection)
+	} else {
+		document, err = standardresources.BuildForBuildIdentity(guestArchitecture, buildinfo.Current(), selection)
+	}
 	if err != nil {
 		return resourceapply.Document{}, manifestError("standard_resources", err)
 	}

@@ -17,12 +17,16 @@ type ManifestV1 struct {
 	Overrides         TuningOverrides   `toml:"overrides"`
 }
 
-// StandardResources is an explicit release-bundle selection. It contains no authority.
+// StandardResources is an explicit release-bundle selection. It contains no
+// authority. Exactly one of ArtifactManifest (a verified release) or
+// GuestArchitecture (a source build whose secondbox-deploy owns the standard
+// documents) states the release guest architecture.
 type StandardResources struct {
-	ArtifactManifest string               `toml:"artifact_manifest"`
-	Bundles          []string             `toml:"bundles"`
-	RunnerPools      []StandardRunnerPool `toml:"runner_pools"`
-	ApplyWaitSeconds *int64               `toml:"apply_wait_seconds"`
+	ArtifactManifest  string               `toml:"artifact_manifest,omitempty"`
+	GuestArchitecture string               `toml:"guest_architecture,omitempty"`
+	Bundles           []string             `toml:"bundles"`
+	RunnerPools       []StandardRunnerPool `toml:"runner_pools"`
+	ApplyWaitSeconds  *int64               `toml:"apply_wait_seconds"`
 }
 
 // StandardRunnerPool declares inventory once for all bundles using its name.
