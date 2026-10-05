@@ -166,6 +166,7 @@ gh run list --workflow release.yml --limit 1
 gh run watch --exit-status
 ```
 
-If publication fails while the release is still a draft, fix the cause and retry
-the same upload from the successful staged run. Never move a published tag;
+Keep both staged outputs until publication succeeds. If publication fails while
+the release is still a draft, fix the cause and retry the uploads of both staged
+outputs, because the publisher may already have deleted archives of either set. Never move a published tag;
 use a new patch version for changed artifacts.

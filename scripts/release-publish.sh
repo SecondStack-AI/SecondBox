@@ -14,9 +14,10 @@ jq -s -e '.[0].sourceCommit == .[1].sourceCommit' "$manifest" "$arm64_manifest" 
 # Each set is uploaded from its own host; publish only when both are complete.
 for allowlist in candidate-allowlist.json candidate-allowlist-arm64.json; do
   [[ -f "$input/$allowlist" ]] || { echo "release input lacks $allowlist" >&2; exit 1; }
+  files="$(jq -er '.files | if type == "array" and length > 0 then .[] else error("no files") end' "$input/$allowlist")" || { echo "release input $allowlist is malformed" >&2; exit 1; }
   while IFS= read -r name; do
     [[ -f "$input/$name" ]] || { echo "release input lacks $name listed in $allowlist" >&2; exit 1; }
-  done < <(jq -er '.files[]' "$input/$allowlist")
+  done <<<"$files"
 done
 
 # The arm64 artifact set publishes its images under the -arm64 tag suffix.
