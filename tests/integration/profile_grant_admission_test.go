@@ -64,6 +64,17 @@ func TestDataPlaneAdmissionEvaluatesTheSwitchedProfileGrant(t *testing.T) {
 	); err != nil {
 		t.Fatalf("exec admission with the current Profile grant error = %v", err)
 	}
+	// A replay discloses the admitted session, so it needs the grant for the
+	// Profile that session was admitted under.
+	replayed := admission([]string{online.Name}, "current")
+	replayed.ID, replayed.StreamID = "dps_switch_admission_replay", "stream_switch_admission_replay"
+	if _, _, err := dataPlaneStore.AdmitDataPlane(t.Context(), replayed); !errors.Is(err, ports.ErrAuthorizationDenied) {
+		t.Fatalf("exec replay without the admitted Profile grant error = %v", err)
+	}
+	replayed.ProfileGrants = []string{offline.Name}
+	if session, replay, err := dataPlaneStore.AdmitDataPlane(t.Context(), replayed); err != nil || !replay || session.ID != "dps_switch_admission_current" {
+		t.Fatalf("exec replay with the admitted Profile grant = %s replayed %t error %v", session.ID, replay, err)
+	}
 
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: fixture.databaseStore, PlatformToken: testPlatformToken,
@@ -88,5 +99,11 @@ func TestDataPlaneAdmissionEvaluatesTheSwitchedProfileGrant(t *testing.T) {
 	}
 	if err := createPort([]string{offline.Name}, "switch-admission-port-current"); err != nil {
 		t.Fatalf("Port admission with the current Profile grant error = %v", err)
+	}
+	if err := createPort([]string{online.Name}, "switch-admission-port-current"); !errors.Is(err, ports.ErrAuthorizationDenied) {
+		t.Fatalf("Port replay without the admitted Profile grant error = %v", err)
+	}
+	if err := createPort([]string{offline.Name}, "switch-admission-port-current"); err != nil {
+		t.Fatalf("Port replay with the admitted Profile grant error = %v", err)
 	}
 }

@@ -65,6 +65,9 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 		if err != nil {
 			return PortTunnel{}, false, err
 		}
+		if err := authorizeReplayProfile(ctx, tx, input.ProfileGrants, tunnel.ProfileRevisionID); err != nil {
+			return PortTunnel{}, false, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession replay commit: %w", err)
 		}

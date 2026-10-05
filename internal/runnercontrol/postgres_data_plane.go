@@ -255,6 +255,9 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 			return DataPlaneSession{}, false, err
 		}
 		if found {
+			if err := authorizeReplayProfile(ctx, tx, input.ProfileGrants, session.ProfileRevisionID); err != nil {
+				return DataPlaneSession{}, false, err
+			}
 			if err := tx.Commit(ctx); err != nil {
 				return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane replay commit: %w", err)
 			}
@@ -566,6 +569,24 @@ func lookupDataPlaneReplay(
 		err = hydrateDataPlaneTransport(ctx, tx, &session)
 	}
 	return session, true, err
+}
+
+// authorizeReplayProfile checks an application authority's grant for the
+// Profile a replayed session was admitted under. A replay discloses that
+// session, which another authority of the subject may have admitted under a
+// Profile this caller lacks, including before a Profile switch.
+func authorizeReplayProfile(ctx context.Context, tx pgx.Tx, grants []string, profileRevisionID string) error {
+	if grants == nil {
+		return nil
+	}
+	var profileName string
+	if err := tx.QueryRow(ctx, `SELECT profile_name FROM secondbox.profile_revisions WHERE id=$1`, profileRevisionID).Scan(&profileName); err != nil {
+		return fmt.Errorf("SecondBox replay Profile lookup: %w", err)
+	}
+	if !slices.Contains(grants, profileName) {
+		return ports.ErrAuthorizationDenied
+	}
+	return nil
 }
 
 func lockDataPlaneSessionQuota(ctx context.Context, tx pgx.Tx, sessionID string) error {
