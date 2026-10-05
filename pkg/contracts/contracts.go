@@ -561,6 +561,12 @@ type CreateSandboxRequest struct {
 	SourceSnapshotID string                  `json:"sourceSnapshotId,omitempty"`
 }
 
+// SwitchSandboxProfileRequest names the Profile whose current revision a stopped
+// Sandbox is repinned to.
+type SwitchSandboxProfileRequest struct {
+	Profile string `json:"profile"`
+}
+
 // UpdateSandboxMetadataRequest replaces bounded application correlation metadata.
 type UpdateSandboxMetadataRequest struct {
 	Metadata map[string]string `json:"metadata"`

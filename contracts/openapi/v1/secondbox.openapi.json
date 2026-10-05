@@ -2627,6 +2627,91 @@
     "/v1/sandboxes/{sandboxId}:relocate": {
       "$ref": "#/components/pathItems/RelocateSandbox"
     },
+    "/v1/sandboxes/{sandboxId}:switch-profile": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TenantRef"
+        },
+        {
+          "$ref": "#/components/parameters/SubjectRef"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Sandboxes"
+        ],
+        "operationId": "switchSandboxProfile",
+        "description": "Changes the Profile of a stopped, Snapshot-free Sandbox whose Workspace is ready, keeping its identity, Workspace, home Runner, resources, and egress-context pin. The next start builds its Instance from the target Profile's current revision. The target must share the pinned RunnerPool, architecture, startup mode, and egress-context requirement, admit the pinned resources, and be served by the home Runner. An application authority must hold grants for both Profiles. A Sandbox already pinned to the target's current revision is returned unchanged.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SandboxID"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchSandboxProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sandbox pinned to the target Profile revision.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sandbox"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/v1/sandboxes/{sandboxId}:inspect": {
       "parameters": [
         {
@@ -8412,6 +8497,18 @@
           }
         ]
       },
+      "SwitchSandboxProfileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profile"
+        ],
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/ProfileName"
+          }
+        }
+      },
       "UpdateSandboxMetadataRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -10548,6 +10645,8 @@
           "sandbox_not_stopped",
           "workspace_relocation_snapshots_present",
           "workspace_relocation_target_unavailable",
+          "profile_incompatible",
+          "profile_switch_snapshots_present",
           "quota_exceeded",
           "image_preparation_targets_exceeded",
           "image_preparation_failed",

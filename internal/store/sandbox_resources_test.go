@@ -119,3 +119,34 @@ func TestResolveResumeSandboxResources(t *testing.T) {
 		}
 	}
 }
+
+func TestSandboxResourcesFitProfileNeverReRounds(t *testing.T) {
+	pointer := func(n int64) *int64 { return &n }
+	defaults := contracts.ResourcePolicy{VCPUCount: 2, MemoryBytes: 4 << 30, WorkspaceBytes: 8 << 30, ConcurrentOperations: 1}
+	// A clamped 50 GiB disk is pinned as is; an unbounded target admits it
+	// without rounding it up to 64 GiB.
+	clamped := contracts.SandboxResources{VCPUCount: 2, MemoryBytes: 4 << 30, WorkspaceBytes: 50 << 30}
+	for _, test := range []struct {
+		name      string
+		spec      contracts.ProfileRevisionSpec
+		resources contracts.SandboxResources
+		want      bool
+	}{
+		{"defaults bound", contracts.ProfileRevisionSpec{Resources: defaults}, contracts.SandboxResources{VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30}, true},
+		{"above defaults", contracts.ProfileRevisionSpec{Resources: defaults}, clamped, false},
+		{"unbounded disk", contracts.ProfileRevisionSpec{Resources: defaults, ResourceCeiling: contracts.ProfileResourceCeiling{
+			"vcpuCount": pointer(2), "memoryBytes": pointer(4 << 30), "workspaceBytes": nil,
+		}}, clamped, true},
+		{"memory ceiling", contracts.ProfileRevisionSpec{Resources: defaults, ResourceCeiling: contracts.ProfileResourceCeiling{
+			"vcpuCount": nil, "memoryBytes": pointer(2 << 30), "workspaceBytes": nil,
+		}}, clamped, false},
+		{"resume exact", contracts.ProfileRevisionSpec{Resources: defaults, Startup: contracts.StartupPolicy{Mode: contracts.StartupModeSnapshotResume}},
+			contracts.SandboxResources{VCPUCount: 2, MemoryBytes: 4 << 30, WorkspaceBytes: 8 << 30}, true},
+		{"resume smaller", contracts.ProfileRevisionSpec{Resources: defaults, Startup: contracts.StartupPolicy{Mode: contracts.StartupModeSnapshotResume}},
+			contracts.SandboxResources{VCPUCount: 1, MemoryBytes: 4 << 30, WorkspaceBytes: 8 << 30}, false},
+	} {
+		if got := sandboxResourcesFitProfile(test.spec, test.resources); got != test.want {
+			t.Errorf("%s: fit = %t, want %t", test.name, got, test.want)
+		}
+	}
+}

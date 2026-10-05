@@ -222,6 +222,45 @@ func (handle *SandboxHandle) Relocate(
 	return handle.lifecycle(ctx, "relocateSandbox", options, request)
 }
 
+// SwitchProfile repins the stopped Sandbox to the named Profile's current
+// revision and retains the returned representation. A Sandbox already pinned to
+// that revision is returned unchanged.
+func (handle *SandboxHandle) SwitchProfile(
+	ctx context.Context,
+	options LifecycleOptions,
+	request SwitchSandboxProfileRequest,
+) (Sandbox, error) {
+	if request.Profile == "" {
+		return Sandbox{}, errors.New("SecondBox Sandbox Profile switch target Profile is required")
+	}
+	if options.IdempotencyKey == "" {
+		generated, err := NewIdempotencyKey()
+		if err != nil {
+			return Sandbox{}, err
+		}
+		options.IdempotencyKey = generated
+	}
+	if options.IfMatch == "" {
+		options.IfMatch = RevisionETag(handle.Snapshot().Revision)
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return Sandbox{}, fmt.Errorf("SecondBox switchSandboxProfile encode request: %w", err)
+	}
+	headers := make(http.Header)
+	headers.Set("Idempotency-Key", options.IdempotencyKey)
+	headers.Set("If-Match", options.IfMatch)
+	var sandbox Sandbox
+	if err := handle.client.RequestJSON(ctx, "switchSandboxProfile", CallOptions{
+		PathParameters: map[string]string{"sandboxId": string(handle.Snapshot().ID)},
+		Headers:        headers, Body: bytes.NewReader(body), ContentType: "application/json",
+	}, &sandbox); err != nil {
+		return Sandbox{}, err
+	}
+	handle.store(sandbox)
+	return sandbox, nil
+}
+
 // Restore replaces the stopped Sandbox workspace with a writable Snapshot copy.
 func (handle *SandboxHandle) Restore(
 	ctx context.Context,

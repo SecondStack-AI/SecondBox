@@ -573,7 +573,7 @@ func (apiHandler *handler) getSandbox(writer http.ResponseWriter, request *http.
 func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *http.Request) {
 	sandboxID, action, ok := splitAction(
 		request.PathValue("sandboxAction"),
-		"start", "drain", "stop", "relocate", "restore", "wait", "inspect", "ping", "touch",
+		"start", "drain", "stop", "relocate", "switch-profile", "restore", "wait", "inspect", "ping", "touch",
 	)
 	if !ok {
 		apiHandler.writeError(writer, request, ports.ErrSandboxNotFound)
@@ -627,6 +627,32 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 		}
 		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 		apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
+	case "switch-profile":
+		var body contracts.SwitchSandboxProfileRequest
+		if err := decodeStrictJSON(request, &body); err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		if err := authorizeApplicationProfile(request, body.Profile); err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		expectedRevision, err := parseIfMatch(request)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		sandbox, replayed, err := apiHandler.service.SwitchSandboxProfile(
+			request.Context(), requestPrincipal(request), sandboxID,
+			request.Header.Get("Idempotency-Key"), expectedRevision, body,
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		setRevisionETag(writer, sandbox.Revision)
+		apiHandler.writeJSON(writer, request, http.StatusOK, sandbox)
 	case "restore":
 		var body contracts.RestoreSnapshotRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
@@ -905,6 +931,7 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 			principalContextKey{},
 			applicationPrincipal(authority),
 		)
+		requestContext = service.ContextWithApplicationProfileGrants(requestContext, authority.ProfileGrants)
 		next.ServeHTTP(writer, request.WithContext(requestContext))
 	})
 }
@@ -1041,6 +1068,10 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		problem.Ceiling = &fixedResources.Fixed
 		problem.Requested = &fixedResources.Requested
 	}
+	var incompatibleProfile *ports.ProfileIncompatibleError
+	if errors.As(err, &incompatibleProfile) {
+		problem.Details = []contracts.ProblemDetail{{Field: incompatibleProfile.Property, Reason: incompatibleProfile.Reason}}
+	}
 	if errors.Is(err, ports.ErrHomeRunnerUnavailable) {
 		retryAfterMilliseconds := int64(time.Second / time.Millisecond)
 		problem.RetryAfterMilliseconds = &retryAfterMilliseconds
@@ -1107,6 +1138,12 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "sandbox_not_stopped", "Workspace relocation requires a stopped Sandbox", false
 	case errors.Is(err, ports.ErrRelocationSnapshotsPresent):
 		return http.StatusConflict, "workspace_relocation_snapshots_present", "Workspace relocation requires all Snapshots to be deleted", false
+	case errors.Is(err, ports.ErrProfileSwitchSandboxNotStopped):
+		return http.StatusConflict, "sandbox_not_stopped", "Profile switch requires a stopped Sandbox", false
+	case errors.Is(err, ports.ErrProfileSwitchSnapshotsPresent):
+		return http.StatusConflict, "profile_switch_snapshots_present", "Profile switch requires all Snapshots to be deleted", false
+	case errors.Is(err, ports.ErrProfileIncompatible):
+		return http.StatusConflict, "profile_incompatible", "Target Profile is incompatible with the Sandbox", false
 	case errors.Is(err, ports.ErrRelocationTargetUnavailable):
 		return http.StatusConflict, "workspace_relocation_target_unavailable", "Workspace relocation target is unavailable or incompatible", true
 	case errors.Is(err, ports.ErrHomeRunnerUnavailable):

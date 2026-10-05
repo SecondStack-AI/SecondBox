@@ -1128,6 +1128,12 @@
     ],
     "optional": []
   },
+  "SwitchSandboxProfileRequest": {
+    "required": [
+      "profile"
+    ],
+    "optional": []
+  },
   "Tenant": {
     "required": [
       "aggregateQuota",

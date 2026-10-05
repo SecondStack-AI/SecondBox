@@ -30,6 +30,7 @@ import {
   type ProfilePage,
   type Problem,
   type RelocateSandboxRequest,
+  type SwitchSandboxProfileRequest,
   type ReviseProfileRequest,
   type RestoreSnapshotRequest,
   type RemovePathRequest,
@@ -94,6 +95,7 @@ export type {
   StartSandboxRequest,
   Problem,
   RelocateSandboxRequest,
+  SwitchSandboxProfileRequest,
   SandboxResourceRequest,
   SandboxResources,
   Sandbox,
@@ -1207,6 +1209,31 @@ export class SandboxHandle implements SandboxFilesystem {
     options: LifecycleOptions,
   ): Promise<Operation> {
     return this.lifecycle("relocateSandbox", options, request as unknown as JSONValue);
+  }
+
+  /**
+   * Repins the stopped Sandbox to the named Profile's current revision. A
+   * Sandbox already pinned to that revision is returned unchanged.
+   */
+  public async switchProfile(
+    request: SwitchSandboxProfileRequest,
+    options: LifecycleOptions = {},
+  ): Promise<Sandbox> {
+    requireNonempty(request.profile, "Sandbox Profile switch target Profile");
+    if (options.idempotencyKey === "") {
+      throw new Error("SecondBox switchSandboxProfile idempotency key is required");
+    }
+    const sandbox = await this.#api.requestJSON<Sandbox>("switchSandboxProfile", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      headers: {
+        "Idempotency-Key": options.idempotencyKey ?? idempotencyKey(),
+        "If-Match": lifecycleETag(options, this.#snapshot.revision, "switchSandboxProfile"),
+      },
+      body: encodeJSONBody({ profile: request.profile } satisfies SwitchSandboxProfileRequest),
+      signal: options.signal,
+    });
+    this.#snapshot = sandbox;
+    return sandbox;
   }
 
   public restore(

@@ -55,6 +55,8 @@ var (
 	ErrSandboxNotStopped               = errors.New("SecondBox Workspace relocation requires a stopped Sandbox")
 	ErrRelocationTargetUnavailable     = errors.New("SecondBox Workspace relocation target is unavailable or incompatible")
 	ErrRelocationSnapshotsPresent      = errors.New("SecondBox Workspace relocation requires all Snapshots to be deleted")
+	ErrProfileSwitchSandboxNotStopped  = errors.New("SecondBox Sandbox Profile switch requires a stopped Sandbox")
+	ErrProfileSwitchSnapshotsPresent   = errors.New("SecondBox Sandbox Profile switch requires all Snapshots to be deleted")
 	// ErrSerializationContention reports that a transaction lost a serialization
 	// race and the caller should try again later. It is an ordinary outcome of
 	// serializable isolation under concurrency, not a fault: a caller that treats
@@ -133,6 +135,23 @@ type UpdateSandboxMetadataInput struct {
 	SandboxID        string
 	Metadata         map[string]string
 	ExpectedRevision int64
+	Now              time.Time
+}
+
+// SwitchSandboxProfileInput repins one stopped Sandbox to another Profile's
+// current revision at one Sandbox revision.
+type SwitchSandboxProfileInput struct {
+	Principal contracts.Principal
+	SandboxID string
+	Profile   string
+	// ProfileGrants is nil for a caller without an application authority and
+	// otherwise lists the authority's grants, which must name both Profiles.
+	ProfileGrants    []string
+	ExpectedRevision int64
+	IdempotencyKey   string
+	RequestHash      string
+	IdempotencyEnds  time.Time
+	AuditEvent       contracts.AuditEvent
 	Now              time.Time
 }
 

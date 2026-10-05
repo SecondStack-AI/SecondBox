@@ -598,6 +598,8 @@ const (
 	ProblemCodeSandboxNotStopped                    ProblemCode = "sandbox_not_stopped"
 	ProblemCodeWorkspaceRelocationSnapshotsPresent  ProblemCode = "workspace_relocation_snapshots_present"
 	ProblemCodeWorkspaceRelocationTargetUnavailable ProblemCode = "workspace_relocation_target_unavailable"
+	ProblemCodeProfileIncompatible                  ProblemCode = "profile_incompatible"
+	ProblemCodeProfileSwitchSnapshotsPresent        ProblemCode = "profile_switch_snapshots_present"
 	ProblemCodeQuotaExceeded                        ProblemCode = "quota_exceeded"
 	ProblemCodeImagePreparationTargetsExceeded      ProblemCode = "image_preparation_targets_exceeded"
 	ProblemCodeImagePreparationFailed               ProblemCode = "image_preparation_failed"
@@ -935,6 +937,10 @@ type SubjectUsage struct {
 	Limits     SubjectQuota `json:"limits"`
 	SubjectRef OwnershipRef `json:"subjectRef"`
 	Usage      QuotaUsage   `json:"usage"`
+}
+
+type SwitchSandboxProfileRequest struct {
+	Profile ProfileName `json:"profile"`
 }
 
 type Tenant struct {
