@@ -10,6 +10,7 @@
 ### Upgrade notes
 
 - Migration `0037_subject_sandbox_policy_profiles` rewrites every stored Subject Sandbox policy from `profile` to a one-element `profiles` set, without changing its values or the Subject revision. Rolling back requires the pre-update database backup.
+- Control planes before and after the migration do not share Subject Sandbox policies: an older control plane ignores a migrated policy and resolves Profile defaults, and a policy it writes with `profile` is ignored by an updated one. Stop every older control-plane process before the migration runs, pause Subject policy writes, update the control plane, then resume them only from clients that send `profiles`. Runners need no change.
 
 ### Changed
 
