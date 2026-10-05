@@ -4,7 +4,7 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG PUBLIC_CONTRACT_DIGEST
 
-FROM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS builder
 
 ARG RELEASE_VERSION
 ARG SOURCE_COMMIT

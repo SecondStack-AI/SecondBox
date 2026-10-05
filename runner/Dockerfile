@@ -2,7 +2,7 @@ ARG RELEASE_VERSION
 ARG SOURCE_COMMIT
 ARG PUBLIC_CONTRACT_DIGEST
 
-FROM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS runner-builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS runner-builder
 
 ARG RELEASE_VERSION
 ARG SOURCE_COMMIT
@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -buildvcs=f
     && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false \
       -o /out/secondbox-image-fetcher ./cmd/secondbox-image-fetcher
 
-FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c AS firecracker-release
+FROM --platform=$BUILDPLATFORM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c AS firecracker-release
 
 ARG TARGETARCH
 ARG FIRECRACKER_VERSION=1.16.1

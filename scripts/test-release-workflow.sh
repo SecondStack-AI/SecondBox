@@ -47,10 +47,10 @@ fi
 test ! -e "$repo_root/pkg/releasefinalize"
 test ! -e "$repo_root/pkg/releasepublish"
 
-for dockerfile in "$repo_root/Dockerfile" "$repo_root/deploy/installer-tools.Dockerfile" "$repo_root/runner/Dockerfile" "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile" "$repo_root/runner/Dockerfile.gvisor" "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile"; do
+for dockerfile in "$repo_root/Dockerfile" "$repo_root/deploy/installer-tools.Dockerfile" "$repo_root/runner/Dockerfile" "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile" "$repo_root/runner/Dockerfile.gvisor" "$repo_root/runner/deploy/gvisor-artifact-transport.Dockerfile" "$repo_root/deploy/host-cli.Dockerfile"; do
   while IFS= read -r base; do
     [[ "$base" == "scratch" || "$base" == *@sha256:* ]] || { echo "release Dockerfile uses mutable base $base" >&2; exit 1; }
-  done < <(awk '$1 == "FROM" {print $2}' "$dockerfile")
+  done < <(awk '$1 == "FROM" {for (i = 2; i <= NF; i++) if ($i !~ /^--/) {print $i; break}}' "$dockerfile")
 done
 
 if rg -n '^\s*(-\s+)?uses:\s*[^ ]+@(main|master|v[0-9]+([.]?[0-9]+)*)\s*$' "$workflow"; then
