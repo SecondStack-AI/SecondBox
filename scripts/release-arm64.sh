@@ -57,5 +57,5 @@ echo "arm64 release run ($source_commit); logs: $directory"
 env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 \
   scripts/release-stage.sh --shared-from "$shared" "$version" "$output" >"$directory/stage.log" 2>&1 || fail "staging failed; inspect $directory/stage.log"
 [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'source changed during release'
-printf 'Staged arm64 artifact set: %s\nAfter the tag push, upload it from this host:\n' "$output"
+printf 'Staged arm64 artifact set: %s\nAfter the tag push, upload it from this host before the amd64 set:\n' "$output"
 printf '/usr/bin/just release-upload %q %q\n' "$version" "$output"

@@ -24,7 +24,7 @@ The Go module's `retract` directives identify withdrawn versions.
 
 ## Linux arm64 hosts
 
-Each release also publishes an arm64 artifact set under the same tag, described by `secondbox-VERSION-arm64-artifact-manifest.json`.
+A release can also publish an arm64 artifact set under the same tag, described by `secondbox-VERSION-arm64-artifact-manifest.json`; check that the selected release carries it.
 It names the arm64 Runner, microVM artifacts, control-plane and installer-tools images, and the standard Profile revisions of the `standard-arm64` RunnerPool.
 Its SDK, binary, OpenAPI and install-bootstrap entries are identical to the amd64 manifest.
 A consumer that deploys on both architectures pins both manifests and selects by host architecture; standard Profile revisions match, but their spec digests differ by RunnerPool.
