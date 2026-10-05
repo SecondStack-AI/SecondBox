@@ -9,9 +9,10 @@ type packagedRunnerPath struct {
 }
 
 // These paths belong to the packaged image and Compose mount layout. Remote
-// Runner hosts own their paths and must supply them explicitly.
+// Runner hosts own their paths and must supply them explicitly. The installed
+// bundle paths exist only for a Runner that declares an installed bundle.
 func (r *Runner) packagedPaths() []packagedRunnerPath {
-	return []packagedRunnerPath{
+	paths := []packagedRunnerPath{
 		{"identity_directory", &r.IdentityDirectory, "/run/secondbox-runner-identity"},
 		{"workspace_root", &r.WorkspaceRoot, "/var/lib/secondbox-runner/workspaces"},
 		{"egress_context_config_path", &r.EgressContextConfigPath, "/run/secondbox-runner-config/egress-contexts.json"},
@@ -20,17 +21,33 @@ func (r *Runner) packagedPaths() []packagedRunnerPath {
 		{"firecracker_path", &r.FirecrackerPath, "/usr/local/bin/firecracker"},
 		{"firecracker_jailer_path", &r.FirecrackerJailerPath, "/usr/local/bin/jailer"},
 		{"firecracker_jail_root", &r.FirecrackerJailRoot, "/var/lib/secondbox-runner/jail"},
-		{"firecracker_kernel_path", &r.FirecrackerKernelPath, "/opt/secondbox-artifacts/kernel"},
-		{"firecracker_rootfs_path", &r.FirecrackerRootFSPath, "/opt/secondbox-artifacts/rootfs.ext4"},
-		{"firecracker_shared_image_path", &r.FirecrackerSharedImagePath, "/opt/secondbox-artifacts/shared.img"},
 		{"firecracker_run_directory", &r.FirecrackerRunDirectory, "/var/lib/secondbox-runner/state/run"},
 		{"firecracker_log_directory", &r.FirecrackerLogDirectory, "/var/lib/secondbox-runner/state/firecracker-logs"},
 		{"snapshot_template_cache_root", &r.SnapshotTemplateCacheRoot, "/var/lib/secondbox-runner/state/snapshot-template-cache"},
-		{"artifact_public_key", &r.ArtifactPublicKey, "/opt/secondbox-artifacts/signing.pub"},
 		{"execution_image_public_key", &r.ExecutionImagePublicKey, "/run/secondbox-image-trust/public.pem"},
 		{"sandbox_network_state_directory", &r.SandboxNetworkStateDir, "/var/lib/secondbox-runner/state/network"},
 		{"network_policy_nft_path", &r.NetworkPolicyNFTPath, "/usr/sbin/nft"},
 	}
+	if r.hasInstalledBundle() {
+		paths = append(paths, r.installedBundlePaths()...)
+	}
+	return paths
+}
+
+// installedBundlePaths are the Runner fields that locate and trust the
+// installed signed execution bundle, with their packaged same-host values.
+func (r *Runner) installedBundlePaths() []packagedRunnerPath {
+	return []packagedRunnerPath{
+		{"firecracker_kernel_path", &r.FirecrackerKernelPath, "/opt/secondbox-artifacts/kernel"},
+		{"firecracker_rootfs_path", &r.FirecrackerRootFSPath, "/opt/secondbox-artifacts/rootfs.ext4"},
+		{"firecracker_shared_image_path", &r.FirecrackerSharedImagePath, "/opt/secondbox-artifacts/shared.img"},
+		{"artifact_public_key", &r.ArtifactPublicKey, "/opt/secondbox-artifacts/signing.pub"},
+	}
+}
+
+// hasInstalledBundle reports the validated firecracker_installed_bundle choice.
+func (r *Runner) hasInstalledBundle() bool {
+	return r.FirecrackerInstalledBundle != nil && *r.FirecrackerInstalledBundle
 }
 
 func (r Runner) withPackagedPaths() Runner {

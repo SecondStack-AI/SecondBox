@@ -22,7 +22,9 @@ identity_directory = ''
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
 
 # Artifact trust
-# Execution-asset directory on the Runner host; absolute when set and required for same-host placement.
+# Whether this Runner has an installed signed execution bundle; required, so replace this string with a Boolean. With true, assignments that select no execution image boot the installed bundle, and the bundle settings below are required. With false, the Runner boots only client-selected execution images and artifact_host_directory, artifact_public_key, artifact_public_key_sha256, firecracker_kernel_path, firecracker_rootfs_path, and firecracker_shared_image_path must be omitted.
+firecracker_installed_bundle = '<replace-with-boolean>'
+# Installed-bundle directory on the Runner host; absolute when set and required for same-host placement with an installed bundle.
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'
 # Registry hosts allowed for client-selected execution images.
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
@@ -38,9 +40,9 @@ execution_image_max_download_bytes = 0
 execution_image_max_expanded_bytes = 0
 # Maximum retained expanded image cache size.
 execution_image_max_cache_bytes = 0
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/signing.pub.
+# Remote placement with an installed bundle requires this absolute Runner-host path. Leave empty for same-host placement, where the package uses /opt/secondbox-artifacts/signing.pub, and for a Runner without an installed bundle.
 artifact_public_key = ''
-# Provisioned signed-artifact key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
+# Installed-bundle signing-key fingerprint; with an installed bundle, exactly 64 lowercase hexadecimal characters and not all zeroes. Omit it for a Runner without an installed bundle.
 artifact_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
 
 # Runner storage
@@ -83,11 +85,11 @@ firecracker_jailer_gid = 0
 firecracker_cgroup_version = 0
 # Host cgroup parent used by the jailer; required.
 firecracker_cgroup_parent = ''
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/kernel.
+# Remote placement with an installed bundle requires this absolute Runner-host path. Leave empty for same-host placement, where the package uses /opt/secondbox-artifacts/kernel, and for a Runner without an installed bundle.
 firecracker_kernel_path = ''
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/rootfs.ext4.
+# Remote placement with an installed bundle requires this absolute Runner-host path. Leave empty for same-host placement, where the package uses /opt/secondbox-artifacts/rootfs.ext4, and for a Runner without an installed bundle.
 firecracker_rootfs_path = ''
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/shared.img.
+# Remote placement with an installed bundle requires this absolute Runner-host path. Leave empty for same-host placement, where the package uses /opt/secondbox-artifacts/shared.img, and for a Runner without an installed bundle.
 firecracker_shared_image_path = ''
 # Kernel arguments; must include console=ttyS0, reboot=k, panic=1, pci=off, root=/dev/vda, rw, quiet, loglevel=1, i8042.noaux, i8042.nomux, i8042.nopnp, i8042.dumbkbd, and init=/init.
 firecracker_kernel_args = ''

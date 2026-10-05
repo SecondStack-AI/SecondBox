@@ -113,6 +113,7 @@ type Runner struct {
 	ControlPlaneServerName                string                `toml:"control_plane_server_name"`
 	IdentityDirectory                     string                `toml:"identity_directory,omitempty"`
 	IdentityHostDirectory                 string                `toml:"identity_host_directory"`
+	FirecrackerInstalledBundle            *bool                 `toml:"firecracker_installed_bundle"`
 	ArtifactHostDirectory                 string                `toml:"artifact_host_directory"`
 	StateHostDirectory                    string                `toml:"state_host_directory"`
 	ExecutionImageRegistries              string                `toml:"execution_image_registries"`

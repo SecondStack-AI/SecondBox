@@ -212,6 +212,9 @@ type recordedInstallerTopology struct {
 	} `toml:"database"`
 	Runners []struct {
 		Placement string `toml:"placement"`
+		// Source-era manifests written before this key carry the installed
+		// bundle mount inside compose.same-host-runner.yml itself.
+		FirecrackerInstalledBundle *bool `toml:"firecracker_installed_bundle"`
 	} `toml:"runners"`
 }
 
@@ -247,10 +250,6 @@ func recordedInstallerComposeIdentity(manifestPath string) (string, string, []st
 	composeProject := manifest.Deployment.ComposeProjectName
 	composeBackendCIDR := manifest.Deployment.ComposeBackendCIDR
 	databaseMode := manifest.Database.Mode
-	runnerPlacements := make([]string, 0, len(manifest.Runners))
-	for _, runner := range manifest.Runners {
-		runnerPlacements = append(runnerPlacements, runner.Placement)
-	}
 	if deploymentMode != "development" && deploymentMode != "production" {
 		return "", "", nil, manifestError("recorded Compose deployment mode is unsupported", nil)
 	}
@@ -267,14 +266,18 @@ func recordedInstallerComposeIdentity(manifestPath string) (string, string, []st
 		composeFiles = append(composeFiles, "deploy/compose.bundled-database.yml")
 	}
 	sameHost := false
-	for _, placement := range runnerPlacements {
-		if placement == "same-host" {
+	for _, runner := range manifest.Runners {
+		if runner.Placement == "same-host" {
 			if sameHost {
 				return "", "", nil, manifestError("recorded Compose topology has multiple same-host Runners", nil)
 			}
 			sameHost = true
-			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
-		} else if placement != "remote" {
+			if runner.FirecrackerInstalledBundle == nil {
+				composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
+			} else {
+				composeFiles = append(composeFiles, sameHostRunnerComposeFiles(*runner.FirecrackerInstalledBundle)...)
+			}
+		} else if runner.Placement != "remote" {
 			return "", "", nil, manifestError("recorded Compose Runner placement is unsupported", nil)
 		}
 	}
@@ -360,4 +363,13 @@ func composeEnvironment() []string {
 	}
 	slices.Sort(result)
 	return result
+}
+
+// sameHostRunnerComposeFiles selects the same-host Runner service and, for a
+// Runner with an installed bundle, the overlay that mounts and names it.
+func sameHostRunnerComposeFiles(installedBundle bool) []string {
+	if installedBundle {
+		return []string{"deploy/compose.same-host-runner.yml", "deploy/compose.same-host-runner-installed-bundle.yml"}
+	}
+	return []string{"deploy/compose.same-host-runner.yml"}
 }

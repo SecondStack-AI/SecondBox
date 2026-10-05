@@ -18,6 +18,7 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 	base := readRepositoryFile(t, "deploy/compose.yml")
 	development := readRepositoryFile(t, "deploy/compose.development.yml")
 	runner := readRepositoryFile(t, "deploy/compose.same-host-runner.yml")
+	installedBundle := readRepositoryFile(t, "deploy/compose.same-host-runner-installed-bundle.yml")
 	for _, forbidden := range []string{"same-host-runner:", "postgres:", "profiles:", "SECONDBOX_RUNNER_PROTOCOL_MINIMUM", "SECONDBOX_RUNNER_PROTOCOL_MAXIMUM"} {
 		if strings.Contains(base, forbidden) {
 			t.Errorf("base Compose model contains inactive topology %q", forbidden)
@@ -38,8 +39,19 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 			t.Errorf("same-host Runner overlay missing %q", required)
 		}
 	}
-	if count := strings.Count(runner, "create_host_path: false"); count != 4 {
-		t.Errorf("same-host Runner overlay disables host path creation for %d of 4 operator-owned binds", count)
+	if count := strings.Count(runner, "create_host_path: false"); count != 3 {
+		t.Errorf("same-host Runner overlay disables host path creation for %d of 3 operator-owned binds", count)
+	}
+	if count := strings.Count(installedBundle, "create_host_path: false"); count != 1 {
+		t.Errorf("installed-bundle overlay disables host path creation for %d of 1 operator-owned bind", count)
+	}
+	for _, bundleSetting := range []string{"SECONDBOX_RUNNER_ARTIFACT_HOST_DIR", "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH", "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH", "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH", "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY", "/opt/secondbox-artifacts"} {
+		if strings.Contains(runner, bundleSetting) {
+			t.Errorf("same-host Runner overlay requires installed-bundle setting %q; it belongs to the installed-bundle overlay", bundleSetting)
+		}
+		if !strings.Contains(installedBundle, bundleSetting) {
+			t.Errorf("installed-bundle overlay missing %q", bundleSetting)
+		}
 	}
 	if strings.Contains(runner, "source: ${SECONDBOX_RUNNER_WORKSPACE_HOST_DIR") {
 		t.Error("same-host Runner overlay must not create a nested Workspace bind inside the Runner storage bind")
