@@ -255,7 +255,7 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 			return DataPlaneSession{}, false, err
 		}
 		if found {
-			if err := authorizeReplayProfile(ctx, tx, input.ProfileGrants, session.ProfileRevisionID); err != nil {
+			if err := authorizeReplayProfile(ctx, tx, input.ProfileGrants, input.TenantRef, input.SubjectRef, input.SandboxID, session.ProfileRevisionID); err != nil {
 				return DataPlaneSession{}, false, err
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -571,19 +571,26 @@ func lookupDataPlaneReplay(
 	return session, true, err
 }
 
-// authorizeReplayProfile checks an application authority's grant for the
-// Profile a replayed session was admitted under. A replay discloses that
-// session, which another authority of the subject may have admitted under a
-// Profile this caller lacks, including before a Profile switch.
-func authorizeReplayProfile(ctx context.Context, tx pgx.Tx, grants []string, profileRevisionID string) error {
+// authorizeReplayProfile checks an application authority's grants for both the
+// Profile a replayed session was admitted under and the Sandbox's current
+// Profile. A replay discloses that session, which another authority of the
+// subject may have admitted under a Profile this caller lacks, and like any
+// data-plane request it needs the current Profile. The plain read linearizes
+// the replay before any Profile switch that commits after it.
+func authorizeReplayProfile(ctx context.Context, tx pgx.Tx, grants []string, tenantRef, subjectRef, sandboxID, profileRevisionID string) error {
 	if grants == nil {
 		return nil
 	}
-	var profileName string
-	if err := tx.QueryRow(ctx, `SELECT profile_name FROM secondbox.profile_revisions WHERE id=$1`, profileRevisionID).Scan(&profileName); err != nil {
+	var admitted, current string
+	if err := tx.QueryRow(ctx, `
+		SELECT revision.profile_name,sandbox.profile_name
+		FROM secondbox.profile_revisions AS revision, secondbox.sandboxes AS sandbox
+		WHERE revision.id=$1 AND sandbox.tenant_ref=$2 AND sandbox.subject_ref=$3 AND sandbox.id=$4`,
+		profileRevisionID, tenantRef, subjectRef, sandboxID,
+	).Scan(&admitted, &current); err != nil {
 		return fmt.Errorf("SecondBox replay Profile lookup: %w", err)
 	}
-	if !slices.Contains(grants, profileName) {
+	if !slices.Contains(grants, admitted) || !slices.Contains(grants, current) {
 		return ports.ErrAuthorizationDenied
 	}
 	return nil
