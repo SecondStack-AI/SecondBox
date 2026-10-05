@@ -7,11 +7,33 @@ The Firecracker backend consumes three versioned artifacts:
 - `shared.img`: a read-only erofs/squashfs image for shared immutable content,
   or ext4 when local hosts do not have erofs/squashfs tooling.
 
-`runner/scripts/microvm-image/build.sh --help` lists every required build input. The builder has no environment defaults. For a supplied kernel, set both the kernel path and its config path explicitly and set `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=false`. For the pinned kernel, set `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=true`, explicitly set the kernel path and config variables to empty strings, and provide the four kernel-builder inputs shown by `build-kernel.sh --help`.
+`runner/scripts/microvm-image/build.sh --help` lists every required build input. The builder has no environment defaults. For a supplied kernel, set both the kernel path and its config path explicitly and set `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=false`. For the pinned kernel, set `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=true`, explicitly set the kernel path and config variables to empty strings, and provide the five kernel-builder inputs shown by `build-kernel.sh --help`.
 
 `SECONDBOX_RUNNER_MICROVM_ARCHITECTURE` selects the guest architecture, `amd64` or `arm64`; it sets the guest agent build, the manifest architecture, and the kernel requirements.
 The pinned-kernel path downloads the exact kernel tarball from the locked URL, verifies its SHA-256, builds the Firecracker boot image with reproducible Kbuild metadata, and copies the kernel `.config` into the build output.
 The boot image is `vmlinux` on amd64 and the PE `Image` on arm64; `kernel-required-<architecture>.config` adds the Firecracker platform devices of that architecture.
+`SECONDBOX_RUNNER_MICROVM_KERNEL_CROSS_COMPILE` is the kernel `CROSS_COMPILE` toolchain prefix. It may be empty to use the host compiler, which then must run on the guest architecture; the build refuses an empty prefix on a host of the other architecture.
+The prefix and the compiler identity are recorded in `kernel-provenance.json`.
+
+### Guest kernel Docker build
+
+`runner/scripts/microvm-image/kernel.Dockerfile` builds the same pinned kernel with only Docker on the host.
+Its build context is `runner/scripts/microvm-image`, and the target platform selects the guest architecture:
+
+```sh
+docker buildx build --platform linux/arm64 \
+  -f runner/scripts/microvm-image/kernel.Dockerfile \
+  --output type=local,dest=/absolute/kernel-arm64 \
+  runner/scripts/microvm-image
+```
+
+The build stage runs on the build platform and cross-compiles with the Debian toolchain for the target, so an arm64 host builds the amd64 kernel and an amd64 host builds the arm64 kernel without emulation.
+Both native and cross builds use the triplet-prefixed compiler, so the kernel records one compiler identity per target.
+Repeated builds of the same inputs produce identical kernel and config bytes on any build host; only `createdAt` in `kernel-provenance.json` differs.
+Only `kernel.lock`, `build-kernel.sh`, `check-kernel-config.sh`, and the `kernel-required*.config` files enter the build, so other source changes keep the Docker layer cache; the source download depends only on `kernel.lock`.
+The final `scratch` stage holds exactly the `build-kernel.sh` output under `/kernel`: the boot image (`/kernel/vmlinux` on amd64, `/kernel/Image` on arm64), `/kernel/config`, `/kernel/System.map`, and `/kernel/kernel-provenance.json`.
+There is no architecture-neutral alias; consumers select the boot image name from the architecture they already pass to the bundle builder.
+The provenance `builder.gitCommit` is empty because the build context has no Git metadata.
 
 The build writes `kernel-provenance.json`, `rootfs-source-manifest.json`, `secondbox-rootfs-contract.json`, the package and license inventories, `manifest.json`, `SHA256SUMS`, `manifest.sig`, and `signing.pub` alongside the artifacts in the explicitly configured output directory.
 `manifest.json` records `/init` as the guest entrypoint and
@@ -48,8 +70,9 @@ The script uses the same rootfs, guest-agent, kernel, manifest, and signature pi
 It then packages the exact artifact allowlist under `/secondbox-runner-microvm` in an OCI image.
 
 Use `deploy/client-execution-image-builder.Dockerfile` when the build host does not have the required build tools.
-The public builder targets Linux amd64 and needs a Linux Docker daemon, privileged loop-device and mount access, the Docker socket, and enough free space for the source layers, rootfs image, signed bundle, and final OCI build context.
+The builder runs on a Linux amd64 or arm64 Docker daemon. It runs the rootfs build steps of the target architecture, so build each architecture natively on a host of that architecture. It needs privileged loop-device and mount access, the Docker socket, and enough free space for the source layers, rootfs image, signed bundle, and final OCI build context.
 Run that container with the Docker socket, a writable output directory, the signing key and public key, and the source kernel directory mounted.
+The guest kernel Docker build output is a suitable kernel directory: set `SECONDBOX_CLIENT_IMAGE_KERNEL_PATH` to its boot image and `SECONDBOX_CLIENT_IMAGE_KERNEL_CONFIG` to its `config`.
 Set every `SECONDBOX_CLIENT_IMAGE_*` variable explicitly.
 The source reference must contain a digest.
 The source commit must be the exact SecondBox revision used by the builder image.
@@ -59,7 +82,7 @@ The builder always uses prepared OCI mode.
 Both output directories must be absent before the build starts.
 `SECONDBOX_CLIENT_IMAGE_ARCHITECTURE` is `amd64` or `arm64` and must match the builder's Docker platform and the supplied kernel. The builder pulls and builds the source image for `linux/<architecture>`, refuses a source or rootfs image of another platform before signing, and packages the execution image for that platform.
 
-This example builds the amd64 builder on any Docker host and runs the privileged Linux work on the Docker daemon:
+This example builds an amd64 execution image on an amd64 Docker host. On an arm64 host, use `linux/arm64`, `SECONDBOX_CLIENT_IMAGE_ARCHITECTURE=arm64`, and the arm64 `Image`:
 
 ```sh
 docker buildx build --platform linux/amd64 --load \

@@ -5,10 +5,12 @@
 ### Added
 
 - Each release publishes an arm64 artifact set beside the amd64 one under the same tag: `secondbox-VERSION-arm64-artifact-manifest.json` with its linux-arm64 scenario evidence and `standard-arm64` standard bundles, and the control-plane, Runner, installer-tools and microVM-artifact images under `vVERSION-arm64` tags. It shares the SDKs, binaries, OpenAPI document and install bootstrap with the amd64 set. `just release-arm64 VERSION AMD64_RELEASE_DIR` stages it on a Linux arm64 KVM host, each host uploads its own output, and the publisher starts once the draft holds both sets.
+- `runner/scripts/microvm-image/kernel.Dockerfile` builds the pinned guest kernel with plain `docker build` for `linux/amd64` or `linux/arm64`. Its build stage runs on the build platform and cross-compiles, so either architecture builds on an amd64 or arm64 host without emulation, and the result is exported under `/kernel` from a `scratch` image.
 
 ### Changed
 
 - `releasecontract.ArtifactManifestLocation` and `QualificationEvidenceLocation` take the guest architecture. Files of a non-amd64 artifact set, including its standard bundles, staging checksums and OCI archives, carry the architecture suffix; amd64 names are unchanged.
+- `build-kernel.sh` requires `SECONDBOX_RUNNER_MICROVM_KERNEL_CROSS_COMPILE`, the kernel toolchain prefix. Set it empty to keep the host compiler; an empty prefix on a host of the other architecture now fails before the download. `kernel-provenance.json` records the prefix and the compiler identity.
 
 ### Fixed
 
