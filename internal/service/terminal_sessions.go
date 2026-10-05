@@ -76,6 +76,7 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 		UseProfileStreamWindow: true, DeferResponseCredit: true,
 		Detachable: request.Detachable, ExecOpen: open, Request: request, Now: now,
 		CredentialDigest: service.dataPlaneCredentialDigest(sessionID),
+		ProfileGrants:    applicationProfileGrants(ctx),
 	})
 }
 

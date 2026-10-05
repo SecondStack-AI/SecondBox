@@ -96,6 +96,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 		StreamWindowBytes:    request.WindowBytes, UseProfileRequestLimit: true,
 		DeferResponseCredit: true, ExecOpen: open, AttributedExecution: request.AttributedExecution, Request: request,
 		CredentialDigest: service.dataPlaneCredentialDigest(sessionID), Now: now,
+		ProfileGrants: applicationProfileGrants(ctx),
 	})
 }
 
@@ -256,6 +257,7 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 			MaximumOutputBytes   int64                 `json:"maximumOutputBytes"`
 		}{request.Command, request.Cwd, request.Environment, request.DeadlineMilliseconds, request.MaximumOutputBytes},
 		CredentialDigest: service.dataPlaneCredentialDigest(sessionID), Now: now,
+		ProfileGrants: applicationProfileGrants(ctx),
 	})
 	if err != nil {
 		return nil, false, err
@@ -517,6 +519,7 @@ func (service *ControlPlaneService) runFileOperation(
 		},
 		FileContent: content, Request: request,
 		CredentialDigest: service.dataPlaneCredentialDigest(sessionID), Now: now,
+		ProfileGrants: applicationProfileGrants(ctx),
 	})
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err

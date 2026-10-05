@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -81,6 +82,9 @@ type DataPlaneAdmission struct {
 	Request                 any
 	CredentialDigest        []byte
 	Now                     time.Time
+	// ProfileGrants is nil for a caller without an application authority and
+	// otherwise must name the Sandbox's Profile as read under the admission lock.
+	ProfileGrants []string
 }
 
 // PublicDataPlaneCancellation binds one HTTP cancellation key to an exact session response.
@@ -599,9 +603,10 @@ func lockDataPlaneAuthority(
 	var runnerConnected bool
 	var encodedDataPlaneEndpoint string
 	var specJSON []byte
+	var profileName string
 	err := tx.QueryRow(ctx, `
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,
-		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
+		       sandbox.profile_name,sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
 		       assignment.fencing_token,assignment.state,revision.spec_json,
 		       COALESCE(runner.data_plane_address,''),sandbox.egress_context IS NOT NULL,
@@ -624,7 +629,7 @@ func lockDataPlaneAuthority(
 		input.TenantRef, input.SubjectRef, input.SandboxID, contracts.RunnerCapabilityPerExecAttribution,
 	).Scan(
 		&session.TenantRef, &session.SubjectRef,
-		&session.ProfileRevisionID, &session.Generation, &sandboxState,
+		&profileName, &session.ProfileRevisionID, &session.Generation, &sandboxState,
 		&session.AssignmentID, &session.InstanceID, &session.RunnerID,
 		&session.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint,
 		&egressContextPinned, &perExecAttributionReady,
@@ -650,6 +655,9 @@ func lockDataPlaneAuthority(
 	}
 	if err != nil {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, fmt.Errorf("SecondBox data-plane authority lookup: %w", err)
+	}
+	if input.ProfileGrants != nil && !slices.Contains(input.ProfileGrants, profileName) {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrAuthorizationDenied
 	}
 	if session.Generation != input.Generation {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, dataPlaneCapacity{}, ports.ErrGenerationFenced

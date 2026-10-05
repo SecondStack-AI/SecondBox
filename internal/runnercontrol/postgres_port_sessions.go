@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -560,9 +561,10 @@ func lockPortAdmissionAuthority(
 	var encodedDataPlaneEndpoint string
 	var sandboxState, assignmentState string
 	var specJSON []byte
+	var profileName string
 	err := tx.QueryRow(ctx, `
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,
-		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
+		       sandbox.profile_name,sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
 		       assignment.fencing_token,assignment.state,revision.spec_json,
 		       COALESCE(runner.data_plane_address,'')
@@ -578,7 +580,7 @@ func lockPortAdmissionAuthority(
 		input.TenantRef, input.SubjectRef, input.Session.SandboxID,
 	).Scan(
 		&tunnel.TenantRef, &tunnel.SubjectRef,
-		&tunnel.ProfileRevisionID, &tunnel.Session.Generation, &sandboxState,
+		&profileName, &tunnel.ProfileRevisionID, &tunnel.Session.Generation, &sandboxState,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID,
 		&tunnel.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint,
 	)
@@ -587,6 +589,9 @@ func lockPortAdmissionAuthority(
 	}
 	if err != nil {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, fmt.Errorf("SecondBox Port authority lookup: %w", err)
+	}
+	if input.ProfileGrants != nil && !slices.Contains(input.ProfileGrants, profileName) {
+		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrAuthorizationDenied
 	}
 	if input.Session.Transport == contracts.PortTransportDirect {
 		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)

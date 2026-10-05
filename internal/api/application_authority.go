@@ -47,9 +47,11 @@ func authorizeApplicationRequest(
 // revision carries network egress, attributed execution, approved ports, and
 // resources. Creation alone cannot enforce it, because a Sandbox in the
 // authority's subject may have been created by the platform or by another
-// authority with different grants. Reads, listing, and lifecycle stay
-// subject-scoped, so an authority can still see, stop, and delete what lives in
-// its subject.
+// authority with different grants, or switched to another Profile since. Reads,
+// listing, and lifecycle stay subject-scoped, so an authority can still see,
+// stop, and delete what lives in its subject. This pre-read refuses early;
+// admissions repeat the check against the Profile they lock, which is the one
+// a concurrent switch cannot change underneath them.
 func (apiHandler *handler) authorizeApplicationDataPlane(
 	authority ports.AuthenticatedApplicationAuthority,
 	request *http.Request,
