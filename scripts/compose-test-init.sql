@@ -48,7 +48,7 @@ INSERT INTO secondbox.runners (
     'compose-live-runner',
     'ready',
     '["amd64"]'::jsonb,
-    '["compute","network-policy","storage","cleanup","local-workspace"]'::jsonb,
+    '["compute","network-policy","storage","cleanup","local-workspace","client-selected-image"]'::jsonb,
     '{"VCPUCount":1000,"MemoryBytes":1099511627776,"DiskBytes":10995116277760,"Instances":1000,"Operations":1000}'::jsonb,
     '[1]'::jsonb,
     1,
