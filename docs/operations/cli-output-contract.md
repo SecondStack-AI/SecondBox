@@ -49,6 +49,7 @@ without a classification fails command tests.
 | `version`, `init`, `validate` | no | bounded receipt with historical non-TTY form | CLI |
 | `runner-template`, `render`, `runner-init` | no | exact TOML, environment, path, or generated artifact contract | CLI |
 | `verify`, `inspect` | no | machine JSON | CLI |
+| `compose-update-check` | no | bounded receipt, or a JSON verdict with `--output json` also on exit 2 | CLI |
 | `compose` | Docker-defined | Docker Compose stdout, connected directly | Docker Compose stderr and exit status |
 
 Raw commands ignore human styling. Guest stdin, stdout, stderr, terminal resize,

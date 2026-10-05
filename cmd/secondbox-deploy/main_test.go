@@ -49,7 +49,7 @@ func TestDeployRootHelpIsSuccessfulAndSeparateFromUsageErrors(t *testing.T) {
 }
 
 func TestEveryDeployCommandHasOutputContract(t *testing.T) {
-	for _, command := range []string{"help", "version", "install", "init", "runner-template", "verify", "validate", "render", "runner-init", "inspect", "compose"} {
+	for _, command := range []string{"help", "version", "install", "init", "runner-template", "verify", "validate", "render", "runner-init", "inspect", "compose", "compose-update-check"} {
 		contract, found := deployCommandContracts[command]
 		if !found || contract.Command != command || contract.Output == "" || contract.ExitOwner == "" {
 			t.Errorf("command %q has incomplete output contract: %#v", command, contract)

@@ -13,6 +13,7 @@ func secondboxDeployHelp() cliui.Help {
 			{Key: "uninstall", Value: "stop a deployment while preserving data; use --purge for deletion"},
 			{Key: "bootstrap-tenancy DIRECTORY", Value: "create local tenancy; --tenant-ref, --subject-ref, --application, --check"},
 			{Key: "update", Value: "update a completed guided deployment; use --check or --resume"},
+			{Key: "compose-update-check --from VERSION", Value: "check that this release may update a Compose-managed deployment of VERSION in place"},
 			{Key: "init", Value: "create an explicit deployment manifest"},
 			{Key: "validate", Value: "validate a deployment manifest"},
 			{Key: "runner-template", Value: "emit the Runner TOML template"},

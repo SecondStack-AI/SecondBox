@@ -8,6 +8,8 @@
 
 - `[standard_resources]` accepts `guest_architecture = "amd64"` or `"arm64"` in place of `artifact_manifest` for a deployment built from source. `secondbox-deploy` then builds the standard documents from its own code, selecting the development lineage for an unstamped build and the full published lineage for a stamped one, and skips the release signing-identity and Profile-identity checks that need a manifest. Exactly one of the two fields must be set.
 
+- `secondbox-deploy compose-update-check --from VERSION` checks a Compose-managed in-place update against the binary's own release version. It exits 2 when the applied release predates the v0.14.0 database migration baseline or is newer than the binary, and 3 when the binary carries the unstamped development identity; `--output json` reports the verdict.
+
 ### Changed
 
 - `releasecontract.ArtifactManifestLocation` and `QualificationEvidenceLocation` take the guest architecture. Files of a non-amd64 artifact set, including its standard bundles, staging checksums and OCI archives, carry the architecture suffix; amd64 names are unchanged.

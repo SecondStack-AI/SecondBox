@@ -18,6 +18,15 @@ v0.17.0 shipped a new signed Firecracker bundle. Under the retired Profile bundl
 
 Historically, v0.16.0 allowed a v0.15.0 deployment to update in place because its bundle and migration baseline were unchanged. v0.15.0 accepted the exact v0.14.0 migration baseline and applied forward migrations. Other checksum mismatches remain errors; do not reset migration records to bypass them. See each target release's notes for its boundary.
 
+Before a Compose-managed in-place update (stop the deployment with `compose down`, then `compose up` with the new images), run the target release's `secondbox-deploy` against the applied release version:
+
+```sh
+secondbox-deploy compose-update-check --from 0.22.0
+secondbox-deploy --output json compose-update-check --from 0.22.0
+```
+
+It compares the applied version with its own stamped release version and exits 0 when the update is supported, including between two builds of the same version. It exits 2 when the applied release predates the v0.14.0 database migration baseline, which requires clean recreation, or is newer than the binary, which is a downgrade. It exits 3 when the binary carries the unstamped development identity, and 1 for invalid arguments or a version that is not canonical SemVer without build metadata. JSON output reports `supported`, `verdict` (`supported`, `below_minimum_source_version`, or `downgrade`), the applied and target versions, the target source commit, `minimumSourceVersion`, and `message`. The guided `update` command applies its own boundaries.
+
 Each Runner selects one compute backend explicitly. RunnerPool backend homogeneity is control-plane-private and is sealed by the first healthy registration; operators cannot mutate or reset it. Profiles and public resources continue to name only the RunnerPool.
 
 Firecracker is the backend this guide deploys. The experimental Microsandbox backend has no supported deployment path on Linux: it is exercised through the repository's KVM qualification suites (`just test-microsandbox-linux`, `just test-scenario-microsandbox-linux`, both requiring a pinned local Microsandbox build, `/dev/kvm`, and a reflink-capable qualification filesystem), and its only documented operator procedure is the native macOS guide at [`microsandbox-macos.md`](microsandbox-macos.md), which also records the backend's environment contract and known limitations. The [gVisor runtime](gvisor-runtime.md) covers hosts without KVM, deployed from the released `runner-gvisor` and `gvisor-artifacts` images rather than by this guide.
