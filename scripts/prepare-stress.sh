@@ -177,6 +177,7 @@ SECONDBOX_RUNNER_MICROVM_KERNEL_LOCK="$repo_root/runner/scripts/microvm-image/ke
 SECONDBOX_RUNNER_MICROVM_KERNEL_CACHE="$local_root/cache/kernel" \
 SECONDBOX_RUNNER_MICROVM_KERNEL_JOBS="$kernel_jobs" \
 SECONDBOX_RUNNER_MICROVM_KERNEL_VERIFY_ONLY=false \
+SECONDBOX_RUNNER_MICROVM_KERNEL_CROSS_COMPILE= \
   "$repo_root/runner/scripts/microvm-image/build.sh"
 
 rm -rf "$staged_artifacts/kernel-build"
