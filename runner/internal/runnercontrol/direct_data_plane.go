@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -567,7 +568,7 @@ func (s *RunnerProtocolService) serveDirectTypedConnection(
 		payload, err := portdirect.ReadTypedMessage(connection)
 		if err != nil {
 			cancel(err)
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || stream.lingerExpired(err) {
 				return nil
 			}
 			return err
@@ -696,10 +697,16 @@ func (s *RunnerProtocolService) consumeDirectDataPlaneCredential(
 // blocked output write and confirm the operation on the control connection.
 const directDataPlaneWriteTimeout = 5 * time.Second
 
+// After its terminal the Runner keeps reading until the control plane closes.
+// Closing with unread credit in the receive buffer resets the connection, and
+// the reset can discard the terminal before the control plane reads it.
+const directDataPlaneTerminalLinger = 5 * time.Second
+
 type directTypedStream struct {
-	connection net.Conn
-	deadline   time.Time
-	mu         sync.Mutex
+	connection   net.Conn
+	deadline     time.Time
+	mu           sync.Mutex
+	terminalSent bool
 }
 
 func (stream *directTypedStream) Send(message *runnerprotocol.RunnerToControlPlane) error {
@@ -716,14 +723,30 @@ func (stream *directTypedStream) Send(message *runnerprotocol.RunnerToControlPla
 	if err := stream.connection.SetWriteDeadline(deadline); err != nil {
 		return errors.Join(err, stream.connection.Close())
 	}
-	err = portdirect.WriteTypedMessage(stream.connection, payload)
+	if err := portdirect.WriteTypedMessage(stream.connection, payload); err != nil {
+		return errors.Join(err, stream.connection.Close())
+	}
 	terminal := message.GetExec().GetTerminal() != nil ||
 		message.GetExec().GetBufferedResult() != nil || message.GetPty().GetTerminal() != nil ||
 		message.GetFile().GetTerminal() != nil
-	if terminal || err != nil {
-		err = errors.Join(err, stream.connection.Close())
+	if !terminal {
+		return nil
 	}
-	return err
+	stream.terminalSent = true
+	linger := time.Now().Add(directDataPlaneTerminalLinger)
+	if !stream.deadline.IsZero() && stream.deadline.Before(linger) {
+		linger = stream.deadline
+	}
+	if err := stream.connection.SetReadDeadline(linger); err != nil {
+		return errors.Join(err, stream.connection.Close())
+	}
+	return nil
+}
+
+func (stream *directTypedStream) lingerExpired(readErr error) bool {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.terminalSent && errors.Is(readErr, os.ErrDeadlineExceeded)
 }
 
 func (*directTypedStream) Recv() (*runnerprotocol.ControlPlaneToRunner, error) {

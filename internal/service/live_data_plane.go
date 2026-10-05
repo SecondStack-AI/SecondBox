@@ -190,7 +190,13 @@ func (stream *directDataPlaneStream) Send(message *runnerv1.ControlPlaneToRunner
 	}
 	stream.writeMu.Lock()
 	defer stream.writeMu.Unlock()
-	return portdirect.WriteTypedMessage(stream.connection, payload)
+	if err := portdirect.WriteTypedMessage(stream.connection, payload); err != nil {
+		return errors.Join(
+			runnercontrol.ErrLiveDataPlaneUnavailable,
+			fmt.Errorf("SecondBox direct data-plane send: %w", err),
+		)
+	}
+	return nil
 }
 
 func (stream *directDataPlaneStream) Receive(ctx context.Context) (*runnerv1.RunnerToControlPlane, error) {
@@ -1041,11 +1047,10 @@ func (service *ControlPlaneService) executeFileDataPlane(
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
-	sequence := uint64(1)
 	if err := stream.Send(&runnerv1.ControlPlaneToRunner{
 		Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
 			Fence: dataPlaneFence(session), OperationId: session.ID, StreamId: session.StreamID,
-			Sequence: sequence, Correlation: dataPlaneCorrelation(session),
+			Sequence: 1, Correlation: dataPlaneCorrelation(session),
 			Payload: &runnerv1.FileFrame_Open{Open: proto.Clone(open).(*runnerv1.FileOpen)},
 		}},
 	}); err != nil {
@@ -1054,18 +1059,44 @@ func (service *ControlPlaneService) executeFileDataPlane(
 		)
 	}
 	defer stream.Close()
-	for offset := 0; offset < len(content); {
+	return service.exchangeFileDataPlane(ctx, operationCtx, session, stream, open, content)
+}
+
+// exchangeFileDataPlane sends upload chunks and response credit after the
+// Open and receives the Runner's result. A lost transport stops sending but
+// does not decide the outcome: the Runner may already have sent its terminal
+// and closed. Only the terminal or a receive failure ends the operation.
+func (service *ControlPlaneService) exchangeFileDataPlane(
+	ctx context.Context,
+	operationCtx context.Context,
+	session runnercontrol.DataPlaneSession,
+	stream dataPlaneStream,
+	open *runnerv1.FileOpen,
+	content []byte,
+) (runnercontrol.DataPlaneSession, error) {
+	sequence := uint64(1)
+	var transportErr error
+	send := func(frame *runnerv1.FileFrame) error {
+		if transportErr != nil {
+			return nil
+		}
 		sequence++
+		frame.Fence, frame.OperationId, frame.StreamId = dataPlaneFence(session), session.ID, session.StreamID
+		frame.Sequence, frame.Correlation = sequence, dataPlaneCorrelation(session)
+		err := stream.Send(&runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_File{File: frame},
+		})
+		if errors.Is(err, runnercontrol.ErrLiveDataPlaneUnavailable) {
+			transportErr = err
+			return nil
+		}
+		return err
+	}
+	for offset := 0; offset < len(content); {
 		size := min(liveDataPlaneChunkBytes, len(content)-offset)
-		if err := stream.Send(&runnerv1.ControlPlaneToRunner{
-			Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
-				Fence: dataPlaneFence(session), OperationId: session.ID, StreamId: session.StreamID,
-				Sequence: sequence, Correlation: dataPlaneCorrelation(session),
-				Payload: &runnerv1.FileFrame_Chunk{Chunk: &runnerv1.FileChunk{
-					Offset: uint64(offset), Data: bytes.Clone(content[offset : offset+size]),
-				}},
-			}},
-		}); err != nil {
+		if err := send(&runnerv1.FileFrame{Payload: &runnerv1.FileFrame_Chunk{Chunk: &runnerv1.FileChunk{
+			Offset: uint64(offset), Data: bytes.Clone(content[offset : offset+size]),
+		}}}); err != nil {
 			return runnercontrol.DataPlaneSession{}, err
 		}
 		offset += size
@@ -1073,16 +1104,9 @@ func (service *ControlPlaneService) executeFileDataPlane(
 	responseCreditGranted := int64(0)
 	if open.Operation == runnerv1.FileOperation_FILE_OPERATION_READ {
 		responseCreditGranted = min(session.MaximumResponseBytes, session.StreamWindowBytes)
-		sequence++
-		if err := stream.Send(&runnerv1.ControlPlaneToRunner{
-			Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
-				Fence: dataPlaneFence(session), OperationId: session.ID, StreamId: session.StreamID,
-				Sequence: sequence, Correlation: dataPlaneCorrelation(session),
-				Payload: &runnerv1.FileFrame_Credit{Credit: &runnerv1.StreamCredit{
-					ByteCount: uint64(responseCreditGranted),
-				}},
-			}},
-		}); err != nil {
+		if err := send(&runnerv1.FileFrame{Payload: &runnerv1.FileFrame_Credit{Credit: &runnerv1.StreamCredit{
+			ByteCount: uint64(responseCreditGranted),
+		}}}); err != nil {
 			return runnercontrol.DataPlaneSession{}, err
 		}
 	}
@@ -1091,7 +1115,7 @@ func (service *ControlPlaneService) executeFileDataPlane(
 	for {
 		message, err := stream.Receive(operationCtx)
 		if err != nil {
-			return service.abandonBufferedDataPlane(ctx, operationCtx, session, err)
+			return service.abandonBufferedDataPlane(ctx, operationCtx, session, errors.Join(transportErr, err))
 		}
 		frame := message.GetFile()
 		if frame == nil || frame.OperationId != session.ID || frame.StreamId != session.StreamID ||
@@ -1116,17 +1140,9 @@ func (service *ControlPlaneService) executeFileDataPlane(
 				session.MaximumResponseBytes-responseCreditGranted,
 			)
 			if additionalCredit > 0 {
-				sequence++
-				if err := stream.Send(&runnerv1.ControlPlaneToRunner{
-					Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
-						Fence: dataPlaneFence(session), OperationId: session.ID,
-						StreamId: session.StreamID, Sequence: sequence,
-						Correlation: dataPlaneCorrelation(session),
-						Payload: &runnerv1.FileFrame_Credit{Credit: &runnerv1.StreamCredit{
-							ByteCount: uint64(additionalCredit),
-						}},
-					}},
-				}); err != nil {
+				if err := send(&runnerv1.FileFrame{Payload: &runnerv1.FileFrame_Credit{Credit: &runnerv1.StreamCredit{
+					ByteCount: uint64(additionalCredit),
+				}}}); err != nil {
 					return runnercontrol.DataPlaneSession{}, err
 				}
 				responseCreditGranted += additionalCredit
