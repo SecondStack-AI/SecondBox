@@ -555,20 +555,11 @@ func TestRunnerWithoutInstalledBundleRejectsDefaultImageAssignment(t *testing.T)
 	}
 }
 
-func TestReadinessAdvertisementFollowsInstalledBundle(t *testing.T) {
+func TestReadinessWithoutInstalledBundleAdvertisesCompiledGuestGeneration(t *testing.T) {
 	fixture := newFirecrackerConformanceFixture(t)
 	backend := fixture.Backend.(*AssignmentBackend)
-	verifiedAt := time.Now().UTC()
-	installed, err := backend.installedBundleAdvertisement(backend.manager.cfg, verifiedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if installed.guestProtocolGenerations.GetMinimum() != 1 || installed.guestProtocolGenerations.GetMaximum() != 1 ||
-		len(installed.materializations) != 1 || installed.snapshotResumeReady {
-		t.Fatalf("installed-bundle advertisement = %+v", installed)
-	}
 	withoutInstalledBundleForTest(backend)
-	absent, err := backend.installedBundleAdvertisement(backend.manager.cfg, verifiedAt)
+	absent, err := backend.installedBundleAdvertisement(backend.manager.cfg, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

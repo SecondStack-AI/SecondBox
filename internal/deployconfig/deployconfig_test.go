@@ -1261,7 +1261,8 @@ func TestSameHostRunnerSelectsOnlyItsOverlayAndRejectsAmbiguousIdentity(t *testi
 	if got := resolved.Environment["SECONDBOX_RUNNER_ID"]; got != "runner-local" {
 		t.Fatalf("same-host runner ID = %q", got)
 	}
-	if len(resolved.ComposeFiles) != 3 || resolved.ComposeFiles[2] != "deploy/compose.same-host-runner.yml" {
+	if len(resolved.ComposeFiles) != 4 || resolved.ComposeFiles[2] != "deploy/compose.same-host-runner.yml" ||
+		resolved.ComposeFiles[3] != "deploy/compose.same-host-runner-installed-bundle.yml" {
 		t.Fatalf("Compose files = %#v", resolved.ComposeFiles)
 	}
 	manifest.Runners = append(manifest.Runners, validSameHostTestRunner("runner-local-2"))

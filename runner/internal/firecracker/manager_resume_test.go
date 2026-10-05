@@ -47,6 +47,7 @@ func shortResumeDir(t *testing.T) string {
 func newJailedResumeManager(t *testing.T, runDir string) *Manager {
 	t.Helper()
 	return &Manager{cfg: &config.Config{
+		MicroVMInstalledBundle:     true,
 		FirecrackerPath:            "/usr/local/bin/firecracker",
 		JailerPath:                 "/usr/local/bin/jailer",
 		MicroVMAllowUnjailed:       false,

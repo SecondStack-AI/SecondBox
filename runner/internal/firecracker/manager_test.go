@@ -777,6 +777,7 @@ func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 
 func TestMicroVMImageForStartSelectsToolExecutorImage(t *testing.T) {
 	m := &Manager{cfg: &config.Config{
+		MicroVMInstalledBundle:     true,
 		MicroVMRootfsPath:          "/images/agent-rootfs.ext4",
 		MicroVMSharedImagePath:     "/images/agent-shared.img",
 		MicroVMToolRootfsPath:      "/images/tool-rootfs.ext4",
@@ -1825,12 +1826,13 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	}
 	m := &Manager{
 		cfg: &config.Config{
-			MicroVMRunDir:        runDir,
-			MicroVMLogDir:        logDir,
-			MicroVMRootfsPath:    filepath.Join(root, "missing-rootfs.ext4"),
-			MicroVMBridgeName:    "agbr0",
-			MicroVMBridgeCIDR:    "10.0.0.1/24",
-			MicroVMAllowUnjailed: true,
+			MicroVMInstalledBundle: true,
+			MicroVMRunDir:          runDir,
+			MicroVMLogDir:          logDir,
+			MicroVMRootfsPath:      filepath.Join(root, "missing-rootfs.ext4"),
+			MicroVMBridgeName:      "agbr0",
+			MicroVMBridgeCIDR:      "10.0.0.1/24",
+			MicroVMAllowUnjailed:   true,
 		},
 		instances: map[string]*instance{},
 		guestIPs:  map[string]string{},
