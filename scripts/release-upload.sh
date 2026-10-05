@@ -11,8 +11,9 @@ tag="v${version}"
   exit 1
 }
 [[ -d "$output" ]] || { echo "release output directory does not exist: $output" >&2; exit 1; }
-# A release publishes an amd64 and an arm64 artifact set, each staged and
-# uploaded from its own host; the publisher starts once both are in the draft.
+# A release publishes the amd64 artifact set and optionally an arm64 set, each
+# staged and uploaded from its own host. An arm64 set is uploaded first; the
+# amd64 upload completes the draft and dispatches the publisher.
 amd64_manifest="secondbox-${version}-artifact-manifest.json"
 arm64_manifest="secondbox-${version}-arm64-artifact-manifest.json"
 if [[ -f "$output/$amd64_manifest" && ! -e "$output/$arm64_manifest" ]]; then
@@ -22,6 +23,28 @@ elif [[ -f "$output/$arm64_manifest" && ! -e "$output/$amd64_manifest" ]]; then
 else
   echo "release output must contain exactly one of the v${version} amd64 and arm64 artifact manifests" >&2
   exit 1
+fi
+
+gh auth status >/dev/null
+draft=false
+assets=''
+if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
+  test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true || {
+    echo "release $tag is already public" >&2
+    exit 1
+  }
+  draft=true
+  assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+fi
+if [[ "$architecture" == arm64 ]] && grep -Fxq "$amd64_manifest" <<<"$assets"; then
+  echo "the draft already holds the amd64 set, which dispatched the publisher; upload the arm64 set before the amd64 set" >&2
+  exit 1
+fi
+arm64_footer=''
+if [[ "$architecture" == arm64 ]] || grep -Fxq "$arm64_manifest" <<<"$assets"; then
+  arm64_footer="Linux arm64 hosts deploy from \`$arm64_manifest\`; the guided installer is amd64-only.
+
+"
 fi
 
 notes="$(mktemp)"
@@ -49,27 +72,19 @@ Guided Linux amd64 install:
 curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/download/$tag/install.sh | sh
 \`\`\`
 
-Linux arm64 hosts deploy from \`secondbox-$version-arm64-artifact-manifest.json\`; the guided installer is amd64-only.
-
-SDKs: \`npm install @secondstack-ai/secondbox@$version\` and \`go get github.com/SecondStack-AI/SecondBox@$tag\`
+${arm64_footer}SDKs: \`npm install @secondstack-ai/secondbox@$version\` and \`go get github.com/SecondStack-AI/SecondBox@$tag\`
 FOOTER
 
-gh auth status >/dev/null
-if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
-  test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true || {
-    echo "release $tag is already public" >&2
-    exit 1
-  }
+if $draft; then
   gh release edit "$tag" --notes-file "$notes"
 else
   gh release create "$tag" --draft --verify-tag --title "SecondBox $tag" --notes-file "$notes"
 fi
 
 gh release upload "$tag" "$output"/* --clobber
-assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
-if grep -Fxq "$amd64_manifest" <<<"$assets" && grep -Fxq "$arm64_manifest" <<<"$assets"; then
+if [[ "$architecture" == amd64 ]]; then
   gh workflow run release.yml --ref main -f version="$version"
-  echo "Uploaded the $architecture artifact set of $tag and dispatched the GitHub publisher."
+  echo "Uploaded the amd64 artifact set of $tag and dispatched the GitHub publisher."
 else
-  echo "Uploaded the $architecture artifact set of $tag; upload the other architecture's staged release to publish."
+  echo "Uploaded the arm64 artifact set of $tag; upload the amd64 set to publish."
 fi

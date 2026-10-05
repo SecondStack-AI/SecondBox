@@ -4,7 +4,7 @@ Release inputs may describe multiple backend materializations, but each is stric
 
 A SecondBox release is a SemVer Git tag plus the locally built files attached to its stable GitHub Release. GitHub Actions publishes those supplied files without rebuilding them.
 
-Each release carries two artifact sets under its one tag: the amd64 set and the arm64 set. The arm64 set has its own artifact manifest, qualification evidence, standard bundles and images, and reuses the architecture-neutral files of the amd64 set (SDKs, CLI and deploy binaries, OpenAPI document, SBOM, install bootstrap) byte for byte. Its own files carry an `-arm64` suffix, and its images an `-arm64` tag suffix.
+Each release carries the amd64 artifact set under its tag, and optionally an arm64 set. The arm64 set has its own artifact manifest, qualification evidence, standard bundles and images, and reuses the architecture-neutral files of the amd64 set (SDKs, CLI and deploy binaries, OpenAPI document, SBOM, install bootstrap) byte for byte. Its own files carry an `-arm64` suffix, and its images an `-arm64` tag suffix.
 
 ## Public coordinates
 
@@ -54,7 +54,7 @@ Choose the default or full tier for a new version; use `--resume` only to recove
 a gate-only failure with the retained build and commit-exact scenario evidence. The flow creates the local tag,
 qualifies the source, builds the artifacts, stages a non-publishable installer
 candidate, qualifies those bytes in disposable guests, and stages the final
-amd64 manifest. On a Linux arm64 KVM host, `just release-arm64 VERSION AMD64_RELEASE_DIR`
+amd64 manifest. Optionally, on a Linux arm64 KVM host, `just release-arm64 VERSION AMD64_RELEASE_DIR`
 then qualifies the same commit with `just test-scenario` and stages the arm64 set
 beside a copy of the final amd64 release. Publication remains an explicit
 continuation printed by the successful flows; do not independently tag or upload
@@ -68,8 +68,8 @@ installer modes. A default release does not claim the full tier's coverage.
 Candidate and final staging require evidence for the selected tier and exact
 source commit. Installer evidence binds the candidate's qualification-subject
 digest to the final manifest. Staging rejects absent or mismatched evidence;
-the publisher rejects candidate manifests and starts only when the draft holds
-both artifact sets of one commit. GitHub Actions publishes the staged
+the publisher rejects candidate manifests, incomplete sets, and sets staged
+from different commits. GitHub Actions publishes the staged
 bytes and supplies npm provenance without rebuilding or qualifying them.
 
 Upload reads `docs/releases/vVERSION.md` from the tag when present, otherwise

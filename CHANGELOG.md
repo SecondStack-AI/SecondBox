@@ -4,7 +4,7 @@
 
 ### Added
 
-- Each release publishes an arm64 artifact set beside the amd64 one under the same tag: `secondbox-VERSION-arm64-artifact-manifest.json` with its linux-arm64 scenario evidence and `standard-arm64` standard bundles, and the control-plane, Runner, installer-tools and microVM-artifact images under `vVERSION-arm64` tags. It shares the SDKs, binaries, OpenAPI document and install bootstrap with the amd64 set. `just release-arm64 VERSION AMD64_RELEASE_DIR` stages it on a Linux arm64 KVM host, each host uploads its own output, and the publisher starts once the draft holds both sets.
+- A release can publish an arm64 artifact set beside the amd64 one under the same tag: `secondbox-VERSION-arm64-artifact-manifest.json` with its linux-arm64 scenario evidence and `standard-arm64` standard bundles, and the control-plane, Runner, installer-tools and microVM-artifact images under `vVERSION-arm64` tags. It shares the SDKs, binaries, OpenAPI document and install bootstrap with the amd64 set. `just release-arm64 VERSION AMD64_RELEASE_DIR` stages it on a Linux arm64 KVM host, which uploads it before the amd64 host uploads its own output and starts the publisher. A release without an arm64 set publishes amd64 alone.
 
 ### Changed
 

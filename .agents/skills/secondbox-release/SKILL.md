@@ -22,10 +22,11 @@ it. Prepare a reviewable result before requesting any missing authorization.
   are immutable. Retract a bad Go release in `go.mod`, document it in the
   changelog and release notes, then issue the next patch; never move the tag.
   Leave v0.13.0 intact: its off-main tag has the re-landed tree and downstream pins.
-- Every release publishes an amd64 and an arm64 artifact set from one commit.
-  `just release-arm64 VERSION AMD64_RELEASE_DIR` stages the arm64 set on the
-  arm64 KVM host from a copy of the final amd64 output (without `*.oci.tar`);
-  each host uploads its own output and the second upload dispatches the publisher.
+- A release publishes the amd64 artifact set and, when an arm64 KVM host is
+  available, an arm64 set from the same commit. `just release-arm64 VERSION
+  AMD64_RELEASE_DIR` stages it from a copy of the final amd64 output (without
+  `*.oci.tar`). Each host uploads its own output, arm64 first; the amd64 upload
+  dispatches the publisher.
 - Reserve the host for one release. Inspect `secondbox-suite-*` user units,
   `sbq-*` libvirt domains, matching containers, `.tmp/release/checkout.lock`, and
   `RELEASE_OUTPUT_ROOT/VERSION{,-build,-candidate}`. Identify owners and wait for
@@ -81,15 +82,15 @@ it. Prepare a reviewable result before requesting any missing authorization.
    and final directories first. A code change must land on main first and
    invalidates all commit-bound evidence. Delete a local tag only after checking
    the remote has no such tag; then relaunch the entire flow at the new merged commit.
-7. Stage the arm64 set: copy the final amd64 output without `*.oci.tar` to the
+7. Optionally stage the arm64 set: copy the final amd64 output without `*.oci.tar` to the
    arm64 host, reserve it like the amd64 host, and launch
    `just release-arm64 X.Y.Z COPY` from clean `main` at the same commit under a
    user service. A failure there means rerunning that command after removing its
    own `X.Y.Z-arm64` output; `TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota`
    is a known flake on that host too. A code fix restarts both stagings at the new commit.
-   After both stagings succeed, execute the printed tag push and then
-   `just release-upload X.Y.Z OUTPUT` on each host for its own output, in order
-   within publication authorization.
+   After the stagings succeed, execute the printed tag push and then
+   `just release-upload X.Y.Z OUTPUT` on each host for its own output, the
+   arm64 host first, within publication authorization.
    Upload reads `docs/releases/vX.Y.Z.md` from the tag automatically, or accepts
    an explicit third `NOTES_FILE` argument. Do not edit the published body as
    routine close-out. Locate the dispatched `release.yml` run for this version

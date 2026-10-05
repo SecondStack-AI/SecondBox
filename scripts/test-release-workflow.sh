@@ -128,11 +128,14 @@ export PATH="$fixture/bin:$PATH"
   if "$uploader" 1.2.3 "$fixture/both"; then
     echo 'release upload accepted a directory with both artifact sets' >&2; exit 1
   fi
-  # The publisher starts only once the draft holds both artifact sets.
-  "$uploader" 1.2.3 "$fixture/output"
-  if rg -q '^workflow run' "$RELEASE_TEST_STATE/calls"; then echo 'release upload dispatched the publisher with one artifact set' >&2; exit 1; fi
+  # An optional arm64 set is uploaded first; the amd64 upload dispatches the publisher.
   "$uploader" 1.2.3 "$fixture/output-arm64"
+  if rg -q '^workflow run' "$RELEASE_TEST_STATE/calls"; then echo 'release upload dispatched the publisher without the amd64 set' >&2; exit 1; fi
+  "$uploader" 1.2.3 "$fixture/output"
   test "$(rg -c '^workflow run release.yml --ref main -f version=1.2.3$' "$RELEASE_TEST_STATE/calls")" = 1
+  if "$uploader" 1.2.3 "$fixture/output-arm64"; then
+    echo 'release upload accepted an arm64 set after the amd64 set dispatched the publisher' >&2; exit 1
+  fi
   rg -q '^# Tagged notes$' "$RELEASE_TEST_STATE/body"
   if rg -q 'uncommitted wrong notes' "$RELEASE_TEST_STATE/body"; then echo 'release upload used checkout notes' >&2; exit 1; fi
   rg -q -F 'releases/download/v1.2.3/install.sh | sh' "$RELEASE_TEST_STATE/body"
@@ -151,8 +154,8 @@ export PATH="$fixture/bin:$PATH"
     echo 'release upload accepted absent explicit notes' >&2; exit 1
   fi
   cmp "$fixture/expected" "$RELEASE_TEST_STATE/body"
-  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/output"; then
-    echo 'release publisher accepted a release without the arm64 artifact set' >&2; exit 1
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/output-arm64"; then
+    echo 'release publisher accepted a release without the amd64 artifact set' >&2; exit 1
   fi
   # Neither an incomplete set nor a candidate in either set publishes anything.
   : >"$RELEASE_TEST_STATE/calls"
@@ -168,6 +171,11 @@ export PATH="$fixture/bin:$PATH"
     fi
   done
   cp "$fixture/arm64-allowlist.json" "$fixture/both/candidate-allowlist-arm64.json"
+  printf '{"sourceCommit":"other"}\n' >"$fixture/both/secondbox-1.2.3-arm64-artifact-manifest.json"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
+    echo 'release publisher accepted artifact sets of different commits' >&2; exit 1
+  fi
+  printf '{}\n' >"$fixture/both/secondbox-1.2.3-arm64-artifact-manifest.json"
   printf '{"candidate":true}\n' >"$fixture/both/secondbox-1.2.3-artifact-manifest.json"
   if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
     echo 'release publisher accepted an amd64 installer candidate beside a final arm64 set' >&2; exit 1
@@ -201,5 +209,18 @@ export PATH="$fixture/bin:$PATH"
   "$uploader" 1.2.4 "$fixture/output" ""
   rg -q '^Publishing locally built artifacts.$' "$RELEASE_TEST_STATE/body"
   rg -q -F '`npm install @secondstack-ai/secondbox@1.2.4`' "$RELEASE_TEST_STATE/body"
+  if rg -q 'arm64-artifact-manifest' "$RELEASE_TEST_STATE/body"; then echo 'release notes name an absent arm64 set' >&2; exit 1; fi
+  test "$(rg -c '^workflow run release.yml --ref main -f version=1.2.4$' "$RELEASE_TEST_STATE/calls")" = 1
+
+  # An amd64-only release publishes the amd64 images alone.
+  mkdir "$fixture/amd64-only"
+  cp "$fixture/both/secondbox-1.2.3-artifact-manifest.json" "$fixture/amd64-only/"
+  for image in control-plane runner installer-tools microvm-artifacts runner-gvisor gvisor-artifacts; do cp "$fixture/both/$image.oci.tar" "$fixture/amd64-only/"; done
+  (cd "$fixture/amd64-only" && ls | jq -R . | jq -s '{schemaVersion:1,files:(. + ["candidate-allowlist.json"])}' >candidate-allowlist.json)
+  echo true >"$RELEASE_TEST_STATE/draft"
+  : >"$RELEASE_TEST_STATE/calls"
+  GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/amd64-only"
+  test "$(rg -c '^skopeo .*:v1\.2\.3$' "$RELEASE_TEST_STATE/calls")" = 6
+  if rg -q 'arm64' "$RELEASE_TEST_STATE/calls"; then echo 'amd64-only publication touched arm64 assets' >&2; exit 1; fi
 )
 echo 'Release upload and publication notes regression checks passed.'

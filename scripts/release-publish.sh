@@ -8,11 +8,20 @@ tag="v${version}"
 manifest="$input/secondbox-${version}-artifact-manifest.json"
 arm64_manifest="$input/secondbox-${version}-arm64-artifact-manifest.json"
 
-[[ -f "$manifest" && -f "$arm64_manifest" ]] || { echo "release input does not contain both the amd64 and the arm64 artifact manifest" >&2; exit 1; }
-jq -s -e 'all(.[]; .candidate != true)' "$manifest" "$arm64_manifest" >/dev/null || { echo "release input is an installer candidate, not a publishable final release" >&2; exit 1; }
-jq -s -e '.[0].sourceCommit == .[1].sourceCommit' "$manifest" "$arm64_manifest" >/dev/null || { echo "the amd64 and arm64 artifact sets were staged from different commits" >&2; exit 1; }
-# Each set is uploaded from its own host; publish only when both are complete.
-for allowlist in candidate-allowlist.json candidate-allowlist-arm64.json; do
+# The arm64 artifact set is optional; when present it joins the amd64 set.
+[[ -f "$manifest" ]] || { echo "release input does not contain the amd64 artifact manifest" >&2; exit 1; }
+manifests=("$manifest")
+allowlists=(candidate-allowlist.json)
+with_arm64=false
+if [[ -e "$arm64_manifest" ]]; then
+  with_arm64=true
+  manifests+=("$arm64_manifest")
+  allowlists+=(candidate-allowlist-arm64.json)
+fi
+jq -s -e 'all(.[]; .candidate != true)' "${manifests[@]}" >/dev/null || { echo "release input is an installer candidate, not a publishable final release" >&2; exit 1; }
+jq -s -e '.[0].sourceCommit as $commit | all(.[]; .sourceCommit == $commit)' "${manifests[@]}" >/dev/null || { echo "the amd64 and arm64 artifact sets were staged from different commits" >&2; exit 1; }
+# Each set is uploaded from its own host; publish only complete sets.
+for allowlist in "${allowlists[@]}"; do
   [[ -f "$input/$allowlist" ]] || { echo "release input lacks $allowlist" >&2; exit 1; }
   files="$(jq -er '.files | if type == "array" and length > 0 then .[] else error("no files") end' "$input/$allowlist")" || { echo "release input $allowlist is malformed" >&2; exit 1; }
   while IFS= read -r name; do
@@ -25,17 +34,22 @@ printf '%s' "$GH_TOKEN" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --pass
 for image in control-plane runner installer-tools microvm-artifacts runner-gvisor gvisor-artifacts; do
   skopeo copy --all "oci-archive:$input/$image.oci.tar" "docker://ghcr.io/secondstack-ai/secondbox/$image:$tag"
 done
-for image in control-plane runner installer-tools microvm-artifacts; do
-  skopeo copy --all "oci-archive:$input/$image-arm64.oci.tar" "docker://ghcr.io/secondstack-ai/secondbox/$image:$tag-arm64"
-done
+if $with_arm64; then
+  for image in control-plane runner installer-tools microvm-artifacts; do
+    skopeo copy --all "oci-archive:$input/$image-arm64.oci.tar" "docker://ghcr.io/secondstack-ai/secondbox/$image:$tag-arm64"
+  done
+fi
 skopeo logout ghcr.io >/dev/null
 
 if ! npm view "@secondstack-ai/secondbox@${version}" version >/dev/null 2>&1; then
   npm publish "$input/secondstack-ai-secondbox-${version}.tgz" --access public --tag latest --provenance
 fi
 
-for name in control-plane.oci.tar runner.oci.tar installer-tools.oci.tar microvm-artifacts.oci.tar runner-gvisor.oci.tar gvisor-artifacts.oci.tar candidate-allowlist.json \
-  control-plane-arm64.oci.tar runner-arm64.oci.tar installer-tools-arm64.oci.tar microvm-artifacts-arm64.oci.tar candidate-allowlist-arm64.json; do
+staging_assets=(control-plane.oci.tar runner.oci.tar installer-tools.oci.tar microvm-artifacts.oci.tar runner-gvisor.oci.tar gvisor-artifacts.oci.tar candidate-allowlist.json)
+if $with_arm64; then
+  staging_assets+=(control-plane-arm64.oci.tar runner-arm64.oci.tar installer-tools-arm64.oci.tar microvm-artifacts-arm64.oci.tar candidate-allowlist-arm64.json)
+fi
+for name in "${staging_assets[@]}"; do
   gh release delete-asset "$tag" "$name" --yes
 done
 
