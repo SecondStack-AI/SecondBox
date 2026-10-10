@@ -62,6 +62,7 @@ type schedulerLockFixture struct {
 	poolName         string
 	homeRunnerID     string
 	homeConnectionID string
+	homeIdentity     runnercontrol.RunnerIdentity
 	siblingRunnerID  string
 }
 
@@ -80,7 +81,7 @@ func newSchedulerLockFixture(t *testing.T) schedulerLockFixture {
 	}
 	t.Cleanup(stateStore.Close)
 	fixture.stateStore = stateStore
-	register := func() (string, string) {
+	register := func() (string, string, runnercontrol.RunnerIdentity) {
 		runnerID := task4ID("runner")
 		connectionID := task4ID("connection")
 		issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
@@ -98,10 +99,10 @@ func newSchedulerLockFixture(t *testing.T) schedulerLockFixture {
 			t.Fatal(err)
 		}
 		task4CompleteWorkspaceReconciliation(t, stateStore, runnerID, connectionID, 3, nil, fixture.now)
-		return runnerID, connectionID
+		return runnerID, connectionID, issued.Identity
 	}
-	fixture.homeRunnerID, fixture.homeConnectionID = register()
-	fixture.siblingRunnerID, _ = register()
+	fixture.homeRunnerID, fixture.homeConnectionID, fixture.homeIdentity = register()
+	fixture.siblingRunnerID, _, _ = register()
 
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {

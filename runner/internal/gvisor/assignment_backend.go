@@ -320,10 +320,8 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox gVisor readiness materialization: %w", err)
 	}
-	if backend.storagePressure != nil {
-		if err := backend.storagePressure.admit(ctx); err != nil {
-			return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox gVisor readiness storage pressure: %w", err)
-		}
+	if err := backend.storagePressureReadiness(ctx); err != nil {
+		return runnercontrol.BackendReadiness{}, err
 	}
 	if err := backend.probePlatform(ctx); err != nil {
 		return runnercontrol.BackendReadiness{}, err
@@ -383,6 +381,21 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 			VerifiedAtUnixMs:        uint64(time.Now().UTC().UnixMilli()),
 		}},
 	}, nil
+}
+
+// storagePressureReadiness fails readiness only when the Workspace filesystem
+// cannot be measured. Admission denial is not a readiness failure: admit
+// already refuses new work, and only a connected Runner receives the stops,
+// fences, and deletes that free storage. The heartbeat's storage-pressure
+// observation keeps the control plane from placing here.
+func (backend *AssignmentBackend) storagePressureReadiness(ctx context.Context) error {
+	if backend.storagePressure == nil {
+		return nil
+	}
+	if _, err := backend.storagePressure.observe(ctx); err != nil {
+		return fmt.Errorf("SecondBox gVisor readiness storage pressure: %w", err)
+	}
+	return nil
 }
 
 func (backend *AssignmentBackend) ValidateAssignment(

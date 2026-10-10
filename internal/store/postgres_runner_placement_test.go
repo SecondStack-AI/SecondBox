@@ -614,6 +614,53 @@ func TestRunnerPlacementRequiresBackendMaterialization(t *testing.T) {
 	}
 }
 
+// TestHomePlacementSkipsRunnerDenyingStorageAdmission keeps new Workspaces off
+// a connected Runner whose heartbeat reports storage admission denial, and
+// places there again once the Runner reports recovery.
+func TestHomePlacementSkipsRunnerDenyingStorageAdmission(t *testing.T) {
+	store := openStoreTest(t)
+	now := time.Date(2026, 10, 10, 18, 5, 0, 0, time.UTC)
+	spec := placementTestSpec("pool-placement-storage-pressure")
+	runnerID := "runner-placement-storage-pressure"
+	seedPlacementRunner(t, store, spec.Pool, runnerID, now)
+	seedPlacementProfileRevision(t, store, "revision-placement-storage-pressure", spec, now)
+	place := func() (string, error) {
+		t.Helper()
+		tx, err := store.pool.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(t.Context())
+		return selectInitialHomeRunner(t.Context(), tx, spec)
+	}
+	for _, testCase := range []struct {
+		status string
+		want   string
+	}{
+		{status: contracts.StoragePressureStatusAdmissionDenied, want: ""},
+		{status: "warning", want: runnerID},
+		{status: "healthy", want: runnerID},
+	} {
+		if _, err := store.pool.Exec(t.Context(), `
+			UPDATE secondbox.runners
+			SET storage_pressure_json=jsonb_build_object('status',$2::text,'observedAt',$3::timestamptz)
+			WHERE id=$1`, runnerID, testCase.status, now,
+		); err != nil {
+			t.Fatal(err)
+		}
+		selected, err := place()
+		if testCase.want == "" {
+			if !errors.Is(err, ports.ErrHomeRunnerUnavailable) || selected != "" {
+				t.Fatalf("%s placement selected=%q error=%v", testCase.status, selected, err)
+			}
+			continue
+		}
+		if err != nil || selected != testCase.want {
+			t.Fatalf("%s placement selected=%q error=%v", testCase.status, selected, err)
+		}
+	}
+}
+
 type placementScanFixture struct{ cacheJSON string }
 
 func (fixture placementScanFixture) Scan(destinations ...any) error {
@@ -630,6 +677,7 @@ func (fixture placementScanFixture) Scan(destinations ...any) error {
 	*(destinations[10].(*[]byte)) = []byte(`{}`)
 	*(destinations[11].(*[]byte)) = []byte(fixture.cacheJSON)
 	*(destinations[12].(*[]byte)) = []byte(`[]`)
+	*(destinations[13].(*string)) = ""
 	return nil
 }
 

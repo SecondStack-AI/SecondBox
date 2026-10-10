@@ -629,7 +629,8 @@ func lockHomeRunner(
 		SELECT id,pool_name,architectures_json,capabilities_json,capacity_json,
 			reserved_capacity_json,drain_phase,last_seen_at,artifact_cache_json,
 			guest_protocol_minimum,guest_protocol_maximum,backend_kind,
-			supported_egress_contexts_json
+			supported_egress_contexts_json,
+			COALESCE(storage_pressure_json->>'status','')
 		FROM secondbox.runners
 		WHERE id=$1 AND pool_name=$2 AND state='ready'
 		FOR UPDATE`, homeRunnerID, poolName)
@@ -645,7 +646,7 @@ func lockHomeRunner(
 			&runner.ID, &runner.PoolName, &architecturesJSON, &capabilitiesJSON,
 			&allocatableJSON, &reservedJSON, &runner.DrainPhase, &runner.LastHeartbeatAt,
 			&cacheJSON, &runner.GuestProtocolMinimum, &runner.GuestProtocolMaximum, &runner.BackendKind,
-			&egressContextsJSON,
+			&egressContextsJSON, &runner.StoragePressureStatus,
 		); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler home Runner scan: %w", err)
 		}

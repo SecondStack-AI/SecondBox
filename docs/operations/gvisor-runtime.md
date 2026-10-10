@@ -275,7 +275,9 @@ never copied from a document.
    values. With `SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE=physical`, aggregate logical disk
    reservations do not block home placement or assignment starts. The Runner checks measured
    use of the Workspace filesystem at creation, start, and readiness; it denies admission at
-   the configured threshold and reopens at recovery. Probe failures deny admission. Per-Instance
+   the configured threshold and reopens at recovery. A Runner denying admission stays connected
+   so stops and deletes can free storage, and the control plane places nothing new on it until
+   it reports recovery. Probe failures deny admission and fail readiness. Per-Instance
    disk ceilings, CPU, memory, instance limits, and Sandbox-count quotas still apply. The
    default mode is `logical`, which retains aggregate disk reservations without a gVisor
    filesystem-pressure gate. The `SECONDBOX_RUNNER_SANDBOX_*`, file-transfer, and remaining

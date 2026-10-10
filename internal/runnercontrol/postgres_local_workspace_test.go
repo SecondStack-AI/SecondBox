@@ -674,6 +674,52 @@ func TestWorkspaceCreateFailureCompletesOperationWithTypedError(t *testing.T) {
 	}
 }
 
+// TestWorkspaceCreateFailureWithoutReceiptIsRecorded records a failed create
+// in the exact shape the Runner reports when its storage reservation is
+// refused: no receipt, so no generation or capacity. Rejecting it as an
+// authority conflict tore down the Runner session and left the command
+// pending for redelivery into the same failure.
+func TestWorkspaceCreateFailureWithoutReceiptIsRecorded(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 10, 10, 18, 5, 0, 0, time.UTC)
+	seedPendingWorkspaceCreation(t, store, now)
+	recordLocalWorkspaceTestResult(t, store, &runnerv1.LocalWorkspaceResult{
+		CommandVersion: 1,
+		Kind:           runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		Terminal:       runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED,
+		OperationId:    "operation-create-reconcile",
+		EffectId:       "effect-create-reconcile",
+		SandboxId:      "sandbox-create-reconcile",
+		WorkspaceId:    "workspace-create-reconcile",
+		SafeDetail:     "local workspace operation failed",
+	}, now.Add(time.Second))
+	var workspaceState, sandboxState, operationState, effectState, commandState string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT workspace.state,sandbox.state,operation.state,effect.state,command.state
+		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.workspace_id=workspace.id
+		JOIN secondbox.operations AS operation
+		  ON operation.id='operation-create-reconcile'
+		JOIN secondbox.lifecycle_effects AS effect
+		  ON effect.id='effect-create-reconcile'
+		JOIN secondbox.runner_commands AS command
+		  ON command.id='command-create-reconcile'
+		WHERE workspace.id='workspace-create-reconcile'`,
+	).Scan(&workspaceState, &sandboxState, &operationState, &effectState, &commandState); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceState != "failed" ||
+		sandboxState != "failed" ||
+		operationState != "failed" ||
+		effectState != "runner_failed" ||
+		commandState != "acknowledged" {
+		t.Fatalf(
+			"failed create Workspace=%q Sandbox=%q Operation=%q effect=%q command=%q",
+			workspaceState, sandboxState, operationState, effectState, commandState,
+		)
+	}
+}
+
 func TestReturningRunnerMissingWorkspaceFailsAndExactEvidenceRecoversWithoutRelocation(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 18, 45, 0, 0, time.UTC)

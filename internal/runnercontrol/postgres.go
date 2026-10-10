@@ -491,7 +491,7 @@ func (store *PostgresStateStore) RecordRegistration(
 			artifact_cache_json=$12,sandbox_start_sample_count=$13,
 			sandbox_start_p95_milliseconds=$14,last_seen_at=$15,
 			data_plane_address=$17,backend_kind=$18,
-			supported_egress_contexts_json=$19,
+			supported_egress_contexts_json=$19,storage_pressure_json=NULL,
 			revision=revision+1,updated_at=$15
 		WHERE id=$1 AND pool_name=$2 AND active_connection_id=$16`,
 		registration.RunnerId, registration.RunnerPoolId, architecturesJSON, capabilitiesJSON,
@@ -1373,6 +1373,11 @@ func localWorkspaceAuthorityConflict(
 			"durable mutationOperationId %q != reported operationId %q",
 			workspace.Mutation.OperationID, result.OperationId,
 		))
+	}
+	// Generation and capacity come from the local receipt. A failed create or
+	// clone wrote none, so its result carries no Workspace evidence to compare.
+	if result.Terminal != runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED {
+		return strings.Join(conflicts, "; ")
 	}
 	if workspace.Generation != int64(result.Generation) {
 		conflicts = append(conflicts, fmt.Sprintf(
