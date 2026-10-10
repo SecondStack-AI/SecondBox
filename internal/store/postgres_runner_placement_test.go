@@ -615,8 +615,8 @@ func TestRunnerPlacementRequiresBackendMaterialization(t *testing.T) {
 }
 
 // TestHomePlacementSkipsRunnerDenyingStorageAdmission keeps new Workspaces off
-// a connected Runner whose heartbeat reports storage admission denial, and
-// places there again once the Runner reports recovery.
+// a connected Runner whose heartbeat reports storage admission denial, including
+// a later failed probe, and places there again only on a measured recovery.
 func TestHomePlacementSkipsRunnerDenyingStorageAdmission(t *testing.T) {
 	store := openStoreTest(t)
 	now := time.Date(2026, 10, 10, 18, 5, 0, 0, time.UTC)
@@ -638,8 +638,9 @@ func TestHomePlacementSkipsRunnerDenyingStorageAdmission(t *testing.T) {
 		want   string
 	}{
 		{status: contracts.StoragePressureStatusAdmissionDenied, want: ""},
-		{status: "warning", want: runnerID},
+		{status: contracts.StoragePressureStatusUnavailable, want: ""},
 		{status: "healthy", want: runnerID},
+		{status: "warning", want: runnerID},
 	} {
 		if _, err := store.pool.Exec(t.Context(), `
 			UPDATE secondbox.runners

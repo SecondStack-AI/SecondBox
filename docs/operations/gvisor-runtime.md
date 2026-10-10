@@ -277,7 +277,8 @@ never copied from a document.
    use of the Workspace filesystem at creation, start, and readiness; it denies admission at
    the configured threshold and reopens at recovery. A Runner denying admission stays connected
    so stops and deletes can free storage, and the control plane places nothing new on it until
-   it reports recovery. Probe failures deny admission and fail readiness. Per-Instance
+   it reports recovery. Probe failures deny admission and fail readiness; on a connected Runner
+   they report `unavailable`, which also blocks placement until a measured recovery. Per-Instance
    disk ceilings, CPU, memory, instance limits, and Sandbox-count quotas still apply. The
    default mode is `logical`, which retains aggregate disk reservations without a gVisor
    filesystem-pressure gate. The `SECONDBOX_RUNNER_SANDBOX_*`, file-transfer, and remaining

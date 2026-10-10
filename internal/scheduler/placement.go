@@ -154,7 +154,7 @@ func compatible(
 	}
 	// The Runner would refuse the start; leaving it unselected defers the start
 	// to the next reconcile pass instead of sending a doomed Assignment.
-	if runner.StoragePressureStatus == contracts.StoragePressureStatusAdmissionDenied {
+	if contracts.StoragePressureRefusesAdmission(runner.StoragePressureStatus) {
 		return false
 	}
 	// A default-image start boots whichever signed bundle the Runner has

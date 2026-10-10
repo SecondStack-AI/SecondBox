@@ -10,10 +10,11 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-// A connected home Runner that reports storage admission denial must receive
-// no new Assignment: the start is deferred as an unavailable home, not sent to
-// a Runner that would refuse it. A healthy report re-admits the Runner, and a
-// new connection discards the previous connection's pressure evidence.
+// A connected home Runner that reports storage admission denial, or a failed
+// storage probe, must receive no new Assignment: the start is deferred as an
+// unavailable home, not sent to a Runner that would refuse it. Only a measured
+// healthy report re-admits the Runner, and a new connection discards the
+// previous connection's pressure evidence.
 func TestSchedulerDefersStartWhileHomeRunnerDeniesStorageAdmission(t *testing.T) {
 	fixture := newSchedulerLockFixture(t)
 	reportPressure := func(sequence uint64, status string, observedAt time.Time) {
@@ -59,20 +60,27 @@ func TestSchedulerDefersStartWhileHomeRunnerDeniesStorageAdmission(t *testing.T)
 		t.Fatalf("admission-denied home state=%q assignments=%d, want ready with none", state, assignments)
 	}
 
-	reportPressure(5, "healthy", fixture.now.Add(time.Second))
+	// A failed probe replaces the denial but proves nothing about recovery; the
+	// Runner refuses admission while it cannot measure.
+	reportPressure(5, contracts.StoragePressureStatusUnavailable, fixture.now.Add(time.Second))
+	if _, _, err := fixture.scheduler.Schedule(t.Context(), fixture.request); !errors.Is(err, scheduler.ErrHomeRunnerUnavailable) {
+		t.Fatalf("placement on unmeasured home = %v, want ErrHomeRunnerUnavailable", err)
+	}
+
+	reportPressure(6, "healthy", fixture.now.Add(2*time.Second))
 	fixture.scheduleWithin(t, 5*time.Second)
 
-	reportPressure(6, contracts.StoragePressureStatusAdmissionDenied, fixture.now.Add(2*time.Second))
+	reportPressure(7, contracts.StoragePressureStatusAdmissionDenied, fixture.now.Add(3*time.Second))
 	connectionID := task4ID("connection")
 	if err := fixture.stateStore.OpenConnection(
-		t.Context(), fixture.homeIdentity, connectionID, 1, fixture.now.Add(3*time.Second),
+		t.Context(), fixture.homeIdentity, connectionID, 1, fixture.now.Add(4*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.stateStore.RecordRegistration(
 		t.Context(),
 		task4Registration(fixture.homeRunnerID, connectionID, fixture.poolName),
-		fixture.now.Add(3*time.Second),
+		fixture.now.Add(4*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
