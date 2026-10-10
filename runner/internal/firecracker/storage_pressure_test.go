@@ -266,13 +266,20 @@ func TestStoragePressureDenialKeepsRunnerReadyUntilStopReleasesReservation(t *te
 	if status := reportedPressure(); status != string(storagePressureStateAdmissionDenied) {
 		t.Fatalf("reported pressure = %q, want admission_denied", status)
 	}
-	if err := backend.storagePressureReadiness(t.Context()); err != nil {
-		t.Fatalf("readiness over the deny threshold = %v, want ready", err)
+	if pressure, err := backend.storagePressureReadiness(t.Context()); err != nil ||
+		pressure.Status != string(storagePressureStateAdmissionDenied) || pressure.ObservedAtUnixMs == 0 {
+		t.Fatalf("readiness over the deny threshold = %+v, %v, want ready reporting admission_denied", pressure, err)
 	}
 	next := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
 	next.Fence.AssignmentId, next.Fence.SandboxId = "assignment-2", "sandbox-2"
-	if err := backend.ValidateAssignment(t.Context(), next); !errors.Is(err, ErrStoragePressureAdmissionDenied) {
-		t.Fatalf("new assignment validation = %v, want admission denial", err)
+	validationErr := backend.ValidateAssignment(t.Context(), next)
+	var decision interface {
+		AssignmentDecision() runnerprotocol.AssignmentDecision
+	}
+	if !errors.Is(validationErr, ErrStoragePressureAdmissionDenied) ||
+		!errors.As(validationErr, &decision) ||
+		decision.AssignmentDecision() != runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_CAPACITY {
+		t.Fatalf("new assignment validation = %v, want a retryable capacity rejection", validationErr)
 	}
 	if _, err := backend.StartAssignment(t.Context(), next, func(runnerprotocol.AssignmentProgressStage) error {
 		return nil
@@ -292,15 +299,16 @@ func TestStoragePressureDenialKeepsRunnerReadyUntilStopReleasesReservation(t *te
 	if status := reportedPressure(); status != string(storagePressureStateHealthy) {
 		t.Fatalf("reported pressure after stop = %q, want healthy", status)
 	}
-	if err := backend.storagePressureReadiness(t.Context()); err != nil {
-		t.Fatalf("readiness after recovery = %v", err)
+	if pressure, err := backend.storagePressureReadiness(t.Context()); err != nil ||
+		pressure.Status != string(storagePressureStateHealthy) {
+		t.Fatalf("readiness after recovery = %+v, %v", pressure, err)
 	}
 	if err := backend.ValidateAssignment(t.Context(), next); err != nil {
 		t.Fatalf("new assignment after recovery = %v", err)
 	}
 
 	probe.err = errors.New("simulated probe failure")
-	if err := backend.storagePressureReadiness(t.Context()); !errors.Is(err, ErrStoragePressureProbe) {
+	if _, err := backend.storagePressureReadiness(t.Context()); !errors.Is(err, ErrStoragePressureProbe) {
 		t.Fatalf("readiness with failed probe = %v, want ErrStoragePressureProbe", err)
 	}
 }

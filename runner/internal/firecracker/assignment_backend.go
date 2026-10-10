@@ -270,7 +270,8 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	if !workspaceInfo.IsDir() {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness workspace storage %q is not a directory", cfg.RunnerWorkspaceRoot)
 	}
-	if err := b.storagePressureReadiness(ctx); err != nil {
+	storagePressure, err := b.storagePressureReadiness(ctx)
+	if err != nil {
 		return runnercontrol.BackendReadiness{}, err
 	}
 	kernelRelease, err := os.ReadFile("/proc/sys/kernel/osrelease")
@@ -310,6 +311,7 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 		},
 		BackendKind:      runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 		Materializations: materializations,
+		StoragePressure:  storagePressure,
 	}, nil
 }
 
@@ -319,11 +321,18 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 // the stops, fences, and drains that release reservations. Refusing to connect
 // over the threshold would hold every reservation forever. The heartbeat's
 // storage-pressure observation keeps the control plane from placing here.
-func (b *AssignmentBackend) storagePressureReadiness(ctx context.Context) error {
-	if _, err := b.storagePressure.Observe(ctx); err != nil {
-		return fmt.Errorf("SecondBox Firecracker readiness storage pressure: %w", err)
+func (b *AssignmentBackend) storagePressureReadiness(
+	ctx context.Context,
+) (*runnerprotocol.StoragePressureObservation, error) {
+	observedAt := time.Now()
+	state, err := b.storagePressure.Observe(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox Firecracker readiness storage pressure: %w", err)
 	}
-	return nil
+	return &runnerprotocol.StoragePressureObservation{
+		Status:           string(state),
+		ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
+	}, nil
 }
 
 func firecrackerIsolationReady(cfg *config.Config) bool {
@@ -534,9 +543,25 @@ func (b *AssignmentBackend) ValidateAssignment(
 		}
 	}
 	if err := b.checkWorkspaceAdmission(ctx, requirements.DiskBytes); err != nil {
-		return fmt.Errorf("SecondBox Firecracker assignment storage pressure: %w", err)
+		err = fmt.Errorf("SecondBox Firecracker assignment storage pressure: %w", err)
+		if errors.Is(err, ErrStoragePressureAdmissionDenied) {
+			return storagePressureAssignmentRejection{cause: err}
+		}
+		return err
 	}
 	return nil
+}
+
+// storagePressureAssignmentRejection refuses an Assignment as a capacity
+// shortage, which the control plane retries, rather than an unmet prerequisite,
+// which fails the Sandbox. Storage pressure is transient: stops release it, and
+// the Runner's reported pressure defers placement until it does.
+type storagePressureAssignmentRejection struct{ cause error }
+
+func (rejection storagePressureAssignmentRejection) Error() string { return rejection.cause.Error() }
+func (rejection storagePressureAssignmentRejection) Unwrap() error { return rejection.cause }
+func (storagePressureAssignmentRejection) AssignmentDecision() runnerprotocol.AssignmentDecision {
+	return runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_CAPACITY
 }
 
 func (b *AssignmentBackend) checkWorkspaceAdmission(ctx context.Context, requestedBytes uint64) error {
