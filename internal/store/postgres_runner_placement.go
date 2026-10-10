@@ -274,8 +274,9 @@ func runnerPlacementCompatible(
 		!contains(candidate.capabilities, "local-workspace") {
 		return false
 	}
-	// The Runner refuses every new Workspace while it denies storage admission.
-	if candidate.storagePressureStatus == contracts.StoragePressureStatusAdmissionDenied {
+	// The Runner refuses every new Workspace while its storage pressure denies
+	// admission or cannot be measured.
+	if contracts.StoragePressureRefusesAdmission(candidate.storagePressureStatus) {
 		return false
 	}
 	if options.requireWorkspaceTransfer &&
