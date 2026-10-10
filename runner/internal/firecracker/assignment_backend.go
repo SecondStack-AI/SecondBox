@@ -270,18 +270,8 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	if !workspaceInfo.IsDir() {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness workspace storage %q is not a directory", cfg.RunnerWorkspaceRoot)
 	}
-	storagePressureState, err := b.storagePressure.Observe(ctx)
-	if err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf(
-			"SecondBox Firecracker readiness storage pressure: %w",
-			err,
-		)
-	}
-	if storagePressureState == storagePressureStateAdmissionDenied {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf(
-			"SecondBox Firecracker readiness storage pressure: %w",
-			ErrStoragePressureAdmissionDenied,
-		)
+	if err := b.storagePressureReadiness(ctx); err != nil {
+		return runnercontrol.BackendReadiness{}, err
 	}
 	kernelRelease, err := os.ReadFile("/proc/sys/kernel/osrelease")
 	if err != nil {
@@ -321,6 +311,19 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 		BackendKind:      runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 		Materializations: materializations,
 	}, nil
+}
+
+// storagePressureReadiness fails readiness only when storage pressure cannot be
+// observed. Admission denial is not a readiness failure: Reserve and
+// CheckAdmission already refuse new work, and only a connected Runner receives
+// the stops, fences, and drains that release reservations. Refusing to connect
+// over the threshold would hold every reservation forever. The heartbeat's
+// storage-pressure observation keeps the control plane from placing here.
+func (b *AssignmentBackend) storagePressureReadiness(ctx context.Context) error {
+	if _, err := b.storagePressure.Observe(ctx); err != nil {
+		return fmt.Errorf("SecondBox Firecracker readiness storage pressure: %w", err)
+	}
+	return nil
 }
 
 func firecrackerIsolationReady(cfg *config.Config) bool {

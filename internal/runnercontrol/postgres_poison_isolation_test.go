@@ -214,6 +214,7 @@ func TestLocalWorkspaceAuthorityConflictNamesDivergentFields(t *testing.T) {
 		},
 	}
 	agreeing := &runnerv1.LocalWorkspaceResult{
+		Terminal:    runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
 		EffectId:    "effect-authority",
 		OperationId: "operation-authority",
 		Generation:  3, LogicalCapacityBytes: 2147483648,
@@ -222,6 +223,7 @@ func TestLocalWorkspaceAuthorityConflictNamesDivergentFields(t *testing.T) {
 		t.Fatalf("agreeing result reported conflict %q", conflict)
 	}
 	diverging := &runnerv1.LocalWorkspaceResult{
+		Terminal:    runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
 		EffectId:    "effect-authority",
 		OperationId: "operation-other",
 		Generation:  4, LogicalCapacityBytes: 2147483648,
@@ -239,6 +241,20 @@ func TestLocalWorkspaceAuthorityConflictNamesDivergentFields(t *testing.T) {
 		strings.Contains(conflict, "mutationId") ||
 		strings.Contains(conflict, "mutationState") {
 		t.Fatalf("conflict %q names fields that agree", conflict)
+	}
+	// A failed create wrote no receipt, so the Runner reports no generation or
+	// capacity. Only the mutation identity is comparable.
+	failed := &runnerv1.LocalWorkspaceResult{
+		Terminal:    runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED,
+		EffectId:    "effect-authority",
+		OperationId: "operation-authority",
+	}
+	if conflict := localWorkspaceAuthorityConflict(workspace, failed); conflict != "" {
+		t.Fatalf("failed result without receipt reported conflict %q", conflict)
+	}
+	failed.OperationId = "operation-other"
+	if conflict := localWorkspaceAuthorityConflict(workspace, failed); !strings.Contains(conflict, "mutationOperationId") {
+		t.Fatalf("failed result conflict %q is missing the operation mismatch", conflict)
 	}
 }
 

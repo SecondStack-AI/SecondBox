@@ -222,6 +222,89 @@ func TestAssignmentStoragePressureDeniesBeforeAllocationOrProgress(t *testing.T)
 	}
 }
 
+// TestStoragePressureDenialKeepsRunnerReadyUntilStopReleasesReservation pins
+// the recovery path. Running Instances hold reservations that only a stop
+// releases, and only a connected Runner receives the stop, so admission denial
+// must refuse new work without failing readiness.
+func TestStoragePressureDenialKeepsRunnerReadyUntilStopReleasesReservation(t *testing.T) {
+	fixture := newFirecrackerConformanceFixture(t)
+	backend := fixture.Backend.(*AssignmentBackend)
+	probe := &mutableStoragePressureProbe{sample: storagePressureSample{
+		Backend: "ext4", TotalBytes: 8 << 30, UsedBytes: 4 << 30,
+	}}
+	controller, err := newStoragePressureController(
+		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90},
+		probe,
+		func(context.Context, string) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.storagePressure = controller
+	reportedPressure := func() string {
+		t.Helper()
+		_, pressure, err := backend.ObserveWorkspaceStorage(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pressure.Status
+	}
+	running := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+	running.Requirements.DiskBytes = 2 << 30
+	if _, err := backend.StartAssignment(t.Context(), running, func(runnerprotocol.AssignmentProgressStage) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("start below the deny threshold: %v", err)
+	}
+	if controller.ReservedBytes() != running.Requirements.DiskBytes {
+		t.Fatalf("running reservation = %d", controller.ReservedBytes())
+	}
+
+	// Physical use grows under the running Instance until it and the 2 GiB
+	// reservation project 90% of the 8 GiB volume.
+	probe.sample.UsedBytes = 5325 << 20
+	if status := reportedPressure(); status != string(storagePressureStateAdmissionDenied) {
+		t.Fatalf("reported pressure = %q, want admission_denied", status)
+	}
+	if err := backend.storagePressureReadiness(t.Context()); err != nil {
+		t.Fatalf("readiness over the deny threshold = %v, want ready", err)
+	}
+	next := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+	next.Fence.AssignmentId, next.Fence.SandboxId = "assignment-2", "sandbox-2"
+	if err := backend.ValidateAssignment(t.Context(), next); !errors.Is(err, ErrStoragePressureAdmissionDenied) {
+		t.Fatalf("new assignment validation = %v, want admission denial", err)
+	}
+	if _, err := backend.StartAssignment(t.Context(), next, func(runnerprotocol.AssignmentProgressStage) error {
+		return nil
+	}); !errors.Is(err, ErrStoragePressureAdmissionDenied) {
+		t.Fatalf("new assignment start = %v, want admission denial", err)
+	}
+
+	evidence, err := backend.FenceAssignment(t.Context(), &runnerprotocol.FenceCommand{Fence: running.Fence})
+	if err != nil || evidence.Result != runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_STOPPED {
+		t.Fatalf("stop over the deny threshold = %+v, %v", evidence, err)
+	}
+	if controller.ReservedBytes() != 0 {
+		t.Fatalf("stop retained reservation %d", controller.ReservedBytes())
+	}
+	// 5.2 GiB of 8 GiB is 65%, at or below the 70% recovery threshold, and the
+	// next 1 GiB Instance projects 77.5%.
+	if status := reportedPressure(); status != string(storagePressureStateHealthy) {
+		t.Fatalf("reported pressure after stop = %q, want healthy", status)
+	}
+	if err := backend.storagePressureReadiness(t.Context()); err != nil {
+		t.Fatalf("readiness after recovery = %v", err)
+	}
+	if err := backend.ValidateAssignment(t.Context(), next); err != nil {
+		t.Fatalf("new assignment after recovery = %v", err)
+	}
+
+	probe.err = errors.New("simulated probe failure")
+	if err := backend.storagePressureReadiness(t.Context()); !errors.Is(err, ErrStoragePressureProbe) {
+		t.Fatalf("readiness with failed probe = %v, want ErrStoragePressureProbe", err)
+	}
+}
+
 func TestExt4StoragePressureRejectsHostRootFilesystem(t *testing.T) {
 	probe := &ext4StoragePressureProbe{workspaceDir: "/"}
 	_, err := probe.Sample(t.Context())
