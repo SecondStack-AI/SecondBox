@@ -325,6 +325,51 @@ func TestSelectHomeRunnerRejectsDrainingHomeWithoutRelocation(t *testing.T) {
 	}
 }
 
+// TestSelectHomeRunnerDefersStartWhileHomeDeniesStorageAdmission keeps a start
+// off a connected home Runner that reports storage admission denial or a
+// failed storage probe. The
+// unavailable-home error defers the start to the next reconcile pass, so the
+// Runner is not sent Assignments it would refuse.
+func TestSelectHomeRunnerDefersStartWhileHomeDeniesStorageAdmission(t *testing.T) {
+	now := time.Date(2026, 10, 10, 18, 5, 0, 0, time.UTC)
+	requirements := Requirements{
+		PoolName: "general", Architecture: "amd64",
+		RequiredCapabilities: []string{"local-workspace"},
+		Capacity: Capacity{
+			VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 2 << 30,
+			Instances: 1, Operations: 1,
+		},
+	}
+	home := RunnerSnapshot{
+		ID: "runner-home", PoolName: "general", Architecture: "amd64", BackendKind: "firecracker",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1, Materializations: readyMaterializations(),
+		StoragePressureStatus: contracts.StoragePressureStatusAdmissionDenied,
+	}
+	// A failed probe refuses admission on the Runner as denial does.
+	for _, status := range []string{
+		contracts.StoragePressureStatusAdmissionDenied,
+		contracts.StoragePressureStatusUnavailable,
+	} {
+		home.StoragePressureStatus = status
+		if _, err := SelectHomeRunner(
+			home.ID, requirements, []RunnerSnapshot{home}, now, 30*time.Second,
+		); !errors.Is(err, ErrHomeRunnerUnavailable) {
+			t.Fatalf("%q home selection error = %v, want ErrHomeRunnerUnavailable", status, err)
+		}
+	}
+	for _, status := range []string{"", "healthy", "warning"} {
+		home.StoragePressureStatus = status
+		selected, err := SelectHomeRunner(
+			home.ID, requirements, []RunnerSnapshot{home}, now, 30*time.Second,
+		)
+		if err != nil || selected.ID != home.ID {
+			t.Fatalf("%q home selection = %q, %v", status, selected.ID, err)
+		}
+	}
+}
+
 func readyCapabilities() map[string]bool {
 	return map[string]bool{
 		"compute":        true,

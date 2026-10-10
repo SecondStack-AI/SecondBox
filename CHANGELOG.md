@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- A Runner over its storage-pressure admission-denial threshold failed readiness, so it could not reconnect after any session loss. Its running Instances kept their storage reservations, the stops that would release them could not be delivered, and the Runner stayed offline until it was restarted. Admission denial now only refuses new Workspaces and Instances: the Runner stays connected and reports `admission_denied` in its heartbeat, and the control plane no longer places new Workspaces or starts on that Runner until it reports recovery. Storage probe failures still fail readiness, and a connected Runner whose probe fails reports `unavailable`, which also blocks placement until a measured recovery. A new connection clears the previous connection's storage-pressure report, and the Runner's first heartbeat on that connection carries the pressure measured during readiness. A Firecracker Runner now refuses an Assignment under storage pressure as a capacity shortage, which the control plane retries, as gVisor already did, instead of failing the Sandbox.
+- A failed local Workspace create or clone that produced no receipt, such as one refused by storage pressure, was rejected by the control plane as conflicting with durable authority. The rejection ended the Runner session and left the command pending for redelivery. The control plane now records the failure.
+
 ## 0.24.0 - 2026-10-05
 
 A stopped Sandbox can switch to another compatible Profile while keeping its Workspace, and one Subject Sandbox policy now names a set of Profiles so a switched Sandbox keeps the same lifecycle and connection limits. The Subject policy body changes from `profile` to `profiles`. Deployments from v0.14.0 onward update in place; back up PostgreSQL first, because migration `0037_subject_sandbox_policy_profiles` makes rollback a database restore, and update Subject policy clients with the control plane. The Runner protocol remains `[6,6]` and peers connect in either update order; update Runners to receive the direct File transport fix. The execution bundle, trust anchor, and standard Profile revisions are unchanged. See the [v0.24.0 release notes](docs/releases/v0.24.0.md).

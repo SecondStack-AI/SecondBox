@@ -62,6 +62,7 @@ type RunnerSnapshot struct {
 	SupportedEgressContexts []string
 	GuestProtocolMinimum    uint32
 	GuestProtocolMaximum    uint32
+	StoragePressureStatus   string
 }
 
 // SelectRunner applies hard compatibility before free capacity and stable identity ordering.
@@ -149,6 +150,11 @@ func compatible(
 		return false
 	}
 	if runner.BackendKind == "" || !runner.Capabilities["compute"] {
+		return false
+	}
+	// The Runner would refuse the start; leaving it unselected defers the start
+	// to the next reconcile pass instead of sending a doomed Assignment.
+	if contracts.StoragePressureRefusesAdmission(runner.StoragePressureStatus) {
 		return false
 	}
 	// A default-image start boots whichever signed bundle the Runner has

@@ -69,6 +69,9 @@ type BackendReadiness struct {
 	BackendKind       runnerprotocol.ComputeBackendKind
 	Materializations  []*runnerprotocol.BackendMaterializationEvidence
 	ReadinessFailures []runnerprotocol.RunnerReadinessFailure
+	// StoragePressure is the pressure readiness measured, or nil for a
+	// backend without a storage-pressure controller.
+	StoragePressure *runnerprotocol.StoragePressureObservation
 }
 
 // BackendInstance is the provider-private identity of a ready compute instance.
@@ -521,7 +524,14 @@ func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, e
 	); err != nil {
 		return false, err
 	}
-	if err := s.sendHeartbeat(ctx, stream, welcome.ConnectionId, readiness); err != nil {
+	// Registration clears the previous connection's storage-pressure report and
+	// the asynchronous storage poll has no result for this session yet, so the
+	// first heartbeat carries the pressure readiness just measured. Placement
+	// would otherwise treat a Runner denying admission as unconstrained until
+	// the next heartbeat.
+	if err := s.sendHeartbeat(
+		ctx, stream, welcome.ConnectionId, readiness, readiness.StoragePressure,
+	); err != nil {
 		return true, err
 	}
 	return true, s.consumeCommands(ctx, stream, welcome, readiness)
@@ -864,7 +874,7 @@ func (s *RunnerProtocolService) sendHeartbeats(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.sendHeartbeat(ctx, stream, connectionID, readiness); err != nil {
+			if err := s.sendHeartbeat(ctx, stream, connectionID, readiness, nil); err != nil {
 				select {
 				case asyncErrors <- err:
 				case <-ctx.Done():
@@ -1508,10 +1518,15 @@ func (s *RunnerProtocolService) sendHeartbeat(
 	stream RunnerProtocolStream,
 	connectionID string,
 	readiness BackendReadiness,
+	measuredPressure *runnerprotocol.StoragePressureObservation,
 ) error {
 	observation := s.pollWorkspaceStorage(ctx)
 	if observation.err != nil {
 		return fmt.Errorf("SecondBox Runner storage observation failed: %w", observation.err)
+	}
+	pressure := observation.pressure
+	if measuredPressure != nil {
+		pressure = measuredPressure
 	}
 	return s.sendSequencedRunnerFrame(
 		stream,
@@ -1530,7 +1545,7 @@ func (s *RunnerProtocolService) sendHeartbeat(
 						DrainPhase:        s.drainPhase(),
 						StartupTiming:     s.startupTiming(),
 						WorkspaceStorage:  observation.storage,
-						StoragePressure:   observation.pressure,
+						StoragePressure:   pressure,
 
 						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
 					},

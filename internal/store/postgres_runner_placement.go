@@ -36,6 +36,7 @@ type runnerPlacementCandidate struct {
 	supportedEgressContexts []string
 	allocatable             runnerCapacity
 	reportedReserved        runnerCapacity
+	storagePressureStatus   string
 }
 
 // placementMaterialization mirrors the scheduler's materialization snapshot
@@ -61,7 +62,8 @@ func selectRunnerForPlacement(
 		SELECT id,pool_name,state,drain_phase,active_connection_id,backend_kind,
 		       architectures_json,capabilities_json,protocol_versions_json,
 		       capacity_json,reserved_capacity_json,artifact_cache_json,
-		       supported_egress_contexts_json
+		       supported_egress_contexts_json,
+		       COALESCE(storage_pressure_json->>'status','')
 		FROM secondbox.runners
 		WHERE pool_name=$1
 		  AND ($2='' OR id=$2)
@@ -176,7 +178,8 @@ func lockRunnerPlacementCandidate(
 			SELECT id,pool_name,state,drain_phase,active_connection_id,backend_kind,
 			       architectures_json,capabilities_json,protocol_versions_json,
 			       capacity_json,reserved_capacity_json,artifact_cache_json,
-			       supported_egress_contexts_json
+			       supported_egress_contexts_json,
+			       COALESCE(storage_pressure_json->>'status','')
 			FROM secondbox.runners
 			WHERE id=$1
 			`+lockClause, snapshot.id),
@@ -222,6 +225,7 @@ func scanRunnerPlacementCandidate(
 		&candidate.drainPhase, &candidate.activeConnectionID, &candidate.backendKind,
 		&architecturesJSON, &capabilitiesJSON, &versionsJSON,
 		&capacityJSON, &reservedJSON, &cacheJSON, &egressContextsJSON,
+		&candidate.storagePressureStatus,
 	); err != nil {
 		return runnerPlacementCandidate{}, err
 	}
@@ -268,6 +272,11 @@ func runnerPlacementCompatible(
 		!contains(candidate.architectures, spec.Architecture) ||
 		!contains(candidate.capabilities, "compute") ||
 		!contains(candidate.capabilities, "local-workspace") {
+		return false
+	}
+	// The Runner refuses every new Workspace while its storage pressure denies
+	// admission or cannot be measured.
+	if contracts.StoragePressureRefusesAdmission(candidate.storagePressureStatus) {
 		return false
 	}
 	if options.requireWorkspaceTransfer &&

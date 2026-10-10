@@ -320,10 +320,9 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox gVisor readiness materialization: %w", err)
 	}
-	if backend.storagePressure != nil {
-		if err := backend.storagePressure.admit(ctx); err != nil {
-			return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox gVisor readiness storage pressure: %w", err)
-		}
+	storagePressure, err := backend.storagePressureReadiness(ctx)
+	if err != nil {
+		return runnercontrol.BackendReadiness{}, err
 	}
 	if err := backend.probePlatform(ctx); err != nil {
 		return runnercontrol.BackendReadiness{}, err
@@ -366,7 +365,8 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 			ClientSelectedImageReady:      true,
 			PhysicalStorageAdmissionReady: backend.storagePressure != nil,
 		},
-		BackendKind: runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR,
+		BackendKind:     runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR,
+		StoragePressure: storagePressure,
 		Materializations: []*runnerprotocol.BackendMaterializationEvidence{{
 			SchemaVersion:           1,
 			BackendKind:             runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_GVISOR,
@@ -382,6 +382,27 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 			HelperBuildId:           manifest.HelperBuildID,
 			VerifiedAtUnixMs:        uint64(time.Now().UTC().UnixMilli()),
 		}},
+	}, nil
+}
+
+// storagePressureReadiness fails readiness only when the Workspace filesystem
+// cannot be measured. Admission denial is not a readiness failure: admit
+// already refuses new work, and only a connected Runner receives the stops,
+// fences, and deletes that free storage. The heartbeat's storage-pressure
+// observation keeps the control plane from placing here.
+func (backend *AssignmentBackend) storagePressureReadiness(
+	ctx context.Context,
+) (*runnerprotocol.StoragePressureObservation, error) {
+	if backend.storagePressure == nil {
+		return nil, nil
+	}
+	observedAt := time.Now()
+	state, err := backend.storagePressure.observe(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox gVisor readiness storage pressure: %w", err)
+	}
+	return &runnerprotocol.StoragePressureObservation{
+		Status: state, ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
 	}, nil
 }
 

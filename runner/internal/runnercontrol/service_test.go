@@ -889,6 +889,66 @@ func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testi
 	}
 }
 
+// TestFirstHeartbeatCarriesReadinessStoragePressure closes the window after
+// registration, which clears the previous connection's storage-pressure report,
+// in which placement would treat a Runner denying admission as unconstrained.
+// Later heartbeats carry only fresh observations.
+func TestFirstHeartbeatCarriesReadinessStoragePressure(t *testing.T) {
+	measured := &runnerprotocol.StoragePressureObservation{
+		Status: "admission_denied", ObservedAtUnixMs: uint64(time.Now().UnixMilli()),
+	}
+	stream := &recordingProtocolStream{
+		inbound: []*runnerprotocol.ControlPlaneToRunner{{
+			Message: &runnerprotocol.ControlPlaneToRunner_Welcome{
+				Welcome: &runnerprotocol.RunnerWelcome{
+					ConnectionId: "connection-1", SelectedVersion: 1,
+					EnabledFeatures: []runnerprotocol.RunnerFeature{
+						runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+					},
+					HeartbeatIntervalMs: 60_000,
+				},
+			},
+		}},
+	}
+	readiness := BackendReadiness{
+		Architecture: "amd64",
+		Capacity:     &runnerprotocol.Capacity{VcpuCount: 4, MemoryBytes: 8 << 30, DiskBytes: 64 << 30, Instances: 2, Operations: 8},
+		Capabilities: &runnerprotocol.RunnerCapabilities{
+			Architecture: "amd64", ComputeBackendVersion: "1.16.1",
+			HypervisorReady: true, IsolationReady: true, ResourceLimitsReady: true,
+			NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+			GuestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+		},
+		StoragePressure: measured,
+	}
+	service, err := NewRunnerProtocolService(
+		testRunnerConfig(),
+		&recordingAssignmentBackend{readiness: readiness},
+		staticProtocolConnector{stream: stream},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.runProtocolSession(t.Context()); !errors.Is(err, io.EOF) {
+		t.Fatalf("session error = %v, want stream EOF", err)
+	}
+	if len(stream.outbound) < 3 || stream.outbound[1].GetRegistration() == nil {
+		t.Fatalf("outbound = %d messages, want hello, registration, heartbeat", len(stream.outbound))
+	}
+	heartbeat := stream.outbound[2].GetHeartbeat()
+	if heartbeat == nil || !proto.Equal(heartbeat.StoragePressure, measured) {
+		t.Fatalf("first heartbeat after registration = %#v, want readiness storage pressure", heartbeat)
+	}
+
+	periodic := &recordingProtocolStream{}
+	if err := service.sendHeartbeat(t.Context(), periodic, "connection-1", readiness, nil); err != nil {
+		t.Fatal(err)
+	}
+	if pressure := periodic.outbound[0].GetHeartbeat().StoragePressure; pressure != nil {
+		t.Fatalf("periodic heartbeat repeated the readiness storage pressure %#v", pressure)
+	}
+}
+
 func TestRunnerProtocolServiceRejectsUnresolvedAssignmentBeforeBackend(t *testing.T) {
 	assignment := resolvedAssignmentCommand()
 	assignment.ProfileRevisionId = ""
