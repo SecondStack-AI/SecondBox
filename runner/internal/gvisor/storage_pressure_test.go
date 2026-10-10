@@ -246,24 +246,25 @@ func TestStoragePressureDenialDoesNotFailReadiness(t *testing.T) {
 	var probeErr error
 	pressure.probe = func(string) (uint64, uint64, error) { return used, 100, probeErr }
 	backend := &AssignmentBackend{config: validatedConfig{Config: config}, storagePressure: pressure}
-	if err := backend.storagePressureReadiness(t.Context()); err != nil {
-		t.Fatalf("readiness over the deny threshold = %v, want ready", err)
+	if observed, err := backend.storagePressureReadiness(t.Context()); err != nil ||
+		observed.Status != "admission_denied" || observed.ObservedAtUnixMs == 0 {
+		t.Fatalf("readiness over the deny threshold = %+v, %v, want ready reporting admission_denied", observed, err)
 	}
 	if err := pressure.admit(t.Context()); !errors.Is(err, errPhysicalStoragePressure) {
 		t.Fatalf("admission over the deny threshold = %v", err)
 	}
 	used = 70
-	if err := backend.storagePressureReadiness(t.Context()); err != nil {
-		t.Fatalf("readiness after recovery = %v", err)
+	if observed, err := backend.storagePressureReadiness(t.Context()); err != nil || observed.Status != "healthy" {
+		t.Fatalf("readiness after recovery = %+v, %v", observed, err)
 	}
 	if state, err := pressure.observe(t.Context()); err != nil || state != "healthy" {
 		t.Fatalf("state after recovery = %q, %v", state, err)
 	}
 	probeErr = errors.New("probe failed")
-	if err := backend.storagePressureReadiness(t.Context()); !errors.Is(err, probeErr) {
+	if _, err := backend.storagePressureReadiness(t.Context()); !errors.Is(err, probeErr) {
 		t.Fatalf("readiness with failed probe = %v", err)
 	}
-	if err := (&AssignmentBackend{}).storagePressureReadiness(t.Context()); err != nil {
-		t.Fatalf("readiness without physical admission = %v", err)
+	if observed, err := (&AssignmentBackend{}).storagePressureReadiness(t.Context()); err != nil || observed != nil {
+		t.Fatalf("readiness without physical admission = %+v, %v, want no report", observed, err)
 	}
 }
