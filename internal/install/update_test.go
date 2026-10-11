@@ -219,7 +219,7 @@ func TestStageUpdateReleaseIsResumableAndDoesNotReplaceActivePaths(t *testing.T)
 	oldUmask := syscall.Umask(0o077)
 	defer syscall.Umask(oldUmask)
 	source := t.TempDir()
-	release := writeSignedArtifactFixture(t, source)
+	release := writeBundleArtifactFixture(t, source)
 	secondboxBytes, deployBytes := []byte("target secondbox"), []byte("target secondbox-deploy")
 	for index := range release.Binaries {
 		if release.Binaries[index].Platform != "linux/amd64" {
@@ -290,7 +290,7 @@ func TestStageUpdateReleaseIsResumableAndDoesNotReplaceActivePaths(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if artifact.ManifestDigest != release.MicroVM.SignedManifestDigest || executor.extractions != 1 || len(executor.pulls) != 5 {
+	if artifact.ManifestDigest != release.MicroVM.ManifestDigest() || executor.extractions != 1 || len(executor.pulls) != 5 {
 		t.Fatalf("first stage = artifact %#v extractions %d pulls %d", artifact, executor.extractions, len(executor.pulls))
 	}
 	if _, err := os.Lstat(filepath.Join(artifactParent, "artifacts")); !os.IsNotExist(err) {

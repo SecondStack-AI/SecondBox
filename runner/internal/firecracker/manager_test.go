@@ -348,8 +348,8 @@ func TestPrepareLaunchImageUsesVerifiedExecutionImageTrust(t *testing.T) {
 		image.VerifiedArtifacts = append(image.VerifiedArtifacts, identity)
 	}
 	manager := &Manager{cfg: &config.Config{
-		MicroVMPublicKeyPath: "/fixed-release-authority/public.pem",
-		MicroVMKernelPath:    "/fixed-release-bundle/kernel",
+		MicroVMBundleVerification: true,
+		MicroVMKernelPath:         "/fixed-release-bundle/kernel",
 	}}
 	staged, err := manager.prepareLaunchImage(t.TempDir(), image)
 	if err != nil {

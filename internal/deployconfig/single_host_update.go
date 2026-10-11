@@ -41,9 +41,7 @@ func ValidateSingleHostUpdateSource(plan install.InstallPlan, release releasecon
 	if releasecontract.Digest(releaseBytes) != plan.Release.ArtifactManifestDigest || release.Version != plan.Release.Version ||
 		release.ControlPlane.Reference != plan.Release.Images["control-plane"] || release.Runner.Reference != plan.Release.Images["runner"] ||
 		release.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || release.InstallerTools.Reference != plan.Release.Images["installer-tools"] ||
-		release.BundledServices.Postgres != plan.Release.Images["postgres"] ||
-		release.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint || artifact.ManifestDigest != release.MicroVM.SignedManifestDigest ||
-		artifact.SigningKeyID != strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:")) {
+		release.BundledServices.Postgres != plan.Release.Images["postgres"] || artifact.ManifestDigest != release.MicroVM.ManifestDigest() {
 		return manifestError("existing single-host release identity differs from the accepted install plan", nil)
 	}
 	for _, name := range []string{"secondbox", "secondbox-deploy"} {
@@ -82,7 +80,7 @@ func StageSingleHostUpdate(plan install.InstallPlan, update install.UpdateRecord
 // also wrote a signed-asset catalog that current releases no longer read; the
 // accepted plan keeps listing that path, so the stale file is left for purge.
 func singleHostUpdateContents(plan install.InstallPlan, update install.UpdateRecord, verified releaseverify.VerifiedRelease, artifact install.VerifiedArtifact) ([]byte, error) {
-	if verified.Manifest.Version != update.TargetRelease.Version || artifact.ManifestDigest != verified.Manifest.MicroVM.SignedManifestDigest || artifact.SigningKeyID != strings.ToLower(strings.TrimPrefix(verified.Manifest.MicroVM.SigningKeyFingerprint, "SHA256:")) {
+	if verified.Manifest.Version != update.TargetRelease.Version || artifact.ManifestDigest != verified.Manifest.MicroVM.ManifestDigest() {
 		return nil, manifestError("staged single-host update release identity differs", nil)
 	}
 	deployment := installPath(plan, "deployment")
@@ -94,7 +92,7 @@ func singleHostUpdateContents(plan install.InstallPlan, update install.UpdateRec
 	relativeTarget := func(category string) string { return relativeTo(deployment, targets[category]) }
 	releasePath := installPath(plan, "release-artifact-manifest")
 	pkiPath := installPath(plan, "runner-pki")
-	manifest, err := singleHostManifest(plan, verified.Manifest, artifact.SigningKeyID, runnerID, installPath(plan, "runner-identity"), relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
+	manifest, err := singleHostManifest(plan, verified.Manifest, runnerID, installPath(plan, "runner-identity"), relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
 	if err != nil {
 		return nil, err
 	}

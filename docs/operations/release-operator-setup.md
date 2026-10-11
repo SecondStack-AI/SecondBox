@@ -11,27 +11,17 @@ SecondBox releases are qualified and built locally, then published by one GitHub
 
 The local build host needs Docker Buildx, `jq`, `openssl`, npm, Node.js, Go, and `just`. It must also satisfy the KVM, TUN, reflink-filesystem, and scenario bundle requirements in [external scenario qualification](scenario-qualification.md). Release staging needs the microVM release bundle variables documented by `scripts/release-stage.sh` because the runner consumes that bundle at runtime.
 
-## The microVM bundle and its trust anchor
+## The microVM bundle
 
-A release publishes the signed microVM bundle the runner executes. The bundle is built by the [microVM image pipeline](microvm-image-pipeline.md) and signed with the release signing key; staging verifies it against an independently held public anchor before packaging it as the `microvm-artifacts` OCI archive, and the staged artifact manifest records the verified fingerprint as `microvm.signingKeyFingerprint`.
-
-The signing key is RSA — `Config.ValidateMicroVMTrustAnchor` rejects any other algorithm. Keep the private half outside the repository, mode 0600, alongside the release operator's other material and never inside a release artifact, a staged candidate, or command output. Keep the public key and its canonical DER SHA-256 fingerprint next to it, and give staging the public half only:
+A release publishes the microVM bundle the runner executes. The bundle is built by the [microVM image pipeline](microvm-image-pipeline.md); staging verifies it with `verify.sh` before packaging it as the `microvm-artifacts` OCI archive, and the staged artifact manifest records the bundle `manifest.json` digest as `microvm.bundleManifestDigest`. Give staging the bundle directory:
 
 ```sh
-export SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR=/absolute/path/to/signed/bundle
-export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY=/absolute/path/to/manifest-public.pem
-export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$(
-  openssl pkey -pubin -in "$SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY" -outform DER |
-    sha256sum | awk '{print $1}'
-)"
+export SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR=/absolute/path/to/bundle
 ```
 
-Rebuilding the bundle rotates its identity. The guest agent, `/init`, and the microVM entrypoint live inside the signed rootfs, so any change to them requires a rebuilt, re-signed bundle, and a rebuild changes the runtime and toolchain component-manifest digests. Profiles do not name those digests, so existing Sandboxes start on the new bundle once Runners install it. When a release rotates the bundle it also rotates what operators must install:
+Rebuilding the bundle rotates its identity. The guest agent, `/init`, and the microVM entrypoint live inside the rootfs, so any change to them requires a rebuilt bundle, and a rebuild changes the runtime and toolchain component-manifest digests. Profiles do not name those digests, so existing Sandboxes start on the new bundle once Runners install it. When a release rotates the bundle, announce the rotation in the release notes, naming what requires the new bundle and what still works against an older verified one.
 
-- Operators install the new bundle through the runner init flow and pin the fingerprint the release's artifact manifest records. Never pin the `signing.pub` carried inside the bundle — that degrades the anchor to the fingerprint alone, which is exactly what the verifier refuses to rely on.
-- Announce the rotation in the release notes, naming what requires the new bundle and what still works against an older verified one.
-
-The [v0.12.0 release](../releases/v0.12.0.md) rotated the Firecracker bundle and signing authority. [v0.14.0](../releases/v0.14.0.md) retained that bundle and anchor but required a fresh database and Runner storage root. [v0.17.0](../releases/v0.17.0.md) ships a new signed bundle for its guest change and retains the v0.12.0 anchor; [v0.18.0](../releases/v0.18.0.md) retains that bundle. Consult the target release notes before choosing bundle inputs. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact signed bundle named there; do not rebuild a published bundle from other guest sources. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
+Consult the target release notes before choosing bundle inputs. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact bundle named there; do not rebuild a published bundle from other guest sources. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
 
 ## Automated release
 
@@ -128,7 +118,7 @@ publication. Neither command is run automatically.
 
 A release can also publish an arm64 artifact set, staged on a separate Linux arm64 host with writable KVM and TUN after `just release VERSION` succeeds on the amd64 host. Without an arm64 host, the release publishes amd64 alone.
 Configure that host from `deploy/release-arm64.env.example` as `~/.config/secondbox/release.env`, with a release checkout on the same reflink filesystem as its scenario workspace root and bundle, the same Buildx builder setup, and `npm ci --ignore-scripts`.
-Its microVM bundle is built for `arm64` by the [microVM image pipeline](microvm-image-pipeline.md) and signed with the same release key as the amd64 bundle; staging refuses another anchor.
+Its microVM bundle is built for `arm64` by the [microVM image pipeline](microvm-image-pipeline.md).
 Rebuild it under the same rules as the amd64 bundle.
 
 Copy the final amd64 release directory without its `*.oci.tar` files to the arm64 host, then run from clean `main` at the same commit:

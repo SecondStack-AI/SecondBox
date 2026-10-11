@@ -49,7 +49,7 @@ func (backend *AssignmentBackend) fixedGuestIdentity() guestLaunchIdentity {
 }
 
 // validateSelectedImageAssignment checks, without I/O, that the pinned guest
-// agent can serve the assignment's signed components. Their digests are
+// agent can serve the assignment's components. Their digests are
 // matched to the locally verified bundle at start.
 func (backend *AssignmentBackend) validateSelectedImageAssignment(assignment *runnerprotocol.AssignmentCommand) error {
 	if !selectedImageReferencePattern.MatchString(assignment.ExecutionImage.GetReference()) {
@@ -68,8 +68,8 @@ func (backend *AssignmentBackend) validateSelectedImageAssignment(assignment *ru
 	return nil
 }
 
-// stageSelectedImage verifies the cached signed bundle through the shared
-// verifier, matches the assignment to its signed components, and reflinks its
+// stageSelectedImage verifies the cached bundle through the shared
+// verifier, matches the assignment to its components, and reflinks its
 // rootfs into an unnamed clone. The digest lock is held only until the clone
 // exists; later cache eviction cannot reach the Instance.
 func (backend *AssignmentBackend) stageSelectedImage(
@@ -82,7 +82,7 @@ func (backend *AssignmentBackend) stageSelectedImage(
 		return nil, guestLaunchIdentity{}, artifactAssignment(fmt.Errorf("SecondBox gVisor selected image verification: %w", err))
 	}
 	defer prepared.Release()
-	start, err := firecracker.ResolveSignedBundleGuestStart(assignment, prepared.Directory)
+	start, err := firecracker.ResolveBundleGuestStart(assignment, prepared.Directory)
 	if err != nil {
 		return nil, guestLaunchIdentity{}, artifactAssignment(err)
 	}

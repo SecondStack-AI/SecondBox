@@ -3,13 +3,9 @@ package config
 
 import (
 	"context"
-	"crypto"
-	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"net/netip"
@@ -22,22 +18,23 @@ import (
 )
 
 type Config struct {
-	FirecrackerPath                            string
-	JailerPath                                 string
-	MicroVMJailerChrootBaseDir                 string
-	MicroVMJailerUIDStart                      int
-	MicroVMJailerUIDCount                      int
-	MicroVMJailerUIDAllowBelow1000             bool
-	MicroVMJailerGID                           int
-	MicroVMJailerCgroupVersion                 int
-	MicroVMJailerParentCgroup                  string
-	MicroVMKernelPath                          string
-	MicroVMRootfsPath                          string
-	MicroVMToolRootfsPath                      string
-	MicroVMSharedImagePath                     string
-	MicroVMToolSharedImagePath                 string
-	MicroVMPublicKeyPath                       string
-	MicroVMPublicKeySHA256                     string
+	FirecrackerPath                string
+	JailerPath                     string
+	MicroVMJailerChrootBaseDir     string
+	MicroVMJailerUIDStart          int
+	MicroVMJailerUIDCount          int
+	MicroVMJailerUIDAllowBelow1000 bool
+	MicroVMJailerGID               int
+	MicroVMJailerCgroupVersion     int
+	MicroVMJailerParentCgroup      string
+	MicroVMKernelPath              string
+	MicroVMRootfsPath              string
+	MicroVMToolRootfsPath          string
+	MicroVMSharedImagePath         string
+	MicroVMToolSharedImagePath     string
+	// MicroVMBundleVerification requires the kernel, rootfs and shared image to
+	// form one bundle that matches its manifest and checksums.
+	MicroVMBundleVerification                  bool
 	RunnerWorkspaceRoot                        string
 	MicroVMRunDir                              string
 	MicroVMLogDir                              string
@@ -79,79 +76,36 @@ type Config struct {
 	ExecutionImageFetcherSocket          string
 	ExecutionImageRegistryAllowlist      []string
 	ExecutionImageRegistryCertificates   string
-	ExecutionImagePublicKeyPath          string
-	ExecutionImagePublicKeySHA256        string
 	ExecutionImageMaximumDownloadBytes   int64
 	ExecutionImageMaximumExpandedBytes   int64
 	ExecutionImageMaximumCacheBytes      int64
 }
 
-// VerifyMicroVMArtifactDirectory verifies one selected bundle against operator trust.
-func VerifyMicroVMArtifactDirectory(ctx context.Context, directory, publicKeyPath, publicKeySHA256 string) error {
-	if !filepath.IsAbs(publicKeyPath) || len(publicKeySHA256) != sha256.Size*2 {
-		return fmt.Errorf("SecondBox execution image verification requires an explicit signing key and fingerprint")
-	}
+// VerifyMicroVMArtifactDirectory verifies that one bundle directory matches its own manifest and checksums.
+func VerifyMicroVMArtifactDirectory(ctx context.Context, directory string) error {
 	verification := &Config{
 		MicroVMKernelPath:          filepath.Join(directory, "kernel"),
 		MicroVMRootfsPath:          filepath.Join(directory, "rootfs.ext4"),
 		MicroVMToolRootfsPath:      filepath.Join(directory, "rootfs.ext4"),
 		MicroVMSharedImagePath:     filepath.Join(directory, "shared.img"),
 		MicroVMToolSharedImagePath: filepath.Join(directory, "shared.img"),
-		MicroVMPublicKeyPath:       publicKeyPath,
-		MicroVMPublicKeySHA256:     publicKeySHA256,
+		MicroVMBundleVerification:  true,
 	}
-	return verification.ValidateMicroVMTrustAnchor(ctx)
+	return verification.ValidateMicroVMBundle(ctx)
 }
 
-func (c *Config) ValidateMicroVMTrustAnchor(ctx context.Context) error {
-	if c == nil {
+// ValidateMicroVMBundle proves the configured kernel, rootfs and shared image
+// are the files the bundle manifest and checksums name. Bundle integrity rests
+// on the digest-pinned OCI image that delivered the directory.
+func (c *Config) ValidateMicroVMBundle(ctx context.Context) error {
+	if c == nil || !c.MicroVMBundleVerification {
 		return nil
 	}
-	if c.MicroVMPublicKeySHA256 != "" {
-		if _, err := hex.DecodeString(c.MicroVMPublicKeySHA256); err != nil || len(c.MicroVMPublicKeySHA256) != sha256.Size*2 {
-			return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters")
-		}
-	}
-	if c.MicroVMPublicKeySHA256 != "" && c.MicroVMPublicKeyPath == "" {
-		return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY")
-	}
-	if c.MicroVMPublicKeyPath == "" {
-		return nil
-	}
-	publicKey, publicKeyDER, err := readPublicKey(c.MicroVMPublicKeyPath)
-	if err != nil {
-		return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY %q: %w", c.MicroVMPublicKeyPath, err)
-	}
-	actualFingerprint := sha256.Sum256(publicKeyDER)
-	actualFingerprintHex := hex.EncodeToString(actualFingerprint[:])
-	if c.MicroVMPublicKeySHA256 != "" && actualFingerprintHex != c.MicroVMPublicKeySHA256 {
-		return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 mismatch: expected %s, got %s", c.MicroVMPublicKeySHA256, actualFingerprintHex)
-	}
-	return verifyArtifactSet(ctx, c, publicKey)
+	return verifyArtifactSet(ctx, c)
 }
 
-func readPublicKey(path string) (*rsa.PublicKey, []byte, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	der := data
-	if block, _ := pem.Decode(data); block != nil {
-		der = block.Bytes
-	}
-	publicKey, err := x509.ParsePKIXPublicKey(der)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse public key: %w", err)
-	}
-	rsaPublicKey, ok := publicKey.(*rsa.PublicKey)
-	if !ok {
-		return nil, nil, fmt.Errorf("public key must be RSA")
-	}
-	return rsaPublicKey, der, nil
-}
-
-// SignedArtifactFileNames lists every file a signed bundle verification reads.
-var SignedArtifactFileNames = []string{
+// BundleArtifactFileNames lists every file a bundle verification reads.
+var BundleArtifactFileNames = []string{
 	"kernel",
 	"rootfs.ext4",
 	"shared.img",
@@ -166,11 +120,10 @@ var SignedArtifactFileNames = []string{
 	"toolchain-manifest.json",
 	"manifest.json",
 	"SHA256SUMS",
-	"manifest.sig",
 }
 
 // artifactDigestCache hashes each file once per verification pass. The checksum
-// list and the signed manifest cover the same multi-gigabyte kernel, rootfs and
+// list and the manifest cover the same multi-gigabyte kernel, rootfs and
 // shared image.
 type artifactDigestCache struct {
 	digests map[string]string
@@ -192,19 +145,19 @@ func (cache *artifactDigestCache) hex(ctx context.Context, path string) (string,
 	return digest, nil
 }
 
-func verifyArtifactSet(ctx context.Context, cfg *Config, publicKey *rsa.PublicKey) error {
+func verifyArtifactSet(ctx context.Context, cfg *Config) error {
 	if cfg.MicroVMToolRootfsPath != "" && cfg.MicroVMToolRootfsPath != cfg.MicroVMRootfsPath {
-		return fmt.Errorf("SecondBox Runner tool rootfs must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set")
+		return fmt.Errorf("SecondBox Runner tool rootfs must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH for bundle verification")
 	}
 	if cfg.MicroVMToolSharedImagePath != "" && cfg.MicroVMToolSharedImagePath != cfg.MicroVMSharedImagePath {
-		return fmt.Errorf("SecondBox Runner tool shared image must match SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set")
+		return fmt.Errorf("SecondBox Runner tool shared image must match SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH for bundle verification")
 	}
 	if cfg.MicroVMSharedImagePath == "" {
-		return fmt.Errorf("SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH is required when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set")
+		return fmt.Errorf("SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH is required for bundle verification")
 	}
 	artifactDir := filepath.Dir(cfg.MicroVMKernelPath)
 	if filepath.Dir(cfg.MicroVMRootfsPath) != artifactDir || filepath.Dir(cfg.MicroVMSharedImagePath) != artifactDir {
-		return fmt.Errorf("SecondBox Runner kernel, rootfs, and shared image must be in the same signed artifact directory")
+		return fmt.Errorf("SecondBox Runner kernel, rootfs, and shared image must be in the same bundle directory")
 	}
 	for path, name := range map[string]string{
 		cfg.MicroVMKernelPath:      "kernel",
@@ -215,9 +168,9 @@ func verifyArtifactSet(ctx context.Context, cfg *Config, publicKey *rsa.PublicKe
 			return fmt.Errorf("SecondBox Runner artifact path %s must name %s", path, name)
 		}
 	}
-	for _, name := range SignedArtifactFileNames {
+	for _, name := range BundleArtifactFileNames {
 		if _, err := os.Stat(filepath.Join(artifactDir, name)); err != nil {
-			return fmt.Errorf("signed SecondBox Runner artifact %s: %w", name, err)
+			return fmt.Errorf("SecondBox Runner bundle artifact %s: %w", name, err)
 		}
 	}
 	digests := newArtifactDigestCache()
@@ -228,15 +181,7 @@ func verifyArtifactSet(ctx context.Context, cfg *Config, publicKey *rsa.PublicKe
 	if err != nil {
 		return fmt.Errorf("read SecondBox Runner manifest: %w", err)
 	}
-	signature, err := ReadArtifactMetadata(filepath.Join(artifactDir, "manifest.sig"), MaximumArtifactSignatureBytes)
-	if err != nil {
-		return fmt.Errorf("read SecondBox Runner manifest signature: %w", err)
-	}
-	digest := sha256.Sum256(manifest)
-	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature); err != nil {
-		return fmt.Errorf("verify SecondBox Runner manifest signature: %w", err)
-	}
-	if err := verifySignedManifestArtifacts(ctx, artifactDir, manifest, digests); err != nil {
+	if err := verifyManifestArtifacts(ctx, artifactDir, manifest, digests); err != nil {
 		return err
 	}
 	return verifySecondBoxRootfsContract(artifactDir)
@@ -263,12 +208,12 @@ type artifactManifestEntry struct {
 	SHA256 string `json:"sha256"`
 }
 
-func verifySignedManifestArtifacts(ctx context.Context, artifactDir string, manifestData []byte, digests *artifactDigestCache) error {
+func verifyManifestArtifacts(ctx context.Context, artifactDir string, manifestData []byte, digests *artifactDigestCache) error {
 	var manifest artifactManifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		return fmt.Errorf("parse SecondBox Runner manifest: %w", err)
 	}
-	for label, signed := range map[string]struct {
+	for label, named := range map[string]struct {
 		entry artifactManifestEntry
 		path  string
 	}{
@@ -279,18 +224,18 @@ func verifySignedManifestArtifacts(ctx context.Context, artifactDir string, mani
 		"rootfs source manifest": {manifest.RootfsSource, "rootfs-source-manifest.json"},
 		"rootfs contract":        {manifest.RootfsContract, "secondbox-rootfs-contract.json"},
 	} {
-		if !safeManifestPath(signed.entry.Path) || signed.entry.SHA256 == "" {
+		if !safeManifestPath(named.entry.Path) || named.entry.SHA256 == "" {
 			return fmt.Errorf("SecondBox Runner manifest missing %s path or sha256", label)
 		}
-		if signed.entry.Path != signed.path {
-			return fmt.Errorf("SecondBox Runner manifest %s path must be %s, got %s", label, signed.path, signed.entry.Path)
+		if named.entry.Path != named.path {
+			return fmt.Errorf("SecondBox Runner manifest %s path must be %s, got %s", label, named.path, named.entry.Path)
 		}
-		actual, err := digests.hex(ctx, filepath.Join(artifactDir, signed.entry.Path))
+		actual, err := digests.hex(ctx, filepath.Join(artifactDir, named.entry.Path))
 		if err != nil {
 			return err
 		}
-		if actual != signed.entry.SHA256 {
-			return fmt.Errorf("signed SecondBox Runner manifest hash mismatch for %s: expected %s, got %s", signed.entry.Path, signed.entry.SHA256, actual)
+		if actual != named.entry.SHA256 {
+			return fmt.Errorf("SecondBox Runner manifest hash mismatch for %s: expected %s, got %s", named.entry.Path, named.entry.SHA256, actual)
 		}
 	}
 	for label, component := range map[string]struct {
@@ -402,21 +347,4 @@ func (reader contextReader) Read(buffer []byte) (int, error) {
 		return 0, err
 	}
 	return reader.reader.Read(buffer)
-}
-
-// VerifyPublicKeyFingerprint proves at startup that a configured signing key
-// parses and matches its independently pinned DER SHA-256 fingerprint.
-func VerifyPublicKeyFingerprint(path, fingerprint string) error {
-	if !filepath.IsAbs(path) || len(fingerprint) != sha256.Size*2 {
-		return fmt.Errorf("SecondBox signing key verification requires an absolute key path and a 64-hex fingerprint")
-	}
-	_, der, err := readPublicKey(path)
-	if err != nil {
-		return fmt.Errorf("SecondBox signing key %q: %w", path, err)
-	}
-	actual := sha256.Sum256(der)
-	if hex.EncodeToString(actual[:]) != fingerprint {
-		return fmt.Errorf("SecondBox signing key %q does not match its pinned fingerprint", path)
-	}
-	return nil
 }

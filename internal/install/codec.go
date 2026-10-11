@@ -19,7 +19,6 @@ import (
 
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 var checksumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-var keyPattern = regexp.MustCompile(`^SHA256:[0-9A-F]{64}$`)
 var operationPattern = regexp.MustCompile(`^install_[a-z0-9]{16,64}$`)
 var updatePattern = regexp.MustCompile(`^update_[a-z0-9]{16,64}$`)
 
@@ -156,8 +155,8 @@ func validateReleasePlan(release ReleasePlan) error {
 	if !strings.HasPrefix(release.ArtifactManifestURL, "https://") {
 		return installerError("artifact manifest URL must use HTTPS", nil)
 	}
-	if release.Version == "" || !keyPattern.MatchString(release.SigningKeyFingerprint) || release.ExpectedDownloadBytes <= 0 {
-		return installerError("release identity, signing key, or expected download size is invalid", nil)
+	if release.Version == "" || release.ExpectedDownloadBytes <= 0 {
+		return installerError("release identity or expected download size is invalid", nil)
 	}
 	wantImages := []string{"control-plane", "runner", "microvm-artifacts", "installer-tools", "postgres"}
 	if len(release.Images) != len(wantImages) {

@@ -18,8 +18,7 @@ func testSnapshotTemplateKey() SnapshotTemplateKey {
 	return SnapshotTemplateKey{
 		ArtifactVersion:         "2026.08.01",
 		Architecture:            "amd64",
-		SigningKeyFingerprint:   strings.Repeat("a", 64),
-		SignedManifestDigest:    "sha256:" + strings.Repeat("b", 64),
+		BundleManifestDigest:    "sha256:" + strings.Repeat("b", 64),
 		KernelSHA256:            strings.Repeat("c", 64),
 		KernelArgs:              "console=ttyS0 root=/dev/vda rw noxsave",
 		SourceRootfsSHA256:      strings.Repeat("d", 64),
@@ -128,8 +127,7 @@ func TestSnapshotTemplateKeyChangeProducesNewIdentity(t *testing.T) {
 		"protocol":        func(k *SnapshotTemplateKey) { k.GuestProtocolGeneration = 2 },
 		"features":        func(k *SnapshotTemplateKey) { k.GuestFeatures = []string{"streaming_exec"} },
 		"control port":    func(k *SnapshotTemplateKey) { k.GuestControlVsockPort = 2048 },
-		"signing key":     func(k *SnapshotTemplateKey) { k.SigningKeyFingerprint = strings.Repeat("3", 64) },
-		"signed manifest": func(k *SnapshotTemplateKey) { k.SignedManifestDigest = "sha256:" + strings.Repeat("4", 64) },
+		"bundle manifest": func(k *SnapshotTemplateKey) { k.BundleManifestDigest = "sha256:" + strings.Repeat("4", 64) },
 		"workspace shape": func(k *SnapshotTemplateKey) { k.WorkspaceSizeMiB = 128 },
 		"runtime class":   func(k *SnapshotTemplateKey) { k.RuntimeClass = "other" },
 		"network shape":   func(k *SnapshotTemplateKey) { k.NetworkInterfaceID = "eth1" },
@@ -626,7 +624,7 @@ func TestHostCPUCompatibilityFingerprintReadsHost(t *testing.T) {
 
 // TestSnapshotTemplateBundleLookupGatesRunnerResumeCapacity pins the condition a
 // runner advertises snapshot-resume capacity on. An empty cache, or a cache
-// holding only templates built from a different signed bundle, must report no
+// holding only templates built from a different bundle, must report no
 // capacity: resume has no cold-boot fallback, so advertising it without a usable
 // template would attract Profiles that could never start.
 func TestSnapshotTemplateBundleLookupGatesRunnerResumeCapacity(t *testing.T) {
@@ -659,7 +657,7 @@ func TestSnapshotTemplateBundleLookupGatesRunnerResumeCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ready {
-		t.Fatal("a template from another signed bundle reported snapshot-resume capacity")
+		t.Fatal("a template from another bundle reported snapshot-resume capacity")
 	}
 
 	stageTestSnapshotTemplate(t, cache, key)

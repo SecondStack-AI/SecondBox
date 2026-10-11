@@ -380,7 +380,7 @@ func (s *GuestProtocolSession) NegotiatedFeatureNames() []string {
 	return names
 }
 
-// GuestFeaturesFromContractNames converts a signed bundle's mandatory guest
+// GuestFeaturesFromContractNames converts a bundle's mandatory guest
 // features into the protocol features its guest must negotiate.
 func GuestFeaturesFromContractNames(names []string) ([]guestv1.GuestFeature, error) {
 	features := make([]guestv1.GuestFeature, 0, len(names))

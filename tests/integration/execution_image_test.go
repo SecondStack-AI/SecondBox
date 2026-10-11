@@ -1,52 +1,17 @@
 package integration_test
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
-	"os"
-	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
-	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var integrationImagePublisher = sync.OnceValues(func() (*rsa.PrivateKey, error) { return rsa.GenerateKey(rand.Reader, 2048) })
-
-func testExecutionImageAuthority(t *testing.T) *assetcatalog.ExecutionImageAuthority {
-	t.Helper()
-	key, err := integrationImagePublisher()
-	if err != nil {
-		t.Fatal(err)
-	}
-	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "image-publisher.pem")
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0600); err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(der)
-	authority, err := assetcatalog.LoadExecutionImageAuthority(path, hex.EncodeToString(digest[:]))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return authority
-}
-
 // These lifecycle fixtures emulate materialized bytes, as they emulate compute.
-// The control plane still verifies the real signature before creating assignments.
+// The control plane still imports the reported manifest before creating assignments.
 func completeTestImagePreparation(t *testing.T, pool *pgxpool.Pool, sandboxID string, now time.Time) bool {
 	t.Helper()
 	rows, err := pool.Query(t.Context(), `SELECT effect.id,revision.spec_json FROM secondbox.lifecycle_effects effect
@@ -83,16 +48,7 @@ func completeTestImagePreparation(t *testing.T, pool *pgxpool.Pool, sandboxID st
 		if err != nil {
 			t.Fatal(err)
 		}
-		key, err := integrationImagePublisher()
-		if err != nil {
-			t.Fatal(err)
-		}
-		digest := sha256.Sum256(manifest)
-		signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
-		if err != nil {
-			t.Fatal(err)
-		}
-		evidence, err := json.Marshal(&runnerv1.PrepareImageResult{OperationId: preparation.id, ResolvedDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Manifest: manifest, Signature: signature})
+		evidence, err := json.Marshal(&runnerv1.PrepareImageResult{OperationId: preparation.id, ResolvedDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Manifest: manifest})
 		if err != nil {
 			t.Fatal(err)
 		}

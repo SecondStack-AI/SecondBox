@@ -86,7 +86,7 @@ func TestVerifiedArtifactPurgePrecedesPrivilegedRunnerStorageDeletion(t *testing
 	if err := os.MkdirAll(artifacts, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	release := writeSignedArtifactFixture(t, artifacts)
+	release := writeBundleArtifactFixture(t, artifacts)
 	releaseBytes, err := json.Marshal(release)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestVerifiedArtifactPurgePrecedesPrivilegedRunnerStorageDeletion(t *testing
 	artifactPath, _ := plannedPathByName(plan.Paths, "artifacts")
 	releasePath, _ := plannedPathByName(plan.Paths, "release-artifact-manifest")
 	receipt := InstallReceipt{Status: OperationPurging, CreatedResources: []CreatedResource{resourceFromPath(artifactPath, StageAssetsMaterialized), resourceFromPath(releasePath, StageAssetsMaterialized)}}
-	receipt.CreatedResources[0].Digest = release.MicroVM.SignedManifestDigest
+	receipt.CreatedResources[0].Digest = release.MicroVM.ManifestDigest()
 	receipt.CreatedResources[1].Digest = Digest(releaseBytes)
 	if err := ValidatePurgeVerifiedArtifacts(plan, receipt); err != nil {
 		t.Fatal(err)

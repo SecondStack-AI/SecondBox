@@ -92,22 +92,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	publicKeyPath, err := required("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY")
-	if err != nil {
-		return nil, err
-	}
-	publicKeySHA256, err := required("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256")
-	if err != nil {
-		return nil, err
-	}
-	executionImagePublicKeyPath, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY")
-	if err != nil {
-		return nil, err
-	}
-	executionImagePublicKeySHA256, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256")
-	if err != nil {
-		return nil, err
-	}
 	executionImageCacheRoot, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT")
 	if err != nil {
 		return nil, err
@@ -311,8 +295,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMToolRootfsPath:                      rootfsPath,
 		MicroVMSharedImagePath:                     sharedImagePath,
 		MicroVMToolSharedImagePath:                 sharedImagePath,
-		MicroVMPublicKeyPath:                       publicKeyPath,
-		MicroVMPublicKeySHA256:                     publicKeySHA256,
+		MicroVMBundleVerification:                  true,
 		RunnerWorkspaceRoot:                        runnerWorkspaceRoot,
 		MicroVMRunDir:                              runDir,
 		MicroVMLogDir:                              logDir,
@@ -350,8 +333,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		ExecutionImageFetcherSocket:                executionImageFetcherSocket,
 		ExecutionImageRegistryAllowlist:            executionImageRegistries,
 		ExecutionImageRegistryCertificates:         executionImageRegistryCertificates,
-		ExecutionImagePublicKeyPath:                executionImagePublicKeyPath,
-		ExecutionImagePublicKeySHA256:              executionImagePublicKeySHA256,
 		ExecutionImageMaximumDownloadBytes:         int64(executionImageMaximumDownloadBytes),
 		ExecutionImageMaximumExpandedBytes:         int64(executionImageMaximumExpandedBytes),
 		ExecutionImageMaximumCacheBytes:            int64(executionImageMaximumCacheBytes),

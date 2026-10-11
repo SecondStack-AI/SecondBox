@@ -243,14 +243,11 @@ if [[ "$only" == all || "$only" == gates ]]; then
   [[ -x node_modules/.bin/tsc ]] || fail 'run npm ci --ignore-scripts first'
 fi
 if [[ "$only" == all || "$only" == firecracker ]]; then
-  for key in SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY SECONDBOX_RUNNER_WORKSPACE_ROOT; do
+  for key in SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR SECONDBOX_RUNNER_WORKSPACE_ROOT; do
     [[ "${!key:-}" == /* && -e "${!key}" ]] || fail "$key must be an existing absolute path"
   done
-  [[ -d "$SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR" && -d "$SECONDBOX_RUNNER_WORKSPACE_ROOT" && -f "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY" ]] || fail 'invalid Firecracker input paths'
-  [[ "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:-}" =~ ^[a-f0-9]{64}$ ]] || fail 'invalid artifact key fingerprint'
-  for tool in openssl sha256sum docker; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
-  actual="$(openssl pkey -pubin -in "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY" -outform DER | sha256sum | cut -d' ' -f1)"
-  [[ "$actual" == "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" ]] || fail 'artifact public key fingerprint mismatch'
+  [[ -d "$SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR" && -d "$SECONDBOX_RUNNER_WORKSPACE_ROOT" ]] || fail 'invalid Firecracker input paths'
+  for tool in sha256sum docker; do command -v "$tool" >/dev/null || fail "missing tool: $tool"; done
   [[ "${SECONDBOX_REQUIRE_QUALIFIED_SCENARIO:-}" == 1 ]] || fail 'SECONDBOX_REQUIRE_QUALIFIED_SCENARIO must be 1'
   [[ -c /dev/kvm && -c /dev/net/tun ]] || fail 'Firecracker requires /dev/kvm and /dev/net/tun'
   docker info >/dev/null || fail 'Docker unavailable'

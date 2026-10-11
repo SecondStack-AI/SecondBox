@@ -166,7 +166,7 @@ The underlying authenticated routes are `GET /v1/sandboxes/{sandboxId}/timings?l
 
 For a real-compute concurrency sweep that records these timing projections alongside workload
 throughput and saturation evidence, see
-[Local stress qualification](stress-qualification.md). The stress gate requires KVM and the signed
+[Local stress qualification](stress-qualification.md). The stress gate requires KVM and the
 artifact bundle and never substitutes mock compute.
 
 ## Bounded support bundles

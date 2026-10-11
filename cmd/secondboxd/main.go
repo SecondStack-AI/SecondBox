@@ -19,7 +19,6 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/api"
-	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	"github.com/SecondStack-AI/SecondBox/internal/config"
 	"github.com/SecondStack-AI/SecondBox/internal/lifecycle"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
@@ -157,10 +156,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer assignmentReconcileStore.Close()
-	executionImageAuthority, err := assetcatalog.LoadExecutionImageAuthority(processConfig.ExecutionImagePublicKeyPath, processConfig.ExecutionImagePublicKeySHA256)
-	if err != nil {
-		return err
-	}
 	lifecycleEffects, err := lifecycle.NewPostgresEffectBroker(
 		processContext,
 		processConfig.DatabaseURL,
@@ -171,7 +166,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			HeartbeatTimeout:        processConfig.RunnerHeartbeatTimeout,
 			RetryLimit:              processConfig.AssignmentRetryLimit,
 			SerializationRetryLimit: processConfig.SchedulerSerializationRetryLimit,
-			ExecutionImageAuthority: executionImageAuthority,
 			SessionCanceller:        dataPlaneStore,
 			NewID:                   service.NewOpaqueID,
 			NewFencingToken:         newLifecycleFencingToken,

@@ -7,12 +7,12 @@ The suite never skips. It exits non-zero unless qualification is explicitly requ
 ## Automated qualification
 
 Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` and review
-all paths, signing-key fingerprints, component digests, and dedicated VM inputs.
-Set `SECONDBOX_SCENARIO_EXECUTION_IMAGE` to a signed digest reference that every Firecracker scenario Runner can retrieve.
+all paths, component digests, and dedicated VM inputs.
+Set `SECONDBOX_SCENARIO_EXECUTION_IMAGE` to a digest reference that every Firecracker scenario Runner can retrieve.
 Set `SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG` to an operator configuration directory containing `tenants.json`, credential files when needed, and `certificates/`.
 Set `SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS` to a DNS server address reachable from the scenario image fetcher's isolated Docker network. The scenario does not rely on the host's stub resolver, which may be unreachable from that network.
 Grant the selected repository to `scenario-tenant`; paths in the configuration use the fetcher's `/run/image-registry` mount.
-The harness copies this configuration into its private run directory and starts an unprivileged fetcher with only the cache, socket, publisher key, and registry configuration.
+The harness copies this configuration into its private run directory and starts an unprivileged fetcher with only the cache, socket, and registry configuration.
 Supply `SECONDBOX_TEST_DATABASE_URL` for a disposable PostgreSQL database and
 run `npm ci --ignore-scripts` in the checkout. The example documents every key.
 
@@ -84,12 +84,12 @@ recipes below remain available for hosts without this automation.
 
 Use a dedicated Linux amd64 or arm64 host with:
 
-- a signed microVM bundle of the host architecture; the scenario Runner joins `standard-amd64` or `standard-arm64` accordingly;
+- a microVM bundle of the host architecture; the scenario Runner joins `standard-amd64` or `standard-arm64` accordingly;
 - readable and writable character devices at `/dev/kvm` and `/dev/net/tun`;
 - cgroup v2 mounted for the privileged runner container;
 - Docker Engine and Docker Compose v2, with permission to start privileged, host-networked containers and create host mounts;
 - an existing absolute workspace-root directory on XFS or Btrfs;
-- the workspace root, signed artifact directory, and checkout on the same filesystem, so rootfs staging into the operation run directory and jail remains reflink/link-only;
+- the workspace root, artifact directory, and checkout on the same filesystem, so rootfs staging into the operation run directory and jail remains reflink/link-only;
 - working reflink support in that filesystem. The harness checks the filesystem type and runner readiness performs the real `FICLONE` and mutation-isolation probe;
 - `curl`, `date`, `docker`, `findmnt`, `git`, `go`, `ip`, `jq`, `mountpoint`, `openssl`, `python3`, `seq`, and `sha256sum`.
 
@@ -97,7 +97,7 @@ The workspace root is a parent for an operation-scoped scenario directory. Do no
 
 ## Materialize and verify the microVM bundle
 
-Building the approximately 11 GB bundle is deliberately outside this gate. Build or obtain a signed bundle by following [the microVM image pipeline](microvm-image-pipeline.md), then materialize it into an existing absolute, non-symbolic-link directory on the qualification host. For a release scratch image, one explicit extraction flow is:
+Building the approximately 11 GB bundle is deliberately outside this gate. Build or obtain a bundle by following [the microVM image pipeline](microvm-image-pipeline.md), then materialize it into an existing absolute, non-symbolic-link directory on the qualification host. For a release scratch image, one explicit extraction flow is:
 
 ```sh
 artifact_image='ghcr.io/secondstack-ai/secondbox-runner-microvm-artifacts:<release-tag>'
@@ -108,44 +108,31 @@ docker cp "$artifact_container:/secondbox-runner-microvm/." "$artifact_target/"
 docker rm "$artifact_container"
 ```
 
-Treat the signing key as an independently distributed trust anchor; do not trust a `signing.pub` copied from the bundle. Compute its canonical DER fingerprint and verify the materialized bundle before running the suite:
+Verify the materialized bundle before running the suite:
 
 ```sh
-artifact_public_key='/etc/secondbox/trust/artifact-signing.pem'
-artifact_public_key_sha256="$(
-  openssl pkey -pubin -in "$artifact_public_key" -outform DER |
-    sha256sum |
-    awk '{print $1}'
-)"
-just -f runner/Justfile verify-microvm-images \
-  "$artifact_target" \
-  "$artifact_public_key" \
-  "$artifact_public_key_sha256"
+just -f runner/Justfile verify-microvm-images "$artifact_target"
 ```
 
-Verification checks the fixed artifact set, payload checksums, signed manifest, provenance bindings, architecture, guest protocol range, and rootfs contract. The scenario harness repeats the checks it relies on before Compose starts and refuses symbolic-link artifacts.
+Verification checks the fixed artifact set, payload checksums, manifest, provenance bindings, architecture, guest protocol range, and rootfs contract. The scenario harness repeats the checks it relies on before Compose starts and refuses symbolic-link artifacts.
 
 ## Required variables
 
-Set all seven variables. Paths must be clean absolute paths that already exist.
+Set all five variables. Paths must be clean absolute paths that already exist.
 
 ```sh
 export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
 export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$artifact_target"
-export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$artifact_public_key"
-export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$artifact_public_key_sha256"
 export SECONDBOX_RUNNER_WORKSPACE_ROOT='/srv/secondbox/qualification/workspaces'
-export SECONDBOX_SCENARIO_EXECUTION_IMAGE='registry.example/secondbox/qualification-agent:stable'
+export SECONDBOX_SCENARIO_EXECUTION_IMAGE='registry.example/secondbox/qualification-agent@sha256:<digest>'
 export SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG='/etc/secondbox/qualification-image-registry'
 just test-scenario
 ```
 
 - `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1` turns every missing prerequisite into a named hard failure.
-- `SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR` is the verified materialized bundle containing at least `SHA256SUMS`, `kernel`, `rootfs.ext4`, `shared.img`, `manifest.json`, `manifest.sig`, `runtime-manifest.json`, and `toolchain-manifest.json`.
-- `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY` is the independently trusted PEM public key.
-- `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256` is the 64-character lowercase SHA-256 of that key's canonical DER encoding.
+- `SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR` is the verified materialized bundle containing at least `SHA256SUMS`, `kernel`, `rootfs.ext4`, `shared.img`, `manifest.json`, `runtime-manifest.json`, and `toolchain-manifest.json`.
 - `SECONDBOX_RUNNER_WORKSPACE_ROOT` is the dedicated XFS or Btrfs parent described above.
-- `SECONDBOX_SCENARIO_EXECUTION_IMAGE` is a retrievable OCI execution image signed by the configured artifact key. Selected-image coverage uses this reference; fixed-Profile coverage retains the Profile's assets, including snapshot-resume and gVisor.
+- `SECONDBOX_SCENARIO_EXECUTION_IMAGE` is a retrievable, digest-pinned OCI execution image. Selected-image coverage uses this reference; fixed-Profile coverage retains the Profile's assets, including snapshot-resume and gVisor.
 - `SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG` contains the Tenant registry configuration and optional authentication and CA files for that image.
 
 `SECONDBOX_SCENARIO_TEST_PATTERN` is an optional Go regular expression for a focused diagnostic rerun. It does not qualify a commit; qualification requires the unfiltered command.

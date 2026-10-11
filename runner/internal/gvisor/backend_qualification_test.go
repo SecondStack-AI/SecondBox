@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage/executionimagetest"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	runnerconformance "github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
@@ -72,7 +71,6 @@ type qualificationFixture struct {
 	fence     *runnerprotocol.AssignmentFence
 	command   *runnerprotocol.AssignmentCommand
 	evidence  *qualificationEvidenceSink
-	publisher *executionimagetest.Publisher
 	rootfs    string
 	imageRoot string
 }
@@ -156,7 +154,6 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
-	publisher := executionimagetest.NewPublisher(t)
 	imageRoot := filepath.Join(qualificationRoot, "execution-images")
 	backend, err := NewAssignmentBackend(Config{
 		RunscPath: runsc, AgentPath: agent, FlatRootPath: rootfs,
@@ -167,10 +164,8 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 		MaximumVCPUs:   2, MaximumMemoryBytes: 1 << 30,
 		MaximumDiskBytes: uint64(backendQualificationWorkspaceBytes),
 		MaximumInstances: 1, MaximumOperations: 8, WorkspaceStore: store,
-		ExecutionImageCacheRoot:       imageRoot,
-		ExecutionImageFetcherSocket:   filepath.Join(runtimeDir, "unused-fetcher.sock"),
-		ExecutionImagePublicKeyPath:   publisher.PublicKeyPath,
-		ExecutionImagePublicKeySHA256: publisher.PublicKeySHA256,
+		ExecutionImageCacheRoot:     imageRoot,
+		ExecutionImageFetcherSocket: filepath.Join(runtimeDir, "unused-fetcher.sock"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +205,7 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 	}
 	return qualificationFixture{
 		backend: backend, fence: fence, command: command, evidence: evidence,
-		publisher: publisher, rootfs: rootfs, imageRoot: imageRoot,
+		rootfs: rootfs, imageRoot: imageRoot,
 	}
 }
 

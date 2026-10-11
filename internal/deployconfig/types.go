@@ -34,22 +34,20 @@ type StandardRunnerPool struct {
 }
 
 type Deployment struct {
-	Mode                          string `toml:"mode"`
-	ComposeProjectName            string `toml:"compose_project_name"`
-	ComposeBackendCIDR            string `toml:"compose_backend_cidr,omitempty"`
-	PublicBaseURL                 string `toml:"public_base_url"`
-	TLSTermination                string `toml:"tls_termination"`
-	ControlPlaneImage             string `toml:"control_plane_image"`
-	RunnerImage                   string `toml:"runner_image"`
-	PostgresImage                 string `toml:"postgres_image"`
-	APIBindIP                     string `toml:"api_bind_ip"`
-	APIPublishedPort              *int64 `toml:"api_published_port"`
-	RunnerBindIP                  string `toml:"runner_bind_ip"`
-	RunnerPublishedPort           *int64 `toml:"runner_published_port"`
-	LogPath                       string `toml:"log_path"`
-	ExecutionImagePublicKey       string `toml:"execution_image_public_key"`
-	ExecutionImagePublicKeySHA256 string `toml:"execution_image_public_key_sha256"`
-	DevelopmentWaitSeconds        *int64 `toml:"development_prepare_wait_timeout_seconds"`
+	Mode                   string `toml:"mode"`
+	ComposeProjectName     string `toml:"compose_project_name"`
+	ComposeBackendCIDR     string `toml:"compose_backend_cidr,omitempty"`
+	PublicBaseURL          string `toml:"public_base_url"`
+	TLSTermination         string `toml:"tls_termination"`
+	ControlPlaneImage      string `toml:"control_plane_image"`
+	RunnerImage            string `toml:"runner_image"`
+	PostgresImage          string `toml:"postgres_image"`
+	APIBindIP              string `toml:"api_bind_ip"`
+	APIPublishedPort       *int64 `toml:"api_published_port"`
+	RunnerBindIP           string `toml:"runner_bind_ip"`
+	RunnerPublishedPort    *int64 `toml:"runner_published_port"`
+	LogPath                string `toml:"log_path"`
+	DevelopmentWaitSeconds *int64 `toml:"development_prepare_wait_timeout_seconds"`
 }
 
 type Database struct {
@@ -117,8 +115,6 @@ type Runner struct {
 	StateHostDirectory                    string                `toml:"state_host_directory"`
 	ExecutionImageRegistries              string                `toml:"execution_image_registries"`
 	ExecutionImageRegistryConfigDirectory string                `toml:"execution_image_registry_config_directory"`
-	ExecutionImagePublicKey               string                `toml:"execution_image_public_key,omitempty"`
-	ExecutionImagePublicKeySHA256         string                `toml:"execution_image_public_key_sha256"`
 	ExecutionImageMaxDownloadBytes        *int64                `toml:"execution_image_max_download_bytes"`
 	ExecutionImageMaxExpandedBytes        *int64                `toml:"execution_image_max_expanded_bytes"`
 	ExecutionImageMaxCacheBytes           *int64                `toml:"execution_image_max_cache_bytes"`
@@ -141,8 +137,6 @@ type Runner struct {
 	FirecrackerRunDirectory               string                `toml:"firecracker_run_directory,omitempty"`
 	FirecrackerLogDirectory               string                `toml:"firecracker_log_directory,omitempty"`
 	SnapshotTemplateCacheRoot             string                `toml:"snapshot_template_cache_root,omitempty"`
-	ArtifactPublicKey                     string                `toml:"artifact_public_key,omitempty"`
-	ArtifactPublicKeySHA256               string                `toml:"artifact_public_key_sha256"`
 	WorkspaceRoot                         string                `toml:"workspace_root,omitempty"`
 	StorageRecoveryPercent                *int64                `toml:"storage_pressure_recovery_percent"`
 	StorageWarningPercent                 *int64                `toml:"storage_pressure_warning_percent"`

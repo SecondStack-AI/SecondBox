@@ -11,7 +11,6 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
-	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
@@ -32,14 +31,13 @@ type ActiveSessionCanceller interface {
 	CancelSandboxSessions(context.Context, string, int64, string, time.Time) (int64, error)
 }
 
-// EffectBrokerConfig contains explicit lifecycle effect bounds and selected-image trust.
+// EffectBrokerConfig contains explicit lifecycle effect bounds.
 type EffectBrokerConfig struct {
 	AssignmentClaimDuration time.Duration
 	AssignmentDeadline      time.Duration
 	HeartbeatTimeout        time.Duration
 	RetryLimit              int64
 	SerializationRetryLimit int
-	ExecutionImageAuthority *assetcatalog.ExecutionImageAuthority
 	SessionCanceller        ActiveSessionCanceller
 	NewID                   func(string) string
 	NewFencingToken         func() ([]byte, error)
@@ -460,9 +458,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	if err != nil {
 		return broker.failInvalidProfileStart(ctx, claim, plan, err, now.UTC())
 	}
-	// A default-image start carries no assets: the home Runner boots the signed
+	// A default-image start carries no assets: the home Runner boots the
 	// bundle it has installed, so a Sandbox survives release upgrades. Only a
-	// client-selected image names its signed components.
+	// client-selected image names its components.
 	var assets []*runnerv1.AssetReference
 	resolvedArtifacts := map[string]string{}
 	selectedReference := ""

@@ -17,7 +17,7 @@
 # - client-selected execution images arrive through an unprivileged image
 #   fetcher container sharing the runner image; its cache is a node-local
 #   directory on a reflink-capable filesystem, because each start reflinks the
-#   signed rootfs out of it.
+#   image rootfs out of it.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -168,15 +168,11 @@ spec:
         - name: SECONDBOX_GVISOR_NETWORK_PROFILE
           value: "0"
         # Client-selected execution images: the shared cache, the fetcher's
-        # pod-local socket, and the independently pinned publisher key.
+        # pod-local socket.
         - name: SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT
           value: /var/lib/secondbox-execution-images
         - name: SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET
           value: /run/secondbox-image-fetcher/fetcher.sock
-        - name: SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY
-          value: /etc/secondbox-execution-image-trust/public.pem
-        - name: SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256
-          value: "OPERATOR_EXECUTION_IMAGE_PUBLIC_KEY_SHA256"
       volumeMounts:
         - name: identity
           mountPath: /opt/secondbox-runner-identity
@@ -196,9 +192,6 @@ spec:
           mountPath: /var/lib/secondbox-execution-images
         - name: image-fetcher-socket
           mountPath: /run/secondbox-image-fetcher
-        - name: execution-image-trust
-          mountPath: /etc/secondbox-execution-image-trust
-          readOnly: true
     # Retrieves and verifies client-selected images with no Workspace mounts,
     # host devices, or privileges. Registry credentials reach only this
     # container, never the runner or a sandbox.
@@ -225,10 +218,6 @@ spec:
           value: "OPERATOR_REGISTRY_HOSTS"
         - name: SECONDBOX_IMAGE_FETCHER_CERTIFICATES
           value: /etc/secondbox-image-registry/certificates
-        - name: SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY
-          value: /etc/secondbox-execution-image-trust/public.pem
-        - name: SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY_SHA256
-          value: "OPERATOR_EXECUTION_IMAGE_PUBLIC_KEY_SHA256"
         - name: SECONDBOX_IMAGE_FETCHER_MAX_DOWNLOAD_BYTES
           value: "OPERATOR_MAXIMUM_DOWNLOAD_BYTES"
         - name: SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES
@@ -242,9 +231,6 @@ spec:
           mountPath: /run/secondbox-image-fetcher
         - name: image-registry
           mountPath: /etc/secondbox-image-registry
-          readOnly: true
-        - name: execution-image-trust
-          mountPath: /etc/secondbox-execution-image-trust
           readOnly: true
         - name: image-fetcher-tmp
           mountPath: /tmp
@@ -289,11 +275,6 @@ spec:
     - name: image-registry
       secret:
         secretName: secondbox-gvisor-runner-image-registry
-        defaultMode: 0o440
-    # The publisher public key only; the signing key never reaches the node.
-    - name: execution-image-trust
-      configMap:
-        name: secondbox-gvisor-runner-execution-image-trust
         defaultMode: 0o440
     - name: image-fetcher-tmp
       emptyDir:

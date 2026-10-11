@@ -1,6 +1,6 @@
 ---
 name: secondbox-release
-description: Cut, tag, publish, verify, or retract SecondBox releases; prepare release notes or rotate release bundles and trust anchors. Use for any v-prefixed release tag push in this repository.
+description: Cut, tag, publish, verify, or retract SecondBox releases; prepare release notes or rotate release bundles. Use for any v-prefixed release tag push in this repository.
 ---
 
 # SecondBox release
@@ -22,6 +22,8 @@ it. Prepare a reviewable result before requesting any missing authorization.
   are immutable. Retract a bad Go release in `go.mod`, document it in the
   changelog and release notes, then issue the next patch; never move the tag.
   Leave v0.13.0 intact: its off-main tag has the re-landed tree and downstream pins.
+- The amd64 and arm64 release hosts are whichever qualified Linux KVM hosts
+  the operator chooses; take paths from that host's `release.env`, never assume them.
 - A release publishes the amd64 artifact set and, when an arm64 KVM host is
   available, an arm64 set from the same commit. `just release-arm64 VERSION
   AMD64_RELEASE_DIR` stages it from a copy of the final amd64 output (without
@@ -43,8 +45,8 @@ it. Prepare a reviewable result before requesting any missing authorization.
   releases. Report “not released” with the failing stage when prerequisites fail.
 - Land notes and the changelog cut on `main` before tagging, including pre-1.0.
   Only an explicit operator decision may skip them; record it in the ledger.
-- Keep private signing keys and password-manager contents out of repository,
-  notes, logs and worklog. Reference the key and item by name only.
+- Keep credentials and password-manager contents out of repository, notes,
+  logs and worklog. Reference each item by name only.
 
 ## Procedure
 
@@ -52,12 +54,11 @@ it. Prepare a reviewable result before requesting any missing authorization.
    `gh release list --limit 5` (local tags include unpublished/retracted tags),
    and `git log --oneline vLAST..origin/main`.
 2. Choose a minor version pre-1.0 for protocol generation, migration checksum,
-   bundle/trust-anchor or clean-install boundary changes; patch otherwise.
+   bundle or clean-install boundary changes; patch otherwise.
    Ask only if the evidence leaves a consequential ambiguity.
 3. Preflight without changing host state: check ownership above; compare the
    **key names** in `release.env` with `deploy/release.env.example` without
-   printing secrets; verify the public anchor's DER SHA-256 against the notes;
-   inspect `df` (100 GiB free per output/workspace filesystem for lean releases,
+   printing secrets; inspect `df` (100 GiB free per output/workspace filesystem for lean releases,
    200 GiB for `--full`) and MemAvailable (guest plus 4 GiB, guest at least 13312 MiB).
    On smaller hosts, set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` to bound scenario concurrency.
    Check dependencies match the lockfile; provision with
@@ -121,7 +122,7 @@ it. Prepare a reviewable result before requesting any missing authorization.
 | Output already exists | Confirm this failed run owns it; archive or remove only its versioned outputs before a full retry. Retain the build for recovery. |
 | Checkout lock held | Inspect owning processes and units; wait for a live owner. `flock` releases on process exit. A leftover file is harmless: never unlink a held lock (that could permit concurrent runs). |
 | `sbq-` domains | Confirm owner is gone before destroying/undefining this run's orphan with `virsh -c qemu:///system`; preserve other guests. |
-| Missing env key or anchor mismatch | Compare example keys and independently verified public pins; correct operator config, not script validation. |
+| Missing env key | Compare with the example keys; correct operator config, not script validation. |
 | Several tests fail at 0.00s | Inspect disposable Postgres readiness and environment leaks; `--resume` once. A repeat requires fixing the cause. |
 | `UnsafeConfiguration/group_or_other_readable` | Correct unsafe file modes; never weaken the test. |
 | Firecracker “Runner did not enroll” cascade | Inspect enrollment logs; retry once if evidence indicates the known restart flake. Repetition requires investigation. |

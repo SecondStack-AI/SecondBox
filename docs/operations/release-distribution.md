@@ -24,7 +24,7 @@ Each release carries the amd64 artifact set under its tag, and optionally an arm
 | Deployment binary | `secondbox-deploy_VERSION_OS_ARCH` |
 | Guided-install bootstrap | versioned `releases/download/vVERSION/install.sh`; stable `releases/latest/download/install.sh` |
 
-The release also includes checksums, the OpenAPI document, the Go module archive, the TypeScript package, an SPDX SBOM, standard resource bundles, KVM scenario and installer qualification evidence, package and OCI metadata, and an artifact manifest containing digest-pinned OCI references. Every generated identity record carries the same version and exact source commit; binaries embed both. The npm publication uses trusted-publisher provenance, while the signed microVM manifest attests its component hashes and provenance under the independently provisioned release key. There is no separate locally manufactured qualification attestation. `install.sh` embeds the exact release version and Linux amd64 deployment-binary digest. It downloads and verifies only that binary; all release and host verification remains in `secondbox-deploy install`.
+The release also includes checksums, the OpenAPI document, the Go module archive, the TypeScript package, an SPDX SBOM, standard resource bundles, KVM scenario and installer qualification evidence, package and OCI metadata, and an artifact manifest containing digest-pinned OCI references. Every generated identity record carries the same version and exact source commit; binaries embed both. The npm publication uses trusted-publisher provenance, while the microVM bundle manifest binds its component hashes and provenance and the artifact manifest records that bundle manifest's digest. There is no separate locally manufactured qualification attestation. `install.sh` embeds the exact release version and Linux amd64 deployment-binary digest. It downloads and verifies only that binary; all release and host verification remains in `secondbox-deploy install`.
 
 ## Supported platforms
 
@@ -35,7 +35,7 @@ The release also includes checksums, the OpenAPI document, the Go module archive
 | amd64 | `secondbox-VERSION-artifact-manifest.json` | `just test-scenario` on a `linux-amd64` KVM host, gVisor host evidence, installer evidence |
 | arm64 | `secondbox-VERSION-arm64-artifact-manifest.json` | `just test-scenario` on a `linux-arm64` KVM host only |
 
-The arm64 set carries no gVisor artifacts and no installer qualification evidence, because the guided installer installs amd64 releases only. Release verification enforces both rules, and `secondbox-deploy install` and `update` refuse an arm64 set before planning. Its microVM bundle is signed by the trust anchor of the amd64 set. The amd64 set builds the control-plane image for `linux/amd64` (`just release VERSION --full` also builds `linux/arm64`); the arm64 set builds its own `linux/arm64` control-plane image. Read the selected manifest for its actual image platform matrix.
+The arm64 set carries no gVisor artifacts and no installer qualification evidence, because the guided installer installs amd64 releases only. Release verification enforces both rules, and `secondbox-deploy install` and `update` refuse an arm64 set before planning. The amd64 set builds the control-plane image for `linux/amd64` (`just release VERSION --full` also builds `linux/arm64`); the arm64 set builds its own `linux/arm64` control-plane image. Read the selected manifest for its actual image platform matrix.
 
 ## Qualification and publication
 

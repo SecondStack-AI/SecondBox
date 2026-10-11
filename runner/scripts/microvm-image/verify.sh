@@ -5,17 +5,14 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     cat >&2 <<'USAGE'
-Usage: verify.sh <artifact-dir> <public-key.pem> <public-key-der-sha256>
+Usage: verify.sh <artifact-dir>
 
 Verifies the Firecracker artifact set emitted by build.sh: required files,
-checksums, OpenSSL manifest signature, and manifest consistency. The trusted
-public key and its canonical DER SHA-256 fingerprint are mandatory.
+checksums, and manifest consistency.
 USAGE
 }
 
 dir="${1-}"
-pubkey="${2-}"
-expected_pubkey_sha="${3-}"
 if [ "${dir:-}" = "-h" ] || [ "${dir:-}" = "--help" ]; then
     usage
     exit 0
@@ -25,37 +22,12 @@ if [ -z "$dir" ] || [ ! -d "$dir" ]; then
     exit 2
 fi
 
-if [ -z "$pubkey" ]; then
-    echo "trusted public key is required" >&2
-    exit 1
-fi
-if [ -z "$expected_pubkey_sha" ]; then
-    echo "trusted public key fingerprint is required" >&2
-    exit 1
-fi
-if [ ! -f "$pubkey" ]; then
-    echo "public key not found: $pubkey" >&2
-    exit 1
-fi
-actual_pubkey_sha="$(openssl pkey -pubin -in "$pubkey" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')" || {
-    echo "invalid public key: $pubkey" >&2
-    exit 1
-}
-if ! [[ "$expected_pubkey_sha" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "expected public key fingerprint must be 64 lowercase hex characters" >&2
-    exit 1
-fi
-if [ "$actual_pubkey_sha" != "$expected_pubkey_sha" ]; then
-    echo "public key fingerprint mismatch: expected $expected_pubkey_sha, got $actual_pubkey_sha" >&2
-    exit 1
-fi
-
 for file in \
     kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-manifest.json \
     secondbox-rootfs-contract.json rootfs-debian-packages.lock rootfs-python.freeze \
     rootfs-debian-license-inventory.json rootfs-python-license-inventory.json \
     runtime-manifest.json toolchain-manifest.json \
-    manifest.json manifest.sig SHA256SUMS
+    manifest.json SHA256SUMS
 do
     if [ ! -f "$dir/$file" ]; then
         echo "missing artifact: $file" >&2
@@ -64,7 +36,6 @@ do
 done
 
 (cd "$dir" && sha256sum -c SHA256SUMS)
-openssl dgst -sha256 -verify "$pubkey" -signature "$dir/manifest.sig" "$dir/manifest.json" >/dev/null
 
 legacy_v1_contract=false
 if jq -e '.source | has("browserPolicy")' "$dir/rootfs-source-manifest.json" >/dev/null; then
@@ -89,7 +60,7 @@ else
           .state == "verified" and
           .policySha256 == $policySha
         ' "$dir/secondbox-rootfs-contract.json" >/dev/null; then
-        echo "unsigned browser policy is permitted only for the known signed v1 OCI contract" >&2
+        echo "a source manifest without browser policy is permitted only for the known v1 OCI contract" >&2
         exit 1
     fi
     legacy_v1_contract=true
@@ -151,7 +122,7 @@ fi
 if [ "$legacy_v1_contract" != "true" ]; then
     contract_browser_policy="$(jq -er '.browserPolicy | select(. == "allow" or . == "forbid")' "$dir/secondbox-rootfs-contract.json")"
     if [ "$contract_browser_policy" != "$browser_policy" ]; then
-        echo "SecondBox rootfs contract browser policy differs from signed source provenance" >&2
+        echo "SecondBox rootfs contract browser policy differs from source provenance" >&2
         exit 1
     fi
     for policy_binding in \

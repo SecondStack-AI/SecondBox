@@ -29,7 +29,7 @@ Gotcha: record a verified host or process constraint, or omit this line
 Use `Did:`, `Result:`, `Evidence:`, `Next:` and optional `Gotcha:`. Record facts,
 commit hashes, paths, run IDs, PRs, timing, and brief operator decisions. No
 secrets, private key material, narration, or duplicated plan text. Reference
-signing keys and password-manager items by name only.
+credentials and password-manager items by name only.
 
 Append each complete entry in one write, under `flock` on
 `.worklog/.append.lock` when writers may overlap. Never rewrite earlier entries;

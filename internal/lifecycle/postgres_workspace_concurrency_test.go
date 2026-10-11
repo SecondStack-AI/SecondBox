@@ -139,7 +139,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		command.Requirements.MemoryBytes != 1<<30 ||
 		command.Requirements.DiskBytes != 4<<30 ||
 		// A default-image start names no assets: the home Runner boots the
-		// signed bundle it has installed, whichever release that is.
+		// bundle it has installed, whichever release that is.
 		len(command.Assets) != 0 || command.ExecutionImage != nil ||
 		len(recordingScheduler.request.ResolvedArtifacts) != 0 ||
 		recordingScheduler.request.Requirements.Capacity.VCPUCount != 1 ||

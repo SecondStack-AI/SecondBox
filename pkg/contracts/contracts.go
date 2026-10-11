@@ -39,7 +39,7 @@ const (
 
 	// RunnerCapabilitySnapshotResume is advertised by a Runner that can start a
 	// Sandbox by resuming a prepared guest: it is configured with a template
-	// cache root and holds an admitted template built from the exact signed
+	// cache root and holds an admitted template built from the exact
 	// bundle the Runner itself verified.
 	RunnerCapabilitySnapshotResume = "snapshot-resume"
 

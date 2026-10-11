@@ -199,7 +199,7 @@ func TestSecondBoxImagePipelineBindsTheGuestArchitecture(t *testing.T) {
 		}
 	}
 	if !strings.Contains(readRepositoryFile(t, "runner/scripts/microvm-image/build.sh"), `jq -r '.source.architecture // ""'`) {
-		t.Error("the microVM builder must refuse a rootfs source of another architecture before signing")
+		t.Error("the microVM builder must refuse a rootfs source of another architecture before building")
 	}
 	clientBuilder := readRepositoryFile(t, "scripts/build-client-execution-image.sh")
 	for _, required := range []string{
@@ -216,9 +216,9 @@ SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE=`,
 func TestClientExecutionImageBuilderRequiresExplicitBrowserPolicy(t *testing.T) {
 	environment := []string{"PATH=" + os.Getenv("PATH"), "SECONDBOX_CLIENT_IMAGE_KERNEL_CONFIG="}
 	for _, name := range []string{
-		"ARCHITECTURE", "ARTIFACT_VERSION", "BUNDLE_DIR", "KERNEL_PATH", "OUTPUT_REFERENCE", "PUBLIC_KEY",
-		"PUBLIC_KEY_SHA256", "ROOTFS_SIZE_MIB", "ROOTFS_SOURCE_DIR", "ROOTFS_UUID",
-		"SHARED_FORMAT", "SHARED_SIZE_MIB", "SIGNING_KEY", "SOURCE_COMMIT", "SOURCE_REFERENCE",
+		"ARCHITECTURE", "ARTIFACT_VERSION", "BUNDLE_DIR", "KERNEL_PATH", "OUTPUT_REFERENCE",
+		"ROOTFS_SIZE_MIB", "ROOTFS_SOURCE_DIR", "ROOTFS_UUID",
+		"SHARED_FORMAT", "SHARED_SIZE_MIB", "SOURCE_COMMIT", "SOURCE_REFERENCE",
 	} {
 		environment = append(environment, "SECONDBOX_CLIENT_IMAGE_"+name+"=set")
 	}
@@ -238,22 +238,18 @@ func TestClientExecutionImageBuilderRequiresExplicitBrowserPolicy(t *testing.T) 
 	}
 }
 
-func TestArtifactVerifierKeepsKnownSignedV1BundlesVerifiable(t *testing.T) {
+func TestArtifactVerifierKeepsKnownV1BundlesVerifiable(t *testing.T) {
 	verifier := readRepositoryFile(t, "runner/scripts/microvm-image/verify.sh")
 	for _, required := range []string{
 		"legacy_v1_policy_sha=\"46da289e29e1b51bac73d1619a7e2830d256b75a347533cde15bc38d36270e3f\"",
 		`([keys[]] | sort) ==`,
 		`(.source | has("browserPolicy") | not)`,
 		`(.source | has("ociMode") | not)`,
-		"unsigned browser policy is permitted only for the known signed v1 OCI contract",
+		"a source manifest without browser policy is permitted only for the known v1 OCI contract",
 	} {
 		if !strings.Contains(verifier, required) {
-			t.Errorf("artifact verifier is missing signed v1 compatibility guard %q", required)
+			t.Errorf("artifact verifier is missing v1 compatibility guard %q", required)
 		}
-	}
-	if strings.Index(verifier, "openssl dgst -sha256 -verify") >
-		strings.Index(verifier, "legacy_v1_contract=false") {
-		t.Fatal("artifact signature must be verified before selecting the signed v1 contract")
 	}
 }
 

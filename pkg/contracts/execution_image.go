@@ -44,7 +44,7 @@ func (request *StartSandboxRequest) UnmarshalJSON(data []byte) error {
 	return request.Image.Validate()
 }
 
-// ExecutionImage selects one signed OCI execution bundle for a lifecycle operation.
+// ExecutionImage selects one digest-pinned OCI execution bundle for a lifecycle operation.
 type ExecutionImage struct {
 	Reference string `json:"reference"`
 }

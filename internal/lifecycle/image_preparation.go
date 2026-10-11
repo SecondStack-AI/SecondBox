@@ -8,6 +8,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
@@ -17,7 +18,7 @@ import (
 const imagePreparationDeadline = 30 * time.Minute
 
 // prepareStartImage reuses durable lifecycle effects and Runner command delivery.
-// It returns before scheduling compute until signed metadata is available.
+// It returns before scheduling compute until image metadata is available.
 func (broker *PostgresEffectBroker) prepareStartImage(ctx context.Context, claim ports.LifecycleReconcileClaim, plan startPlan, now time.Time) ([]*runnerv1.AssetReference, string, bool, error) {
 	var state string
 	var evidence []byte
@@ -75,7 +76,7 @@ func (broker *PostgresEffectBroker) prepareStartImage(ctx context.Context, claim
 	if err := json.Unmarshal(evidence, &result); err != nil {
 		return nil, "", false, err
 	}
-	assets, err := broker.config.ExecutionImageAuthority.ImportManifest(result.Manifest, result.Signature)
+	assets, err := assetcatalog.ImportExecutionImageManifest(result.Manifest)
 	if err != nil {
 		return nil, "", false, err
 	}

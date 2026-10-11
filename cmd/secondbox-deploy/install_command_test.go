@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 func guidedFacts() install.HostFacts {
@@ -21,8 +23,7 @@ func guidedFacts() install.HostFacts {
 }
 
 func fakeGuidedRelease() releaseverify.VerifiedRelease {
-	fingerprint := "SHA256:" + strings.Repeat("A", 64)
-	return releaseverify.VerifiedRelease{Manifest: releasecontract.ArtifactManifest{Identity: releasecontract.Identity{Version: "0.4.0", Tag: "v0.4.0", SourceCommit: strings.Repeat("a", 40)}, ControlPlane: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/control-plane@sha256:" + strings.Repeat("b", 64)}, Runner: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/runner@sha256:" + strings.Repeat("c", 64)}, InstallerTools: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:" + strings.Repeat("1", 64)}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@sha256:" + strings.Repeat("2", 64)}, MicroVM: releasecontract.MicroVMArtifact{ImageReference: "ghcr.io/secondstack-ai/secondbox/microvm-artifacts@sha256:" + strings.Repeat("d", 64), SigningKeyFingerprint: fingerprint}, Binaries: []releasecontract.BinaryArtifact{{Name: "secondbox", Platform: "linux/amd64", SHA256: strings.Repeat("e", 64)}, {Name: "secondbox-deploy", Platform: "linux/amd64", SHA256: strings.Repeat("f", 64)}}, Platforms: releasecontract.PlatformMatrix{Guest: []string{"linux/amd64"}}}, ManifestBytes: []byte("verified manifest bytes")}
+	return releaseverify.VerifiedRelease{Manifest: releasecontract.ArtifactManifest{Identity: releasecontract.Identity{Version: "0.4.0", Tag: "v0.4.0", SourceCommit: strings.Repeat("a", 40)}, ControlPlane: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/control-plane@sha256:" + strings.Repeat("b", 64)}, Runner: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/runner@sha256:" + strings.Repeat("c", 64)}, InstallerTools: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:" + strings.Repeat("1", 64)}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@sha256:" + strings.Repeat("2", 64)}, MicroVM: releasecontract.MicroVMArtifact{ImageReference: "ghcr.io/secondstack-ai/secondbox/microvm-artifacts@sha256:" + strings.Repeat("d", 64)}, Binaries: []releasecontract.BinaryArtifact{{Name: "secondbox", Platform: "linux/amd64", SHA256: strings.Repeat("e", 64)}, {Name: "secondbox-deploy", Platform: "linux/amd64", SHA256: strings.Repeat("f", 64)}}, Platforms: releasecontract.PlatformMatrix{Guest: []string{"linux/amd64"}}}, ManifestBytes: []byte("verified manifest bytes")}
 }
 
 func usePublishedGuidedReleaseBuild(t *testing.T) {
@@ -353,5 +354,28 @@ func TestGuidedInstallerRefusesNonAMD64Releases(t *testing.T) {
 	}
 	if err := requireGuidedInstallerRelease(release("linux/arm64")); err == nil || !strings.Contains(err.Error(), "installs amd64 releases only") {
 		t.Fatalf("arm64 release error = %v", err)
+	}
+}
+
+// A plan accepted for a v5 or v6 release recorded its signing-key fingerprint;
+// update and resume compare it with the projection of the same release.
+func TestReleasePlanKeepsTheIdentityOfARecordedSignedRelease(t *testing.T) {
+	verified := fakeGuidedRelease()
+	verified.Manifest.SchemaVersion = releasecontract.SignedArtifactManifestSchema
+	verified.Manifest.MicroVM.LegacySignedManifestDigest = "sha256:" + strings.Repeat("3", 64)
+	verified.Manifest.MicroVM.LegacySigningKeyFingerprint = "SHA256:" + strings.Repeat("A", 64)
+	location := releasecontract.ArtifactManifestLocation("0.4.0", standardresources.ArchitectureAMD64)
+	current := releasePlan(verified, location)
+	var recorded install.ReleasePlan
+	if err := json.Unmarshal([]byte(`{"version":"0.4.0","artifactManifestUrl":"`+location+`","artifactManifestDigest":"`+current.ArtifactManifestDigest+`","signingKeyFingerprint":"SHA256:`+strings.Repeat("A", 64)+`","images":{},"binaryDigests":{},"expectedDownloadBytes":0}`), &recorded); err != nil {
+		t.Fatal(err)
+	}
+	recorded.Images, recorded.BinaryDigests, recorded.ExpectedDownloadBytes = current.Images, current.BinaryDigests, current.ExpectedDownloadBytes
+	if !sameUpdateTarget(recorded, current) {
+		t.Fatalf("recorded signed release plan %#v differs from its projection %#v", recorded, current)
+	}
+	verified.Manifest.MicroVM.LegacySigningKeyFingerprint = ""
+	if encoded, _ := install.Canonical(releasePlan(verified, location)); strings.Contains(string(encoded), "signingKeyFingerprint") {
+		t.Fatalf("current release plan records a signing key: %s", encoded)
 	}
 }

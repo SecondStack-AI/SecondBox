@@ -39,8 +39,6 @@ services:
       SECONDBOX_ASSIGNMENT_RETRY_LIMIT: "2"
       SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT: "3"
       SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS: ${SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS:?SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS is required}
-      SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY: /opt/secondbox/pki/execution-image.pub
-      SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256:?execution image publisher fingerprint is required}
       SECONDBOX_LISTEN_ADDR: "0.0.0.0:8080"
       SECONDBOX_PUBLIC_BASE_URL: "http://127.0.0.1:${SECONDBOX_SCENARIO_API_PORT:?SECONDBOX_SCENARIO_API_PORT is required}"
       SECONDBOX_LOG_PATH: /tmp/secondbox-scenario.log
@@ -141,10 +139,6 @@ services:
       # a golden memory file can be hard-linked into each jail and keep one
       # inode and one page cache across concurrent resumes.
       SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT: /w/snapshot-templates
-      SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY: /opt/secondbox-artifact-public-key.pem
-      SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256: ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 is required}
-      SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY: /opt/secondbox-artifact-public-key.pem
-      SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256: ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 is required}
       # The image cache must share a filesystem with the run dir, because a
       # start stages the selected rootfs into the run dir by reflink.
       SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /var/lib/secondbox-runner/execution-images
@@ -197,7 +191,6 @@ services:
       - ${SECONDBOX_SCENARIO_IDENTITY_DIR:?SECONDBOX_SCENARIO_IDENTITY_DIR is required}:/opt/secondbox-runner-identity:ro
       - ${SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR:?SECONDBOX_SCENARIO_ATTRIBUTED_GATEWAY_DIR is required}:/opt/secondbox-attributed-gateway:ro
       - ${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR is required}:/opt/secondbox-artifacts:ro
-      - ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is required}:/opt/secondbox-artifact-public-key.pem:ro
       - scenario-egress-context-config:/etc/secondbox-runner:ro
       - scenario-image-fetcher-socket:/run/secondbox-image-fetcher
       - ${SECONDBOX_SCENARIO_STATE_DIR:?SECONDBOX_SCENARIO_STATE_DIR is required}:/var/lib/secondbox-runner:rshared
@@ -220,8 +213,8 @@ services:
   # SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT before the Runner starts.
   #
   # It runs with the Runner's exact environment, so the kernel arguments, CPU
-  # template, vsock ports, signed bundle, and trust anchor that the template's
-  # compatibility key records cannot disagree with the Runner that must resolve
+  # template, vsock ports, and bundle that the template's compatibility key
+  # records cannot disagree with the Runner that must resolve
   # it. Only the Profile shape is stated separately, because that is the
   # operator's choice rather than the Runner's.
   #
@@ -256,7 +249,6 @@ services:
       - ./scenario-publish-snapshot-template.sh:/usr/local/bin/secondbox-scenario-publish-snapshot-template:ro
       - ${SECONDBOX_SCENARIO_BUILD_DIR:?SECONDBOX_SCENARIO_BUILD_DIR is required}/snapshot-template-publish.test:/opt/secondbox-snapshot-template-publish.test:ro
       - ${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR is required}:/opt/secondbox-artifacts:ro
-      - ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is required}:/opt/secondbox-artifact-public-key.pem:ro
       - scenario-egress-context-config:/etc/secondbox-runner:ro
       - ${SECONDBOX_SCENARIO_STATE_DIR:?SECONDBOX_SCENARIO_STATE_DIR is required}:/var/lib/secondbox-runner:rshared
       - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?SECONDBOX_SCENARIO_WORKSPACE_DIR is required}:/w:rshared
@@ -289,8 +281,6 @@ services:
       SECONDBOX_IMAGE_FETCHER_CACHE_ROOT: /cache
       SECONDBOX_IMAGE_FETCHER_REGISTRIES: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY:?scenario registry is required}
       SECONDBOX_IMAGE_FETCHER_CERTIFICATES: /run/image-registry/certificates
-      SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY: /run/image-trust/public.pem
-      SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY_SHA256: ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256:?execution image publisher fingerprint is required}
       SECONDBOX_IMAGE_FETCHER_MAX_DOWNLOAD_BYTES: "17179869184"
       SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES: "17179869184"
       SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES: "68719476736"
@@ -298,7 +288,6 @@ services:
       - ${SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR:?scenario execution image cache is required}:/cache
       - scenario-image-fetcher-socket:/run/secondbox-image-fetcher
       - ${SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY:?scenario registry directory is required}:/run/image-registry:ro
-      - ${SECONDBOX_SCENARIO_PKI_DIR:?scenario PKI is required}/execution-image.pub:/run/image-trust/public.pem:ro
     read_only: true
     tmpfs: ["/tmp:size=16m,mode=1777"]
     cap_drop: [ALL]

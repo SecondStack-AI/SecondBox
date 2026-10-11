@@ -335,9 +335,9 @@ const snapshotResumeLoadTimeout = 120 * time.Second
 // snapshotResumeTemplateKey derives the exact compatibility identity this start
 // needs. Every field comes from configuration the runner already verified or
 // from the Profile shape the assignment carries; nothing is hashed here. The
-// kernel, rootfs, and shared-image digests are read from the signed manifest,
-// whose signature Config.ValidateMicroVMTrustAnchor verified against the local
-// files before the Manager existed, so a start never rehashes an 11 GiB bundle.
+// kernel, rootfs, and shared-image digests are read from the bundle manifest,
+// which Config.ValidateMicroVMBundle verified against the local files before
+// the Manager existed, so a start never rehashes an 11 GiB bundle.
 //
 // A key this runner cannot state is a template it cannot resolve, so every
 // failure here is the same typed unavailability a cache miss raises.
@@ -355,16 +355,16 @@ func (m *Manager) snapshotResumeTemplateKey(
 	}
 	artifactDir := filepath.Dir(m.cfg.MicroVMKernelPath)
 	manifestPath := filepath.Join(artifactDir, "manifest.json")
-	manifest, err := loadSignedArtifactManifest(manifestPath)
+	manifest, err := loadBundleArtifactManifest(manifestPath)
 	if err != nil {
 		return SnapshotTemplateKey{}, fmt.Errorf(
-			"%w: read signed bundle manifest: %w", ErrSnapshotTemplateUnavailable, err,
+			"%w: read bundle manifest: %w", ErrSnapshotTemplateUnavailable, err,
 		)
 	}
 	manifestDigest, err := fileSHA256(manifestPath)
 	if err != nil {
 		return SnapshotTemplateKey{}, fmt.Errorf(
-			"%w: digest signed bundle manifest: %w", ErrSnapshotTemplateUnavailable, err,
+			"%w: digest bundle manifest: %w", ErrSnapshotTemplateUnavailable, err,
 		)
 	}
 	cpuFingerprint, err := hostCPUCompatibilityFingerprint()
@@ -388,11 +388,10 @@ func (m *Manager) snapshotResumeTemplateKey(
 		sharedImageSHA256 = manifest.Shared.SHA256
 	}
 	key := SnapshotTemplateKey{
-		ArtifactVersion:       manifest.ArtifactVersion,
-		Architecture:          manifest.Architecture,
-		SigningKeyFingerprint: m.cfg.MicroVMPublicKeySHA256,
-		SignedManifestDigest:  "sha256:" + manifestDigest,
-		KernelSHA256:          manifest.Kernel.SHA256,
+		ArtifactVersion:      manifest.ArtifactVersion,
+		Architecture:         manifest.Architecture,
+		BundleManifestDigest: "sha256:" + manifestDigest,
+		KernelSHA256:         manifest.Kernel.SHA256,
 		// The template's own boot arguments, which carry no Sandbox identity and
 		// no guest address. A resumed guest's kernel finished booting before the
 		// Sandbox existed, so its identity arrives at the assignment bind.

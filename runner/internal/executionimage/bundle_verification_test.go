@@ -12,14 +12,14 @@ import (
 
 func TestBundleVerificationRepeatsOnlyWhenBundleMetadataChanges(t *testing.T) {
 	manager := &Manager{}
-	directory, publicKeyPath := writeBundleFixture(t)
+	directory := writeBundleFixture(t)
 	verifications := 0
 	verify := func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 		verifications++
 		return []runtimemanager.VerifiedExecutionImageArtifact{{Label: "rootfs", Path: filepath.Join(directory, "rootfs.ext4")}}, nil
 	}
 	for range 4 {
-		artifacts, err := manager.memoizedBundleVerification(directory, publicKeyPath, verify)
+		artifacts, err := manager.memoizedBundleVerification(directory, verify)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -33,34 +33,25 @@ func TestBundleVerificationRepeatsOnlyWhenBundleMetadataChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "rootfs.ext4"), []byte("replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.memoizedBundleVerification(directory, publicKeyPath, verify); err != nil {
+	if _, err := manager.memoizedBundleVerification(directory, verify); err != nil {
 		t.Fatal(err)
 	}
 	if verifications != 2 {
 		t.Fatalf("replaced rootfs produced %d verifications", verifications)
 	}
-	if err := os.WriteFile(publicKeyPath, []byte("replacement key"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.memoizedBundleVerification(directory, publicKeyPath, verify); err != nil {
-		t.Fatal(err)
-	}
-	if verifications != 3 {
-		t.Fatalf("replaced signing key produced %d verifications", verifications)
-	}
 }
 
 func TestBundleVerificationRejectsBundleChangedDuringVerification(t *testing.T) {
 	manager := &Manager{}
-	directory, publicKeyPath := writeBundleFixture(t)
-	_, err := manager.memoizedBundleVerification(directory, publicKeyPath, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+	directory := writeBundleFixture(t)
+	_, err := manager.memoizedBundleVerification(directory, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 		return nil, os.WriteFile(filepath.Join(directory, "kernel"), []byte("substituted"), 0o600)
 	})
-	if err == nil || !strings.Contains(err.Error(), "changed during signature verification") {
+	if err == nil || !strings.Contains(err.Error(), "changed during bundle verification") {
 		t.Fatalf("substitution during verification error = %v", err)
 	}
 	verifications := 0
-	if _, err := manager.memoizedBundleVerification(directory, publicKeyPath, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+	if _, err := manager.memoizedBundleVerification(directory, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 		verifications++
 		return nil, nil
 	}); err != nil {
@@ -73,16 +64,16 @@ func TestBundleVerificationRejectsBundleChangedDuringVerification(t *testing.T) 
 
 func TestBundleVerificationForgetsUnreachableBundles(t *testing.T) {
 	manager := &Manager{}
-	removed, publicKeyPath := writeBundleFixture(t)
+	removed := writeBundleFixture(t)
 	verify := func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) { return nil, nil }
-	if _, err := manager.memoizedBundleVerification(removed, publicKeyPath, verify); err != nil {
+	if _, err := manager.memoizedBundleVerification(removed, verify); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(removed); err != nil {
 		t.Fatal(err)
 	}
-	retained, retainedKeyPath := writeBundleFixture(t)
-	if _, err := manager.memoizedBundleVerification(retained, retainedKeyPath, verify); err != nil {
+	retained := writeBundleFixture(t)
+	if _, err := manager.memoizedBundleVerification(retained, verify); err != nil {
 		t.Fatal(err)
 	}
 	if _, remembered := manager.rememberedBundleVerification(removed); remembered {
@@ -93,19 +84,15 @@ func TestBundleVerificationForgetsUnreachableBundles(t *testing.T) {
 	}
 }
 
-// writeBundleFixture writes every file a signed bundle verification reads. The
+// writeBundleFixture writes every file a bundle verification reads. The
 // content is irrelevant here; only its filesystem identity is under test.
-func writeBundleFixture(t *testing.T) (directory string, publicKeyPath string) {
+func writeBundleFixture(t *testing.T) string {
 	t.Helper()
-	directory = t.TempDir()
-	for _, name := range config.SignedArtifactFileNames {
+	directory := t.TempDir()
+	for _, name := range config.BundleArtifactFileNames {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte("fixture:"+name), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	publicKeyPath = filepath.Join(t.TempDir(), "execution-image-public.pem")
-	if err := os.WriteFile(publicKeyPath, []byte("fixture:public key"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return directory, publicKeyPath
+	return directory
 }

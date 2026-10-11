@@ -273,7 +273,7 @@ func readRuntimeInputs(mode string) (runtimeInputs, error) {
 	if inputs.guestCIDR, err = required("SECONDBOX_SCENARIO_GUEST_CIDR"); err != nil {
 		return runtimeInputs{}, err
 	}
-	// The RunnerPool and Profile take the architecture of the signed bundle the
+	// The RunnerPool and Profile take the architecture of the bundle the
 	// scenario Runner boots.
 	if inputs.architecture, err = required("SECONDBOX_SCENARIO_ARCHITECTURE"); err != nil {
 		return runtimeInputs{}, err

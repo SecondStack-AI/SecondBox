@@ -17,10 +17,9 @@ if [[ "$SECONDBOX_REQUIRE_QUALIFIED_LIFECYCLE" != "1" ]]; then
   exit 1
 fi
 
-# The lifecycle benchmark reuses the qualified artifact bundle, trust anchor and
-# Workspace root prepared by `just prepare-stress`.
+# The lifecycle benchmark reuses the qualified artifact bundle and Workspace
+# root prepared by `just prepare-stress`.
 uses_local_preparation=false
-uses_local_public_key=false
 if [[ -z "${SECONDBOX_LIFECYCLE_CONFIG:-}" ]]; then
   export SECONDBOX_LIFECYCLE_CONFIG="$repo_root/scripts/lifecycle-config.example.json"
 fi
@@ -34,11 +33,6 @@ fi
 if [[ -z "${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:-}" ]]; then
   export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$local_root/artifacts"
   uses_local_preparation=true
-fi
-if [[ -z "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:-}" ]]; then
-  export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$local_root/trust/manifest-public.pem"
-  uses_local_preparation=true
-  uses_local_public_key=true
 fi
 if [[ -z "${SECONDBOX_RUNNER_WORKSPACE_ROOT:-}" ]]; then
   export SECONDBOX_RUNNER_WORKSPACE_ROOT="$local_root/workspaces"
@@ -61,25 +55,6 @@ for command in date jq openssl realpath sha256sum; do
     exit 1
   }
 done
-
-if [[ -z "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:-}" &&
-      "$uses_local_public_key" == "true" ]]; then
-  fingerprint_file="$local_root/trust/manifest-public.sha256"
-  if [[ ! -f "$fingerprint_file" || -L "$fingerprint_file" ]]; then
-    echo "SecondBox lifecycle trust fingerprint is missing; run: just prepare-stress" >&2
-    exit 1
-  fi
-  export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
-  SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$(<"$fingerprint_file")"
-elif [[ -z "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:-}" ]]; then
-  echo "SecondBox lifecycle benchmark missing required variable: SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" >&2
-  exit 1
-fi
-[[ "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
-  {
-    echo "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters" >&2
-    exit 1
-  }
 
 if [[ "$SECONDBOX_LIFECYCLE_CONFIG" != /* ||
       -L "$SECONDBOX_LIFECYCLE_CONFIG" ||

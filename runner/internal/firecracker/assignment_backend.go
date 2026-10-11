@@ -39,33 +39,33 @@ type activeRunnerAssignment struct {
 	resolvedImageDigest     string
 }
 
-type signedArtifactManifest struct {
+type bundleArtifactManifest struct {
 	ArtifactVersion string `json:"artifactVersion"`
 	Architecture    string `json:"architecture"`
 	GuestProtocol   struct {
 		Minimum uint32 `json:"minimum"`
 		Maximum uint32 `json:"maximum"`
 	} `json:"guestProtocol"`
-	RuntimeBundle   signedArtifactComponent `json:"runtimeBundle"`
-	ToolchainBundle signedArtifactComponent `json:"toolchainBundle"`
-	// Kernel, Rootfs, and Shared carry the digests the signature already covers.
-	// Config.ValidateMicroVMTrustAnchor proves the runner's local files match
+	RuntimeBundle   bundleArtifactComponent `json:"runtimeBundle"`
+	ToolchainBundle bundleArtifactComponent `json:"toolchainBundle"`
+	// Kernel, Rootfs, and Shared carry the bundle file digests.
+	// Config.ValidateMicroVMBundle proves the runner's local files match
 	// them before the Manager exists, so a snapshot-resume compatibility key can
 	// state the launch-image identity without rehashing multi-gigabyte files on
 	// a start path.
-	Kernel signedArtifactImage `json:"kernel"`
-	Rootfs signedArtifactImage `json:"rootfs"`
-	Shared signedArtifactImage `json:"shared"`
+	Kernel bundleArtifactImage `json:"kernel"`
+	Rootfs bundleArtifactImage `json:"rootfs"`
+	Shared bundleArtifactImage `json:"shared"`
 }
 
-type signedArtifactComponent struct {
+type bundleArtifactComponent struct {
 	ArtifactID             string   `json:"artifactId"`
 	Path                   string   `json:"path"`
 	ManifestDigest         string   `json:"manifestDigest"`
 	MandatoryGuestFeatures []string `json:"mandatoryGuestFeatures"`
 }
 
-type signedArtifactImage struct {
+type bundleArtifactImage struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 }
@@ -202,7 +202,7 @@ func (b *AssignmentBackend) StartupTiming() (uint64, time.Duration) {
 	return b.manager.StartupTiming()
 }
 
-// Readiness verifies signed artifacts and host prerequisites before capacity advertisement.
+// Readiness verifies bundle artifacts and host prerequisites before capacity advertisement.
 func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.BackendReadiness, error) {
 	if err := b.manager.CleanupHealth(); err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness cleanup evidence: %w", err)
@@ -218,9 +218,9 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness close KVM probe: %w", err)
 	}
 	cfg := b.manager.cfg
-	manifest, err := loadSignedArtifactManifest(filepath.Join(filepath.Dir(cfg.MicroVMKernelPath), "manifest.json"))
+	manifest, err := loadBundleArtifactManifest(filepath.Join(filepath.Dir(cfg.MicroVMKernelPath), "manifest.json"))
 	if err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness signed compatibility metadata: %w", err)
+		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness bundle compatibility metadata: %w", err)
 	}
 	if strings.TrimSpace(cfg.MicroVMJailerChrootBaseDir) == "" ||
 		cfg.MicroVMJailerUIDStart < 1 ||
@@ -335,16 +335,16 @@ func firecrackerIsolationReady(cfg *config.Config) bool {
 // name lets each Instance open its own staged disks. An unjailed runner cannot
 // resume at all.
 //
-// The template must already exist and must have been built from the exact signed
+// The template must already exist and must have been built from the exact
 // bundle this runner verified. A Profile pins runtime and toolchain digests and
-// the runner refuses any assignment whose signed components differ from its own,
+// the runner refuses any assignment whose bundle components differ from its own,
 // so a template keyed to this bundle is a template compatible with every Profile
 // this runner can serve. A runner with a configured but empty cache advertises
 // nothing, because snapshot resume has no cold-boot fallback and a Profile
 // placed here would fail every start.
 func (b *AssignmentBackend) snapshotResumeReady(
 	cfg *config.Config,
-	manifest signedArtifactManifest,
+	manifest bundleArtifactManifest,
 ) (bool, error) {
 	if cfg.MicroVMAllowUnjailed || b.manager == nil || b.manager.snapshotTemplates == nil {
 		return false, nil
@@ -376,7 +376,7 @@ func runnerAllocatableCapacity(cfg *config.Config) *runnerprotocol.Capacity {
 }
 
 func firecrackerMaterializationEvidence(
-	manifest signedArtifactManifest,
+	manifest bundleArtifactManifest,
 	verifiedAt time.Time,
 ) ([]*runnerprotocol.BackendMaterializationEvidence, error) {
 	digest := func(value string) string {
@@ -498,7 +498,6 @@ func (b *AssignmentBackend) ValidateAssignment(
 		"local-workspace":       true,
 		"network-policy":        true,
 		"per-exec-attribution":  b.manager.cfg.NetworkPolicyEgressContexts.HasAttributedGateway(),
-		"signed-artifacts":      true,
 		"storage":               true,
 		"tap":                   true,
 		"vsock":                 true,
@@ -882,10 +881,10 @@ func fenceTerminationEvidenceDigest(fence *runnerprotocol.AssignmentFence) strin
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-// SignedBundleGuestStart is what one verified signed bundle grants an
+// BundleGuestStart is what one verified bundle grants an
 // assignment: its build identity, the component digests its guest reports,
 // and the mandatory guest features of both components.
-type SignedBundleGuestStart struct {
+type BundleGuestStart struct {
 	GuestBuildID            string
 	ImageManifestDigest     string
 	ToolchainManifestDigest string
@@ -893,39 +892,39 @@ type SignedBundleGuestStart struct {
 }
 
 // assignmentGuestProtocolStart resolves the guest a start boots. A default-image
-// assignment names no assets and boots the Runner's installed signed bundle,
+// assignment names no assets and boots the Runner's installed bundle,
 // whichever release that is; a client-selected image names its components.
-func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (SignedBundleGuestStart, error) {
+func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (BundleGuestStart, error) {
 	if assignment.ExecutionImage == nil {
 		if len(assignment.Assets) != 0 {
-			return SignedBundleGuestStart{}, fmt.Errorf("SecondBox default-image assignment must not select assets")
+			return BundleGuestStart{}, fmt.Errorf("SecondBox default-image assignment must not select assets")
 		}
-		return InstalledSignedBundleGuestStart(filepath.Dir(b.manager.cfg.MicroVMKernelPath))
+		return InstalledBundleGuestStart(filepath.Dir(b.manager.cfg.MicroVMKernelPath))
 	}
-	return ResolveSignedBundleGuestStart(assignment, artifactDirectory)
+	return ResolveBundleGuestStart(assignment, artifactDirectory)
 }
 
-// InstalledSignedBundleGuestStart grants a start the identity of an already
+// InstalledBundleGuestStart grants a start the identity of an already
 // verified bundle directory without consulting the assignment.
-func InstalledSignedBundleGuestStart(artifactDirectory string) (SignedBundleGuestStart, error) {
-	manifest, err := loadSignedArtifactManifest(filepath.Join(artifactDirectory, "manifest.json"))
+func InstalledBundleGuestStart(artifactDirectory string) (BundleGuestStart, error) {
+	manifest, err := loadBundleArtifactManifest(filepath.Join(artifactDirectory, "manifest.json"))
 	if err != nil {
-		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle compatibility metadata: %w", err)
+		return BundleGuestStart{}, fmt.Errorf("SecondBox bundle compatibility metadata: %w", err)
 	}
-	return signedBundleGuestStart(manifest), nil
+	return bundleGuestStart(manifest), nil
 }
 
-// ResolveSignedBundleGuestStart matches a client-selected image assignment's
-// runtime and toolchain assets to the signed manifest of an already verified
+// ResolveBundleGuestStart matches a client-selected image assignment's
+// runtime and toolchain assets to the manifest of an already verified
 // bundle directory. Every backend that launches a selected image shares this check.
-func ResolveSignedBundleGuestStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (SignedBundleGuestStart, error) {
+func ResolveBundleGuestStart(assignment *runnerprotocol.AssignmentCommand, artifactDirectory string) (BundleGuestStart, error) {
 	manifestPath := filepath.Join(artifactDirectory, "manifest.json")
-	manifest, err := loadSignedArtifactManifest(manifestPath)
+	manifest, err := loadBundleArtifactManifest(manifestPath)
 	if err != nil {
-		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle compatibility metadata: %w", err)
+		return BundleGuestStart{}, fmt.Errorf("SecondBox bundle compatibility metadata: %w", err)
 	}
 	if len(assignment.Assets) != 2 {
-		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle assignment must select exactly runtime and toolchain assets")
+		return BundleGuestStart{}, fmt.Errorf("SecondBox bundle assignment must select exactly runtime and toolchain assets")
 	}
 	runtimeAsset, err := matchAssignmentComponent(
 		assignment.Assets,
@@ -933,7 +932,7 @@ func ResolveSignedBundleGuestStart(assignment *runnerprotocol.AssignmentCommand,
 		manifest,
 	)
 	if err != nil {
-		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle runtime asset: %w", err)
+		return BundleGuestStart{}, fmt.Errorf("SecondBox bundle runtime asset: %w", err)
 	}
 	toolchainAsset, err := matchAssignmentComponent(
 		assignment.Assets,
@@ -941,20 +940,20 @@ func ResolveSignedBundleGuestStart(assignment *runnerprotocol.AssignmentCommand,
 		manifest,
 	)
 	if err != nil {
-		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle toolchain asset: %w", err)
+		return BundleGuestStart{}, fmt.Errorf("SecondBox bundle toolchain asset: %w", err)
 	}
 	if runtimeAsset == toolchainAsset {
-		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle runtime and toolchain assets must be distinct")
+		return BundleGuestStart{}, fmt.Errorf("SecondBox bundle runtime and toolchain assets must be distinct")
 	}
 	if assignment.Assets[runtimeAsset].GuestProtocolGeneration !=
 		assignment.Assets[toolchainAsset].GuestProtocolGeneration {
-		return SignedBundleGuestStart{}, fmt.Errorf("SecondBox signed bundle runtime and toolchain guest generations differ")
+		return BundleGuestStart{}, fmt.Errorf("SecondBox bundle runtime and toolchain guest generations differ")
 	}
-	return signedBundleGuestStart(manifest), nil
+	return bundleGuestStart(manifest), nil
 }
 
-func signedBundleGuestStart(manifest signedArtifactManifest) SignedBundleGuestStart {
-	return SignedBundleGuestStart{
+func bundleGuestStart(manifest bundleArtifactManifest) BundleGuestStart {
+	return BundleGuestStart{
 		GuestBuildID:            manifest.ArtifactVersion,
 		ImageManifestDigest:     manifest.RuntimeBundle.ManifestDigest,
 		ToolchainManifestDigest: manifest.ToolchainBundle.ManifestDigest,
@@ -982,8 +981,8 @@ func mergeUniqueStrings(groups ...[]string) []string {
 
 func matchAssignmentComponent(
 	assets []*runnerprotocol.AssetReference,
-	component signedArtifactComponent,
-	manifest signedArtifactManifest,
+	component bundleArtifactComponent,
+	manifest bundleArtifactManifest,
 ) (int, error) {
 	for index, asset := range assets {
 		if asset == nil ||
@@ -995,7 +994,7 @@ func matchAssignmentComponent(
 			asset.GuestProtocolGeneration < manifest.GuestProtocol.Minimum ||
 			asset.GuestProtocolGeneration > manifest.GuestProtocol.Maximum ||
 			!equalStringSets(asset.MandatoryGuestFeatures, component.MandatoryGuestFeatures) {
-			return -1, fmt.Errorf("assignment compatibility evidence does not match the locally verified signed component")
+			return -1, fmt.Errorf("assignment compatibility evidence does not match the locally verified bundle component")
 		}
 		for _, name := range asset.MandatoryGuestFeatures {
 			if _, err := guestFeatureFromContractName(name); err != nil {
@@ -1004,7 +1003,7 @@ func matchAssignmentComponent(
 		}
 		return index, nil
 	}
-	return -1, fmt.Errorf("assignment does not select signed component %q", component.ArtifactID)
+	return -1, fmt.Errorf("assignment does not select bundle component %q", component.ArtifactID)
 }
 
 func equalStringSets(left, right []string) bool {
@@ -1029,21 +1028,21 @@ func equalStringSets(left, right []string) bool {
 	return true
 }
 
-func loadSignedArtifactManifest(path string) (signedArtifactManifest, error) {
+func loadBundleArtifactManifest(path string) (bundleArtifactManifest, error) {
 	data, err := config.ReadArtifactMetadata(path, config.MaximumArtifactManifestBytes)
 	if err != nil {
-		return signedArtifactManifest{}, err
+		return bundleArtifactManifest{}, err
 	}
-	var manifest signedArtifactManifest
+	var manifest bundleArtifactManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return signedArtifactManifest{}, fmt.Errorf("decode signed artifact manifest: %w", err)
+		return bundleArtifactManifest{}, fmt.Errorf("decode bundle artifact manifest: %w", err)
 	}
 	if strings.TrimSpace(manifest.ArtifactVersion) == "" {
-		return signedArtifactManifest{}, fmt.Errorf("signed artifact manifest is missing artifactVersion")
+		return bundleArtifactManifest{}, fmt.Errorf("bundle artifact manifest is missing artifactVersion")
 	}
 	if manifest.Architecture != runtime.GOARCH {
-		return signedArtifactManifest{}, fmt.Errorf(
-			"signed artifact architecture %q does not match runner architecture %q",
+		return bundleArtifactManifest{}, fmt.Errorf(
+			"bundle artifact architecture %q does not match runner architecture %q",
 			manifest.Architecture,
 			runtime.GOARCH,
 		)
@@ -1052,13 +1051,13 @@ func loadSignedArtifactManifest(path string) (signedArtifactManifest, error) {
 		manifest.GuestProtocol.Maximum == 0 ||
 		manifest.GuestProtocol.Minimum > 1 ||
 		manifest.GuestProtocol.Maximum < 1 {
-		return signedArtifactManifest{}, fmt.Errorf(
-			"signed artifact guest protocol range %d..%d is incompatible with runner generation 1",
+		return bundleArtifactManifest{}, fmt.Errorf(
+			"bundle artifact guest protocol range %d..%d is incompatible with runner generation 1",
 			manifest.GuestProtocol.Minimum,
 			manifest.GuestProtocol.Maximum,
 		)
 	}
-	for label, component := range map[string]signedArtifactComponent{
+	for label, component := range map[string]bundleArtifactComponent{
 		"runtime": manifest.RuntimeBundle, "toolchain": manifest.ToolchainBundle,
 	} {
 		if strings.TrimSpace(component.ArtifactID) == "" ||
@@ -1066,19 +1065,19 @@ func loadSignedArtifactManifest(path string) (signedArtifactManifest, error) {
 			len(component.ManifestDigest) != len("sha256:")+sha256.Size*2 ||
 			filepath.Base(component.Path) != component.Path ||
 			component.Path == "." {
-			return signedArtifactManifest{}, fmt.Errorf("signed artifact %s component metadata is incomplete", label)
+			return bundleArtifactManifest{}, fmt.Errorf("bundle artifact %s component metadata is incomplete", label)
 		}
 		actual, err := fileSHA256(filepath.Join(filepath.Dir(path), component.Path))
 		if err != nil {
-			return signedArtifactManifest{}, fmt.Errorf("signed artifact %s component manifest: %w", label, err)
+			return bundleArtifactManifest{}, fmt.Errorf("bundle artifact %s component manifest: %w", label, err)
 		}
 		if "sha256:"+actual != component.ManifestDigest {
-			return signedArtifactManifest{}, fmt.Errorf("signed artifact %s component manifest digest mismatch", label)
+			return bundleArtifactManifest{}, fmt.Errorf("bundle artifact %s component manifest digest mismatch", label)
 		}
 	}
 	if manifest.RuntimeBundle.ArtifactID == manifest.ToolchainBundle.ArtifactID ||
 		manifest.RuntimeBundle.ManifestDigest == manifest.ToolchainBundle.ManifestDigest {
-		return signedArtifactManifest{}, fmt.Errorf("signed runtime and toolchain components must be distinct")
+		return bundleArtifactManifest{}, fmt.Errorf("bundle runtime and toolchain components must be distinct")
 	}
 	return manifest, nil
 }

@@ -2106,7 +2106,7 @@ type RunnerCapabilities struct {
 	DataPlaneReady           bool                   `protobuf:"varint,11,opt,name=data_plane_ready,json=dataPlaneReady,proto3" json:"data_plane_ready,omitempty"`
 	// snapshot_resume_ready is true only when this runner is configured with a
 	// resume template cache root, requires the jailer, and holds at least one
-	// admitted template built from the exact signed bundle it verified. It is not
+	// admitted template built from the exact bundle it verified. It is not
 	// a prerequisite: a runner without it stays fully eligible for cold boot.
 	SnapshotResumeReady      bool `protobuf:"varint,12,opt,name=snapshot_resume_ready,json=snapshotResumeReady,proto3" json:"snapshot_resume_ready,omitempty"`
 	ClientSelectedImageReady bool `protobuf:"varint,14,opt,name=client_selected_image_ready,json=clientSelectedImageReady,proto3" json:"client_selected_image_ready,omitempty"`
@@ -3863,7 +3863,6 @@ type PrepareImageResult struct {
 	Stage          AssignmentProgressStage `protobuf:"varint,4,opt,name=stage,proto3,enum=secondbox.runner.v1.AssignmentProgressStage" json:"stage,omitempty"`
 	ResolvedDigest string                  `protobuf:"bytes,5,opt,name=resolved_digest,json=resolvedDigest,proto3" json:"resolved_digest,omitempty"`
 	Manifest       []byte                  `protobuf:"bytes,6,opt,name=manifest,proto3" json:"manifest,omitempty"`
-	Signature      []byte                  `protobuf:"bytes,7,opt,name=signature,proto3" json:"signature,omitempty"`
 	Failure        string                  `protobuf:"bytes,8,opt,name=failure,proto3" json:"failure,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -3937,13 +3936,6 @@ func (x *PrepareImageResult) GetResolvedDigest() string {
 func (x *PrepareImageResult) GetManifest() []byte {
 	if x != nil {
 		return x.Manifest
-	}
-	return nil
-}
-
-func (x *PrepareImageResult) GetSignature() []byte {
-	if x != nil {
-		return x.Signature
 	}
 	return nil
 }
@@ -9613,7 +9605,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\n" +
 	"tenant_ref\x18\x04 \x01(\tR\ttenantRef\x12\x1c\n" +
 	"\treference\x18\x05 \x01(\tR\treference\x12(\n" +
-	"\x10deadline_unix_ms\x18\x06 \x01(\x04R\x0edeadlineUnixMs\"\xb3\x02\n" +
+	"\x10deadline_unix_ms\x18\x06 \x01(\x04R\x0edeadlineUnixMs\"\xa6\x02\n" +
 	"\x12PrepareImageResult\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -9621,9 +9613,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12B\n" +
 	"\x05stage\x18\x04 \x01(\x0e2,.secondbox.runner.v1.AssignmentProgressStageR\x05stage\x12'\n" +
 	"\x0fresolved_digest\x18\x05 \x01(\tR\x0eresolvedDigest\x12\x1a\n" +
-	"\bmanifest\x18\x06 \x01(\fR\bmanifest\x12\x1c\n" +
-	"\tsignature\x18\a \x01(\fR\tsignature\x12\x18\n" +
-	"\afailure\x18\b \x01(\tR\afailure\"j\n" +
+	"\bmanifest\x18\x06 \x01(\fR\bmanifest\x12\x18\n" +
+	"\afailure\x18\b \x01(\tR\afailureJ\x04\b\a\x10\bR\tsignature\"j\n" +
 	"\x1dAttributedExecutionPermission\x12\x18\n" +
 	"\agateway\x18\x01 \x01(\tR\agateway\x12/\n" +
 	"\x13maximum_connections\x18\x02 \x01(\rR\x12maximumConnections\"\xbb\x01\n" +

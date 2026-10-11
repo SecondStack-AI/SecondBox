@@ -35,15 +35,13 @@ var artifactEvidenceFiles = map[string]string{
 	"debianLicenseInventory": "rootfs-debian-license-inventory.json",
 	"pythonLicenseInventory": "rootfs-python-license-inventory.json",
 	"manifest":               "manifest.json",
-	"signature":              "manifest.sig",
 	"checksums":              "SHA256SUMS",
-	"bundledVerificationKey": "signing.pub",
 }
 
 func main() {
 	var artifactsDir string
 	var outputPath string
-	flag.StringVar(&artifactsDir, "artifacts", "", "signed Firecracker artifact directory")
+	flag.StringVar(&artifactsDir, "artifacts", "", "Firecracker artifact directory")
 	flag.StringVar(&outputPath, "out", "", "new owner-only evidence JSON path")
 	flag.Parse()
 	if err := collect(artifactsDir, outputPath); err != nil {

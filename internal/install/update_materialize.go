@@ -129,7 +129,7 @@ func StageUpdateRelease(ctx context.Context, plan InstallPlan, update UpdateReco
 
 func validateVerifiedRelease(target ReleasePlan, verified releaseverify.VerifiedRelease) error {
 	manifest := verified.Manifest
-	if releasecontract.Digest(verified.ManifestBytes) != target.ArtifactManifestDigest || manifest.Version != target.Version || manifest.ControlPlane.Reference != target.Images["control-plane"] || manifest.Runner.Reference != target.Images["runner"] || manifest.InstallerTools.Reference != target.Images["installer-tools"] || manifest.MicroVM.ImageReference != target.Images["microvm-artifacts"] || manifest.BundledServices.Postgres != target.Images["postgres"] || manifest.MicroVM.SigningKeyFingerprint != target.SigningKeyFingerprint {
+	if releasecontract.Digest(verified.ManifestBytes) != target.ArtifactManifestDigest || manifest.Version != target.Version || manifest.ControlPlane.Reference != target.Images["control-plane"] || manifest.Runner.Reference != target.Images["runner"] || manifest.InstallerTools.Reference != target.Images["installer-tools"] || manifest.MicroVM.ImageReference != target.Images["microvm-artifacts"] || manifest.BundledServices.Postgres != target.Images["postgres"] {
 		return installerError("verified update release differs from journaled target identity", nil)
 	}
 	for _, name := range []string{"secondbox", "secondbox-deploy"} {

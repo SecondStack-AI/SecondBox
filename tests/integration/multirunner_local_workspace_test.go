@@ -306,7 +306,6 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 			HeartbeatTimeout:        time.Minute,
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
-			ExecutionImageAuthority: testExecutionImageAuthority(t),
 			SessionCanceller:        multirunnerSessionCanceller{},
 			NewID: func(prefix string) string {
 				idSequence++
@@ -913,7 +912,7 @@ func multirunnerRecordEvent(
 	}
 }
 
-// selectedImageComponents returns the signed runtime and toolchain components a
+// selectedImageComponents returns the runtime and toolchain components a
 // fixture execution image manifest binds.
 func selectedImageComponents() (map[string]any, map[string]any) {
 	component := func(name, fill string) map[string]any {

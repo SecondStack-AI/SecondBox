@@ -5,13 +5,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
-for cmd in blkid fakeroot mkfs.ext4 openssl sha256sum truncate; do
+for cmd in blkid fakeroot mkfs.ext4 sha256sum truncate; do
 	command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 2; }
 done
-
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work_dir/private.pem" >/dev/null 2>&1
-openssl pkey -in "$work_dir/private.pem" -pubout -out "$work_dir/public.pem" >/dev/null 2>&1
-public_key_fingerprint="$(openssl pkey -pubin -in "$work_dir/public.pem" -outform DER | sha256sum | awk '{print $1}')"
 
 make_root() {
 	root="$1"
@@ -139,20 +135,11 @@ EOF
 			rootfs-debian-license-inventory.json rootfs-python-license-inventory.json \
 			runtime-manifest.json toolchain-manifest.json manifest.json > SHA256SUMS
 	)
-	openssl dgst -sha256 -sign "$work_dir/private.pem" -out "$artifact_dir/manifest.sig" "$artifact_dir/manifest.json"
 }
 
 clean_artifacts="$work_dir/clean-artifacts"
 make_artifact_dir "$clean_artifacts" "$clean_image" "$clean_image" forbid
-"$script_dir/verify.sh" "$clean_artifacts" "$work_dir/public.pem" "$public_key_fingerprint"
-
-unsigned_artifacts="$work_dir/unsigned-artifacts"
-cp -a "$clean_artifacts" "$unsigned_artifacts"
-rm "$unsigned_artifacts/manifest.sig"
-if "$script_dir/verify.sh" "$unsigned_artifacts" "$work_dir/public.pem" "$public_key_fingerprint" >/dev/null 2>&1; then
-	echo "expected unsigned artifact rejection" >&2
-	exit 1
-fi
+"$script_dir/verify.sh" "$clean_artifacts"
 
 incompatible_artifacts="$work_dir/incompatible-artifacts"
 cp -a "$clean_artifacts" "$incompatible_artifacts"
@@ -162,9 +149,8 @@ sed -i 's/"architecture": "amd64"/"architecture": "incompatible"/' "$incompatibl
 	sed -i '/  manifest.json$/d' SHA256SUMS
 	sha256sum manifest.json >> SHA256SUMS
 )
-openssl dgst -sha256 -sign "$work_dir/private.pem" -out "$incompatible_artifacts/manifest.sig" "$incompatible_artifacts/manifest.json"
-if "$script_dir/verify.sh" "$incompatible_artifacts" "$work_dir/public.pem" "$public_key_fingerprint" >/dev/null 2>&1; then
-	echo "expected incompatible signed architecture rejection" >&2
+if "$script_dir/verify.sh" "$incompatible_artifacts" >/dev/null 2>&1; then
+	echo "expected incompatible architecture rejection" >&2
 	exit 1
 fi
 
@@ -176,14 +162,14 @@ if "$script_dir/verify-browser-surface.sh" --rootfs "$bad_image" >/dev/null 2>&1
 fi
 bad_artifacts="$work_dir/bad-artifacts"
 make_artifact_dir "$bad_artifacts" "$bad_image" "$clean_image" forbid
-if "$script_dir/verify.sh" "$bad_artifacts" "$work_dir/public.pem" "$public_key_fingerprint" >/dev/null 2>&1; then
+if "$script_dir/verify.sh" "$bad_artifacts" >/dev/null 2>&1; then
 	echo "expected artifact verification browser launcher rejection" >&2
 	exit 1
 fi
 
 allowed_browser_artifacts="$work_dir/allowed-browser-artifacts"
 make_artifact_dir "$allowed_browser_artifacts" "$bad_image" "$clean_image" allow
-"$script_dir/verify.sh" "$allowed_browser_artifacts" "$work_dir/public.pem" "$public_key_fingerprint"
+"$script_dir/verify.sh" "$allowed_browser_artifacts"
 
 bad_shared_root="$work_dir/bad-shared-root"
 make_root "$bad_shared_root"

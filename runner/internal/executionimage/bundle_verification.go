@@ -12,7 +12,7 @@ import (
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
-// Verifying a signed bundle hashes its kernel, rootfs and shared image, which
+// Verifying a bundle hashes its kernel, rootfs and shared image, which
 // are gigabytes. A Sandbox start cannot afford that inside its start deadline,
 // so each bundle directory is verified once and afterwards proven unchanged by
 // the filesystem metadata of every file the verification read. Metadata drift
@@ -23,15 +23,14 @@ type bundleVerification struct {
 	identities []runtimemanager.VerifiedExecutionImageArtifact
 }
 
-func (manager *Manager) verifiedBundleArtifacts(ctx context.Context, directory, publicKeyPath, publicKeySHA256 string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
-	return manager.memoizedBundleVerification(directory, publicKeyPath, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
-		return manager.verifyAndCaptureArtifacts(ctx, directory, publicKeyPath, publicKeySHA256)
+func (manager *Manager) verifiedBundleArtifacts(ctx context.Context, directory string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+	return manager.memoizedBundleVerification(directory, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+		return manager.verifyAndCaptureArtifacts(ctx, directory)
 	})
 }
 
 func (manager *Manager) memoizedBundleVerification(
 	directory string,
-	publicKeyPath string,
 	verify func() ([]runtimemanager.VerifiedExecutionImageArtifact, error),
 ) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 	if recorded, remembered := manager.rememberedBundleVerification(directory); remembered {
@@ -43,7 +42,7 @@ func (manager *Manager) memoizedBundleVerification(
 			return slices.Clone(recorded.artifacts), nil
 		}
 	}
-	before, err := captureBundleIdentities(directory, publicKeyPath)
+	before, err := captureBundleIdentities(directory)
 	if err != nil {
 		return nil, err
 	}
@@ -51,13 +50,13 @@ func (manager *Manager) memoizedBundleVerification(
 	if err != nil {
 		return nil, err
 	}
-	after, err := captureBundleIdentities(directory, publicKeyPath)
+	after, err := captureBundleIdentities(directory)
 	if err != nil {
 		return nil, err
 	}
 	for index := range before {
 		if !sameVerifiedArtifactIdentity(before[index], after[index]) {
-			return nil, fmt.Errorf("SecondBox execution image bundle %s changed during signature verification", before[index].Label)
+			return nil, fmt.Errorf("SecondBox execution image bundle %s changed during bundle verification", before[index].Label)
 		}
 	}
 	manager.rememberBundleVerification(directory, bundleVerification{artifacts: artifacts, identities: after})
@@ -87,20 +86,16 @@ func (manager *Manager) rememberBundleVerification(directory string, verificatio
 	manager.verifications[directory] = verification
 }
 
-func captureBundleIdentities(directory, publicKeyPath string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
-	identities := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, len(config.SignedArtifactFileNames)+1)
-	for _, name := range config.SignedArtifactFileNames {
+func captureBundleIdentities(directory string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+	identities := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, len(config.BundleArtifactFileNames))
+	for _, name := range config.BundleArtifactFileNames {
 		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(name, filepath.Join(directory, name))
 		if err != nil {
 			return nil, fmt.Errorf("record execution image bundle file %s identity: %w", name, err)
 		}
 		identities = append(identities, identity)
 	}
-	publicKey, err := runtimemanager.CaptureVerifiedExecutionImageArtifact("signing public key", publicKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("record execution image signing public key identity: %w", err)
-	}
-	return append(identities, publicKey), nil
+	return identities, nil
 }
 
 func bundleIdentitiesUnchanged(identities []runtimemanager.VerifiedExecutionImageArtifact) (bool, error) {

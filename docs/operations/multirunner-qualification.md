@@ -41,7 +41,7 @@ Firecracker lifecycle and two-root isolation on one Btrfs/KVM machine.
 - KVM device: character device `/dev/kvm`, major/minor `10,232`, readable and
   writable by the qualification user.
 - Firecracker: `v1.16.1`.
-- Signed artifact version:
+- Artifact version:
   `secondbox-local-cow-c7b9bbe-20260729-ext4-entropy2`.
 - Manifest SHA-256:
   `9eb58e3d8f3a030b1522c88b450de09702e002da85dcf8185659da08a5122b60`.

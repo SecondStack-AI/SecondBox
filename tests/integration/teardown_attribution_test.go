@@ -416,7 +416,6 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 			HeartbeatTimeout:        time.Minute,
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
-			ExecutionImageAuthority: testExecutionImageAuthority(t),
 			SessionCanceller:        teardownSessionCanceller{},
 			NewID: func(prefix string) string {
 				idSequence++

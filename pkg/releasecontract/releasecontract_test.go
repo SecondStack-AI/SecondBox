@@ -1,6 +1,7 @@
 package releasecontract
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -69,7 +70,8 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 		{name: "absent checksum", mutate: func(value *ArtifactManifest) { value.Binaries[0].SHA256 = "" }, want: "checksum"},
 		{name: "unsupported platform", mutate: func(value *ArtifactManifest) { value.Platforms.Runner = append(value.Platforms.Runner, "linux/arm64") }, want: "lacks required qualification"},
 		{name: "incompatible protocol window", mutate: func(value *ArtifactManifest) { value.RunnerProtocol = ProtocolWindow{Minimum: 3, Maximum: 2} }, want: "window is invalid"},
-		{name: "malformed signing identity", mutate: func(value *ArtifactManifest) { value.MicroVM.SigningKeyFingerprint = "SHA256:no" }, want: "fingerprint"},
+		{name: "malformed bundle manifest digest", mutate: func(value *ArtifactManifest) { value.MicroVM.BundleManifestDigest = "sha256:no" }, want: "bundle manifest digest"},
+		{name: "retired signing fields", mutate: func(value *ArtifactManifest) { value.MicroVM.LegacySigningKeyFingerprint = testKey }, want: "retired microVM signing fields"},
 		{name: "mutable gVisor runner", mutate: func(value *ArtifactManifest) { value.GVisor.RunnerReference = GVisorRunnerImage + ":latest" }, want: "immutable canonical"},
 		{name: "noncanonical gVisor materialization", mutate: func(value *ArtifactManifest) {
 			value.GVisor.Materialization.Location = "https://example.com/materialization.json"
@@ -89,7 +91,7 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 		{name: "noncanonical qualification evidence", mutate: func(value *ArtifactManifest) {
 			value.QualificationEvidence.Location = "https://example.com/evidence.json"
 		}, want: "not canonical"},
-		{name: "missing runtime component", mutate: func(value *ArtifactManifest) { value.MicroVM.RuntimeBundle = SignedComponent{} }, want: "runtime bundle artifact ID"},
+		{name: "missing runtime component", mutate: func(value *ArtifactManifest) { value.MicroVM.RuntimeBundle = BundleComponent{} }, want: "runtime bundle artifact ID"},
 		{name: "aliased components", mutate: func(value *ArtifactManifest) {
 			value.MicroVM.ToolchainBundle.ManifestDigest = value.MicroVM.RuntimeBundle.ManifestDigest
 		}, want: "distinct identities"},
@@ -288,7 +290,7 @@ func validManifest() ArtifactManifest {
 		BundledServices:                BundledServiceImages{Postgres: "docker.io/library/postgres@" + testDigest},
 		InstallBootstrap:               Reference{Location: InstallBootstrapLocation(identity.Version), Digest: testDigest},
 		GVisor:                         &GVisorArtifact{Identity: identity, RunnerReference: GVisorRunnerImage + "@" + testDigest, ImageReference: GVisorImage + "@" + testDigest, Materialization: Reference{Location: GVisorMaterializationLocation(identity.Version), Digest: testDigest}, MaterializationDigest: testDigest, FlatRootDigest: testDigest, RunscRelease: "20260817.0", QualificationEvidence: Reference{Location: GVisorQualificationEvidenceLocation(identity.Version, false), Digest: testDigest}, PodQualificationEvidence: Reference{Location: GVisorQualificationEvidenceLocation(identity.Version, true), Digest: testDigest}},
-		MicroVM:                        MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
+		MicroVM:                        MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, BundleManifestDigest: testDigest, RuntimeBundle: BundleComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: BundleComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
 		Binaries:                       binaries,
 		SBOMs:                          []Reference{ref("sbom.spdx.json")},
 		ArtifactAttestations:           []Reference{ref("provenance.intoto.jsonl")},
@@ -301,6 +303,46 @@ func validManifest() ArtifactManifest {
 			{Identity: identity, Name: "agent-compartment-isolated", Document: ref("agent-compartment-isolated.json"), Profiles: []StandardProfileIdentity{{Name: "agent-compartment-isolated", Revision: 1, SpecDigest: testDigest}}},
 		},
 	}
+}
+
+func microVMKeyOrder(t *testing.T, manifest []byte) []string {
+	t.Helper()
+	var document struct {
+		MicroVM json.RawMessage `json:"microvm"`
+	}
+	if err := json.Unmarshal(manifest, &document); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(document.MicroVM))
+	var keys []string
+	depth := 0
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		switch value := token.(type) {
+		case json.Delim:
+			if value == '{' || value == '[' {
+				depth++
+			} else {
+				depth--
+			}
+		case string:
+			if depth == 1 && decoder.More() {
+				keys = append(keys, value)
+				if err := skipJSONValue(decoder); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	return keys
+}
+
+func skipJSONValue(decoder *json.Decoder) error {
+	var value json.RawMessage
+	return decoder.Decode(&value)
 }
 
 func mustJSON(t *testing.T, value any) []byte {
@@ -333,6 +375,9 @@ func TestLegacyManifestKeepsItsRecordedShape(t *testing.T) {
 	legacy.QualificationEvidence.Location = QualificationEvidenceLocation("0.8.3", "amd64")
 	legacy.InstallerQualificationEvidence.Location = InstallerQualificationEvidenceLocation("0.8.3")
 	legacy.GVisor = nil
+	legacy.MicroVM.LegacySignedManifestDigest = legacy.MicroVM.BundleManifestDigest
+	legacy.MicroVM.LegacySigningKeyFingerprint = testKey
+	legacy.MicroVM.BundleManifestDigest = ""
 	if err := legacy.Validate(); err != nil {
 		t.Fatalf("a recorded v5 release must stay valid: %v", err)
 	}
@@ -490,5 +535,54 @@ func TestGVisorHostMayHaveKVMButPodMustNot(t *testing.T) {
 	evidence.Host.KVM.Present = false
 	if err := evidence.Validate(true); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDecodeArtifactManifestAcceptsCurrentAndRecordedMicroVMShapes(t *testing.T) {
+	current := validManifest()
+	decoded, err := DecodeArtifactManifest(mustJSON(t, current))
+	if err != nil {
+		t.Fatalf("v7 manifest rejected: %v", err)
+	}
+	if decoded.MicroVM.BundleManifestDigest != testDigest {
+		t.Fatalf("v7 bundle manifest digest = %q", decoded.MicroVM.BundleManifestDigest)
+	}
+
+	recorded := func(t *testing.T, schema string, mutate func(microVM map[string]any)) []byte {
+		t.Helper()
+		var document map[string]any
+		if err := json.Unmarshal(mustJSON(t, current), &document); err != nil {
+			t.Fatal(err)
+		}
+		document["schemaVersion"] = schema
+		microVM := document["microvm"].(map[string]any)
+		microVM["signedManifestDigest"] = microVM["bundleManifestDigest"]
+		delete(microVM, "bundleManifestDigest")
+		microVM["signingKeyFingerprint"] = testKey
+		mutate(microVM)
+		return mustJSON(t, document)
+	}
+
+	decoded, err = DecodeArtifactManifest(recorded(t, SignedArtifactManifestSchema, func(map[string]any) {}))
+	if err != nil {
+		t.Fatalf("recorded v6 manifest rejected: %v", err)
+	}
+	if decoded.MicroVM.ManifestDigest() != testDigest || decoded.MicroVM.BundleManifestDigest != "" || decoded.MicroVM.LegacySigningKeyFingerprint != testKey {
+		t.Fatalf("recorded v6 microVM = %+v", decoded.MicroVM)
+	}
+	// Installer qualification digests the re-encoded manifest, so a recorded
+	// release must re-encode byte-identically.
+	if keys := microVMKeyOrder(t, mustJSON(t, decoded)); strings.Join(keys, ",") != "identity,imageReference,signedManifestDigest,signingKeyFingerprint,runtimeBundle,toolchainBundle" {
+		t.Fatalf("recorded v6 microVM re-encodes with keys %v", keys)
+	}
+	if _, err := DecodeArtifactManifest(recorded(t, SignedArtifactManifestSchema, func(microVM map[string]any) {
+		delete(microVM, "signingKeyFingerprint")
+	})); err == nil || !strings.Contains(err.Error(), "recorded microVM signing fields") {
+		t.Fatalf("recorded v6 manifest without its signing fields error = %v", err)
+	}
+	if _, err := DecodeArtifactManifest(recorded(t, ArtifactManifestSchema, func(microVM map[string]any) {
+		microVM["bundleManifestDigest"] = testDigest
+	})); err == nil || !strings.Contains(err.Error(), "retired microVM signing fields") {
+		t.Fatalf("v7 manifest with retired signing fields error = %v", err)
 	}
 }

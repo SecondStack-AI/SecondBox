@@ -33,7 +33,7 @@ type ReleaseMaterializeDependencies struct {
 
 // MaterializeRelease installs only bytes named by an independently verified
 // release. The artifact directory is published with one rename after all
-// allowlist, hash, signature, component, platform, and rootfs checks succeed.
+// allowlist, hash, component, platform, and rootfs checks succeed.
 func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verified releaseverify.VerifiedRelease, dependencies ReleaseMaterializeDependencies) (InstallReceipt, VerifiedArtifact, error) {
 	if dependencies.Executor == nil || dependencies.PersistReceipt == nil || dependencies.Now == nil {
 		return receipt, VerifiedArtifact{}, installerError("release materialization dependencies are incomplete", nil)
@@ -82,7 +82,7 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 	artifactResource, artifactRecorded := receiptResource(receipt, artifactTarget.Name)
 	var artifact VerifiedArtifact
 	if artifactRecorded {
-		if artifactResource.Path != artifactTarget.Path || artifactResource.Digest != verified.Manifest.MicroVM.SignedManifestDigest {
+		if artifactResource.Path != artifactTarget.Path || artifactResource.Digest != verified.Manifest.MicroVM.ManifestDigest() {
 			return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, installerError("recorded artifact resource differs from the accepted release", nil))
 		}
 		artifact, err = VerifyArtifactDirectory(artifactTarget.Path, verified.Manifest)
@@ -218,7 +218,7 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 			}
 		}
 	}
-	if err := receipt.CompleteStage(StageAssetsMaterialized, dependencies.Now(), map[string]string{"signedManifestDigest": artifact.ManifestDigest, "signingKeyId": artifact.SigningKeyID, "secondboxDigest": "sha256:" + plan.Release.BinaryDigests["secondbox"], "secondboxDeployDigest": "sha256:" + plan.Release.BinaryDigests["secondbox-deploy"]}); err != nil {
+	if err := receipt.CompleteStage(StageAssetsMaterialized, dependencies.Now(), map[string]string{"bundleManifestDigest": artifact.ManifestDigest, "secondboxDigest": "sha256:" + plan.Release.BinaryDigests["secondbox"], "secondboxDeployDigest": "sha256:" + plan.Release.BinaryDigests["secondbox-deploy"]}); err != nil {
 		return receipt, VerifiedArtifact{}, err
 	}
 	if err := dependencies.PersistReceipt(receipt); err != nil {
@@ -238,7 +238,7 @@ func receiptResource(receipt InstallReceipt, id string) (CreatedResource, bool) 
 
 func validateVerifiedReleasePlan(plan InstallPlan, verified releaseverify.VerifiedRelease) error {
 	manifest := verified.Manifest
-	if releasecontract.Digest(verified.ManifestBytes) != plan.Release.ArtifactManifestDigest || manifest.Version != plan.Release.Version || manifest.ControlPlane.Reference != plan.Release.Images["control-plane"] || manifest.Runner.Reference != plan.Release.Images["runner"] || manifest.InstallerTools.Reference != plan.Release.Images["installer-tools"] || manifest.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || manifest.BundledServices.Postgres != plan.Release.Images["postgres"] || manifest.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint {
+	if releasecontract.Digest(verified.ManifestBytes) != plan.Release.ArtifactManifestDigest || manifest.Version != plan.Release.Version || manifest.ControlPlane.Reference != plan.Release.Images["control-plane"] || manifest.Runner.Reference != plan.Release.Images["runner"] || manifest.InstallerTools.Reference != plan.Release.Images["installer-tools"] || manifest.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || manifest.BundledServices.Postgres != plan.Release.Images["postgres"] {
 		return installerError("verified release differs from accepted plan identity", nil)
 	}
 	for _, name := range []string{"secondbox", "secondbox-deploy"} {

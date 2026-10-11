@@ -1,7 +1,5 @@
 {
 "SECONDBOX_COMPUTE_BACKEND": "firecracker",
-"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY": "/opt/secondbox/manifest-public.pem",
-"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 "SECONDBOX_RUNNER_CLIENT_CERTIFICATE": "/etc/secondbox/identity/runner.crt",
 "SECONDBOX_RUNNER_CLIENT_KEY": "/etc/secondbox/identity/runner.key",
 "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": "control-plane.example:9443",
@@ -51,8 +49,6 @@
 "SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR": "/etc/secondbox/image-registry",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES": "ghcr.io",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES": "/var/lib/secondbox-runner/registry-certificates",
-"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY": "/opt/secondbox/execution-image-public.pem",
-"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES": "8589934592",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES": "17179869184",
 "SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES": "68719476736",

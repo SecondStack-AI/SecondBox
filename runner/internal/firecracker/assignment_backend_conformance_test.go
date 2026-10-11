@@ -55,7 +55,7 @@ func TestAssignmentBackendRequiresWorkspaceStore(t *testing.T) {
 	}
 }
 
-func TestSignedArtifactCompatibilityMetadataFailsClosed(t *testing.T) {
+func TestBundleArtifactCompatibilityMetadataFailsClosed(t *testing.T) {
 	for name, manifest := range map[string]string{
 		"missing architecture": `{"artifactVersion":"v1","guestProtocol":{"minimum":1,"maximum":1}}`,
 		"wrong architecture":   `{"artifactVersion":"v1","architecture":"incompatible","guestProtocol":{"minimum":1,"maximum":1}}`,
@@ -67,8 +67,8 @@ func TestSignedArtifactCompatibilityMetadataFailsClosed(t *testing.T) {
 			if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := loadSignedArtifactManifest(path); err == nil {
-				t.Fatalf("accepted incompatible signed metadata: %s", manifest)
+			if _, err := loadBundleArtifactManifest(path); err == nil {
+				t.Fatalf("accepted incompatible bundle metadata: %s", manifest)
 			}
 		})
 	}
@@ -109,7 +109,7 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 
 // TestDefaultImageBootsTheInstalledBundleWithoutAssets pins the upgrade
 // property: a default-image assignment names no assets and boots whichever
-// signed bundle this Runner has verified, so a Sandbox created under an
+// bundle this Runner has verified, so a Sandbox created under an
 // earlier release starts on the current one.
 func TestDefaultImageBootsTheInstalledBundleWithoutAssets(t *testing.T) {
 	fixture := newFirecrackerConformanceFixture(t)
@@ -161,22 +161,22 @@ func TestReadinessEvidenceHelpers(t *testing.T) {
 		containsNetworkAddress(addresses, "198.18.0.2/24") {
 		t.Fatal("bridge address matching is not interface-and-prefix exact")
 	}
-	cache, err := firecrackerMaterializationEvidence(signedArtifactManifest{
+	cache, err := firecrackerMaterializationEvidence(bundleArtifactManifest{
 		ArtifactVersion: "fixture-v1",
 		Architecture:    "amd64",
 		GuestProtocol: struct {
 			Minimum uint32 `json:"minimum"`
 			Maximum uint32 `json:"maximum"`
 		}{Minimum: 1, Maximum: 1},
-		RuntimeBundle: signedArtifactComponent{
+		RuntimeBundle: bundleArtifactComponent{
 			ArtifactID: "runtime-v1", ManifestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
-		ToolchainBundle: signedArtifactComponent{
+		ToolchainBundle: bundleArtifactComponent{
 			ArtifactID: "toolchain-v1", ManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		},
-		Kernel: signedArtifactImage{SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
-		Rootfs: signedArtifactImage{SHA256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
-		Shared: signedArtifactImage{SHA256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+		Kernel: bundleArtifactImage{SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+		Rootfs: bundleArtifactImage{SHA256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+		Shared: bundleArtifactImage{SHA256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
 	}, time.UnixMilli(1234))
 	if err != nil {
 		t.Fatal(err)
@@ -231,11 +231,9 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 	if err := os.WriteFile(filepath.Join(artifactDir, "manifest.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	keyID := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	manager := &Manager{
 		cfg: &config.Config{
 			MicroVMKernelPath:                          filepath.Join(artifactDir, "kernel"),
-			MicroVMPublicKeySHA256:                     keyID,
 			MicroVMVCPUs:                               2,
 			MicroVMMemoryMiB:                           1024,
 			MicroVMWorkspaceSizeMiB:                    2048,

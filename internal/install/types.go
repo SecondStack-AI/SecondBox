@@ -251,13 +251,16 @@ type NetworkPlan struct {
 	Gateways           map[string]string `json:"gateways"`
 }
 type ReleasePlan struct {
-	Version                string            `json:"version"`
-	ArtifactManifestURL    string            `json:"artifactManifestUrl"`
-	ArtifactManifestDigest string            `json:"artifactManifestDigest"`
-	SigningKeyFingerprint  string            `json:"signingKeyFingerprint"`
-	Images                 map[string]string `json:"images"`
-	BinaryDigests          map[string]string `json:"binaryDigests"`
-	ExpectedDownloadBytes  int64             `json:"expectedDownloadBytes"`
+	Version                string `json:"version"`
+	ArtifactManifestURL    string `json:"artifactManifestUrl"`
+	ArtifactManifestDigest string `json:"artifactManifestDigest"`
+	// LegacySigningKeyFingerprint mirrors a recorded v5 or v6 release
+	// manifest, so a plan for such a release keeps its identity; it is never
+	// checked against a key.
+	LegacySigningKeyFingerprint string            `json:"signingKeyFingerprint,omitempty"`
+	Images                      map[string]string `json:"images"`
+	BinaryDigests               map[string]string `json:"binaryDigests"`
+	ExpectedDownloadBytes       int64             `json:"expectedDownloadBytes"`
 }
 
 // ReleaseActivation is the append-only audit history for the release that an

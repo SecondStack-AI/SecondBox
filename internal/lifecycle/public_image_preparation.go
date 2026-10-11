@@ -10,6 +10,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	"github.com/SecondStack-AI/SecondBox/internal/imagepreparation"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
@@ -89,9 +90,9 @@ func (broker *PostgresEffectBroker) reconcileImagePreparation(ctx context.Contex
 	if err := json.Unmarshal(encoded, &resolved); err != nil {
 		return false, err
 	}
-	assets, err := broker.config.ExecutionImageAuthority.ImportManifest(resolved.Manifest, resolved.Signature)
+	assets, err := assetcatalog.ImportExecutionImageManifest(resolved.Manifest)
 	if err != nil {
-		return fail("Image publisher signature or manifest is invalid")
+		return fail("Image manifest is invalid")
 	}
 	var plan imagepreparation.Payload
 	if err := json.Unmarshal(payload, &plan); err != nil {
@@ -152,7 +153,7 @@ func (broker *PostgresEffectBroker) reconcileImagePreparation(ctx context.Contex
 				rows.Close()
 				return false, err
 			}
-			if result.ResolvedDigest != resolved.ResolvedDigest || !bytes.Equal(result.Manifest, resolved.Manifest) || !bytes.Equal(result.Signature, resolved.Signature) {
+			if result.ResolvedDigest != resolved.ResolvedDigest || !bytes.Equal(result.Manifest, resolved.Manifest) {
 				failedRunners = append(failedRunners, runner)
 				continue
 			}

@@ -12,10 +12,6 @@ case "$architecture" in
 esac
 local_root="${SECONDBOX_STRESS_LOCAL_ROOT:-$repo_root/.secondbox/stress}"
 artifacts_dir="$local_root/artifacts"
-trust_dir="$local_root/trust"
-private_key="$trust_dir/manifest-private.pem"
-public_key="$trust_dir/manifest-public.pem"
-fingerprint_file="$trust_dir/manifest-public.sha256"
 config_file="$local_root/stress.json"
 workspace_root="$local_root/workspaces"
 results_dir="$local_root/results"
@@ -30,7 +26,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<'USAGE'
 Usage: just prepare-stress
 
-Builds and signs a reusable local Firecracker artifact bundle under
+Builds a reusable local Firecracker artifact bundle under
 .secondbox/stress. A valid existing bundle is verified and reused.
 
 Optional environment:
@@ -40,17 +36,17 @@ USAGE
 fi
 [[ "$#" -eq 0 ]] || fail "unexpected argument: $1"
 
-for command in blkid debugfs findmnt install jq openssl realpath sha256sum; do
+for command in blkid debugfs findmnt install jq realpath sha256sum; do
   command -v "$command" >/dev/null 2>&1 ||
     fail "missing required command: $command"
 done
 [[ "$local_root" == /* && "$local_root" != "/" ]] ||
   fail "SECONDBOX_STRESS_LOCAL_ROOT must be a narrow absolute path"
 
-mkdir -p "$local_root" "$trust_dir" "$workspace_root" "$results_dir"
+mkdir -p "$local_root" "$workspace_root" "$results_dir"
 [[ ! -L "$local_root" && "$(realpath -e "$local_root")" == "$local_root" ]] ||
   fail "SECONDBOX_STRESS_LOCAL_ROOT must be a clean non-symlink path"
-for directory in "$trust_dir" "$workspace_root" "$results_dir"; do
+for directory in "$workspace_root" "$results_dir"; do
   [[ ! -L "$directory" && -d "$directory" ]] ||
     fail "local stress directory must not be a symbolic link: $directory"
 done
@@ -66,25 +62,12 @@ elif [[ -L "$config_file" || ! -f "$config_file" ]]; then
   fail "local stress config must be a regular non-symlink file: $config_file"
 fi
 
-public_key_fingerprint() {
-  openssl pkey -pubin -in "$public_key" -outform DER 2>/dev/null |
-    sha256sum |
-    awk '{print $1}'
-}
-
 if [[ -d "$artifacts_dir" ]]; then
   [[ ! -L "$artifacts_dir" ]] ||
     fail "local artifact directory must not be a symbolic link"
-  [[ -f "$public_key" && ! -L "$public_key" ]] ||
-    fail "prepared artifacts require the saved trust anchor: $public_key"
-  public_key_sha256="$(public_key_fingerprint)" ||
-    fail "saved artifact public key is invalid"
-  "$verify_script" "$artifacts_dir" "$public_key" "$public_key_sha256"
-  printf '%s\n' "$public_key_sha256" >"$fingerprint_file"
-  chmod 0600 "$fingerprint_file"
+  "$verify_script" "$artifacts_dir"
   echo "SecondBox local stress bundle is already prepared and verified:"
   echo "  artifacts: $artifacts_dir"
-  echo "  trust key: $public_key"
   echo "  workspace: $workspace_root"
   echo "Run: just test-stress"
   exit 0
@@ -100,36 +83,6 @@ for command in \
 done
 docker info >/dev/null 2>&1 ||
   fail "Docker Engine is not available to the current user"
-
-if [[ ! -e "$private_key" && ! -e "$public_key" ]]; then
-  echo "Generating persistent local artifact signing key"
-  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
-    -out "$private_key" >/dev/null 2>&1
-  chmod 0600 "$private_key"
-  openssl pkey -in "$private_key" -pubout -out "$public_key" >/dev/null 2>&1
-  chmod 0644 "$public_key"
-elif [[ -f "$private_key" && ! -L "$private_key" && ! -e "$public_key" ]]; then
-  openssl pkey -in "$private_key" -pubout -out "$public_key" >/dev/null 2>&1
-  chmod 0644 "$public_key"
-fi
-[[ -f "$private_key" && ! -L "$private_key" ]] ||
-  fail "building a bundle requires the saved private key: $private_key"
-[[ -f "$public_key" && ! -L "$public_key" ]] ||
-  fail "building a bundle requires the saved public key: $public_key"
-
-derived_public_key="$(mktemp "$trust_dir/derived-public.XXXXXX")"
-openssl pkey -in "$private_key" -pubout -out "$derived_public_key" >/dev/null 2>&1 ||
-  fail "saved artifact private key is invalid"
-if ! cmp -s "$derived_public_key" "$public_key"; then
-  rm -f "$derived_public_key"
-  fail "saved artifact public key does not match the private key"
-fi
-rm -f "$derived_public_key"
-
-public_key_sha256="$(public_key_fingerprint)" ||
-  fail "saved artifact public key is invalid"
-printf '%s\n' "$public_key_sha256" >"$fingerprint_file"
-chmod 0600 "$fingerprint_file"
 
 mkdir -p "$repo_root/.tmp"
 build_root="$(mktemp -d "$repo_root/.tmp/prepare-stress.XXXXXX")"
@@ -158,7 +111,7 @@ env \
   SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR="$rootfs_source" \
   "$repo_root/runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh"
 
-echo "Building and signing the reusable SecondBox microVM bundle"
+echo "Building the reusable SecondBox microVM bundle"
 SECONDBOX_RUNNER_MICROVM_ARCHITECTURE="$architecture" \
 SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=true \
 SECONDBOX_RUNNER_MICROVM_KERNEL_PATH= \
@@ -166,9 +119,6 @@ SECONDBOX_RUNNER_MICROVM_KERNEL_CONFIG= \
 SECONDBOX_RUNNER_MICROVM_ARTIFACT_VERSION="$artifact_version" \
 SECONDBOX_RUNNER_MICROVM_OUT_DIR="$staged_artifacts" \
 SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR="$rootfs_source" \
-SECONDBOX_RUNNER_MICROVM_SIGNING_KEY="$private_key" \
-SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY="$public_key" \
-SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY_SHA256="$public_key_sha256" \
 SECONDBOX_RUNNER_MICROVM_ROOTFS_SIZE_MIB=10240 \
 SECONDBOX_RUNNER_MICROVM_SHARED_SIZE_MIB=1024 \
 SECONDBOX_RUNNER_MICROVM_SHARED_FORMAT=ext4 \
@@ -180,11 +130,10 @@ SECONDBOX_RUNNER_MICROVM_KERNEL_VERIFY_ONLY=false \
   "$repo_root/runner/scripts/microvm-image/build.sh"
 
 rm -rf "$staged_artifacts/kernel-build"
-"$verify_script" "$staged_artifacts" "$public_key" "$public_key_sha256"
+"$verify_script" "$staged_artifacts"
 mv "$staged_artifacts" "$artifacts_dir"
 
 echo "SecondBox local stress bundle prepared and verified:"
 echo "  artifacts: $artifacts_dir"
-echo "  trust key: $public_key"
 echo "  workspace: $workspace_root"
 echo "Run: just test-stress"

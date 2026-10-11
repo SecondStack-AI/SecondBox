@@ -28,7 +28,7 @@ func main() {
 
 func runImageFetcher() error {
 	values := make(map[string]string)
-	for _, key := range []string{"SOCKET", "TENANTS", "CACHE_ROOT", "REGISTRIES", "CERTIFICATES", "PUBLIC_KEY", "PUBLIC_KEY_SHA256", "MAX_DOWNLOAD_BYTES", "MAX_EXPANDED_BYTES", "MAX_CACHE_BYTES"} {
+	for _, key := range []string{"SOCKET", "TENANTS", "CACHE_ROOT", "REGISTRIES", "CERTIFICATES", "MAX_DOWNLOAD_BYTES", "MAX_EXPANDED_BYTES", "MAX_CACHE_BYTES"} {
 		value := os.Getenv("SECONDBOX_IMAGE_FETCHER_" + key)
 		if value == "" {
 			return fmt.Errorf("SecondBox image fetcher required configuration is missing: %s", key)
@@ -45,7 +45,7 @@ func runImageFetcher() error {
 	}
 	service, err := executionimage.NewFetchService(&config.Config{
 		ExecutionImageCacheRoot: values["CACHE_ROOT"], ExecutionImageRegistryAllowlist: strings.Split(values["REGISTRIES"], ","),
-		ExecutionImageRegistryCertificates: values["CERTIFICATES"], ExecutionImagePublicKeyPath: values["PUBLIC_KEY"], ExecutionImagePublicKeySHA256: values["PUBLIC_KEY_SHA256"],
+		ExecutionImageRegistryCertificates: values["CERTIFICATES"],
 		ExecutionImageMaximumDownloadBytes: limits["MAX_DOWNLOAD_BYTES"], ExecutionImageMaximumExpandedBytes: limits["MAX_EXPANDED_BYTES"], ExecutionImageMaximumCacheBytes: limits["MAX_CACHE_BYTES"],
 	}, values["TENANTS"])
 	if err != nil {

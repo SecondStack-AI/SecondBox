@@ -40,7 +40,6 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 	}
 	for _, required := range []string{
 		"SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR",
-		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256",
 		"SECONDBOX_RUNNER_WORKSPACE_ROOT",
 		"trap cleanup EXIT",
 		"compose logs --tail 200 control-plane secondbox-runner postgres",
@@ -97,9 +96,6 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 	}
 	for _, required := range []string{
 		`local_root="${SECONDBOX_STRESS_LOCAL_ROOT:-$repo_root/.secondbox/stress}"`,
-		"manifest-private.pem",
-		"manifest-public.pem",
-		"openssl genpkey",
 		"build-secondbox-rootfs-source.sh",
 		"microvm-image/build.sh",
 		`"$verify_script" "$staged_artifacts"`,
@@ -110,7 +106,7 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 		}
 	}
 	if !strings.Contains(gitignore, "/.secondbox/") {
-		t.Error("persistent local stress artifacts and private keys must be ignored")
+		t.Error("persistent local stress artifacts must be ignored")
 	}
 
 	command := exec.Command(filepath.Join(

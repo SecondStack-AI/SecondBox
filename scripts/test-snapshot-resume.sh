@@ -43,8 +43,6 @@ SecondBox snapshot-load qualification is explicit and never skips.
 Set SECONDBOX_REQUIRE_QUALIFIED_SNAPSHOT_LOAD=1 and provide:
   /dev/kvm
   SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR
-  SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY
-  SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
   SECONDBOX_RUNNER_WORKSPACE_ROOT on XFS or Btrfs
   SECONDBOX_SNAPSHOT_QUALIFICATION_MEMORY_MIB (comma-separated)
   SECONDBOX_SNAPSHOT_QUALIFICATION_WARM_ITERATIONS
@@ -57,7 +55,7 @@ PREREQUISITES
   exit 1
 fi
 
-for command in awk chmod docker findmnt git go jq ln mktemp openssl readlink realpath sha256sum uname; do
+for command in awk chmod docker findmnt git go jq ln mktemp readlink realpath sha256sum uname; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
 [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] ||
@@ -67,8 +65,6 @@ host_architecture="$(go env GOARCH)"
   fail "qualification requires an amd64 or arm64 host, got $host_architecture"
 
 : "${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?snapshot qualification requires SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR}"
-: "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?snapshot qualification requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY}"
-: "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?snapshot qualification requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256}"
 : "${SECONDBOX_RUNNER_WORKSPACE_ROOT:?snapshot qualification requires SECONDBOX_RUNNER_WORKSPACE_ROOT}"
 : "${SECONDBOX_SNAPSHOT_QUALIFICATION_MEMORY_MIB:?snapshot qualification requires SECONDBOX_SNAPSHOT_QUALIFICATION_MEMORY_MIB}"
 : "${SECONDBOX_SNAPSHOT_QUALIFICATION_WARM_ITERATIONS:?snapshot qualification requires SECONDBOX_SNAPSHOT_QUALIFICATION_WARM_ITERATIONS}"
@@ -80,14 +76,11 @@ host_architecture="$(go env GOARCH)"
 
 artifacts_dir="$SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR"
 workspace_root="$SECONDBOX_RUNNER_WORKSPACE_ROOT"
-public_key="$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"
 output_path="$SECONDBOX_SNAPSHOT_QUALIFICATION_OUTPUT"
 for directory in "$artifacts_dir" "$workspace_root"; do
   [[ "$directory" = /* && "$(realpath -e "$directory")" == "$directory" && ! -L "$directory" && -d "$directory" ]] ||
     fail "directory must be an existing clean absolute non-symlink path: $directory"
 done
-[[ "$public_key" = /* && "$(realpath -e "$public_key")" == "$public_key" && ! -L "$public_key" && -f "$public_key" ]] ||
-  fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY must be an existing clean absolute non-symlink file"
 [[ "$output_path" = /* && ! -e "$output_path" && ! -L "$output_path" ]] ||
   fail "SECONDBOX_SNAPSHOT_QUALIFICATION_OUTPUT must be an absent absolute path"
 output_parent="$(dirname "$output_path")"
@@ -116,7 +109,7 @@ if [[ "$workspace_fstype" != "xfs" && "$workspace_fstype" != "btrfs" ]]; then
   fail "SECONDBOX_RUNNER_WORKSPACE_ROOT must be on XFS or Btrfs, got $workspace_fstype"
 fi
 
-required_artifacts=(SHA256SUMS kernel manifest.json manifest.sig rootfs.ext4 shared.img)
+required_artifacts=(SHA256SUMS kernel manifest.json rootfs.ext4 shared.img)
 for name in "${required_artifacts[@]}"; do
   [[ -f "$artifacts_dir/$name" && ! -L "$artifacts_dir/$name" ]] ||
     fail "artifact bundle is missing regular non-symlink file: $name"
@@ -125,18 +118,8 @@ done
   cd "$artifacts_dir"
   sha256sum --check --strict SHA256SUMS >/dev/null
 ) || fail "artifact bundle checksum verification failed"
-openssl dgst -sha256 -verify "$public_key" \
-  -signature "$artifacts_dir/manifest.sig" "$artifacts_dir/manifest.json" >/dev/null ||
-  fail "artifact manifest signature verification failed"
 [[ "$(jq -er '.architecture' "$artifacts_dir/manifest.json")" == "$host_architecture" ]] ||
   fail "artifact bundle architecture differs from the $host_architecture host"
-actual_key_fingerprint="$(
-  openssl pkey -pubin -in "$public_key" -outform DER 2>/dev/null |
-    sha256sum |
-    awk '{print $1}'
-)"
-[[ "$actual_key_fingerprint" == "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" ]] ||
-  fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 does not match the parsed public key"
 
 mkdir -p "$repo_root/.tmp"
 qualification_root="$(mktemp -d "$workspace_root/secondbox-snapshot-load.XXXXXX")"
@@ -170,8 +153,6 @@ SECONDBOX_RUNNER_FIRECRACKER_PATH="$tools_root/firecracker" \
 SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH="$artifacts_dir/kernel" \
 SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH="$artifacts_dir/rootfs.ext4" \
 SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH="$artifacts_dir/shared.img" \
-SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$public_key" \
-SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" \
 SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS="console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init" \
 SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT=1024 \
 SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT=1025 \

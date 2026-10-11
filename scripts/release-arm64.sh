@@ -32,11 +32,9 @@ tag="v$version"
 if git show-ref --verify --quiet "refs/tags/$tag"; then
   [[ "$(git rev-parse "refs/tags/$tag^{commit}")" == "$source_commit" ]] || fail "$tag already identifies another commit"
 fi
-for key in SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY RELEASE_OUTPUT_ROOT; do
+for key in SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR RELEASE_OUTPUT_ROOT; do
   [[ "${!key:-}" == /* && -e "${!key}" && ! -L "${!key}" ]] || fail "$key must be an existing absolute non-symlink path"
 done
-actual="$(openssl pkey -pubin -in "$SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY" -outform DER | sha256sum | cut -d' ' -f1)"
-[[ "$actual" == "${SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256:-}" ]] || fail 'release public key fingerprint mismatch'
 [[ -d "$shared" && ! -L "$shared" ]] || fail 'AMD64_RELEASE_DIR must be a non-symlink directory'
 shared="$(cd "$shared" && pwd)"
 output="$RELEASE_OUTPUT_ROOT/$version-arm64"

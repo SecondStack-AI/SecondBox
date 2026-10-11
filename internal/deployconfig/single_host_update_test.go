@@ -1,7 +1,6 @@
 package deployconfig
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,12 +19,13 @@ func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var release releasecontract.ArtifactManifest
-	if err := json.Unmarshal(releaseBytes, &release); err != nil {
+	// The recorded v6 manifest names its bundle manifest digest
+	// signedManifestDigest; decoding maps it onto the current field.
+	release, err := releasecontract.DecodeArtifactManifest(releaseBytes)
+	if err != nil {
 		t.Fatal(err)
 	}
-	keyID := strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:"))
-	artifact := install.VerifiedArtifact{SigningKeyID: keyID, ManifestDigest: release.MicroVM.SignedManifestDigest}
+	artifact := install.VerifiedArtifact{ManifestDigest: release.MicroVM.ManifestDigest()}
 	directory := t.TempDir()
 	releasePath := filepath.Join(directory, "release.json")
 	catalogPath := filepath.Join(directory, "catalog.json")
@@ -49,7 +49,7 @@ func TestUpdateSourceValidationUsesRecordedSourceFiles(t *testing.T) {
 		}
 	}
 	plan := install.InstallPlan{
-		Release: install.ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version, standardresources.ArchitectureAMD64), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), SigningKeyFingerprint: release.MicroVM.SigningKeyFingerprint, Images: images, BinaryDigests: binaries},
+		Release: install.ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version, standardresources.ArchitectureAMD64), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), Images: images, BinaryDigests: binaries},
 		Paths: []install.PlannedPath{
 			{Name: "release-artifact-manifest", Path: releasePath, Kind: install.ResourceFile, Mode: 0o600, OwnerUID: int64(os.Getuid()), OwnerGID: int64(os.Getgid())},
 			{Name: "signed-asset-catalog", Path: catalogPath, Kind: install.ResourceFile, Mode: 0o600, OwnerUID: int64(os.Getuid()), OwnerGID: int64(os.Getgid())},

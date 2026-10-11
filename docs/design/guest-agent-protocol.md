@@ -14,7 +14,7 @@ The guest answers `Welcome` with the selected protocol generation, guest build i
 
 Every Exec, PTY, File, and Port operation then opens its own gRPC stream on that transport and negotiates it with a fresh nonce and exactly the features it uses. The guest serves each stream independently, so a running command or open Terminal never delays another operation on the Instance, and a protocol error or closed stream ends only its own operation. Closing an operation's stream kills a command it still runs.
 
-The runner supports the current guest protocol generation and the two immediately preceding released generations. A release may remove the oldest generation only after compatibility gates prove existing signed execution assets and pinned ProfileRevisions are handled explicitly. Signed image metadata declares its guest generation and mandatory features.
+The runner supports the current guest protocol generation and the two immediately preceding released generations. A release may remove the oldest generation only after compatibility gates prove existing execution assets and pinned ProfileRevisions are handled explicitly. Image manifest metadata declares its guest generation and mandatory features.
 
 ## Feature gating
 

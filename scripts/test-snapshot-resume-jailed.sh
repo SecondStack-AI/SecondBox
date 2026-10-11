@@ -75,8 +75,6 @@ Set SECONDBOX_REQUIRE_QUALIFIED_SNAPSHOT_RESUME_JAILED=1 and provide:
   /dev/net/tun
   a cgroup v2 host
   SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR
-  SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY
-  SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
   SECONDBOX_RUNNER_WORKSPACE_ROOT on XFS or Btrfs
   SECONDBOX_SNAPSHOT_RESUME_JAILED_MEMORY_MIB
   SECONDBOX_SNAPSHOT_RESUME_JAILED_WORKSPACE_MIB
@@ -86,7 +84,7 @@ PREREQUISITES
   exit 1
 fi
 
-for command in awk chmod docker findmnt git go jq id mktemp openssl realpath sha256sum uname; do
+for command in awk chmod docker findmnt git go jq id mktemp realpath sha256sum uname; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
 [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] ||
@@ -99,8 +97,6 @@ host_architecture="$(go env GOARCH)"
   fail "qualification requires an amd64 or arm64 host, got $host_architecture"
 
 : "${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?jailed resume qualification requires SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR}"
-: "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?jailed resume qualification requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY}"
-: "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?jailed resume qualification requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256}"
 : "${SECONDBOX_RUNNER_WORKSPACE_ROOT:?jailed resume qualification requires SECONDBOX_RUNNER_WORKSPACE_ROOT}"
 : "${SECONDBOX_SNAPSHOT_RESUME_JAILED_MEMORY_MIB:?jailed resume qualification requires SECONDBOX_SNAPSHOT_RESUME_JAILED_MEMORY_MIB}"
 : "${SECONDBOX_SNAPSHOT_RESUME_JAILED_WORKSPACE_MIB:?jailed resume qualification requires SECONDBOX_SNAPSHOT_RESUME_JAILED_WORKSPACE_MIB}"
@@ -109,14 +105,11 @@ host_architecture="$(go env GOARCH)"
 
 artifacts_dir="$SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR"
 workspace_root="$SECONDBOX_RUNNER_WORKSPACE_ROOT"
-public_key="$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"
 output_path="$SECONDBOX_SNAPSHOT_RESUME_JAILED_OUTPUT"
 for directory in "$artifacts_dir" "$workspace_root"; do
   [[ "$directory" = /* && "$(realpath -e "$directory")" == "$directory" && ! -L "$directory" && -d "$directory" ]] ||
     fail "directory must be an existing clean absolute non-symlink path: $directory"
 done
-[[ "$public_key" = /* && "$(realpath -e "$public_key")" == "$public_key" && ! -L "$public_key" && -f "$public_key" ]] ||
-  fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY must be an existing clean absolute non-symlink file"
 [[ "$output_path" = /* && ! -e "$output_path" && ! -L "$output_path" ]] ||
   fail "SECONDBOX_SNAPSHOT_RESUME_JAILED_OUTPUT must be an absent absolute path"
 output_parent="$(dirname "$output_path")"
@@ -134,7 +127,7 @@ if [[ "$workspace_fstype" != "xfs" && "$workspace_fstype" != "btrfs" ]]; then
   fail "SECONDBOX_RUNNER_WORKSPACE_ROOT must be on XFS or Btrfs, got $workspace_fstype"
 fi
 
-required_artifacts=(SHA256SUMS kernel manifest.json manifest.sig rootfs.ext4 shared.img)
+required_artifacts=(SHA256SUMS kernel manifest.json rootfs.ext4 shared.img)
 for name in "${required_artifacts[@]}"; do
   [[ -f "$artifacts_dir/$name" && ! -L "$artifacts_dir/$name" ]] ||
     fail "artifact bundle is missing regular non-symlink file: $name"
@@ -143,18 +136,8 @@ done
   cd "$artifacts_dir"
   sha256sum --check --strict SHA256SUMS >/dev/null
 ) || fail "artifact bundle checksum verification failed"
-openssl dgst -sha256 -verify "$public_key" \
-  -signature "$artifacts_dir/manifest.sig" "$artifacts_dir/manifest.json" >/dev/null ||
-  fail "artifact manifest signature verification failed"
 [[ "$(jq -er '.architecture' "$artifacts_dir/manifest.json")" == "$host_architecture" ]] ||
   fail "artifact bundle architecture differs from the $host_architecture host"
-actual_key_fingerprint="$(
-  openssl pkey -pubin -in "$public_key" -outform DER 2>/dev/null |
-    sha256sum |
-    awk '{print $1}'
-)"
-[[ "$actual_key_fingerprint" == "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" ]] ||
-  fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 does not match the parsed public key"
 
 maximum_concurrency="$(
   awk -F, '{max=0; for (i=1; i<=NF; i++) if ($i+0 > max) max=$i+0; print max}' \
@@ -202,8 +185,6 @@ SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT=$cgroup_parent
 SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH=/opt/secondbox-artifacts/kernel
 SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH=/opt/secondbox-artifacts/rootfs.ext4
 SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH=/opt/secondbox-artifacts/shared.img
-SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY=/opt/secondbox-artifact-public-key.pem
-SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256=$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
 SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS=console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init
 SECONDBOX_RUNNER_FIRECRACKER_BRIDGE_NAME=$bridge_name
 SECONDBOX_RUNNER_FIRECRACKER_BRIDGE_CIDR=$bridge_cidr
@@ -258,7 +239,6 @@ docker run \
   --env-file "$env_file" \
   --volume "$qualification_root:/q" \
   --volume "$artifacts_dir:/opt/secondbox-artifacts:ro" \
-  --volume "$public_key:/opt/secondbox-artifact-public-key.pem:ro" \
   --volume "$tools_root/snapshot-resume-jailed.test:/opt/secondbox-gate.test:ro" \
   --volume /sys/fs/cgroup:/sys/fs/cgroup:rw \
   --entrypoint /bin/bash \

@@ -13,16 +13,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage/executionimagetest"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
 
 const qualificationSelectedImageDigest = "sha256:5e1ec7ed5e1ec7ed5e1ec7ed5e1ec7ed5e1ec7ed5e1ec7ed5e1ec7ed5e1ec7ed"
 
-// TestQualifiedGVisorBackendBootsClientSelectedImage proves a signed image's
+// TestQualifiedGVisorBackendBootsClientSelectedImage proves a bundled image's
 // rootfs.ext4 becomes the sandbox root on a real host: the image lacks the
 // gVisor mount targets, the supervisor creates them in the private clone,
-// the pinned agent negotiates the image's signed identity, the Workspace
+// the pinned agent negotiates the image's bundle identity, the Workspace
 // stays writable, and the cached bytes are never modified.
 func TestQualifiedGVisorBackendBootsClientSelectedImage(t *testing.T) {
 	fixture := newQualificationFixture(t, "selected")
@@ -56,7 +57,7 @@ func TestQualifiedGVisorBackendBootsClientSelectedImage(t *testing.T) {
 		t.Fatalf("build selected rootfs.ext4: %v: %s", err, output)
 	}
 	cachedBefore := qualificationDigestFile(t, rootfsImage)
-	bundle := fixture.publisher.WriteBundle(t, bundleDirectory, nil)
+	bundle := executionimagetest.WriteBundle(t, bundleDirectory, nil)
 
 	assignment := fixture.command
 	assignment.ExecutionImage = &runnerprotocol.ExecutionImage{Reference: "registry.example/agent@" + qualificationSelectedImageDigest}

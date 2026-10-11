@@ -21,7 +21,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
@@ -106,8 +106,8 @@ func ensureShortRunDirAlias(alias, target string) error {
 	return nil
 }
 
-func (m *Manager) validateTrustAnchorForLaunch() error {
-	if m == nil || m.cfg == nil || strings.TrimSpace(m.cfg.MicroVMPublicKeyPath) == "" {
+func (m *Manager) validateBundleForLaunch() error {
+	if m == nil || m.cfg == nil || !m.cfg.MicroVMBundleVerification {
 		return nil
 	}
 	m.mu.Lock()
@@ -137,7 +137,7 @@ func (m *Manager) prepareLaunchImage(dir string, image microVMImageSelection) (m
 		artifacts := trustedArtifactsFromExecutionImage(image.VerifiedArtifacts)
 		return stageTrustedLaunchImageFiles(dir, image, artifacts)
 	}
-	if m == nil || m.cfg == nil || strings.TrimSpace(m.cfg.MicroVMPublicKeyPath) == "" {
+	if m == nil || m.cfg == nil || !m.cfg.MicroVMBundleVerification {
 		sourceRootfs := m.microVMImageSourceRootfs(image)
 		image.RootfsPath = filepath.Join(dir, rootfsName)
 		if err := reflinkOnlyFile(image.RootfsPath, sourceRootfs, 0o600); err != nil {
@@ -145,8 +145,8 @@ func (m *Manager) prepareLaunchImage(dir string, image microVMImageSelection) (m
 		}
 		return image, nil
 	}
-	if err := m.validateTrustAnchorForLaunch(); err != nil {
-		return microVMImageSelection{}, fmt.Errorf("verify microVM trust anchor: %w", err)
+	if err := m.validateBundleForLaunch(); err != nil {
+		return microVMImageSelection{}, fmt.Errorf("verify microVM bundle: %w", err)
 	}
 	if image.KernelPath != "" && image.KernelPath != m.cfg.MicroVMKernelPath {
 		selectedConfig := *m.cfg
@@ -235,14 +235,14 @@ func stageTrustedLaunchImageFiles(dir string, image microVMImageSelection, artif
 }
 
 func verifyAndCaptureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroVMArtifacts, error) {
-	if cfg == nil || strings.TrimSpace(cfg.MicroVMPublicKeyPath) == "" {
+	if cfg == nil || !cfg.MicroVMBundleVerification {
 		return nil, nil
 	}
 	before, err := captureTrustedMicroVMArtifacts(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("record microVM trust anchor identities: %w", err)
+		return nil, fmt.Errorf("record microVM bundle identities: %w", err)
 	}
-	if err := cfg.ValidateMicroVMTrustAnchor(context.Background()); err != nil {
+	if err := cfg.ValidateMicroVMBundle(context.Background()); err != nil {
 		return nil, err
 	}
 	unchanged, err := trustedMicroVMArtifactsUnchanged(before)
@@ -272,12 +272,11 @@ func (m *Manager) VerifyArtifactHealth() error {
 }
 
 func captureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroVMArtifacts, error) {
-	if cfg == nil || strings.TrimSpace(cfg.MicroVMPublicKeyPath) == "" {
+	if cfg == nil || !cfg.MicroVMBundleVerification {
 		return nil, nil
 	}
 	artifactDir := filepath.Dir(cfg.MicroVMKernelPath)
 	paths := []trustedMicroVMArtifactFile{
-		{label: "public key", path: cfg.MicroVMPublicKeyPath},
 		{label: "kernel", path: cfg.MicroVMKernelPath},
 		{label: "rootfs", path: cfg.MicroVMRootfsPath},
 		{label: "shared image", path: cfg.MicroVMSharedImagePath},
@@ -291,7 +290,6 @@ func captureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroVMArtifact
 		{label: "runtime component manifest", path: filepath.Join(artifactDir, "runtime-manifest.json")},
 		{label: "toolchain component manifest", path: filepath.Join(artifactDir, "toolchain-manifest.json")},
 		{label: "manifest", path: filepath.Join(artifactDir, "manifest.json")},
-		{label: "manifest signature", path: filepath.Join(artifactDir, "manifest.sig")},
 		{label: "checksums", path: filepath.Join(artifactDir, "SHA256SUMS")},
 	}
 	for i := range paths {

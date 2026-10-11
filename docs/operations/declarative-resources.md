@@ -26,7 +26,7 @@ apply at new Sandbox creation; existing Sandboxes keep their pinned lifecycle. S
 [configurable limits](../design/configurable-limits.md) for `lifecycleCeiling` omission and
 explicit-null semantics. Individual commands and ownership leases remain bounded.
 
-Standard Profiles name no execution bundle; each Instance boots the signed bundle its home Runner has installed. Standard documents contain no tokens, application authorities, runner credentials, host paths, or storage keys.
+Standard Profiles name no execution bundle; each Instance boots the bundle its home Runner has installed. Standard documents contain no tokens, application authorities, runner credentials, host paths, or storage keys.
 
 ## Deployment selection
 

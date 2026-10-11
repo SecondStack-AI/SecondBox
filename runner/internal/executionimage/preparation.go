@@ -32,5 +32,5 @@ func PrepareThroughFetcher(
 	if err != nil {
 		return nil, err
 	}
-	return &runnerprotocol.PrepareImageResult{ResolvedDigest: result.Digest, Manifest: result.Manifest, Signature: result.Signature}, nil
+	return &runnerprotocol.PrepareImageResult{ResolvedDigest: result.Digest, Manifest: result.Manifest}, nil
 }

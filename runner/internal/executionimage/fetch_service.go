@@ -27,11 +27,10 @@ type FetchRequest struct {
 }
 
 type FetchResult struct {
-	Stage     string `json:"stage,omitempty"`
-	Digest    string `json:"digest,omitempty"`
-	Manifest  []byte `json:"manifest,omitempty"`
-	Signature []byte `json:"signature,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Stage    string `json:"stage,omitempty"`
+	Digest   string `json:"digest,omitempty"`
+	Manifest []byte `json:"manifest,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // FetchService streams one bounded request through a host-private Unix socket.
@@ -109,13 +108,12 @@ func (service *FetchService) ServeHTTP(writer http.ResponseWriter, request *http
 		return
 	}
 	defer prepared.Release()
-	manifest, manifestErr := config.ReadArtifactMetadata(filepath.Join(prepared.Directory, "manifest.json"), config.MaximumArtifactManifestBytes)
-	signature, signatureErr := config.ReadArtifactMetadata(filepath.Join(prepared.Directory, "manifest.sig"), config.MaximumArtifactSignatureBytes)
-	if errors.Join(manifestErr, signatureErr) != nil {
+	manifest, err := config.ReadArtifactMetadata(filepath.Join(prepared.Directory, "manifest.json"), config.MaximumArtifactManifestBytes)
+	if err != nil {
 		writeFetchResult(ctx, encoder, FetchResult{Error: "SecondBox image manifest read failed"})
 		return
 	}
-	writeFetchResult(ctx, encoder, FetchResult{Digest: prepared.ResolvedDigest, Manifest: manifest, Signature: signature})
+	writeFetchResult(ctx, encoder, FetchResult{Digest: prepared.ResolvedDigest, Manifest: manifest})
 }
 
 func writeFetchResult(ctx context.Context, encoder *json.Encoder, result FetchResult) {

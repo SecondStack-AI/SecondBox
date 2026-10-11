@@ -44,7 +44,7 @@ func TestScenarioSelectedImagePreservesDigestAndWorkspace(t *testing.T) {
 		requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_APPLICATION_TOKEN"),
 		requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TENANT_REF"),
 		requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_SUBJECT_REF"))
-	// Every signed execution image carries the builder's guest entrypoint; no
+	// Every execution image bundle carries the builder's guest entrypoint; no
 	// fixed gVisor flat root does, so this proves the image supplies the root.
 	cli.success(t, ctx, "exec", ready.ID, "--", "/bin/sh", "-c", "test -x /usr/local/bin/secondbox-runner-guest-entrypoint")
 	cli.success(t, ctx, "exec", ready.ID, "--", "/bin/sh", "-c", "printf selected-image-persisted > /workspace/selected-image.txt")

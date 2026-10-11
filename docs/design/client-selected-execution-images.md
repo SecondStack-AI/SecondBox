@@ -3,8 +3,8 @@
 ## Ownership and public contract
 
 The application owns its userspace image and builds it with a pinned SecondBox builder.
-The signed bundle includes the existing guest agent, not the public `secondbox` CLI.
-SecondBox uses the existing signed manifest and guest handshake; it does not require matching builder and host release numbers.
+The bundle includes the existing guest agent, not the public `secondbox` CLI.
+SecondBox uses the existing bundle manifest and guest handshake; it does not require matching builder and host release numbers.
 
 Create accepts an optional `image.reference`, a fully qualified OCI tag or digest.
 Omitting the image selects the Profile's fixed assets; an explicitly malformed image is rejected.
@@ -25,7 +25,7 @@ Image selection does not rewrite historical Profile revisions.
 
 Each Runner host runs an unprivileged image fetcher in a separate container.
 The fetcher executable shares the Runner release image, but receives no Workspace mounts, host devices, Docker socket, or privileged capabilities.
-It receives only the image cache, a host-private Unix socket, registry configuration, and publisher public key.
+It receives only the image cache, a host-private Unix socket, and registry configuration.
 The privileged Runner handles shared storage reservations and verifies local files before launch; it does not retrieve registry content or extract archives.
 
 The operator configures one registry authentication record per Tenant on each eligible host.
@@ -41,12 +41,13 @@ Temporary auth files are private and removed after use.
 Credentials never enter guest files, Operations, or durable Runner commands.
 TLS verification is mandatory; private CAs reside under the configured `certificates/<registry-host>/ca.crt` directory.
 
-## Signed metadata and launch authority
+## Image metadata and launch authority
 
 Preparation uses existing lifecycle effects and durable Runner command delivery.
-The fetcher streams progress and returns bounded signed metadata through its local socket.
+The fetcher streams progress and returns the bounded bundle manifest through its local socket.
 It has no independent job database or retry scheduler.
-The control plane verifies the existing bundle signature with its configured publisher key before constructing an assignment from the signed component identities.
+The control plane imports the runtime and toolchain component identities from the manifest the Runner returns for the digest-resolved image and constructs the assignment from them.
+It does not authenticate a publisher: image integrity rests on the immutable digest, the registry allowlist, Tenant authorization, and control of who can push to allowed registries.
 The assignment contains a digest reference and authorized identities, never a mutable tag or pull credentials.
 
 The Runner independently verifies local bundle bytes and checks the assigned component identities before guest negotiation.
@@ -61,7 +62,7 @@ Failed verification does not select another image.
 `POST /v1/images:prepare` accepts an image and optional Profile and returns the existing asynchronous Operation.
 It requires lifecycle authority and uses the intersection of Tenant and application Profile grants.
 Admission captures a finite set of ready eligible Runners; a Profile narrows that set.
-The service resolves the reference once, verifies signed metadata, and sends that digest to compatible members of the captured set.
+The service resolves the reference once, imports the image manifest, and sends that digest to compatible members of the captured set.
 Resolution runs on the captured Runner with the widest architecture coverage, and that fetch counts as its own preparation, so no Runner retrieves the same digest twice.
 Fleet members added later are not silently added to the Operation.
 
@@ -100,17 +101,17 @@ Snapshot-resume Profiles and Microsandbox reject selected-image assignments unti
 
 ## gVisor materialization
 
-gVisor consumes the same signed OCI artifact as Firecracker; applications publish one image for both backends.
-Retrieval, registry allowlist, Tenant authorization, signature and fingerprint checks, the cache, and its limits are the shared implementation above.
+gVisor consumes the same OCI artifact as Firecracker; applications publish one image for both backends.
+Retrieval, registry allowlist, Tenant authorization, bundle verification, the cache, and its limits are the shared implementation above.
 The runner protocol does not change.
 Generation 5 already carries `RUNNER_FEATURE_CLIENT_SELECTED_IMAGE`, and a gVisor Runner reports `client-selected-image` readiness like Firecracker, which admits it to `images:prepare` targets and selected-image placement.
-Every gVisor Runner requires the image fetcher, cache root, and publisher key; there is no fixed-assets-only gVisor mode.
+Every gVisor Runner requires the image fetcher, and cache root; there is no fixed-assets-only gVisor mode.
 
 The image supplies userspace only.
-The Runner uses the signed `rootfs.ext4` as the sandbox root and ignores the signed kernel, `shared.img`, `/init`, and the guest agent embedded in the image.
+The Runner uses the image's `rootfs.ext4` as the sandbox root and ignores its kernel, `shared.img`, `/init`, and the guest agent embedded in the image.
 The Runner's pinned materialization still supplies `runsc` and the guest agent, which runs as PID 1 exactly as with fixed assets.
-An assignment's runtime and toolchain assets must equal the image's signed components, the materialization agent must speak the assigned guest protocol generation, and it must implement every mandatory guest feature.
-The guest handshake reports the image's signed component digests and the materialization's build identity.
+An assignment's runtime and toolchain assets must equal the image's manifest components, the materialization agent must speak the assigned guest protocol generation, and it must implement every mandatory guest feature.
+The guest handshake reports the image's component digests and the materialization's build identity.
 
 A start verifies local bytes under the digest lock through the shared memoized verifier.
 The Runner then opens `rootfs.ext4`, requires the open file to match the verified identity, reflinks it into an unnamed inode on the cache filesystem, and releases the digest lock.
@@ -128,9 +129,9 @@ The clone shares extents with the cache entry, and only mount metadata and creat
 It is not charged against Workspace capacity.
 Guest writes to the root go to the sentry's memory overlay, which the Instance memory limit bounds.
 
-The trust boundary equals Firecracker's: the same publisher key, allowlist, and Tenant authorization admit the same bytes.
-One difference remains: the host kernel parses the signed ext4 root, where Firecracker leaves that to the guest kernel.
-The gVisor backend already mounts each guest-writable Workspace ext4 image in the host kernel, so a signed, verified, private, read-only root adds no new parser class.
+The trust boundary equals Firecracker's: the same digest pin, allowlist, and Tenant authorization admit the same bytes.
+One difference remains: the host kernel parses the image's ext4 root, where Firecracker leaves that to the guest kernel.
+The gVisor backend already mounts each guest-writable Workspace ext4 image in the host kernel, so a verified, private, read-only root adds no new parser class.
 The guest reaches the root only through the gofer.
 
 An image change boots a new Instance against the same Workspace disk.

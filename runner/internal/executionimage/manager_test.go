@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage/executionimagetest"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
@@ -334,12 +335,10 @@ func TestRegistryCertificateArgsRequireExplicitCA(t *testing.T) {
 func TestWarmCacheHitReservesNoStagingCapacity(t *testing.T) {
 	cacheRoot := t.TempDir()
 	digest := "sha256:" + strings.Repeat("ab", 32)
-	publicKeyPath, publicKeySHA256 := writeSignedBundleFixture(t, filepath.Join(cacheRoot, strings.TrimPrefix(digest, "sha256:")))
+	executionimagetest.WriteBundle(t, filepath.Join(cacheRoot, strings.TrimPrefix(digest, "sha256:")), nil)
 	manager := &Manager{
 		cacheRoot:            cacheRoot,
 		registryAllowlist:    []string{"registry.example"},
-		publicKeyPath:        publicKeyPath,
-		publicKeySHA256:      publicKeySHA256,
 		maximumDownloadBytes: 1 << 20,
 		maximumExpandedBytes: 1 << 20,
 		maximumCacheBytes:    4 << 20,
