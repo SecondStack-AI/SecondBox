@@ -254,8 +254,9 @@ type ReleasePlan struct {
 	Version                string `json:"version"`
 	ArtifactManifestURL    string `json:"artifactManifestUrl"`
 	ArtifactManifestDigest string `json:"artifactManifestDigest"`
-	// LegacySigningKeyFingerprint is recorded only by plans written before
-	// release signing was retired; it is neither written nor checked.
+	// LegacySigningKeyFingerprint mirrors a recorded v5 or v6 release
+	// manifest, so a plan for such a release keeps its identity; it is never
+	// checked against a key.
 	LegacySigningKeyFingerprint string            `json:"signingKeyFingerprint,omitempty"`
 	Images                      map[string]string `json:"images"`
 	BinaryDigests               map[string]string `json:"binaryDigests"`

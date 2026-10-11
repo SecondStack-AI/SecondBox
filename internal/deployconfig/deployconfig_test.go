@@ -254,6 +254,49 @@ func TestRunnerRejectsRetiredSigningKeySettings(t *testing.T) {
 	}
 }
 
+// A guided install from a release that still signed its bundles keeps its
+// recorded manifest until an update regenerates it; teardown and recovery of
+// that install resolve it as written.
+func TestAcceptedInstallerManifestIgnoresOnlyRetiredSigningKeySettings(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	provisionSameHostTestRunner(t, manifestPath, "runner-local")
+	content, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := string(content)
+	for _, name := range []string{"execution_image_public_key", "execution_image_public_key_sha256"} {
+		recorded = strings.Replace(recorded, "[deployment]\n", "[deployment]\n"+name+" = 'retired'\n", 1)
+	}
+	for _, name := range retiredSigningSettings {
+		recorded = strings.Replace(recorded, "[[runners]]\n", "[[runners]]\n"+name+" = 'retired'\n", 1)
+	}
+	if err := os.WriteFile(manifestPath, []byte(recorded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want, err := ResolveForAcceptedInstaller(manifestPath)
+	if err != nil {
+		t.Fatalf("recorded installer manifest rejected: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ResolveForAcceptedInstaller(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want.ComposeProject() != current.ComposeProject() || len(want.Environment) != len(current.Environment) {
+		t.Fatalf("recorded installer manifest resolved differently: %s/%d, want %s/%d", want.ComposeProject(), len(want.Environment), current.ComposeProject(), len(current.Environment))
+	}
+	unknown := strings.Replace(recorded, "[deployment]\n", "[deployment]\nnot_a_setting = 'x'\n", 1)
+	if err := os.WriteFile(manifestPath, []byte(unknown), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveForAcceptedInstaller(manifestPath); err == nil || !strings.Contains(err.Error(), "deployment.not_a_setting") || strings.Contains(err.Error(), "public_key") {
+		t.Fatalf("unknown setting error = %v, want only deployment.not_a_setting", err)
+	}
+}
+
 func TestSelectedStandardBundlesShareOnePool(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	manifest, err := ReadManifest(manifestPath)

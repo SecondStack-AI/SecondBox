@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 func guidedFacts() install.HostFacts {
@@ -352,5 +354,28 @@ func TestGuidedInstallerRefusesNonAMD64Releases(t *testing.T) {
 	}
 	if err := requireGuidedInstallerRelease(release("linux/arm64")); err == nil || !strings.Contains(err.Error(), "installs amd64 releases only") {
 		t.Fatalf("arm64 release error = %v", err)
+	}
+}
+
+// A plan accepted for a v5 or v6 release recorded its signing-key fingerprint;
+// update and resume compare it with the projection of the same release.
+func TestReleasePlanKeepsTheIdentityOfARecordedSignedRelease(t *testing.T) {
+	verified := fakeGuidedRelease()
+	verified.Manifest.SchemaVersion = releasecontract.SignedArtifactManifestSchema
+	verified.Manifest.MicroVM.LegacySignedManifestDigest = "sha256:" + strings.Repeat("3", 64)
+	verified.Manifest.MicroVM.LegacySigningKeyFingerprint = "SHA256:" + strings.Repeat("A", 64)
+	location := releasecontract.ArtifactManifestLocation("0.4.0", standardresources.ArchitectureAMD64)
+	current := releasePlan(verified, location)
+	var recorded install.ReleasePlan
+	if err := json.Unmarshal([]byte(`{"version":"0.4.0","artifactManifestUrl":"`+location+`","artifactManifestDigest":"`+current.ArtifactManifestDigest+`","signingKeyFingerprint":"SHA256:`+strings.Repeat("A", 64)+`","images":{},"binaryDigests":{},"expectedDownloadBytes":0}`), &recorded); err != nil {
+		t.Fatal(err)
+	}
+	recorded.Images, recorded.BinaryDigests, recorded.ExpectedDownloadBytes = current.Images, current.BinaryDigests, current.ExpectedDownloadBytes
+	if !sameUpdateTarget(recorded, current) {
+		t.Fatalf("recorded signed release plan %#v differs from its projection %#v", recorded, current)
+	}
+	verified.Manifest.MicroVM.LegacySigningKeyFingerprint = ""
+	if encoded, _ := install.Canonical(releasePlan(verified, location)); strings.Contains(string(encoded), "signingKeyFingerprint") {
+		t.Fatalf("current release plan records a signing key: %s", encoded)
 	}
 }

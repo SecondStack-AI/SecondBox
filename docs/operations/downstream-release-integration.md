@@ -74,7 +74,7 @@ Runner host. Every Runner hosting such Sandboxes needs that route in the pinned 
 revision and spec digest from the selected release's standard bundle rather
 than deriving revision numbers from a version. The isolated Profile has no
 attributed permission. Read the public API and Runner protocol windows from the selected manifest
-(v0.18.0 uses version 1 and `[5,5]`; v0.21.0 introduces per-exec attribution with `[6,6]`). Permitting Profiles also require the advertised `per-exec-attribution`
+(v0.18.0 uses version 1 and `[5,5]`; v0.21.0 introduces per-exec attribution with `[6,6]`; v0.25.0 uses `[7,7]`). Permitting Profiles also require the advertised `per-exec-attribution`
 capability. See [Profiles and authorization](../design/profiles-and-authorization.md).
 
 After readiness, log in with the platform token, create each Tenant and its tenant-controller authority, log in with the returned controller token, then create the Subject and application authority. Capture each bearer token from its successful creation response; it cannot be retrieved later. The source-free CLI sequence is documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). The repository scenario harness uses this same sequence and creates a separate application authority for the optional `sandbox:ports:direct` grant.

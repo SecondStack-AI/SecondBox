@@ -61,7 +61,16 @@ var (
 	configValidationMu            sync.Mutex
 )
 
+// retiredSigningSettings were written by installers before release signing was
+// retired. An installer-owned manifest from such a release keeps them until its
+// update regenerates it, so teardown and recovery of that install ignore them.
+var retiredSigningSettings = []string{"execution_image_public_key", "execution_image_public_key_sha256", "artifact_public_key", "artifact_public_key_sha256"}
+
 func ReadManifest(path string) (ManifestV1, error) {
+	return readManifest(path, false)
+}
+
+func readManifest(path string, ignoreRetiredSigningSettings bool) (ManifestV1, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return ManifestV1{}, manifestError("resolve path", err)
@@ -88,13 +97,24 @@ func ReadManifest(path string) (ManifestV1, error) {
 		if errors.As(err, &unknown) {
 			keys := make([]string, 0, len(unknown.Errors))
 			for _, field := range unknown.Errors {
-				keys = append(keys, fmt.Sprintf("%q", strings.Join(field.Key(), ".")))
+				key := field.Key()
+				if ignoreRetiredSigningSettings && slices.Contains(retiredSigningSettings, key[len(key)-1]) {
+					continue
+				}
+				keys = append(keys, fmt.Sprintf("%q", strings.Join(key, ".")))
+			}
+			if len(keys) == 0 {
+				return validateSchemaVersion(manifest)
 			}
 			// Name invalid fields without printing their potentially secret values.
 			return ManifestV1{}, manifestError("strict decode: unknown fields "+strings.Join(keys, ", "), err)
 		}
 		return ManifestV1{}, manifestError("strict decode", err)
 	}
+	return validateSchemaVersion(manifest)
+}
+
+func validateSchemaVersion(manifest ManifestV1) (ManifestV1, error) {
 	if manifest.SchemaVersion != 1 {
 		return ManifestV1{}, manifestError(fmt.Sprintf("unsupported schema_version %d", manifest.SchemaVersion), nil)
 	}
@@ -134,7 +154,7 @@ func ResolveForAcceptedInstaller(path string) (ResolvedDeployment, error) {
 }
 
 func resolvePath(path string, validateSameHost bool) (ResolvedDeployment, error) {
-	manifest, err := ReadManifest(path)
+	manifest, err := readManifest(path, !validateSameHost)
 	if err != nil {
 		return ResolvedDeployment{}, err
 	}

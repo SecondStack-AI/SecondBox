@@ -10,7 +10,7 @@ A runner presents the deployment's pre-shared Runner credential over a mutually 
 
 The shared credential is configured explicitly on the control plane and every trusted Runner; PostgreSQL stores neither the credential nor a credential lifecycle. `secondbox-deploy runner-init` issues one create-only client identity for an immutable manifest-declared Runner ID, and its certificate carries `spiffe://secondbox/runner/<runner-id>`. The RunnerPool is reported during registration and must already exist in a registration-accepting state. The control-plane server certificate is configured separately.
 
-The supported Runner protocol window is a compiled fact, not deployment configuration. Per-exec attribution advances both implementations to generation 6 exactly. Identical constants live beside both independently built generated protocol packages, the generation verifier rejects drift, and both implementations use those constants for negotiation. Generation 5 and every other adjacent version are rejected as unsupported; there is no mixed-generation or legacy-assignment fallback. Generation 6 moves attribution from `AssignmentCommand` to `ExecOpen.attributed_execution`, adds `AssignmentCommand.attributed_execution_permission`, and replaces the `attributed_execution_ready` capability with `per_exec_attribution_ready`, recorded as `per-exec-attribution`.
+The supported Runner protocol window is a compiled fact, not deployment configuration. Both implementations support generation 7 exactly. Identical constants live beside both independently built generated protocol packages, the generation verifier rejects drift, and both implementations use those constants for negotiation. Every other version is rejected as unsupported; there is no mixed-generation or legacy-assignment fallback. Generation 6 moves attribution from `AssignmentCommand` to `ExecOpen.attributed_execution`, adds `AssignmentCommand.attributed_execution_permission`, and replaces the `attributed_execution_ready` capability with `per_exec_attribution_ready`, recorded as `per-exec-attribution`.
 
 Unknown, empty, or mismatched shared credentials are rejected before protocol negotiation. CA verification and the certificate identity are also mandatory. Rotating the deployment-wide credential or Runner CA is an operator-coordinated replacement of the affected control-plane and Runner secret material; no database-backed enrollment, rotation, or revocation workflow exists.
 
@@ -41,7 +41,7 @@ The runner performs prerequisite and trust validation before advertising schedul
 Assignments carry provider-neutral `AssetReference` records: artifact identity, immutable digest, architecture, guest protocol generation, and required features.
 Generation 5 adds preparation commands before compute assignment and digest-only selected images in assignments.
 The unprivileged fetcher uses operator-configured Tenant credentials, and the control plane imports the component identities from the bundle manifest the Runner returns for the resolved digest before assigning compute.
-`PrepareImageResult` field 7 (`signature`) is reserved; removing it did not change the protocol window.
+Generation 7 reserves `PrepareImageResult` field 7 (`signature`): a generation 6 control plane rejects an unsigned preparation result, so the removal advances the generation.
 The Runner verifies local bytes against that assignment without registry access.
 Microsandbox and gVisor admission continue to require locally materialized, content-addressed images.
 
