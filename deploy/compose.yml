@@ -7,8 +7,6 @@ services:
     depends_on:
       runner-pki-init:
         condition: service_completed_successfully
-      control-plane-assets-init:
-        condition: service_completed_successfully
     environment:
       SECONDBOX_LISTEN_ADDR: ${SECONDBOX_LISTEN_ADDR:?set SECONDBOX_LISTEN_ADDR}
       SECONDBOX_PUBLIC_BASE_URL: ${SECONDBOX_PUBLIC_BASE_URL:?set SECONDBOX_PUBLIC_BASE_URL}
@@ -21,8 +19,6 @@ services:
       SECONDBOX_RUNNER_CA_CERTIFICATE: ${SECONDBOX_RUNNER_CA_CERTIFICATE:?set SECONDBOX_RUNNER_CA_CERTIFICATE}
       SECONDBOX_RUNNER_CREDENTIAL: ${SECONDBOX_RUNNER_CREDENTIAL:?set SECONDBOX_RUNNER_CREDENTIAL}
       SECONDBOX_DATA_PLANE_RETENTION_SECONDS: ${SECONDBOX_DATA_PLANE_RETENTION_SECONDS:?set SECONDBOX_DATA_PLANE_RETENTION_SECONDS}
-      SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY: ${SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY:?set SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY}
-      SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256: ${SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256:?set SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256}
       SECONDBOX_RUNNER_ENABLED_FEATURES: ${SECONDBOX_RUNNER_ENABLED_FEATURES:?set SECONDBOX_RUNNER_ENABLED_FEATURES}
       # Value-less mappings preserve true absence while forwarding selected
       # values from the generated env file.
@@ -49,7 +45,6 @@ services:
     volumes:
       - control-plane-logs:/var/log/secondbox
       - runner-pki-runtime:/run/secondbox-runner-pki:ro
-      - control-plane-assets:/etc/secondbox:ro
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -81,27 +76,10 @@ services:
     security_opt: [no-new-privileges:true]
     networks: [secondbox-backend]
 
-  control-plane-assets-init:
-    image: ${SECONDBOX_CONTROL_PLANE_IMAGE:?set SECONDBOX_CONTROL_PLANE_IMAGE}
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        install -m 644 -o 65532 -g 65532 /source/execution-image.pub /target/execution-image.pub
-    volumes:
-      - "${SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_HOST_PATH:?set SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_HOST_PATH}:/source/execution-image.pub:ro"
-      - control-plane-assets:/target
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
-    security_opt: [no-new-privileges:true]
-    networks: [secondbox-backend]
-
 networks:
   secondbox-backend:
     driver: bridge
 
 volumes:
-  control-plane-assets:
   control-plane-logs:
   runner-pki-runtime:

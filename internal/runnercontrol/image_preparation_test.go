@@ -34,7 +34,7 @@ func TestImagePreparationResultAuthorityAndReplay(t *testing.T) {
 		}
 		return tx.Commit(t.Context())
 	}
-	result := &runnerv1.PrepareImageResult{OperationId: "prepare-op", ResolvedDigest: "sha256:" + strings.Repeat("a", 64), Manifest: []byte("signed manifest"), Signature: []byte("signature")}
+	result := &runnerv1.PrepareImageResult{OperationId: "prepare-op", ResolvedDigest: "sha256:" + strings.Repeat("a", 64), Manifest: []byte("bundle manifest")}
 	if err := write("runner-other", result, now); err == nil {
 		t.Fatal("unassigned Runner supplied preparation evidence")
 	}

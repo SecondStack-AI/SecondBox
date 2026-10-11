@@ -28,7 +28,6 @@ func TestRunnerPathsRequireOnlyPlacementOwnedInputs(t *testing.T) {
 		{"firecracker_run_directory", func(r *Runner, value string) { r.FirecrackerRunDirectory = value }},
 		{"firecracker_log_directory", func(r *Runner, value string) { r.FirecrackerLogDirectory = value }},
 		{"snapshot_template_cache_root", func(r *Runner, value string) { r.SnapshotTemplateCacheRoot = value }},
-		{"artifact_public_key", func(r *Runner, value string) { r.ArtifactPublicKey = value }},
 		{"sandbox_network_state_directory", func(r *Runner, value string) { r.SandboxNetworkStateDir = value }},
 		{"network_policy_nft_path", func(r *Runner, value string) { r.NetworkPolicyNFTPath = value }},
 	}
@@ -55,7 +54,7 @@ func TestSameHostDerivedPathsMatchComposeMounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"identity_directory", "workspace_root", "egress_context_config_path", "log_path", "log_directory", "firecracker_path", "firecracker_jailer_path", "firecracker_jail_root", "firecracker_kernel_path", "firecracker_rootfs_path", "firecracker_shared_image_path", "firecracker_run_directory", "firecracker_log_directory", "snapshot_template_cache_root", "artifact_public_key", "sandbox_network_state_directory", "network_policy_nft_path", "workspace_host_directory"} {
+	for _, field := range []string{"identity_directory", "workspace_root", "egress_context_config_path", "log_path", "log_directory", "firecracker_path", "firecracker_jailer_path", "firecracker_jail_root", "firecracker_kernel_path", "firecracker_rootfs_path", "firecracker_shared_image_path", "firecracker_run_directory", "firecracker_log_directory", "snapshot_template_cache_root", "sandbox_network_state_directory", "network_policy_nft_path", "workspace_host_directory"} {
 		_, runnerContent, found := strings.Cut(string(content), "[[runners]]")
 		if !found {
 			t.Fatal("rendered manifest has no Runner declaration")
@@ -82,8 +81,6 @@ func TestSameHostDerivedPathsMatchComposeMounts(t *testing.T) {
 		"SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR":           "/var/lib/secondbox-runner/state/run",
 		"SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR":           "/var/lib/secondbox-runner/state/firecracker-logs",
 		"SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT":  "/var/lib/secondbox-runner/state/snapshot-template-cache",
-		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY":           "/opt/secondbox-artifacts/signing.pub",
-		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY":    "/run/secondbox-image-trust/public.pem",
 		"SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR":     "/var/lib/secondbox-runner/state/network",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH":       "/usr/sbin/nft",
 		"SECONDBOX_RUNNER_CLIENT_CERTIFICATE":            "/run/secondbox-runner-identity/runner.crt",
@@ -181,7 +178,6 @@ func TestRemoteRunnerPathsSurviveEnvironmentRendering(t *testing.T) {
 	runner.FirecrackerRunDirectory = "/remote/8"
 	runner.FirecrackerLogDirectory = "/remote/9"
 	runner.SnapshotTemplateCacheRoot = "/remote/10"
-	runner.ArtifactPublicKey = "/remote/11"
 	runner.SandboxNetworkStateDir = "/remote/12"
 	runner.NetworkPolicyNFTPath = "/remote/13"
 	env := resolveRunnerEnvironment(runner, "runner-credential")
@@ -198,7 +194,6 @@ func TestRemoteRunnerPathsSurviveEnvironmentRendering(t *testing.T) {
 		"SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR":           "/remote/8",
 		"SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR":           "/remote/9",
 		"SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT":  "/remote/10",
-		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY":           "/remote/11",
 		"SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR":     "/remote/12",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH":       "/remote/13",
 	}

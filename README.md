@@ -42,7 +42,7 @@ To fetch the small published bootstrap and run the wizard:
 curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh | sh
 ```
 
-**v0.16.0 updates a v0.15.0 deployment in place: it keeps Runner protocol generation 5, the database schema, and the signed fixed-Profile guest bundle.**
+**v0.16.0 updates a v0.15.0 deployment in place: it keeps Runner protocol generation 5, the database schema, and the fixed-Profile guest bundle.**
 Stop active Sandboxes and retain a database and Runner-storage backup before updating; see the [v0.16.0 release notes](docs/releases/v0.16.0.md).
 Deployments older than v0.15.0 must first cross the boundary in the [v0.15.0 release notes](docs/releases/v0.15.0.md), and earlier release boundaries still apply.
 
@@ -334,7 +334,7 @@ Firecracker validation requires a dedicated Linux host with KVM and the configur
 just test-firecracker
 ```
 
-The external scenario gate joins the HTTP API, PostgreSQL, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux amd64 or arm64 machine with writable KVM and TUN devices, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
+The external scenario gate joins the HTTP API, PostgreSQL, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux amd64 or arm64 machine with writable KVM and TUN devices, cgroup v2, a separately verified microVM bundle, and an XFS or Btrfs workspace root with reflink support:
 
 ```sh
 SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 just test-scenario

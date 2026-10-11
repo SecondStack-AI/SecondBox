@@ -40,7 +40,7 @@ if [[ "$runner_placement" == "pod" && "$scenario_backend" != "gvisor" ]]; then
   echo "SecondBox scenario pod placement is qualified only for the gvisor backend" >&2
   exit 1
 fi
-# Both supported backends launch a retrievable signed client-selected image,
+# Both supported backends launch a retrievable client-selected image,
 # the gVisor pod placement included.
 selected_image_scenario=false
 if [[ "$scenario_backend" == firecracker || "$scenario_backend" == gvisor ]]; then
@@ -142,7 +142,7 @@ if [[ "${SECONDBOX_REQUIRE_QUALIFIED_SCENARIO:-}" != "1" ]]; then
 SecondBox scenario qualification is mandatory and never skips.
 Set SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 and provide:
   the selected host hypervisor and native prerequisites
-  the selected backend's explicit local artifacts and trust inputs
+  the selected backend's explicit local artifacts
   SECONDBOX_RUNNER_WORKSPACE_ROOT on the platform-qualified reflink filesystem
 PREREQUISITES
   exit 1
@@ -289,37 +289,28 @@ fi
 
 if [[ "$scenario_backend" == "firecracker" ]]; then
   : "${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?SecondBox Firecracker scenario requires SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR}"
-  : "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SecondBox Firecracker scenario requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY}"
-  : "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SecondBox Firecracker scenario requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256}"
 else
   if [[ "$scenario_backend" == "microsandbox" ]]; then
   : "${SECONDBOX_SCENARIO_MICROSANDBOX_BUILD:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_MICROSANDBOX_BUILD}"
   : "${SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION}"
   : "${SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST:?SecondBox Microsandbox scenario requires SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST}"
   fi
-  # The base Compose service contains ignored Firecracker mounts. Bind explicit
-  # existing local Microsandbox inputs to those targets so Compose can validate
-  # one shared topology without introducing a signature requirement.
+  # The base Compose service contains an ignored Firecracker artifact mount.
+  # Bind the existing local backend build to that target so Compose can
+  # validate one shared topology.
   if [[ "$scenario_backend" == "gvisor" ]]; then
     export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$SECONDBOX_SCENARIO_GVISOR_BUILD"
-    export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION"
-    export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$SECONDBOX_SCENARIO_GVISOR_MATERIALIZATION_DIGEST"
   else
     export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$SECONDBOX_SCENARIO_MICROSANDBOX_BUILD"
-    export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION"
-    export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"
   fi
 fi
 
 artifacts_dir="$SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR"
 workspace_root="$SECONDBOX_RUNNER_WORKSPACE_ROOT"
-public_key="$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"
 for directory in "$artifacts_dir" "$workspace_root"; do
   [[ "$directory" = /* && "$(realpath "$directory")" == "$directory" && ! -L "$directory" && -d "$directory" ]] ||
     fail "directory must be an existing clean absolute non-symlink path: $directory"
 done
-[[ "$public_key" = /* && "$(realpath "$public_key")" == "$public_key" && ! -L "$public_key" && -f "$public_key" ]] ||
-  fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY must be an existing clean absolute non-symlink file"
 if [[ "$scenario_backend" == gvisor && "$runner_placement" == compose ]]; then
   source "$repo_root/scripts/scenario-network.sh"
   scenario_reserve_gvisor_profiles "$workspace_root/.scenario-gvisor-profile-locks" || fail "gVisor profiles are occupied"
@@ -351,7 +342,7 @@ else
   workspace_device="$(stat -c %d "$workspace_root")"
 fi
 if [[ "$selected_image_scenario" == true ]]; then
-	: "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:?the selected-image scenario requires a retrievable signed SECONDBOX_SCENARIO_EXECUTION_IMAGE}"
+	: "${SECONDBOX_SCENARIO_EXECUTION_IMAGE:?the selected-image scenario requires a retrievable SECONDBOX_SCENARIO_EXECUTION_IMAGE}"
 	[[ "$SECONDBOX_SCENARIO_EXECUTION_IMAGE" == */* ]] ||
 		fail "SECONDBOX_SCENARIO_EXECUTION_IMAGE must contain a registry host"
 	export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY="${SECONDBOX_SCENARIO_EXECUTION_IMAGE%%/*}"
@@ -359,35 +350,19 @@ if [[ "$selected_image_scenario" == true ]]; then
 	[[ -f "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/tenants.json" ]] || fail "scenario registry configuration must contain tenants.json"
 	: "${SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS:?the selected-image scenario requires an image fetcher DNS address reachable from its Docker network}"
 fi
-if [[ "$scenario_backend" == gvisor && "$selected_image_scenario" == true ]]; then
-	# The gVisor Runner's own artifact key slot carries its materialization, so
-	# the selected image's publisher key is a separate explicit input.
-	: "${SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY:?the gVisor selected-image scenario requires the image publisher key}"
-	[[ -f "$SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY" ]] || fail "SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY must be a file"
-fi
 if [[ "$scenario_backend" == "firecracker" ]]; then
 	artifacts_device="$(stat -c %d "$artifacts_dir")"
   checkout_device="$(stat -c %d "$repo_root")"
   [[ "$workspace_device" == "$artifacts_device" && "$workspace_device" == "$checkout_device" ]] ||
     fail "workspace root, microVM artifacts, and checkout must share one reflink filesystem"
 
-  required_artifacts=(SHA256SUMS kernel manifest.json manifest.sig rootfs.ext4 runtime-manifest.json shared.img toolchain-manifest.json)
+  required_artifacts=(SHA256SUMS kernel manifest.json rootfs.ext4 runtime-manifest.json shared.img toolchain-manifest.json)
   for name in "${required_artifacts[@]}"; do
     [[ -f "$artifacts_dir/$name" && ! -L "$artifacts_dir/$name" ]] ||
       fail "artifact bundle is missing regular non-symlink file: $name"
   done
   (cd "$artifacts_dir" && sha256sum --check --strict SHA256SUMS >/dev/null) ||
     fail "artifact bundle checksum verification failed"
-  openssl dgst -sha256 -verify "$public_key" \
-    -signature "$artifacts_dir/manifest.sig" "$artifacts_dir/manifest.json" >/dev/null ||
-    fail "artifact manifest signature verification failed"
-  actual_key_fingerprint="$(
-    openssl pkey -pubin -in "$public_key" -outform DER 2>/dev/null |
-      sha256sum |
-      awk '{print $1}'
-  )"
-  [[ "$actual_key_fingerprint" == "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" ]] ||
-    fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 does not match the parsed public key"
 
   manifest_digest="sha256:$(sha256sum "$artifacts_dir/manifest.json" | awk '{print $1}')"
   guest_protocol_minimum="$(jq -er '.guestProtocol.minimum' "$artifacts_dir/manifest.json")" ||
@@ -561,20 +536,12 @@ chmod 0644 "$pki_dir/runner-ca.crt" "$pki_dir/server.crt"
 
 export SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY="$run_dir/image-registry"
 mkdir -p "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/certificates" "$execution_image_dir"
-if [[ "$scenario_backend" == "firecracker" ]]; then
-  cp "$public_key" "$pki_dir/execution-image.pub"
-  cp -a "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/." "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/"
-elif [[ "$selected_image_scenario" == true ]]; then
-  cp "$SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY" "$pki_dir/execution-image.pub"
+if [[ "$selected_image_scenario" == true ]]; then
   cp -a "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG/." "$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/"
 else
-  openssl pkey -in "$pki_dir/runner-ca.key" -pubout -out "$pki_dir/execution-image.pub" 2>/dev/null
   export SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY=unused.invalid
   printf '{}\n' >"$SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY/tenants.json"
 fi
-chmod 0644 "$pki_dir/execution-image.pub"
-export SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256
-SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256="$(openssl pkey -pubin -in "$pki_dir/execution-image.pub" -outform DER 2>/dev/null | sha256_stream | awk '{print $1}')"
 
 export SECONDBOX_RUNNER_CA_CERTIFICATE="$pki_dir/runner-ca.crt"
 export SECONDBOX_RUNNER_CA_PRIVATE_KEY="$pki_dir/runner-ca.key"

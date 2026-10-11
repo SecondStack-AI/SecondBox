@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"net"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
 func (m *Manager) SetHostNetworkConfigurer(configurer HostNetworkConfigurer) {

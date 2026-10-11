@@ -50,14 +50,11 @@ tag="v$version"
 if git show-ref --verify --quiet "refs/tags/$tag"; then
   [[ "$(git rev-parse "refs/tags/$tag^{commit}")" == "$source_commit" ]] || fail "$tag already identifies another commit"
 fi
-for key in SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY SECONDBOX_INSTALLER_QUALIFICATION_IMAGE SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT RELEASE_OUTPUT_ROOT; do
+for key in SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR SECONDBOX_INSTALLER_QUALIFICATION_IMAGE SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT RELEASE_OUTPUT_ROOT; do
   [[ "${!key:-}" == /* && -e "${!key}" && ! -L "${!key}" ]] || fail "$key must be an existing absolute non-symlink path"
 done
 [[ -d "$RELEASE_OUTPUT_ROOT" && -d "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT" && -d "$SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR" ]] || fail 'invalid directory inputs'
 [[ "${SECONDBOX_RELEASE_POSTGRES_IMAGE:-}" =~ ^docker.io/library/postgres@sha256:[a-f0-9]{64}$ ]] || fail 'Postgres image must be digest pinned'
-[[ "${SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256:-}" =~ ^[a-f0-9]{64}$ ]] || fail 'invalid release public key fingerprint'
-actual="$(openssl pkey -pubin -in "$SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY" -outform DER | sha256sum | cut -d' ' -f1)"
-[[ "$actual" == "$SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256" ]] || fail 'release public key fingerprint mismatch'
 [[ "${SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256:-}" == "$(scripts/prepare-installer-qualification-image.sh --print-sha256)" ]] || fail 'installer image pin differs from repository'
 printf '%s  %s\n' "$SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256" "$SECONDBOX_INSTALLER_QUALIFICATION_IMAGE" | sha256sum --check --status || fail 'installer image digest mismatch'
 workspace_type="$(findmnt -n -o FSTYPE --target "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT")"

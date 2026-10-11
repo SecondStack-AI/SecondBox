@@ -151,7 +151,7 @@ func compatible(
 	if runner.BackendKind == "" || !runner.Capabilities["compute"] {
 		return false
 	}
-	// A default-image start boots whichever signed bundle the Runner has
+	// A default-image start boots whichever bundle the Runner has
 	// verified. Selected images are prepared and verified before placement.
 	if !slices.Contains(requirements.RequiredCapabilities, contracts.RunnerCapabilityClientSelectedImage) &&
 		!hasMaterialization(runner) {

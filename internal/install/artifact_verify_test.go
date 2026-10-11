@@ -1,14 +1,9 @@
 package install
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,17 +15,36 @@ import (
 
 func TestVerifyArtifactDirectoryAuthenticatesCompleteReleaseIdentity(t *testing.T) {
 	directory := t.TempDir()
-	release := writeSignedArtifactFixture(t, directory)
+	release := writeBundleArtifactFixture(t, directory)
 	verified, err := VerifyArtifactDirectory(directory, release)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verified.ManifestDigest != release.MicroVM.SignedManifestDigest || "SHA256:"+strings.ToUpper(verified.SigningKeyID) != release.MicroVM.SigningKeyFingerprint || len(verified.SigningPublicKeyPEM) == 0 {
+	if verified.ManifestDigest != release.MicroVM.ManifestDigest() {
 		t.Fatalf("verified identity = %#v", verified)
 	}
 }
 
-// Bundles signed before the rootfs secret scan was removed still carry secretScanPolicySha256.
+// An update or rollback re-verifies a directory materialized from a v6 release.
+func TestVerifyArtifactDirectoryToleratesRetiredSigningFilesOnlyForRecordedReleases(t *testing.T) {
+	directory := t.TempDir()
+	current := writeBundleArtifactFixture(t, directory)
+	writeFixtureFile(t, directory, "manifest.sig", []byte("signature"))
+	writeFixtureFile(t, directory, "signing.pub", []byte("key"))
+	recorded := current
+	recorded.SchemaVersion = releasecontract.SignedArtifactManifestSchema
+	recorded.MicroVM.LegacySignedManifestDigest = current.MicroVM.BundleManifestDigest
+	recorded.MicroVM.LegacySigningKeyFingerprint = "SHA256:" + strings.Repeat("A", 64)
+	recorded.MicroVM.BundleManifestDigest = ""
+	if _, err := VerifyArtifactDirectory(directory, recorded); err != nil {
+		t.Fatalf("recorded v6 artifact directory rejected: %v", err)
+	}
+	if _, err := VerifyArtifactDirectory(directory, current); err == nil {
+		t.Fatal("current artifact directory with retired signing files accepted")
+	}
+}
+
+// Bundles built before the rootfs secret scan was removed still carry secretScanPolicySha256.
 func TestVerifyArtifactDirectoryAcceptsRootfsContractWithOrWithoutTheSecretScanPolicyDigest(t *testing.T) {
 	tests := map[string][]map[string]string{
 		"contract built before the secret scan was removed": {{"secretScanPolicySha256": strings.Repeat("2", 64)}},
@@ -39,7 +53,7 @@ func TestVerifyArtifactDirectoryAcceptsRootfsContractWithOrWithoutTheSecretScanP
 	for name, extraContractFields := range tests {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
-			release := writeSignedArtifactFixture(t, directory, extraContractFields...)
+			release := writeBundleArtifactFixture(t, directory, extraContractFields...)
 			if _, err := VerifyArtifactDirectory(directory, release); err != nil {
 				t.Fatal(err)
 			}
@@ -53,6 +67,17 @@ func TestVerifyArtifactDirectoryRejectsExtraSubstitutedAndSymlinkedEntries(t *te
 		mutate func(*testing.T, string)
 	}{
 		{"extra file", func(t *testing.T, directory string) { writeFixtureFile(t, directory, "unexpected", []byte("no")) }},
+		{"retired signature file", func(t *testing.T, directory string) {
+			writeFixtureFile(t, directory, "manifest.sig", []byte("signature"))
+		}},
+		{"substituted manifest", func(t *testing.T, directory string) {
+			if err := os.Chmod(filepath.Join(directory, "manifest.json"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "manifest.json"), []byte("{}"), 0o444); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{"substituted rootfs", func(t *testing.T, directory string) {
 			if err := os.Chmod(filepath.Join(directory, "rootfs.ext4"), 0o644); err != nil {
 				t.Fatal(err)
@@ -73,7 +98,7 @@ func TestVerifyArtifactDirectoryRejectsExtraSubstitutedAndSymlinkedEntries(t *te
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
-			release := writeSignedArtifactFixture(t, directory)
+			release := writeBundleArtifactFixture(t, directory)
 			test.mutate(t, directory)
 			if _, err := VerifyArtifactDirectory(directory, release); err == nil {
 				t.Fatal("tampered artifact directory verified")
@@ -82,7 +107,7 @@ func TestVerifyArtifactDirectoryRejectsExtraSubstitutedAndSymlinkedEntries(t *te
 	}
 }
 
-func writeSignedArtifactFixture(t *testing.T, directory string, extraContractFields ...map[string]string) releasecontract.ArtifactManifest {
+func writeBundleArtifactFixture(t *testing.T, directory string, extraContractFields ...map[string]string) releasecontract.ArtifactManifest {
 	t.Helper()
 	files := map[string][]byte{
 		"kernel":                               []byte("kernel"),
@@ -112,18 +137,6 @@ func writeSignedArtifactFixture(t *testing.T, directory string, extraContractFie
 	for name, content := range files {
 		writeFixtureFile(t, directory, name, content)
 	}
-	privateKey, err := rsa.GenerateKey(rand.Reader, 3072)
-	if err != nil {
-		t.Fatal(err)
-	}
-	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	publicPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})
-	writeFixtureFile(t, directory, "signing.pub", publicPEM)
-	publicDigest := sha256.Sum256(publicDER)
-	fingerprint := "SHA256:" + strings.ToUpper(hex.EncodeToString(publicDigest[:]))
 	runtimeDigest := "sha256:" + fixtureChecksum(files["runtime-manifest.json"])
 	toolchainDigest := "sha256:" + fixtureChecksum(files["toolchain-manifest.json"])
 	entry := func(path string) map[string]any {
@@ -144,21 +157,15 @@ func writeSignedArtifactFixture(t *testing.T, directory string, extraContractFie
 		t.Fatal(err)
 	}
 	writeFixtureFile(t, directory, "manifest.json", manifestBytes)
-	manifestHash := sha256.Sum256(manifestBytes)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, manifestHash[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFixtureFile(t, directory, "manifest.sig", signature)
 	var sums strings.Builder
 	for _, name := range checksummedArtifactFiles {
 		sums.WriteString(fixtureChecksum(files[name]) + "  " + name + "\n")
 	}
 	writeFixtureFile(t, directory, "SHA256SUMS", []byte(sums.String()))
-	return artifactFixtureRelease(t, "sha256:"+fixtureChecksum(manifestBytes), fingerprint, runtimeDigest, toolchainDigest)
+	return artifactFixtureRelease(t, "sha256:"+fixtureChecksum(manifestBytes), runtimeDigest, toolchainDigest)
 }
 
-func artifactFixtureRelease(t *testing.T, manifestDigest, fingerprint, runtimeDigest, toolchainDigest string) releasecontract.ArtifactManifest {
+func artifactFixtureRelease(t *testing.T, manifestDigest, runtimeDigest, toolchainDigest string) releasecontract.ArtifactManifest {
 	t.Helper()
 	identity := releasecontract.Identity{Version: "1.2.3", Tag: "v1.2.3", SourceCommit: strings.Repeat("a", 40)}
 	digest := "sha256:" + strings.Repeat("b", 64)
@@ -171,7 +178,7 @@ func artifactFixtureRelease(t *testing.T, manifestDigest, fingerprint, runtimeDi
 			binaries = append(binaries, releasecontract.BinaryArtifact{Identity: identity, Name: name, Platform: platform, Location: releasecontract.BinaryLocation(identity.Version, name, platform), SHA256: strings.Repeat("b", 64)})
 		}
 	}
-	release := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: ref("secondbox.openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 2}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"}, InstallerTools: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: ref("go-sdk.zip")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: ref("secondbox.tgz")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + digest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + digest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + digest}, InstallBootstrap: releasecontract.Reference{Location: releasecontract.InstallBootstrapLocation(identity.Version), Digest: digest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + digest, SignedManifestDigest: manifestDigest, SigningKeyFingerprint: fingerprint, RuntimeBundle: releasecontract.SignedComponent{ArtifactID: "fixture-runtime", ManifestDigest: runtimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: releasecontract.SignedComponent{ArtifactID: "fixture-toolchain", ManifestDigest: toolchainDigest, MandatoryGuestFeatures: []string{}}}, Binaries: binaries, SBOMs: []releasecontract.Reference{ref("sbom.spdx.json")}, ArtifactAttestations: []releasecontract.Reference{ref("provenance.intoto.jsonl")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: digest}, QualificationEvidence: releasecontract.Reference{Location: releasecontract.QualificationEvidenceLocation(identity.Version, standardresources.ArchitectureAMD64), Digest: digest}, InstallerQualificationEvidence: releasecontract.Reference{Location: releasecontract.InstallerQualificationEvidenceLocation(identity.Version), Digest: digest}, StandardBundles: []releasecontract.StandardBundleArtifact{{Identity: identity, Name: "agent-compartment", Document: ref("agent-compartment.json"), Profiles: []releasecontract.StandardProfileIdentity{{Name: "agent-compartment", Revision: 1, SpecDigest: digest}}}, {Identity: identity, Name: "durable-coding", Document: ref("durable-coding.json"), Profiles: []releasecontract.StandardProfileIdentity{{Name: "durable-coding", Revision: 1, SpecDigest: digest}}}, {Identity: identity, Name: "agent-compartment-isolated", Document: ref("agent-compartment-isolated.json"), Profiles: []releasecontract.StandardProfileIdentity{{Name: "agent-compartment-isolated", Revision: 1, SpecDigest: digest}}}}}
+	release := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: ref("secondbox.openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 2}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"}, InstallerTools: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: ref("go-sdk.zip")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: ref("secondbox.tgz")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + digest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + digest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + digest}, InstallBootstrap: releasecontract.Reference{Location: releasecontract.InstallBootstrapLocation(identity.Version), Digest: digest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + digest, BundleManifestDigest: manifestDigest, RuntimeBundle: releasecontract.BundleComponent{ArtifactID: "fixture-runtime", ManifestDigest: runtimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: releasecontract.BundleComponent{ArtifactID: "fixture-toolchain", ManifestDigest: toolchainDigest, MandatoryGuestFeatures: []string{}}}, Binaries: binaries, SBOMs: []releasecontract.Reference{ref("sbom.spdx.json")}, ArtifactAttestations: []releasecontract.Reference{ref("provenance.intoto.jsonl")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: digest}, QualificationEvidence: releasecontract.Reference{Location: releasecontract.QualificationEvidenceLocation(identity.Version, standardresources.ArchitectureAMD64), Digest: digest}, InstallerQualificationEvidence: releasecontract.Reference{Location: releasecontract.InstallerQualificationEvidenceLocation(identity.Version), Digest: digest}, StandardBundles: []releasecontract.StandardBundleArtifact{{Identity: identity, Name: "agent-compartment", Document: ref("agent-compartment.json"), Profiles: []releasecontract.StandardProfileIdentity{{Name: "agent-compartment", Revision: 1, SpecDigest: digest}}}, {Identity: identity, Name: "durable-coding", Document: ref("durable-coding.json"), Profiles: []releasecontract.StandardProfileIdentity{{Name: "durable-coding", Revision: 1, SpecDigest: digest}}}, {Identity: identity, Name: "agent-compartment-isolated", Document: ref("agent-compartment-isolated.json"), Profiles: []releasecontract.StandardProfileIdentity{{Name: "agent-compartment-isolated", Revision: 1, SpecDigest: digest}}}}}
 	release.BundledServices = releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@" + digest}
 	release.GVisor = &releasecontract.GVisorArtifact{Identity: identity, RunnerReference: releasecontract.GVisorRunnerImage + "@" + digest, ImageReference: releasecontract.GVisorImage + "@" + digest, Materialization: ref("secondbox-1.2.3-gvisor-materialization.json"), MaterializationDigest: digest, FlatRootDigest: digest, RunscRelease: "20260817.0", QualificationEvidence: ref("secondbox-1.2.3-gvisor-qualification-evidence.json"), PodQualificationEvidence: ref("secondbox-1.2.3-gvisor-pod-qualification-evidence.json")}
 	if err := release.Validate(); err != nil {

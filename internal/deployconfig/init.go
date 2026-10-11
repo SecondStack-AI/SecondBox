@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -108,23 +107,6 @@ func InitDevelopment(directory string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	imageKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return "", err
-	}
-	imagePublicKey, err := x509.MarshalPKIXPublicKey(&imageKey.PublicKey)
-	if err != nil {
-		return "", err
-	}
-	if err := writeAtomic(filepath.Join(secrets, "execution-image.pub"), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: imagePublicKey}), 0o644, false); err != nil {
-		return "", err
-	}
-	if err := writeAtomic(filepath.Join(secrets, "execution-image.key"), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(imageKey)}), 0o600, false); err != nil {
-		return "", err
-	}
-	imageFingerprint := sha256.Sum256(imagePublicKey)
-	manifest.Deployment.ExecutionImagePublicKey = "secrets/execution-image.pub"
-	manifest.Deployment.ExecutionImagePublicKeySHA256 = hex.EncodeToString(imageFingerprint[:])
 	encoded, err := encodeManifest(manifest)
 	if err != nil {
 		return "", err
@@ -181,7 +163,7 @@ func developmentReleaseManifest(architecture string) (releasecontract.ArtifactMa
 		installerEvidence = releasecontract.Reference{Location: releasecontract.InstallerQualificationEvidenceLocation(identity.Version), Digest: developmentBundleDigest}
 		gvisor = &releasecontract.GVisorArtifact{Identity: identity, RunnerReference: releasecontract.GVisorRunnerImage + "@" + developmentBundleDigest, ImageReference: releasecontract.GVisorImage + "@" + developmentBundleDigest, Materialization: releasecontract.Reference{Location: releasecontract.GVisorMaterializationLocation(identity.Version), Digest: developmentBundleDigest}, MaterializationDigest: developmentBundleDigest, FlatRootDigest: developmentBundleDigest, RunscRelease: "development", QualificationEvidence: releasecontract.Reference{Location: releasecontract.GVisorQualificationEvidenceLocation(identity.Version, false), Digest: developmentBundleDigest}, PodQualificationEvidence: releasecontract.Reference{Location: releasecontract.GVisorQualificationEvidenceLocation(identity.Version, true), Digest: developmentBundleDigest}}
 	}
-	return releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: reference("openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{platform}, ControlPlane: []string{platform}, Runner: []string{platform}, InstallerTools: []string{platform}, Guest: []string{platform}, QualifiedRunnerGuest: []string{platform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: reference("go-sdk")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: reference("typescript-sdk")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + developmentBundleDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + developmentBundleDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + developmentBundleDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@" + developmentBundleDigest}, InstallBootstrap: releasecontract.Reference{Location: releasecontract.InstallBootstrapLocation(identity.Version), Digest: developmentBundleDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + developmentBundleDigest, SignedManifestDigest: developmentBundleDigest, SigningKeyFingerprint: "SHA256:" + strings.Repeat("D", 64), RuntimeBundle: releasecontract.SignedComponent{ArtifactID: "secondbox-development-runtime", ManifestDigest: developmentRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: releasecontract.SignedComponent{ArtifactID: "secondbox-development-toolchain", ManifestDigest: developmentToolchainDigest, MandatoryGuestFeatures: []string{}}}, GVisor: gvisor, Binaries: binaries, SBOMs: []releasecontract.Reference{reference("sbom.json")}, ArtifactAttestations: []releasecontract.Reference{reference("attestation.json")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: developmentBundleDigest}, QualificationEvidence: releasecontract.Reference{Location: releasecontract.QualificationEvidenceLocation(identity.Version, architecture), Digest: developmentBundleDigest}, InstallerQualificationEvidence: installerEvidence, StandardBundles: bundles}, nil
+	return releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: reference("openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{platform}, ControlPlane: []string{platform}, Runner: []string{platform}, InstallerTools: []string{platform}, Guest: []string{platform}, QualifiedRunnerGuest: []string{platform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: reference("go-sdk")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: reference("typescript-sdk")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + developmentBundleDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + developmentBundleDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + developmentBundleDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@" + developmentBundleDigest}, InstallBootstrap: releasecontract.Reference{Location: releasecontract.InstallBootstrapLocation(identity.Version), Digest: developmentBundleDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + developmentBundleDigest, BundleManifestDigest: developmentBundleDigest, RuntimeBundle: releasecontract.BundleComponent{ArtifactID: "secondbox-development-runtime", ManifestDigest: developmentRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: releasecontract.BundleComponent{ArtifactID: "secondbox-development-toolchain", ManifestDigest: developmentToolchainDigest, MandatoryGuestFeatures: []string{}}}, GVisor: gvisor, Binaries: binaries, SBOMs: []releasecontract.Reference{reference("sbom.json")}, ArtifactAttestations: []releasecontract.Reference{reference("attestation.json")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: developmentBundleDigest}, QualificationEvidence: releasecontract.Reference{Location: releasecontract.QualificationEvidenceLocation(identity.Version, architecture), Digest: developmentBundleDigest}, InstallerQualificationEvidence: installerEvidence, StandardBundles: bundles}, nil
 }
 
 func encodeManifest(manifest ManifestV1) ([]byte, error) {
@@ -336,7 +318,6 @@ func materializeProduction(manifest ManifestV1, sourcePath, directory string, re
 		}
 		return filepath.Clean(filepath.Join(sourceBase, reference))
 	}
-	manifest.Deployment.ExecutionImagePublicKey = absoluteReference(manifest.Deployment.ExecutionImagePublicKey)
 	if releaseBytes == nil {
 		manifest.StandardResources.ArtifactManifest = absoluteReference(manifest.StandardResources.ArtifactManifest)
 	} else {

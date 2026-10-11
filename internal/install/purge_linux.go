@@ -273,7 +273,7 @@ func PurgeVerifiedArtifacts(plan InstallPlan, receipt InstallReceipt, now func()
 }
 
 // ValidatePurgeVerifiedArtifacts proves the complete release-owned artifact
-// directory against the still-present signed release manifest without removing
+// directory against the still-present release manifest without removing
 // either one.
 func ValidatePurgeVerifiedArtifacts(plan InstallPlan, receipt InstallReceipt) error {
 	_, _, err := validatePurgeVerifiedArtifacts(plan, receipt)

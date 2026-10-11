@@ -36,9 +36,8 @@ func reflinkCacheRoot(t *testing.T) string {
 	return root
 }
 
-func publishCachedBundle(t *testing.T, cacheRoot string, rootfs []byte) *executionimagetest.Publisher {
+func writeCachedBundle(t *testing.T, cacheRoot string, rootfs []byte) {
 	t.Helper()
-	publisher := executionimagetest.NewPublisher(t)
 	directory := filepath.Join(cacheRoot, strings.TrimPrefix(verifierTestDigest, "sha256:"))
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
@@ -46,33 +45,27 @@ func publishCachedBundle(t *testing.T, cacheRoot string, rootfs []byte) *executi
 	if err := os.WriteFile(filepath.Join(directory, "rootfs.ext4"), rootfs, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	publisher.WriteBundle(t, directory, nil)
-	return publisher
+	executionimagetest.WriteBundle(t, directory, nil)
 }
 
-func TestVerifierRefusesUnpinnedTrustAndHasNoFixedBundle(t *testing.T) {
-	publisher := executionimagetest.NewPublisher(t)
-	if _, err := NewVerifier("relative/cache", publisher.PublicKeyPath, publisher.PublicKeySHA256); err == nil {
+func TestVerifierRefusesRelativeCacheRootAndHasNoFixedBundle(t *testing.T) {
+	if _, err := NewVerifier("relative/cache"); err == nil {
 		t.Fatal("relative cache root was accepted")
 	}
-	if _, err := NewVerifier(t.TempDir(), publisher.PublicKeyPath, strings.Repeat("0", 64)); err == nil ||
-		!strings.Contains(err.Error(), "does not match its pinned fingerprint") {
-		t.Fatalf("mismatched publisher fingerprint error = %v", err)
-	}
-	verifier, err := NewVerifier(t.TempDir(), publisher.PublicKeyPath, publisher.PublicKeySHA256)
+	verifier, err := NewVerifier(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := verifier.VerifyLocal(t.Context(), nil, noVerifierProgress); err == nil ||
-		!strings.Contains(err.Error(), "no fixed signed bundle") {
+		!strings.Contains(err.Error(), "no fixed bundle") {
 		t.Fatalf("fixed-bundle request on a verifier error = %v", err)
 	}
 }
 
 func TestCloneVerifiedRootfsRefusesAReplacedFile(t *testing.T) {
 	cacheRoot := t.TempDir()
-	publisher := publishCachedBundle(t, cacheRoot, []byte("verified-root"))
-	verifier, err := NewVerifier(cacheRoot, publisher.PublicKeyPath, publisher.PublicKeySHA256)
+	writeCachedBundle(t, cacheRoot, []byte("verified-root"))
+	verifier, err := NewVerifier(cacheRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +91,8 @@ func TestCloneVerifiedRootfsRefusesAReplacedFile(t *testing.T) {
 func TestCloneVerifiedRootfsReflinksAnUnnamedCopy(t *testing.T) {
 	cacheRoot := reflinkCacheRoot(t)
 	content := bytes.Repeat([]byte("selected-root-block"), 4096)
-	publisher := publishCachedBundle(t, cacheRoot, content)
-	verifier, err := NewVerifier(cacheRoot, publisher.PublicKeyPath, publisher.PublicKeySHA256)
+	writeCachedBundle(t, cacheRoot, content)
+	verifier, err := NewVerifier(cacheRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,8 +138,7 @@ func TestRootfsCloningProbeRejectsAFilesystemWithoutReflink(t *testing.T) {
 	if filesystem.Type == unix.BTRFS_SUPER_MAGIC || filesystem.Type == unix.XFS_SUPER_MAGIC {
 		t.Skip("the temporary directory supports reflink; the refusal needs another filesystem")
 	}
-	publisher := executionimagetest.NewPublisher(t)
-	verifier, err := NewVerifier(cacheRoot, publisher.PublicKeyPath, publisher.PublicKeySHA256)
+	verifier, err := NewVerifier(cacheRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

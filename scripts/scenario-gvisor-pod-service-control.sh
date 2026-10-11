@@ -31,11 +31,9 @@ for name in \
   SECONDBOX_SCENARIO_RELOCATION_STATE_DIR \
   SECONDBOX_SCENARIO_RELOCATION_WORKSPACE_DIR \
   SECONDBOX_SCENARIO_EXECUTION_IMAGE_DIR \
-  SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256 \
   SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY \
   SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS \
-  SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY \
-  SECONDBOX_SCENARIO_PKI_DIR; do
+  SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY; do
   [[ -n "${!name:-}" ]] || fail "$name is required"
 done
 [[ "$SECONDBOX_SCENARIO_IMAGE_FETCHER_DNS" =~ ^[0-9A-Fa-f:.]+$ ]] ||
@@ -162,8 +160,6 @@ $(emit_env \
   "SECONDBOX_IMAGE_FETCHER_CACHE_ROOT=/cache" \
   "SECONDBOX_IMAGE_FETCHER_REGISTRIES=$SECONDBOX_SCENARIO_EXECUTION_IMAGE_REGISTRY" \
   "SECONDBOX_IMAGE_FETCHER_CERTIFICATES=/run/image-registry/certificates" \
-  "SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY=/run/image-trust/public.pem" \
-  "SECONDBOX_IMAGE_FETCHER_PUBLIC_KEY_SHA256=$SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256" \
   "SECONDBOX_IMAGE_FETCHER_MAX_DOWNLOAD_BYTES=17179869184" \
   "SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES=17179869184" \
   "SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES=68719476736" \
@@ -175,9 +171,6 @@ $(emit_env \
           mountPath: /run/secondbox-image-fetcher
         - name: image-registry
           mountPath: /run/image-registry
-          readOnly: true
-        - name: execution-image-key
-          mountPath: /run/image-trust/public.pem
           readOnly: true
         - name: image-fetcher-tmp
           mountPath: /tmp
@@ -262,8 +255,6 @@ $(emit_env \
   "SECONDBOX_GVISOR_NETWORK_PROFILE=$service_network_profile" \
   "SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT=/var/lib/secondbox-execution-images" \
   "SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET=/run/secondbox-image-fetcher/fetcher.sock" \
-  "SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY=/opt/secondbox-execution-image-public-key.pem" \
-  "SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256=$SECONDBOX_SCENARIO_EXECUTION_IMAGE_KEY_SHA256" \
 )
       volumeMounts:
         - name: entrypoint
@@ -293,9 +284,6 @@ $(emit_env \
           mountPath: /var/lib/secondbox-execution-images
         - name: image-fetcher-socket
           mountPath: /run/secondbox-image-fetcher
-        - name: execution-image-key
-          mountPath: /opt/secondbox-execution-image-public-key.pem
-          readOnly: true
   volumes:
     - name: entrypoint
       hostPath:
@@ -340,10 +328,6 @@ $(emit_env \
       hostPath:
         path: $SECONDBOX_SCENARIO_IMAGE_REGISTRY_DIRECTORY
         type: Directory
-    - name: execution-image-key
-      hostPath:
-        path: $SECONDBOX_SCENARIO_PKI_DIR/execution-image.pub
-        type: File
     - name: image-fetcher-tmp
       emptyDir:
         medium: Memory

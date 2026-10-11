@@ -40,7 +40,7 @@ func (m *Manager) NegotiateAssignmentGuest(
 	ctx context.Context,
 	backendReference string,
 	assignmentID string,
-	start SignedBundleGuestStart,
+	start BundleGuestStart,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err

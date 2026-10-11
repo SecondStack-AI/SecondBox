@@ -2,21 +2,21 @@
 
 ## Release upgrade boundary
 
-[v0.24.0](../releases/v0.24.0.md) updates in place from v0.14.0 onward and retains Runner protocol `[6,6]`, execution bundles, the trust anchor, and standard Profile revisions; Runners stay protocol-compatible in either update order and need updating only to receive the direct File transport fix. Public API v1 adds the stopped-Sandbox Profile switch and changes the Subject Sandbox policy body from `profile` to `profiles`. Back up PostgreSQL first: migration `0037_subject_sandbox_policy_profiles` rewrites stored Subject policies, so rollback to v0.23.0 requires the backup, and control planes on either side of it do not share those policies. Pause Subject policy writes, stop every v0.23.0 control-plane process before v0.24.0 starts, then deploy policy clients that send `profiles` and resume. Upgrades from earlier versions must also follow the intervening release boundaries below.
+[v0.24.0](../releases/v0.24.0.md) updates in place from v0.14.0 onward and retains Runner protocol `[6,6]`, execution bundles, and standard Profile revisions; Runners stay protocol-compatible in either update order and need updating only to receive the direct File transport fix. Public API v1 adds the stopped-Sandbox Profile switch and changes the Subject Sandbox policy body from `profile` to `profiles`. Back up PostgreSQL first: migration `0037_subject_sandbox_policy_profiles` rewrites stored Subject policies, so rollback to v0.23.0 requires the backup, and control planes on either side of it do not share those policies. Pause Subject policy writes, stop every v0.23.0 control-plane process before v0.24.0 starts, then deploy policy clients that send `profiles` and resume. Upgrades from earlier versions must also follow the intervening release boundaries below.
 
-[v0.23.0](../releases/v0.23.0.md) updates in place from v0.14.0 onward with no database migration and retains public API v1, Runner protocol `[6,6]`, execution bundles, the trust anchor, and standard Profile revisions. v0.22.0 and v0.23.0 peers can connect in either update order. The published release serves amd64 Runner hosts; an arm64 Runner host needs a locally staged arm64 release. Upgrades from earlier versions must also follow the intervening release boundaries below.
+[v0.23.0](../releases/v0.23.0.md) updates in place from v0.14.0 onward with no database migration and retains public API v1, Runner protocol `[6,6]`, execution bundles, and standard Profile revisions. v0.22.0 and v0.23.0 peers can connect in either update order. The published release serves amd64 Runner hosts; an arm64 Runner host needs a locally staged arm64 release. Upgrades from earlier versions must also follow the intervening release boundaries below.
 
-[v0.22.0](../releases/v0.22.0.md) updates in place from v0.14.0 onward and retains public API v1, Runner protocol `[6,6]`, execution bundles, the trust anchor, and standard Profile revisions. Back up PostgreSQL before updating: migrations `0035_live_sandbox_quota_index` and `0036_sandbox_quota_ledger_on_increase` add an index and replace the Sandbox quota-ledger trigger, so rollback to v0.21.0 requires the backup. Update the control plane and all Runners for the cancellation fixes; v0.21.0 and v0.22.0 peers can connect in either update order. Upgrades from earlier versions must also follow the intervening release boundaries below.
+[v0.22.0](../releases/v0.22.0.md) updates in place from v0.14.0 onward and retains public API v1, Runner protocol `[6,6]`, execution bundles, and standard Profile revisions. Back up PostgreSQL before updating: migrations `0035_live_sandbox_quota_index` and `0036_sandbox_quota_ledger_on_increase` add an index and replace the Sandbox quota-ledger trigger, so rollback to v0.21.0 requires the backup. Update the control plane and all Runners for the cancellation fixes; v0.21.0 and v0.22.0 peers can connect in either update order. Upgrades from earlier versions must also follow the intervening release boundaries below.
 
 [v0.21.0](../releases/v0.21.0.md) updates in place from v0.14.0 onward. It advances the Runner protocol to generation 6 exactly, so update the control plane and all Runners together. Migration `0034_per_exec_attribution` moves the attributed-execution binding from `assignments` to `data_plane_sessions`, so rollback requires the pre-update database backup. Attribution moves from the start request to the exec request, and every Assignment of a Profile that permits attributed execution requires an `attributed_socket` route for its pinned gateway. Configure that route on every Runner first, drain attributed traffic, update, then deploy clients built on the v0.21.0 SDKs; the release notes give the sequence.
 
 [v0.20.0](../releases/v0.20.0.md) updates in place from v0.14.0 onward with the control plane and all Runners updated together. Its migrations `0032_port_stream_accounting` and `0033_port_stream_in_memory` drop `port_sessions` columns the v0.19.0 control plane reads, so rollback requires the pre-update database backup. Application data-plane requests now enforce the authority's `profileGrants`. The in-place extension routes ship with v0.20.0, so audit grants before updating, pause traffic that depends on a missing grant, update, extend the missing grants, and resume; the release notes give the sequence.
 
-Starting with [v0.19.0](../releases/v0.19.0.md), Profiles no longer name execution bundle digests, and deployments from v0.14.0 onward update in place with the control plane and all Runners updated together. A Sandbox's Instances boot whichever signed bundle its home Runner has installed, so a release that ships a new bundle updates in place and existing Sandboxes keep their Workspaces and start on the new bundle. Migration `0031_profile_execution_assets_unpinned` removes the retired digests from recorded Profile revisions, and the guided updater no longer compares bundle identities. A guest image upgrade can still change what software a Workspace sees, as any base-image upgrade does.
+Starting with [v0.19.0](../releases/v0.19.0.md), Profiles no longer name execution bundle digests, and deployments from v0.14.0 onward update in place with the control plane and all Runners updated together. A Sandbox's Instances boot whichever bundle its home Runner has installed, so a release that ships a new bundle updates in place and existing Sandboxes keep their Workspaces and start on the new bundle. Migration `0031_profile_execution_assets_unpinned` removes the retired digests from recorded Profile revisions, and the guided updater no longer compares bundle identities. A guest image upgrade can still change what software a Workspace sees, as any base-image upgrade does.
 
-v0.18.0 retains the v0.17.0 signed Firecracker bundle, Runner protocol generation 5, and the migration baseline, so a v0.17.0 deployment updates in place. It is breaking for gVisor Runners: each now requires the image fetcher, a reflink-capable execution image cache, registry configuration, and the publisher key before it starts. See the [v0.18.0 release notes](../releases/v0.18.0.md).
+v0.18.0 retains the v0.17.0 Firecracker bundle, Runner protocol generation 5, and the migration baseline, so a v0.17.0 deployment updates in place. It is breaking for gVisor Runners: each now requires the image fetcher, a reflink-capable execution image cache, and registry configuration before it starts. See the [v0.18.0 release notes](../releases/v0.18.0.md).
 
-v0.17.0 shipped a new signed Firecracker bundle. Under the retired Profile bundle pin, its releases refused in-place updates from earlier releases; the current updater accepts them. See the [v0.17.0 release notes](../releases/v0.17.0.md).
+v0.17.0 shipped a new Firecracker bundle. Under the retired Profile bundle pin, its releases refused in-place updates from earlier releases; the current updater accepts them. See the [v0.17.0 release notes](../releases/v0.17.0.md).
 
 Historically, v0.16.0 allowed a v0.15.0 deployment to update in place because its bundle and migration baseline were unchanged. v0.15.0 accepted the exact v0.14.0 migration baseline and applied forward migrations. Other checksum mismatches remain errors; do not reset migration records to bypass them. See each target release's notes for its boundary.
 
@@ -108,7 +108,7 @@ Required deployment authority has no default. This includes identities, the plat
 
 The deployment compiler supplies the packaged container listeners (`0.0.0.0:8080` for the API and `0.0.0.0:9443` for Runners). Operators choose the host bind addresses and published ports. Generated process configuration still states every value explicitly.
 
-Existing manifests must remove the retired `policy.default_subject_max_*`, `deployment.listen_address`, `deployment.runner_listen_address`, `deployment.signed_asset_catalog_path`, and `deployment.signed_asset_catalog` keys; the control plane no longer reads a signed-asset catalog, and its catalog file may be deleted. Standard bundles now share one RunnerPool inventory declaration by name: remove its `bundle` key and consolidate identical `[[standard_resources.runner_pools]]` entries into one. Conflicting inventory declarations require an explicit operator choice; the compiler rejects duplicate names. The strict decoder identifies retired keys without disclosing their values.
+Existing manifests must remove the retired `policy.default_subject_max_*`, `deployment.listen_address`, `deployment.runner_listen_address`, `deployment.signed_asset_catalog_path`, and `deployment.signed_asset_catalog` keys; the control plane no longer reads a signed-asset catalog, and its catalog file may be deleted. Standard bundles now share one RunnerPool inventory declaration by name: remove its `bundle` key and consolidate identical `[[standard_resources.runner_pools]]` entries into one. Conflicting inventory declarations require an explicit operator choice; the compiler rejects duplicate names. The strict decoder identifies retired keys without disclosing their values. SecondBox no longer signs release bundles or execution images, so existing manifests must also delete `deployment.execution_image_public_key`, `deployment.execution_image_public_key_sha256`, and each Runner's `execution_image_public_key`, `execution_image_public_key_sha256`, `artifact_public_key`, and `artifact_public_key_sha256`.
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
@@ -127,7 +127,7 @@ Runner protocol minimum and maximum are not configuration. Both binaries compile
 
 ## Tenant-aware egress topology
 
-The client-selected-image release uses Runner protocol generation 5 exactly. Earlier control planes and Runners cannot join a generation-5 deployment. Upgrade the control plane and every Runner as one coordinated replacement. A mixed fleet, legacy assignment, or global-gateway fallback is unsupported. The first cold start also includes registry download, extraction, and signature verification. Size assignment and ingress deadlines for that work; warm starts use the verified Runner-local cache.
+The client-selected-image release uses Runner protocol generation 5 exactly. Earlier control planes and Runners cannot join a generation-5 deployment. Upgrade the control plane and every Runner as one coordinated replacement. A mixed fleet, legacy assignment, or global-gateway fallback is unsupported. The first cold start also includes registry download, extraction, and bundle verification. Size assignment and ingress deadlines for that work; warm starts use the verified Runner-local cache.
 
 One SecondBox Tenant represents one SecondStack installation and has at most one nullable operator-selected egress-context name. Names are opaque and match `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`, so they contain 1 through 63 lowercase ASCII letters, digits, or hyphens and begin and end with an alphanumeric character. They are not DNS names or network coordinates. Do not put SecondStack hostnames, proxy endpoints, certificates, network ranges, Tenant references, or secrets in a context name or in control-plane configuration.
 
@@ -232,7 +232,7 @@ The control-plane container runs as UID/GID 65532 with a read-only root, dropped
 
 Every `[[runners]]` entry is keyed by immutable `runner_id`. At most one may use `placement = "same-host"`; any number may use `placement = "remote"`.
 
-For same-host placement, set `identity_host_directory`, `artifact_host_directory`, and `state_host_directory` to explicit host paths. The compiler supplies all seventeen fixed container paths: identity and egress configuration, workspace root, Runner logs, Firecracker and jailer executables, jail root, kernel/rootfs/shared assets, runtime and Firecracker logs, snapshot-template cache, signing-key file, network state, and nft executable. Remove `workspace_host_directory` from existing manifests and omit the path fields marked remote-only in the Runner template from same-host declarations. Nonempty values are rejected instead of silently ignored. The signing-key fingerprint stays explicit; only its packaged file location is derived. The existing `state_host_directory/workspaces` directory remains authoritative and must exist on the qualified storage filesystem; resolution never creates or relocates it. Remote declarations still require explicit paths. Existing custom state or asset layouts must be reconciled with the documented packaged paths before adopting this schema; compilation does not move their files.
+For same-host placement, set `identity_host_directory`, `artifact_host_directory`, and `state_host_directory` to explicit host paths. The compiler supplies all sixteen fixed container paths: identity and egress configuration, workspace root, Runner logs, Firecracker and jailer executables, jail root, kernel/rootfs/shared assets, runtime and Firecracker logs, snapshot-template cache, network state, and nft executable. Remove `workspace_host_directory` from existing manifests and omit the path fields marked remote-only in the Runner template from same-host declarations. Nonempty values are rejected instead of silently ignored. The existing `state_host_directory/workspaces` directory remains authoritative and must exist on the qualified storage filesystem; resolution never creates or relocates it. Remote declarations still require explicit paths. Existing custom state or asset layouts must be reconciled with the documented packaged paths before adopting this schema; compilation does not move their files.
 
 Packaged deployments always use the Firecracker jailer for both placements. Remove `firecracker_allow_unjailed` from existing Runner declarations; the compiler emits the fixed `false` runtime value.
 
@@ -252,19 +252,15 @@ Each preparation reserves `2 * execution_image_max_download_bytes + execution_im
 This conservative reservation also applies to cached images and must fit below the storage-pressure denial threshold with existing filesystem usage and Workspace reservations.
 The guided install values reserve 48 GiB for staging from a 16 GiB download limit and a 16 GiB expanded limit.
 Existing manifests must add these fields before a generation-5 Runner starts.
-They must also set `[deployment].execution_image_public_key` to the publisher's PEM public key and `execution_image_public_key_sha256` to its SHA-256 DER fingerprint.
-Calculate the fingerprint with `openssl pkey -pubin -in PUBLIC_KEY -outform DER | sha256sum`.
-Use that same publisher fingerprint for each Runner's execution-image trust, and make the public key readable by the fetcher's UID 10002.
-This publisher may differ from the historical release asset publisher.
 Leave the three remote-only paths empty for same-host placement.
 
-For a remote Runner, map the manifest values to `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES`.
+For a remote Runner, map the manifest values to `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES`.
 `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT` must be on the same filesystem as `SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR`, because a start stages the selected rootfs into the run directory by reflink; the Runner refuses to start otherwise.
 Run `secondbox-image-fetcher` as a separate unprivileged user with Skopeo, access to the image cache, and a private Unix socket at `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET`.
 It must have no access to Workspaces, host devices, or the Docker socket.
 Configure its explicit `SECONDBOX_IMAGE_FETCHER_*` environment as shown in `deploy/compose.same-host-runner.yml`.
 The same-host package provisions this separate service and its mounts.
-A gVisor Runner uses the same fetcher, cache, socket, and publisher-key settings, but needs no run directory: its cache must itself support reflink; see [gVisor runtime](gvisor-runtime.md#client-selected-execution-images).
+A gVisor Runner uses the same fetcher, cache, and socket settings, but needs no run directory: its cache must itself support reflink; see [gVisor runtime](gvisor-runtime.md#client-selected-execution-images).
 
 ### Tenant registry access
 
@@ -321,20 +317,12 @@ artifact_host_directory = '<replace-with-absolute-runner-host-path>'
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
 # Private directory containing tenants.json and exported registry credentials on the Runner host.
 execution_image_registry_config_directory = '<replace-with-absolute-tenant-registry-config-directory>'
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package mounts the deployment's execution-image publisher key.
-execution_image_public_key = ''
-# Client-selected execution-image signing-key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
-execution_image_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
 # Maximum downloaded OCI archive size per image.
 execution_image_max_download_bytes = 0
-# Maximum expanded signed bundle size per image.
+# Maximum expanded bundle size per image.
 execution_image_max_expanded_bytes = 0
 # Maximum retained expanded image cache size.
 execution_image_max_cache_bytes = 0
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/signing.pub.
-artifact_public_key = ''
-# Provisioned signed-artifact key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
-artifact_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
 
 # Runner storage
 # Dedicated reflink-capable Runner storage root on the host; absolute when set and required for same-host placement. Compose binds this root once at /var/lib/secondbox-runner so its state and workspaces children retain one mount identity.
@@ -392,7 +380,7 @@ firecracker_run_directory = ''
 firecracker_log_directory = ''
 
 # Snapshot-resume startup
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/snapshot-template-cache. Keep this cache on the same filesystem as firecracker_jail_root: golden memory files are hard-linked into each jail. Snapshot-resume capacity requires a template built from the verified signed bundle.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/snapshot-template-cache. Keep this cache on the same filesystem as firecracker_jail_root: golden memory files are hard-linked into each jail. Snapshot-resume capacity requires a template built from the verified bundle.
 snapshot_template_cache_root = ''
 
 # Sandbox networking
@@ -557,6 +545,6 @@ curl --fail --silent --show-error http://127.0.0.1:8080/metrics
 
 See [backup and restore](backup-and-restore.md), [Firecracker runtime](firecracker-runtime.md), [multirunner qualification](multirunner-qualification.md), and [observability and diagnostics](observability-and-diagnostics.md).
 
-For public releases, verify the published checksums and artifact manifest, then initialize with `secondbox-deploy init --mode production --input COMPLETE_MANIFEST --artifact-manifest URL DIRECTORY`. The artifact manifest supplies digest-pinned control-plane and Runner images, the Runner software version, and release-owned standard-resource identity. All deployment identity, credentials, storage, topology, host paths, gateways, capacity, retention, and independently held guest trust anchors remain explicit in `COMPLETE_MANIFEST`. See [release distribution](release-distribution.md).
+For public releases, verify the published checksums and artifact manifest, then initialize with `secondbox-deploy init --mode production --input COMPLETE_MANIFEST --artifact-manifest URL DIRECTORY`. The artifact manifest supplies digest-pinned control-plane and Runner images, the Runner software version, and release-owned standard-resource identity. All deployment identity, credentials, storage, topology, host paths, gateways, capacity, and retention remain explicit in `COMPLETE_MANIFEST`. See [release distribution](release-distribution.md).
 
 RunnerPools declare placement inventory: name, state, architectures, and capabilities. Remove `capacityPolicy` from resource documents and API requests, remove it from `mutableFields`, and remove `--capacity` from standard-bundle CLI commands. In deployment manifests, remove `max_sandboxes`, `max_vcpu_count`, and `max_memory_bytes` from `[[standard_resources.runner_pools]]`. These pool settings were never enforced. Tenant and Subject quotas, Profile resource ceilings, and reported Runner capacity continue to govern admission. The forward migration drops only the unused pool metadata column; deploy the control plane and clients together because old clients and old control-plane binaries still expect that field.

@@ -70,7 +70,7 @@ A Profile is a stable operator-chosen name with an enabled state and current rev
 Every ProfileRevision contains:
 
 - RunnerPool selector and required architecture/capability set;
-- immutable runtime and toolchain component-manifest digests bound by one signed execution-bundle manifest; the runtime component covers the kernel, rootfs, and guest agent, while the toolchain component covers the shared tool payload and its locked provenance;
+- immutable runtime and toolchain component-manifest digests bound by one execution-bundle manifest; the runtime component covers the kernel, rootfs, and guest agent, while the toolchain component covers the shared tool payload and its locked provenance;
 - vCPU, memory, Workspace capacity, and concurrent-operation limits;
 - the startup mode every Instance uses, explicitly `cold_boot` or `snapshot_resume`;
 - exec deadline, buffered output, streaming window, transfer, PTY, and port-session bounds;
@@ -155,7 +155,7 @@ The Sandbox's lifecycle policy re-resolves against the target revision and the S
 Client-selected images currently support only `cold_boot` Firecracker assignments.
 For `snapshot_resume` Profiles, omit the image on create and start to boot the Runner's installed execution bundle.
 
-The mode is a placement requirement, not a hint. A `snapshot_resume` ProfileRevision admits only onto Runners advertising the provider-neutral `snapshot-resume` capability, at initial home placement and at every later Instance assignment onto that same home Runner. A Runner advertises the capability only when it is configured with a resume template cache root, requires the jailer, and already holds a template built from the exact signed execution bundle it verified. A pool whose operator-declared capabilities omit `snapshot-resume` refuses a `snapshot_resume` Profile non-retryably with `startup_mode_unsupported`, because no Runner in it will ever be admissible; a declared pool with no currently advertising Runner refuses retryably, because a Runner may materialize the template.
+The mode is a placement requirement, not a hint. A `snapshot_resume` ProfileRevision admits only onto Runners advertising the provider-neutral `snapshot-resume` capability, at initial home placement and at every later Instance assignment onto that same home Runner. A Runner advertises the capability only when it is configured with a resume template cache root, requires the jailer, and already holds a template built from the exact execution bundle it verified. A pool whose operator-declared capabilities omit `snapshot-resume` refuses a `snapshot_resume` Profile non-retryably with `startup_mode_unsupported`, because no Runner in it will ever be admissible; a declared pool with no currently advertising Runner refuses retryably, because a Runner may materialize the template.
 
 Revisions recorded before the field existed are stamped `cold_boot` by migration `0015_profile_startup_mode`. That is a statement of the behavior they already had, not a default invented for them, and it keeps an upgraded database converging on exactly the spec a fresh one writes.
 

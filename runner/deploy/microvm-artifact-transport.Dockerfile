@@ -2,15 +2,15 @@ FROM scratch
 
 ARG RELEASE_VERSION
 ARG SOURCE_COMMIT
-ARG SIGNED_MANIFEST_DIGEST
+ARG BUNDLE_MANIFEST_DIGEST
 
 LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondBox" \
-      org.opencontainers.image.title="SecondBox signed microVM artifacts" \
+      org.opencontainers.image.title="SecondBox microVM artifacts" \
       org.opencontainers.image.version="${RELEASE_VERSION}" \
       org.opencontainers.image.revision="${SOURCE_COMMIT}" \
-      ai.secondstack.secondbox.signed-manifest-digest="${SIGNED_MANIFEST_DIGEST}"
+      ai.secondstack.secondbox.bundle-manifest-digest="${BUNDLE_MANIFEST_DIGEST}"
 
-# This image is a release transport for the independently signed host bundle.
+# This image is a release transport for the host bundle.
 # Keep the allowlist explicit so build-context files can never enter the image.
 COPY kernel /secondbox-runner-microvm/kernel
 COPY rootfs.ext4 /secondbox-runner-microvm/rootfs.ext4
@@ -25,6 +25,4 @@ COPY rootfs-python-license-inventory.json /secondbox-runner-microvm/rootfs-pytho
 COPY runtime-manifest.json /secondbox-runner-microvm/runtime-manifest.json
 COPY toolchain-manifest.json /secondbox-runner-microvm/toolchain-manifest.json
 COPY manifest.json /secondbox-runner-microvm/manifest.json
-COPY manifest.sig /secondbox-runner-microvm/manifest.sig
-COPY signing.pub /secondbox-runner-microvm/signing.pub
 COPY SHA256SUMS /secondbox-runner-microvm/SHA256SUMS

@@ -193,7 +193,7 @@ complete milestone coverage and this wake behaviour.
 
 ## Running it
 
-The benchmark reuses the qualified artifact bundle, trust anchor, and Workspace
+The benchmark reuses the qualified artifact bundle and Workspace
 root prepared by `just prepare-stress`, and fails loudly naming the exact missing
 variable rather than skipping.
 

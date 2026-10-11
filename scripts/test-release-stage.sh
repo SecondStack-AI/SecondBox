@@ -42,29 +42,23 @@ rm -f -- "$qualification_evidence"
 
 artifact_dir="$work_dir/microvm"
 mkdir "$artifact_dir"
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work_dir/private.pem" >/dev/null 2>&1
-openssl pkey -in "$work_dir/private.pem" -pubout -out "$work_dir/public.pem" >/dev/null 2>&1
 for name in kernel kernel-provenance.json rootfs-debian-license-inventory.json rootfs-debian-packages.lock rootfs-python-license-inventory.json rootfs-python.freeze rootfs-source-manifest.json rootfs.ext4 runtime-manifest.json secondbox-rootfs-contract.json shared.img toolchain-manifest.json; do
   printf 'synthetic release-stage fixture: %s\n' "$name" >"$artifact_dir/$name"
 done
 runtime_digest="sha256:$(sha256sum "$artifact_dir/runtime-manifest.json" | awk '{print $1}')"
 toolchain_digest="sha256:$(sha256sum "$artifact_dir/toolchain-manifest.json" | awk '{print $1}')"
 jq -n --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '{artifactVersion:"synthetic-release-stage",architecture:"amd64",guestProtocol:{minimum:1,maximum:1},runtimeBundle:{artifactId:"synthetic-runtime",path:"runtime-manifest.json",manifestDigest:$runtime,mandatoryGuestFeatures:[]},toolchainBundle:{artifactId:"synthetic-toolchain",path:"toolchain-manifest.json",manifestDigest:$toolchain,mandatoryGuestFeatures:[]}}' >"$artifact_dir/manifest.json"
-cp "$work_dir/public.pem" "$artifact_dir/signing.pub"
 (
   cd "$artifact_dir"
   sha256sum kernel kernel-provenance.json rootfs-debian-license-inventory.json rootfs-debian-packages.lock rootfs-python-license-inventory.json rootfs-python.freeze rootfs-source-manifest.json rootfs.ext4 runtime-manifest.json secondbox-rootfs-contract.json shared.img toolchain-manifest.json manifest.json >SHA256SUMS
 )
-openssl dgst -sha256 -sign "$work_dir/private.pem" -out "$artifact_dir/manifest.sig" "$artifact_dir/manifest.json"
-fingerprint="$(openssl pkey -pubin -in "$work_dir/public.pem" -outform DER | sha256sum | awk '{print $1}')"
+bundle_manifest_digest="sha256:$(sha256sum "$artifact_dir/manifest.json" | awk '{print $1}')"
 
 stage_one="$work_dir/stage-one"
 stage_two="$work_dir/stage-two"
 stage_dictionary_locale="$work_dir/stage-dictionary-locale"
 stage_installer_candidate="$work_dir/stage-installer-candidate"
 export SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$artifact_dir"
-export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY="$work_dir/public.pem"
-export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$fingerprint"
 # Both reproducibility stagings run under byte collation and the third under
 # dictionary collation, so the comparison below means the same thing whatever
 # locale the operator brought. The dictionary locale is a stated prerequisite
@@ -112,7 +106,7 @@ final_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-q
 for stage in "$stage_one" "$stage_two" "$stage_dictionary_locale"; do
   go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage"
   source_commit="$(jq -er '.sourceCommit' "$stage/secondbox-0.7.0-artifact-manifest.json")"
-  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v6" and .version == "0.7.0" and .runnerProtocol == {minimum:6,maximum:6} and (.installerTools.reference | startswith("ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:")) and (.installBootstrap.location | endswith("/v0.7.0/install.sh")) and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.7.0-qualification-evidence.json")) and (.installerQualificationEvidence.location | endswith("/secondbox-0.7.0-installer-qualification-evidence.json"))' "$stage/secondbox-0.7.0-artifact-manifest.json" >/dev/null
+  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" --arg bundleManifest "$bundle_manifest_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v7" and .microvm.bundleManifestDigest == $bundleManifest and (.microvm | has("signedManifestDigest") or has("signingKeyFingerprint") | not) and .version == "0.7.0" and .runnerProtocol == {minimum:6,maximum:6} and (.installerTools.reference | startswith("ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:")) and (.installBootstrap.location | endswith("/v0.7.0/install.sh")) and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.7.0-qualification-evidence.json")) and (.installerQualificationEvidence.location | endswith("/secondbox-0.7.0-installer-qualification-evidence.json"))' "$stage/secondbox-0.7.0-artifact-manifest.json" >/dev/null
   jq -e '.schemaVersion == "secondbox.standard-bundle/v4" and .profile.revisions[-1].number == 2 and ([.profile.revisions[].spec | has("runtimeBundleDigest") or has("toolchainBundleDigest")] | any | not) and .profile.revisions[-1].spec.network.requiresTenantEgressContext == true' "$stage/durable-coding.standard-bundle.json" >/dev/null
   # Revision 3 repeats revision 2 once Profiles stopped naming bundles; attributed
   # execution, unlimited lifetimes, and connection limits append later revisions.
@@ -220,7 +214,6 @@ jq '.architecture = "arm64"' "$artifact_dir/manifest.json" >"$arm64_artifact_dir
   cd "$arm64_artifact_dir"
   sha256sum kernel kernel-provenance.json rootfs-debian-license-inventory.json rootfs-debian-packages.lock rootfs-python-license-inventory.json rootfs-python.freeze rootfs-source-manifest.json rootfs.ext4 runtime-manifest.json secondbox-rootfs-contract.json shared.img toolchain-manifest.json manifest.json >SHA256SUMS
 )
-openssl dgst -sha256 -sign "$work_dir/private.pem" -out "$arm64_artifact_dir/manifest.sig" "$arm64_artifact_dir/manifest.json"
 export SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$arm64_artifact_dir"
 for rejected in "--candidate --shared-from $amd64_final" "--shared-from $stage_installer_candidate" ""; do
   # shellcheck disable=SC2086
@@ -242,8 +235,7 @@ jq -e --slurpfile amd64 "$amd64_final/secondbox-0.7.0-artifact-manifest.json" '
   (.qualificationEvidence.location | endswith("/v0.7.0/secondbox-0.7.0-arm64-qualification-evidence.json")) and
   ([.standardBundles[].document.location | endswith("-arm64.standard-bundle.json")] | all) and
   .openapi == $amd64[0].openapi and .goSdk == $amd64[0].goSdk and .typeScriptSdk == $amd64[0].typeScriptSdk and .binaries == $amd64[0].binaries and
-  .installBootstrap == $amd64[0].installBootstrap and .sboms == $amd64[0].sboms and .bundledServices == $amd64[0].bundledServices and
-  .microvm.signingKeyFingerprint == $amd64[0].microvm.signingKeyFingerprint' "$arm64_manifest" >/dev/null
+  .installBootstrap == $amd64[0].installBootstrap and .sboms == $amd64[0].sboms and .bundledServices == $amd64[0].bundledServices' "$arm64_manifest" >/dev/null
 jq -e '.architecture == "arm64" and .runnerPoolSelector == "standard-arm64"' "$work_dir/arm64/agent-compartment-arm64.standard-bundle.json" >/dev/null
 jq -e '.host.platform == "linux-arm64"' "$work_dir/arm64/secondbox-0.7.0-arm64-qualification-evidence.json" >/dev/null
 for image in control-plane runner installer-tools microvm-artifacts; do [[ -f "$work_dir/arm64/$image-arm64.oci.json" ]]; done
@@ -256,17 +248,5 @@ cp -a "$amd64_final" "$work_dir/amd64-tampered"
 printf 'tampered' >>"$work_dir/amd64-tampered/secondbox_0.7.0_linux_arm64"
 if arm64_stage --shared-from "$work_dir/amd64-tampered" 0.7.0 "$work_dir/arm64-tampered" >/dev/null 2>&1; then
   echo "arm64 staging accepted a shared binary that differs from the amd64 manifest" >&2
-  exit 1
-fi
-other_key_dir="$work_dir/microvm-arm64-other-key"
-cp -a "$arm64_artifact_dir" "$other_key_dir"
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work_dir/other-private.pem" >/dev/null 2>&1
-openssl pkey -in "$work_dir/other-private.pem" -pubout -out "$work_dir/other-public.pem" >/dev/null 2>&1
-cp "$work_dir/other-public.pem" "$other_key_dir/signing.pub"
-openssl dgst -sha256 -sign "$work_dir/other-private.pem" -out "$other_key_dir/manifest.sig" "$other_key_dir/manifest.json"
-if SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$other_key_dir" SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY="$work_dir/other-public.pem" \
-  SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$(openssl pkey -pubin -in "$work_dir/other-public.pem" -outform DER | sha256sum | awk '{print $1}')" \
-  arm64_stage --shared-from "$amd64_final" 0.7.0 "$work_dir/arm64-other-key" >/dev/null 2>&1; then
-  echo "arm64 staging accepted a bundle signed by another trust anchor than the amd64 release" >&2
   exit 1
 fi

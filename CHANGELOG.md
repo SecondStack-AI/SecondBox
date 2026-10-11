@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Upgrade notes
+
+- Delete `deployment.execution_image_public_key`, `deployment.execution_image_public_key_sha256`, and each Runner's `execution_image_public_key`, `execution_image_public_key_sha256`, `artifact_public_key`, and `artifact_public_key_sha256` from `secondbox.toml` before updating; the strict decoder rejects them as unknown keys. Remote Runner and image-fetcher environments drop their `*_PUBLIC_KEY` and `*_PUBLIC_KEY_SHA256` variables.
+- Existing snapshot-resume templates miss once after the update and are rebuilt, because the template key no longer includes a signing-key fingerprint.
+
+### Removed
+
+- **Breaking:** SecondBox no longer signs release microVM bundles or client-selected execution images. Bundles carry no `manifest.sig` or `signing.pub`, `verify.sh` and `just -f runner/Justfile verify-microvm-images` take only the artifact directory, the client image builder and release staging take no signing or public key, `secondbox-deploy init` no longer generates `secrets/execution-image.{pub,key}`, and the control plane imports component identities from the manifest the Runner returns for the digest-resolved image instead of verifying a publisher signature. Integrity rests on immutable digest pinning, the registry allowlist, Tenant authorization, and the Runner's `SHA256SUMS`, manifest, component-digest, and rootfs-contract checks. The Runner no longer advertises the `signed-artifacts` capability.
+
+### Changed
+
+- The release artifact manifest schema is `secondbox.release/artifact-manifest/v7`: `microvm.bundleManifestDigest` replaces `microvm.signedManifestDigest`, and `microvm.signingKeyFingerprint` is gone. Recorded v5 and v6 manifests still decode, and the guided installer still reads install plans that recorded a signing-key fingerprint.
+- Runner protocol `PrepareImageResult.signature` (field 7) is removed and reserved; the protocol window is unchanged.
+
 ## 0.24.0 - 2026-10-05
 
 A stopped Sandbox can switch to another compatible Profile while keeping its Workspace, and one Subject Sandbox policy now names a set of Profiles so a switched Sandbox keeps the same lifecycle and connection limits. The Subject policy body changes from `profile` to `profiles`. Deployments from v0.14.0 onward update in place; back up PostgreSQL first, because migration `0037_subject_sandbox_policy_profiles` makes rollback a database restore, and update Subject policy clients with the control plane. The Runner protocol remains `[6,6]` and peers connect in either update order; update Runners to receive the direct File transport fix. The execution bundle, trust anchor, and standard Profile revisions are unchanged. See the [v0.24.0 release notes](docs/releases/v0.24.0.md).

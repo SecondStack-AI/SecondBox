@@ -8,20 +8,18 @@ import (
 )
 
 var requiredControlPlaneEnvironment = map[string]string{
-	"SECONDBOX_LISTEN_ADDR":                       "127.0.0.1:8080",
-	"SECONDBOX_PUBLIC_BASE_URL":                   "http://127.0.0.1:8080",
-	"SECONDBOX_RUNNER_LISTEN_ADDR":                "127.0.0.1:9443",
-	"SECONDBOX_DATABASE_URL":                      "postgres://secondbox@example/secondbox",
-	"SECONDBOX_LOG_PATH":                          "/tmp/secondbox.log",
-	"SECONDBOX_PLATFORM_TOKEN":                    "platform-token-0000000000000000",
-	"SECONDBOX_RUNNER_CREDENTIAL":                 "runner-credential-00000000000000000000",
-	"SECONDBOX_RUNNER_SERVER_CERTIFICATE":         "/tmp/server.crt",
-	"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY":         "/tmp/server.key",
-	"SECONDBOX_RUNNER_CA_CERTIFICATE":             "/tmp/ca.crt",
-	"SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY":        "/tmp/execution-image.pub",
-	"SECONDBOX_EXECUTION_IMAGE_PUBLIC_KEY_SHA256": strings.Repeat("a", 64),
-	"SECONDBOX_DATA_PLANE_RETENTION_SECONDS":      "86400",
-	"SECONDBOX_RUNNER_ENABLED_FEATURES":           "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy",
+	"SECONDBOX_LISTEN_ADDR":                  "127.0.0.1:8080",
+	"SECONDBOX_PUBLIC_BASE_URL":              "http://127.0.0.1:8080",
+	"SECONDBOX_RUNNER_LISTEN_ADDR":           "127.0.0.1:9443",
+	"SECONDBOX_DATABASE_URL":                 "postgres://secondbox@example/secondbox",
+	"SECONDBOX_LOG_PATH":                     "/tmp/secondbox.log",
+	"SECONDBOX_PLATFORM_TOKEN":               "platform-token-0000000000000000",
+	"SECONDBOX_RUNNER_CREDENTIAL":            "runner-credential-00000000000000000000",
+	"SECONDBOX_RUNNER_SERVER_CERTIFICATE":    "/tmp/server.crt",
+	"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY":    "/tmp/server.key",
+	"SECONDBOX_RUNNER_CA_CERTIFICATE":        "/tmp/ca.crt",
+	"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": "86400",
+	"SECONDBOX_RUNNER_ENABLED_FEATURES":      "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy",
 }
 
 func setRequiredControlPlaneEnvironment(t *testing.T) {

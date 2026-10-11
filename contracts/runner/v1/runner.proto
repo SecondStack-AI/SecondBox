@@ -82,7 +82,7 @@ message RunnerCapabilities {
   bool data_plane_ready = 11;
   // snapshot_resume_ready is true only when this runner is configured with a
   // resume template cache root, requires the jailer, and holds at least one
-  // admitted template built from the exact signed bundle it verified. It is not
+  // admitted template built from the exact bundle it verified. It is not
   // a prerequisite: a runner without it stays fully eligible for cold boot.
   bool snapshot_resume_ready = 12;
   reserved 13;
@@ -345,7 +345,8 @@ message PrepareImageResult {
   AssignmentProgressStage stage = 4;
   string resolved_digest = 5;
   bytes manifest = 6;
-  bytes signature = 7;
+  reserved 7;
+  reserved "signature";
   string failure = 8;
 }
 

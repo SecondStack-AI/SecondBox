@@ -63,7 +63,7 @@ func resumeTestPolicy() *runtimemanager.SandboxRuntimePolicy {
 }
 
 // The runtime and toolchain component manifests are distinct files with
-// distinct digests, which loadSignedArtifactManifest proves.
+// distinct digests, which loadBundleArtifactManifest proves.
 var (
 	resumeKeyRuntimeComponent   = []byte("{\"component\":\"runtime\"}\n")
 	resumeKeyToolchainComponent = []byte("{\"component\":\"toolchain\"}\n")
@@ -74,8 +74,8 @@ func resumeKeyComponentDigest(content []byte) string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-// newResumeKeyManager builds a Manager whose signed artifact directory carries
-// the digests Config.ValidateMicroVMTrustAnchor would have proved against the
+// newResumeKeyManager builds a Manager whose bundle directory carries
+// the digests Config.ValidateMicroVMBundle would have proved against the
 // local files. The resume path reads them from there rather than rehashing, so
 // the fixture is the manifest and never the images.
 func newResumeKeyManager(t *testing.T) *Manager {
@@ -97,10 +97,10 @@ func newResumeKeyManager(t *testing.T) *Manager {
 }
 `
 	if err := os.WriteFile(filepath.Join(artifactDir, "manifest.json"), []byte(manifest), 0o600); err != nil {
-		t.Fatalf("write signed manifest: %v", err)
+		t.Fatalf("write bundle manifest: %v", err)
 	}
-	// loadSignedArtifactManifest proves the component manifests it names exist
-	// and hash to the digests the signed manifest records.
+	// loadBundleArtifactManifest proves the component manifests it names exist
+	// and hash to the digests the bundle manifest records.
 	for name, content := range map[string][]byte{
 		"runtime-manifest.json":   resumeKeyRuntimeComponent,
 		"toolchain-manifest.json": resumeKeyToolchainComponent,
@@ -113,7 +113,6 @@ func newResumeKeyManager(t *testing.T) *Manager {
 	manager.cfg.MicroVMKernelPath = filepath.Join(artifactDir, "kernel")
 	manager.cfg.MicroVMRootfsPath = filepath.Join(artifactDir, "rootfs.ext4")
 	manager.cfg.MicroVMSharedImagePath = filepath.Join(artifactDir, "shared.img")
-	manager.cfg.MicroVMPublicKeySHA256 = strings.Repeat("a", 64)
 	manager.cfg.MicroVMKernelArgs = "console=ttyS0 root=/dev/vda rw"
 	manager.cfg.MicroVMGuestControlVsockPort = 1024
 	manager.cfg.MicroVMGuestProtocolVsockPort = 1025
@@ -137,9 +136,9 @@ func resumeKeyStartOpts() runtimemanager.StartOpts {
 
 // The compatibility key must be derivable on the start path without touching a
 // multi-gigabyte image, because the alternative is the 835 ms artifact_verify
-// p95 the plan set out to avoid. Every launch-image digest comes from the signed
-// manifest whose signature already covers them.
-func TestSnapshotResumeTemplateKeyReadsImageDigestsFromTheSignedManifest(t *testing.T) {
+// p95 the plan set out to avoid. Every launch-image digest comes from the bundle
+// manifest that startup verification already proved against the local files.
+func TestSnapshotResumeTemplateKeyReadsImageDigestsFromTheBundleManifest(t *testing.T) {
 	manager := newResumeKeyManager(t)
 	key, err := manager.snapshotResumeTemplateKey(resumeKeyStartOpts(), true, true)
 	if err != nil {

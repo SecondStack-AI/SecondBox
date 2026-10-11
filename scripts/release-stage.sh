@@ -319,25 +319,15 @@ for binary in "$output_dir"/secondbox*_${version}_* "$temporary/secondboxd_linux
 done
 
 : "${SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR:?release staging requires SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR}"
-: "${SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY:?release staging requires SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY}"
-: "${SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256:?release staging requires SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256}"
 microvm_source="$SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR"
-microvm_key="$SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY"
-microvm_fingerprint="$SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256"
-microvm_files=(SHA256SUMS kernel kernel-provenance.json manifest.json manifest.sig rootfs-debian-license-inventory.json rootfs-debian-packages.lock rootfs-python-license-inventory.json rootfs-python.freeze rootfs-source-manifest.json rootfs.ext4 runtime-manifest.json secondbox-rootfs-contract.json shared.img signing.pub toolchain-manifest.json)
+microvm_files=(SHA256SUMS kernel kernel-provenance.json manifest.json rootfs-debian-license-inventory.json rootfs-debian-packages.lock rootfs-python-license-inventory.json rootfs-python.freeze rootfs-source-manifest.json rootfs.ext4 runtime-manifest.json secondbox-rootfs-contract.json shared.img toolchain-manifest.json)
 mapfile -t actual_microvm_files < <(find "$microvm_source" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
 mapfile -t expected_microvm_files < <(printf '%s\n' "${microvm_files[@]}" | sort)
 [[ "${actual_microvm_files[*]}" == "${expected_microvm_files[*]}" ]] || { echo "microVM release bundle differs from fixed allowlist" >&2; exit 1; }
-actual_fingerprint="$(openssl pkey -pubin -in "$microvm_key" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"
-[[ "$actual_fingerprint" == "$microvm_fingerprint" ]] || { echo "microVM release trust-anchor fingerprint mismatch" >&2; exit 1; }
-if [[ -n "$shared_from" ]]; then
-  [[ "SHA256:${microvm_fingerprint^^}" == "$(jq -er '.microvm.signingKeyFingerprint' "$shared_from/secondbox-${version}-artifact-manifest.json")" ]] || { echo "the $guest_architecture microVM bundle must be signed by the trust anchor of the amd64 release" >&2; exit 1; }
-fi
 if $test_mode; then
   (cd "$microvm_source" && sha256sum -c SHA256SUMS >/dev/null)
-  openssl dgst -sha256 -verify "$microvm_key" -signature "$microvm_source/manifest.sig" "$microvm_source/manifest.json" >/dev/null
 else
-  "$repo_root/runner/scripts/microvm-image/verify.sh" "$microvm_source" "$microvm_key" "$microvm_fingerprint"
+  "$repo_root/runner/scripts/microvm-image/verify.sh" "$microvm_source"
 fi
 [[ "$(jq -er '.architecture' "$microvm_source/manifest.json")" == "$guest_architecture" ]] || { echo "microVM release bundle architecture differs from the $guest_architecture release guest architecture" >&2; exit 1; }
 microvm_manifest_digest="sha256:$(sha256sum "$microvm_source/manifest.json" | awk '{print $1}')"
@@ -346,7 +336,7 @@ microvm_toolchain_bundle="$(jq -ce '.toolchainBundle | {artifactId,manifestDiges
 microvm_runtime_digest="$(jq -er '.manifestDigest' <<<"$microvm_runtime_bundle")"
 microvm_toolchain_digest="$(jq -er '.manifestDigest' <<<"$microvm_toolchain_bundle")"
 [[ "$microvm_runtime_digest" != "$microvm_toolchain_digest" && "$microvm_runtime_digest" != "$microvm_manifest_digest" && "$microvm_toolchain_digest" != "$microvm_manifest_digest" ]] || {
-  echo "microVM signed manifest must bind distinct runtime and toolchain component digests" >&2
+  echo "microVM bundle manifest must bind distinct runtime and toolchain component digests" >&2
   exit 1
 }
 
@@ -371,12 +361,12 @@ if $test_mode; then
   jq -n --arg version "$version" --arg commit "$source_commit" --argjson platforms "$(jq -cn --arg platforms "$image_platforms" '$platforms|split(",")')" --arg digest "$control_plane_digest" --arg contract "$public_contract_digest" '{image:"control-plane",version:$version,sourceCommit:$commit,digest:$digest,platforms:$platforms,publicContractDigest:$contract}' >"$output_dir/$control_plane_oci.json"
 	jq -n --arg platform "$guest_platform" --arg version "$version" --arg commit "$source_commit" --arg digest "$runner_digest" --arg contract "$public_contract_digest" '{image:"runner",version:$version,sourceCommit:$commit,digest:$digest,platforms:[$platform],publicContractDigest:$contract}' >"$output_dir/$runner_oci.json"
 	jq -n --arg platform "$guest_platform" --arg version "$version" --arg commit "$source_commit" --arg digest "$installer_tools_digest" '{image:"installer-tools",version:$version,sourceCommit:$commit,digest:$digest,platforms:[$platform]}' >"$output_dir/$installer_tools_oci.json"
-  jq -n --arg platform "$guest_platform" --arg version "$version" --arg commit "$source_commit" --arg digest "$microvm_image_digest" --arg manifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" '{image:"microvm-artifacts",version:$version,sourceCommit:$commit,digest:$digest,platforms:[$platform],signedManifestDigest:$manifest,signingKeyFingerprint:$fingerprint}' >"$output_dir/$microvm_oci.json"
+  jq -n --arg platform "$guest_platform" --arg version "$version" --arg commit "$source_commit" --arg digest "$microvm_image_digest" --arg manifest "$microvm_manifest_digest" '{image:"microvm-artifacts",version:$version,sourceCommit:$commit,digest:$digest,platforms:[$platform],bundleManifestDigest:$manifest}' >"$output_dir/$microvm_oci.json"
 else
   docker buildx build --platform "$image_platforms" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --output "type=oci,dest=$output_dir/$control_plane_oci.tar" --metadata-file "$output_dir/$control_plane_oci.json" "$repo_root"
 	docker buildx build --platform "$guest_platform" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --file "$repo_root/runner/Dockerfile" --output "type=oci,dest=$output_dir/$runner_oci.tar" --metadata-file "$output_dir/$runner_oci.json" "$repo_root"
 	docker buildx build --platform "$guest_platform" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --file "$repo_root/deploy/installer-tools.Dockerfile" --output "type=oci,dest=$output_dir/$installer_tools_oci.tar" --metadata-file "$output_dir/$installer_tools_oci.json" "$repo_root"
-  docker buildx build --platform "$guest_platform" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "SIGNED_MANIFEST_DIGEST=$microvm_manifest_digest" --file "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile" --output "type=oci,dest=$output_dir/$microvm_oci.tar" --metadata-file "$output_dir/$microvm_oci.json" "$microvm_source"
+  docker buildx build --platform "$guest_platform" --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "BUNDLE_MANIFEST_DIGEST=$microvm_manifest_digest" --file "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile" --output "type=oci,dest=$output_dir/$microvm_oci.tar" --metadata-file "$output_dir/$microvm_oci.json" "$microvm_source"
   control_plane_digest="$(jq -er '."containerimage.digest"' "$output_dir/$control_plane_oci.json")"
 	runner_digest="$(jq -er '."containerimage.digest"' "$output_dir/$runner_oci.json")"
 	installer_tools_digest="$(jq -er '."containerimage.digest"' "$output_dir/$installer_tools_oci.json")"
@@ -407,7 +397,7 @@ if [[ -z "$shared_from" ]]; then
   jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
   jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"
 fi
-jq -n --argjson imagePlatforms "$(jq -cn --arg platforms "$image_platforms" '$platforms|split(",")')" --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" --arg gvisorRunner "$gvisor_runner_digest" --arg gvisorImage "$gvisor_image_digest" --arg gvisorMaterialization "$gvisor_materialization_digest" --arg gvisorFlatRoot "$gvisor_flat_root_digest" --arg gvisorRunsc "$gvisor_runsc_release" --arg guestArchitecture "$guest_architecture" '{imagePlatforms:$imagePlatforms,guestArchitecture:$guestArchitecture,candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain,gvisorRunnerDigest:$gvisorRunner,gvisorImageDigest:$gvisorImage,gvisorMaterializationDigest:$gvisorMaterialization,gvisorFlatRootDigest:$gvisorFlatRoot,gvisorRunscRelease:$gvisorRunsc}' >"$temporary/candidate-input.json"
+jq -n --argjson imagePlatforms "$(jq -cn --arg platforms "$image_platforms" '$platforms|split(",")')" --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" --arg gvisorRunner "$gvisor_runner_digest" --arg gvisorImage "$gvisor_image_digest" --arg gvisorMaterialization "$gvisor_materialization_digest" --arg gvisorFlatRoot "$gvisor_flat_root_digest" --arg gvisorRunsc "$gvisor_runsc_release" --arg guestArchitecture "$guest_architecture" '{imagePlatforms:$imagePlatforms,guestArchitecture:$guestArchitecture,candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain,gvisorRunnerDigest:$gvisorRunner,gvisorImageDigest:$gvisorImage,gvisorMaterializationDigest:$gvisorMaterialization,gvisorFlatRootDigest:$gvisorFlatRoot,gvisorRunscRelease:$gvisorRunsc}' >"$temporary/candidate-input.json"
 fi
 if $build_only; then
   cp "$temporary/candidate-input.json" "$output_dir/.release-build.json"

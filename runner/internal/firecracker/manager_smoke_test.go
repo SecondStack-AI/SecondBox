@@ -3,7 +3,6 @@ package firecracker
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -21,7 +20,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
@@ -475,8 +474,7 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 		MicroVMSharedImagePath:           sharedImagePath,
 		MicroVMToolRootfsPath:            rootfsPath,
 		MicroVMToolSharedImagePath:       sharedImagePath,
-		MicroVMPublicKeyPath:             requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:           requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
+		MicroVMBundleVerification:        true,
 		MicroVMRunDir:                    filepath.Join(workDir, "run"),
 		MicroVMLogDir:                    filepath.Join(workDir, "logs"),
 		MicroVMSnapshotTemplateCacheRoot: filepath.Join(workDir, "snapshot-templates"),
@@ -485,11 +483,6 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 		MicroVMVCPUs:                     1,
 		MicroVMWorkspaceSizeMiB:          requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB"),
 		MicroVMAllowUnjailed:             true,
-	}
-	rejectedCfg := *cfg
-	rejectedCfg.MicroVMPublicKeySHA256 = strings.Repeat("0", sha256.Size*2)
-	if _, err := New(&rejectedCfg); err == nil || !strings.Contains(err.Error(), "PUBLIC_KEY_SHA256 mismatch") {
-		t.Fatalf("mismatched signed-artifact trust anchor was not rejected: %v", err)
 	}
 	mgr, err := New(cfg)
 	if err != nil {
@@ -759,8 +752,7 @@ func TestSmokeRunnerLocalSnapshotRestore(t *testing.T) {
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:             requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:           requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
+		MicroVMBundleVerification:        true,
 		MicroVMRunDir:                    filepath.Join(workDir, "run"),
 		MicroVMLogDir:                    filepath.Join(workDir, "logs"),
 		MicroVMSnapshotTemplateCacheRoot: filepath.Join(workDir, "snapshot-templates"),
@@ -983,8 +975,7 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:             requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:           requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
+		MicroVMBundleVerification:        true,
 		MicroVMRunDir:                    filepath.Join(workDir, "run"),
 		MicroVMLogDir:                    filepath.Join(workDir, "logs"),
 		MicroVMSnapshotTemplateCacheRoot: filepath.Join(workDir, "snapshot-templates"),
@@ -1263,8 +1254,7 @@ func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:             requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:           requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
+		MicroVMBundleVerification:        true,
 		MicroVMRunDir:                    filepath.Join(workDir, "run"),
 		MicroVMLogDir:                    filepath.Join(workDir, "logs"),
 		MicroVMSnapshotTemplateCacheRoot: filepath.Join(workDir, "snapshot-templates"),
@@ -1326,8 +1316,7 @@ func TestSmokeJailedTapGeneratedImage(t *testing.T) {
 		MicroVMKernelPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:             requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:           requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
+		MicroVMBundleVerification:        true,
 		MicroVMRunDir:                    filepath.Join(workDir, "run"),
 		MicroVMLogDir:                    filepath.Join(workDir, "logs"),
 		MicroVMSnapshotTemplateCacheRoot: filepath.Join(workDir, "snapshot-templates"),
@@ -1462,13 +1451,13 @@ func smokeGuestProtocolOpts(t *testing.T, cfg *config.Config, opts runtimemanage
 	}
 	cfg.MicroVMGuestHeartbeatInterval = heartbeat
 	manifestPath := filepath.Join(filepath.Dir(cfg.MicroVMKernelPath), "manifest.json")
-	manifest, err := loadSignedArtifactManifest(manifestPath)
+	manifest, err := loadBundleArtifactManifest(manifestPath)
 	if err != nil {
-		t.Fatalf("load smoke signed artifact manifest: %v", err)
+		t.Fatalf("load smoke bundle artifact manifest: %v", err)
 	}
 	digest, err := fileSHA256(manifestPath)
 	if err != nil {
-		t.Fatalf("hash smoke signed artifact manifest: %v", err)
+		t.Fatalf("hash smoke bundle artifact manifest: %v", err)
 	}
 	opts.SandboxGeneration = 1
 	opts.GuestBuildID = manifest.ArtifactVersion

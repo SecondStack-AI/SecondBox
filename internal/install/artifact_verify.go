@@ -1,13 +1,8 @@
 package install
 
 import (
-	"bytes"
-	"crypto"
-	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,13 +12,15 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 )
 
-var artifactFileAllowlist = []string{"SHA256SUMS", "kernel", "kernel-provenance.json", "manifest.json", "manifest.sig", "rootfs-debian-license-inventory.json", "rootfs-debian-packages.lock", "rootfs-python-license-inventory.json", "rootfs-python.freeze", "rootfs-source-manifest.json", "rootfs.ext4", "runtime-manifest.json", "secondbox-rootfs-contract.json", "shared.img", "signing.pub", "toolchain-manifest.json"}
+var artifactFileAllowlist = []string{"SHA256SUMS", "kernel", "kernel-provenance.json", "manifest.json", "rootfs-debian-license-inventory.json", "rootfs-debian-packages.lock", "rootfs-python-license-inventory.json", "rootfs-python.freeze", "rootfs-source-manifest.json", "rootfs.ext4", "runtime-manifest.json", "secondbox-rootfs-contract.json", "shared.img", "toolchain-manifest.json"}
+
+// Directories materialized from v5 and v6 releases still hold these files; an
+// update or rollback re-verifies them, so they are tolerated but never read.
+var retiredSigningArtifactFiles = []string{"manifest.sig", "signing.pub"}
 var checksummedArtifactFiles = []string{"kernel", "rootfs.ext4", "shared.img", "kernel-provenance.json", "rootfs-source-manifest.json", "secondbox-rootfs-contract.json", "rootfs-debian-packages.lock", "rootfs-python.freeze", "rootfs-debian-license-inventory.json", "rootfs-python-license-inventory.json", "runtime-manifest.json", "toolchain-manifest.json"}
 
 type VerifiedArtifact struct {
-	SigningPublicKeyPEM []byte
-	SigningKeyID        string
-	ManifestDigest      string
+	ManifestDigest string
 }
 
 type artifactEntry struct {
@@ -58,7 +55,7 @@ type artifactProvenance struct {
 	DebianLicenses artifactEntry `json:"debianLicenses"`
 	PythonLicenses artifactEntry `json:"pythonLicenses"`
 }
-type signedArtifactManifest struct {
+type bundleArtifactManifest struct {
 	ArtifactVersion   string                         `json:"artifactVersion"`
 	Architecture      string                         `json:"architecture"`
 	GuestProtocol     releasecontract.ProtocolWindow `json:"guestProtocol"`
@@ -94,6 +91,9 @@ func VerifyArtifactDirectory(directory string, release releasecontract.ArtifactM
 	}
 	slices.Sort(actual)
 	want := slices.Clone(artifactFileAllowlist)
+	if release.SchemaVersion != releasecontract.ArtifactManifestSchema {
+		want = append(want, retiredSigningArtifactFiles...)
+	}
 	slices.Sort(want)
 	if !slices.Equal(actual, want) {
 		return VerifiedArtifact{}, installerError("extracted artifact directory differs from the fixed file allowlist", nil)
@@ -115,36 +115,20 @@ func VerifyArtifactDirectory(directory string, release releasecontract.ArtifactM
 	if err != nil {
 		return VerifiedArtifact{}, err
 	}
-	if Digest(manifestBytes) != release.MicroVM.SignedManifestDigest {
-		return VerifiedArtifact{}, installerError("signed artifact manifest digest differs from release identity", nil)
+	if Digest(manifestBytes) != release.MicroVM.ManifestDigest() {
+		return VerifiedArtifact{}, installerError("bundle artifact manifest digest differs from release identity", nil)
 	}
-	publicPEM, err := os.ReadFile(filepath.Join(directory, "signing.pub"))
-	if err != nil {
-		return VerifiedArtifact{}, err
-	}
-	publicKey, keyID, err := verifyArtifactPublicKey(publicPEM, release.MicroVM.SigningKeyFingerprint)
-	if err != nil {
-		return VerifiedArtifact{}, err
-	}
-	signature, err := os.ReadFile(filepath.Join(directory, "manifest.sig"))
-	if err != nil {
-		return VerifiedArtifact{}, err
-	}
-	manifestHash := sha256.Sum256(manifestBytes)
-	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, manifestHash[:], signature); err != nil {
-		return VerifiedArtifact{}, installerError("verify artifact manifest signature", err)
-	}
-	var manifest signedArtifactManifest
+	var manifest bundleArtifactManifest
 	if err := decodeStrict(manifestBytes, &manifest); err != nil {
-		return VerifiedArtifact{}, installerError("decode signed artifact manifest", err)
+		return VerifiedArtifact{}, installerError("decode bundle artifact manifest", err)
 	}
-	if err := validateSignedArtifactManifest(directory, manifest, release); err != nil {
+	if err := validateBundleArtifactManifest(directory, manifest, release); err != nil {
 		return VerifiedArtifact{}, err
 	}
 	if err := validateRootfsContract(directory, manifest.Rootfs.SHA256); err != nil {
 		return VerifiedArtifact{}, err
 	}
-	return VerifiedArtifact{SigningPublicKeyPEM: slices.Clone(publicPEM), SigningKeyID: keyID, ManifestDigest: release.MicroVM.SignedManifestDigest}, nil
+	return VerifiedArtifact{ManifestDigest: release.MicroVM.ManifestDigest()}, nil
 }
 
 func decodeChecksums(path string) (map[string]string, error) {
@@ -170,43 +154,22 @@ func decodeChecksums(path string) (map[string]string, error) {
 	return result, nil
 }
 
-func verifyArtifactPublicKey(content []byte, expected string) (*rsa.PublicKey, string, error) {
-	block, remainder := pem.Decode(content)
-	if block == nil || block.Type != "PUBLIC KEY" || len(bytes.TrimSpace(remainder)) != 0 {
-		return nil, "", installerError("artifact signing key must contain exactly one PKIX PEM public key", nil)
-	}
-	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, "", installerError("parse artifact signing key", err)
-	}
-	publicKey, ok := parsed.(*rsa.PublicKey)
-	if !ok || publicKey.N.BitLen() < 3072 || publicKey.E != 65537 {
-		return nil, "", installerError("artifact signing key must be RSA-3072 or stronger with exponent 65537", nil)
-	}
-	digest := sha256.Sum256(block.Bytes)
-	keyID := hex.EncodeToString(digest[:])
-	if "SHA256:"+strings.ToUpper(keyID) != expected {
-		return nil, "", installerError("artifact signing key fingerprint differs from release identity", nil)
-	}
-	return publicKey, keyID, nil
-}
-
-func validateSignedArtifactManifest(directory string, manifest signedArtifactManifest, release releasecontract.ArtifactManifest) error {
+func validateBundleArtifactManifest(directory string, manifest bundleArtifactManifest, release releasecontract.ArtifactManifest) error {
 	if manifest.ArtifactVersion == "" || manifest.Architecture != "amd64" || manifest.GuestProtocol != release.GuestProtocol || manifest.CreatedAt == "" || manifest.Entrypoint != "/init" || manifest.RuntimeEntrypoint != "/usr/local/bin/secondbox-runner-guest-entrypoint" {
-		return installerError("signed artifact manifest identity or platform contract is invalid", nil)
+		return installerError("bundle artifact manifest identity or platform contract is invalid", nil)
 	}
 	components := []struct {
 		got  artifactComponent
-		want releasecontract.SignedComponent
+		want releasecontract.BundleComponent
 		path string
 	}{{manifest.RuntimeBundle, release.MicroVM.RuntimeBundle, "runtime-manifest.json"}, {manifest.ToolchainBundle, release.MicroVM.ToolchainBundle, "toolchain-manifest.json"}}
 	for _, component := range components {
 		if component.got.ArtifactID != component.want.ArtifactID || component.got.Path != component.path || component.got.ManifestDigest != component.want.ManifestDigest || !slices.Equal(component.got.MandatoryGuestFeatures, component.want.MandatoryGuestFeatures) {
-			return installerError("signed artifact component identity differs from release identity", nil)
+			return installerError("bundle artifact component identity differs from release identity", nil)
 		}
 		digest, err := fileSHA256(filepath.Join(directory, component.path))
 		if err != nil || "sha256:"+digest != component.got.ManifestDigest {
-			return installerError("signed artifact component digest mismatch", err)
+			return installerError("bundle artifact component digest mismatch", err)
 		}
 	}
 	entries := []struct {
@@ -221,15 +184,15 @@ func validateSignedArtifactManifest(directory string, manifest signedArtifactMan
 	}
 	for _, item := range entries {
 		if item.entry.Path != item.path || !checksumPattern.MatchString(item.entry.SHA256) {
-			return installerError("signed artifact path or checksum is invalid for "+item.path, nil)
+			return installerError("bundle artifact path or checksum is invalid for "+item.path, nil)
 		}
 		digest, err := fileSHA256(filepath.Join(directory, item.path))
 		if err != nil || digest != item.entry.SHA256 {
-			return installerError("signed artifact hash mismatch for "+item.path, err)
+			return installerError("bundle artifact hash mismatch for "+item.path, err)
 		}
 	}
 	if manifest.RootfsContract.State != "verified" || manifest.Rootfs.Format != "ext4" || manifest.Rootfs.SizeMiB <= 0 || manifest.Shared.Format == "" {
-		return installerError("signed rootfs/shared artifact contract is invalid", nil)
+		return installerError("rootfs/shared artifact contract is invalid", nil)
 	}
 	return nil
 }
@@ -248,7 +211,7 @@ func validateRootfsContract(directory, rootfsDigest string) error {
 		RootfsSHA256               string `json:"rootfsSha256"`
 		PolicySHA256               string `json:"policySha256"`
 		BrowserSurfacePolicySHA256 string `json:"browserSurfacePolicySha256"`
-		// Bundles signed before the rootfs secret scan was removed carry this field. It is accepted and ignored.
+		// Bundles built before the rootfs secret scan was removed carry this field. It is accepted and ignored.
 		SecretScanPolicySHA256 string `json:"secretScanPolicySha256"`
 	}
 	if err := decodeStrict(content, &contract); err != nil {

@@ -618,7 +618,7 @@ func writeUpdateSuccess(renderer cliui.Renderer, directory string, plan install.
 }
 
 func refreshUpdateResourceLedger(receipt *install.InstallReceipt, update install.UpdateRecord, target releaseverify.VerifiedRelease, expected map[string]string) error {
-	if err := receipt.RefreshUpdatedResource("artifacts", target.Manifest.MicroVM.SignedManifestDigest); err != nil {
+	if err := receipt.RefreshUpdatedResource("artifacts", target.Manifest.MicroVM.ManifestDigest()); err != nil {
 		return err
 	}
 	expected["secondbox-binary"] = "sha256:" + update.TargetRelease.BinaryDigests["secondbox"]

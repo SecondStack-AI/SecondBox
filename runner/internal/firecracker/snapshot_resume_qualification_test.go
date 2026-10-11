@@ -40,7 +40,7 @@ type snapshotTemplateQualificationReport struct {
 }
 
 // TestSmokeSnapshotResumeTemplateLifecycle qualifies the runner-managed
-// template artifact: build it from a real signed boot, seal VM state, memory,
+// template artifact: build it from a real bundle boot, seal VM state, memory,
 // and the post-boot rootfs at one paused point, publish it atomically, admit it
 // through the runner-local cache with full digest verification, and prove the
 // per-start stable-identity check.
@@ -167,12 +167,12 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 	)
 }
 
-// buildSnapshotResumeTemplate boots the signed bundle, pauses it at a coherent
+// buildSnapshotResumeTemplate boots the verified bundle, pauses it at a coherent
 // point, and seals VM state, memory, and the post-boot rootfs into the cache.
 // Capturing the rootfs alongside memory is required: boot mutates the disk, so
 // memory alone is not a coherent template.
 //
-// prepareOpts states the Profile shape and signed identity the template is
+// prepareOpts states the Profile shape and bundle identity the template is
 // built for. A gate that only resumes its own template passes nil and takes the
 // smoke shape; the interim operator publish flow passes the exact shape the
 // Runner's assignments will carry, because the compatibility key records it.

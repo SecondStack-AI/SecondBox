@@ -1,6 +1,6 @@
 # Firecracker Runner Operations
 
-This runbook covers the standalone privileged SecondBox Runner and its Firecracker backend. Image construction and signing are described in `microvm-image-pipeline.md`.
+This runbook covers the standalone privileged SecondBox Runner and its Firecracker backend. Image construction is described in `microvm-image-pipeline.md`.
 
 ## Runtime topology
 
@@ -53,8 +53,6 @@ SECONDBOX_RUNNER_FIRECRACKER_CPU_TEMPLATE
 SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR
 SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR
 SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED
-SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY
-SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
 SECONDBOX_RUNNER_WORKSPACE_ROOT
 SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT
 SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT
@@ -89,7 +87,7 @@ kernel arguments that omit these latency-critical flags.
 
 ## Host architectures
 
-A Runner runs on a Linux amd64 or arm64 host and boots signed microVM bundles of the same architecture. The Runner image, guest agent, guest kernel, and bundle are built per architecture; standard Profiles of an arm64 release bind `standard-arm64`. Firecracker CPU templates such as `T2` exist only on x86_64, so arm64 Runners use `None`. The Runner adds `noxsave` and requests Firecracker's `clock_realtime` snapshot restore only on amd64; on arm64 the guest agent alone sets the restored guest clock at bind. The validator still requires `pci=off` and the `i8042.*` arguments on arm64, where the guest kernel ignores them. Snapshot-resume templates key host compatibility on `/proc/cpuinfo`: vendor, family, model, stepping, and flags on amd64, and the MIDR fields and features on arm64. Both read the first listed CPU, so on arm64 hosts that mix core types the key does not describe every core. gVisor has no arm64 support.
+A Runner runs on a Linux amd64 or arm64 host and boots microVM bundles of the same architecture. The Runner image, guest agent, guest kernel, and bundle are built per architecture; standard Profiles of an arm64 release bind `standard-arm64`. Firecracker CPU templates such as `T2` exist only on x86_64, so arm64 Runners use `None`. The Runner adds `noxsave` and requests Firecracker's `clock_realtime` snapshot restore only on amd64; on arm64 the guest agent alone sets the restored guest clock at bind. The validator still requires `pci=off` and the `i8042.*` arguments on arm64, where the guest kernel ignores them. Snapshot-resume templates key host compatibility on `/proc/cpuinfo`: vendor, family, model, stepping, and flags on amd64, and the MIDR fields and features on arm64. Both read the first listed CPU, so on arm64 hosts that mix core types the key does not describe every core. gVisor has no arm64 support.
 
 `SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL` bounds resident Firecracker Instances. `SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS` independently bounds transient assignment-start work and must not exceed the resident limit. `SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL` advertises runner-wide data-plane operation capacity; scheduling reserves each active Sandbox's immutable Profile limit against it.
 
@@ -110,15 +108,15 @@ application authority holding the exact `sandbox:ports:direct` scope. An
 unavailable listener makes the runner unready and fences its active instances,
 matching the network-policy listener rule.
 
-The guest HTTP bootstrap/control surface and the canonical bidirectional gRPC data plane use distinct, explicitly configured vsock ports. `SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL` is a positive Go duration no greater than 60 seconds. The runner does not report an assignment ready until the canonical stream has negotiated the exact assignment Instance, Sandbox generation, random connection nonce, signed guest build and manifest identities, protocol generation, and mandatory features. `/workspace` and `/runtime-private` are signed image ABI mount points: init mounts the persistent workspace at the former and a RAM-only secret tmpfs at the latter.
+The guest HTTP bootstrap/control surface and the canonical bidirectional gRPC data plane use distinct, explicitly configured vsock ports. `SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL` is a positive Go duration no greater than 60 seconds. The runner does not report an assignment ready until the canonical stream has negotiated the exact assignment Instance, Sandbox generation, random connection nonce, guest build and manifest identities, protocol generation, and mandatory features. `/workspace` and `/runtime-private` are image ABI mount points: init mounts the persistent workspace at the former and a RAM-only secret tmpfs at the latter.
 
 Startup verifies that the Firecracker binary exactly matches `runner/internal/firecracker/firecracker.lock`. Runtime qualification depends on that exact version. The guest kernel source is separately pinned in `runner/scripts/microvm-image/kernel.lock`.
 
-## Signed artifact readiness
+## Artifact readiness
 
-The kernel, rootfs, shared image, manifest, signature, checksums, kernel provenance, rootfs source manifest, rootfs contract, package locks, and license inventories form one signed artifact directory. The runner requires an independently provisioned RSA public key and its lowercase DER SHA-256 fingerprint.
+The kernel, rootfs, shared image, manifest, checksums, kernel provenance, rootfs source manifest, rootfs contract, package locks, and license inventories form one artifact directory.
 
-Before registration, readiness verifies the signature, checksums, manifest paths and digests, signed architecture and guest-protocol range, rootfs contract, captured file identities, read-write KVM access, cgroup controllers, the configured bridge address, workspace storage, and cleanup health. Assignment admission is provider-neutral: an assignment is admitted only when its artifact ID, manifest digest, architecture, and guest protocol generation select a locally revalidated artifact. Signature verification is a separate Firecracker-specific step against the runner-local trust anchor; a signature-key identity never enters the shared admission identity. Artifact mutation after startup fails health checks and assignment launch.
+Before registration, readiness verifies the checksums, manifest paths and digests, manifest architecture and guest-protocol range, rootfs contract, captured file identities, read-write KVM access, cgroup controllers, the configured bridge address, workspace storage, and cleanup health. Assignment admission is provider-neutral: an assignment is admitted only when its artifact ID, manifest digest, architecture, and guest protocol generation select a locally revalidated artifact. Artifact mutation after startup fails health checks and assignment launch.
 
 Build and verification inputs are explicit. Inspect the current required inputs with:
 
@@ -128,7 +126,7 @@ runner/scripts/microvm-image/build-kernel.sh --help
 runner/scripts/microvm-image/verify.sh --help
 ```
 
-`verify.sh` requires the artifact directory, trusted public key, and trusted public-key fingerprint as positional arguments. Missing, unsigned, or incorrectly signed manifests fail.
+`verify.sh` takes the artifact directory as its only argument. A missing artifact, a checksum mismatch, or an inconsistent manifest fails.
 
 ## Jailer and cgroups
 
@@ -154,7 +152,7 @@ A Profile revision pinned to `snapshot_resume` resumes an identity-neutral
 post-boot memory snapshot instead of booting a guest. The Runner advertises the
 provider-neutral `snapshot-resume` capability only when the jailer is required,
 `SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT` is configured, and its cache
-already holds a published template built from exactly the signed bundle this
+already holds a published template built from exactly the bundle this
 Runner verified. There is no cold-boot fallback: an absent, incompatible, or
 changed template fails the start with a typed retryable unavailability.
 
@@ -271,8 +269,8 @@ runner/scripts/microvm-stage-check.sh --static
 Privileged qualification uses the same explicit environment and runs as root:
 
 ```sh
-sudo --preserve-env=SECONDBOX_RUNNER_FIRECRACKER_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH,SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH,SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000,SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT,SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS,SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256,SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME,SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR,SECONDBOX_RUNNER_SANDBOX_GUEST_IP,SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX,SECONDBOX_RUNNER_WORKSPACE_ROOT,SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB,SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB,SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT \
+sudo --preserve-env=SECONDBOX_RUNNER_FIRECRACKER_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH,SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH,SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000,SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT,SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS,SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL,SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME,SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR,SECONDBOX_RUNNER_SANDBOX_GUEST_IP,SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX,SECONDBOX_RUNNER_WORKSPACE_ROOT,SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB,SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB,SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT \
   runner/scripts/microvm-stage-check.sh
 ```
 
-The privileged check requires real `/dev/kvm`, jailer, cgroup, bridge/TAP, signed artifact, generated guest, and vsock readiness. Missing evidence fails; qualification does not convert a requested capability failure into a skip.
+The privileged check requires real `/dev/kvm`, jailer, cgroup, bridge/TAP, artifact, generated guest, and vsock readiness. Missing evidence fails; qualification does not convert a requested capability failure into a skip.

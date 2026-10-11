@@ -13,13 +13,13 @@ The Firecracker backend consumes three versioned artifacts:
 The pinned-kernel path downloads the exact kernel tarball from the locked URL, verifies its SHA-256, builds the Firecracker boot image with reproducible Kbuild metadata, and copies the kernel `.config` into the build output.
 The boot image is `vmlinux` on amd64 and the PE `Image` on arm64; `kernel-required-<architecture>.config` adds the Firecracker platform devices of that architecture.
 
-The build writes `kernel-provenance.json`, `rootfs-source-manifest.json`, `secondbox-rootfs-contract.json`, the package and license inventories, `manifest.json`, `SHA256SUMS`, `manifest.sig`, and `signing.pub` alongside the artifacts in the explicitly configured output directory.
+The build writes `kernel-provenance.json`, `rootfs-source-manifest.json`, `secondbox-rootfs-contract.json`, the package and license inventories, `manifest.json`, and `SHA256SUMS` alongside the artifacts in the explicitly configured output directory.
 `manifest.json` records `/init` as the guest entrypoint and
 `/usr/local/bin/secondbox-runner-guest-entrypoint` as the runtime bootstrap. The
 manifest includes the kernel provenance and rootfs source-manifest hashes, so
-the OpenSSL signature covers provenance as well as the artifact hashes.
+its digest covers provenance as well as the artifact hashes.
 
-The same signed rootfs boots two ways, selected by kernel argument. A tenant
+The same rootfs boots two ways, selected by kernel argument. A tenant
 Instance boots with its full `secondbox.*` assignment identity. A
 snapshot-resume template boots with `secondbox.template_mode=1` and no identity
 at all: the guest serves only the host-only vsock control endpoint, leaves
@@ -30,34 +30,31 @@ receives its Sandbox identity and mounts its Workspace through one
 Template capture is performed only inside the privileged runner qualification
 boundary; the runner never boots a tenant Instance in template mode.
 
-Verify an artifact set with an independently trusted public key and its canonical DER SHA-256 fingerprint:
+Verify an artifact set:
 
 ```sh
-just -f runner/Justfile verify-microvm-images \
-  releases/microvm/<version> \
-  /etc/secondbox/trust/artifact-signing.pem \
-  <64-lowercase-hex-fingerprint>
+just -f runner/Justfile verify-microvm-images releases/microvm/<version>
 ```
 
-The verifier never trusts the artifact's bundled `signing.pub`. The trusted key and fingerprint are mandatory; an unsigned bundle or a missing, malformed, or mismatched trust anchor fails verification.
+The verifier checks the required files, `SHA256SUMS`, and the consistency of `manifest.json` with the provenance, inventories, and rootfs contract.
 
 ## Client execution image builder
 
-`scripts/build-client-execution-image.sh` converts one digest-pinned OCI userspace into a signed execution image.
-The script uses the same rootfs, guest-agent, kernel, manifest, and signature pipeline as release artifacts.
+`scripts/build-client-execution-image.sh` converts one digest-pinned OCI userspace into an execution image.
+The script uses the same rootfs, guest-agent, kernel, and manifest pipeline as release artifacts.
 It then packages the exact artifact allowlist under `/secondbox-runner-microvm` in an OCI image.
 
 Use `deploy/client-execution-image-builder.Dockerfile` when the build host does not have the required build tools.
-The public builder targets Linux amd64 and needs a Linux Docker daemon, privileged loop-device and mount access, the Docker socket, and enough free space for the source layers, rootfs image, signed bundle, and final OCI build context.
-Run that container with the Docker socket, a writable output directory, the signing key and public key, and the source kernel directory mounted.
+The public builder targets Linux amd64 and needs a Linux Docker daemon, privileged loop-device and mount access, the Docker socket, and enough free space for the source layers, rootfs image, bundle, and final OCI build context.
+Run that container with the Docker socket, a writable output directory, and the source kernel directory mounted.
 Set every `SECONDBOX_CLIENT_IMAGE_*` variable explicitly.
 The source reference must contain a digest.
 The source commit must be the exact SecondBox revision used by the builder image.
 The prepared source image must contain Python 3 and pip because the rootfs inventory records the installed Python environment.
 The builder always uses prepared OCI mode.
-`SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY` is `forbid` or `allow`. `forbid` fails the build when the rootfs contains a browser package, launcher, or runtime; `allow` builds a userspace that ships a browser on purpose and records `browserPolicy: allow` in the signed rootfs contract.
+`SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY` is `forbid` or `allow`. `forbid` fails the build when the rootfs contains a browser package, launcher, or runtime; `allow` builds a userspace that ships a browser on purpose and records `browserPolicy: allow` in the rootfs contract.
 Both output directories must be absent before the build starts.
-`SECONDBOX_CLIENT_IMAGE_ARCHITECTURE` is `amd64` or `arm64` and must match the builder's Docker platform and the supplied kernel. The builder pulls and builds the source image for `linux/<architecture>`, refuses a source or rootfs image of another platform before signing, and packages the execution image for that platform.
+`SECONDBOX_CLIENT_IMAGE_ARCHITECTURE` is `amd64` or `arm64` and must match the builder's Docker platform and the supplied kernel. The builder pulls and builds the source image for `linux/<architecture>`, refuses a source or rootfs image of another platform before packaging, and packages the execution image for that platform.
 
 This example builds the amd64 builder on any Docker host and runs the privileged Linux work on the Docker daemon:
 
@@ -71,7 +68,6 @@ docker run --rm --privileged --platform linux/amd64 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /absolute/output-parent:/output \
   -v /absolute/kernel-parent:/kernel:ro \
-  -v /absolute/signing-parent:/signing:ro \
   -e SECONDBOX_CLIENT_IMAGE_ARCHITECTURE=amd64 \
   -e SECONDBOX_CLIENT_IMAGE_ARTIFACT_VERSION=local \
   -e SECONDBOX_CLIENT_IMAGE_BROWSER_POLICY=forbid \
@@ -79,14 +75,11 @@ docker run --rm --privileged --platform linux/amd64 \
   -e SECONDBOX_CLIENT_IMAGE_KERNEL_PATH=/kernel/vmlinux \
   -e SECONDBOX_CLIENT_IMAGE_KERNEL_CONFIG= \
   -e SECONDBOX_CLIENT_IMAGE_OUTPUT_REFERENCE=registry.example/secondbox/agent:local \
-  -e SECONDBOX_CLIENT_IMAGE_PUBLIC_KEY=/signing/signing.pub \
-  -e SECONDBOX_CLIENT_IMAGE_PUBLIC_KEY_SHA256=<64-lowercase-hex-fingerprint> \
   -e SECONDBOX_CLIENT_IMAGE_ROOTFS_SIZE_MIB=12288 \
   -e SECONDBOX_CLIENT_IMAGE_ROOTFS_SOURCE_DIR=/output/rootfs-source \
   -e SECONDBOX_CLIENT_IMAGE_ROOTFS_UUID=<fixed-uuid> \
   -e SECONDBOX_CLIENT_IMAGE_SHARED_FORMAT=ext4 \
   -e SECONDBOX_CLIENT_IMAGE_SHARED_SIZE_MIB=256 \
-  -e SECONDBOX_CLIENT_IMAGE_SIGNING_KEY=/signing/signing.key \
   -e SECONDBOX_CLIENT_IMAGE_SOURCE_COMMIT="$(git rev-parse HEAD)" \
   -e SECONDBOX_CLIENT_IMAGE_SOURCE_REFERENCE=registry.example/base/userspace@sha256:<digest> \
   secondbox-client-image-builder:local
@@ -98,27 +91,26 @@ docker logout registry.example
 ```
 
 Authenticate to the output registry before publication and push the exact reference supplied in `SECONDBOX_CLIENT_IMAGE_OUTPUT_REFERENCE`.
-The signing private key stays outside the OCI image.
-The Runner receives only the public key and its DER SHA-256 fingerprint.
+Tenants select the image by immutable digest; the image carries no publisher signature, so control who can push to the registries the deployment allows.
 The output image is a distribution artifact, not a normal Linux process image.
-Firecracker Runners boot its kernel and rootfs; gVisor Runners use only its signed `rootfs.ext4` as the sandbox root with their own pinned guest agent.
+Firecracker Runners boot its kernel and rootfs; gVisor Runners use only its `rootfs.ext4` as the sandbox root with their own pinned guest agent.
 
 ## Release distribution and host materialization
 
-The signed bundle is approximately 11 GB and is not embedded in the source-less GitHub release zip. Local release preparation reads an independently signed bundle from the absolute path configured by `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR`, verifies it against `SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256`, and builds the exact allowlist as the dedicated `microvm-artifacts` OCI archive. The hosted publisher pushes that supplied archive without rebuilding it. Image labels and the artifact manifest bind the verified public-key fingerprint and `manifest.json` digest.
+The bundle is approximately 11 GB and is not embedded in the source-less GitHub release zip. Local release preparation reads the bundle from the absolute path configured by `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR`, verifies it with `verify.sh`, and builds the exact allowlist as the dedicated `microvm-artifacts` OCI archive. The hosted publisher pushes that supplied archive without rebuilding it. Image labels and the artifact manifest bind the bundle `manifest.json` digest.
 
 For a manual deployment, materialize the release's digest-pinned
 `microvm-artifacts` image into the operator-selected artifact directory and
-verify it with the independent public key before enrolling the Runner. Set
-`artifact_host_directory` and the matching trust and asset pins in the Runner
+verify it with `verify-microvm-images` before enrolling the Runner. Set
+`artifact_host_directory` and the matching asset pins in the Runner
 declaration; [deployment operations](deployment.md) documents that contract.
 `secondbox-deploy runner-init` issues Runner identity and configuration, not
 execution assets.
 
 The [guided installer](guided-single-host-install.md) materializes the image
 from the verified release manifest. It extracts into a create-only temporary
-directory, verifies the fixed allowlist and signed component identities against
-the release-bound fingerprint, and publishes the directory atomically. Resume
+directory, verifies the fixed allowlist and component identities against
+the release-bound manifest digests, and publishes the directory atomically. Resume
 rechecks and reuses a recorded verified directory. A different bundle needs a
 separate target and a coordinated deployment transition.
 
@@ -135,7 +127,7 @@ The build pipeline:
   squashfs, then ext4);
 - scans the staged rootfs for forbidden runtime credential files and obvious
   baked secret material;
-- signs the manifest with an OpenSSL key.
+- writes `manifest.json` and `SHA256SUMS` and verifies the result.
 
 Configure the runner to consume the verified materialized bundle with:
 
@@ -147,8 +139,6 @@ SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS="console=ttyS0 reboot=k panic=1 pci=off
 SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT=1024
 SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT=1025
 SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL=5s
-SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY=/etc/secondbox/trust/artifact-signing.pem
-SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256=<64-lowercase-hex-fingerprint>
 ```
 
 For local smoke on minimal hosts, force the portable shared-image fallback:
@@ -173,9 +163,9 @@ just -f runner/Justfile build-microvm-images-std
 
 `secondbox-apt-packages.txt`, `secondbox-python-requirements.txt`, and `config/`
 are the package/configuration inputs. The builder writes the source manifest,
-Debian package lock, Python freeze, and license inventories. The signed image
+Debian package lock, Python freeze, and license inventories. The bundle
 manifest binds those digests. Edit the tracked inputs and rebuild to change
-the toolset; updating the Runner binary alone does not change a signed guest.
+the toolset; updating the Runner binary alone does not change a guest.
 
 ## CI artifact evidence
 

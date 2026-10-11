@@ -38,13 +38,12 @@ const (
 // VMM will accept, belongs here. A mismatch in any field is a cache miss, never
 // a best-effort restore.
 type SnapshotTemplateKey struct {
-	ArtifactVersion       string `json:"artifactVersion"`
-	Architecture          string `json:"architecture"`
-	SigningKeyFingerprint string `json:"signingKeyFingerprint"`
-	SignedManifestDigest  string `json:"signedManifestDigest"`
-	KernelSHA256          string `json:"kernelSha256"`
-	KernelArgs            string `json:"kernelArgs"`
-	SourceRootfsSHA256    string `json:"sourceRootfsSha256"`
+	ArtifactVersion      string `json:"artifactVersion"`
+	Architecture         string `json:"architecture"`
+	BundleManifestDigest string `json:"bundleManifestDigest"`
+	KernelSHA256         string `json:"kernelSha256"`
+	KernelArgs           string `json:"kernelArgs"`
+	SourceRootfsSHA256   string `json:"sourceRootfsSha256"`
 	// SharedImageSHA256 is empty exactly when the template was captured without
 	// the read-only shared image drive, for the same reason the network fields
 	// are empty without a device: a restored Instance opens exactly the drives
@@ -88,8 +87,7 @@ func (k SnapshotTemplateKey) Validate() error {
 	}{
 		{"artifactVersion", k.ArtifactVersion},
 		{"architecture", k.Architecture},
-		{"signingKeyFingerprint", k.SigningKeyFingerprint},
-		{"signedManifestDigest", k.SignedManifestDigest},
+		{"bundleManifestDigest", k.BundleManifestDigest},
 		{"kernelSha256", k.KernelSHA256},
 		{"kernelArgs", k.KernelArgs},
 		{"sourceRootfsSha256", k.SourceRootfsSHA256},
@@ -439,7 +437,7 @@ func (c *SnapshotTemplateCache) Publish(stageDir string, manifest SnapshotTempla
 }
 
 // Resolve returns the admitted template for a compatibility key. Admission
-// verifies signature-anchored identity and every recorded digest exactly once;
+// verifies bundle identity and every recorded digest exactly once;
 // afterwards the per-start cost is a stat of three files. Concurrent callers
 // for the same identity coalesce and never observe a partially verified result.
 func (c *SnapshotTemplateCache) Resolve(key SnapshotTemplateKey) (*AdmittedSnapshotTemplate, error) {
@@ -486,11 +484,11 @@ func (c *SnapshotTemplateCache) Resolve(key SnapshotTemplateKey) (*AdmittedSnaps
 	return template, nil
 }
 
-// SnapshotTemplateBundleIdentity is the signed-bundle half of a template's
+// SnapshotTemplateBundleIdentity is the bundle half of a template's
 // compatibility key. It is the part a runner can prove before it has seen any
 // assignment, because it is exactly what the runner verified about its own local
 // bundle. A Profile pins runtime and toolchain digests, the control plane
-// resolves those to the signed components the runner must match, and the runner
+// resolves those to the bundle components the runner must match, and the runner
 // already refuses any assignment whose component digests differ from its own.
 // So a template built from this bundle is a template compatible with every
 // Profile the runner can serve at all.
@@ -516,7 +514,7 @@ func (i SnapshotTemplateBundleIdentity) validate() error {
 }
 
 // HasTemplateForBundle reports whether the cache already holds a published
-// template built from exactly this signed bundle. It is what turns runner
+// template built from exactly this bundle. It is what turns runner
 // snapshot-resume capacity on: a runner that advertises the capability before it
 // holds such a template would attract Profiles it cannot start, and snapshot
 // resume has no cold-boot fallback.

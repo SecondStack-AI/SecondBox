@@ -13,15 +13,13 @@ import (
 	"runtime"
 	"strings"
 
-	runnerconfig "github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 // Config is the complete, explicit immutable backend composition. A gVisor
-// runner requires no KVM, jailer, TAP, or bridge configuration; its only
-// signature trust is the client-selected execution image publisher key.
+// runner requires no KVM, jailer, TAP, or bridge configuration.
 type Config struct {
 	RunscPath             string
 	AgentPath             string
@@ -48,10 +46,8 @@ type Config struct {
 	WorkspaceStore         workspacestore.WorkspaceStore
 	// Client-selected images arrive through the host-private image fetcher
 	// into this cache; the backend only verifies and reflinks them.
-	ExecutionImageCacheRoot       string
-	ExecutionImageFetcherSocket   string
-	ExecutionImagePublicKeyPath   string
-	ExecutionImagePublicKeySHA256 string
+	ExecutionImageCacheRoot     string
+	ExecutionImageFetcherSocket string
 }
 
 type validatedConfig struct {
@@ -166,7 +162,6 @@ func validateConfig(config Config) (validatedConfig, error) {
 		"runner executable":        config.SelfExecutable,
 		"execution image cache":    config.ExecutionImageCacheRoot,
 		"image fetcher socket":     config.ExecutionImageFetcherSocket,
-		"execution image key":      config.ExecutionImagePublicKeyPath,
 	} {
 		if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
 			return validatedConfig{}, fmt.Errorf("SecondBox gVisor %s path must be clean and absolute", name)
@@ -174,9 +169,6 @@ func validateConfig(config Config) (validatedConfig, error) {
 	}
 	if err := validateRuntimeDir(config.RuntimeDir, config.WorkspaceRoot, config.FlatRootPath, config.ExecutionImageCacheRoot); err != nil {
 		return validatedConfig{}, err
-	}
-	if err := runnerconfig.VerifyPublicKeyFingerprint(config.ExecutionImagePublicKeyPath, config.ExecutionImagePublicKeySHA256); err != nil {
-		return validatedConfig{}, fmt.Errorf("SecondBox gVisor execution image publisher key: %w", err)
 	}
 	if config.MaximumVCPUs == 0 || config.MaximumMemoryBytes == 0 || config.MaximumDiskBytes == 0 ||
 		config.MaximumInstances == 0 || config.MaximumOperations == 0 {

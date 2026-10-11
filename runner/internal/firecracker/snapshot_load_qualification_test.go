@@ -294,15 +294,14 @@ func snapshotLoadQualificationConfig(t *testing.T, workDir string, memoryMiB int
 		fmt.Sprintf("m%d", memoryMiB),
 	)
 	return &config.Config{
-		FirecrackerPath:        requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
-		MicroVMKernelPath:      requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
-		MicroVMRootfsPath:      requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
-		MicroVMSharedImagePath: requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:   requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256: requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
-		RunnerWorkspaceRoot:    filepath.Join(workDir, "workspaces"),
-		MicroVMRunDir:          runDir,
-		MicroVMLogDir:          filepath.Join(workDir, "logs"),
+		FirecrackerPath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMKernelPath:         requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
+		MicroVMRootfsPath:         requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
+		MicroVMSharedImagePath:    requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
+		MicroVMBundleVerification: true,
+		RunnerWorkspaceRoot:       filepath.Join(workDir, "workspaces"),
+		MicroVMRunDir:             runDir,
+		MicroVMLogDir:             filepath.Join(workDir, "logs"),
 		// The qualifications build their own cache under the same root, so the
 		// Manager's configured root is the one they then admit templates through
 		// and the jailed gate's single-filesystem requirement covers both.

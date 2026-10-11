@@ -21,9 +21,9 @@ import (
 
 const selectedImageTestDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 
-func selectedImageTestBackend(t *testing.T, cacheRoot string, publisher *executionimagetest.Publisher) *AssignmentBackend {
+func selectedImageTestBackend(t *testing.T, cacheRoot string) *AssignmentBackend {
 	t.Helper()
-	verifier, err := executionimage.NewVerifier(cacheRoot, publisher.PublicKeyPath, publisher.PublicKeySHA256)
+	verifier, err := executionimage.NewVerifier(cacheRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func selectedImageTestBackend(t *testing.T, cacheRoot string, publisher *executi
 	}
 }
 
-func publishSelectedImage(t *testing.T, cacheRoot string, publisher *executionimagetest.Publisher, rootfs []byte, features []string) executionimagetest.Bundle {
+func writeSelectedImage(t *testing.T, cacheRoot string, rootfs []byte, features []string) executionimagetest.Bundle {
 	t.Helper()
 	directory := filepath.Join(cacheRoot, strings.TrimPrefix(selectedImageTestDigest, "sha256:"))
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -50,7 +50,7 @@ func publishSelectedImage(t *testing.T, cacheRoot string, publisher *executionim
 	if err := os.WriteFile(filepath.Join(directory, "rootfs.ext4"), rootfs, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return publisher.WriteBundle(t, directory, features)
+	return executionimagetest.WriteBundle(t, directory, features)
 }
 
 func selectedImageAssignment(bundle executionimagetest.Bundle) *runnerprotocol.AssignmentCommand {
@@ -66,8 +66,7 @@ func selectedImageAssignment(bundle executionimagetest.Bundle) *runnerprotocol.A
 func noSelectedImageProgress(runnerprotocol.AssignmentProgressStage) error { return nil }
 
 func TestSelectedImageAssignmentRequiresADigestAndThePinnedAgentGeneration(t *testing.T) {
-	publisher := executionimagetest.NewPublisher(t)
-	backend := selectedImageTestBackend(t, t.TempDir(), publisher)
+	backend := selectedImageTestBackend(t, t.TempDir())
 	valid := selectedImageAssignment(executionimagetest.Bundle{
 		RuntimeArtifactID: "runtime", RuntimeManifestDigest: "sha256:" + strings.Repeat("c", 64),
 		ToolchainArtifactID: "toolchain", ToolchainManifestDigest: "sha256:" + strings.Repeat("d", 64),
@@ -93,16 +92,15 @@ func TestSelectedImageAssignmentRequiresADigestAndThePinnedAgentGeneration(t *te
 	}
 }
 
-func TestStageSelectedImageRejectsAssetsTheBundleDidNotSign(t *testing.T) {
+func TestStageSelectedImageRejectsAssetsTheBundleDoesNotName(t *testing.T) {
 	cacheRoot := t.TempDir()
-	publisher := executionimagetest.NewPublisher(t)
-	bundle := publishSelectedImage(t, cacheRoot, publisher, []byte("selected-root"), nil)
-	backend := selectedImageTestBackend(t, cacheRoot, publisher)
+	bundle := writeSelectedImage(t, cacheRoot, []byte("selected-root"), nil)
+	backend := selectedImageTestBackend(t, cacheRoot)
 	assignment := selectedImageAssignment(bundle)
 	assignment.Assets[0].ManifestDigest = "sha256:" + strings.Repeat("e", 64)
 	if _, _, err := backend.stageSelectedImage(t.Context(), assignment, noSelectedImageProgress); err == nil ||
 		!strings.Contains(err.Error(), "runtime asset") {
-		t.Fatalf("unsigned runtime asset error = %v", err)
+		t.Fatalf("unnamed runtime asset error = %v", err)
 	}
 	absent := selectedImageAssignment(bundle)
 	absent.ExecutionImage.Reference = "registry.example/agent@sha256:" + strings.Repeat("3", 64)
@@ -122,10 +120,9 @@ func TestStageSelectedImageClonesTheVerifiedRootAndReportsItsIdentity(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(cacheRoot) })
-	publisher := executionimagetest.NewPublisher(t)
 	content := bytes.Repeat([]byte("selected-root"), 1024)
-	bundle := publishSelectedImage(t, cacheRoot, publisher, content, []string{"activity_events"})
-	backend := selectedImageTestBackend(t, cacheRoot, publisher)
+	bundle := writeSelectedImage(t, cacheRoot, content, []string{"activity_events"})
+	backend := selectedImageTestBackend(t, cacheRoot)
 	assignment := selectedImageAssignment(bundle)
 	for _, asset := range assignment.Assets {
 		asset.MandatoryGuestFeatures = []string{"activity_events"}

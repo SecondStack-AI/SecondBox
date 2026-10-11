@@ -2,14 +2,9 @@ package config
 
 import (
 	"context"
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
@@ -30,100 +25,99 @@ var checksumArtifactNames = []string{
 	"rootfs-python-license-inventory.json",
 }
 
-func TestValidateMicroVMTrustAnchorVerifiesRSASignature(t *testing.T) {
+func TestValidateMicroVMBundleVerifiesContent(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
-		cfg, _ := signedArtifactFixture(t)
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err != nil {
+		cfg, _ := bundleArtifactFixture(t)
+		if err := cfg.ValidateMicroVMBundle(t.Context()); err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		cfg := &Config{MicroVMKernelPath: filepath.Join(t.TempDir(), "absent", "kernel")}
+		if err := cfg.ValidateMicroVMBundle(t.Context()); err != nil {
+			t.Fatalf("disabled bundle verification error = %v", err)
 		}
 	})
 
 	t.Run("cancelled", func(t *testing.T) {
-		cfg, _ := signedArtifactFixture(t)
+		cfg, _ := bundleArtifactFixture(t)
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		if err := cfg.ValidateMicroVMTrustAnchor(ctx); !errors.Is(err, context.Canceled) {
+		if err := cfg.ValidateMicroVMBundle(ctx); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled verification error = %v", err)
 		}
 	})
 
-	t.Run("wrong key", func(t *testing.T) {
-		cfg, _ := signedArtifactFixture(t)
-		wrongKey, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
+	t.Run("missing manifest", func(t *testing.T) {
+		cfg, artifactDir := bundleArtifactFixture(t)
+		if err := os.Remove(filepath.Join(artifactDir, "manifest.json")); err != nil {
 			t.Fatal(err)
 		}
-		writePublicKeyFixture(t, cfg, &wrongKey.PublicKey)
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil || !strings.Contains(err.Error(), "verify SecondBox Runner manifest signature") {
-			t.Fatalf("wrong-key verification error = %v", err)
+		if err := cfg.ValidateMicroVMBundle(t.Context()); err == nil || !strings.Contains(err.Error(), "SecondBox Runner bundle artifact manifest.json") {
+			t.Fatalf("missing-manifest verification error = %v", err)
 		}
 	})
 
-	t.Run("tampered payload", func(t *testing.T) {
-		cfg, artifactDir := signedArtifactFixture(t)
+	t.Run("manifest hash mismatch", func(t *testing.T) {
+		cfg, artifactDir := bundleArtifactFixture(t)
 		manifestPath := filepath.Join(artifactDir, "manifest.json")
 		manifest, err := os.ReadFile(manifestPath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		manifest = append(manifest, '\n')
+		var decoded artifactManifest
+		if err := json.Unmarshal(manifest, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		decoded.Kernel.SHA256 = strings.Repeat("0", sha256.Size*2)
+		manifest, err = json.Marshal(decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil || !strings.Contains(err.Error(), "verify SecondBox Runner manifest signature") {
-			t.Fatalf("tampered-payload verification error = %v", err)
+		if err := cfg.ValidateMicroVMBundle(t.Context()); err == nil || !strings.Contains(err.Error(), "manifest hash mismatch for kernel") {
+			t.Fatalf("manifest-hash-mismatch verification error = %v", err)
+		}
+	})
+
+	t.Run("tampered component manifest", func(t *testing.T) {
+		cfg, artifactDir := bundleArtifactFixture(t)
+		if err := os.WriteFile(filepath.Join(artifactDir, "runtime-manifest.json"), []byte(`{"component":"other"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := cfg.ValidateMicroVMBundle(t.Context()); err == nil || !strings.Contains(err.Error(), "runtime component digest mismatch") {
+			t.Fatalf("tampered-component verification error = %v", err)
 		}
 	})
 }
 
-func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
-	t.Run("malformed fingerprint", func(t *testing.T) {
-		cfg := &Config{MicroVMPublicKeySHA256: "not-hex"}
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
-			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters") {
-			t.Fatalf("malformed-fingerprint error = %v", err)
-		}
-	})
-
-	t.Run("fingerprint without key", func(t *testing.T) {
-		cfg := &Config{MicroVMPublicKeySHA256: strings.Repeat("ab", sha256.Size)}
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
-			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY") {
-			t.Fatalf("fingerprint-without-key error = %v", err)
-		}
-	})
-
-	t.Run("unreadable key path", func(t *testing.T) {
-		cfg := &Config{MicroVMPublicKeyPath: filepath.Join(t.TempDir(), "absent.pem")}
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
-			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY ") {
-			t.Fatalf("unreadable-key error = %v", err)
-		}
-	})
-
+func TestValidateMicroVMBundleNamesRealEnvironmentVariables(t *testing.T) {
 	t.Run("separate tool rootfs", func(t *testing.T) {
-		cfg, _ := signedArtifactFixture(t)
+		cfg, _ := bundleArtifactFixture(t)
 		cfg.MicroVMToolRootfsPath = "/images/other-rootfs.ext4"
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
-			!strings.Contains(err.Error(), "must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
+		if err := cfg.ValidateMicroVMBundle(t.Context()); err == nil ||
+			!strings.Contains(err.Error(), "must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH for bundle verification") {
 			t.Fatalf("separate-tool-rootfs error = %v", err)
 		}
 	})
 
 	t.Run("separate tool shared image", func(t *testing.T) {
-		cfg, _ := signedArtifactFixture(t)
+		cfg, _ := bundleArtifactFixture(t)
 		cfg.MicroVMToolSharedImagePath = "/images/other-shared.img"
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
-			!strings.Contains(err.Error(), "must match SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
+		if err := cfg.ValidateMicroVMBundle(t.Context()); err == nil ||
+			!strings.Contains(err.Error(), "must match SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH for bundle verification") {
 			t.Fatalf("separate-tool-shared-image error = %v", err)
 		}
 	})
 
 	t.Run("missing shared image", func(t *testing.T) {
-		cfg, _ := signedArtifactFixture(t)
+		cfg, _ := bundleArtifactFixture(t)
 		cfg.MicroVMSharedImagePath = ""
-		if err := cfg.ValidateMicroVMTrustAnchor(t.Context()); err == nil ||
-			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH is required when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
+		if err := cfg.ValidateMicroVMBundle(t.Context()); err == nil ||
+			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH is required for bundle verification") {
 			t.Fatalf("missing-shared-image error = %v", err)
 		}
 	})
@@ -189,7 +183,7 @@ func TestSafeManifestPathRejectsTraversal(t *testing.T) {
 	}
 }
 
-func signedArtifactFixture(t *testing.T) (*Config, string) {
+func bundleArtifactFixture(t *testing.T) (*Config, string) {
 	t.Helper()
 	dir := checksumFixture(t)
 	for name, data := range map[string][]byte{
@@ -230,40 +224,13 @@ func signedArtifactFixture(t *testing.T) (*Config, string) {
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(manifest)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, digest[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.sig"), signature, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	cfg := &Config{
-		MicroVMKernelPath:      filepath.Join(dir, "kernel"),
-		MicroVMRootfsPath:      filepath.Join(dir, "rootfs.ext4"),
-		MicroVMSharedImagePath: filepath.Join(dir, "shared.img"),
-		MicroVMPublicKeyPath:   filepath.Join(t.TempDir(), "manifest-public.pem"),
+		MicroVMKernelPath:         filepath.Join(dir, "kernel"),
+		MicroVMRootfsPath:         filepath.Join(dir, "rootfs.ext4"),
+		MicroVMSharedImagePath:    filepath.Join(dir, "shared.img"),
+		MicroVMBundleVerification: true,
 	}
-	writePublicKeyFixture(t, cfg, &privateKey.PublicKey)
 	return cfg, dir
-}
-
-func writePublicKeyFixture(t *testing.T, cfg *Config, key *rsa.PublicKey) {
-	t.Helper()
-	der, err := x509.MarshalPKIXPublicKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
-	if err := os.WriteFile(cfg.MicroVMPublicKeyPath, encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fingerprint := sha256.Sum256(der)
-	cfg.MicroVMPublicKeySHA256 = hex.EncodeToString(fingerprint[:])
 }
 
 func checksumFixture(t *testing.T) string {
@@ -288,7 +255,7 @@ func checksumFixture(t *testing.T) string {
 }
 
 // One verification pass hashes kernel, rootfs and shared image once, although
-// both the checksum list and the signed manifest cover them.
+// both the checksum list and the bundle manifest cover them.
 func TestArtifactDigestCacheHashesEachFileOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rootfs.ext4")
 	if err := os.WriteFile(path, []byte("verified bytes"), 0o600); err != nil {

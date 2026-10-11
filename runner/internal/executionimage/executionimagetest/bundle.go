@@ -1,16 +1,11 @@
-// Package executionimagetest publishes signed execution bundles that pass the
-// real Runner verification, so tests exercise admission instead of stubbing it.
+// Package executionimagetest writes execution bundles that pass the real Runner
+// verification, so tests exercise admission instead of stubbing it.
 package executionimagetest
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"io"
 	"os"
@@ -19,45 +14,19 @@ import (
 	"testing"
 )
 
-// Publisher holds a throwaway signing key and its pinned public identity.
-type Publisher struct {
-	key             *rsa.PrivateKey
-	PublicKeyPath   string
-	PublicKeySHA256 string
-}
-
-// Bundle is the signed identity one WriteBundle call produced.
+// Bundle is the identity one WriteBundle call produced.
 type Bundle struct {
 	RuntimeArtifactID       string
 	RuntimeManifestDigest   string
 	ToolchainArtifactID     string
 	ToolchainManifestDigest string
 	Manifest                []byte
-	Signature               []byte
 }
 
-func NewPublisher(t testing.TB) *Publisher {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "execution-image-public.pem")
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fingerprint := sha256.Sum256(der)
-	return &Publisher{key: key, PublicKeyPath: path, PublicKeySHA256: hex.EncodeToString(fingerprint[:])}
-}
-
-// WriteBundle signs a complete bundle in directory. A file already present,
-// such as a real rootfs.ext4, is signed as it is; every absent file receives
-// fixture content.
-func (publisher *Publisher) WriteBundle(t testing.TB, directory string, mandatoryGuestFeatures []string) Bundle {
+// WriteBundle completes a bundle in directory. A file already present, such as
+// a real rootfs.ext4, is recorded as it is; every absent file receives fixture
+// content.
+func WriteBundle(t testing.TB, directory string, mandatoryGuestFeatures []string) Bundle {
 	t.Helper()
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
@@ -125,15 +94,7 @@ func (publisher *Publisher) WriteBundle(t testing.TB, directory string, mandator
 	if err := os.WriteFile(filepath.Join(directory, "manifest.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manifestDigest := sha256.Sum256(manifest)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, publisher.key, crypto.SHA256, manifestDigest[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(directory, "manifest.sig"), signature, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	bundle.Manifest, bundle.Signature = manifest, signature
+	bundle.Manifest = manifest
 	return bundle
 }
 

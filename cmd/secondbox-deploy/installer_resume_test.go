@@ -78,7 +78,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 			if err := current.CompleteStage(install.StageAssetsMaterialized, now, map[string]string{"verified": "true"}); err != nil {
 				return current, install.VerifiedArtifact{}, err
 			}
-			return current, install.VerifiedArtifact{ManifestDigest: "sha256:" + strings.Repeat("d", 64), SigningKeyID: strings.Repeat("a", 64)}, persist(current)
+			return current, install.VerifiedArtifact{ManifestDigest: "sha256:" + strings.Repeat("d", 64)}, persist(current)
 		},
 		Initialize: func(plan install.InstallPlan, _ releaseverify.VerifiedRelease, _ install.VerifiedArtifact) (deployconfig.SingleHostInstallResult, error) {
 			calls = append(calls, "initialize")

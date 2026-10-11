@@ -28,9 +28,7 @@ func TestCollectWritesOnlyArtifactDigests(t *testing.T) {
 		"rootfs-debian-license-inventory.json": "debian licenses",
 		"rootfs-python-license-inventory.json": "python licenses",
 		"manifest.json":                        `{"schemaVersion":1,"secret":"must not be copied"}`,
-		"manifest.sig":                         "signature bytes",
 		"SHA256SUMS":                           "checksums",
-		"signing.pub":                          "public key bytes",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(artifacts, name), []byte(content), 0o600); err != nil {
@@ -72,7 +70,7 @@ func TestCollectRejectsSymlinkArtifactAndExistingOutput(t *testing.T) {
 	if err := os.Mkdir(artifacts, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"rootfs.ext4", "shared.img", "manifest.json", "manifest.sig", "signing.pub"} {
+	for _, name := range []string{"rootfs.ext4", "shared.img", "manifest.json"} {
 		if err := os.WriteFile(filepath.Join(artifacts, name), []byte(name), 0o600); err != nil {
 			t.Fatal(err)
 		}

@@ -72,7 +72,7 @@ func installReleasePlanFixture() install.ReleasePlan {
 	for _, name := range []string{"control-plane", "runner", "microvm-artifacts", "installer-tools", "postgres"} {
 		images[name] = "example.invalid/" + name + "@sha256:" + strings.Repeat("b", 64)
 	}
-	return install.ReleasePlan{Version: "0.5.1", ArtifactManifestURL: "https://example.invalid/manifest.json", ArtifactManifestDigest: "sha256:" + strings.Repeat("a", 64), SigningKeyFingerprint: "SHA256:" + strings.Repeat("A", 64), Images: images, BinaryDigests: map[string]string{"secondbox": strings.Repeat("c", 64), "secondbox-deploy": strings.Repeat("d", 64)}, ExpectedDownloadBytes: 1}
+	return install.ReleasePlan{Version: "0.5.1", ArtifactManifestURL: "https://example.invalid/manifest.json", ArtifactManifestDigest: "sha256:" + strings.Repeat("a", 64), Images: images, BinaryDigests: map[string]string{"secondbox": strings.Repeat("c", 64), "secondbox-deploy": strings.Repeat("d", 64)}, ExpectedDownloadBytes: 1}
 }
 
 func TestDecodeBlockingUpdateSandboxesPreservesProjectAndLifecycleState(t *testing.T) {

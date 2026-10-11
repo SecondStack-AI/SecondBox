@@ -1803,7 +1803,7 @@ func validateResolvedAssignment(assignment *runnerprotocol.AssignmentCommand) er
 		return fmt.Errorf("SecondBox runner assignment has incomplete immutable profile requirements")
 	}
 	// A default-image assignment boots this Runner's installed bundle and names
-	// no assets; a client-selected image names its signed components.
+	// no assets; a client-selected image names its components.
 	if (assignment.ExecutionImage == nil) != (len(assignment.Assets) == 0) {
 		return fmt.Errorf("SecondBox runner assignment assets must accompany exactly a client-selected image")
 	}

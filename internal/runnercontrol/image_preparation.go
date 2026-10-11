@@ -15,7 +15,7 @@ import (
 var preparedImageDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 func recordImagePreparationResult(ctx context.Context, tx pgx.Tx, runnerID string, result *runnerv1.PrepareImageResult, now time.Time) error {
-	if result == nil || result.OperationId == "" || len(result.Manifest) > 1<<20 || len(result.Signature) > 8192 || len(result.Failure) > 512 {
+	if result == nil || result.OperationId == "" || len(result.Manifest) > 1<<20 || len(result.Failure) > 512 {
 		return errors.New("SecondBox image preparation evidence exceeds protocol bounds")
 	}
 	var commandID, state string
@@ -37,8 +37,8 @@ func recordImagePreparationResult(ctx context.Context, tx pgx.Tx, runnerID strin
 	if result.Failure != "" {
 		state, terminal = "failed", true
 	} else if result.ResolvedDigest != "" {
-		if !preparedImageDigestPattern.MatchString(result.ResolvedDigest) || len(result.Manifest) == 0 || len(result.Signature) == 0 {
-			return errors.New("SecondBox image preparation signed evidence is incomplete")
+		if !preparedImageDigestPattern.MatchString(result.ResolvedDigest) || len(result.Manifest) == 0 {
+			return errors.New("SecondBox image preparation evidence is incomplete")
 		}
 		state, terminal = "completed", true
 	}

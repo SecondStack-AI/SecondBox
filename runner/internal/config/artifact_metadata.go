@@ -7,7 +7,6 @@ import (
 )
 
 const MaximumArtifactManifestBytes int64 = 1 << 20
-const MaximumArtifactSignatureBytes int64 = 16 << 10
 
 // ReadArtifactMetadata bounds memory even if an untrusted file grows during the read.
 func ReadArtifactMetadata(path string, maximumBytes int64) ([]byte, error) {

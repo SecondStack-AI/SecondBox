@@ -1,17 +1,10 @@
-// Package assetcatalog authenticates the signed components of client-selected execution images.
+// Package assetcatalog imports the components of client-selected execution images.
 package assetcatalog
 
 import (
-	"crypto"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -19,55 +12,25 @@ import (
 
 var catalogDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
-// signedImageComponent is one runtime or toolchain component a signed
-// execution image manifest binds.
-type signedImageComponent struct {
+// imageComponent is one runtime or toolchain component an execution image
+// manifest binds.
+type imageComponent struct {
 	ArtifactID             string   `json:"artifactId"`
 	ManifestDigest         string   `json:"manifestDigest"`
 	MandatoryGuestFeatures []string `json:"mandatoryGuestFeatures"`
 }
 
-// ExecutionImageAuthority imports component identities from the existing signed bundle.
-// Runner materialization reports alone cannot grant execution authority.
-type ExecutionImageAuthority struct{ key *rsa.PublicKey }
-
-func LoadExecutionImageAuthority(path, fingerprint string) (*ExecutionImageAuthority, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox execution image authority read: %w", err)
-	}
-	block, _ := pem.Decode(content)
-	if block == nil {
-		return nil, errors.New("SecondBox execution image authority requires a PEM public key")
-	}
-	digest := sha256.Sum256(block.Bytes)
-	if hex.EncodeToString(digest[:]) != fingerprint {
-		return nil, errors.New("SecondBox execution image authority fingerprint mismatch")
-	}
-	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox execution image authority parse: %w", err)
-	}
-	key, ok := parsed.(*rsa.PublicKey)
-	if !ok {
-		return nil, errors.New("SecondBox execution image authority requires an RSA public key")
-	}
-	return &ExecutionImageAuthority{key: key}, nil
-}
-
-func (authority *ExecutionImageAuthority) ImportManifest(manifest, signature []byte) ([]*runnerv1.AssetReference, error) {
-	if authority == nil || authority.key == nil || len(manifest) == 0 || len(manifest) > 1<<20 || len(signature) > 8192 {
-		return nil, errors.New("SecondBox execution image import requires bounded signed metadata and configured trust")
-	}
-	digest := sha256.Sum256(manifest)
-	if err := rsa.VerifyPKCS1v15(authority.key, crypto.SHA256, digest[:], signature); err != nil {
-		return nil, fmt.Errorf("SecondBox execution image manifest signature: %w", err)
+// ImportExecutionImageManifest reads component identities from the manifest of
+// a digest-resolved execution image bundle the Runner verified.
+func ImportExecutionImageManifest(manifest []byte) ([]*runnerv1.AssetReference, error) {
+	if len(manifest) == 0 || len(manifest) > 1<<20 {
+		return nil, errors.New("SecondBox execution image import requires bounded manifest metadata")
 	}
 	var document struct {
 		Architecture    string                            `json:"architecture"`
 		GuestProtocol   struct{ Minimum, Maximum uint32 } `json:"guestProtocol"`
-		RuntimeBundle   signedImageComponent              `json:"runtimeBundle"`
-		ToolchainBundle signedImageComponent              `json:"toolchainBundle"`
+		RuntimeBundle   imageComponent                    `json:"runtimeBundle"`
+		ToolchainBundle imageComponent                    `json:"toolchainBundle"`
 	}
 	if err := json.Unmarshal(manifest, &document); err != nil {
 		return nil, fmt.Errorf("SecondBox execution image manifest decode: %w", err)
@@ -76,7 +39,7 @@ func (authority *ExecutionImageAuthority) ImportManifest(manifest, signature []b
 		return nil, errors.New("SecondBox execution image manifest architecture or guest protocol is invalid")
 	}
 	assets := make([]*runnerv1.AssetReference, 0, 2)
-	for _, component := range []signedImageComponent{document.RuntimeBundle, document.ToolchainBundle} {
+	for _, component := range []imageComponent{document.RuntimeBundle, document.ToolchainBundle} {
 		if component.ArtifactID == "" || !catalogDigestPattern.MatchString(component.ManifestDigest) {
 			return nil, errors.New("SecondBox execution image manifest component identity is invalid")
 		}

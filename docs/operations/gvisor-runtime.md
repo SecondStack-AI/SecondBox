@@ -4,8 +4,8 @@ The gVisor runner is the supported backend for Linux x86_64 hosts that cannot ex
 `/dev/kvm`, Kubernetes nodes included. It is a separate, operator-managed Runner deployment; it does not alter or replace the qualified
 Linux Firecracker installer, container, systemd units, network setup, or standard Profiles.
 
-Sandboxes use the Profile's fixed flat root unless create or start selects a signed execution image.
-A gVisor Runner consumes the same signed image an application publishes for Firecracker: the image's
+Sandboxes use the Profile's fixed flat root unless create or start selects an execution image.
+A gVisor Runner consumes the same image an application publishes for Firecracker: the image's
 `rootfs.ext4` becomes the sandbox root, while the Runner's pinned `runsc` and guest agent still launch it.
 [Client-selected execution images](../design/client-selected-execution-images.md#gvisor-materialization)
 defines the trust and materialization contract.
@@ -145,8 +145,6 @@ export SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 # from the runtime directory; the fetcher owns it.
 export SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT=/var/lib/secondbox-execution-images
 export SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET=/run/secondbox-image-fetcher/fetcher.sock
-export SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY=/etc/secondbox/execution-image-public.pem
-export SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256=OPERATOR_PUBLISHER_KEY_DER_SHA256
 ```
 
 ## Client-selected execution images
@@ -156,24 +154,23 @@ is no fixed-assets-only mode. Run the fetcher as a separate unprivileged process
 reference pod) from the same release image, with `secondbox-image-fetcher` as its entrypoint and
 exactly the inputs [deployment operations](deployment.md) documents for Firecracker: the cache root,
 a host-private socket directory shared with the Runner, the per-Tenant registry configuration
-directory, the publisher public key and fingerprint, the registry allowlist, and the three byte
-limits. The fetcher receives no Workspace mounts, host devices, or privileges, and the Runner never
+directory, the registry allowlist, and the three byte limits. The fetcher receives no Workspace mounts, host devices, or privileges, and the Runner never
 receives registry credentials.
 
-At startup the Runner verifies the publisher key against its pinned fingerprint and proves that the
-cache filesystem can reflink into an unnamed file; either failure stops the Runner. Readiness then
+At startup the Runner proves that the cache filesystem can reflink into an unnamed file; a failure
+stops the Runner. Readiness then
 advertises `client-selected-image`, which admits the Runner to `images:prepare` targets and
 selected-image placement.
 
-A selected-image start verifies the cached signed bundle, reflinks its `rootfs.ext4` into an
+A selected-image start verifies the cached bundle, reflinks its `rootfs.ext4` into an
 unnamed file, and mounts that clone read-only as the sandbox root inside the mount supervisor's
 private namespace. The supervisor creates only absent gVisor mount targets in the clone. As under
 Firecracker, the guest may write anywhere in that root: `runsc`'s in-memory overlay absorbs the
 writes, which count against the Instance memory limit and vanish when the Instance stops. An image
-whose root symlinks one of those targets, such as `/etc/resolv.conf`, fails the start. The signed
+whose root symlinks one of those targets, such as `/etc/resolv.conf`, fails the start. The image's
 kernel and `shared.img` are verified but not attached. The image's guest agent is ignored: the
 materialization's agent must speak the image's guest protocol generation and every mandatory guest
-feature the image signs.
+feature the image manifest declares.
 
 Create `/etc/secondbox-runner/egress-contexts.json` as a root-owned, read-only file (or the reference pod's ConfigMap) before starting the Runner:
 
@@ -269,7 +266,7 @@ never copied from a document.
    | `SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE` / `SECONDBOX_RUNNER_STORAGE_PRESSURE_*` | `logical` or `physical`; physical mode requires explicit recovery, warning, and deny percentages for the Workspace filesystem. |
    | `SECONDBOX_RUNNER_NETWORK_POLICY_*` plus `SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG` | Explicit generic enforcement bounds, protected Runner and management destinations, the strict context-indexed logical-gateway file, and the IPv4 DNS upstream. |
    | `SECONDBOX_GVISOR_*` (all values from the environment block above) | The backend block, including capacity maxima, the materialization pin, the runtime directory, and the network profile. |
-   | `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT` / `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET` / `SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY` / `..._SHA256` | The reflink-capable image cache shared with the fetcher, the fetcher's socket, and the independently pinned publisher key. |
+   | `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT` / `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET` | The reflink-capable image cache shared with the fetcher and the fetcher's socket. |
 
    Instance capacity and per-Instance ceilings come from the `SECONDBOX_GVISOR_MAXIMUM_*`
    values. With `SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE=physical`, aggregate logical disk
@@ -361,8 +358,7 @@ remains operator-authored and unqualified.
   `runner-gvisor` image beside the runner. They share a pod-local socket `emptyDir` and a node-local
   execution image cache on a reflink-capable filesystem. The fetcher alone mounts the per-Tenant
   registry Secret (`tenants.json`, token files, and optional `certificates/<host>/ca.crt`); the pod's
-  `fsGroup` keeps those files group-readable only, as the fetcher requires. Both containers mount the
-  publisher public key.
+  `fsGroup` keeps those files group-readable only, as the fetcher requires.
 - Materialize the released assets on each runner node from the `gvisor-artifacts` image the
   artifact manifest pins (`gvisor.imageReference`). The image holds one directory,
   `/secondbox-runner-gvisor`, whose contents become the node directory the reference pod mounts
@@ -441,18 +437,16 @@ just test-gvisor "$SECONDBOX_GVISOR_BUILD"
 export SECONDBOX_GVISOR_LINUX_BUILD="$SECONDBOX_GVISOR_BUILD"
 export SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1
 export SECONDBOX_RUNNER_WORKSPACE_ROOT=/absolute/path/on/reflink-fs/scenario-workspaces
-# The host scenario launches a retrievable signed execution image.
+# The host scenario launches a retrievable execution image.
 export SECONDBOX_SCENARIO_EXECUTION_IMAGE=registry.example/secondbox/agent@sha256:<digest>
 export SECONDBOX_SCENARIO_IMAGE_REGISTRY_CONFIG=/absolute/path/to/tenant-registry-config
-export SECONDBOX_SCENARIO_EXECUTION_IMAGE_PUBLIC_KEY=/absolute/path/to/publisher-public.pem
 just test-scenario-gvisor
 ```
 
-`scripts/qualify-gvisor.sh --host` supplies the release publisher key from
-`SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY`, because its selected image is the release-signed microVM
-artifact the Firecracker scenario also launches. The pod placement runs the same selected-image
-scenario through the reference pod's fetcher container; the nightly VM path copies the image,
-registry configuration, and publisher key into the VM. A cold fetch reserves twice the download
+The selected image of `scripts/qualify-gvisor.sh --host` is the release microVM artifact the
+Firecracker scenario also launches. The pod placement runs the same selected-image
+scenario through the reference pod's fetcher container; the nightly VM path copies the image and
+registry configuration into the VM. A cold fetch reserves twice the download
 limit plus the expanded limit (48 GiB in the scenario) beside the cached image, so the pod
 qualification node's reflink volume needs at least 64 GiB free.
 

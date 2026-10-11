@@ -211,7 +211,7 @@ The service rejects a reserved name that could never resolve: one that is blank,
 ./dist/secondbox run durable-coding --image registry.example/secondbox/agent:stable -- python3 -c 'print("hello")'
 ```
 
-`--image` selects a signed execution image from a Tenant-authorized repository.
+`--image` selects an execution image from a Tenant-authorized repository.
 The SecondBox operator configures registry authentication once per Tenant; the CLI does not accept pull credentials.
 Create and run require an image; an ordinary start can omit it to reuse the last successful digest.
 `--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error.

@@ -30,7 +30,7 @@ type Composition struct {
 // nested-virtualization configuration: only the pinned runsc launch artifact,
 // the injected guest agent, the pre-materialized flat root, the pinned
 // materialization manifest, integer capacity bounds, and the client-selected
-// execution image cache, fetcher socket, and publisher key.
+// execution image cache and fetcher socket.
 type GVisorComposition struct {
 	RunscPath              string
 	RuntimeDir             string
@@ -50,10 +50,8 @@ type GVisorComposition struct {
 	NetworkProfile         uint32
 	NetworkPolicy          networkpolicy.RunnerConfig
 	// The same generic execution image settings the Firecracker Runner uses.
-	ExecutionImageCacheRoot       string
-	ExecutionImageFetcherSocket   string
-	ExecutionImagePublicKeyPath   string
-	ExecutionImagePublicKeySHA256 string
+	ExecutionImageCacheRoot     string
+	ExecutionImageFetcherSocket string
 }
 
 type MicrosandboxComposition struct {
@@ -174,7 +172,6 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		"SECONDBOX_GVISOR_RUNTIME_DIR",
 		"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT",
 		"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET",
-		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY",
 	} {
 		value := strings.TrimSpace(os.Getenv(name))
 		if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
@@ -185,10 +182,6 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 	digest := strings.TrimSpace(os.Getenv("SECONDBOX_GVISOR_MATERIALIZATION_DIGEST"))
 	if digest == "" {
 		return GVisorComposition{}, 0, fmt.Errorf("SECONDBOX_GVISOR_MATERIALIZATION_DIGEST is required")
-	}
-	executionImageKeySHA256 := strings.TrimSpace(os.Getenv("SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256"))
-	if executionImageKeySHA256 == "" {
-		return GVisorComposition{}, 0, fmt.Errorf("SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256 is required")
 	}
 	readUint := func(name string, bits int) (uint64, error) {
 		value, err := strconv.ParseUint(strings.TrimSpace(os.Getenv(name)), 10, bits)
@@ -248,10 +241,8 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		MaximumInstances: uint32(instances), MaximumOperations: uint32(operations),
 		StorageAdmissionMode: storageMode, StorageRecoveryPercent: recovery, StorageWarningPercent: warning, StorageDenyPercent: deny,
 		NetworkProfile: uint32(networkProfile), NetworkPolicy: networkPolicyConfig,
-		ExecutionImageCacheRoot:       values["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"],
-		ExecutionImageFetcherSocket:   values["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"],
-		ExecutionImagePublicKeyPath:   values["SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY"],
-		ExecutionImagePublicKeySHA256: executionImageKeySHA256,
+		ExecutionImageCacheRoot:     values["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"],
+		ExecutionImageFetcherSocket: values["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"],
 	}, int64(template), nil
 }
 

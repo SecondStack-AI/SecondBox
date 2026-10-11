@@ -28,20 +28,12 @@ artifact_host_directory = '<replace-with-absolute-runner-host-path>'
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
 # Private directory containing tenants.json and exported registry credentials on the Runner host.
 execution_image_registry_config_directory = '<replace-with-absolute-tenant-registry-config-directory>'
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package mounts the deployment's execution-image publisher key.
-execution_image_public_key = ''
-# Client-selected execution-image signing-key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
-execution_image_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
 # Maximum downloaded OCI archive size per image.
 execution_image_max_download_bytes = 0
-# Maximum expanded signed bundle size per image.
+# Maximum expanded bundle size per image.
 execution_image_max_expanded_bytes = 0
 # Maximum retained expanded image cache size.
 execution_image_max_cache_bytes = 0
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-artifacts/signing.pub.
-artifact_public_key = ''
-# Provisioned signed-artifact key fingerprint; exactly 64 lowercase hexadecimal characters and not all zeroes.
-artifact_public_key_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
 
 # Runner storage
 # Dedicated reflink-capable Runner storage root on the host; absolute when set and required for same-host placement. Compose binds this root once at /var/lib/secondbox-runner so its state and workspaces children retain one mount identity.
@@ -99,7 +91,7 @@ firecracker_run_directory = ''
 firecracker_log_directory = ''
 
 # Snapshot-resume startup
-# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/snapshot-template-cache. Keep this cache on the same filesystem as firecracker_jail_root: golden memory files are hard-linked into each jail. Snapshot-resume capacity requires a template built from the verified signed bundle.
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/snapshot-template-cache. Keep this cache on the same filesystem as firecracker_jail_root: golden memory files are hard-linked into each jail. Snapshot-resume capacity requires a template built from the verified bundle.
 snapshot_template_cache_root = ''
 
 # Sandbox networking

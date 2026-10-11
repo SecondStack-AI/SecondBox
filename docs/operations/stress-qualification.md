@@ -1,7 +1,7 @@
 # Local stress qualification
 
 `just test-stress` measures how a real local SecondBox deployment changes as concurrency increases.
-It is a thin configuration adapter over the prerequisite checks, signed-artifact verification,
+It is a thin configuration adapter over the prerequisite checks, artifact verification,
 dynamic host network, Compose topology, and cleanup path used by `just test-scenario`. It then drives
 the deployment exclusively through the published HTTP API with
 `sdk/go/secondboxclient`. The driver does not read PostgreSQL, import a control-plane or runner
@@ -36,9 +36,8 @@ The host must provide:
 
 - readable and writable `/dev/kvm` and `/dev/net/tun`;
 - Docker with Compose v2, Go, `curl`, `findmnt`, Git, `ip`, `jq`, OpenSSL, and `sha256sum`;
-- the complete signed microVM artifact directory described by
+- the complete microVM artifact directory described by
   [the microVM image pipeline](microvm-image-pipeline.md);
-- the trusted artifact public key and its lowercase DER SHA-256 fingerprint;
 - an existing, non-root, non-symlink XFS or Btrfs directory for per-run Workspace storage;
 - four unused loopback TCP ports selected by the shared scenario harness for
   the public API, measurement-only PostgreSQL access, Runner control, and the
@@ -49,7 +48,7 @@ runner removes the bridge and its exact firewall rules during trapped cleanup. T
 names a qualified parent; the harness creates one unique per-run Workspace root beneath it and
 removes that exact root after restoring file ownership.
 
-The artifact verifier runs before Compose. It checks the public-key fingerprint, manifest signature,
+The artifact verifier runs before Compose. It checks the
 checksums, component manifest digests, architecture, guest-protocol range, rootfs contract, and
 browser surface. A missing or invalid artifact is a failed run, not a skipped test.
 
@@ -62,12 +61,10 @@ just prepare-stress
 just test-stress
 ```
 
-`just prepare-stress` creates persistent, gitignored state beneath `.secondbox/stress/`. It generates
-one local RSA signing key and separate public trust anchor, prepares the standard guest rootfs,
-builds the pinned kernel, creates and signs the approximately 11 GB bundle, verifies that bundle
-against the saved trust anchor, and installs a copy of the example stress configuration. It also
-creates the result and Workspace parent directories. The private key has mode `0600` and is kept
-outside the artifact bundle.
+`just prepare-stress` creates persistent, gitignored state beneath `.secondbox/stress/`. It prepares
+the standard guest rootfs, builds the pinned kernel, creates and verifies the approximately 11 GB
+bundle, and installs a copy of the example stress configuration. It also creates the result and
+Workspace parent directories.
 
 The one-time local build additionally requires `debootstrap`, `fakeroot`, a working Docker Engine,
 the pinned-kernel build toolchain, and passwordless or interactive `sudo` access for rootfs staging.
@@ -79,7 +76,7 @@ it instead of rebuilding. Change `.secondbox/stress/stress.json` to tune the loc
 large state elsewhere, set `SECONDBOX_STRESS_LOCAL_ROOT` to a clean absolute path for both commands.
 That path must reside on XFS or Btrfs because it also owns the local Workspace parent.
 
-After preparation, `just test-stress` discovers the bundle, public key, key fingerprint,
+After preparation, `just test-stress` discovers the bundle,
 configuration, and Workspace parent automatically. Each run writes a new timestamped result below
 `.secondbox/stress/results/`.
 
@@ -101,14 +98,12 @@ export SECONDBOX_REQUIRE_QUALIFIED_STRESS=1
 export SECONDBOX_STRESS_CONFIG=/absolute/path/stress.json
 export SECONDBOX_STRESS_OUTPUT=/absolute/path/stress-result.json
 export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR=/absolute/path/firecracker-artifacts
-export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY=/absolute/path/manifest-public.pem
-export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 export SECONDBOX_RUNNER_WORKSPACE_ROOT=/absolute/path/reflink-qualification-parent
 just test-stress
 ```
 
 When omitted, `SECONDBOX_REQUIRE_QUALIFIED_STRESS` is set to `1` by the dedicated stress recipe.
-Supplying any other value still fails. Explicit path and fingerprint values override all locally
+Supplying any other value still fails. Explicit path values override all locally
 prepared values.
 
 `SECONDBOX_STRESS_OUTPUT` must be an absent absolute path whose parent already exists. The harness
@@ -116,7 +111,7 @@ refuses to overwrite it and creates it with mode `0600`. The shared topology's d
 platform, runner, and database credentials are supplied only to their consumers and
 are never written to the result.
 
-The gate prints the source commit, Go version, `findmnt` evidence, and signed artifact-manifest
+The gate prints the source commit, Go version, `findmnt` evidence, and artifact-manifest
 digest before starting the sweep. Failure logs come from the control plane, runner, and PostgreSQL.
 Cleanup runs for both success and failure.
 

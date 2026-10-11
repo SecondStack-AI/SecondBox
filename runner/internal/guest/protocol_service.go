@@ -16,7 +16,7 @@ const (
 )
 
 // ProtocolIdentity is immutable boot identity used to bind a guest protocol
-// connection to the exact runner assignment and signed image.
+// connection to the exact runner assignment and image.
 type ProtocolIdentity struct {
 	InstanceID              string
 	SandboxID               string

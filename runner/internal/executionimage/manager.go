@@ -47,13 +47,9 @@ var ErrCapacityAdmissionDenied = errors.New("SecondBox execution image capacity 
 
 type Manager struct {
 	fixedDirectory       string
-	fixedPublicKeyPath   string
-	fixedPublicKeySHA256 string
 	cacheRoot            string
 	registryAllowlist    []string
 	registryCertificates string
-	publicKeyPath        string
-	publicKeySHA256      string
 	skopeoPath           string
 	maximumDownloadBytes int64
 	maximumExpandedBytes int64
@@ -78,13 +74,9 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	}
 	return &Manager{
 		fixedDirectory:       filepath.Dir(cfg.MicroVMKernelPath),
-		fixedPublicKeyPath:   cfg.MicroVMPublicKeyPath,
-		fixedPublicKeySHA256: cfg.MicroVMPublicKeySHA256,
 		cacheRoot:            cfg.ExecutionImageCacheRoot,
 		registryAllowlist:    append([]string(nil), cfg.ExecutionImageRegistryAllowlist...),
 		registryCertificates: cfg.ExecutionImageRegistryCertificates,
-		publicKeyPath:        cfg.ExecutionImagePublicKeyPath,
-		publicKeySHA256:      cfg.ExecutionImagePublicKeySHA256,
 		maximumDownloadBytes: cfg.ExecutionImageMaximumDownloadBytes,
 		maximumExpandedBytes: cfg.ExecutionImageMaximumExpandedBytes,
 		maximumCacheBytes:    cfg.ExecutionImageMaximumCacheBytes,
@@ -148,7 +140,7 @@ func (manager *Manager) Fetch(
 	}()
 	manager.cacheMu.RLock()
 	if _, err := os.Stat(cacheDirectory); err == nil {
-		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256)
+		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory)
 		if err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
@@ -176,7 +168,7 @@ func (manager *Manager) Fetch(
 	manager.cacheMu.RUnlock()
 	if cacheErr == nil {
 		manager.cacheMu.RLock()
-		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory, manager.publicKeyPath, manager.publicKeySHA256)
+		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory)
 		if err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
@@ -238,9 +230,9 @@ func (manager *Manager) Fetch(
 	if err := extractDockerArchive(ctx, archivePath, candidate, manager.maximumDownloadBytes, manager.maximumExpandedBytes); err != nil {
 		return PreparedImage{}, err
 	}
-	artifacts, err := manager.verifyAndCaptureArtifacts(ctx, candidate, manager.publicKeyPath, manager.publicKeySHA256)
+	artifacts, err := manager.verifyAndCaptureArtifacts(ctx, candidate)
 	if err != nil {
-		return PreparedImage{}, fmt.Errorf("SecondBox execution image signature verification failed: %w", err)
+		return PreparedImage{}, fmt.Errorf("SecondBox execution image bundle verification failed: %w", err)
 	}
 	if err := os.Rename(candidate, cacheDirectory); err != nil {
 		return PreparedImage{}, fmt.Errorf("SecondBox execution image cache publication failed: %w", err)
@@ -538,7 +530,7 @@ func (manager *Manager) cacheEntries() ([]cacheEntry, int64, error) {
 	return entries, total, nil
 }
 
-func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory, publicKeyPath, publicKeySHA256 string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory string) ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 	artifacts := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, 3)
 	for _, artifact := range []struct{ label, name string }{{"kernel", "kernel"}, {"rootfs", "rootfs.ext4"}, {"shared image", "shared.img"}} {
 		identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(artifact.label, filepath.Join(directory, artifact.name))
@@ -547,7 +539,7 @@ func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory
 		}
 		artifacts = append(artifacts, identity)
 	}
-	if err := config.VerifyMicroVMArtifactDirectory(ctx, directory, publicKeyPath, publicKeySHA256); err != nil {
+	if err := config.VerifyMicroVMArtifactDirectory(ctx, directory); err != nil {
 		return nil, err
 	}
 	for _, artifact := range artifacts {
@@ -556,7 +548,7 @@ func (manager *Manager) verifyAndCaptureArtifacts(ctx context.Context, directory
 			return nil, fmt.Errorf("record execution image %s identity after verification: %w", artifact.Label, err)
 		}
 		if !sameVerifiedArtifactIdentity(artifact, current) {
-			return nil, fmt.Errorf("SecondBox execution image %s changed during signature verification", artifact.Label)
+			return nil, fmt.Errorf("SecondBox execution image %s changed during bundle verification", artifact.Label)
 		}
 	}
 	return artifacts, nil

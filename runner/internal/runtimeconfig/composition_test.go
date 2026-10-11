@@ -114,8 +114,6 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM":       "10.201.0.10:53",
 		"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT":        "/var/lib/secondbox-runner/execution-images",
 		"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET":              "/run/secondbox-image-fetcher/fetcher.sock",
-		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY":        "/etc/secondbox/execution-image-public.pem",
-		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256": strings.Repeat("b", 64),
 	}
 	for name, value := range complete {
 		t.Setenv(name, value)
@@ -159,9 +157,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		strings.Join(composition.NetworkPolicy.ContextNames(), ",") != "tenant-a,tenant-b" ||
 		composition.NetworkPolicy.DNSUpstream.String() != "10.201.0.10:53" ||
 		composition.ExecutionImageCacheRoot != complete["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"] ||
-		composition.ExecutionImageFetcherSocket != complete["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"] ||
-		composition.ExecutionImagePublicKeyPath != complete["SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY"] ||
-		composition.ExecutionImagePublicKeySHA256 != complete["SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256"] {
+		composition.ExecutionImageFetcherSocket != complete["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"] {
 		t.Fatalf("gVisor composition = %#v templateBytes=%d", composition, templateBytes)
 	}
 	t.Run("network profile", func(t *testing.T) {
@@ -189,8 +185,6 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM",
 		"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT",
 		"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET",
-		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY",
-		"SECONDBOX_RUNNER_EXECUTION_IMAGE_PUBLIC_KEY_SHA256",
 	} {
 		t.Run(required, func(t *testing.T) {
 			t.Setenv(required, "")

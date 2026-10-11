@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
 func TestMicroVMInitRemovesForbiddenDeviceNodesBeforeEntrypoint(t *testing.T) {
@@ -69,8 +69,7 @@ func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
 		MicroVMSharedImagePath:           requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
 		MicroVMToolRootfsPath:            requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMToolSharedImagePath:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:             requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:           requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
+		MicroVMBundleVerification:        true,
 		MicroVMRunDir:                    filepath.Join(workDir, "run"),
 		MicroVMLogDir:                    filepath.Join(workDir, "logs"),
 		MicroVMSnapshotTemplateCacheRoot: filepath.Join(workDir, "snapshot-templates"),

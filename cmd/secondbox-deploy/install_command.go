@@ -401,7 +401,7 @@ func releasePlan(verified releaseverify.VerifiedRelease, location string) instal
 			binaries[binary.Name] = binary.SHA256
 		}
 	}
-	return install.ReleasePlan{Version: manifest.Version, ArtifactManifestURL: location, ArtifactManifestDigest: releasecontract.Digest(verified.ManifestBytes), SigningKeyFingerprint: manifest.MicroVM.SigningKeyFingerprint, Images: images, BinaryDigests: binaries, ExpectedDownloadBytes: install.ExecutionBundleEstimateBytes}
+	return install.ReleasePlan{Version: manifest.Version, ArtifactManifestURL: location, ArtifactManifestDigest: releasecontract.Digest(verified.ManifestBytes), Images: images, BinaryDigests: binaries, ExpectedDownloadBytes: install.ExecutionBundleEstimateBytes}
 }
 
 func humanBytes(value int64) string {

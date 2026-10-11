@@ -29,7 +29,7 @@ type SingleHostInstallResult struct {
 // InitSingleHostFromReleaseOrValidate makes the stage commit marker (the
 // create-only manifest) resumable. A completed but not-yet-recorded
 // materialization is adopted only when its deterministic manifest, release,
-// signed-asset catalog, and resolved deployment all match the accepted plan.
+// asset catalog, and resolved deployment all match the accepted plan.
 func InitSingleHostFromReleaseOrValidate(plan install.InstallPlan, release releasecontract.ArtifactManifest, releaseBytes []byte, verified install.VerifiedArtifact) (SingleHostInstallResult, error) {
 	manifestPath := installPath(plan, "manifest")
 	if _, err := os.Lstat(manifestPath); os.IsNotExist(err) {
@@ -64,9 +64,7 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 	if releasecontract.Digest(releaseBytes) != plan.Release.ArtifactManifestDigest || release.Version != plan.Release.Version ||
 		release.ControlPlane.Reference != plan.Release.Images["control-plane"] || release.Runner.Reference != plan.Release.Images["runner"] ||
 		release.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || release.InstallerTools.Reference != plan.Release.Images["installer-tools"] ||
-		release.BundledServices.Postgres != plan.Release.Images["postgres"] ||
-		release.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint || verified.ManifestDigest != release.MicroVM.SignedManifestDigest ||
-		verified.SigningKeyID != strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:")) {
+		release.BundledServices.Postgres != plan.Release.Images["postgres"] || verified.ManifestDigest != release.MicroVM.ManifestDigest() {
 		return SingleHostInstallResult{}, manifestError("single-host release identity differs from the accepted install plan", nil)
 	}
 	for _, name := range []string{"secondbox", "secondbox-deploy"} {
@@ -171,7 +169,7 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 		return SingleHostInstallResult{}, err
 	}
 
-	manifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, relativeTo(deployment, releasePath), relativeTo(deployment, pki))
+	manifest, err := singleHostManifest(plan, release, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, relativeTo(deployment, releasePath), relativeTo(deployment, pki))
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -289,9 +287,7 @@ func validateExistingSingleHostInstall(plan install.InstallPlan, release release
 	if releasecontract.Digest(releaseBytes) != plan.Release.ArtifactManifestDigest || release.Version != plan.Release.Version ||
 		release.ControlPlane.Reference != plan.Release.Images["control-plane"] || release.Runner.Reference != plan.Release.Images["runner"] ||
 		release.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || release.InstallerTools.Reference != plan.Release.Images["installer-tools"] ||
-		release.BundledServices.Postgres != plan.Release.Images["postgres"] ||
-		release.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint || verified.ManifestDigest != release.MicroVM.SignedManifestDigest ||
-		verified.SigningKeyID != strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:")) {
+		release.BundledServices.Postgres != plan.Release.Images["postgres"] || verified.ManifestDigest != release.MicroVM.ManifestDigest() {
 		return SingleHostInstallResult{}, manifestError("existing single-host release identity differs from the accepted install plan", nil)
 	}
 	for _, name := range []string{"secondbox", "secondbox-deploy"} {
@@ -311,7 +307,7 @@ func validateExistingSingleHostInstall(plan install.InstallPlan, release release
 	relativeTarget := func(category string) string { return relativeTo(deployment, targets[category]) }
 	releasePath := installPath(plan, "release-artifact-manifest")
 	pkiPath := installPath(plan, "runner-pki")
-	expectedManifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
+	expectedManifest, err := singleHostManifest(plan, release, runnerID, runnerIdentity, relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -351,7 +347,7 @@ func readSingleHostPlannedFile(plan install.InstallPlan, name string) ([]byte, e
 	return os.ReadFile(path)
 }
 
-func singleHostManifest(plan install.InstallPlan, release releasecontract.ArtifactManifest, signingKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, releasePath, pkiPath string) (ManifestV1, error) {
+func singleHostManifest(plan install.InstallPlan, release releasecontract.ArtifactManifest, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, releasePath, pkiPath string) (ManifestV1, error) {
 	apiHost, apiPort, err := splitPlanAddress(plan.Network.APIAddress)
 	if err != nil {
 		return ManifestV1{}, err
@@ -408,12 +404,9 @@ func singleHostManifest(plan install.InstallPlan, release releasecontract.Artifa
 		Policy:            Policy{DataPlaneRetentionSeconds: integer(plan.RetentionSeconds), RunnerEnabledFeatures: strings.Join(features[1:], ",")},
 	}
 	dnsUpstream := netip.MustParseAddr(plan.Network.DNSUpstream)
-	manifest.Runners = []Runner{{RunnerID: runnerID, Placement: "same-host", PoolID: standardresources.PoolAMD64, SoftwareVersion: release.Version, ControlPlaneAddress: plan.Network.RunnerAddress, ControlPlaneServerName: "control-plane", IdentityHostDirectory: runnerIdentity, ArtifactHostDirectory: artifacts, StateHostDirectory: runnerStorage, FirecrackerJailerUIDStart: integer(plan.Network.JailerUIDRange.Start), FirecrackerJailerUIDCount: integer(plan.Network.JailerUIDRange.Count), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(plan.Network.JailerUIDRange.Start), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: plan.Network.CgroupParent, FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: plan.Compute.FirecrackerCPUTemplate, ArtifactPublicKeySHA256: signingKeyID, StorageRecoveryPercent: integer(storageDeny - 10), StorageWarningPercent: integer(storageDeny - 5), StorageAdmissionDenyPercent: integer(storageDeny), StorageAdmissionMode: "logical", SandboxMaxVCPUs: integer(maxVCPUs), SandboxMaxMemoryMiB: integer(maxMemoryMiB), SandboxMaxDiskMiB: integer(maxDiskMiB), SandboxMemoryBudgetMiB: integer(plan.Capacity.MaxMemoryBytes / (1 << 20)), SandboxGuestIP: guest.String(), SandboxBridgeName: "sbx0", SandboxBridgeCIDR: bridge.String() + "/" + fmt.Sprint(prefix.Bits()), SandboxGuestCIDR: prefix.String(), SandboxTapPrefix: plan.Network.TAPPrefix, SandboxDeleteBridge: boolean(true), NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: bridge.String(), NetworkPolicyManagementCIDRs: prefix.String(), EgressContexts: []RunnerEgressContext{{Name: contextName, Gateways: contextGateways}}, NetworkPolicyDNSUpstream: netip.AddrPortFrom(dnsUpstream, 53).String(), MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(plan.Capacity.MaxSandboxes), MaxConcurrentStarts: integer(plan.Capacity.ConcurrentStarts), MaxConcurrentWorkspaceCreates: integer(plan.Capacity.ConcurrentStarts), MaxConcurrentOperationsGlobal: integer(plan.Capacity.ConcurrentOperations), FileTransferMaxBytes: integer(1 << 30), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:" + fmt.Sprint(dataPort), DataPlaneAdvertisedAddress: plan.Network.DataPlaneAddress}}
+	manifest.Runners = []Runner{{RunnerID: runnerID, Placement: "same-host", PoolID: standardresources.PoolAMD64, SoftwareVersion: release.Version, ControlPlaneAddress: plan.Network.RunnerAddress, ControlPlaneServerName: "control-plane", IdentityHostDirectory: runnerIdentity, ArtifactHostDirectory: artifacts, StateHostDirectory: runnerStorage, FirecrackerJailerUIDStart: integer(plan.Network.JailerUIDRange.Start), FirecrackerJailerUIDCount: integer(plan.Network.JailerUIDRange.Count), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(plan.Network.JailerUIDRange.Start), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: plan.Network.CgroupParent, FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: plan.Compute.FirecrackerCPUTemplate, StorageRecoveryPercent: integer(storageDeny - 10), StorageWarningPercent: integer(storageDeny - 5), StorageAdmissionDenyPercent: integer(storageDeny), StorageAdmissionMode: "logical", SandboxMaxVCPUs: integer(maxVCPUs), SandboxMaxMemoryMiB: integer(maxMemoryMiB), SandboxMaxDiskMiB: integer(maxDiskMiB), SandboxMemoryBudgetMiB: integer(plan.Capacity.MaxMemoryBytes / (1 << 20)), SandboxGuestIP: guest.String(), SandboxBridgeName: "sbx0", SandboxBridgeCIDR: bridge.String() + "/" + fmt.Sprint(prefix.Bits()), SandboxGuestCIDR: prefix.String(), SandboxTapPrefix: plan.Network.TAPPrefix, SandboxDeleteBridge: boolean(true), NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: bridge.String(), NetworkPolicyManagementCIDRs: prefix.String(), EgressContexts: []RunnerEgressContext{{Name: contextName, Gateways: contextGateways}}, NetworkPolicyDNSUpstream: netip.AddrPortFrom(dnsUpstream, 53).String(), MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(plan.Capacity.MaxSandboxes), MaxConcurrentStarts: integer(plan.Capacity.ConcurrentStarts), MaxConcurrentWorkspaceCreates: integer(plan.Capacity.ConcurrentStarts), MaxConcurrentOperationsGlobal: integer(plan.Capacity.ConcurrentOperations), FileTransferMaxBytes: integer(1 << 30), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:" + fmt.Sprint(dataPort), DataPlaneAdvertisedAddress: plan.Network.DataPlaneAddress}}
 	manifest.Runners[0].ExecutionImageRegistries, _, _ = strings.Cut(release.MicroVM.ImageReference, "/")
-	manifest.Deployment.ExecutionImagePublicKey = filepath.Join(artifacts, "signing.pub")
-	manifest.Deployment.ExecutionImagePublicKeySHA256 = signingKeyID
 	manifest.Runners[0].ExecutionImageRegistryConfigDirectory = filepath.Join(installPath(plan, "secrets"), "image-registry")
-	manifest.Runners[0].ExecutionImagePublicKeySHA256 = signingKeyID
 	manifest.Runners[0].ExecutionImageMaxDownloadBytes = integer(16 << 30)
 	manifest.Runners[0].ExecutionImageMaxExpandedBytes = integer(16 << 30)
 	manifest.Runners[0].ExecutionImageMaxCacheBytes = integer(64 << 30)

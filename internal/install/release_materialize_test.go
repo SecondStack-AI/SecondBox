@@ -97,7 +97,7 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 	oldUmask := syscall.Umask(0o077)
 	defer syscall.Umask(oldUmask)
 	source := t.TempDir()
-	release := writeSignedArtifactFixture(t, source)
+	release := writeBundleArtifactFixture(t, source)
 	secondboxBytes := []byte("secondbox release binary")
 	deployBytes := []byte("secondbox-deploy release binary")
 	for index := range release.Binaries {
@@ -235,7 +235,7 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if completed.Status != OperationRunning || lastStageForTest(completed) != StageAssetsMaterialized || executor.extractions != 1 || artifact.ManifestDigest != release.MicroVM.SignedManifestDigest {
+	if completed.Status != OperationRunning || lastStageForTest(completed) != StageAssetsMaterialized || executor.extractions != 1 || artifact.ManifestDigest != release.MicroVM.ManifestDigest() {
 		t.Fatalf("resumed materialization = status %s stage %s extractions %d artifact %#v", completed.Status, lastStageForTest(completed), executor.extractions, artifact)
 	}
 	if len(executor.pulls) != 10 {
@@ -316,7 +316,7 @@ func releasePlanForMaterializer(release releasecontract.ArtifactManifest, releas
 			binaries[binary.Name] = binary.SHA256
 		}
 	}
-	return ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version, standardresources.ArchitectureAMD64), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), SigningKeyFingerprint: release.MicroVM.SigningKeyFingerprint, Images: map[string]string{"control-plane": release.ControlPlane.Reference, "runner": release.Runner.Reference, "microvm-artifacts": release.MicroVM.ImageReference, "installer-tools": release.InstallerTools.Reference, "postgres": release.BundledServices.Postgres}, BinaryDigests: binaries, ExpectedDownloadBytes: ExecutionBundleEstimateBytes}
+	return ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version, standardresources.ArchitectureAMD64), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), Images: map[string]string{"control-plane": release.ControlPlane.Reference, "runner": release.Runner.Reference, "microvm-artifacts": release.MicroVM.ImageReference, "installer-tools": release.InstallerTools.Reference, "postgres": release.BundledServices.Postgres}, BinaryDigests: binaries, ExpectedDownloadBytes: ExecutionBundleEstimateBytes}
 }
 
 func lastStageForTest(receipt InstallReceipt) Stage {

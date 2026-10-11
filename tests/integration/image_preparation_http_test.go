@@ -1,10 +1,6 @@
 package integration_test
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -41,15 +37,6 @@ func TestPrepareImageHTTPResolvesOnceAndWarmsWithoutSandbox(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			key, err := integrationImagePublisher()
-			if err != nil {
-				t.Fatal(err)
-			}
-			digest := sha256.Sum256(manifest)
-			signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
-			if err != nil {
-				t.Fatal(err)
-			}
 			// The only eligible Runner resolves the reference, and that one fetch
 			// is its preparation: it must not receive a second digest command.
 			var payload []byte
@@ -65,7 +52,7 @@ func TestPrepareImageHTTPResolvesOnceAndWarmsWithoutSandbox(t *testing.T) {
 				t.Fatalf("preparation command: %v", command)
 			}
 			sequence := fixture.nextSequence()
-			fixture.recordEvent(t, runnercontrol.EventImagePreparation, &runnerv1.RunnerToControlPlane{Message: &runnerv1.RunnerToControlPlane_PrepareImageResult{PrepareImageResult: &runnerv1.PrepareImageResult{MessageId: fmt.Sprintf("prepare-result-%d", sequence), Sequence: sequence, OperationId: command.OperationId, ResolvedDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Manifest: manifest, Signature: signature}}})
+			fixture.recordEvent(t, runnercontrol.EventImagePreparation, &runnerv1.RunnerToControlPlane{Message: &runnerv1.RunnerToControlPlane_PrepareImageResult{PrepareImageResult: &runnerv1.PrepareImageResult{MessageId: fmt.Sprintf("prepare-result-%d", sequence), Sequence: sequence, OperationId: command.OperationId, ResolvedDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Manifest: manifest}}})
 			if _, err := fixture.reconciler.PrepareImages(t.Context(), time.Now().UTC()); err != nil {
 				t.Fatal(err)
 			}
@@ -98,9 +85,8 @@ func TestPrepareImageHTTPResolvesOnceAndWarmsWithoutSandbox(t *testing.T) {
 // preparationFixture drives one images:prepare Operation across several eligible
 // Runners through the public API and the Runner reporting path.
 type preparationFixture struct {
-	fixture   *teardownFixture
-	manifest  []byte
-	signature []byte
+	fixture  *teardownFixture
+	manifest []byte
 }
 
 func newPreparationFixture(t *testing.T) *preparationFixture {
@@ -114,16 +100,7 @@ func newPreparationFixture(t *testing.T) *preparationFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := integrationImagePublisher()
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(manifest)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &preparationFixture{fixture: fixture, manifest: manifest, signature: signature}
+	return &preparationFixture{fixture: fixture, manifest: manifest}
 }
 
 // effectRunner reports which Runner holds one preparation effect, so the test
@@ -170,7 +147,6 @@ func (preparation *preparationFixture) report(t *testing.T, runnerID, connection
 	if failure == "" {
 		result.ResolvedDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 		result.Manifest = preparation.manifest
-		result.Signature = preparation.signature
 	} else {
 		result.Failure = failure
 	}

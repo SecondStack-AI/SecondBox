@@ -38,7 +38,7 @@ type snapshotTemplatePublishReport struct {
 // Everything about the template it publishes follows from the Runner's own
 // environment. It loads the Runner's configuration through the same
 // LoadRunnerFirecrackerConfigFromEnv the Runner uses, so the kernel arguments,
-// CPU template, vsock ports, signed bundle, and trust anchor cannot disagree
+// CPU template, vsock ports, and bundle cannot disagree
 // with it, and it derives the compatibility key through the same production
 // function the resume start path uses. The only values it takes separately are
 // the Profile shape the template is for, because that is the operator's choice
@@ -92,11 +92,11 @@ func TestSmokePublishSnapshotResumeTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the Runner's snapshot template cache: %v", err)
 	}
-	manifest, err := loadSignedArtifactManifest(
+	manifest, err := loadBundleArtifactManifest(
 		filepath.Join(filepath.Dir(cfg.MicroVMKernelPath), "manifest.json"),
 	)
 	if err != nil {
-		t.Fatalf("read the Runner's signed bundle manifest: %v", err)
+		t.Fatalf("read the Runner's bundle manifest: %v", err)
 	}
 
 	buildStartedAt := time.Now()
@@ -160,12 +160,12 @@ func TestSmokePublishSnapshotResumeTemplate(t *testing.T) {
 
 // productionTemplateStartOpts restates the launch options exactly as
 // AssignmentBackend.StartAssignment produces them for a Profile of this shape.
-// The signed identity comes from the Runner's own verified manifest, which is
-// what matchSignedAssignmentComponent proves every assignment against, so a
+// The bundle identity comes from the Runner's own verified manifest, which is
+// what matchAssignmentComponent proves every assignment against, so a
 // template built here is keyed to the assignments this Runner will accept.
 func productionTemplateStartOpts(
 	opts runtimemanager.StartOpts,
-	manifest signedArtifactManifest,
+	manifest bundleArtifactManifest,
 	cfg *config.Config,
 ) runtimemanager.StartOpts {
 	opts.GuestBuildID = manifest.ArtifactVersion

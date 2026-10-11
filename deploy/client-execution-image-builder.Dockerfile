@@ -6,7 +6,6 @@ RUN apt-get update \
       e2fsprogs \
       fakeroot \
       jq \
-      openssl \
       python3 \
     && rm -rf /var/lib/apt/lists/*
 

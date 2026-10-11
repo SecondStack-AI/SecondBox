@@ -24,7 +24,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
@@ -282,7 +282,7 @@ func New(cfg *config.Config) (*Manager, error) {
 	}
 	trustedArtifacts, err := verifyAndCaptureTrustedMicroVMArtifacts(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("verify microVM trust anchor: %w", err)
+		return nil, fmt.Errorf("verify microVM bundle: %w", err)
 	}
 	executionImages, err := executionimage.NewManager(cfg)
 	if err != nil {

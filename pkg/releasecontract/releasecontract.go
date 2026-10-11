@@ -19,10 +19,13 @@ import (
 )
 
 const (
-	ArtifactManifestSchema = "secondbox.release/artifact-manifest/v6"
-	// LegacyArtifactManifestSchema is accepted for recorded releases that
-	// predate the gVisor artifact section; a newer updater still
+	ArtifactManifestSchema = "secondbox.release/artifact-manifest/v7"
+	// SignedArtifactManifestSchema is accepted for recorded releases that
+	// still carried a microVM signing key fingerprint; a newer updater still
 	// authenticates them.
+	SignedArtifactManifestSchema = "secondbox.release/artifact-manifest/v6"
+	// LegacyArtifactManifestSchema is accepted for recorded releases that
+	// predate the gVisor artifact section and also carried the signing key.
 	LegacyArtifactManifestSchema               = "secondbox.release/artifact-manifest/v5"
 	QualificationEvidenceSchema                = "secondbox.release/qualification-evidence/v2"
 	LegacyQualificationEvidenceSchema          = "secondbox.release/qualification-evidence/v1"
@@ -45,7 +48,6 @@ var (
 	digestPattern   = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	checksumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	platformPattern = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9][a-z0-9._-]*$`)
-	keyPattern      = regexp.MustCompile(`^SHA256:[0-9A-F]{64}$`)
 	numericPattern  = regexp.MustCompile(`^[0-9]+$`)
 )
 
@@ -158,21 +160,34 @@ type StandardBundleArtifact struct {
 	Profiles []StandardProfileIdentity `json:"profiles"`
 }
 
-// SignedComponent is one independently selected component bound by the signed
-// top-level microVM manifest.
-type SignedComponent struct {
+// BundleComponent is one independently selected component bound by the
+// top-level microVM bundle manifest.
+type BundleComponent struct {
 	ArtifactID             string   `json:"artifactId"`
 	ManifestDigest         string   `json:"manifestDigest"`
 	MandatoryGuestFeatures []string `json:"mandatoryGuestFeatures"`
 }
 
 type MicroVMArtifact struct {
-	Identity              Identity        `json:"identity"`
-	ImageReference        string          `json:"imageReference"`
-	SignedManifestDigest  string          `json:"signedManifestDigest"`
-	SigningKeyFingerprint string          `json:"signingKeyFingerprint"`
-	RuntimeBundle         SignedComponent `json:"runtimeBundle"`
-	ToolchainBundle       SignedComponent `json:"toolchainBundle"`
+	Identity             Identity `json:"identity"`
+	ImageReference       string   `json:"imageReference"`
+	BundleManifestDigest string   `json:"bundleManifestDigest,omitempty"`
+	// Recorded v5 and v6 manifests name the bundle manifest digest
+	// signedManifestDigest and carry the retired signing key fingerprint. The
+	// field order keeps their re-encoding byte-identical to the recorded shape,
+	// which installer qualification evidence digests.
+	LegacySignedManifestDigest  string          `json:"signedManifestDigest,omitempty"`
+	LegacySigningKeyFingerprint string          `json:"signingKeyFingerprint,omitempty"`
+	RuntimeBundle               BundleComponent `json:"runtimeBundle"`
+	ToolchainBundle             BundleComponent `json:"toolchainBundle"`
+}
+
+// ManifestDigest returns the bundle manifest digest under either recorded name.
+func (artifact MicroVMArtifact) ManifestDigest() string {
+	if artifact.LegacySignedManifestDigest != "" {
+		return artifact.LegacySignedManifestDigest
+	}
+	return artifact.BundleManifestDigest
 }
 
 // GVisorArtifact names the gVisor backend distribution: the runner image and
@@ -701,8 +716,8 @@ func (manifest ArtifactManifest) InstallerQualificationSubjectDigest() (string, 
 }
 
 func (manifest ArtifactManifest) Validate() error {
-	if manifest.SchemaVersion != ArtifactManifestSchema && manifest.SchemaVersion != LegacyArtifactManifestSchema {
-		return contractError("artifact manifest schemaVersion must be %q or legacy %q", ArtifactManifestSchema, LegacyArtifactManifestSchema)
+	if manifest.SchemaVersion != ArtifactManifestSchema && manifest.SchemaVersion != SignedArtifactManifestSchema && manifest.SchemaVersion != LegacyArtifactManifestSchema {
+		return contractError("artifact manifest schemaVersion must be %q or recorded %q or %q", ArtifactManifestSchema, SignedArtifactManifestSchema, LegacyArtifactManifestSchema)
 	}
 	if manifest.SchemaVersion == LegacyArtifactManifestSchema {
 		// The legacy schema is only what pre-gVisor releases recorded; a
@@ -719,7 +734,7 @@ func (manifest ArtifactManifest) Validate() error {
 		return err
 	}
 	// gVisor ships for amd64 guests only; an arm64 release cannot carry it.
-	if manifest.SchemaVersion == ArtifactManifestSchema && guestArchitecture == "amd64" && manifest.GVisor == nil {
+	if manifest.SchemaVersion != LegacyArtifactManifestSchema && guestArchitecture == "amd64" && manifest.GVisor == nil {
 		return contractError("artifact manifest requires the gVisor artifact")
 	}
 	if guestArchitecture != "amd64" && manifest.GVisor != nil {
@@ -790,25 +805,30 @@ func (manifest ArtifactManifest) Validate() error {
 	if err := validateOCIReference(MicroVMImage, manifest.MicroVM.ImageReference); err != nil {
 		return err
 	}
-	if !digestPattern.MatchString(manifest.MicroVM.SignedManifestDigest) {
-		return contractError("microVM signed manifest digest must be canonical sha256")
+	recorded := manifest.MicroVM.LegacySignedManifestDigest != "" && manifest.MicroVM.LegacySigningKeyFingerprint != "" && manifest.MicroVM.BundleManifestDigest == ""
+	current := manifest.MicroVM.LegacySignedManifestDigest == "" && manifest.MicroVM.LegacySigningKeyFingerprint == ""
+	if manifest.SchemaVersion == ArtifactManifestSchema && !current {
+		return contractError("artifact manifest %s carries retired microVM signing fields", manifest.SchemaVersion)
 	}
-	if !keyPattern.MatchString(manifest.MicroVM.SigningKeyFingerprint) {
-		return contractError("microVM signing key fingerprint must be SHA256 followed by 64 uppercase hexadecimal characters")
+	if manifest.SchemaVersion != ArtifactManifestSchema && !recorded {
+		return contractError("artifact manifest %s lacks its recorded microVM signing fields", manifest.SchemaVersion)
 	}
-	if err := validateSignedComponent("microVM runtime bundle", manifest.MicroVM.RuntimeBundle); err != nil {
+	if !digestPattern.MatchString(manifest.MicroVM.ManifestDigest()) {
+		return contractError("microVM bundle manifest digest must be canonical sha256")
+	}
+	if err := validateBundleComponent("microVM runtime bundle", manifest.MicroVM.RuntimeBundle); err != nil {
 		return err
 	}
-	if err := validateSignedComponent("microVM toolchain bundle", manifest.MicroVM.ToolchainBundle); err != nil {
+	if err := validateBundleComponent("microVM toolchain bundle", manifest.MicroVM.ToolchainBundle); err != nil {
 		return err
 	}
 	if manifest.MicroVM.RuntimeBundle.ArtifactID == manifest.MicroVM.ToolchainBundle.ArtifactID ||
 		manifest.MicroVM.RuntimeBundle.ManifestDigest == manifest.MicroVM.ToolchainBundle.ManifestDigest {
 		return contractError("microVM runtime and toolchain components must have distinct identities")
 	}
-	if manifest.MicroVM.SignedManifestDigest == manifest.MicroVM.RuntimeBundle.ManifestDigest ||
-		manifest.MicroVM.SignedManifestDigest == manifest.MicroVM.ToolchainBundle.ManifestDigest {
-		return contractError("microVM signed manifest and component digests must be distinct")
+	if manifest.MicroVM.ManifestDigest() == manifest.MicroVM.RuntimeBundle.ManifestDigest ||
+		manifest.MicroVM.ManifestDigest() == manifest.MicroVM.ToolchainBundle.ManifestDigest {
+		return contractError("microVM bundle manifest and component digests must be distinct")
 	}
 	if manifest.GVisor != nil {
 		if manifest.GVisor.Identity != manifest.Identity {
@@ -903,7 +923,7 @@ func (manifest ArtifactManifest) Validate() error {
 	return nil
 }
 
-func validateSignedComponent(name string, component SignedComponent) error {
+func validateBundleComponent(name string, component BundleComponent) error {
 	if strings.TrimSpace(component.ArtifactID) == "" {
 		return contractError("%s artifact ID is required", name)
 	}

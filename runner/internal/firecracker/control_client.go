@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/sandboxlimits"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/toolexecutor"
 )

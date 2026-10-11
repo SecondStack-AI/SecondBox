@@ -196,8 +196,8 @@ build-microvm-images-std:
 build-microvm-kernel:
     scripts/microvm-image/build-kernel.sh tmp/microvm-kernel
 
-verify-microvm-images artifact_dir public_key public_key_sha256:
-    scripts/microvm-image/verify.sh {{ artifact_dir }} {{ public_key }} {{ public_key_sha256 }}
+verify-microvm-images artifact_dir:
+    scripts/microvm-image/verify.sh {{ artifact_dir }}
 
 verify-microvm-staging *ARGS:
     scripts/microvm-stage-check.sh {{ ARGS }}
@@ -243,7 +243,6 @@ net-uninstall:
 test:
     scripts/ci_paths_test.sh
     scripts/microvm-image/browser-surface-policy-test.sh
-    scripts/microvm-image/trust-anchor-policy-test.sh
     go test ./... -count=1
     go vet ./...
 

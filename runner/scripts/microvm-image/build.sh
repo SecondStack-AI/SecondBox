@@ -17,9 +17,6 @@ Environment:
   SECONDBOX_RUNNER_MICROVM_ARTIFACT_VERSION  Required immutable artifact version.
   SECONDBOX_RUNNER_MICROVM_OUT_DIR           Required output directory.
   SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR Prepared guest rootfs directory to copy.
-  SECONDBOX_RUNNER_MICROVM_SIGNING_KEY       Required OpenSSL private key path for manifest signing.
-  SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY        Required independently provisioned verification key.
-  SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY_SHA256 Required trusted public key DER SHA-256.
   SECONDBOX_RUNNER_MICROVM_ROOTFS_SIZE_MIB   Required rootfs image size.
   SECONDBOX_RUNNER_MICROVM_SHARED_SIZE_MIB   Required ext4 shared-image size.
   SECONDBOX_RUNNER_MICROVM_SHARED_FORMAT     Required: auto|erofs|squashfs|ext4.
@@ -36,9 +33,6 @@ for required_name in \
     SECONDBOX_RUNNER_MICROVM_ARTIFACT_VERSION \
     SECONDBOX_RUNNER_MICROVM_OUT_DIR \
     SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR \
-    SECONDBOX_RUNNER_MICROVM_SIGNING_KEY \
-    SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY \
-    SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY_SHA256 \
     SECONDBOX_RUNNER_MICROVM_ROOTFS_SIZE_MIB \
     SECONDBOX_RUNNER_MICROVM_SHARED_SIZE_MIB \
     SECONDBOX_RUNNER_MICROVM_SHARED_FORMAT \
@@ -65,9 +59,6 @@ out_dir="$SECONDBOX_RUNNER_MICROVM_OUT_DIR"
 rootfs_source_dir="$SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR"
 kernel_path="$SECONDBOX_RUNNER_MICROVM_KERNEL_PATH"
 kernel_config="$SECONDBOX_RUNNER_MICROVM_KERNEL_CONFIG"
-signing_key="$SECONDBOX_RUNNER_MICROVM_SIGNING_KEY"
-trusted_public_key="$SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY"
-trusted_public_key_sha="$SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY_SHA256"
 rootfs_size_mib="$SECONDBOX_RUNNER_MICROVM_ROOTFS_SIZE_MIB"
 shared_size_mib="$SECONDBOX_RUNNER_MICROVM_SHARED_SIZE_MIB"
 shared_format="$SECONDBOX_RUNNER_MICROVM_SHARED_FORMAT"
@@ -126,20 +117,8 @@ if [ "$oci_mode" = "prepared" ]; then
 else
     rootfs_surface_contract="standard-tools"
 fi
-if [ -z "$signing_key" ] || [ ! -f "$signing_key" ]; then
-    echo "SECONDBOX_RUNNER_MICROVM_SIGNING_KEY must point to an existing private key" >&2
-    exit 2
-fi
-if [ -z "$trusted_public_key" ] || [ ! -f "$trusted_public_key" ]; then
-    echo "SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY must point to an independently provisioned public key" >&2
-    exit 2
-fi
-if ! [[ "$trusted_public_key_sha" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "SECONDBOX_RUNNER_MICROVM_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters" >&2
-    exit 2
-fi
 
-for cmd in blkid debugfs go sha256sum openssl mkfs.ext4 tar; do
+for cmd in blkid debugfs go sha256sum mkfs.ext4 tar; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 2; }
 done
 
@@ -377,12 +356,7 @@ cat > "$out_dir/manifest.json" <<EOF
 }
 EOF
 
-openssl pkey -in "$signing_key" -pubout -out "$out_dir/signing.pub" >/dev/null 2>&1
-openssl dgst -sha256 -sign "$signing_key" -out "$out_dir/manifest.sig" "$out_dir/manifest.json"
-chmod 0644 "$out_dir/signing.pub" "$out_dir/manifest.sig"
-openssl dgst -sha256 -verify "$out_dir/signing.pub" -signature "$out_dir/manifest.sig" "$out_dir/manifest.json" >/dev/null
-
-"$script_dir/verify.sh" "$out_dir" "$trusted_public_key" "$trusted_public_key_sha"
+"$script_dir/verify.sh" "$out_dir"
 out_dir_abs="$(cd "$out_dir" && pwd)"
 mkdir -p "$runner_root/releases/microvm"
 ln -sfn "$out_dir_abs" "$runner_root/releases/microvm/latest"

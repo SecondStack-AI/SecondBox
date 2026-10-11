@@ -1723,7 +1723,7 @@ func findAssignmentResult(messages []*runnerprotocol.RunnerToControlPlane) *runn
 
 // TestResolvedAssignmentNamesAssetsOnlyForSelectedImages pins the upgrade
 // property: a default-image assignment boots this Runner's installed bundle and
-// names no assets, while a client-selected image names its signed components.
+// names no assets, while a client-selected image names its bundle components.
 func TestResolvedAssignmentNamesAssetsOnlyForSelectedImages(t *testing.T) {
 	asset := &runnerprotocol.AssetReference{
 		ArtifactId: "selected-runtime", Architecture: "amd64", GuestProtocolGeneration: 1,
