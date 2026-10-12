@@ -171,7 +171,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *testing.T) {
 	plan := install.InstallPlan{OperationID: "install_0123456789abcdef"}
 	ready := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, SupportedEgressContexts: []string{"secondbox-0123456789abcdef"}, Capacity: map[string]int64{"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
-	if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); !ok || evidence["runnerId"] != ready.ID || evidence["runnerPool"] != standardresources.PoolAMD64 || evidence["coldBootCapacity"] != "advertised" || evidence["concurrentOperationCapacity"] != "16" {
+	if evidence, ok, err := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); err != nil || !ok || evidence["runnerId"] != ready.ID || evidence["runnerPool"] != standardresources.PoolAMD64 || evidence["coldBootCapacity"] != "advertised" || evidence["concurrentOperationCapacity"] != "16" {
 		t.Fatalf("exact readiness evidence = %#v, %t", evidence, ok)
 	}
 	for _, mutate := range []func(*contracts.Runner){
@@ -188,7 +188,7 @@ func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *t
 		candidate.Capabilities = slices.Clone(ready.Capabilities)
 		candidate.Capacity = maps.Clone(ready.Capacity)
 		mutate(&candidate)
-		if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{candidate}); ok {
+		if evidence, ok, err := installedRunnerReadinessEvidence(plan, []contracts.Runner{candidate}); err != nil || ok {
 			t.Fatalf("insufficient Runner accepted: %#v %#v", candidate, evidence)
 		}
 	}
@@ -807,5 +807,16 @@ func TestInstallResumeFailureInjectionStopsAtEveryOrchestrationBoundary(t *testi
 				t.Fatalf("failure receipt = status %s stage %s", failed.Status, failed.FailureStage)
 			}
 		})
+	}
+}
+
+func TestInstalledRunnerReadinessFollowsPlanSandboxProfile(t *testing.T) {
+	runner := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, SupportedEgressContexts: []string{"secondbox-0123456789abcdef"}, Capacity: map[string]int64{"VCPUCount": 1, "MemoryBytes": 1 << 30, "DiskBytes": 2 << 30, "Instances": 1, "Operations": 4}}
+	small := install.InstallPlan{OperationID: "install_0123456789abcdef", SizedSandboxProfile: standardresources.AgentCompartment}
+	if evidence, ok, err := installedRunnerReadinessEvidence(small, []contracts.Runner{runner}); err != nil || !ok || evidence["concurrentOperationCapacity"] != "4" {
+		t.Fatalf("agent-compartment readiness = %#v, %t, %v", evidence, ok, err)
+	}
+	if _, ok, err := installedRunnerReadinessEvidence(install.InstallPlan{OperationID: small.OperationID}, []contracts.Runner{runner}); err != nil || ok {
+		t.Fatalf("default plan accepted agent-compartment capacity: %t, %v", ok, err)
 	}
 }

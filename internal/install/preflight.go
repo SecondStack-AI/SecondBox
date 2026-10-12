@@ -60,6 +60,8 @@ type PreflightProbes struct {
 	// loop devices, nftables, and iproute2 for its host attachment and
 	// routed-veth policy path.
 	Backend string
+	// Capacity sizes the CPU and memory findings; see CapacityOverrides.
+	Capacity CapacityOverrides
 }
 
 type systemFilesystemProbe struct{}
@@ -180,6 +182,10 @@ func Preflight(ctx context.Context, probes PreflightProbes) (HostFacts, error) {
 	if probes.Filesystem == nil || probes.Process == nil || probes.Network == nil || probes.Now == nil || probes.Users == nil || probes.LookupEnv == nil {
 		return HostFacts{}, installerError("preflight requires filesystem, process, network, clock, and user probes", nil)
 	}
+	sizing, err := probes.Capacity.resolve()
+	if err != nil {
+		return HostFacts{}, err
+	}
 	facts := HostFacts{SchemaVersion: HostFactsSchema, ObservedAt: probes.Now().UTC(), OS: probes.OS, Architecture: probes.Architecture, InvokingUID: probes.InvokingUID, InvokingGID: probes.InvokingGID, CPUCount: probes.CPUCount, Devices: []DeviceFact{}, ListeningPorts: []PortFact{}, Routes: []RouteFact{}, DockerNetworkSubnets: []string{}, DNSUpstreams: []string{}, AssignedUIDs: []int64{}, ReservedIDRanges: []UIDRange{}, CandidateUIDRanges: []UIDRange{}, Utilities: map[string]string{}, Findings: []Finding{}}
 	add := func(id string, class FindingClass, summary, detail, remedy string) {
 		facts.Findings = append(facts.Findings, Finding{ID: id, Class: class, Summary: summary, Detail: detail, Remedy: remedy})
@@ -211,7 +217,7 @@ func Preflight(ctx context.Context, probes PreflightProbes) (HostFacts, error) {
 	}
 	preflightCgroup(probes, &facts, add)
 	preflightDevices(probes, &facts, add)
-	preflightCPUAndMemory(probes, &facts, add)
+	preflightCPUAndMemory(probes, sizing, &facts, add)
 	preflightMounts(probes, &facts, add)
 	preflightNetwork(ctx, probes, &facts, add)
 	if probes.Backend != "gvisor" {
@@ -408,7 +414,7 @@ func preflightDevices(p PreflightProbes, f *HostFacts, add func(string, FindingC
 		add("btrfs", FindingWarning, "Btrfs kernel support was not observed", errorText(err), "Use a qualified kernel or an existing dedicated XFS workspace.")
 	}
 }
-func preflightCPUAndMemory(p PreflightProbes, f *HostFacts, add func(string, FindingClass, string, string, string)) {
+func preflightCPUAndMemory(p PreflightProbes, sizing capacitySizing, f *HostFacts, add func(string, FindingClass, string, string, string)) {
 	cpu, err := p.Filesystem.ReadFile("/proc/cpuinfo")
 	text := string(cpu)
 	if err == nil && (strings.Contains(text, " vmx ") || strings.Contains(text, " svm ") || strings.Contains(text, "\nflags") && (strings.Contains(text, "vmx") || strings.Contains(text, "svm"))) {
@@ -433,13 +439,13 @@ func preflightCPUAndMemory(p PreflightProbes, f *HostFacts, add func(string, Fin
 			}
 		}
 	}
-	if f.MemoryBytes < MinimumHostMemoryBytes {
-		add("memory", FindingNeedsAction, "Host memory is below 12 GiB", strconv.FormatInt(f.MemoryBytes, 10)+" bytes", "Use a host with enough memory for control services and the durable-coding microVM.")
+	if f.MemoryBytes < sizing.minimumHostMemoryBytes() {
+		add("memory", FindingNeedsAction, "Host memory is below "+formatMemoryBytes(sizing.minimumHostMemoryBytes()), strconv.FormatInt(f.MemoryBytes, 10)+" bytes", "Use a host with enough memory for control services and the "+sizing.profile+" microVM.")
 	} else {
 		add("memory", FindingPass, "Host memory is sufficient", strconv.FormatInt(f.MemoryBytes, 10)+" bytes", "")
 	}
-	if f.CPUCount < MinimumHostCPUCount {
-		add("cpu", FindingNeedsAction, "Fewer than six logical CPUs detected", strconv.Itoa(f.CPUCount), "Use a host with capacity for control services and the durable-coding microVM.")
+	if int64(f.CPUCount) < sizing.minimumHostCPUCount() {
+		add("cpu", FindingNeedsAction, "Fewer than "+strconv.FormatInt(sizing.minimumHostCPUCount(), 10)+" logical CPUs detected", strconv.Itoa(f.CPUCount), "Use a host with capacity for control services and the "+sizing.profile+" microVM.")
 	} else {
 		add("cpu", FindingPass, "CPU capacity observed", strconv.Itoa(f.CPUCount)+" logical CPUs", "")
 	}

@@ -183,6 +183,11 @@ func (plan InstallPlan) Validate() error {
 	if plan.SchemaVersion != PlanSchema {
 		return installerError("plan schema is unsupported", nil)
 	}
+	if plan.SizedSandboxProfile != "" {
+		if _, err := SandboxProfileResources(plan.SizedSandboxProfile); err != nil || plan.SizedSandboxProfile == DefaultSandboxProfile {
+			return installerError("plan sandbox Profile must be a non-default standard Profile when recorded", err)
+		}
+	}
 	if !operationPattern.MatchString(plan.OperationID) {
 		return installerError("operation ID is invalid", nil)
 	}

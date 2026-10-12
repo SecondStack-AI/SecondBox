@@ -24,7 +24,7 @@ func unattendedTenancy(arguments []string) (bool, error) {
 	return *tenancy == "yes", nil
 }
 
-func runUnattendedInstall(ctx context.Context, arguments []string, renderer cliui.Renderer) error {
+func runUnattendedInstall(ctx context.Context, arguments []string, renderer cliui.Renderer, capacity install.CapacityOverrides) error {
 	tenancy, err := unattendedTenancy(arguments)
 	if err != nil {
 		return err
@@ -32,6 +32,7 @@ func runUnattendedInstall(ctx context.Context, arguments []string, renderer cliu
 	guide := func(ctx context.Context, renderer cliui.Renderer, facts install.HostFacts, advanced bool) error {
 		dependencies := systemGuidedInstallDependencies()
 		dependencies.Unattended = true
+		dependencies.Capacity = capacity
 		dependencies.RunForm = func(_ context.Context, form cliui.Form, _ cliui.FormHandles) error {
 			return acceptUnattendedInstallForm(form, tenancy)
 		}
@@ -41,7 +42,9 @@ func runUnattendedInstall(ctx context.Context, arguments []string, renderer cliu
 		return runGuidedInstallWith(ctx, renderer, facts, advanced, dependencies)
 	}
 	return runInstallPreflightWithGuide(ctx, nil, renderer, func(ctx context.Context) (install.HostFacts, error) {
-		return install.Preflight(ctx, install.SystemPreflightProbes())
+		probes := install.SystemPreflightProbes()
+		probes.Capacity = capacity
+		return install.Preflight(ctx, probes)
 	}, guide)
 }
 
