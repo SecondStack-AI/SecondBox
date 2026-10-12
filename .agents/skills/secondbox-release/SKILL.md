@@ -14,8 +14,9 @@ it. Prepare a reviewable result before requesting any missing authorization.
 ## Invariants
 
 - A release is cut only by pushing a `vX.Y.Z` tag on a merged commit of
-  `origin/main`; `release-tag.yml` qualifies and stages it on the self-hosted
-  release runners and dispatches the hosted publisher. Never tag a PR branch,
+  `origin/main`; `release-tag.yml` builds the shared files once on a hosted
+  runner, qualifies and stages both artifact sets in parallel on the
+  self-hosted release runners, and dispatches the hosted publisher. Never tag a PR branch,
   run `release-upload` by hand, or construct a release from separate
   `release-stage` and upload commands.
 - Push the tag only after the notes and the changelog cut are on `main`,
@@ -45,8 +46,10 @@ it. Prepare a reviewable result before requesting any missing authorization.
 3. Check both release runners are online and idle (`gh api
    repos/SecondStack-AI/SecondBox/actions/runners` needs admin; otherwise
    check a recent run or the hosts). For a changed release input (bundle,
-   installer image, Postgres pin), update each runner's `release.env` first and
-   compare its **key names** with the matching example without printing secrets.
+   installer image), update each runner's `release.env` first and compare its
+   **key names** with the matching example without printing secrets. The
+   bundled Postgres pin lives in `scripts/release-build-shared.sh` and changes
+   through a reviewed PR.
 4. Prepare branch `release/vX.Y.Z`, PR title `docs(release): prepare vX.Y.Z`:
    cut `## Unreleased` to `## X.Y.Z - DATE` and leave a fresh Unreleased section;
    write `docs/releases/vX.Y.Z.md` using v0.14.0 as the structure (deployment
@@ -60,7 +63,8 @@ it. Prepare a reviewable result before requesting any missing authorization.
    `release-tag.yml` run ID in the worklog. Watch it with `gh run watch RUN
    --exit-status`, checking no more often than every five minutes.
 6. On failure, read the failed job log and the stage logs kept on that runner
-   under `RELEASE_OUTPUT_ROOT/logs/`; use the table below. A flake or host
+   under `RELEASE_OUTPUT_ROOT/logs/`; use the table below. A `build-shared`
+   failure has only its hosted job log. A flake or host
    problem is recovered with **Re-run failed jobs**: each job replaces this
    version's earlier outputs on its host. A code change lands on main first and
    invalidates all commit-bound evidence; it ships as the next patch version.

@@ -1,9 +1,11 @@
 name: SecondBox release from tag
 
-# A pushed v* tag on main qualifies and stages the release on the self-hosted
-# release runners, uploads both artifact sets to a draft, and dispatches the
-# hosted publisher (release.yml). A vX.Y.Z-dryrun.N tag stages on both runners
-# and uploads nothing. See docs/operations/release-operator-setup.md.
+# A pushed v* tag on main builds the architecture-neutral release files once on
+# a hosted runner, then qualifies and stages the amd64 and arm64 artifact sets in
+# parallel on the self-hosted release runners from those files. When both sets
+# are staged, it uploads the arm64 set and then the amd64 set, which dispatches
+# the hosted publisher (release.yml). A vX.Y.Z-dryrun.N tag builds and stages
+# everything and uploads nothing. See docs/operations/release-operator-setup.md.
 on:
   push:
     tags: ['v[0-9]*']
@@ -20,59 +22,48 @@ env:
   RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
-  stage-amd64:
+  build-shared:
     if: github.repository == 'SecondStack-AI/SecondBox'
-    runs-on: [self-hosted, Linux, X64, secondbox-release-amd64]
-    timeout-minutes: 300
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
-      version: ${{ steps.paths.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.18.0
       - run: npm ci --ignore-scripts
-      - id: paths
-        name: Replace an earlier attempt of this version
+      - id: version
+        name: Validate the tag
         run: |
           version="${VERSION_TAG#v}"
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo "tag $VERSION_TAG is not vSEMVER" >&2; exit 1; }
-          root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
-          rm -rf -- "$root/$version" "$root/$version-build" "$root/$version-candidate"
           echo "version=$version" >>"$GITHUB_OUTPUT"
-          {
-            echo "RELEASE_VERSION=$version"
-            echo "RELEASE_OUTPUT=$root/$version"
-            echo "RELEASE_LOGS=$root/logs/$version-$RUN_KEY"
-          } >>"$GITHUB_ENV"
-      - run: /usr/bin/just release "$RELEASE_VERSION"
-      - name: Keep run logs on the host
-        if: always() && env.RELEASE_LOGS != ''
-        run: |
-          mkdir -p "$RELEASE_LOGS"
-          for logs in .tmp/release .tmp/qualify; do [[ ! -d "$logs" ]] || cp -a "$logs" "$RELEASE_LOGS/"; done
-      - name: Pack the architecture-neutral files for the arm64 runner
+          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
+      - run: scripts/release-build-shared.sh "$RELEASE_VERSION" "$RUNNER_TEMP/shared-$RELEASE_VERSION"
+      - name: Pack the shared files for the staging runners
         # A tar keeps the binaries' executable modes, which workflow artifacts drop.
-        run: tar -C "$RELEASE_OUTPUT" --exclude='*.oci.tar' -cf "$RUNNER_TEMP/amd64-shared.tar" .
+        run: tar -C "$RUNNER_TEMP/shared-$RELEASE_VERSION" -cf "$RUNNER_TEMP/shared.tar" .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: amd64-shared-${{ github.run_id }}
-          path: ${{ runner.temp }}/amd64-shared.tar
+          name: shared-${{ github.run_id }}
+          path: ${{ runner.temp }}/shared.tar
           if-no-files-found: error
           retention-days: 7
 
-  stage-arm64:
-    needs: stage-amd64
-    runs-on: [self-hosted, Linux, ARM64, secondbox-release-arm64]
-    timeout-minutes: 240
-    permissions:
-      contents: write
-      actions: read
+  stage-amd64:
+    needs: build-shared
+    runs-on: [self-hosted, Linux, X64, secondbox-release-amd64]
+    timeout-minutes: 300
     env:
-      GH_TOKEN: ${{ github.token }}
-      RELEASE_VERSION: ${{ needs.stage-amd64.outputs.version }}
+      RELEASE_VERSION: ${{ needs.build-shared.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -84,30 +75,85 @@ jobs:
       - name: Replace an earlier attempt of this version
         run: |
           root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
-          rm -rf -- "$root/$RELEASE_VERSION-arm64" "$RUNNER_TEMP/amd64-shared" "$RUNNER_TEMP/amd64-$RELEASE_VERSION"
+          rm -rf -- "$root/$RELEASE_VERSION" "$root/$RELEASE_VERSION-build" "$root/$RELEASE_VERSION-candidate" "$RUNNER_TEMP/shared-download" "$RUNNER_TEMP/shared-$RELEASE_VERSION"
           {
-            echo "RELEASE_OUTPUT=$root/$RELEASE_VERSION-arm64"
-            echo "RELEASE_SHARED=$RUNNER_TEMP/amd64-$RELEASE_VERSION"
+            echo "RELEASE_SHARED=$RUNNER_TEMP/shared-$RELEASE_VERSION"
+            echo "RELEASE_LOGS=$root/logs/$RELEASE_VERSION-$RUN_KEY"
+          } >>"$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: shared-${{ github.run_id }}
+          path: ${{ runner.temp }}/shared-download
+      - run: |
+          mkdir "$RELEASE_SHARED"
+          tar -C "$RELEASE_SHARED" -xpf "$RUNNER_TEMP/shared-download/shared.tar"
+      - run: /usr/bin/just release "$RELEASE_VERSION" "$RELEASE_SHARED"
+      - name: Keep run logs on the host
+        if: always() && env.RELEASE_LOGS != ''
+        run: |
+          mkdir -p "$RELEASE_LOGS"
+          for logs in .tmp/release .tmp/qualify; do [[ ! -d "$logs" ]] || cp -a "$logs" "$RELEASE_LOGS/"; done
+
+  stage-arm64:
+    needs: build-shared
+    runs-on: [self-hosted, Linux, ARM64, secondbox-release-arm64]
+    timeout-minutes: 240
+    env:
+      RELEASE_VERSION: ${{ needs.build-shared.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts
+      - name: Replace an earlier attempt of this version
+        run: |
+          root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
+          rm -rf -- "$root/$RELEASE_VERSION-arm64" "$RUNNER_TEMP/shared-download" "$RUNNER_TEMP/shared-$RELEASE_VERSION"
+          {
+            echo "RELEASE_SHARED=$RUNNER_TEMP/shared-$RELEASE_VERSION"
             echo "RELEASE_LOGS=$root/logs/$RELEASE_VERSION-arm64-$RUN_KEY"
           } >>"$GITHUB_ENV"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: amd64-shared-${{ github.run_id }}
-          path: ${{ runner.temp }}/amd64-shared
+          name: shared-${{ github.run_id }}
+          path: ${{ runner.temp }}/shared-download
       - run: |
           mkdir "$RELEASE_SHARED"
-          tar -C "$RELEASE_SHARED" -xf "$RUNNER_TEMP/amd64-shared/amd64-shared.tar"
+          tar -C "$RELEASE_SHARED" -xpf "$RUNNER_TEMP/shared-download/shared.tar"
       - run: /usr/bin/just release-arm64 "$RELEASE_VERSION" "$RELEASE_SHARED"
       - name: Keep run logs on the host
         if: always() && env.RELEASE_LOGS != ''
         run: |
           mkdir -p "$RELEASE_LOGS"
           [[ ! -d .tmp/release ]] || cp -a .tmp/release "$RELEASE_LOGS/"
-      - if: ${{ !contains(github.ref_name, '-dryrun.') }}
-        run: scripts/release-upload.sh "$RELEASE_VERSION" "$RELEASE_OUTPUT"
+
+  # Nothing is uploaded until both artifact sets are staged. The arm64 set goes
+  # first because the amd64 upload dispatches the publisher.
+  upload-arm64:
+    needs: [build-shared, stage-amd64, stage-arm64]
+    if: ${{ !contains(github.ref_name, '-dryrun.') }}
+    runs-on: [self-hosted, Linux, ARM64, secondbox-release-arm64]
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.build-shared.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Upload the arm64 set
+        run: |
+          root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
+          scripts/release-upload.sh "$RELEASE_VERSION" "$root/$RELEASE_VERSION-arm64"
 
   upload-amd64:
-    needs: [stage-amd64, stage-arm64]
+    needs: [build-shared, upload-arm64]
     if: ${{ !contains(github.ref_name, '-dryrun.') }}
     runs-on: [self-hosted, Linux, X64, secondbox-release-amd64]
     timeout-minutes: 60
@@ -116,7 +162,7 @@ jobs:
       actions: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_VERSION: ${{ needs.stage-amd64.outputs.version }}
+      RELEASE_VERSION: ${{ needs.build-shared.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

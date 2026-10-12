@@ -3,8 +3,9 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 fail() { echo "SecondBox release: $*" >&2; exit 1; }
-[[ "$#" -eq 1 ]] || fail 'usage: just release VERSION'
+[[ "$#" -eq 2 ]] || fail 'usage: just release VERSION SHARED_DIR'
 version="$1"
+shared="$2"
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || fail 'VERSION must be SemVer without v or build metadata'
 config="${RELEASE_ENV_FILE:-${HOME:?}/.config/secondbox/release.env}"
 [[ -f "$config" ]] || fail "copy deploy/release.env.example to $config and configure it"
@@ -37,7 +38,6 @@ for key in SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR SECONDBOX_INSTALLER_QUALI
   [[ "${!key:-}" == /* && -e "${!key}" && ! -L "${!key}" ]] || fail "$key must be an existing absolute non-symlink path"
 done
 [[ -d "$RELEASE_OUTPUT_ROOT" && -d "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT" && -d "$SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR" ]] || fail 'invalid directory inputs'
-[[ "${SECONDBOX_RELEASE_POSTGRES_IMAGE:-}" =~ ^docker.io/library/postgres@sha256:[a-f0-9]{64}$ ]] || fail 'Postgres image must be digest pinned'
 [[ "${SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256:-}" == "$(scripts/prepare-installer-qualification-image.sh --print-sha256)" ]] || fail 'installer image pin differs from repository'
 printf '%s  %s\n' "$SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256" "$SECONDBOX_INSTALLER_QUALIFICATION_IMAGE" | sha256sum --check --status || fail 'installer image digest mismatch'
 workspace_type="$(findmnt -n -o FSTYPE --target "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT")"
@@ -45,6 +45,10 @@ workspace_type="$(findmnt -n -o FSTYPE --target "$SECONDBOX_INSTALLER_EXISTING_W
 # Bind only the evidence produced in this checkout by this qualification.
 export SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE="$repo_root/.tmp/gvisor-linux-scenario-qualification-evidence.json"
 export SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE="$repo_root/.tmp/gvisor-pod-linux-scenario-qualification-evidence.json"
+[[ -d "$shared" && ! -L "$shared" ]] || fail 'SHARED_DIR must be a non-symlink directory'
+shared="$(cd "$shared" && pwd)"
+# Reject a shared set of another version or commit before hours of qualification.
+go run ./cmd/secondbox-release-tool verify-shared-artifacts "$shared" "$version" "$source_commit" >/dev/null || fail 'SHARED_DIR is not the shared set of this release'
 build="$RELEASE_OUTPUT_ROOT/$version-build"
 candidate="$RELEASE_OUTPUT_ROOT/$version-candidate"
 output="$RELEASE_OUTPUT_ROOT/$version"
@@ -103,7 +107,7 @@ finish() {
 }
 trap finish EXIT
 stage qualification /usr/bin/just qualify --tier release || fail "qualification failed; inspect $directory"
-stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only "$version" "$build" || fail "build failed; inspect $directory"
+stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only --shared-from "$shared" "$version" "$build" || fail "build failed; inspect $directory"
 stage candidate scripts/release-stage.sh --candidate --from-build "$build" "$version" "$candidate"
 export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
 export SECONDBOX_INSTALLER_RELEASE_DIRECTORY="$candidate"

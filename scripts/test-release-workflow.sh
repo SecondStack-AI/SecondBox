@@ -6,6 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow="$repo_root/.github/workflows/release.yml"
 tag_workflow="$repo_root/.github/workflows/release-tag.yml"
 stager="$repo_root/scripts/release-stage.sh"
+shared_builder="$repo_root/scripts/release-build-shared.sh"
 uploader="$repo_root/scripts/release-upload.sh"
 publisher="$repo_root/scripts/release-publish.sh"
 
@@ -23,17 +24,41 @@ rg -q 'gh workflow run release.yml' "$uploader"
 rg -q 'qualification-evidence' "$stager"
 rg -q '^export LC_ALL=C$' "$stager"
 
-# Only the tag workflow runs on the self-hosted release runners; it stages
-# through the release scripts, uploads the arm64 set first, and leaves
-# publication to the hosted publisher.
+# Only the tag workflow runs on the self-hosted release runners. It builds the
+# shared files once on a hosted runner, stages both artifact sets in parallel
+# from them, uploads the arm64 set first, and leaves publication to the hosted
+# publisher.
 if rg -q 'qualif|/dev/kvm|test-scenario|self-hosted' "$workflow" "$repo_root/.github/workflows/ci.yml"; then
   echo "GitHub-hosted workflows contain a forbidden qualification step" >&2
   exit 1
 fi
 rg -q "tags: \['v\[0-9\]\*'\]" "$tag_workflow"
-rg -q 'runs-on: \[self-hosted, Linux, X64, secondbox-release-amd64\]' "$tag_workflow"
-rg -q 'runs-on: \[self-hosted, Linux, ARM64, secondbox-release-arm64\]' "$tag_workflow"
-rg -q '/usr/bin/just release "\$RELEASE_VERSION"' "$tag_workflow"
+# Job graph: name, runner and needs of every job, in file order.
+diff -u <(printf '%s\n' \
+  $'build-shared\tubuntu-latest\t' \
+  $'stage-amd64\t[self-hosted, Linux, X64, secondbox-release-amd64]\tbuild-shared' \
+  $'stage-arm64\t[self-hosted, Linux, ARM64, secondbox-release-arm64]\tbuild-shared' \
+  $'upload-arm64\t[self-hosted, Linux, ARM64, secondbox-release-arm64]\t[build-shared, stage-amd64, stage-arm64]' \
+  $'upload-amd64\t[self-hosted, Linux, X64, secondbox-release-amd64]\t[build-shared, upload-arm64]') \
+  <(awk '/^jobs:$/ {jobs = 1; next}
+    jobs && /^  [a-z0-9-]+:$/ {if (job != "") print job "\t" runs "\t" needs; job = substr($1, 1, length($1) - 1); runs = ""; needs = ""; next}
+    jobs && /^    runs-on: / {runs = substr($0, 14)}
+    jobs && /^    needs: / {needs = substr($0, 12)}
+    END {if (job != "") print job "\t" runs "\t" needs}' "$tag_workflow") || {
+  echo "tag workflow job graph differs from build-shared, parallel staging, then arm64 and amd64 uploads" >&2
+  exit 1
+}
+rg -q 'run: scripts/release-build-shared.sh "\$RELEASE_VERSION" "\$RUNNER_TEMP/shared-\$RELEASE_VERSION"$' "$tag_workflow"
+rg -q '/usr/bin/just release "\$RELEASE_VERSION" "\$RELEASE_SHARED"$' "$tag_workflow"
+rg -q '/usr/bin/just release-arm64 "\$RELEASE_VERSION" "\$RELEASE_SHARED"$' "$tag_workflow"
+# A tar keeps binary modes across the workflow artifact, in and out.
+rg -q 'tar -C "\$RUNNER_TEMP/shared-\$RELEASE_VERSION" -cf "\$RUNNER_TEMP/shared.tar" \.$' "$tag_workflow"
+test "$(rg -c 'tar -C "\$RELEASE_SHARED" -xpf "\$RUNNER_TEMP/shared-download/shared.tar"$' "$tag_workflow")" = 2
+# The shared build needs no KVM, Docker or host configuration.
+if rg -q 'qualif|/dev/kvm|test-scenario|docker (buildx|build|run)|release\.env|RELEASE_' "$shared_builder"; then
+  echo "shared release build depends on a release runner" >&2
+  exit 1
+fi
 # Tag-derived values reach shell steps only through the environment.
 if awk '/^ +(- )?run:/ {block = 1; indent = match($0, /[^ -]/); if ($0 ~ /\$\{\{/) found = 1; next}
   block && match($0, /[^ ]/) > indent && $0 ~ /\$\{\{/ {found = 1}
@@ -42,10 +67,8 @@ if awk '/^ +(- )?run:/ {block = 1; indent = match($0, /[^ -]/); if ($0 ~ /\$\{\{
   echo "tag workflow interpolates expressions into shell source" >&2
   exit 1
 fi
-rg -q 'needs: \[stage-amd64, stage-arm64\]' "$tag_workflow"
 test "$(rg -c 'scripts/release-upload.sh' "$tag_workflow")" = 2
 test "$(rg -c "if: \\$\\{\\{ !contains\\(github.ref_name, '-dryrun.'\\) \\}\\}" "$tag_workflow")" = 2
-rg -q -- "--exclude='\*.oci.tar' -cf" "$tag_workflow"
 if rg -q 'release-publish|npm publish|skopeo|id-token|packages: write' "$tag_workflow"; then
   echo "tag workflow publishes instead of dispatching the hosted publisher" >&2
   exit 1
@@ -208,6 +231,10 @@ export PATH="$fixture/bin:$PATH"
   printf '{"sourceCommit":"other"}\n' >"$fixture/both/secondbox-1.2.3-arm64-artifact-manifest.json"
   if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
     echo 'release publisher accepted artifact sets of different commits' >&2; exit 1
+  fi
+  printf '{"openapi":{"digest":"other"}}\n' >"$fixture/both/secondbox-1.2.3-arm64-artifact-manifest.json"
+  if GH_TOKEN=fixture GITHUB_ACTOR=fixture "$publisher" 1.2.3 "$fixture/both"; then
+    echo 'release publisher accepted artifact sets pinning different shared files' >&2; exit 1
   fi
   printf '{}\n' >"$fixture/both/secondbox-1.2.3-arm64-artifact-manifest.json"
   printf '{"candidate":true}\n' >"$fixture/both/secondbox-1.2.3-artifact-manifest.json"

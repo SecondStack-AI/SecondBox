@@ -73,7 +73,7 @@ service (or `setsid` where user services are unavailable). Reattach with `--wait
 selects another explicit Bash configuration, which `just release` uses for its
 superset `release.env`.
 
-A pushed release tag runs `just release VERSION` on the amd64 release runner to qualify, build,
+A pushed release tag runs `just release VERSION SHARED_DIR` on the amd64 release runner to qualify, build,
 run the installer guests and stage the release. See [release operator setup](release-operator-setup.md)
 for configuration, memory limits and publication. The manual prerequisites and
 recipes below remain available for hosts without this automation.
