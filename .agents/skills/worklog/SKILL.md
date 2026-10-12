@@ -19,7 +19,7 @@ or process gotcha is found. Use UTC from `date -u`. Keep entries 5–15 lines:
 
 ```text
 ## 13:20Z · codex · main@1cda639 · release 0.14.0
-Did: launched just release 0.14.0; unit secondbox-suite-release-0-14-0; run RUN
+Did: pushed tag v0.14.0; release-tag.yml run RUN
 Result: test gate failed; scenario shards passed
 Evidence: .tmp/release/RUN/timing.md; releases/0.14.0-build
 Next: verify evidence and rerun gates before recovery

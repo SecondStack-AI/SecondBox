@@ -1,15 +1,21 @@
 # Release operator setup
 
-SecondBox releases are qualified and built locally, then published by one GitHub workflow. The local release flow stages a non-publishable installer candidate, qualifies that exact candidate in disposable virtual machines, and stages the final release from the resulting evidence.
+A SecondBox release starts when a maintainer pushes a `vVERSION` tag on `main`.
+The `release-tag.yml` workflow qualifies and stages the release on two self-hosted release runners, and the hosted `release.yml` workflow publishes the staged bytes.
+The amd64 runner stages a non-publishable installer candidate, qualifies that exact candidate in disposable virtual machines, and stages the final release from the resulting evidence.
+The arm64 runner qualifies the same commit and stages the arm64 artifact set beside the architecture-neutral amd64 files.
 
 ## One-time setup
 
-- Authenticate the local `gh` CLI for `SecondStack-AI/SecondBox`.
 - Configure npm trusted publishing for `@secondstack-ai/secondbox` and `.github/workflows/release.yml`.
 - Allow that workflow `contents: write`, `packages: write`, and `id-token: write`.
 - Give the repository workflow access to the public `control-plane`, `runner`, `installer-tools`, `microvm-artifacts`, `runner-gvisor`, and `gvisor-artifacts` GHCR packages.
+- Register the two release runners (below) in an organization runner group that admits only this repository, and only `release-tag.yml` from tag refs.
+  The repository is public: a runner that accepts other workflows would run pull-request code from forks on a privileged KVM host.
 
-The local build host needs Docker Buildx, `jq`, `openssl`, npm, Node.js, Go, and `just`. It must also satisfy the KVM, TUN, reflink-filesystem, and scenario bundle requirements in [external scenario qualification](scenario-qualification.md). Release staging needs the microVM release bundle variables documented by `scripts/release-stage.sh` because the runner consumes that bundle at runtime.
+The release runners need Docker Buildx, `jq`, `openssl`, npm, Go, `gh`, and `/usr/bin/just`.
+They must also satisfy the KVM, TUN, reflink-filesystem, and scenario bundle requirements in [external scenario qualification](scenario-qualification.md).
+Release staging needs the microVM release bundle variables documented by `scripts/release-stage.sh` because the runner consumes that bundle at runtime.
 
 ## The microVM bundle
 
@@ -23,142 +29,69 @@ Rebuilding the bundle rotates its identity. The guest agent, `/init`, and the mi
 
 Consult the target release notes before choosing bundle inputs. Point `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR` at the exact bundle named there; do not rebuild a published bundle from other guest sources. The gVisor runner image and artifact transport are built by staging from the repository alone and need no operator input beyond Docker buildx; Microsandbox uses a separate operator-local materialization that is not packaged by this release flow.
 
-## Automated release
+## Release runners
 
-Copy `deploy/qualify.env.example` to `~/.config/secondbox/qualify.env` for PR
-qualification, and `deploy/release.env.example` to
-`~/.config/secondbox/release.env` for releases. Review every path and digest. The Go
-suite gate provisions its own disposable PostgreSQL container unless
-`SECONDBOX_TEST_DATABASE_URL` names a database you manage.
-The release file includes every qualification key and is the sole configuration
-used by `just release`; it does not recover inputs from an older release directory.
-Run `npm ci --ignore-scripts` once in the checkout. Provision your own named
-Buildx builder without changing the caller's selected builder, and set
-`RELEASE_BUILDX_BUILDER` in the release file. This selection applies only to
-artifact staging; it does not change the scenario harness's local Docker builds:
+| Runner | Labels | Configuration |
+|---|---|---|
+| amd64 | `self-hosted`, `Linux`, `X64`, `secondbox-release-amd64` | `deploy/release.env.example` |
+| arm64 | `self-hosted`, `Linux`, `ARM64`, `secondbox-release-arm64` | `deploy/release-arm64.env.example` |
+
+Register exactly one runner per label: the amd64 upload job reads the output that the amd64 staging job left on its host.
+Each runner account copies its example to `~/.config/secondbox/release.env` (or names another file in `RELEASE_ENV_FILE` in the runner service environment), and every path and digest in it is reviewed for that host.
+Place the runner work directory on the reflink filesystem that holds the scenario workspace root, because scenarios reflink from the checkout.
+The runner account needs access to `/dev/kvm`, `/dev/net/tun`, Docker and, on amd64, `qemu:///system` with nested KVM.
+The Go suite gate provisions its own disposable PostgreSQL container unless `SECONDBOX_TEST_DATABASE_URL` names a database you manage.
+Provision a named Buildx builder without changing the account's selected builder, and set `RELEASE_BUILDX_BUILDER`.
+This selection applies only to artifact staging; it does not change the scenario harness's local Docker builds:
 
 ```sh
 docker buildx create --name secondbox-suite-release --driver docker-container \
   --driver-opt image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 ```
 
-Create the configured
-`RELEASE_OUTPUT_ROOT` and `SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT` parents;
-the latter must be on Btrfs or XFS and traversable by the system libvirt account.
-The checked-in examples describe the reviewed release host using public paths;
-review and provision every path for another host.
+Create the configured `RELEASE_OUTPUT_ROOT` and, on amd64, `SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT` parents.
+The installer workspace parent must be on Btrfs or XFS and traversable by the system libvirt account.
+A release runner runs nothing else: release preflight requires its disk and memory headroom, refuses leftover `sbq-` libvirt domains, and a job holds the host for the whole stage.
+
+## Cutting a release
+
+Land the release notes and the changelog cut on `main` first (see the [release skill](../../.agents/skills/secondbox-release/SKILL.md)), then tag that merged commit and push the tag:
 
 ```sh
-just qualify                  # PR gates and four independent Firecracker shards
-just qualify --tier release   # gates, sharded Firecracker and local gVisor host
-just nightly                  # full scenarios and no-KVM gVisor pod suite
-# After merging, from a clean checkout of origin/main:
-just release VERSION          # lean amd64 release
-just release VERSION --full   # alternative: nightly matrix and arm64 images
-just release VERSION --resume # recover a gate-only failure using the retained build
+git fetch origin
+git tag vVERSION origin/main
+git push origin vVERSION
 ```
 
-Release preflight checks source, tag identity, inputs, the pinned Go/protoc and
-`/usr/bin/just` toolchain, libvirt availability, absence of `sbq-` domains, and
-headroom (100 GiB free in each output/workspace filesystem for a lean release,
-200 GiB for `--full`, and enough available memory for a guest plus 4 GiB).
-The installer requires 12 GiB of usable guest RAM; configure at least 13312 MiB to allow for kernel reservations.
-A 13 GiB guest therefore requires 17 GiB available host memory.
-Set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` to limit scenario concurrency on smaller hosts without omitting scenarios.
-It creates a local tag only when absent and
-never pushes it. Existing tags must identify HEAD. All three versioned output
-directories must be absent; failed output is retained for diagnosis, so archive
-or remove only your own failed run's directories before starting a fresh run.
-When only a gate failed after the build and every scenario stage passed,
-`--resume` reuses `VERSION-build` and its commit-exact evidence, reruns the gates,
-and continues from candidate staging.
+`release-tag.yml` then runs three jobs:
 
-Qualification, the unbound artifact build, and installer qualification run sequentially so their memory demands do not overlap.
-Once qualification and the build pass,
-staging binds commit-exact Firecracker and gVisor evidence into the candidate.
-The default lean release builds amd64 images and tests one `btrfs_image` guest:
-the wizard, reboot recovery, and hello-world microVM. The driver removes the
-disposable guest afterwards. `--full` uses nightly qualification, adds the arm64 control-plane
-image, and runs all three installer modes, including existing-filesystem
-uninstall/resume and the v0.7.2 refusal/recreation boundary. Each selected mode
-must satisfy its own required assertions in `tests/installer/vm-scenario.json`.
-Guests have separate MACs and loopback SSH forwards. The manifest records the
-built image platforms; CLI and deploy binaries retain all four host platforms.
-Local gVisor host inputs use `QUALIFY_GVISOR_HOST_BUILD_ROOT`; KVM presence is
-allowed for host evidence. Pod evidence is required only by full releases.
-`QUALIFY_GUEST_MEMORY_MIB` defaults to 16384; concurrency is at most three and is
-capped by available memory after a 4 GiB host reserve. The final stage reuses
-the checksummed build and requires installer evidence for exactly those release
-bytes. Unbound builds cannot be published.
+1. `stage-amd64` runs `just release VERSION` (`scripts/release.sh`).
+   It requires the tag to identify the checked-out commit on `origin/main`, checks the toolchain, inputs and headroom, then runs qualification, the unbound artifact build, the installer candidate, installer qualification, and final staging, sequentially so their memory demands do not overlap.
+   It publishes the final directory without its `*.oci.tar` files as a workflow artifact for the arm64 runner.
+2. `stage-arm64` runs `just release-arm64 VERSION AMD64_COPY` (`scripts/release-arm64.sh`): `just test-scenario` for `linux-arm64` evidence, then the arm64 set staged beside the copied amd64 files, which staging verifies against the amd64 manifest and binds unchanged.
+   It then uploads the arm64 set to the draft release.
+3. `upload-amd64` uploads the amd64 set from the amd64 runner, which dispatches the hosted publisher, and removes the intermediate build and candidate directories.
 
-Each release stage writes a log under `.tmp/release/RUN/`; `timing.md` records
-its result and wall clock. Qualification has its own `.tmp/qualify/RUN/` logs and
-supports `just qualify --wait RUN`. On hosts that terminate commands when their
-terminal disappears, launch the release in a user service:
+A tag such as `v0.0.0-dryrun.1` on `main` runs both staging jobs and uploads nothing; use it to validate the runners, then delete the tag and the runners' outputs of that version.
 
-```sh
-mkdir -p .tmp
-systemd-run --user --unit="secondbox-suite-release-VERSION-$(date +%s)" --collect \
-  --property="WorkingDirectory=$PWD" \
-  --property="StandardOutput=file:$PWD/.tmp/release-console.log" \
-  --property=StandardError=inherit --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
-  --setenv="SECONDBOX_TEST_DATABASE_URL=${SECONDBOX_TEST_DATABASE_URL:-}" \
-  /usr/bin/just release VERSION
-```
+Lean releases build amd64 images and test one `btrfs_image` installer guest: the wizard, reboot recovery, and hello-world microVMs.
+Preflight requires 100 GiB free in each output and workspace filesystem and enough available memory for the installer guest (`QUALIFY_GUEST_MEMORY_MIB`) plus the host reserve.
+On smaller hosts, set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` in `release.env` to limit scenario concurrency without omitting scenarios.
+The final stage reuses the checksummed build and requires installer evidence for exactly those release bytes; unbound builds cannot be published.
 
-Reserve the KVM host before starting, and the dedicated no-KVM VM for `--full`. Do not stop
-another operator's units, domains, Compose stacks, or live deployment to make
-room. The automation leaves the no-KVM VM running. Candidate and final outputs
-are `RELEASE_OUTPUT_ROOT/VERSION-candidate` and `RELEASE_OUTPUT_ROOT/VERSION`;
-`VERSION-build` retains the checksummed intermediate build. The successful
-command prints the exact tag-push and `release-upload` commands for explicit
-publication. Neither command is run automatically.
-
-## The arm64 artifact set
-
-A release can also publish an arm64 artifact set, staged on a separate Linux arm64 host with writable KVM and TUN after `just release VERSION` succeeds on the amd64 host. Without an arm64 host, the release publishes amd64 alone.
-Configure that host from `deploy/release-arm64.env.example` as `~/.config/secondbox/release.env`, with a release checkout on the same reflink filesystem as its scenario workspace root and bundle, the same Buildx builder setup, and `npm ci --ignore-scripts`.
-Its microVM bundle is built for `arm64` by the [microVM image pipeline](microvm-image-pipeline.md).
-Rebuild it under the same rules as the amd64 bundle.
-
-Copy the final amd64 release directory without its `*.oci.tar` files to the arm64 host, then run from clean `main` at the same commit:
-
-```sh
-rsync -a --exclude '*.oci.tar' AMD64_HOST:RELEASE_OUTPUT_ROOT/VERSION/ /path/to/amd64-VERSION/
-just release-arm64 VERSION /path/to/amd64-VERSION
-```
-
-It creates the same local tag when absent, runs `just test-scenario` for `linux-arm64` evidence, and stages `RELEASE_OUTPUT_ROOT/VERSION-arm64`.
-Staging verifies the copied files against the amd64 manifest and binds them unchanged into the arm64 manifest.
-Logs are under `.tmp/release/RUN-arm64/`.
-A failed run is repeated from the start after removing its own output directory.
+Outputs are `RELEASE_OUTPUT_ROOT/VERSION`, `VERSION-build`, `VERSION-candidate` and, on arm64, `VERSION-arm64`.
+Each job first removes the outputs of an earlier attempt of the same version, so a failed job is recovered with **Re-run failed jobs**.
+Stage logs (`.tmp/release/RUN/` with `timing.md`, and `.tmp/qualify/RUN/`) are copied to `RELEASE_OUTPUT_ROOT/logs/` on the runner host after every attempt.
+They are not uploaded as workflow artifacts, because the repository is public.
 
 ## Publication
 
-After the stagings succeed, review their manifests and qualification logs, push
-the tag from the amd64 host, and run the printed `release-upload` on each host
-for its own output directory: the arm64 host first, if it staged a set, then the
-amd64 host. Do not create a release through independent tag, candidate, or
-upload commands.
+Upload accepts one staged directory holding either the amd64 or the arm64 manifest and adds its files to the draft.
+The amd64 upload dispatches the publisher; the publisher requires complete sets from one commit.
+Upload reads `docs/releases/vVERSION.md` from the tag when present, otherwise uses a placeholder.
+It appends the install and SDK footer and refreshes the draft on retry; the publisher preserves that body.
 
-Upload accepts one staged directory holding either the amd64 or the arm64
-manifest, and adds its files to the draft. The amd64 upload dispatches the
-publisher; an arm64 upload is refused while a publisher run is queued or in progress. The publisher requires
-complete sets from one commit. Upload reads the tag's
-`docs/releases/vVERSION.md` when present, otherwise uses a placeholder; an
-optional third `NOTES_FILE` argument supplies the body, and must be the same on
-both hosts. It appends the install and SDK footer and refreshes the draft on retry. The publisher
-preserves that body. Use the [release skill](../../.agents/skills/secondbox-release/SKILL.md)
-for release decisions, recovery, and verification.
-
-Watch the dispatched workflow with:
-
-```sh
-gh run list --workflow release.yml --limit 1
-gh run watch --exit-status
-```
-
-Keep the staged outputs until publication succeeds. If publication fails while
-the release is still a draft, fix the cause and retry the uploads of every staged
-output in the same order, because the publisher may already have deleted archives of either set. Never move a published tag;
-use a new patch version for changed artifacts.
+A code fix after a failed staging lands on `main` first and needs a new tag.
+An unpublished tag may be deleted and pushed again at the fixed commit, but only while no draft or public release exists for it; a published tag is immutable, so use the next patch version.
+If publication fails while the release is still a draft, fix the cause and re-run `stage-arm64` and `upload-amd64`, in that order, because the publisher may already have deleted archives of either set.
+Never move a published tag.
