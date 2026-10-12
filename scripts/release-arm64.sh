@@ -2,11 +2,11 @@
 set -Eeuo pipefail
 # Stages the arm64 artifact set of a release on a Linux arm64 KVM host: scenario
 # qualification on this host, then arm64 images, bundle and standard Profiles
-# beside the architecture-neutral files of the final amd64 release of the tag.
+# beside the architecture-neutral files built once by release-build-shared.sh.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 fail() { echo "SecondBox arm64 release: $*" >&2; exit 1; }
-[[ "$#" -eq 2 ]] || fail 'usage: just release-arm64 VERSION AMD64_RELEASE_DIR'
+[[ "$#" -eq 2 ]] || fail 'usage: just release-arm64 VERSION SHARED_DIR'
 version="$1"
 shared="$2"
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || fail 'VERSION must be SemVer without v or build metadata'
@@ -33,8 +33,10 @@ git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main || fail "
 for key in SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR RELEASE_OUTPUT_ROOT; do
   [[ "${!key:-}" == /* && -e "${!key}" && ! -L "${!key}" ]] || fail "$key must be an existing absolute non-symlink path"
 done
-[[ -d "$shared" && ! -L "$shared" ]] || fail 'AMD64_RELEASE_DIR must be a non-symlink directory'
+[[ -d "$shared" && ! -L "$shared" ]] || fail 'SHARED_DIR must be a non-symlink directory'
 shared="$(cd "$shared" && pwd)"
+# Reject a shared set of another version or commit before scenario qualification.
+go run ./cmd/secondbox-release-tool verify-shared-artifacts "$shared" "$version" "$source_commit" >/dev/null || fail 'SHARED_DIR is not the shared set of this release'
 output="$RELEASE_OUTPUT_ROOT/$version-arm64"
 [[ ! -e "$output" && ! -L "$output" ]] || fail "output already exists: $output"
 for device in /dev/kvm /dev/net/tun; do

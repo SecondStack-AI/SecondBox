@@ -98,11 +98,14 @@ test-standard-resources:
 build-artifacts:
     scripts/build-artifacts.sh
 
-release-stage version output_dir:
-    scripts/release-stage.sh "{{version}}" "{{output_dir}}"
+release-build-shared version output_dir:
+    scripts/release-build-shared.sh "{{version}}" "{{output_dir}}"
 
-release-candidate version output_dir:
-    scripts/release-stage.sh --candidate "{{version}}" "{{output_dir}}"
+release-stage version shared_dir output_dir:
+    scripts/release-stage.sh --shared-from "{{shared_dir}}" "{{version}}" "{{output_dir}}"
+
+release-candidate version shared_dir output_dir:
+    scripts/release-stage.sh --candidate --shared-from "{{shared_dir}}" "{{version}}" "{{output_dir}}"
 
 test-release-stage:
     scripts/test-release-stage.sh
@@ -201,11 +204,11 @@ qualify *args:
     scripts/qualify.sh {{args}}
 
 # Run by .github/workflows/release-tag.yml on the amd64 release runner after a v* tag push.
-release version:
-    scripts/release.sh "{{version}}"
+release version shared_dir:
+    scripts/release.sh "{{version}}" "{{shared_dir}}"
 
-release-arm64 version amd64_release_dir:
-    scripts/release-arm64.sh "{{version}}" "{{amd64_release_dir}}"
+release-arm64 version shared_dir:
+    scripts/release-arm64.sh "{{version}}" "{{shared_dir}}"
 
 # Detached qualification workers survive timer/session exits; failures propagate.
 nightly:

@@ -2,9 +2,9 @@
 
 Release inputs may describe multiple backend materializations, but each is strict and immutable: backend kind, guest architecture, runtime and toolchain digests, local launch-artifact digests, agent protocol/features, and backend/helper build identity. Microsandbox entries also name the digest-pinned source OCI manifest and content-addressed flat root. The published release artifacts package the Firecracker `microvm` bundle and the gVisor `gvisor-artifacts` transport (flat root, `runsc`, guest agent, and materialization, built from the repository and its digest-pinned bases). Microsandbox materializations are not built or distributed through this release process and remain operator-local experimental inputs, assembled and digest-pinned from the operator's reviewed build as the Microsandbox operations guides describe. Runners advertise only materializations already present and revalidated locally.
 
-A SecondBox release is a SemVer Git tag plus the files its release runners built, attached to its stable GitHub Release. The hosted publisher publishes those files without rebuilding them.
+A SecondBox release is a SemVer Git tag plus the files its release workflow built, attached to its stable GitHub Release. The hosted publisher publishes those files without rebuilding them.
 
-Each release carries the amd64 artifact set under its tag, and optionally an arm64 set. The arm64 set has its own artifact manifest, qualification evidence, standard bundles and images, and reuses the architecture-neutral files of the amd64 set (SDKs, CLI and deploy binaries, OpenAPI document, SBOM, install bootstrap) byte for byte. Its own files carry an `-arm64` suffix, and its images an `-arm64` tag suffix.
+Each release carries the amd64 artifact set under its tag, and optionally an arm64 set. The architecture-neutral files (SDKs, CLI and deploy binaries, OpenAPI document, SBOM, install bootstrap) are built once per release, and both sets publish them byte for byte. The arm64 set has its own artifact manifest, qualification evidence, standard bundles and images. Its own files carry an `-arm64` suffix, and its images an `-arm64` tag suffix.
 
 ## Public coordinates
 
@@ -40,10 +40,13 @@ The arm64 set carries no gVisor artifacts and no installer qualification evidenc
 ## Qualification and publication
 
 A maintainer lands the release notes on `main`, then tags that commit and pushes the tag.
-The push starts `release-tag.yml` on the self-hosted release runners, configured as described in [release operator setup](release-operator-setup.md).
-The amd64 runner runs `just release VERSION`: it qualifies the source, builds the artifacts, stages a non-publishable installer candidate, qualifies those bytes in a disposable guest, and stages the final amd64 manifest.
-The arm64 runner then runs `just release-arm64 VERSION AMD64_RELEASE_DIR`, which qualifies the same commit with `just test-scenario` and stages the arm64 set beside a copy of the final amd64 release.
-Each runner uploads its own set to the draft, arm64 first; the amd64 upload dispatches the hosted publisher.
+The push starts `release-tag.yml`, configured as described in [release operator setup](release-operator-setup.md).
+A GitHub-hosted runner first builds the architecture-neutral files with `scripts/release-build-shared.sh` and records them with their digests, version, tag and source commit in `shared-artifacts.json`.
+The two self-hosted release runners then work in parallel from that shared set.
+The amd64 runner runs `just release VERSION SHARED_DIR`: it qualifies the source, builds the amd64 artifacts, stages a non-publishable installer candidate, qualifies those bytes in a disposable guest, and stages the final amd64 manifest.
+The arm64 runner runs `just release-arm64 VERSION SHARED_DIR`: it qualifies the same commit with `just test-scenario` and stages the arm64 set.
+Both stagings verify the shared files against their record and this commit before they copy them.
+When both sets are staged, each runner uploads its own set to the draft, arm64 first; the amd64 upload dispatches the hosted publisher.
 Do not tag a commit that is not on `main`, and do not upload an unqualified build by hand.
 
 A release qualifies Firecracker and local gVisor, builds amd64 images, and runs the Btrfs-image installer guest.
@@ -52,8 +55,8 @@ It does not claim the nightly matrix (`just nightly`) or all three installer mod
 Candidate and final staging require evidence for the selected tier and exact
 source commit. Installer evidence binds the candidate's qualification-subject
 digest to the final manifest. Staging rejects absent or mismatched evidence;
-the publisher rejects candidate manifests, incomplete sets, and sets staged
-from different commits. The hosted publisher publishes the staged
+the publisher rejects candidate manifests, incomplete sets, sets staged
+from different commits, and sets that pin different shared files. The hosted publisher publishes the staged
 bytes and supplies npm provenance without rebuilding or qualifying them.
 
 Upload reads `docs/releases/vVERSION.md` from the tag when present, otherwise

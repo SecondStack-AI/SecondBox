@@ -8,7 +8,7 @@ set -euo pipefail
 export LC_ALL=C
 
 usage() {
-	echo "usage: scripts/release-stage.sh [--test-mode] [--candidate] [--build-only | --from-build DIR | --shared-from AMD64_RELEASE_DIR] VERSION OUTPUT_DIR" >&2
+	echo "usage: scripts/release-stage.sh [--test-mode] [--candidate] {[--build-only] --shared-from SHARED_DIR | --from-build DIR} VERSION OUTPUT_DIR" >&2
   exit 2
 }
 
@@ -20,9 +20,9 @@ shared_from=''
 image_platforms="${RELEASE_IMAGE_PLATFORMS:-linux/amd64}"
 # One staging produces the artifact set of one guest architecture: its Runner,
 # microVM artifacts and standard Profiles. gVisor ships for amd64 guests only.
-# A release publishes the amd64 set and an arm64 set under one tag. The arm64
-# set copies the architecture-neutral files of the final amd64 release staged
-# from the same commit (--shared-from) and suffixes its own files.
+# A release publishes the amd64 set and an arm64 set under one tag. Both copy
+# the architecture-neutral files that scripts/release-build-shared.sh built once
+# for the same commit (--shared-from); the arm64 set suffixes its own files.
 guest_architecture="${RELEASE_GUEST_ARCHITECTURE:-amd64}"
 case "$guest_architecture" in
   amd64) [[ "$image_platforms" == linux/amd64 || "$image_platforms" == linux/amd64,linux/arm64 ]] || { echo 'amd64 release image platforms must be linux/amd64 or linux/amd64,linux/arm64' >&2; exit 1; } ;;
@@ -49,12 +49,15 @@ while [[ "${1:-}" == --* ]]; do
 	shift
 done
 [[ "$#" -eq 2 ]] || usage
-! $build_only || { [[ -z "$from_build" ]] && ! $candidate_mode; } || usage
-# Installer candidates and retained builds exist for the amd64 release flow only.
-if [[ "$guest_architecture" == amd64 ]]; then
-  [[ -z "$shared_from" ]] || { echo 'the amd64 release builds its own shared files; --shared-from stages another guest architecture' >&2; exit 1; }
+! $build_only || ! $candidate_mode || usage
+# A retained build already holds its shared files; every other staging copies them.
+if [[ -n "$from_build" ]]; then
+  [[ -z "$shared_from" ]] && ! $build_only || usage
 else
-  [[ -n "$shared_from" ]] || { echo "an $guest_architecture artifact set requires --shared-from with the final amd64 release of the same commit" >&2; exit 1; }
+  [[ -n "$shared_from" ]] || { echo 'release staging requires --shared-from with the shared files built by scripts/release-build-shared.sh for the same commit' >&2; exit 1; }
+fi
+# Installer candidates and retained builds exist for the amd64 release flow only.
+if [[ "$guest_architecture" != amd64 ]]; then
   ! $candidate_mode && ! $build_only && [[ -z "$from_build" ]] || { echo "an $guest_architecture artifact set is staged final in one pass" >&2; exit 1; }
 fi
 version="$1"
@@ -179,14 +182,10 @@ validate_installer_qualification_evidence() {
   echo "release version must be SemVer without a v prefix or build metadata" >&2
   exit 1
 }
-source_commit="$(git -C "$repo_root" rev-parse HEAD)"
 if $test_mode; then
-  source_commit="$(
-    while IFS= read -r file; do
-      [[ -f "$repo_root/$file" ]] || continue
-      printf '%s %s\n' "$file" "$(sha256sum "$repo_root/$file" | awk '{print $1}')"
-    done < <(git -C "$repo_root" ls-files --cached --others --exclude-standard | sort) |
-      sha256sum | awk '{print substr($1,1,40)}')"
+  source_commit="$("$repo_root/scripts/release-source-commit.sh" --test-mode)"
+else
+  source_commit="$("$repo_root/scripts/release-source-commit.sh")"
 fi
 if ! $test_mode; then
   if ! $build_only; then validate_qualification_evidence "$qualification_evidence_source"; fi
@@ -227,69 +226,15 @@ if [[ -n "$from_build" ]]; then
   mv "$output_dir/.release-build.json" "$temporary/candidate-input.json"
   rm -- "$output_dir/.release-build-sums"
 else
-openapi_name="secondbox-${version}-openapi.json"
-typescript_name="secondstack-ai-secondbox-${version}.tgz"
-ldflags="-s -w -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.Version=${version} -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.SourceCommit=${source_commit}"
-if [[ -n "$shared_from" ]]; then
-  [[ -d "$shared_from" && ! -L "$shared_from" ]] || { echo 'invalid shared amd64 release directory' >&2; exit 1; }
-  # The tool verifies the final amd64 release of this version and commit and
-  # names the files both artifact sets publish byte for byte.
-  shared_files="$(go -C "$repo_root" run ./cmd/secondbox-release-tool shared-artifacts "$shared_from" "$version" "$source_commit")"
+  [[ -d "$shared_from" && ! -L "$shared_from" ]] || { echo 'invalid shared release directory' >&2; exit 1; }
+  shared_from="$(cd "$shared_from" && pwd)"
+  # The tool authenticates the shared files against their record, this
+  # version and this source commit, and names the files to stage byte for byte.
+  shared_files="$(go -C "$repo_root" run ./cmd/secondbox-release-tool verify-shared-artifacts "$shared_from" "$version" "$source_commit")"
   while IFS= read -r name; do cp -p -- "$shared_from/$name" "$output_dir/$name"; done <<<"$shared_files"
-  postgres_image="$(jq -er '.bundledServices.postgres' "$shared_from/secondbox-${version}-artifact-manifest.json")"
-else
-if $test_mode; then
-	postgres_image="docker.io/library/postgres@sha256:$(printf postgres | sha256sum | awk '{print $1}')"
-else
-	: "${SECONDBOX_RELEASE_POSTGRES_IMAGE:?release staging requires digest-pinned SECONDBOX_RELEASE_POSTGRES_IMAGE}"
-	postgres_image="$SECONDBOX_RELEASE_POSTGRES_IMAGE"
-fi
-
-if ! $test_mode && ! $build_only; then
-  "$repo_root/scripts/verify-generated.sh"
-fi
-
-cp "$repo_root/contracts/openapi/v1/secondbox.openapi.json" "$output_dir/$openapi_name"
-
-if $test_mode; then
-  while IFS= read -r file; do [[ -f "$repo_root/$file" ]] && printf '%s\n' "$file"; done < <(git -C "$repo_root" ls-files --cached --others --exclude-standard | sort) | tar -C "$repo_root" --create --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner --files-from=- | gzip -n >"$output_dir/secondbox-${version}-go-module.tar.gz"
-else
-  git -C "$repo_root" archive --format=tar "$source_commit" | gzip -n >"$output_dir/secondbox-${version}-go-module.tar.gz"
-fi
-go -C "$repo_root" mod verify
-go -C "$repo_root" list -m >/dev/null
-module_smoke="$temporary/go-module"
-mkdir "$module_smoke"
-tar -xzf "$output_dir/secondbox-${version}-go-module.tar.gz" -C "$module_smoke"
-go -C "$module_smoke" mod verify
-go -C "$module_smoke" list ./sdk/go/secondboxclient >/dev/null
-
-sdk_copy="$temporary/sdk-typescript"
-# Qualification may replace dist concurrently; copy only SDK build inputs.
-mkdir "$sdk_copy"
-tar -C "$repo_root/sdk/typescript" --exclude=./dist --exclude=./node_modules -cf - . | tar -C "$sdk_copy" -xf -
-"$repo_root/node_modules/.bin/tsc" -p "$sdk_copy/tsconfig.build.json"
-npm --prefix "$sdk_copy" version "$version" --no-git-tag-version --ignore-scripts >/dev/null
-npm pack "$sdk_copy" --pack-destination "$output_dir" >/dev/null
-[[ -f "$output_dir/$typescript_name" ]] || { echo "TypeScript package name is not canonical" >&2; exit 1; }
-while IFS= read -r packaged; do
-  case "$packaged" in
-    package/package.json|package/LICENSE|package/README.md|package/dist/*.js|package/dist/*.js.map|package/dist/*.d.ts|package/dist/*.d.ts.map) ;;
-    *) echo "TypeScript package contains undeclared file: $packaged" >&2; exit 1 ;;
-  esac
-done < <(tar -tzf "$output_dir/$typescript_name")
-
-host_platforms=(linux/amd64 linux/arm64 darwin/amd64 darwin/arm64)
-for platform in "${host_platforms[@]}"; do
-  os="${platform%/*}"
-  arch="${platform#*/}"
-  for command in secondbox secondbox-deploy; do
-    CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go -C "$repo_root" build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$output_dir/${command}_${version}_${os}_${arch}" "./cmd/$command"
-  done
-done
-deploy_linux_amd64="$output_dir/secondbox-deploy_${version}_linux_amd64"
-"$repo_root/scripts/generate-install-bootstrap.sh" "$version" "$(sha256sum "$deploy_linux_amd64" | awk '{print $1}')" "$output_dir/install.sh"
-fi
+  postgres_image="$(jq -er '.postgresImage' "$shared_from/shared-artifacts.json")"
+openapi_name="secondbox-${version}-openapi.json"
+ldflags="-s -w -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.Version=${version} -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.SourceCommit=${source_commit}"
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go -C "$repo_root" build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$temporary/secondboxd_linux_${arch}" ./cmd/secondboxd
 done
@@ -393,10 +338,6 @@ fi
 
 go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$guest_architecture" "$output_dir"
 
-if [[ -z "$shared_from" ]]; then
-  jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
-  jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"
-fi
 jq -n --argjson imagePlatforms "$(jq -cn --arg platforms "$image_platforms" '$platforms|split(",")')" --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" --arg gvisorRunner "$gvisor_runner_digest" --arg gvisorImage "$gvisor_image_digest" --arg gvisorMaterialization "$gvisor_materialization_digest" --arg gvisorFlatRoot "$gvisor_flat_root_digest" --arg gvisorRunsc "$gvisor_runsc_release" --arg guestArchitecture "$guest_architecture" '{imagePlatforms:$imagePlatforms,guestArchitecture:$guestArchitecture,candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain,gvisorRunnerDigest:$gvisorRunner,gvisorImageDigest:$gvisorImage,gvisorMaterializationDigest:$gvisorMaterialization,gvisorFlatRootDigest:$gvisorFlatRoot,gvisorRunscRelease:$gvisorRunsc}' >"$temporary/candidate-input.json"
 fi
 if $build_only; then
@@ -468,8 +409,6 @@ fi
 
 jq --argjson candidate "$candidate_mode" '.candidate = $candidate' "$temporary/candidate-input.json" >"$temporary/bound-input.json"
 mv "$temporary/bound-input.json" "$temporary/candidate-input.json"
-openapi_name="secondbox-${version}-openapi.json"
-typescript_name="secondstack-ai-secondbox-${version}.tgz"
 go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
 artifact_manifest="$output_dir/$artifact_manifest_name"
 installer_qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$artifact_manifest")"
@@ -494,9 +433,6 @@ mapfile -t allowlist < <({ find "$output_dir" -maxdepth 1 -type f -printf '%f\n'
 printf '%s\n' "${allowlist[@]}" | jq -R . | jq -s '{schemaVersion:1,files:.}' >"$output_dir/$allowlist_name"
 
 go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$output_dir"
-node_project="$temporary/node-smoke"
-mkdir "$node_project"
-(cd "$node_project" && npm init --yes >/dev/null && npm install --ignore-scripts "$output_dir/$typescript_name" >/dev/null && node -e 'import("@secondstack-ai/secondbox").then(m => { if (typeof m.SecondBox !== "function") process.exit(1) })')
 source_less_consumer="$temporary/source-less-consumer"
 deployment_dir="$source_less_consumer/deployment"
 mkdir "$source_less_consumer"

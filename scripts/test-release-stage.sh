@@ -20,8 +20,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+shared="$work_dir/shared"
 rm -f -- "$qualification_evidence"
-if "$repo_root/scripts/release-stage.sh" 1.2.3 "$work_dir/missing-evidence" >"$work_dir/missing-evidence.out" 2>&1; then
+if "$repo_root/scripts/release-stage.sh" --shared-from "$shared" 1.2.3 "$work_dir/missing-evidence" >"$work_dir/missing-evidence.out" 2>&1; then
   echo "release staging accepted absent qualification evidence" >&2
   exit 1
 fi
@@ -30,7 +31,7 @@ rg -q 'requires qualification evidence.*run just test-scenario' "$work_dir/missi
   exit 1
 }
 jq -n --arg sourceCommit "0000000000000000000000000000000000000000" '{sourceCommit:$sourceCommit}' >"$qualification_evidence"
-if "$repo_root/scripts/release-stage.sh" 1.2.3 "$work_dir/mismatched-evidence" >"$work_dir/mismatched-evidence.out" 2>&1; then
+if "$repo_root/scripts/release-stage.sh" --shared-from "$shared" 1.2.3 "$work_dir/mismatched-evidence" >"$work_dir/mismatched-evidence.out" 2>&1; then
   echo "release staging accepted commit-mismatched qualification evidence" >&2
   exit 1
 fi
@@ -70,20 +71,81 @@ if [[ "$(LC_ALL="$dictionary_locale" sort <<<"$collation_sample" 2>/dev/null)" =
   echo "release staging locale test requires a dictionary-collating $dictionary_locale locale; generate it and rerun" >&2
   exit 1
 fi
-LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_one" >/dev/null
-LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_two" >/dev/null
-LC_ALL="$dictionary_locale" "$repo_root/scripts/release-stage.sh" --test-mode 0.7.0 "$stage_dictionary_locale" >/dev/null
-LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.7.0 "$stage_installer_candidate" >/dev/null
+
+# The architecture-neutral files are built once and are reproducible across
+# builds and operator locales; every staging below consumes the same set.
+LC_ALL=C "$repo_root/scripts/release-build-shared.sh" --test-mode 0.7.0 "$shared" >/dev/null
+LC_ALL="$dictionary_locale" "$repo_root/scripts/release-build-shared.sh" --test-mode 0.7.0 "$work_dir/shared-again" >/dev/null
+diff -r "$shared" "$work_dir/shared-again" || { echo "shared release build is not reproducible" >&2; exit 1; }
+shared_commit="$(jq -er '.sourceCommit' "$shared/shared-artifacts.json")"
+jq -e --arg commit "$shared_commit" '.schemaVersion == "secondbox.release/shared-artifacts/v1" and .version == "0.7.0" and .tag == "v0.7.0" and .sourceCommit == $commit and (.postgresImage | test("^docker.io/library/postgres@sha256:[0-9a-f]{64}$")) and ([.files[].name] == ([.files[].name] | sort)) and (.files | length == 14)' "$shared/shared-artifacts.json" >/dev/null
+while IFS=$'\t' read -r name digest; do
+  [[ "sha256:$(sha256sum "$shared/$name" | awk '{print $1}')" == "$digest" ]] || { echo "shared artifacts record misstates $name" >&2; exit 1; }
+done < <(jq -r '.files[] | [.name, .digest] | @tsv' "$shared/shared-artifacts.json")
+[[ "$(stat -c '%a' "$shared/secondbox-deploy_0.7.0_linux_amd64")" == 755 && "$(stat -c '%a' "$shared/install.sh")" == 644 ]] || { echo "shared release build modes differ from the contract" >&2; exit 1; }
+if "$repo_root/scripts/release-build-shared.sh" --test-mode v0.7.0 "$work_dir/shared-bad-version" >/dev/null 2>&1; then
+  echo "shared release build accepted a noncanonical version" >&2; exit 1
+fi
+if "$repo_root/scripts/release-build-shared.sh" 1.2.3 "$work_dir/shared-real" >/dev/null 2>&1; then
+  echo "real shared release build accepted dirty source or an absent exact tag" >&2; exit 1
+fi
+
+LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode --shared-from "$shared" 0.7.0 "$stage_one" >/dev/null
+LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode --shared-from "$shared" 0.7.0 "$stage_two" >/dev/null
+LC_ALL="$dictionary_locale" "$repo_root/scripts/release-stage.sh" --test-mode --shared-from "$shared" 0.7.0 "$stage_dictionary_locale" >/dev/null
+LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode --candidate --shared-from "$shared" 0.7.0 "$stage_installer_candidate" >/dev/null
+# Staging publishes every shared file byte for byte with its mode, and nothing of the record.
+while IFS= read -r name; do
+  cmp -s "$shared/$name" "$stage_one/$name" && [[ "$(stat -c '%a' "$shared/$name")" == "$(stat -c '%a' "$stage_one/$name")" ]] || { echo "release staging changed shared file $name" >&2; exit 1; }
+done < <(jq -r '.files[].name' "$shared/shared-artifacts.json")
+[[ ! -e "$stage_one/shared-artifacts.json" ]] || { echo "release staging published the shared artifacts record" >&2; exit 1; }
+
+# A shared set that is incomplete, extended, tampered, re-moded, or recorded
+# for another version or commit is rejected before anything is built.
+reject_shared() {
+  local label="$1" directory="$2" version="${3:-0.7.0}"
+  if "$repo_root/scripts/release-stage.sh" --test-mode --shared-from "$directory" "$version" "$work_dir/rejected-stage" >"$work_dir/rejected-stage.out" 2>&1; then
+    echo "release staging accepted a shared set with $label" >&2; exit 1
+  fi
+  rm -rf "$work_dir/rejected-stage" "$directory"
+}
+tampered_shared() { rm -rf "$work_dir/shared-tampered"; cp -a "$shared" "$work_dir/shared-tampered"; }
+tampered_shared; printf 'tampered' >>"$work_dir/shared-tampered/secondbox_0.7.0_darwin_arm64"
+reject_shared 'a tampered binary' "$work_dir/shared-tampered"
+tampered_shared; rm "$work_dir/shared-tampered/secondbox-0.7.0.spdx.json"
+reject_shared 'a missing file' "$work_dir/shared-tampered"
+tampered_shared; printf extra >"$work_dir/shared-tampered/extra"
+reject_shared 'an undeclared file' "$work_dir/shared-tampered"
+tampered_shared; chmod 0644 "$work_dir/shared-tampered/secondbox-deploy_0.7.0_linux_arm64"
+reject_shared 'a non-executable binary' "$work_dir/shared-tampered"
+tampered_shared; rm "$work_dir/shared-tampered/shared-artifacts.json"
+reject_shared 'no record' "$work_dir/shared-tampered"
+tampered_shared; jq '.sourceCommit = ("0" * 40)' "$shared/shared-artifacts.json" >"$work_dir/shared-tampered/shared-artifacts.json"
+reject_shared 'another source commit' "$work_dir/shared-tampered"
+tampered_shared
+reject_shared 'another version' "$work_dir/shared-tampered" 0.7.1
+# A deploy binary swapped together with its record digest no longer matches install.sh.
+tampered_shared; printf 'tampered' >>"$work_dir/shared-tampered/secondbox-deploy_0.7.0_linux_amd64"
+jq --arg digest "sha256:$(sha256sum "$work_dir/shared-tampered/secondbox-deploy_0.7.0_linux_amd64" | awk '{print $1}')" '(.files[] | select(.name == "secondbox-deploy_0.7.0_linux_amd64") | .digest) = $digest' "$shared/shared-artifacts.json" >"$work_dir/shared-tampered/shared-artifacts.json"
+reject_shared 'an install bootstrap for another deploy binary' "$work_dir/shared-tampered"
+rg -q 'shared install bootstrap lacks expected_sha256=' "$work_dir/rejected-stage.out" || { echo "release staging did not explain the install bootstrap mismatch" >&2; exit 1; }
 
 # An unbound build must bind to exactly the same candidate/final bytes, without
 # rebuilding; corruption, undeclared entries and another version are rejected.
 stage_build="$work_dir/stage-build"
-"$repo_root/scripts/release-stage.sh" --test-mode --build-only 0.7.0 "$stage_build" >/dev/null
+"$repo_root/scripts/release-stage.sh" --test-mode --build-only --shared-from "$shared" 0.7.0 "$stage_build" >/dev/null
 [[ ! -e "$stage_build/secondbox-0.7.0-artifact-manifest.json" ]]
 "$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.0 "$work_dir/bound-candidate" >/dev/null
 "$repo_root/scripts/release-stage.sh" --test-mode --from-build "$stage_build" 0.7.0 "$work_dir/bound-final" >/dev/null
 diff -r "$stage_installer_candidate" "$work_dir/bound-candidate"
 diff -r "$stage_one" "$work_dir/bound-final"
+for rejected in "--from-build $stage_build --shared-from $shared" "--build-only" "--build-only --candidate --shared-from $shared"; do
+  # shellcheck disable=SC2086
+  if "$repo_root/scripts/release-stage.sh" --test-mode $rejected 0.7.0 "$work_dir/rejected-options" >/dev/null 2>&1; then
+    echo "amd64 staging accepted options: $rejected" >&2; exit 1
+  fi
+  rm -rf "$work_dir/rejected-options"
+done
 if "$repo_root/scripts/release-stage.sh" --test-mode --candidate --from-build "$stage_build" 0.7.1 "$work_dir/wrong-build-version" >/dev/null 2>&1; then
   echo 'release binding accepted another version' >&2; exit 1
 fi
@@ -106,7 +168,7 @@ final_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-q
 for stage in "$stage_one" "$stage_two" "$stage_dictionary_locale"; do
   go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage"
   source_commit="$(jq -er '.sourceCommit' "$stage/secondbox-0.7.0-artifact-manifest.json")"
-  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" --arg bundleManifest "$bundle_manifest_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v7" and .microvm.bundleManifestDigest == $bundleManifest and (.microvm | has("signedManifestDigest") or has("signingKeyFingerprint") | not) and .version == "0.7.0" and .runnerProtocol == {minimum:6,maximum:6} and (.installerTools.reference | startswith("ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:")) and (.installBootstrap.location | endswith("/v0.7.0/install.sh")) and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.7.0-qualification-evidence.json")) and (.installerQualificationEvidence.location | endswith("/secondbox-0.7.0-installer-qualification-evidence.json"))' "$stage/secondbox-0.7.0-artifact-manifest.json" >/dev/null
+  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" --arg bundleManifest "$bundle_manifest_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v7" and .microvm.bundleManifestDigest == $bundleManifest and (.microvm | has("signedManifestDigest") or has("signingKeyFingerprint") | not) and .version == "0.7.0" and .runnerProtocol == {minimum:7,maximum:7} and (.installerTools.reference | startswith("ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:")) and (.installBootstrap.location | endswith("/v0.7.0/install.sh")) and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.7.0-qualification-evidence.json")) and (.installerQualificationEvidence.location | endswith("/secondbox-0.7.0-installer-qualification-evidence.json"))' "$stage/secondbox-0.7.0-artifact-manifest.json" >/dev/null
   jq -e '.schemaVersion == "secondbox.standard-bundle/v4" and .profile.revisions[-1].number == 2 and ([.profile.revisions[].spec | has("runtimeBundleDigest") or has("toolchainBundleDigest")] | any | not) and .profile.revisions[-1].spec.network.requiresTenantEgressContext == true' "$stage/durable-coding.standard-bundle.json" >/dev/null
   # Revision 3 repeats revision 2 once Profiles stopped naming bundles; attributed
   # execution, unlimited lifetimes, and connection limits append later revisions.
@@ -180,11 +242,11 @@ if go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_two" >/dev
   exit 1
 fi
 
-if "$repo_root/scripts/release-stage.sh" --test-mode v1.2.3 "$work_dir/bad-version" >/dev/null 2>&1; then
+if "$repo_root/scripts/release-stage.sh" --test-mode --shared-from "$shared" v1.2.3 "$work_dir/bad-version" >/dev/null 2>&1; then
   echo "release staging accepted a noncanonical version" >&2
   exit 1
 fi
-if "$repo_root/scripts/release-stage.sh" 1.2.3 "$work_dir/dirty-real-stage" >/dev/null 2>&1; then
+if "$repo_root/scripts/release-stage.sh" --shared-from "$shared" 1.2.3 "$work_dir/dirty-real-stage" >/dev/null 2>&1; then
   echo "real release staging accepted dirty source or an absent exact tag" >&2
   exit 1
 fi
@@ -194,16 +256,16 @@ if "$repo_root/scripts/release-upload.sh" >/dev/null 2>&1; then
   exit 1
 fi
 
-RELEASE_IMAGE_PLATFORMS=linux/amd64 "$repo_root/scripts/release-stage.sh" --test-mode --candidate 0.7.0 "$work_dir/lean"
+RELEASE_IMAGE_PLATFORMS=linux/amd64 "$repo_root/scripts/release-stage.sh" --test-mode --candidate --shared-from "$shared" 0.7.0 "$work_dir/lean"
 go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$work_dir/lean"
 jq -e '.platforms.controlPlane == ["linux/amd64"] and (.platforms.hostBinaries | length == 4) and .gvisor.podQualificationEvidence == {location:"",digest:""}' "$work_dir/lean/secondbox-0.7.0-artifact-manifest.json" >/dev/null
 [[ ! -e "$work_dir/lean/secondbox-0.7.0-gvisor-pod-qualification-evidence.json" ]]
 
 # The arm64 artifact set carries an arm64 bundle, arm64 standard Profiles and no
-# gVisor, and reuses the architecture-neutral files of the final amd64 release.
+# gVisor, and stages the same shared files as the amd64 set, independently of it.
 amd64_final="$work_dir/bound-final"
 arm64_stage() { RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 "$repo_root/scripts/release-stage.sh" --test-mode "$@"; }
-if arm64_stage --shared-from "$amd64_final" 0.7.0 "$work_dir/arm64-with-amd64-bundle" >/dev/null 2>&1; then
+if arm64_stage --shared-from "$shared" 0.7.0 "$work_dir/arm64-with-amd64-bundle" >/dev/null 2>&1; then
   echo "release staging accepted an amd64 microVM bundle for an arm64 release" >&2
   exit 1
 fi
@@ -215,7 +277,7 @@ jq '.architecture = "arm64"' "$artifact_dir/manifest.json" >"$arm64_artifact_dir
   sha256sum kernel kernel-provenance.json rootfs-debian-license-inventory.json rootfs-debian-packages.lock rootfs-python-license-inventory.json rootfs-python.freeze rootfs-source-manifest.json rootfs.ext4 runtime-manifest.json secondbox-rootfs-contract.json shared.img toolchain-manifest.json manifest.json >SHA256SUMS
 )
 export SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$arm64_artifact_dir"
-for rejected in "--candidate --shared-from $amd64_final" "--shared-from $stage_installer_candidate" ""; do
+for rejected in "--candidate --shared-from $shared" "--build-only --shared-from $shared" "--shared-from $amd64_final" ""; do
   # shellcheck disable=SC2086
   if arm64_stage $rejected 0.7.0 "$work_dir/arm64-rejected" >/dev/null 2>&1; then
     echo "arm64 staging accepted options: ${rejected:-none}" >&2
@@ -223,8 +285,8 @@ for rejected in "--candidate --shared-from $amd64_final" "--shared-from $stage_i
   fi
   rm -rf "$work_dir/arm64-rejected"
 done
-arm64_stage --shared-from "$amd64_final" 0.7.0 "$work_dir/arm64" >/dev/null
-arm64_stage --shared-from "$amd64_final" 0.7.0 "$work_dir/arm64-again" >/dev/null
+arm64_stage --shared-from "$shared" 0.7.0 "$work_dir/arm64" >/dev/null
+arm64_stage --shared-from "$shared" 0.7.0 "$work_dir/arm64-again" >/dev/null
 diff -r "$work_dir/arm64" "$work_dir/arm64-again"
 go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$work_dir/arm64"
 arm64_manifest="$work_dir/arm64/secondbox-0.7.0-arm64-artifact-manifest.json"
@@ -244,9 +306,8 @@ for image in control-plane runner installer-tools microvm-artifacts; do [[ -f "$
 while IFS= read -r name; do
   [[ ! -e "$amd64_final/$name" ]] || cmp -s "$amd64_final/$name" "$work_dir/arm64/$name" || { echo "arm64 artifact set changed shared file $name" >&2; exit 1; }
 done < <(ls "$work_dir/arm64")
-cp -a "$amd64_final" "$work_dir/amd64-tampered"
-printf 'tampered' >>"$work_dir/amd64-tampered/secondbox_0.7.0_linux_arm64"
-if arm64_stage --shared-from "$work_dir/amd64-tampered" 0.7.0 "$work_dir/arm64-tampered" >/dev/null 2>&1; then
-  echo "arm64 staging accepted a shared binary that differs from the amd64 manifest" >&2
+tampered_shared; printf 'tampered' >>"$work_dir/shared-tampered/secondbox_0.7.0_linux_arm64"
+if arm64_stage --shared-from "$work_dir/shared-tampered" 0.7.0 "$work_dir/arm64-tampered" >/dev/null 2>&1; then
+  echo "arm64 staging accepted a shared binary that differs from the shared artifacts record" >&2
   exit 1
 fi

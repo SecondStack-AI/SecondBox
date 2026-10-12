@@ -56,10 +56,13 @@ func run(args []string) error {
 	if len(args) == 2 && args[0] == "installer-qualification-subject" {
 		return writeInstallerQualificationSubject(args[1])
 	}
-	if len(args) == 4 && args[0] == "shared-artifacts" {
-		return writeSharedArtifacts(args[1], args[2], args[3])
+	if len(args) == 5 && args[0] == "write-shared-artifacts-record" {
+		return writeSharedArtifactsRecord(args[1], args[2], args[3], args[4])
 	}
-	return errors.New("usage: secondbox-release-tool {standard-documents ARCHITECTURE OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|shared-artifacts AMD64_RELEASE_DIR VERSION SOURCE_COMMIT|verify STAGING_DIR}")
+	if len(args) == 4 && args[0] == "verify-shared-artifacts" {
+		return verifySharedArtifacts(args[1], args[2], args[3])
+	}
+	return errors.New("usage: secondbox-release-tool {standard-documents ARCHITECTURE OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|write-shared-artifacts-record SHARED_DIR VERSION SOURCE_COMMIT POSTGRES_IMAGE|verify-shared-artifacts SHARED_DIR VERSION SOURCE_COMMIT|verify STAGING_DIR}")
 }
 
 // Staging-only files of one guest architecture's artifact set carry the same
@@ -76,52 +79,115 @@ func ociMetadataFileName(image, guestArchitecture string) string {
 	return image + releasecontract.ArchitectureAssetSuffix(guestArchitecture) + ".oci.json"
 }
 
-// writeSharedArtifacts verifies the final amd64 release staged for version and
-// sourceCommit and prints the architecture-neutral files that another guest
-// architecture's artifact set reuses byte for byte.
-func writeSharedArtifacts(directory, version, sourceCommit string) error {
-	data, err := os.ReadFile(filepath.Join(directory, releasecontract.ArtifactManifestFileName(version, standardresources.ArchitectureAMD64)))
+// checkSharedArtifactFiles authenticates a shared artifacts directory apart
+// from its record: exactly the shared files of version as regular files with
+// their staged modes, package metadata of this release, and an install
+// bootstrap that embeds this version and the Linux amd64 deploy binary digest.
+func checkSharedArtifactFiles(directory, version, sourceCommit string, withRecord bool) (map[string]string, error) {
+	modes := releasecontract.SharedArtifactFileModes(version)
+	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return fmt.Errorf("shared amd64 release manifest: %w", err)
+		return nil, fmt.Errorf("shared artifacts directory: %w", err)
 	}
-	manifest, err := releasecontract.DecodeArtifactManifest(data)
-	if err != nil {
-		return err
+	present := map[string]bool{}
+	recordPresent := false
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == releasecontract.SharedArtifactsRecordFileName && withRecord {
+			if !entry.Type().IsRegular() {
+				return nil, fmt.Errorf("shared artifacts record %s is not a regular file", name)
+			}
+			recordPresent = true
+			continue
+		}
+		if _, ok := modes[name]; !ok {
+			return nil, fmt.Errorf("shared artifacts directory contains unknown entry %s", name)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm() != modes[name] {
+			return nil, fmt.Errorf("shared artifact %s must be a regular file with mode %04o, found %s", name, modes[name], info.Mode())
+		}
+		present[name] = true
 	}
-	guestArchitecture, err := manifest.GuestArchitecture()
-	if err != nil {
-		return err
-	}
-	if manifest.Version != version || manifest.SourceCommit != sourceCommit || manifest.Candidate || guestArchitecture != standardresources.ArchitectureAMD64 {
-		return fmt.Errorf("shared release is not the final amd64 release v%s of %s", version, sourceCommit)
-	}
-	if err := verifyPackageMetadata(directory, manifest); err != nil {
-		return err
-	}
-	names := []string{fmt.Sprintf("secondbox-%s-package-metadata.json", version)}
-	for _, reference := range append([]releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}, manifest.SBOMs...) {
-		name := filepath.Base(reference.Location)
+	digests := make(map[string]string, len(modes))
+	for name := range modes {
+		if !present[name] {
+			return nil, fmt.Errorf("shared artifacts directory lacks %s", name)
+		}
 		content, err := os.ReadFile(filepath.Join(directory, name))
 		if err != nil {
-			return fmt.Errorf("shared release object %s: %w", name, err)
+			return nil, err
 		}
-		if releasecontract.Digest(content) != reference.Digest {
-			return fmt.Errorf("shared release object %s digest mismatch", name)
-		}
-		names = append(names, name)
+		digests[name] = releasecontract.Digest(content)
 	}
-	for _, binary := range manifest.Binaries {
-		name := filepath.Base(binary.Location)
-		content, err := os.ReadFile(filepath.Join(directory, name))
-		if err != nil {
-			return fmt.Errorf("shared release binary %s: %w", name, err)
-		}
-		if strings.TrimPrefix(releasecontract.Digest(content), "sha256:") != binary.SHA256 {
-			return fmt.Errorf("shared release binary %s digest mismatch", name)
-		}
-		names = append(names, name)
+	if withRecord && !recordPresent {
+		return nil, errors.New("shared artifacts directory lacks its record")
 	}
-	sort.Strings(names)
+	if err := verifyPackageMetadata(directory, version, sourceCommit); err != nil {
+		return nil, err
+	}
+	bootstrap, err := os.ReadFile(filepath.Join(directory, "install.sh"))
+	if err != nil {
+		return nil, err
+	}
+	deployDigest := strings.TrimPrefix(digests[releasecontract.HostBinaryFileName(version, "secondbox-deploy", "linux/amd64")], "sha256:")
+	for _, line := range []string{"version='" + version + "'", "expected_sha256='" + deployDigest + "'"} {
+		if !strings.Contains("\n"+string(bootstrap)+"\n", "\n"+line+"\n") {
+			return nil, fmt.Errorf("shared install bootstrap lacks %s", line)
+		}
+	}
+	return digests, nil
+}
+
+// writeSharedArtifactsRecord records the shared files that release-build-shared.sh
+// produced in directory for version, sourceCommit and the bundled Postgres image.
+func writeSharedArtifactsRecord(directory, version, sourceCommit, postgresImage string) error {
+	digests, err := checkSharedArtifactFiles(directory, version, sourceCommit, false)
+	if err != nil {
+		return err
+	}
+	record := releasecontract.SharedArtifactsRecord{SchemaVersion: releasecontract.SharedArtifactsSchema, Identity: releasecontract.Identity{Version: version, Tag: "v" + version, SourceCommit: sourceCommit}, PostgresImage: postgresImage}
+	for _, name := range releasecontract.SharedArtifactFileNames(version) {
+		record.Files = append(record.Files, releasecontract.SharedArtifactFile{Name: name, Digest: digests[name]})
+	}
+	if err := record.ValidateForRelease(version, sourceCommit); err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(directory, releasecontract.SharedArtifactsRecordFileName), append(encoded, '\n'), 0o644)
+}
+
+// verifySharedArtifacts authenticates a shared artifacts directory for the
+// release a staging builds and prints the shared file names it stages.
+func verifySharedArtifacts(directory, version, sourceCommit string) error {
+	data, err := os.ReadFile(filepath.Join(directory, releasecontract.SharedArtifactsRecordFileName))
+	if err != nil {
+		return fmt.Errorf("shared artifacts record: %w", err)
+	}
+	record, err := releasecontract.DecodeSharedArtifactsRecord(data)
+	if err != nil {
+		return err
+	}
+	if err := record.ValidateForRelease(version, sourceCommit); err != nil {
+		return err
+	}
+	digests, err := checkSharedArtifactFiles(directory, version, sourceCommit, true)
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(record.Files))
+	for _, file := range record.Files {
+		if digests[file.Name] != file.Digest {
+			return fmt.Errorf("shared artifact %s digest differs from the shared artifacts record", file.Name)
+		}
+		names = append(names, file.Name)
+	}
 	_, err = fmt.Fprintln(os.Stdout, strings.Join(names, "\n"))
 	return err
 }
@@ -202,11 +268,10 @@ func writeManifest(inputPath, outputDirectory string) error {
 	if err != nil {
 		return err
 	}
-	binaries := make([]releasecontract.BinaryArtifact, 0, 8)
-	for _, name := range []string{"secondbox", "secondbox-deploy"} {
-		for _, platform := range []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"} {
-			filename := fmt.Sprintf("%s_%s_%s", name, input.Version, strings.ReplaceAll(platform, "/", "_"))
-			content, err := os.ReadFile(filepath.Join(outputDirectory, filename))
+	binaries := make([]releasecontract.BinaryArtifact, 0, len(releasecontract.HostBinaryNames)*len(releasecontract.HostBinaryPlatforms))
+	for _, name := range releasecontract.HostBinaryNames {
+		for _, platform := range releasecontract.HostBinaryPlatforms {
+			content, err := os.ReadFile(filepath.Join(outputDirectory, releasecontract.HostBinaryFileName(input.Version, name, platform)))
 			if err != nil {
 				return err
 			}
@@ -279,7 +344,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Identity: identity, Name: name, Document: bundleRef, Profiles: profiles})
 	}
-	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Candidate: input.Candidate, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: input.ImagePlatforms, Runner: []string{guestPlatform}, InstallerTools: []string{guestPlatform}, Guest: []string{guestPlatform}, QualifiedRunnerGuest: []string{guestPlatform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + input.InstallerToolsDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: input.PostgresImage}, InstallBootstrap: installBootstrap, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, BundleManifestDigest: input.MicroVMManifestDigest, RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, GVisor: gvisor, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, QualificationEvidence: qualificationEvidence, InstallerQualificationEvidence: installerQualificationEvidence, StandardBundles: bundles}
+	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Candidate: input.Candidate, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: releasecontract.HostBinaryPlatforms, ControlPlane: input.ImagePlatforms, Runner: []string{guestPlatform}, InstallerTools: []string{guestPlatform}, Guest: []string{guestPlatform}, QualifiedRunnerGuest: []string{guestPlatform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + input.InstallerToolsDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: input.PostgresImage}, InstallBootstrap: installBootstrap, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, BundleManifestDigest: input.MicroVMManifestDigest, RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, GVisor: gvisor, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, QualificationEvidence: qualificationEvidence, InstallerQualificationEvidence: installerQualificationEvidence, StandardBundles: bundles}
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
@@ -475,24 +540,24 @@ func verifyChecksums(directory string, allowlist []string, guestArchitecture str
 	return nil
 }
 
-func verifyPackageMetadata(directory string, manifest releasecontract.ArtifactManifest) error {
+func verifyPackageMetadata(directory, version, sourceCommit string) error {
 	packageMetadata := struct {
 		SchemaVersion int    `json:"schemaVersion"`
 		Version       string `json:"version"`
 		SourceCommit  string `json:"sourceCommit"`
 	}{}
-	data, err := os.ReadFile(filepath.Join(directory, fmt.Sprintf("secondbox-%s-package-metadata.json", manifest.Version)))
+	data, err := os.ReadFile(filepath.Join(directory, fmt.Sprintf("secondbox-%s-package-metadata.json", version)))
 	if err != nil {
 		return fmt.Errorf("release package metadata: %w", err)
 	}
-	if err := json.Unmarshal(data, &packageMetadata); err != nil || packageMetadata.SchemaVersion != 1 || packageMetadata.Version != manifest.Version || packageMetadata.SourceCommit != manifest.SourceCommit {
+	if err := json.Unmarshal(data, &packageMetadata); err != nil || packageMetadata.SchemaVersion != 1 || packageMetadata.Version != version || packageMetadata.SourceCommit != sourceCommit {
 		return errors.New("release package metadata identity mismatch")
 	}
 	return nil
 }
 
 func verifyCandidateMetadata(directory string, manifest releasecontract.ArtifactManifest, guestArchitecture string) error {
-	if err := verifyPackageMetadata(directory, manifest); err != nil {
+	if err := verifyPackageMetadata(directory, manifest.Version, manifest.SourceCommit); err != nil {
 		return err
 	}
 	if err := verifyQualificationEvidence(directory, manifest.Version, manifest.SourceCommit, guestArchitecture); err != nil {

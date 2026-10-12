@@ -25,6 +25,8 @@ else
 fi
 jq -s -e 'all(.[]; .candidate != true)' "${manifests[@]}" >/dev/null || { echo "release input is an installer candidate, not a publishable final release" >&2; exit 1; }
 jq -s -e '.[0].sourceCommit as $commit | all(.[]; .sourceCommit == $commit)' "${manifests[@]}" >/dev/null || { echo "the amd64 and arm64 artifact sets were staged from different commits" >&2; exit 1; }
+# Both sets publish the architecture-neutral files under the same names.
+jq -s -e 'map([.openapi, .goSdk, .typeScriptSdk, .binaries, .installBootstrap, .sboms, .bundledServices]) | .[0] as $first | all(.[]; . == $first)' "${manifests[@]}" >/dev/null || { echo "the amd64 and arm64 artifact sets pin different shared files" >&2; exit 1; }
 # Each set is uploaded from its own host; publish only complete sets.
 for allowlist in "${allowlists[@]}"; do
   [[ -f "$input/$allowlist" ]] || { echo "release input lacks $allowlist" >&2; exit 1; }
