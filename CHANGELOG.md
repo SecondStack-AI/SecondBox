@@ -4,7 +4,7 @@
 
 ## 0.25.0 - 2026-10-12
 
-SecondBox no longer signs release microVM bundles or client-selected execution images; integrity rests on digest pinning, the registry allowlist, Tenant authorization and the Runner's bundle checks. Deployments from v0.14.0 onward update in place with no database migration, but the Runner protocol advances to generation 7 exactly, so update the control plane and every Runner together. Delete the retired signing keys from `secondbox.toml` before updating, and re-materialize snapshot-resume templates afterwards. The execution bundle is the `secondbox-0.17.0` bundle without its signature files, and standard Profile revisions are unchanged. See the [v0.25.0 release notes](docs/releases/v0.25.0.md).
+SecondBox no longer signs release microVM bundles or client-selected execution images; integrity rests on digest pinning, the registry allowlist, Tenant authorization and the Runner's bundle checks. Deployments from v0.14.0 onward update in place with no database migration, but the Runner protocol advances to generation 7 exactly, so update the control plane and every Runner together. Delete the retired signing keys from `secondbox.toml` before updating, and materialize snapshot-resume templates from the new bundle before the updated Runners start. The execution bundle is the `secondbox-0.17.0` bundle without its signature files, and standard Profile revisions are unchanged. See the [v0.25.0 release notes](docs/releases/v0.25.0.md).
 
 ### Upgrade notes
 
