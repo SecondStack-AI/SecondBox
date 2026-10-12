@@ -3,17 +3,8 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 fail() { echo "SecondBox release: $*" >&2; exit 1; }
-full=false
-resume=false
-version=''
-for argument; do
-  case "$argument" in
-    --full) full=true ;;
-    --resume) resume=true ;;
-    *) [[ -z "$version" ]] || fail 'usage: just release VERSION [--full] [--resume]'; version="$argument" ;;
-  esac
-done
-[[ -n "$version" ]] || fail 'usage: just release VERSION [--full] [--resume]'
+[[ "$#" -eq 1 ]] || fail 'usage: just release VERSION'
+version="$1"
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || fail 'VERSION must be SemVer without v or build metadata'
 config="${RELEASE_ENV_FILE:-${HOME:?}/.config/secondbox/release.env}"
 [[ -f "$config" ]] || fail "copy deploy/release.env.example to $config and configure it"
@@ -21,15 +12,8 @@ bash -n "$config"
 set -a
 source "$config"
 set +a
-tier=release
-installer_flags=()
 export RELEASE_IMAGE_PLATFORMS=linux/amd64
 export RELEASE_GUEST_ARCHITECTURE=amd64
-if $full; then
-  tier=nightly
-  installer_flags=(--full)
-  export RELEASE_IMAGE_PLATFORMS=linux/amd64,linux/arm64
-fi
 # Pin the reviewed release toolchain even when invoked through a mise shim.
 : "${RELEASE_GOROOT:?set RELEASE_GOROOT}"
 : "${RELEASE_PROTOC_BIN:?set RELEASE_PROTOC_BIN}"
@@ -44,12 +28,11 @@ for tool in git jq docker virsh virt-install qemu-img cloud-localds ssh scp ssh-
   command -v "$tool" >/dev/null || fail "missing tool: $tool"
 done
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'requires a clean tree including untracked files'
-[[ "$(git symbolic-ref --short HEAD)" == main ]] || fail 'HEAD must be on main'
 source_commit="$(git rev-parse HEAD)"
 tag="v$version"
-if git show-ref --verify --quiet "refs/tags/$tag"; then
-  [[ "$(git rev-parse "refs/tags/$tag^{commit}")" == "$source_commit" ]] || fail "$tag already identifies another commit"
-fi
+# The pushed tag starts the release; it must identify HEAD on fetched main.
+[[ "$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}")" == "$source_commit" ]] || fail "$tag must exist and identify HEAD"
+git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main || fail "$tag is not on origin/main"
 for key in SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR SECONDBOX_INSTALLER_QUALIFICATION_IMAGE SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT RELEASE_OUTPUT_ROOT; do
   [[ "${!key:-}" == /* && -e "${!key}" && ! -L "${!key}" ]] || fail "$key must be an existing absolute non-symlink path"
 done
@@ -65,18 +48,7 @@ export SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE="$repo_root/.tmp/gvisor-pod-l
 build="$RELEASE_OUTPUT_ROOT/$version-build"
 candidate="$RELEASE_OUTPUT_ROOT/$version-candidate"
 output="$RELEASE_OUTPUT_ROOT/$version"
-# --resume reuses a retained checksummed build and commit-exact scenario evidence
-# after a run failed in a gate; only the gates are requalified.
-if $resume; then
-  [[ -d "$build" && ! -L "$build" && -f "$build/.release-build.json" ]] || fail "resume requires a retained build: $build"
-  for evidence in .tmp/scenario-qualification-evidence.json "$SECONDBOX_GVISOR_QUALIFICATION_EVIDENCE"; do
-    [[ "$(jq -r '.sourceCommit' "$evidence" 2>/dev/null)" == "$source_commit" ]] || fail "resume requires commit-exact evidence: $evidence"
-  done
-  ! $full || [[ "$(jq -r '.sourceCommit' "$SECONDBOX_GVISOR_POD_QUALIFICATION_EVIDENCE" 2>/dev/null)" == "$source_commit" ]] || fail 'resume requires commit-exact pod evidence'
-  for path in "$candidate" "$output"; do [[ ! -e "$path" && ! -L "$path" ]] || fail "output already exists: $path"; done
-else
-  for path in "$build" "$candidate" "$output"; do [[ ! -e "$path" && ! -L "$path" ]] || fail "output already exists: $path"; done
-fi
+for path in "$build" "$candidate" "$output"; do [[ ! -e "$path" && ! -L "$path" ]] || fail "output already exists: $path"; done
 for device in /dev/kvm /dev/net/tun; do
   [[ -c "$device" && -r "$device" && -w "$device" ]] || fail "requires accessible $device"
 done
@@ -92,24 +64,20 @@ guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-16384}"
 [[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 13312 && guest_memory <= 1048576)) || fail 'QUALIFY_GUEST_MEMORY_MIB must be 13312..1048576 (installer requires 12 GiB usable RAM)'
 available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
 ((available_mib >= guest_memory+4096)) || fail 'insufficient memory for an installer guest and 4 GiB host reserve'
-# Lean qualification uses one installer guest; full qualification uses three.
 required_disk_gib=100
-! $full || required_disk_gib=200
 for path in "$RELEASE_OUTPUT_ROOT" "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT"; do
   available_kib="$(df -Pk "$path" | awk 'NR==2 {print $4}')"
   ((available_kib >= required_disk_gib*1024*1024)) || fail "less than $required_disk_gib GiB free at $path"
 done
 export QUALIFY_ENV_FILE="$config"
-scripts/qualify.sh --tier "$tier" --preflight
+scripts/qualify.sh --tier release --preflight
 mkdir -p .tmp/release
 exec 8>.tmp/release/checkout.lock
 flock -n 8 || fail 'another release owns this checkout'
-git show-ref --verify --quiet "refs/tags/$tag" || git tag "$tag" "$source_commit"
 run="$(date -u +%Y%m%dT%H%M%S)-$$"
 directory="$repo_root/.tmp/release/$run"
 mkdir -m 700 "$directory"
 echo "Release run: $run ($source_commit); logs: $directory"
-! $resume || echo "Resuming from retained build $build: requalifying gates only"
 started=$SECONDS
 stage() {
   local name="$1" start=$SECONDS status=0; shift
@@ -134,24 +102,12 @@ finish() {
   exit "$status"
 }
 trap finish EXIT
-if $resume; then
-  stage qualification /usr/bin/just qualify --tier "$tier" --only gates || fail "gate requalification failed; inspect $directory"
-else
-  stage qualification /usr/bin/just qualify --tier "$tier" || fail "qualification failed; inspect $directory"
-  stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only "$version" "$build" || fail "build failed; inspect $directory"
-fi
+stage qualification /usr/bin/just qualify --tier release || fail "qualification failed; inspect $directory"
+stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only "$version" "$build" || fail "build failed; inspect $directory"
 stage candidate scripts/release-stage.sh --candidate --from-build "$build" "$version" "$candidate"
 export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
 export SECONDBOX_INSTALLER_RELEASE_DIRECTORY="$candidate"
-stage installer /usr/bin/just test-installer-qualified "${installer_flags[@]}"
+stage installer /usr/bin/just test-installer-qualified
 stage stage scripts/release-stage.sh --from-build "$build" "$version" "$output"
 [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'source changed during release'
 printf 'Staged amd64 release: %s\n' "$output"
-printf 'Optionally copy it without its *.oci.tar files to an arm64 release host and stage the arm64 artifact set there:\n'
-printf '/usr/bin/just release-arm64 %q AMD64_RELEASE_COPY\n' "$version"
-printf 'Publish explicitly; upload a staged arm64 set first, then this output, which dispatches the publisher:\n'
-printf 'git push origin refs/tags/%q\n' "$tag"
-printf '/usr/bin/just release-upload %q %q\n' "$version" "$output"
-if git cat-file -e "refs/tags/$tag:docs/releases/$tag.md" 2>/dev/null; then
-  printf '# Release notes: docs/releases/%s.md (read from the tag)\n' "$tag"
-fi

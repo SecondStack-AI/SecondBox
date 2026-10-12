@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "$repo_root/scripts/test-prepare-gvisor-qualification.sh"
 workflow="$repo_root/.github/workflows/release.yml"
+tag_workflow="$repo_root/.github/workflows/release-tag.yml"
 stager="$repo_root/scripts/release-stage.sh"
 uploader="$repo_root/scripts/release-upload.sh"
 publisher="$repo_root/scripts/release-publish.sh"
@@ -22,8 +23,31 @@ rg -q 'gh workflow run release.yml' "$uploader"
 rg -q 'qualification-evidence' "$stager"
 rg -q '^export LC_ALL=C$' "$stager"
 
-if rg -q 'qualif|/dev/kvm|test-scenario|self-hosted' "$repo_root/.github/workflows"; then
-  echo "GitHub workflows contain a forbidden qualification step" >&2
+# Only the tag workflow runs on the self-hosted release runners; it stages
+# through the release scripts, uploads the arm64 set first, and leaves
+# publication to the hosted publisher.
+if rg -q 'qualif|/dev/kvm|test-scenario|self-hosted' "$workflow" "$repo_root/.github/workflows/ci.yml"; then
+  echo "GitHub-hosted workflows contain a forbidden qualification step" >&2
+  exit 1
+fi
+rg -q "tags: \['v\[0-9\]\*'\]" "$tag_workflow"
+rg -q 'runs-on: \[self-hosted, Linux, X64, secondbox-release-amd64\]' "$tag_workflow"
+rg -q 'runs-on: \[self-hosted, Linux, ARM64, secondbox-release-arm64\]' "$tag_workflow"
+rg -q '/usr/bin/just release "\$RELEASE_VERSION"' "$tag_workflow"
+# Tag-derived values reach shell steps only through the environment.
+if awk '/^ +(- )?run:/ {block = 1; indent = match($0, /[^ -]/); if ($0 ~ /\$\{\{/) found = 1; next}
+  block && match($0, /[^ ]/) > indent && $0 ~ /\$\{\{/ {found = 1}
+  block && match($0, /[^ ]/) <= indent {block = 0}
+  END {exit !found}' "$tag_workflow"; then
+  echo "tag workflow interpolates expressions into shell source" >&2
+  exit 1
+fi
+rg -q 'needs: \[stage-amd64, stage-arm64\]' "$tag_workflow"
+test "$(rg -c 'scripts/release-upload.sh' "$tag_workflow")" = 2
+test "$(rg -c "if: \\$\\{\\{ !contains\\(github.ref_name, '-dryrun.'\\) \\}\\}" "$tag_workflow")" = 2
+rg -q -- "--exclude='\*.oci.tar' -cf" "$tag_workflow"
+if rg -q 'release-publish|npm publish|skopeo|id-token|packages: write' "$tag_workflow"; then
+  echo "tag workflow publishes instead of dispatching the hosted publisher" >&2
   exit 1
 fi
 if rg -q 'qualif|/dev/kvm|test-scenario|self-hosted' "$uploader" "$publisher"; then
@@ -53,7 +77,7 @@ for dockerfile in "$repo_root/Dockerfile" "$repo_root/deploy/installer-tools.Doc
   done < <(awk '$1 == "FROM" {print $2}' "$dockerfile")
 done
 
-if rg -n '^\s*(-\s+)?uses:\s*[^ ]+@(main|master|v[0-9]+([.]?[0-9]+)*)\s*$' "$workflow"; then
+if rg -n '^\s*(-\s+)?uses:\s*[^ ]+@(main|master|v[0-9]+([.]?[0-9]+)*)\s*$' "$workflow" "$tag_workflow"; then
   echo "release workflow contains an unpinned external action" >&2
   exit 1
 fi

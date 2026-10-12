@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 # Stages the arm64 artifact set of a release on a Linux arm64 KVM host: scenario
 # qualification on this host, then arm64 images, bundle and standard Profiles
-# beside the architecture-neutral files of the final amd64 release of HEAD.
+# beside the architecture-neutral files of the final amd64 release of the tag.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 fail() { echo "SecondBox arm64 release: $*" >&2; exit 1; }
@@ -26,12 +26,10 @@ for tool in git jq docker sha256sum openssl npm node flock strings; do
   command -v "$tool" >/dev/null || fail "missing tool: $tool"
 done
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'requires a clean tree including untracked files'
-[[ "$(git symbolic-ref --short HEAD)" == main ]] || fail 'HEAD must be on main'
 source_commit="$(git rev-parse HEAD)"
 tag="v$version"
-if git show-ref --verify --quiet "refs/tags/$tag"; then
-  [[ "$(git rev-parse "refs/tags/$tag^{commit}")" == "$source_commit" ]] || fail "$tag already identifies another commit"
-fi
+[[ "$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}")" == "$source_commit" ]] || fail "$tag must exist and identify HEAD"
+git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main || fail "$tag is not on origin/main"
 for key in SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR RELEASE_OUTPUT_ROOT; do
   [[ "${!key:-}" == /* && -e "${!key}" && ! -L "${!key}" ]] || fail "$key must be an existing absolute non-symlink path"
 done
@@ -47,7 +45,6 @@ docker buildx inspect "$RELEASE_BUILDX_BUILDER" >/dev/null
 mkdir -p .tmp/release
 exec 8>.tmp/release/checkout.lock
 flock -n 8 || fail 'another release owns this checkout'
-git show-ref --verify --quiet "refs/tags/$tag" || git tag "$tag" "$source_commit"
 directory="$repo_root/.tmp/release/$(date -u +%Y%m%dT%H%M%S)-$$-arm64"
 mkdir -m 700 "$directory"
 echo "arm64 release run ($source_commit); logs: $directory"
@@ -55,5 +52,4 @@ echo "arm64 release run ($source_commit); logs: $directory"
 env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" RELEASE_GUEST_ARCHITECTURE=arm64 RELEASE_IMAGE_PLATFORMS=linux/arm64 \
   scripts/release-stage.sh --shared-from "$shared" "$version" "$output" >"$directory/stage.log" 2>&1 || fail "staging failed; inspect $directory/stage.log"
 [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'source changed during release'
-printf 'Staged arm64 artifact set: %s\nAfter the tag push, upload it from this host before the amd64 set:\n' "$output"
-printf '/usr/bin/just release-upload %q %q\n' "$version" "$output"
+printf 'Staged arm64 artifact set: %s\n' "$output"

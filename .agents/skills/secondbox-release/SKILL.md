@@ -6,64 +6,47 @@ description: Cut, tag, publish, verify, or retract SecondBox releases; prepare r
 # SecondBox release
 
 Read [release operator setup](../../../docs/operations/release-operator-setup.md)
-for mechanics and [worklog](../worklog/SKILL.md) for continuity. This skill owns
+for mechanics and runner setup, and [worklog](../worklog/SKILL.md) for continuity. This skill owns
 release decisions, preflight, recovery and close-out. Follow the user's existing
 authorization for PRs, merges and publication; loading this skill does not grant
 it. Prepare a reviewable result before requesting any missing authorization.
 
 ## Invariants
 
-- Cut only with `just release VERSION` (or `--resume` after a gate-only
-  failure) on the release host, from clean `main` equal to fetched
-  `origin/main`. Never construct a release with `git tag`, `release-stage`
-  and `release-upload`, or tag a PR branch. The manual operator appendix
-  explains mechanics for exceptional hosts, not an alternative skill workflow.
-- Push only after successful staging, with the printed command. Pushed tags
-  are immutable. Retract a bad Go release in `go.mod`, document it in the
-  changelog and release notes, then issue the next patch; never move the tag.
+- A release is cut only by pushing a `vX.Y.Z` tag on a merged commit of
+  `origin/main`; `release-tag.yml` qualifies and stages it on the self-hosted
+  release runners and dispatches the hosted publisher. Never tag a PR branch,
+  run `release-upload` by hand, or construct a release from separate
+  `release-stage` and upload commands.
+- Push the tag only after the notes and the changelog cut are on `main`,
+  including pre-1.0. Only an explicit operator decision may skip them; record
+  it in the ledger.
+- A pushed tag is immutable, even when its release failed: the Go module proxy
+  can cache it at once. A fix ships as the next patch; retract the failed or bad
+  version in `go.mod`, document it in the changelog and release notes; never
+  move or re-push a tag. Only `-dryrun.N` tags are deleted after use.
   Leave v0.13.0 intact: its off-main tag has the re-landed tree and downstream pins.
-- The amd64 and arm64 release hosts are whichever qualified Linux KVM hosts
-  the operator chooses; take paths from that host's `release.env`, never assume them.
-- A release publishes the amd64 artifact set and, when an arm64 KVM host is
-  available, an arm64 set from the same commit. `just release-arm64 VERSION
-  AMD64_RELEASE_DIR` stages it from a copy of the final amd64 output (without
-  `*.oci.tar`). Each host uploads its own output, arm64 first; the amd64 upload
-  dispatches the publisher.
-- Reserve the host for one release. Inspect `secondbox-suite-*` user units,
-  `sbq-*` libvirt domains, matching containers, `.tmp/release/checkout.lock`, and
-  `RELEASE_OUTPUT_ROOT/VERSION{,-build,-candidate}`. Identify owners and wait for
-  live work; never stop another operator's resources.
-- Freeze the checkout through final staging: no edits, branch switches or
-  untracked notes. Prefer an operator-designated dedicated release worktree
-  on `main`; creating/reassigning one is a separate setup choice. Worklogs go
-  to the ignored primary-checkout ledger; other notes go outside the frozen tree.
-- Launch long work using the operator doc's `systemd-run --user` command with a
-  unique `secondbox-suite-release-VERSION-TIMESTAMP` unit. Check release status
-  no more often than every five minutes (use a monitor when available). Keep
-  the user informed without repeatedly polling. Do not rely on shell background jobs.
+- The release runners are dedicated hosts. Do not stop another operator's
+  units, domains, Compose stacks, or live deployment on them; take paths from
+  each runner's `release.env`, never assume them.
 - Never publish incomplete artifacts, qualification waivers or source-only
-  releases. Report “not released” with the failing stage when prerequisites fail.
-- Land notes and the changelog cut on `main` before tagging, including pre-1.0.
-  Only an explicit operator decision may skip them; record it in the ledger.
+  releases. Report "not released" with the failing job and stage.
 - Keep credentials and password-manager contents out of repository, notes,
   logs and worklog. Reference each item by name only.
 
 ## Procedure
 
-1. Read the latest two worklog files and operator doc. Fetch `origin`, inspect
-   `gh release list --limit 5` (local tags include unpublished/retracted tags),
-   and `git log --oneline vLAST..origin/main`.
+1. Read the latest two worklog files and the operator doc. Fetch `origin`,
+   inspect `gh release list --limit 5` (local tags include unpublished/retracted
+   tags), and `git log --oneline vLAST..origin/main`.
 2. Choose a minor version pre-1.0 for protocol generation, migration checksum,
    bundle or clean-install boundary changes; patch otherwise.
    Ask only if the evidence leaves a consequential ambiguity.
-3. Preflight without changing host state: check ownership above; compare the
-   **key names** in `release.env` with `deploy/release.env.example` without
-   printing secrets; inspect `df` (100 GiB free per output/workspace filesystem for lean releases,
-   200 GiB for `--full`) and MemAvailable (guest plus 4 GiB, guest at least 13312 MiB).
-   On smaller hosts, set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` to bound scenario concurrency.
-   Check dependencies match the lockfile; provision with
-   `npm ci --ignore-scripts` before launch if needed. For `--full`, reserve the
-   no-KVM VM and verify the reviewed arm64 binfmt registration and Buildx platforms.
+3. Check both release runners are online and idle (`gh api
+   repos/SecondStack-AI/SecondBox/actions/runners` needs admin; otherwise
+   check a recent run or the hosts). For a changed release input (bundle,
+   installer image, Postgres pin), update each runner's `release.env` first and
+   compare its **key names** with the matching example without printing secrets.
 4. Prepare branch `release/vX.Y.Z`, PR title `docs(release): prepare vX.Y.Z`:
    cut `## Unreleased` to `## X.Y.Z - DATE` and leave a fresh Unreleased section;
    write `docs/releases/vX.Y.Z.md` using v0.14.0 as the structure (deployment
@@ -71,35 +54,23 @@ it. Prepare a reviewable result before requesting any missing authorization.
    docs and verify the version-neutral downstream integration instructions.
    Wait for CI and follow the repository/operator review and merge policy;
    do not assume notes-only PRs waive a required review.
-5. After merge, `git switch main` and `git pull --ff-only`; verify HEAD equals
-   `origin/main` and contains the notes merge. Launch `just release X.Y.Z`
-   under the documented user service. Record HEAD, UTC start, unit and run ID
-   in the worklog. Wait for the final result and inspect `timing.md` and failed logs.
-6. On failure, use the table below. When only a gate failed and the build and
-   every scenario stage passed, relaunch as `just release X.Y.Z --resume` (add
-   `--full` if the original run had it): it verifies the retained build and
-   commit-exact evidence, requalifies the gates, and continues from candidate.
-   Any other failure means a full relaunch; remove only this run's candidate
-   and final directories first. A code change must land on main first and
-   invalidates all commit-bound evidence. Delete a local tag only after checking
-   the remote has no such tag; then relaunch the entire flow at the new merged commit.
-7. Optionally stage the arm64 set: copy the final amd64 output without `*.oci.tar` to the
-   arm64 host, reserve it like the amd64 host, and launch
-   `just release-arm64 X.Y.Z COPY` from clean `main` at the same commit under a
-   user service. A failure there means rerunning that command after removing its
-   own `X.Y.Z-arm64` output; `TestScenarioDirectExecDeadlineDeliversTerminalAndReleasesQuota`
-   is a known flake on that host too. A code fix restarts both stagings at the new commit.
-   After the stagings succeed, execute the printed tag push and then
-   `just release-upload X.Y.Z OUTPUT` on each host for its own output, the
-   arm64 host first, within publication authorization.
-   Upload reads `docs/releases/vX.Y.Z.md` from the tag automatically, or accepts
-   an explicit third `NOTES_FILE` argument. Do not edit the published body as
-   routine close-out. Locate the dispatched `release.yml` run for this version
-   (do not assume the newest run is yours) and watch its ID with `--exit-status`.
+5. After merge, fetch, tag the merge commit (`git tag vX.Y.Z origin/main`
+   after confirming it contains the notes merge) and push the tag within
+   publication authorization. Record the commit, UTC start and the
+   `release-tag.yml` run ID in the worklog. Watch it with `gh run watch RUN
+   --exit-status`, checking no more often than every five minutes.
+6. On failure, read the failed job log and the stage logs kept on that runner
+   under `RELEASE_OUTPUT_ROOT/logs/`; use the table below. A flake or host
+   problem is recovered with **Re-run failed jobs**: each job replaces this
+   version's earlier outputs on its host. A code change lands on main first and
+   invalidates all commit-bound evidence; it ships as the next patch version.
+7. The `upload-amd64` job dispatches `release.yml`. Locate that run for this
+   version (do not assume the newest run is yours) and watch it with
+   `--exit-status`. Do not edit the published body as routine close-out.
 8. Verify `gh release view vX.Y.Z --json isDraft,isPrerelease,body,assets`: stable,
    expected notes plus fenced install and SDK footer, complete assets matching the staged
-   manifests. Historical counts were 29 lean / 30 full before the arm64 set;
-   derive expectations from this release instead of treating counts as permanent. Check
+   manifests. Derive asset expectations from this release instead of treating
+   historical counts as permanent. Check
    `npm view @secondstack-ai/secondbox@X.Y.Z version`, and use a fresh temporary
    `GOMODCACHE` with `GOFLAGS=-mod=mod GOPROXY=https://proxy.golang.org go list -m
    github.com/SecondStack-AI/SecondBox@vX.Y.Z`. Inspect all six GHCR version tags
@@ -111,38 +82,23 @@ it. Prepare a reviewable result before requesting any missing authorization.
    memory. Supply the [downstream hand-off](../../../docs/operations/downstream-release-integration.md):
    both manifest URLs/digests, SHA256SUMS digests, npm integrity, OCI and binary digests,
    Profile revision/spec digests, platform matrix and protocol window. State
-   whether deployments may update or must reinstall. After success remove this
-   run's build/candidate directories and temporary worktrees it created, within
-   existing cleanup authorization; retain final artifacts and evidence.
+   whether deployments may update or must reinstall. Final outputs stay on the
+   runners under `RELEASE_OUTPUT_ROOT`; prune old versions when disk runs short.
 
 ## Failure triage
 
 | Symptom | Investigation and action |
 | --- | --- |
-| Output already exists | Confirm this failed run owns it; archive or remove only its versioned outputs before a full retry. Retain the build for recovery. |
-| Checkout lock held | Inspect owning processes and units; wait for a live owner. `flock` releases on process exit. A leftover file is harmless: never unlink a held lock (that could permit concurrent runs). |
-| `sbq-` domains | Confirm owner is gone before destroying/undefining this run's orphan with `virsh -c qemu:///system`; preserve other guests. |
+| `sbq-` domains | A cancelled job can leave its installer guest. Confirm no release job runs, then destroy/undefine that orphan with `virsh -c qemu:///system`. |
+| Job queued, never starts | The runner for that label is offline or busy; check its service on the host. |
 | Missing env key | Compare with the example keys; correct operator config, not script validation. |
-| Several tests fail at 0.00s | Inspect disposable Postgres readiness and environment leaks; `--resume` once. A repeat requires fixing the cause. |
+| Several tests fail at 0.00s | Inspect disposable Postgres readiness and environment leaks; re-run the failed job once. A repeat requires fixing the cause. |
 | `UnsafeConfiguration/group_or_other_readable` | Correct unsafe file modes; never weaken the test. |
 | Firecracker “Runner did not enroll” cascade | Inspect enrollment logs; retry once if evidence indicates the known restart flake. Repetition requires investigation. |
 | Control-plane timeouts | Check host load and `QUALIFY_MAX_STACKS`; avoid concurrent suites. |
 | Storage pressure admission denied | Check /tmp and workspace disk use; free only owned disposable data, never lower admission thresholds. |
 | Firecracker websocket close 1006 | Compare shipped guest bundle provenance with guest commits; inspect the host firewall. |
-| Full arm64 build fails | Verify binfmt after reboot and selected Buildx platforms; use reviewed host setup, not a guessed privileged installer. |
-| Wrong Go / mise version absent | Load release.env and pin RELEASE_GOROOT as below. |
+| Wrong Go / mise version absent | Correct `RELEASE_GOROOT` in that runner's release.env. |
 | Lint errors from another worktree | Use `GOLANGCI_LINT_CACHE=$PWD/.tmp/golangci-lint`. |
 | npm 404 after publish | Poll with a five-minute bound, then inspect the matching workflow log. |
 | Historical published body is an install one-liner | For an explicitly authorized repair, use `gh release edit vX.Y.Z --notes-file docs/releases/vX.Y.Z.md`; new publication preserves notes automatically. |
-
-## Gates-only recovery from a retained build
-
-`just release X.Y.Z --resume` is the only recovery path. It refuses to run
-unless `RELEASE_OUTPUT_ROOT/X.Y.Z-build` exists with its checksums, every
-required scenario evidence file names HEAD (pod evidence too for `--full`),
-and the candidate and final directories are absent. It then requalifies the
-gates, builds the candidate from the retained build, runs installer
-qualification, and stages the final release, printing the same publish
-commands as a fresh run. Launch it under the same user-service wrapper and
-record the original and resumed run IDs in the worklog. If the preconditions
-fail, do not assemble the stages by hand; relaunch the full flow.

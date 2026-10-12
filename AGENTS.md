@@ -19,4 +19,4 @@
 
 - Project skills live in `.agents/skills/` (Codex) with symlinks in `.claude/skills/` (Claude). `secondbox-release` owns cutting, publishing, verifying, and retracting releases; `worklog` owns the shared session ledger.
 - Read `.worklog/` in the primary worktree (today's UTC file and the most recent earlier file) at session start and append at hand-off, after any release step, and whenever you discover a host or process gotcha. Follow the `worklog` skill; the directory is git-ignored and must never be committed.
-- Releases are cut only by `just release VERSION` from a clean `origin/main` checkout; never push a `v*` tag or run `release-upload` outside that flow; a run that failed only in a gate continues with `just release VERSION --resume`.
+- Releases are cut only by pushing a `v*` tag on a merged `origin/main` commit after the release notes landed; `release-tag.yml` qualifies, stages and uploads on the self-hosted release runners and dispatches the publisher. Never run `release-upload` by hand.

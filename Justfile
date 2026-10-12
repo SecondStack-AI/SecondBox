@@ -200,11 +200,10 @@ preship: test-non-kvm
 qualify *args:
     scripts/qualify.sh {{args}}
 
-# --resume requalifies only the gates and continues from the retained build.
-release version *flags:
-    scripts/release.sh "{{version}}" {{flags}}
+# Run by .github/workflows/release-tag.yml on the amd64 release runner after a v* tag push.
+release version:
+    scripts/release.sh "{{version}}"
 
-# On the arm64 release host, after `just release VERSION` staged the amd64 set.
 release-arm64 version amd64_release_dir:
     scripts/release-arm64.sh "{{version}}" "{{amd64_release_dir}}"
 

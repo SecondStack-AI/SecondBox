@@ -62,8 +62,8 @@ detached, and rebuilds the guest agent. Pod evidence retains the absent-KVM
 requirement. Missing prerequisites fail before stages start. The VM is left
 running; reserve it exclusively for nightly qualification.
 
-Qualification covers gates and scenarios. `just release VERSION --full` adds
-the arm64 image build and all three installer modes to that nightly matrix.
+Qualification covers gates and scenarios. `just test-installer-qualified --full`
+runs all three installer modes.
 
 Logs and a stage/result/wall-clock table are under `.tmp/qualify/RUN/`; the run
 ID is printed at launch. Stages survive terminal loss through a user systemd
@@ -73,7 +73,7 @@ service (or `setsid` where user services are unavailable). Reattach with `--wait
 selects another explicit Bash configuration, which `just release` uses for its
 superset `release.env`.
 
-After merging to clean `main`, use `just release VERSION` to qualify, build,
+A pushed release tag runs `just release VERSION` on the amd64 release runner to qualify, build,
 run the installer guests and stage the release. See [release operator setup](release-operator-setup.md)
 for configuration, memory limits and publication. The manual prerequisites and
 recipes below remain available for hosts without this automation.
