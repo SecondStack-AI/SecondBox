@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Sandbox creation, Snapshot clone, and Workspace relocation home a Profile that permits attributed execution only on a Runner advertising `per-exec-attribution`. Before, such a Sandbox could be homed on a Runner without an attributed gateway, and its start then waited with no Assignment and no error; creation now refuses with the existing retryable `home_runner_unavailable` when no Runner in the pool has an attributed gateway ([#217](https://github.com/SecondStack-AI/SecondBox/issues/217)).
 - The installer post-install smoke allows 15 minutes for each smoke Sandbox to become ready instead of the CLI's 5-minute interactive default, and gives each smoke Profile its own budget instead of one shared 10 minutes, so the first cold preparation of the release image on a minimum host no longer fails installation.
 
 ## 0.25.0 - 2026-10-12
