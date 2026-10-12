@@ -72,7 +72,8 @@ jq -e '.schemaVersion == "secondbox.install.vm-scenario/v1" and (.requiredAssert
 
 # Candidates install with agent-compartment sizing and a 1 vCPU / 1 GiB control
 # reserve, which needs 2 GiB of guest MemTotal; 2560 MiB leaves room for kernel reservations.
-guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-3072}"
+# The 4096 MiB default leaves page cache for the smoke's cold release-image preparation.
+guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-4096}"
 [[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 2560 && guest_memory <= 1048576)) || { echo 'QUALIFY_GUEST_MEMORY_MIB must be 2560..1048576 (the qualified installer sizing requires 2 GiB usable RAM)' >&2; exit 1; }
 guest_vcpus=4
 # The recreation mode first installs v0.7.2, which has no sizing options and requires 12 GiB of usable RAM and six CPUs.

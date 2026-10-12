@@ -82,8 +82,13 @@ lifetime ceilings use the contract maximum of 31,536,000 seconds.
 
 The platform CLI session includes those refs and can both apply resources and
 run Sandboxes. Smoke executes `secondbox run agent-compartment-isolated --
-/bin/echo hello`, then the same command with `durable-coding` when the Runner
-advertises the generated context. Each temporary Sandbox is deleted by `run`.
+/bin/echo hello` with the release microVM image, then the same command with
+`durable-coding` when the install is sized for it. An `agent-compartment` sizing
+smokes only the isolated Profile: `agent-compartment` permits attributed
+execution, which places only on a Runner with an attributed gateway, and a
+guided install never configures one. The first run prepares the image cold, so
+each smoke Sandbox may take 15 minutes to become ready, and each Profile has
+its own budget. Each temporary Sandbox is deleted by `run`.
 The receipt records stdout and exit status. Without tenancy, the receipt states
 that smoke checked records only and did not execute a guest command.
 

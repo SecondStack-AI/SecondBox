@@ -820,3 +820,16 @@ func TestInstalledRunnerReadinessFollowsPlanSandboxProfile(t *testing.T) {
 		t.Fatalf("default plan accepted agent-compartment capacity: %t, %v", ok, err)
 	}
 }
+
+// The first smoke run prepares the release image cold, which takes minutes on a
+// minimum host, so the CLI's interactive ready default must not bound it.
+func TestInstalledSmokeRunBoundsColdImagePreparationPerProfile(t *testing.T) {
+	arguments := installedSmokeRunArguments("agent-compartment-isolated", "registry.example/secondbox/image@sha256:abc", "installer-smoke-x")
+	want := []string{"run", "agent-compartment-isolated", "--image", "registry.example/secondbox/image@sha256:abc", "--name", "installer-smoke-x", "--ready-timeout", "15m0s", "--deadline", "1m0s", "--", "/bin/echo", "hello"}
+	if !slices.Equal(arguments, want) {
+		t.Fatalf("smoke run arguments = %v", arguments)
+	}
+	if installedSmokeProfileBudget < installedSmokePlacementTimeout+installedSmokeReadyTimeout+installedSmokeExecDeadline+installedSmokeDeletionTimeout {
+		t.Fatalf("per-Profile smoke budget %s does not cover placement, ready, exec, and deletion", installedSmokeProfileBudget)
+	}
+}

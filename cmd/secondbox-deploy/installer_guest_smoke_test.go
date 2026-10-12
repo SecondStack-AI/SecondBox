@@ -25,19 +25,23 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build CLI: %v: %s", err, output)
 	}
+	// agent-compartment permits attributed execution, which no guided install
+	// can place, so its sizing smoke boots only the isolated Profile.
 	for _, test := range []struct {
 		name     string
-		context  bool
+		sizing   string
+		want     []string
 		exitCode int
-	}{{"both-profiles", true, 0}, {"guest-failure", true, 7}} {
+	}{
+		{"both-profiles", "", []string{"agent-compartment-isolated", "durable-coding"}, 0},
+		{"agent-compartment-sizing", standardresources.AgentCompartment, []string{"agent-compartment-isolated"}, 0},
+		{"guest-failure", "", []string{"agent-compartment-isolated", "durable-coding"}, 7},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			advertisesContext := test.context
-			plan := install.InstallPlan{OperationID: "install_0123456789abcdef", CLI: install.CLIPlan{ConfigPath: filepath.Join(t.TempDir(), "config.json"), TenantRef: "local", SubjectRef: "local-operator"}, Paths: []install.PlannedPath{{Name: "secondbox-binary", Path: binary}}}
+			plan := install.InstallPlan{OperationID: "install_0123456789abcdef", SizedSandboxProfile: test.sizing, CLI: install.CLIPlan{ConfigPath: filepath.Join(t.TempDir(), "config.json"), TenantRef: "local", SubjectRef: "local-operator"}, Paths: []install.PlannedPath{{Name: "secondbox-binary", Path: binary}}}
 			plan.Release.Images = map[string]string{"microvm-artifacts": "registry.example/secondbox/installer-smoke:stable"}
 			runner := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, Capacity: map[string]int64{"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
-			if advertisesContext {
-				runner.SupportedEgressContexts = []string{expectedInstallerComposeProject(plan)}
-			}
+			runner.SupportedEgressContexts = []string{expectedInstallerComposeProject(plan)}
 			var mutex sync.Mutex
 			var profiles []string
 			executions, deletions := 0, 0
@@ -179,11 +183,9 @@ func TestInstalledGuestSmokeUsesRealCLI(t *testing.T) {
 			}
 			mutex.Lock()
 			defer mutex.Unlock()
-			want := []string{"agent-compartment-isolated"}
-			if advertisesContext {
-				want = append(want, "durable-coding")
-			}
-			if !slices.Equal(profiles, want) || executions != len(want) || deletions != len(want) || placementRefusals != 1 || evidence["durable-coding.placementRetries"] != "1" {
+			want := test.want
+			wantRefusals := len(want) - 1
+			if !slices.Equal(profiles, want) || executions != len(want) || deletions != len(want) || placementRefusals != wantRefusals || evidence[want[len(want)-1]+".placementRetries"] != strconv.Itoa(wantRefusals) {
 				t.Fatalf("profiles=%v execs=%d deletes=%d refusals=%d evidence=%v", profiles, executions, deletions, placementRefusals, evidence)
 			}
 			for _, profile := range want {

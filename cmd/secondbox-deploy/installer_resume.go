@@ -643,8 +643,46 @@ func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contra
 	return nil, false, nil
 }
 
+// The first smoke run prepares the selected release image cold. On a 4 vCPU
+// nested qualification guest that took about 6 minutes with 4 GiB and more than
+// 8 with 3 GiB, against seconds once cached, so the ready timeout is about twice
+// the slowest observation.
+// Each Profile then gets its own budget: placement wait, ready, exec, deletion
+// wait, and the one-minute window of home_runner_unavailable retries.
+const (
+	installedSmokeInspectionTimeout = 2 * time.Minute
+	installedSmokePlacementTimeout  = 2 * time.Minute
+	installedSmokeReadyTimeout      = 15 * time.Minute
+	installedSmokeExecDeadline      = time.Minute
+	installedSmokeDeletionTimeout   = 2 * time.Minute
+	installedSmokeProfileBudget     = installedSmokePlacementTimeout + installedSmokeReadyTimeout +
+		installedSmokeExecDeadline + installedSmokeDeletionTimeout + time.Minute
+)
+
 func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[string]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	runnerID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
+	evidence, err := inspectInstalledSmokeRecords(ctx, plan, runnerID)
+	if err != nil {
+		return evidence, err
+	}
+	evidence["smoke"] = "record-only; tenancy bootstrap not selected"
+	if plan.CLI.TenantRef != "" {
+		profiles, err := install.SmokeProfiles(plan.SandboxProfile())
+		if err != nil {
+			return evidence, err
+		}
+		for _, profile := range profiles {
+			if err := runInstalledGuestSmoke(ctx, plan, profile, runnerID, evidence); err != nil {
+				return evidence, err
+			}
+		}
+		evidence["smoke"] = "guest execution verified"
+	}
+	return evidence, nil
+}
+
+func inspectInstalledSmokeRecords(ctx context.Context, plan install.InstallPlan, runnerID string) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, installedSmokeInspectionTimeout)
 	defer cancel()
 	command, stdout, stderr := installedCLICommand(
 		ctx, plan, "--output", "json", "runner-pools", "get",
@@ -657,7 +695,6 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 	if err := json.Unmarshal(stdout.Bytes(), &pool); err != nil {
 		return nil, fmt.Errorf("SecondBox installer qualification RunnerPool decode: %w", err)
 	}
-	runnerID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
 	command, stdout, stderr = installedCLICommand(
 		ctx, plan, "--output", "json", "runners", "get",
 		"--path", "runnerId="+runnerID,
@@ -687,67 +724,76 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 		return nil, errors.New("SecondBox installer qualification egress-context preflight is not ready and complete")
 	}
 	evidence["egressContextPreflight"] = "ready"
-	evidence["smoke"] = "record-only; tenancy bootstrap not selected"
-	if plan.CLI.TenantRef != "" {
-		// Readiness already proved the Runner advertises the generated egress
-		// context, so both the isolated and the context-requiring Profile boot.
-		for _, profile := range install.SmokeProfiles(plan.SandboxProfile()) {
-			// A deleted Sandbox's assignment can outlive its deleted state on the
-			// Runner; on a host sized for one Instance the next create would be
-			// refused. Wait until the preflight reports the tenant's requirement
-			// for this Profile ready on the installed Runner with no active
-			// assignment, exactly as the qualification driver does.
-			placementStarted := time.Now()
-			if err := waitInstalledSmokePlacement(ctx, plan, profile, runnerID); err != nil {
-				return evidence, err
-			}
-			evidence[profile+".placementWait"] = time.Since(placementStarted).String()
-			// The Runner's reported reservation for the previous Sandbox can lag
-			// one heartbeat behind its deletion, and the sizing Profile needs
-			// the whole single-Instance budget of a minimum host. A placement refusal
-			// here is transient, so retry it briefly before treating it as real.
-			var name string
-			var command *exec.Cmd
-			var stdout, stderr *boundedCommandBuffer
-			var err error
-			placementRetries := 0
-			for attempt := 0; ; attempt++ {
-				name = "installer-smoke-" + strings.ToLower(rand.Text())
-				command, stdout, stderr = installedCLICommand(ctx, plan, "run", profile, "--image", plan.Release.Images["microvm-artifacts"], "--name", name, "--", "/bin/echo", "hello")
-				err = command.Run()
-				if err == nil || attempt >= 30 || !strings.Contains(stderr.String(), "code=home_runner_unavailable") {
-					break
-				}
-				placementRetries++
-				timer := time.NewTimer(2 * time.Second)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return evidence, fmt.Errorf("SecondBox installer guest smoke %s placement retry: %w", profile, ctx.Err())
-				case <-timer.C:
-				}
-			}
-			evidence[profile+".placementRetries"] = strconv.Itoa(placementRetries)
-			evidence[profile+".stdout"] = stdout.String()
-			if command.ProcessState != nil {
-				evidence[profile+".exitStatus"] = strconv.Itoa(command.ProcessState.ExitCode())
-			}
-			waitStarted := time.Now()
-			waitErr := waitInstalledSmokeDeletion(ctx, plan, name, evidence, profile)
-			evidence[profile+".deletionWait"] = time.Since(waitStarted).String()
-			if err != nil {
-				return evidence, errors.Join(waitErr, fmt.Errorf("SecondBox installer guest smoke %s: %w: %s", profile, err, cliui.Sanitize(stderr.String())))
-			}
-			if waitErr != nil {
-				return evidence, waitErr
-			}
-			if stdout.tooLong || stdout.String() != "hello\n" {
-				return evidence, fmt.Errorf("SecondBox installer guest smoke %s: unexpected stdout", profile)
-			}
-		}
-		evidence["smoke"] = "guest execution verified"
-	}
 	return evidence, nil
+}
+
+// installedSmokeRunArguments boots one temporary Sandbox of profile from the
+// release image and runs a single command in it.
+func installedSmokeRunArguments(profile, image, name string) []string {
+	return []string{
+		"run", profile, "--image", image, "--name", name,
+		"--ready-timeout", installedSmokeReadyTimeout.String(),
+		"--deadline", installedSmokeExecDeadline.String(),
+		"--", "/bin/echo", "hello",
+	}
+}
+
+func runInstalledGuestSmoke(ctx context.Context, plan install.InstallPlan, profile, runnerID string, evidence map[string]string) error {
+	ctx, cancel := context.WithTimeout(ctx, installedSmokeProfileBudget)
+	defer cancel()
+	// A deleted Sandbox's assignment can outlive its deleted state on the
+	// Runner; on a host sized for one Instance the next create would be
+	// refused. Wait until the preflight reports the tenant's requirement
+	// for this Profile ready on the installed Runner with no active
+	// assignment, exactly as the qualification driver does.
+	placementStarted := time.Now()
+	if err := waitInstalledSmokePlacement(ctx, plan, profile, runnerID); err != nil {
+		return err
+	}
+	evidence[profile+".placementWait"] = time.Since(placementStarted).String()
+	// The Runner's reported reservation for the previous Sandbox can lag
+	// one heartbeat behind its deletion, and the sizing Profile needs
+	// the whole single-Instance budget of a minimum host. A placement refusal
+	// here is transient, so retry it briefly before treating it as real.
+	var name string
+	var command *exec.Cmd
+	var stdout, stderr *boundedCommandBuffer
+	var err error
+	placementRetries := 0
+	for attempt := 0; ; attempt++ {
+		name = "installer-smoke-" + strings.ToLower(rand.Text())
+		command, stdout, stderr = installedCLICommand(ctx, plan, installedSmokeRunArguments(profile, plan.Release.Images["microvm-artifacts"], name)...)
+		err = command.Run()
+		if err == nil || attempt >= 30 || !strings.Contains(stderr.String(), "code=home_runner_unavailable") {
+			break
+		}
+		placementRetries++
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("SecondBox installer guest smoke %s placement retry: %w", profile, ctx.Err())
+		case <-timer.C:
+		}
+	}
+	evidence[profile+".placementRetries"] = strconv.Itoa(placementRetries)
+	evidence[profile+".stdout"] = stdout.String()
+	if command.ProcessState != nil {
+		evidence[profile+".exitStatus"] = strconv.Itoa(command.ProcessState.ExitCode())
+	}
+	waitStarted := time.Now()
+	waitErr := waitInstalledSmokeDeletion(ctx, plan, name, evidence, profile)
+	evidence[profile+".deletionWait"] = time.Since(waitStarted).String()
+	if err != nil {
+		return errors.Join(waitErr, fmt.Errorf("SecondBox installer guest smoke %s: %w: %s", profile, err, cliui.Sanitize(stderr.String())))
+	}
+	if waitErr != nil {
+		return waitErr
+	}
+	if stdout.tooLong || stdout.String() != "hello\n" {
+		return fmt.Errorf("SecondBox installer guest smoke %s: unexpected stdout", profile)
+	}
+	return nil
 }
 
 // waitInstalledSmokePlacement polls the platform preflight until the tenant's
@@ -755,7 +801,7 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 // A Profile that declines an egress context has no requirement entry; it then
 // needs only a ready preflight and an idle Runner.
 func waitInstalledSmokePlacement(ctx context.Context, plan install.InstallPlan, profile string, runnerID string) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, installedSmokePlacementTimeout)
 	defer cancel()
 	for {
 		command, stdout, stderr := installedCLICommand(ctx, plan, "--output", "json", "diagnostics", "egress-contexts")
@@ -793,7 +839,7 @@ func waitInstalledSmokePlacement(ctx context.Context, plan install.InstallPlan, 
 // run emits guest output, so use a unique reserved name to discover its ID even
 // after DELETE admission. Deleted Sandboxes retain metadata and remain listable.
 func waitInstalledSmokeDeletion(ctx context.Context, plan install.InstallPlan, name string, evidence map[string]string, profile string) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, installedSmokeDeletionTimeout)
 	defer cancel()
 	command, stdout, stderr := installedCLICommand(ctx, plan, "--output", "json", "sandboxes", "list", "--query", "metadata="+contracts.SandboxNameMetadataKey+"="+name)
 	if err := command.Run(); err != nil {
@@ -906,11 +952,16 @@ func installerCommandEnvironment(configPath string) []string {
 }
 
 func writeInstallerSuccess(renderer cliui.Renderer, plan install.InstallPlan, receipt install.InstallReceipt) error {
-	smokeProfiles := install.SmokeProfiles(plan.SandboxProfile())
+	smokeProfiles, err := install.SmokeProfiles(plan.SandboxProfile())
+	if err != nil {
+		return err
+	}
 	profile := smokeProfiles[0]
 	for _, record := range receipt.CompletedStages {
-		if record.Stage == install.StageSmokeExecution && record.Evidence[smokeProfiles[1]+".exitStatus"] == "0" {
-			profile = smokeProfiles[1]
+		for _, candidate := range smokeProfiles[1:] {
+			if record.Stage == install.StageSmokeExecution && record.Evidence[candidate+".exitStatus"] == "0" {
+				profile = candidate
+			}
 		}
 	}
 	next := cliui.InstallerTenancyNext("", "", installerPlannedPath(plan, "deployment"), profile)

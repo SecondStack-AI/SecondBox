@@ -83,7 +83,7 @@ Both artifact manifests therefore pin the same shared files, and the publisher r
 A tag such as `v0.0.0-dryrun.1` on `main` runs the shared build and both staging jobs and uploads nothing; use it to validate the runners, then delete the tag and the runners' outputs of that version.
 
 Lean releases build amd64 images and test one `btrfs_image` installer guest: the wizard, reboot recovery, and hello-world microVMs.
-Installer qualification installs the candidate with `--sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024`, so its guest needs 2 GiB of usable RAM; `QUALIFY_GUEST_MEMORY_MIB` defaults to 3072 (minimum 2560, for kernel reservations).
+Installer qualification installs the candidate with `--sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024`, so its guest needs 2 GiB of usable RAM; `QUALIFY_GUEST_MEMORY_MIB` defaults to 4096 (minimum 2560, for kernel reservations); the larger default keeps page cache for the smoke's first cold preparation of the release image, which took 5m50s to 6m13s at 4096 MiB and over 8 minutes at 3072 MiB on a 4 vCPU nested guest.
 Preflight requires 100 GiB free in each output and workspace filesystem and available memory for the guest plus a 2 GiB host reserve.
 On smaller hosts, set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` in `release.env` to limit scenario concurrency without omitting scenarios.
 The final stage reuses the checksummed build and requires installer evidence for exactly those release bytes; unbound builds cannot be published.

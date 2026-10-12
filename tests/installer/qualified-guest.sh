@@ -137,7 +137,7 @@ create_qualification_workload() {
   local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5" profile="$6" egress_context="${7:-}"
   local vcpu_count memory_bytes concurrent_operations
   case "$profile" in
-    agent-compartment) vcpu_count=1 memory_bytes=1073741824 concurrent_operations=4 ;;
+    agent-compartment-isolated) vcpu_count=1 memory_bytes=1073741824 concurrent_operations=4 ;;
     durable-coding) vcpu_count=4 memory_bytes=8589934592 concurrent_operations=16 ;;
     *) echo "qualification workload Profile is unsupported: $profile" >&2; return 1 ;;
   esac
@@ -444,7 +444,6 @@ mapfile -t running_services < <(
 jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerState == "ready"' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 expected_runner_id="runner-${operation_id#install_}"
-expected_context="secondbox-${operation_id#install_}"
 update_attempt="$(jq -er .updateAttempt "$state")"
 jq -e --arg runnerId "$expected_runner_id" '
   .completedStages[] | select(.stage == "smoke_execution") |
@@ -470,7 +469,9 @@ for _ in $(seq 1 300); do
 done
 [[ "$live_runner_state" == ready ]] || { echo 'installed Runner did not become ready after reboot' >&2; exit 1; }
 
-workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" agent-compartment "$expected_context")"
+# agent-compartment permits attributed execution, which needs an attributed
+# gateway that a guided install never configures, so the sized workload is isolated.
+workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" agent-compartment-isolated)"
 sandbox_id="$(jq -er .sandboxId <<<"$workload")"
 workload_config="$(jq -er .configPath <<<"$workload")"
 

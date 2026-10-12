@@ -4,11 +4,15 @@
 
 ### Added
 
-- `secondbox-deploy install` accepts `--sandbox-profile NAME`, `--control-reserve-vcpus N`, and `--control-reserve-memory-mib N` to size a new single-host installation for a smaller standard Profile and control reserve, so `--sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024` installs on a 2 CPU / 2 GiB host. Without them the installer sizes for `durable-coding` with a 2 vCPU / 4 GiB reserve exactly as before. Release installer qualification now uses these options, and its guests default to 3072 MiB and 4 vCPUs with a 2 GiB host reserve.
+- `secondbox-deploy install` accepts `--sandbox-profile NAME`, `--control-reserve-vcpus N`, and `--control-reserve-memory-mib N` to size a new single-host installation for a smaller standard Profile and control reserve, so `--sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024` installs on a 2 CPU / 2 GiB host. Without them the installer sizes for `durable-coding` with a 2 vCPU / 4 GiB reserve exactly as before. The post-install smoke boots `agent-compartment` only where a Runner can place it: that Profile permits attributed execution, which needs an attributed gateway that a guided install never configures, so an `agent-compartment` or `agent-compartment-isolated` sizing smoke boots only `agent-compartment-isolated`. Release installer qualification now uses these options, and its guests default to 4096 MiB and 4 vCPUs with a 2 GiB host reserve.
 
 ### Changed
 
 - Releases are cut by pushing a `vVERSION` tag on `main`: `release-tag.yml` builds the architecture-neutral files (SDKs, CLI and deploy binaries, OpenAPI document, SBOM, install bootstrap) once on a GitHub-hosted runner, qualifies and stages the amd64 and arm64 artifact sets in parallel on two self-hosted release runners from those files, uploads both to the draft once both are staged, and dispatches the publisher. `just release VERSION SHARED_DIR` and `just release-arm64 VERSION SHARED_DIR` take the shared directory that `scripts/release-build-shared.sh` produces and verify it against its `shared-artifacts.json` record, require the pushed tag instead of creating it, and `just release` drops `--full` and `--resume`; a failed job is recovered with a re-run of that job. The bundled PostgreSQL image is pinned in `scripts/release-build-shared.sh`, so release runners no longer set `SECONDBOX_RELEASE_POSTGRES_IMAGE`, and the publisher refuses artifact sets that pin different shared files.
+
+### Fixed
+
+- The installer post-install smoke allows 15 minutes for each smoke Sandbox to become ready instead of the CLI's 5-minute interactive default, and gives each smoke Profile its own budget instead of one shared 10 minutes, so the first cold preparation of the release image on a minimum host no longer fails installation.
 
 ## 0.25.0 - 2026-10-12
 
