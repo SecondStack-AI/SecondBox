@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"slices"
@@ -108,8 +109,18 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 		}
 		return cliui.WriteJSONPassthrough(os.Stdout, encoded.Bytes())
 	case "install":
+		capacity, remaining, err := parseInstallCapacityOptions(arguments[1:])
+		if err != nil {
+			return &deployExitError{code: 2, err: err}
+		}
+		if capacity != (install.CapacityOverrides{}) && slices.ContainsFunc(remaining, func(argument string) bool {
+			return argument == "--resume" || argument == "--recover-compose-network" || argument == "--support"
+		}) {
+			return &deployExitError{code: 2, err: errors.New("SecondBox installer: --sandbox-profile and --control-reserve-* size a new installation; the accepted plan already records them")}
+		}
+		arguments = append([]string{arguments[0]}, remaining...)
 		if slices.Contains(arguments[1:], "--unattended") {
-			return runUnattendedInstall(context.Background(), arguments[1:], renderer)
+			return runUnattendedInstall(context.Background(), arguments[1:], renderer, capacity)
 		}
 		if len(arguments) == 3 && arguments[1] == "--resume" {
 			return runInstallResume(context.Background(), arguments[2], renderer)
@@ -121,12 +132,14 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 			return runInstallCandidateResume(context.Background(), arguments[2], arguments[4], renderer)
 		}
 		if len(arguments) == 3 && arguments[1] == "--candidate-directory" {
-			return runInstallCandidate(context.Background(), arguments[2], renderer)
+			return runInstallCandidate(context.Background(), arguments[2], renderer, capacity)
 		}
 		if len(arguments) == 5 && arguments[1] == "--support" {
 			return runInstallSupport(context.Background(), arguments[2:], renderer)
 		}
-		return runInstallPreflight(context.Background(), arguments[1:], renderer, install.SystemPreflightProbes())
+		probes := install.SystemPreflightProbes()
+		probes.Capacity = capacity
+		return runInstallPreflight(context.Background(), arguments[1:], renderer, probes)
 	case "uninstall":
 		return runInstallUninstall(context.Background(), arguments[1:], renderer)
 	case "bootstrap-tenancy":
@@ -302,9 +315,50 @@ func runInstallPreflight(ctx context.Context, arguments []string, renderer cliui
 		// preflight applies here.
 		return &deployExitError{code: 2, err: errors.New("SecondBox installer preflight: --backend gvisor supports only --check; the guided installer deploys the Firecracker backend, and gVisor deploys from the released runner-gvisor and gvisor-artifacts images")}
 	}
-	return runInstallPreflightWith(ctx, remaining, renderer, func(ctx context.Context) (install.HostFacts, error) {
+	return runInstallPreflightWithGuide(ctx, remaining, renderer, func(ctx context.Context) (install.HostFacts, error) {
 		return install.Preflight(ctx, probes)
-	})
+	}, guidedInstallSizedFor(probes.Capacity))
+}
+
+// parseInstallCapacityOptions removes the new-installation sizing options from
+// the install arguments; the remaining arguments keep their existing grammar.
+func parseInstallCapacityOptions(arguments []string) (install.CapacityOverrides, []string, error) {
+	var capacity install.CapacityOverrides
+	remaining := make([]string, 0, len(arguments))
+	seen := map[string]bool{}
+	for index := 0; index < len(arguments); index++ {
+		name := arguments[index]
+		if name != "--sandbox-profile" && name != "--control-reserve-vcpus" && name != "--control-reserve-memory-mib" {
+			remaining = append(remaining, name)
+			continue
+		}
+		if seen[name] || index+1 >= len(arguments) {
+			return install.CapacityOverrides{}, nil, fmt.Errorf("SecondBox installer: %s requires exactly one value", name)
+		}
+		seen[name] = true
+		value := arguments[index+1]
+		index++
+		if name == "--sandbox-profile" {
+			capacity.SandboxProfile = value
+			continue
+		}
+		number, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || number <= 0 {
+			return install.CapacityOverrides{}, nil, fmt.Errorf("SecondBox installer: %s must be a positive integer", name)
+		}
+		if name == "--control-reserve-vcpus" {
+			capacity.ControlReserveVCPUCount = number
+		} else {
+			if number > math.MaxInt64>>20 {
+				return install.CapacityOverrides{}, nil, fmt.Errorf("SecondBox installer: %s is too large", name)
+			}
+			capacity.ControlReserveMemoryBytes = number << 20
+		}
+	}
+	if err := capacity.Validate(); err != nil {
+		return install.CapacityOverrides{}, nil, err
+	}
+	return capacity, remaining, nil
 }
 
 // parsePreflightBackend removes a "--backend <kind>" pair from the install

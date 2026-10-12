@@ -296,6 +296,8 @@ type InstallPlan struct {
 	RetentionSeconds             int64               `json:"retentionSeconds"`
 	PrivilegedActions            []string            `json:"privilegedActions"`
 	ReleaseHistory               []ReleaseActivation `json:"releaseHistory,omitempty"`
+	// SizedSandboxProfile is read through SandboxProfile.
+	SizedSandboxProfile string `json:"sandboxProfile,omitempty"`
 }
 
 type ResourceKind string

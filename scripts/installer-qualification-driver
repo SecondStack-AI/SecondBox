@@ -70,14 +70,22 @@ done
 virsh -c "$connection" uri >/dev/null
 jq -e '.schemaVersion == "secondbox.install.vm-scenario/v1" and (.requiredAssertions | type == "array" and length > 0)' "$scenario" >/dev/null
 
-guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-16384}"
-[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 13312 && guest_memory <= 1048576)) || { echo 'QUALIFY_GUEST_MEMORY_MIB must be 13312..1048576 (installer requires 12 GiB usable RAM)' >&2; exit 1; }
+# Candidates install with agent-compartment sizing and a 1 vCPU / 1 GiB control
+# reserve, which needs 2 GiB of guest MemTotal; 2560 MiB leaves room for kernel reservations.
+guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-3072}"
+[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 2560 && guest_memory <= 1048576)) || { echo 'QUALIFY_GUEST_MEMORY_MIB must be 2560..1048576 (the qualified installer sizing requires 2 GiB usable RAM)' >&2; exit 1; }
+guest_vcpus=4
+# The recreation mode first installs v0.7.2, which has no sizing options and requires 12 GiB of usable RAM and six CPUs.
+recreation_guest_memory=$((guest_memory > 13312 ? guest_memory : 13312))
+recreation_guest_vcpus=8
+largest_guest_memory="$guest_memory"
+[[ ",$modes," != *,existing_reflink_recreation,* ]] || largest_guest_memory="$recreation_guest_memory"
 available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
-# Installer qualification runs after builds and scenarios, leaving 4 GiB for the host and QEMU.
-guest_parallelism=$(((available_mib-4096)/guest_memory))
+# Installer qualification runs after builds and scenarios, leaving 2 GiB for the host and QEMU.
+guest_parallelism=$(((available_mib-2048)/largest_guest_memory))
 ((guest_parallelism > 0)) || { echo 'insufficient memory for installer qualification' >&2; exit 1; }
 ((guest_parallelism <= 3)) || guest_parallelism=3
-echo "Installer guests: memory=${guest_memory} MiB, parallelism=$guest_parallelism"
+echo "Installer guests: memory=${guest_memory} MiB, recreation memory=${recreation_guest_memory} MiB, parallelism=$guest_parallelism"
 run_id="$(openssl rand -hex 6)"
 resource_root="$(mktemp -d "$existing_workspace_root/secondbox-installer-qualification-${run_id}.XXXXXX")"
 chmod 0700 "$resource_root"
@@ -370,7 +378,11 @@ EOF
     setfacl -m "u:${account}:r--" "$guest_root/seed.img"
     setfacl -m "u:${account}:rw-" "$console_log"
   done
-  run_interruptible virt-install --connect "$connection" --name "$domain" --memory "$guest_memory" --vcpus 8 \
+  local memory="$guest_memory" vcpus="$guest_vcpus"
+  if [[ "$mode" == existing_reflink_recreation ]]; then
+    memory="$recreation_guest_memory" vcpus="$recreation_guest_vcpus"
+  fi
+  run_interruptible virt-install --connect "$connection" --name "$domain" --memory "$memory" --vcpus "$vcpus" \
     --cpu host-passthrough --machine q35 --osinfo ubuntu24.04 --import --noautoconsole --graphics none \
     --disk "path=$guest_root/root.qcow2,format=qcow2,bus=virtio" \
     --disk "path=$guest_root/data.qcow2,format=qcow2,bus=virtio" \

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- `secondbox-deploy install` accepts `--sandbox-profile NAME`, `--control-reserve-vcpus N`, and `--control-reserve-memory-mib N` to size a new single-host installation for a smaller standard Profile and control reserve, so `--sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024` installs on a 2 CPU / 2 GiB host. Without them the installer sizes for `durable-coding` with a 2 vCPU / 4 GiB reserve exactly as before. Release installer qualification now uses these options, and its guests default to 3072 MiB and 4 vCPUs with a 2 GiB host reserve.
+
 ### Changed
 
 - Releases are cut by pushing a `vVERSION` tag on `main`: `release-tag.yml` qualifies and stages the amd64 and arm64 artifact sets on two self-hosted release runners, uploads both to the draft, and dispatches the publisher. `just release` and `just release-arm64` now require the pushed tag instead of creating it, and `just release` drops `--full` and `--resume`; a failed job is recovered with a re-run of that job.

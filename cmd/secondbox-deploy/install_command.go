@@ -24,6 +24,7 @@ import (
 
 type guidedInstallDependencies struct {
 	Unattended     bool
+	Capacity       install.CapacityOverrides
 	Input          io.Reader
 	Now            func() time.Time
 	HomeDirectory  func() (string, error)
@@ -88,16 +89,24 @@ func systemGuidedInstallDependencies() guidedInstallDependencies {
 }
 
 func runGuidedInstall(ctx context.Context, renderer cliui.Renderer, facts install.HostFacts, advanced bool) error {
-	dependencies := systemGuidedInstallDependencies()
-	dependencies.Continue = func(ctx context.Context, directory string) error {
-		return runInstallResumeWith(ctx, directory, renderer, systemInstallResumeDependencies(renderer))
-	}
-	return runGuidedInstallWith(ctx, renderer, facts, advanced, dependencies)
+	return guidedInstallSizedFor(install.CapacityOverrides{})(ctx, renderer, facts, advanced)
 }
 
-func runInstallCandidate(ctx context.Context, directory string, renderer cliui.Renderer) error {
+func guidedInstallSizedFor(capacity install.CapacityOverrides) func(context.Context, cliui.Renderer, install.HostFacts, bool) error {
+	return func(ctx context.Context, renderer cliui.Renderer, facts install.HostFacts, advanced bool) error {
+		dependencies := systemGuidedInstallDependencies()
+		dependencies.Capacity = capacity
+		dependencies.Continue = func(ctx context.Context, directory string) error {
+			return runInstallResumeWith(ctx, directory, renderer, systemInstallResumeDependencies(renderer))
+		}
+		return runGuidedInstallWith(ctx, renderer, facts, advanced, dependencies)
+	}
+}
+
+func runInstallCandidate(ctx context.Context, directory string, renderer cliui.Renderer, capacity install.CapacityOverrides) error {
 	guide := func(ctx context.Context, renderer cliui.Renderer, facts install.HostFacts, advanced bool) error {
 		dependencies := systemGuidedInstallDependencies()
+		dependencies.Capacity = capacity
 		dependencies.VerifyRelease = func(ctx context.Context, _ string) (releaseverify.VerifiedRelease, error) {
 			return verifyCandidateDirectory(ctx, directory)
 		}
@@ -107,7 +116,9 @@ func runInstallCandidate(ctx context.Context, directory string, renderer cliui.R
 		return runGuidedInstallWith(ctx, renderer, facts, advanced, dependencies)
 	}
 	return runInstallPreflightWithGuide(ctx, nil, renderer, func(ctx context.Context) (install.HostFacts, error) {
-		return install.Preflight(ctx, install.SystemPreflightProbes())
+		probes := install.SystemPreflightProbes()
+		probes.Capacity = capacity
+		return install.Preflight(ctx, probes)
 	}, guide)
 }
 
@@ -204,7 +215,7 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 	if err != nil || retentionSeconds <= 0 {
 		return errors.New("SecondBox installer: retention form returned an invalid selection")
 	}
-	input := install.ProposalInput{OperationID: operationID, CreatedAt: dependencies.Now().UTC(), DeploymentDirectory: deploymentDirectory, BinaryDirectory: filepath.Join(home, ".local", "bin"), CLIConfigPath: filepath.Join(home, ".config", "secondbox", "config.json"), BackingAvailableBytes: backingAvailable, DeploymentAvailableBytes: deploymentAvailable, Release: release, StorageChoice: options[selectedIndex].Choice, ExistingMountpoint: options[selectedIndex].Mountpoint, StandardBundles: standardresources.BundleNames(), RetentionSeconds: retentionSeconds}
+	input := install.ProposalInput{OperationID: operationID, CreatedAt: dependencies.Now().UTC(), DeploymentDirectory: deploymentDirectory, BinaryDirectory: filepath.Join(home, ".local", "bin"), CLIConfigPath: filepath.Join(home, ".config", "secondbox", "config.json"), BackingAvailableBytes: backingAvailable, DeploymentAvailableBytes: deploymentAvailable, Release: release, StorageChoice: options[selectedIndex].Choice, ExistingMountpoint: options[selectedIndex].Mountpoint, CapacityOverrides: dependencies.Capacity, StandardBundles: standardresources.BundleNames(), RetentionSeconds: retentionSeconds}
 	plan, err := install.ProposePlan(facts, input)
 	if err != nil {
 		return err
@@ -218,7 +229,7 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 	if tenancyAccepted {
 		plan.CLI.TenantRef, plan.CLI.SubjectRef = "local", "local-operator"
 	}
-	capacitySummary := fmt.Sprintf("%d Sandboxes; %d concurrent starts; %s workspace; %s Runner memory", plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, humanBytes(plan.Capacity.MaxWorkspaceBytes), humanBytes(plan.Capacity.MaxMemoryBytes))
+	capacitySummary := fmt.Sprintf("%d %s Sandboxes; %d concurrent starts; %s workspace; %s Runner memory", plan.Capacity.MaxSandboxes, plan.SandboxProfile(), plan.Capacity.ConcurrentStarts, humanBytes(plan.Capacity.MaxWorkspaceBytes), humanBytes(plan.Capacity.MaxMemoryBytes))
 	if err := dependencies.RunForm(ctx, cliui.CapacityReviewForm(capacitySummary, &capacityAccepted), handles); err != nil {
 		return installerFormError(err)
 	}

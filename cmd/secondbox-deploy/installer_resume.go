@@ -599,7 +599,11 @@ func waitForInstalledRunner(ctx context.Context, plan install.InstallPlan) (map[
 		if err == nil {
 			var response contracts.RunnerPage
 			if json.Unmarshal(stdout.Bytes(), &response) == nil {
-				if evidence, ready := installedRunnerReadinessEvidence(plan, response.Items); ready {
+				evidence, ready, err := installedRunnerReadinessEvidence(plan, response.Items)
+				if err != nil {
+					return nil, err
+				}
+				if ready {
 					return evidence, nil
 				}
 			}
@@ -614,8 +618,12 @@ func waitForInstalledRunner(ctx context.Context, plan install.InstallPlan) (map[
 	}
 }
 
-func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contracts.Runner) (map[string]string, bool) {
+func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contracts.Runner) (map[string]string, bool, error) {
 	expectedID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
+	sandbox, err := install.SandboxProfileResources(plan.SandboxProfile())
+	if err != nil {
+		return nil, false, err
+	}
 	for _, runner := range runners {
 		if runner.ID != expectedID || runner.PoolName != standardresources.PoolAMD64 || runner.State != "ready" || runner.CredentialState != "pre_shared" || !slices.Contains(runner.Architectures, standardresources.ArchitectureAMD64) {
 			continue
@@ -623,16 +631,16 @@ func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contra
 		if slices.ContainsFunc([]string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, func(capability string) bool { return !slices.Contains(runner.Capabilities, capability) }) {
 			continue
 		}
-		if runner.Capacity["VCPUCount"] < install.DurableCodingVCPUCount || runner.Capacity["MemoryBytes"] < install.DurableCodingMemoryBytes || runner.Capacity["DiskBytes"] < install.MinimumWorkspaceBytes || runner.Capacity["Instances"] < 1 || runner.Capacity["Operations"] < install.DurableCodingConcurrentOperations {
+		if runner.Capacity["VCPUCount"] < sandbox.VCPUCount || runner.Capacity["MemoryBytes"] < sandbox.MemoryBytes || runner.Capacity["DiskBytes"] < sandbox.WorkspaceBytes || runner.Capacity["Instances"] < 1 || runner.Capacity["Operations"] < sandbox.ConcurrentOperations {
 			continue
 		}
 		expectedContext := expectedInstallerComposeProject(plan)
 		if !slices.Contains(runner.SupportedEgressContexts, expectedContext) {
 			continue
 		}
-		return map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "egressContext": expectedContext, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}, true
+		return map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "egressContext": expectedContext, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}, true, nil
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[string]string, error) {
@@ -683,7 +691,7 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 	if plan.CLI.TenantRef != "" {
 		// Readiness already proved the Runner advertises the generated egress
 		// context, so both the isolated and the context-requiring Profile boot.
-		for _, profile := range []string{"agent-compartment-isolated", "durable-coding"} {
+		for _, profile := range install.SmokeProfiles(plan.SandboxProfile()) {
 			// A deleted Sandbox's assignment can outlive its deleted state on the
 			// Runner; on a host sized for one Instance the next create would be
 			// refused. Wait until the preflight reports the tenant's requirement
@@ -695,8 +703,8 @@ func runInstalledSmoke(ctx context.Context, plan install.InstallPlan) (map[strin
 			}
 			evidence[profile+".placementWait"] = time.Since(placementStarted).String()
 			// The Runner's reported reservation for the previous Sandbox can lag
-			// one heartbeat behind its deletion, and durable-coding needs the
-			// whole single-Instance budget of a minimum host. A placement refusal
+			// one heartbeat behind its deletion, and the sizing Profile needs
+			// the whole single-Instance budget of a minimum host. A placement refusal
 			// here is transient, so retry it briefly before treating it as real.
 			var name string
 			var command *exec.Cmd
@@ -839,7 +847,10 @@ func installedSmokeEvidence(
 		pool.ReadyRunnerCount < 1 {
 		return nil, errors.New("SecondBox installer qualification RunnerPool is not ready")
 	}
-	evidence, ready := installedRunnerReadinessEvidence(plan, []contracts.Runner{runner})
+	evidence, ready, err := installedRunnerReadinessEvidence(plan, []contracts.Runner{runner})
+	if err != nil {
+		return nil, err
+	}
 	if !ready {
 		return nil, errors.New("SecondBox installer qualification Runner is not ready")
 	}
@@ -895,10 +906,11 @@ func installerCommandEnvironment(configPath string) []string {
 }
 
 func writeInstallerSuccess(renderer cliui.Renderer, plan install.InstallPlan, receipt install.InstallReceipt) error {
-	profile := "agent-compartment-isolated"
+	smokeProfiles := install.SmokeProfiles(plan.SandboxProfile())
+	profile := smokeProfiles[0]
 	for _, record := range receipt.CompletedStages {
-		if record.Stage == install.StageSmokeExecution && record.Evidence["durable-coding.exitStatus"] == "0" {
-			profile = "durable-coding"
+		if record.Stage == install.StageSmokeExecution && record.Evidence[smokeProfiles[1]+".exitStatus"] == "0" {
+			profile = smokeProfiles[1]
 		}
 	}
 	next := cliui.InstallerTenancyNext("", "", installerPlannedPath(plan, "deployment"), profile)

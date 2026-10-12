@@ -24,10 +24,6 @@ const (
 	RunnerStorageReserveBytes         = int64(4 << 30)
 	MinimumRunnerStorageBytes         = ExecutionBundleEstimateBytes + MinimumWorkspaceBytes + RunnerStorageReserveBytes
 	MinimumFilesystemImageBytes       = MinimumRunnerStorageBytes
-	MinimumHostMemoryBytes            = int64(12 << 30)
-	HostMemoryReserveBytes            = int64(4 << 30)
-	MinimumHostCPUCount               = 6
-	HostVCPUReserveCount              = int64(2)
 	DurableCodingVCPUCount            = standardresources.DurableCodingVCPUCount
 	DurableCodingMemoryBytes          = standardresources.DurableCodingMemoryBytes
 	DurableCodingConcurrentOperations = standardresources.DurableCodingConcurrentOperations
@@ -69,6 +65,7 @@ type ProposalInput struct {
 	ExistingMountpoint       string
 	FilesystemImageBytes     int64
 	NetworkOverrides         NetworkOverrides
+	CapacityOverrides        CapacityOverrides
 	StandardBundles          []string
 	RetentionSeconds         int64
 }
@@ -155,11 +152,15 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 	if err != nil {
 		return InstallPlan{}, err
 	}
-	capacity, err := proposeCapacity(facts, workspaceBytes)
+	sizing, err := input.CapacityOverrides.resolve()
 	if err != nil {
 		return InstallPlan{}, err
 	}
 	network, err := proposeNetwork(facts, input.NetworkOverrides)
+	if err != nil {
+		return InstallPlan{}, err
+	}
+	capacity, err := proposeCapacity(facts, workspaceBytes, sizing, network.JailerUIDRange.Count)
 	if err != nil {
 		return InstallPlan{}, err
 	}
@@ -171,6 +172,9 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 		return InstallPlan{}, installerError("operator-selected retention is required", nil)
 	}
 	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"platform-authority", "runner-enrollment", "runner-pki", "database"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage), ReleaseHistory: []ReleaseActivation{{Release: input.Release, ActivatedAt: input.CreatedAt.UTC()}}}
+	if sizing.profile != DefaultSandboxProfile {
+		plan.SizedSandboxProfile = sizing.profile
+	}
 	if err := plan.Validate(); err != nil {
 		return InstallPlan{}, err
 	}
@@ -228,14 +232,15 @@ func proposeStorage(facts HostFacts, input ProposalInput) (StoragePlan, int64, [
 	}
 }
 
-func proposeCapacity(facts HostFacts, workspaceBytes int64) (CapacityPlan, error) {
-	if facts.CPUCount < MinimumHostCPUCount || facts.MemoryBytes < MinimumHostMemoryBytes || workspaceBytes < MinimumWorkspaceBytes {
-		return CapacityPlan{}, installerError("host capacity is insufficient for the durable-coding smoke Sandbox and control services", nil)
+func proposeCapacity(facts HostFacts, workspaceBytes int64, sizing capacitySizing, jailerUIDCount int64) (CapacityPlan, error) {
+	if int64(facts.CPUCount) < sizing.minimumHostCPUCount() || facts.MemoryBytes < sizing.minimumHostMemoryBytes() || workspaceBytes < MinimumWorkspaceBytes {
+		return CapacityPlan{}, installerError("host capacity is insufficient for the "+sizing.profile+" smoke Sandbox and control services", nil)
 	}
-	vcpuCount := int64(facts.CPUCount) - HostVCPUReserveCount
-	memory := facts.MemoryBytes - HostMemoryReserveBytes
-	sandboxes := min(vcpuCount/DurableCodingVCPUCount, memory/DurableCodingMemoryBytes, workspaceBytes/MinimumWorkspaceBytes)
-	runnerOperations := sandboxes * DurableCodingConcurrentOperations
+	vcpuCount := int64(facts.CPUCount) - sizing.reserveVCPUCount
+	memory := facts.MemoryBytes - sizing.reserveMemoryBytes
+	// Each concurrent microVM needs its own jailer UID.
+	sandboxes := min(vcpuCount/sizing.resources.VCPUCount, memory/sizing.resources.MemoryBytes, workspaceBytes/sizing.resources.WorkspaceBytes, jailerUIDCount)
+	runnerOperations := sandboxes * sizing.resources.ConcurrentOperations
 	return CapacityPlan{MaxSandboxes: sandboxes, MaxVCPUCount: vcpuCount, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), sandboxes), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85}, nil
 }
 
@@ -524,7 +529,7 @@ func RenderPlanReview(plan InstallPlan) string {
 		result.WriteString("Post-start tenancy: not selected; record-only smoke\n")
 	}
 	fmt.Fprintf(&result, "Release %s\nArtifact manifest: %s\nManifest digest: %s\nExpected downloads: %s\n", plan.Release.Version, plan.Release.ArtifactManifestURL, plan.Release.ArtifactManifestDigest, formatBytes(plan.Release.ExpectedDownloadBytes))
-	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, guests %s, Compose backend %s, DNS %s\nCLI platform authority: %s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, time.Duration(plan.RetentionSeconds)*time.Second)
+	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d %s Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, guests %s, Compose backend %s, DNS %s\nCLI platform authority: %s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.SandboxProfile(), plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, time.Duration(plan.RetentionSeconds)*time.Second)
 	result.WriteString("Generated authority: " + strings.Join(plan.GeneratedAuthorityCategories, ", ") + "\nPersistent services: PostgreSQL, control plane, same-host Runner\nExisting SecondBox CLIs and CLI configuration at the reviewed paths are upgraded atomically; unrelated files are refused.\nOrdinary uninstall preserves workspaces, authority, manifests, execution assets, and service data.\nPaths requiring sudo:\n")
 	for _, path := range plan.Paths {
 		if path.RequiresSudo {

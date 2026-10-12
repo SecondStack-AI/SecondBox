@@ -365,3 +365,29 @@ func TestGVisorBackendRefusesGuidedInstall(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallCapacityOptionsParseAndValidate(t *testing.T) {
+	capacity, remaining, err := parseInstallCapacityOptions([]string{"--candidate-directory", "/release", "--sandbox-profile", "agent-compartment", "--control-reserve-vcpus", "1", "--control-reserve-memory-mib", "1024"})
+	if err != nil || capacity != (install.CapacityOverrides{SandboxProfile: "agent-compartment", ControlReserveVCPUCount: 1, ControlReserveMemoryBytes: 1 << 30}) || !slices.Equal(remaining, []string{"--candidate-directory", "/release"}) {
+		t.Fatalf("parsed capacity = %#v, remaining %v, %v", capacity, remaining, err)
+	}
+	if capacity, remaining, err := parseInstallCapacityOptions([]string{"--check"}); err != nil || capacity != (install.CapacityOverrides{}) || !slices.Equal(remaining, []string{"--check"}) {
+		t.Fatalf("no capacity options = %#v, remaining %v, %v", capacity, remaining, err)
+	}
+	for _, arguments := range [][]string{
+		{"--sandbox-profile", "custom"},
+		{"--sandbox-profile"},
+		{"--control-reserve-vcpus", "0"},
+		{"--control-reserve-vcpus", "-1"},
+		{"--control-reserve-memory-mib", "lots"},
+		{"--control-reserve-memory-mib", "9223372036854775807"},
+		{"--control-reserve-vcpus", "1", "--control-reserve-vcpus", "2"},
+	} {
+		if _, _, err := parseInstallCapacityOptions(arguments); err == nil {
+			t.Errorf("capacity options %v were accepted", arguments)
+		}
+	}
+	if err := run([]string{"install", "--sandbox-profile", "agent-compartment", "--resume", t.TempDir()}); err == nil || !strings.Contains(err.Error(), "size a new installation") {
+		t.Fatalf("sizing options with resume = %v", err)
+	}
+}

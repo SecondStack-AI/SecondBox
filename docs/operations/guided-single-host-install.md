@@ -46,6 +46,8 @@ sh install.sh
 
 The normal wizard asks for a workspace choice, reviews its conservative resource budget, and asks for final confirmation. `secondbox-deploy install --advanced` additionally exposes the proposed addresses, ports, separate guest and Compose backend CIDRs, DNS upstream, jailer UID range, paths, capacity, and CLI subject identity.
 
+As an advanced option, a new installation can be sized for a smaller standard Profile on a smaller host: `secondbox-deploy install --sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024`. `--sandbox-profile` accepts `agent-compartment`, `agent-compartment-isolated`, or `durable-coding` (the default); the two reserve options default to 2 vCPU and 4096 MiB and must be positive. The host then needs the reserve plus one Sandbox of the chosen Profile, which is 2 CPUs and 2 GiB in this example. The Sandbox count, Runner readiness, and the post-install smoke follow the chosen Profile, and the plan records it for resume and update. All three standard Profiles are still installed; a larger Profile places only where the Runner budget fits it. The options also apply to `install --check`, `install --unattended`, and `install --candidate-directory`, and are refused with `--resume`.
+
 Workspace choices are:
 
 - An existing dedicated, non-root XFS or Btrfs mount with at least 65 GiB available. The mount must permit executable files and device nodes because Firecracker executes and opens KVM/TUN devices inside its per-Instance jail. The installer creates one operation-specific Runner storage tree there for verified execution assets, run state, Workspaces, and local Snapshots.

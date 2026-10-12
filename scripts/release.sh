@@ -60,10 +60,10 @@ docker buildx inspect "$RELEASE_BUILDX_BUILDER" >/dev/null
 virsh -c qemu:///system uri >/dev/null
 domains="$(virsh -c qemu:///system list --all --name)"
 ! grep -q '^sbq-' <<<"$domains" || fail 'libvirt has sbq- domains; wait for their owner'
-guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-16384}"
-[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 13312 && guest_memory <= 1048576)) || fail 'QUALIFY_GUEST_MEMORY_MIB must be 13312..1048576 (installer requires 12 GiB usable RAM)'
+guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-3072}"
+[[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 2560 && guest_memory <= 1048576)) || fail 'QUALIFY_GUEST_MEMORY_MIB must be 2560..1048576 (the qualified installer sizing requires 2 GiB usable RAM)'
 available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
-((available_mib >= guest_memory+4096)) || fail 'insufficient memory for an installer guest and 4 GiB host reserve'
+((available_mib >= guest_memory+2048)) || fail 'insufficient memory for an installer guest and 2 GiB host reserve'
 required_disk_gib=100
 for path in "$RELEASE_OUTPUT_ROOT" "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT"; do
   available_kib="$(df -Pk "$path" | awk 'NR==2 {print $4}')"
