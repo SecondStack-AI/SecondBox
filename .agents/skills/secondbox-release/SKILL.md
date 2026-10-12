@@ -21,10 +21,10 @@ it. Prepare a reviewable result before requesting any missing authorization.
 - Push the tag only after the notes and the changelog cut are on `main`,
   including pre-1.0. Only an explicit operator decision may skip them; record
   it in the ledger.
-- A tag with no draft or public release may be deleted and pushed again at a
-  fixed commit. Once a draft exists, prefer the next patch version; a public
-  tag is immutable. Retract a bad Go release in `go.mod`, document it in the
-  changelog and release notes, then issue the next patch; never move the tag.
+- A pushed tag is immutable, even when its release failed: the Go module proxy
+  can cache it at once. A fix ships as the next patch; retract the failed or bad
+  version in `go.mod`, document it in the changelog and release notes; never
+  move or re-push a tag. Only `-dryrun.N` tags are deleted after use.
   Leave v0.13.0 intact: its off-main tag has the re-landed tree and downstream pins.
 - The release runners are dedicated hosts. Do not stop another operator's
   units, domains, Compose stacks, or live deployment on them; take paths from
@@ -63,8 +63,7 @@ it. Prepare a reviewable result before requesting any missing authorization.
    under `RELEASE_OUTPUT_ROOT/logs/`; use the table below. A flake or host
    problem is recovered with **Re-run failed jobs**: each job replaces this
    version's earlier outputs on its host. A code change lands on main first and
-   invalidates all commit-bound evidence; then delete the unpublished tag
-   (local and remote) and push it at the new merge commit, or use the next patch.
+   invalidates all commit-bound evidence; it ships as the next patch version.
 7. The `upload-amd64` job dispatches `release.yml`. Locate that run for this
    version (do not assume the newest run is yours) and watch it with
    `--exit-status`. Do not edit the published body as routine close-out.

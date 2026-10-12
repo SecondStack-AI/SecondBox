@@ -91,7 +91,8 @@ The amd64 upload dispatches the publisher; the publisher requires complete sets 
 Upload reads `docs/releases/vVERSION.md` from the tag when present, otherwise uses a placeholder.
 It appends the install and SDK footer and refreshes the draft on retry; the publisher preserves that body.
 
-A code fix after a failed staging lands on `main` first and needs a new tag.
-An unpublished tag may be deleted and pushed again at the fixed commit, but only while no draft or public release exists for it; a published tag is immutable, so use the next patch version.
+A pushed tag is immutable even when its release fails: the Go module proxy can cache the tagged source as soon as anyone requests it.
+A code fix after a failed staging therefore lands on `main` and ships as the next patch version; retract the failed version in `go.mod` and note it in the changelog.
+Validate a risky release with a dry-run tag first.
 If publication fails while the release is still a draft, fix the cause and re-run `stage-arm64` and `upload-amd64`, in that order, because the publisher may already have deleted archives of either set.
 Never move a published tag.

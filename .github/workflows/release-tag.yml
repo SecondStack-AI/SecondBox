@@ -17,6 +17,7 @@ permissions:
 
 env:
   VERSION_TAG: ${{ github.ref_name }}
+  RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   stage-amd64:
@@ -24,7 +25,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, secondbox-release-amd64]
     timeout-minutes: 300
     outputs:
-      output: ${{ steps.paths.outputs.output }}
+      version: ${{ steps.paths.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -36,23 +37,29 @@ jobs:
       - id: paths
         name: Replace an earlier attempt of this version
         run: |
-          root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
           version="${VERSION_TAG#v}"
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo "tag $VERSION_TAG is not vSEMVER" >&2; exit 1; }
+          root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
           rm -rf -- "$root/$version" "$root/$version-build" "$root/$version-candidate"
-          echo "output=$root/$version" >>"$GITHUB_OUTPUT"
-          echo "logs=$root/logs/$version-${{ github.run_id }}-${{ github.run_attempt }}" >>"$GITHUB_OUTPUT"
-      - run: /usr/bin/just release "${VERSION_TAG#v}"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          {
+            echo "RELEASE_VERSION=$version"
+            echo "RELEASE_OUTPUT=$root/$version"
+            echo "RELEASE_LOGS=$root/logs/$version-$RUN_KEY"
+          } >>"$GITHUB_ENV"
+      - run: /usr/bin/just release "$RELEASE_VERSION"
       - name: Keep run logs on the host
-        if: always()
+        if: always() && env.RELEASE_LOGS != ''
         run: |
-          mkdir -p "${{ steps.paths.outputs.logs }}"
-          for logs in .tmp/release .tmp/qualify; do [[ ! -d "$logs" ]] || cp -a "$logs" "${{ steps.paths.outputs.logs }}/"; done
+          mkdir -p "$RELEASE_LOGS"
+          for logs in .tmp/release .tmp/qualify; do [[ ! -d "$logs" ]] || cp -a "$logs" "$RELEASE_LOGS/"; done
+      - name: Pack the architecture-neutral files for the arm64 runner
+        # A tar keeps the binaries' executable modes, which workflow artifacts drop.
+        run: tar -C "$RELEASE_OUTPUT" --exclude='*.oci.tar' -cf "$RUNNER_TEMP/amd64-shared.tar" .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: amd64-shared-${{ github.ref_name }}
-          path: |
-            ${{ steps.paths.outputs.output }}/
-            !${{ steps.paths.outputs.output }}/*.oci.tar
+          name: amd64-shared-${{ github.run_id }}
+          path: ${{ runner.temp }}/amd64-shared.tar
           if-no-files-found: error
           retention-days: 7
 
@@ -65,6 +72,7 @@ jobs:
       actions: read
     env:
       GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.stage-amd64.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -73,28 +81,30 @@ jobs:
         with:
           node-version: 24.18.0
       - run: npm ci --ignore-scripts
-      - id: paths
-        name: Replace an earlier attempt of this version
+      - name: Replace an earlier attempt of this version
         run: |
           root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
-          version="${VERSION_TAG#v}"
-          shared="$RUNNER_TEMP/amd64-$version"
-          rm -rf -- "$root/$version-arm64" "$shared"
-          echo "output=$root/$version-arm64" >>"$GITHUB_OUTPUT"
-          echo "shared=$shared" >>"$GITHUB_OUTPUT"
-          echo "logs=$root/logs/$version-arm64-${{ github.run_id }}-${{ github.run_attempt }}" >>"$GITHUB_OUTPUT"
+          rm -rf -- "$root/$RELEASE_VERSION-arm64" "$RUNNER_TEMP/amd64-shared" "$RUNNER_TEMP/amd64-$RELEASE_VERSION"
+          {
+            echo "RELEASE_OUTPUT=$root/$RELEASE_VERSION-arm64"
+            echo "RELEASE_SHARED=$RUNNER_TEMP/amd64-$RELEASE_VERSION"
+            echo "RELEASE_LOGS=$root/logs/$RELEASE_VERSION-arm64-$RUN_KEY"
+          } >>"$GITHUB_ENV"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: amd64-shared-${{ github.ref_name }}
-          path: ${{ steps.paths.outputs.shared }}
-      - run: /usr/bin/just release-arm64 "${VERSION_TAG#v}" "${{ steps.paths.outputs.shared }}"
+          name: amd64-shared-${{ github.run_id }}
+          path: ${{ runner.temp }}/amd64-shared
+      - run: |
+          mkdir "$RELEASE_SHARED"
+          tar -C "$RELEASE_SHARED" -xf "$RUNNER_TEMP/amd64-shared/amd64-shared.tar"
+      - run: /usr/bin/just release-arm64 "$RELEASE_VERSION" "$RELEASE_SHARED"
       - name: Keep run logs on the host
-        if: always()
+        if: always() && env.RELEASE_LOGS != ''
         run: |
-          mkdir -p "${{ steps.paths.outputs.logs }}"
-          [[ ! -d .tmp/release ]] || cp -a .tmp/release "${{ steps.paths.outputs.logs }}/"
+          mkdir -p "$RELEASE_LOGS"
+          [[ ! -d .tmp/release ]] || cp -a .tmp/release "$RELEASE_LOGS/"
       - if: ${{ !contains(github.ref_name, '-dryrun.') }}
-        run: scripts/release-upload.sh "${VERSION_TAG#v}" "${{ steps.paths.outputs.output }}"
+        run: scripts/release-upload.sh "$RELEASE_VERSION" "$RELEASE_OUTPUT"
 
   upload-amd64:
     needs: [stage-amd64, stage-arm64]
@@ -106,11 +116,13 @@ jobs:
       actions: write
     env:
       GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.stage-amd64.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
       - name: Upload the amd64 set and dispatch the publisher
-        run: scripts/release-upload.sh "${VERSION_TAG#v}" "${{ needs.stage-amd64.outputs.output }}"
-      - name: Remove intermediate build outputs
-        run: rm -rf -- "${{ needs.stage-amd64.outputs.output }}-build" "${{ needs.stage-amd64.outputs.output }}-candidate"
+        run: |
+          root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
+          scripts/release-upload.sh "$RELEASE_VERSION" "$root/$RELEASE_VERSION"
+          rm -rf -- "$root/$RELEASE_VERSION-build" "$root/$RELEASE_VERSION-candidate"

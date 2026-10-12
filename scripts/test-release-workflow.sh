@@ -33,10 +33,19 @@ fi
 rg -q "tags: \['v\[0-9\]\*'\]" "$tag_workflow"
 rg -q 'runs-on: \[self-hosted, Linux, X64, secondbox-release-amd64\]' "$tag_workflow"
 rg -q 'runs-on: \[self-hosted, Linux, ARM64, secondbox-release-arm64\]' "$tag_workflow"
-rg -q '/usr/bin/just release "\$\{VERSION_TAG#v\}"' "$tag_workflow"
+rg -q '/usr/bin/just release "\$RELEASE_VERSION"' "$tag_workflow"
+# Tag-derived values reach shell steps only through the environment.
+if awk '/^ +(- )?run:/ {block = 1; indent = match($0, /[^ -]/); if ($0 ~ /\$\{\{/) found = 1; next}
+  block && match($0, /[^ ]/) > indent && $0 ~ /\$\{\{/ {found = 1}
+  block && match($0, /[^ ]/) <= indent {block = 0}
+  END {exit !found}' "$tag_workflow"; then
+  echo "tag workflow interpolates expressions into shell source" >&2
+  exit 1
+fi
 rg -q 'needs: \[stage-amd64, stage-arm64\]' "$tag_workflow"
 test "$(rg -c 'scripts/release-upload.sh' "$tag_workflow")" = 2
 test "$(rg -c "if: \\$\\{\\{ !contains\\(github.ref_name, '-dryrun.'\\) \\}\\}" "$tag_workflow")" = 2
+rg -q -- "--exclude='\*.oci.tar' -cf" "$tag_workflow"
 if rg -q 'release-publish|npm publish|skopeo|id-token|packages: write' "$tag_workflow"; then
   echo "tag workflow publishes instead of dispatching the hosted publisher" >&2
   exit 1
