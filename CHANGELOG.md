@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.25.0 - 2026-10-12
+
+SecondBox no longer signs release microVM bundles or client-selected execution images; integrity rests on digest pinning, the registry allowlist, Tenant authorization and the Runner's bundle checks. Deployments from v0.14.0 onward update in place with no database migration, but the Runner protocol advances to generation 7 exactly, so update the control plane and every Runner together. Delete the retired signing keys from `secondbox.toml` before updating, and materialize snapshot-resume templates from the new bundle before the updated Runners start. The execution bundle is the `secondbox-0.17.0` bundle without its signature files, and standard Profile revisions are unchanged. See the [v0.25.0 release notes](docs/releases/v0.25.0.md).
+
 ### Upgrade notes
 
 - Delete `deployment.execution_image_public_key`, `deployment.execution_image_public_key_sha256`, and each Runner's `execution_image_public_key`, `execution_image_public_key_sha256`, `artifact_public_key`, and `artifact_public_key_sha256` from `secondbox.toml` before updating; the strict decoder rejects them as unknown keys. Remote Runner and image-fetcher environments drop their `*_PUBLIC_KEY` and `*_PUBLIC_KEY_SHA256` variables.
