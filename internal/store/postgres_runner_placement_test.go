@@ -553,6 +553,58 @@ func TestRunnerPlacementRequiresSnapshotResumeCapacityForResumeProfiles(t *testi
 	}
 }
 
+// TestRunnerPlacementRequiresPerExecAttributionForAttributedProfiles keeps an
+// attributed Profile off a Runner without an attributed gateway. Homed there,
+// every start would wait for an Assignment that Runner can never take.
+func TestRunnerPlacementRequiresPerExecAttributionForAttributedProfiles(t *testing.T) {
+	ungated := runnerPlacementCandidate{
+		id: "runner-ungated", poolName: "pool", state: "ready", drainPhase: "active",
+		activeConnectionID: "connection", backendKind: "firecracker",
+		architectures: []string{"amd64"},
+		capabilities:  []string{"compute", "local-workspace"},
+		materializations: []placementMaterialization{{
+			BackendKind: "firecracker", Architecture: "amd64",
+			RuntimeDigest:   placementTestRuntimeDigest,
+			ToolchainDigest: placementTestToolchainDigest,
+			Digest:          "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		}},
+		allocatable: runnerCapacity{
+			VCPUCount: 4, MemoryBytes: 8 << 30, DiskBytes: 8 << 30, Instances: 4, Operations: 8,
+		},
+	}
+	gated := ungated
+	gated.id = "runner-gated"
+	gated.capabilities = []string{"compute", "local-workspace", contracts.RunnerCapabilityPerExecAttribution}
+
+	plainSpec := placementTestSpec("pool")
+	plainSpec.AttributedExecution = nil
+	attributedSpec := placementTestSpec("pool")
+	attributedSpec.AttributedExecution = &contracts.AttributedExecutionPolicy{
+		Gateway: "integrations", MaximumConnections: 128,
+	}
+
+	for _, testCase := range []struct {
+		name      string
+		candidate runnerPlacementCandidate
+		spec      contracts.ProfileRevisionSpec
+		want      bool
+	}{
+		{"plain Profile on ungated Runner", ungated, plainSpec, true},
+		{"plain Profile on gated Runner", gated, plainSpec, true},
+		{"attributed Profile on ungated Runner", ungated, attributedSpec, false},
+		{"attributed Profile on gated Runner", gated, attributedSpec, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := runnerPlacementCompatible(
+				testCase.candidate, testCase.spec, runnerPlacementOptions{}, runnerCapacity{},
+			)
+			if got != testCase.want {
+				t.Fatalf("compatible = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
 // TestRunnerPlacementRequiresBackendMaterialization pins home-time admission: a
 // Sandbox is homed only to a Runner holding a verified materialization for its
 // own backend, whichever release bundle that is, because a permanent home that

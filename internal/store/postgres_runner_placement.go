@@ -280,11 +280,15 @@ func runnerPlacementCompatible(
 		!contains(candidate.supportedEgressContexts, *options.requiredEgressContext) {
 		return false
 	}
-	// A Sandbox never leaves its home Runner, so the startup mode a Profile pins
-	// has to be satisfiable by the Runner chosen here, at creation, and by every
-	// later Instance assignment onto that same Runner.
+	// A Sandbox never leaves its home Runner, so the startup mode and attributed
+	// execution a Profile pins have to be satisfiable by the Runner chosen here,
+	// at creation, and by every later Instance assignment onto that same Runner.
 	if spec.Startup.Mode == contracts.StartupModeSnapshotResume &&
 		!contains(candidate.capabilities, contracts.RunnerCapabilitySnapshotResume) {
+		return false
+	}
+	if spec.AttributedExecution != nil &&
+		!contains(candidate.capabilities, contracts.RunnerCapabilityPerExecAttribution) {
 		return false
 	}
 	// A Sandbox is homed permanently, so the home must already hold a verified
