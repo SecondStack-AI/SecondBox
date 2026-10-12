@@ -64,7 +64,7 @@ docker buildx inspect "$RELEASE_BUILDX_BUILDER" >/dev/null
 virsh -c qemu:///system uri >/dev/null
 domains="$(virsh -c qemu:///system list --all --name)"
 ! grep -q '^sbq-' <<<"$domains" || fail 'libvirt has sbq- domains; wait for their owner'
-guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-3072}"
+guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-4096}"
 [[ "$guest_memory" =~ ^[1-9][0-9]*$ ]] && ((guest_memory >= 2560 && guest_memory <= 1048576)) || fail 'QUALIFY_GUEST_MEMORY_MIB must be 2560..1048576 (the qualified installer sizing requires 2 GiB usable RAM)'
 available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
 ((available_mib >= guest_memory+2048)) || fail 'insufficient memory for an installer guest and 2 GiB host reserve'

@@ -92,14 +92,24 @@ func (plan InstallPlan) SandboxProfile() string {
 }
 
 // SmokeProfiles returns the Profiles the post-install smoke boots: the
-// isolated Profile, then the egress-context-requiring Profile closest to the
-// sizing Profile.
-func SmokeProfiles(sandboxProfile string) []string {
-	egress := sandboxProfile
-	if egress == standardresources.AgentCompartmentIsolated {
-		egress = standardresources.AgentCompartment
+// isolated Profile, then the sizing Profile when it requires the generated
+// egress context. A Profile that permits attributed execution places only on a
+// Runner with an attributed gateway, which a guided install never configures,
+// so the smoke cannot boot it.
+func SmokeProfiles(sandboxProfile string) ([]string, error) {
+	profiles := []string{standardresources.AgentCompartmentIsolated}
+	if sandboxProfile == standardresources.AgentCompartmentIsolated {
+		return profiles, nil
 	}
-	return []string{standardresources.AgentCompartmentIsolated, egress}
+	lineage, err := standardresources.ProfileLineage(sandboxProfile, standardresources.ArchitectureAMD64)
+	if err != nil {
+		return nil, installerError("smoke Profile selection", err)
+	}
+	spec := lineage.Revisions[len(lineage.Revisions)-1].Spec
+	if spec.Network.RequiresTenantEgressContext != nil && *spec.Network.RequiresTenantEgressContext && spec.AttributedExecution == nil {
+		profiles = append(profiles, sandboxProfile)
+	}
+	return profiles, nil
 }
 
 func formatMemoryBytes(value int64) string {

@@ -105,14 +105,17 @@ func TestPreflightCapacityFollowsSandboxSizing(t *testing.T) {
 	}
 }
 
-func TestSmokeProfilesBootIsolatedThenEgressContextProfile(t *testing.T) {
+// agent-compartment permits attributed execution, so it places only on a
+// Runner with an attributed gateway; a guided install has none.
+func TestSmokeProfilesBootOnlyProfilesAGuidedInstallCanPlace(t *testing.T) {
 	for profile, want := range map[string][]string{
 		"durable-coding":             {"agent-compartment-isolated", "durable-coding"},
-		"agent-compartment":          {"agent-compartment-isolated", "agent-compartment"},
-		"agent-compartment-isolated": {"agent-compartment-isolated", "agent-compartment"},
+		"agent-compartment":          {"agent-compartment-isolated"},
+		"agent-compartment-isolated": {"agent-compartment-isolated"},
 	} {
-		if got := SmokeProfiles(profile); !slices.Equal(got, want) {
-			t.Errorf("%s smoke Profiles = %v, want %v", profile, got, want)
+		got, err := SmokeProfiles(profile)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("%s smoke Profiles = %v, %v, want %v", profile, got, err, want)
 		}
 	}
 }
