@@ -25,6 +25,9 @@ release_directory="${3:-}"
 [[ "$release_directory" == /* && -d "$release_directory" && ! -L "$release_directory" ]] || { echo 'qualified guest release directory is unsafe' >&2; exit 1; }
 
 qualification_root="$HOME/.secondbox-installer-qualification"
+# Release qualification sizes the candidate for the smallest standard Profile so
+# its guests fit small qualification hosts; v0.7.2 has no sizing options.
+candidate_sizing=(--sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024)
 state="$qualification_root/state-${mode}.json"
 evidence="/opt/secondbox-qualification/evidence-${mode}.json"
 mkdir -p "$qualification_root"
@@ -129,8 +132,15 @@ EOF
   sudo chmod 0755 /usr/local/bin/docker
 }
 
+# The quota admits exactly one Sandbox of the selected standard Profile.
 create_qualification_workload() {
-  local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5" egress_context="${6:-}"
+  local plan_path="$1" binary="$2" root="$3" tenant_ref="$4" key_suffix="$5" profile="$6" egress_context="${7:-}"
+  local vcpu_count memory_bytes concurrent_operations
+  case "$profile" in
+    agent-compartment) vcpu_count=1 memory_bytes=1073741824 concurrent_operations=4 ;;
+    durable-coding) vcpu_count=4 memory_bytes=8589934592 concurrent_operations=16 ;;
+    *) echo "qualification workload Profile is unsupported: $profile" >&2; return 1 ;;
+  esac
   local platform_config="$root/platform.json" controller_config="$root/controller.json" application_config="$root/application.json"
   local platform_token_path platform_token api_address subject_ref expiry controller_response controller_token application_response application_token
   local operation_id expected_runner_id placement_preflight='' sandbox_operation sandbox_id sandbox_state=''
@@ -144,8 +154,9 @@ create_qualification_workload() {
 
   SECONDBOX_CONFIG="$platform_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$platform_token" \
     "$binary" --output json platform login >/dev/null
-  jq -n --arg ref "$tenant_ref" --arg egressContext "$egress_context" \
-    '{ref:$ref,allowedProfileGrants:["durable-coding"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:4,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16,maxActiveSubjects:1,maxApplicationAuthorities:1},expiryPolicy:{maximumSubjectLifetimeSeconds:21600,maximumAuthorityLifetimeSeconds:21600},metadata:{qualification:"installer-qualified-workload"}} + if $egressContext == "" then {} else {egressContext:$egressContext} end' >"$root/tenant.json"
+  jq -n --arg ref "$tenant_ref" --arg egressContext "$egress_context" --arg profile "$profile" \
+    --argjson vcpuCount "$vcpu_count" --argjson memoryBytes "$memory_bytes" --argjson concurrentOperations "$concurrent_operations" \
+    '{ref:$ref,allowedProfileGrants:[$profile],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],aggregateQuota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:$vcpuCount,maxMemoryBytes:$memoryBytes,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:$concurrentOperations,maxActiveSubjects:1,maxApplicationAuthorities:1},expiryPolicy:{maximumSubjectLifetimeSeconds:21600,maximumAuthorityLifetimeSeconds:21600},metadata:{qualification:"installer-qualified-workload"}} + if $egressContext == "" then {} else {egressContext:$egressContext} end' >"$root/tenant.json"
   SECONDBOX_CONFIG="$platform_config" "$binary" --output json tenant create \
     --file "$root/tenant.json" --idempotency-key "qualified-tenant-$key_suffix" >/dev/null
   jq -n --arg expiresAt "$expiry" '{expiresAt:$expiresAt,metadata:{qualification:"installer-qualified-workload"}}' >"$root/controller-request.json"
@@ -155,11 +166,12 @@ create_qualification_workload() {
   SECONDBOX_CONFIG="$controller_config" SECONDBOX_URL="http://$api_address" SECONDBOX_TOKEN="$controller_token" \
     "$binary" --output json controller login >/dev/null
   jq -n --arg ref "$subject_ref" \
-    '{ref:$ref,quota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:4,maxMemoryBytes:8589934592,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:16},metadata:{qualification:"installer-qualified-workload"}}' >"$root/subject.json"
+    --argjson vcpuCount "$vcpu_count" --argjson memoryBytes "$memory_bytes" --argjson concurrentOperations "$concurrent_operations" \
+    '{ref:$ref,quota:{maxSandboxes:1,maxActiveInstances:1,maxVcpuCount:$vcpuCount,maxMemoryBytes:$memoryBytes,maxSnapshots:1,maxPortSessions:1,maxConcurrentOperations:$concurrentOperations},metadata:{qualification:"installer-qualified-workload"}}' >"$root/subject.json"
   SECONDBOX_CONFIG="$controller_config" "$binary" --output json subject create \
     --file "$root/subject.json" --idempotency-key "qualified-subject-$key_suffix" >/dev/null
-  jq -n --arg subjectRef "$subject_ref" --arg expiresAt "$expiry" \
-    '{subjectRef:$subjectRef,scopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],profileGrants:["durable-coding"],expiresAt:$expiresAt,metadata:{qualification:"installer-qualified-workload"}}' >"$root/application-request.json"
+  jq -n --arg subjectRef "$subject_ref" --arg expiresAt "$expiry" --arg profile "$profile" \
+    '{subjectRef:$subjectRef,scopes:["sandbox:read","sandbox:lifecycle","sandbox:exec","sandbox:files","sandbox:ports"],profileGrants:[$profile],expiresAt:$expiresAt,metadata:{qualification:"installer-qualified-workload"}}' >"$root/application-request.json"
   application_response="$(SECONDBOX_CONFIG="$controller_config" "$binary" --output json application-authority create \
     --file "$root/application-request.json" --idempotency-key "qualified-application-$key_suffix")"
   application_token="$(jq -er .bearerToken <<<"$application_response")"
@@ -172,11 +184,11 @@ create_qualification_workload() {
     expected_runner_id="runner-${operation_id#install_}"
     for _ in $(seq 1 300); do
       if placement_preflight="$(SECONDBOX_CONFIG="$platform_config" "$binary" --output json diagnostics egress-contexts 2>/dev/null)" &&
-        jq -e --arg tenantRef "$tenant_ref" --arg egressContext "$egress_context" --arg runnerId "$expected_runner_id" '
+        jq -e --arg tenantRef "$tenant_ref" --arg egressContext "$egress_context" --arg runnerId "$expected_runner_id" --arg profile "$profile" '
           .ready == true and
           any(.requirements[];
             .tenantRef == $tenantRef and
-            .profileName == "durable-coding" and
+            .profileName == $profile and
             .egressContext == $egressContext and
             .status == "ready" and
             (.compatibleRunnerIds | index($runnerId)) != null
@@ -196,8 +208,8 @@ create_qualification_workload() {
     [[ "$placement_preflight" == ready ]] || { echo 'qualification placement did not become ready' >&2; return 1; }
   fi
 
-  jq -n '{profile:"durable-coding",metadata:{qualification:"installer-qualified-workload"}}' >"$root/sandbox.json"
-  # The installer's guest smoke deletes its durable-coding Sandbox moments before
+  jq -n --arg profile "$profile" '{profile:$profile,metadata:{qualification:"installer-qualified-workload"}}' >"$root/sandbox.json"
+  # The installer's guest smoke deletes its last Sandbox moments before
   # this create, and the Runner's reported reservation for it can lag one
   # heartbeat; on a minimum host that refuses placement transiently.
   local create_attempt create_error=''
@@ -243,7 +255,7 @@ if [[ "$phase" == install ]]; then
   fi
 
   before_mounts="$(findmnt --json --output TARGET,SOURCE,FSTYPE | sha256sum | awk '{print $1}')"
-  "$deploy" --output json install --check >"$qualification_root/preflight-${mode}.json"
+  "$deploy" --output json install "${candidate_sizing[@]}" --check >"$qualification_root/preflight-${mode}.json"
   after_mounts="$(findmnt --json --output TARGET,SOURCE,FSTYPE | sha256sum | awk '{print $1}')"
   [[ "$before_mounts" == "$after_mounts" ]] || { echo 'installer preflight changed the mount table' >&2; exit 1; }
   [[ -z "$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)" ]] || { echo 'installer preflight created an operation directory' >&2; exit 1; }
@@ -284,7 +296,8 @@ if [[ "$phase" == install ]]; then
     jq -e '.status == "succeeded" and (.schemaVersion == "secondbox.install.receipt/v1" or .schemaVersion == "secondbox.install.receipt/v2")' "$receipt" >/dev/null
     cli_binary="$(jq -er '.paths[] | select(.name == "secondbox-binary") | .path' "$plan")"
     cli_config="$(jq -er .cli.configPath "$plan")"
-    source_workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/source-workload-$mode" "qualified-$mode" "source-$mode")"
+    # The v0.7.2 source deployment is sized and qualified for durable-coding.
+    source_workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/source-workload-$mode" "qualified-$mode" "source-$mode" durable-coding)"
     qualification_sandbox_id="$(jq -er .sandboxId <<<"$source_workload")"
     qualification_workload_config="$(jq -er .configPath <<<"$source_workload")"
     source_sandbox_revision="$(SECONDBOX_CONFIG="$qualification_workload_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$qualification_sandbox_id" | jq -er .revision)"
@@ -327,7 +340,7 @@ if [[ "$phase" == install ]]; then
 
     configure_candidate_fetcher_registry
     install_log="$qualification_root/install-candidate-${mode}.log"
-    printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
+    printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install "${candidate_sizing[@]}" --candidate-directory "$release_directory" >"$install_log" 2>&1
     operation=''
     while IFS= read -r candidate_operation; do
       if [[ "$candidate_operation" != "$source_operation" ]] && jq -e --arg target "$candidate_version" '.release.version == $target' "$candidate_operation/install-plan.json" >/dev/null 2>&1; then
@@ -341,13 +354,13 @@ if [[ "$phase" == install ]]; then
     setup_candidate_registry
     configure_candidate_fetcher_registry
     install_log="$qualification_root/install-${mode}.log"
-    printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install --candidate-directory "$release_directory" >"$install_log" 2>&1
+    printf '1\ny\ny\n1\ny\ny\n' | "$deploy" --accessible install "${candidate_sizing[@]}" --candidate-directory "$release_directory" >"$install_log" 2>&1
     operation="$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)"
   else
     setup_candidate_registry
     configure_candidate_fetcher_registry
     install_log="$qualification_root/install-${mode}.log"
-    setsid bash -c 'printf "1\ny\ny\n1\ny\ny\n" | "$1" --accessible install --candidate-directory "$2"' bash "$deploy" "$release_directory" >"$install_log" 2>&1 &
+    setsid bash -c 'printf "1\ny\ny\n1\ny\ny\n" | "$1" --accessible install "${@:3}" --candidate-directory "$2"' bash "$deploy" "$release_directory" "${candidate_sizing[@]}" >"$install_log" 2>&1 &
     install_pid=$!
     operation=''
     interrupted=false
@@ -443,7 +456,7 @@ jq -e --arg runnerId "$expected_runner_id" '
   .evidence.runnerPoolState == "ready" and
   (.evidence.runnerPoolReadyRunners | tonumber) >= 1 and
   .evidence.coldBootCapacity == "advertised" and
-  (.evidence.concurrentOperationCapacity | tonumber) >= 16 and
+  (.evidence.concurrentOperationCapacity | tonumber) >= 4 and
   (.evidence.egressContext | length) > 0 and
   .evidence.egressContextPreflight == "ready"
 ' "$receipt" >/dev/null
@@ -457,7 +470,7 @@ for _ in $(seq 1 300); do
 done
 [[ "$live_runner_state" == ready ]] || { echo 'installed Runner did not become ready after reboot' >&2; exit 1; }
 
-workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" "$expected_context")"
+workload="$(create_qualification_workload "$plan" "$cli_binary" "$qualification_root/clean-install-$mode" "qualified-$mode" "$mode" agent-compartment "$expected_context")"
 sandbox_id="$(jq -er .sandboxId <<<"$workload")"
 workload_config="$(jq -er .configPath <<<"$workload")"
 
