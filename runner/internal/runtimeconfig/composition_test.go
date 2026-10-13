@@ -63,6 +63,50 @@ func TestRenderedRunnerFixturePassesProductionComposition(t *testing.T) {
 	}
 }
 
+// The gVisor fixture is rendered by secondbox-deploy for a remote gVisor
+// Runner; deployconfig keeps it equal to its resolved model.
+func TestRenderedGVisorRunnerFixturePassesProductionComposition(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "runner-environment-gvisor.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var environment map[string]string
+	if err := json.Unmarshal(data, &environment); err != nil {
+		t.Fatal(err)
+	}
+	identity := t.TempDir()
+	certificate, key, ca := issueTestIdentity(t, "runner-conformance")
+	certificatePath := filepath.Join(identity, "runner.crt")
+	keyPath := filepath.Join(identity, "runner.key")
+	caPath := filepath.Join(identity, "runner-ca.crt")
+	for path, value := range map[string][]byte{certificatePath: certificate, keyPath: key, caPath: ca} {
+		if err := os.WriteFile(path, value, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment["SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG"] = writeRuntimeContextConfig(t)
+	environment["SECONDBOX_RUNNER_CREDENTIAL"] = strings.Repeat("c", 48)
+	environment["SECONDBOX_GVISOR_MATERIALIZATION_DIGEST"] = "sha256:" + strings.Repeat("a", 64)
+	environment["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"] = certificatePath
+	environment["SECONDBOX_RUNNER_CLIENT_KEY"] = keyPath
+	environment["SECONDBOX_RUNNER_CONTROL_PLANE_CA"] = caPath
+	for name, value := range environment {
+		t.Setenv(name, value)
+	}
+	composition, err := LoadFromEnvironment(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if composition.BackendKind != "gvisor" || composition.GVisor == nil || composition.Firecracker != nil ||
+		composition.GVisor.NetworkProfile != 3 || composition.GVisor.MaximumInstances != 8 ||
+		composition.WorkspaceTemplateCapacityBytes != 8<<30 {
+		t.Fatalf("composition = %#v", composition)
+	}
+	if err := composition.Connector.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func issueTestIdentity(t *testing.T, runnerID string) ([]byte, []byte, []byte) {
 	t.Helper()
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)

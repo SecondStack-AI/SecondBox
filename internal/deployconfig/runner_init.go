@@ -153,7 +153,7 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 	}
 	environment := resolved.RemoteRunnerEnvironment[runnerID]
 	if declared.Placement == "same-host" {
-		environment = resolveRunnerEnvironment(*declared, resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"])
+		environment = resolveRunnerEnvironment(*declared, resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"], resolved.GVisorMaterializationDigest)
 	}
 	if environment == nil {
 		return fmt.Errorf("SecondBox deployment manifest: runner-init could not resolve runner %s", runnerID)
@@ -284,7 +284,7 @@ func validateExistingRunnerIdentity(manifestPath, runnerID, target string) error
 	}
 	environment := resolved.RemoteRunnerEnvironment[runnerID]
 	if declared.Placement == "same-host" {
-		environment = resolveRunnerEnvironment(*declared, resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"])
+		environment = resolveRunnerEnvironment(*declared, resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"], resolved.GVisorMaterializationDigest)
 	}
 	expectedEnvironment, err := EncodeSystemdEnvironment(environment)
 	if err != nil {

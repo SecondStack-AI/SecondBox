@@ -59,7 +59,7 @@ Repository automation relies on these exact machine paths:
 
 ```text
 go run ./cmd/secondbox-deploy inspect "$manifest" | jq ...
-go run ./cmd/secondbox-deploy runner-template > runner.toml
+go run ./cmd/secondbox-deploy runner-template --backend firecracker > runner.toml
 secondbox sandboxes list | jq ...
 secondbox files read ... > workspace-file
 ```

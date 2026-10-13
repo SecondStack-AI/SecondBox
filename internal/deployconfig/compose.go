@@ -211,7 +211,8 @@ type recordedInstallerTopology struct {
 		Mode string `toml:"mode"`
 	} `toml:"database"`
 	Runners []struct {
-		Placement string `toml:"placement"`
+		Placement      string `toml:"placement"`
+		ComputeBackend string `toml:"compute_backend"`
 	} `toml:"runners"`
 }
 
@@ -247,10 +248,7 @@ func recordedInstallerComposeIdentity(manifestPath string) (string, string, []st
 	composeProject := manifest.Deployment.ComposeProjectName
 	composeBackendCIDR := manifest.Deployment.ComposeBackendCIDR
 	databaseMode := manifest.Database.Mode
-	runnerPlacements := make([]string, 0, len(manifest.Runners))
-	for _, runner := range manifest.Runners {
-		runnerPlacements = append(runnerPlacements, runner.Placement)
-	}
+
 	if deploymentMode != "development" && deploymentMode != "production" {
 		return "", "", nil, manifestError("recorded Compose deployment mode is unsupported", nil)
 	}
@@ -267,14 +265,19 @@ func recordedInstallerComposeIdentity(manifestPath string) (string, string, []st
 		composeFiles = append(composeFiles, "deploy/compose.bundled-database.yml")
 	}
 	sameHost := false
-	for _, placement := range runnerPlacements {
-		if placement == "same-host" {
+	for _, runner := range manifest.Runners {
+		if runner.Placement == "same-host" {
 			if sameHost {
 				return "", "", nil, manifestError("recorded Compose topology has multiple same-host Runners", nil)
 			}
 			sameHost = true
-			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
-		} else if placement != "remote" {
+			// Manifests recorded before compute_backend existed declare only Firecracker Runners.
+			backend := runner.ComputeBackend
+			if backend == "" {
+				backend = computeBackendFirecracker
+			}
+			composeFiles = append(composeFiles, sameHostRunnerComposeFile(backend))
+		} else if runner.Placement != "remote" {
 			return "", "", nil, manifestError("recorded Compose Runner placement is unsupported", nil)
 		}
 	}

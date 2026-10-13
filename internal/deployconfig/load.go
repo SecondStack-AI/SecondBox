@@ -48,7 +48,10 @@ const (
 const (
 	linuxUnixSocketPathLimit      = 108
 	maxFirecrackerInstanceIDBytes = 42
-	cleanInstallBoundaryVersion   = "0.6.0"
+	// The Runner's gVisor backend owns these bounds; validation mirrors them.
+	maximumGVisorNetworkProfiles        = 16
+	minimumGVisorWorkspaceTemplateBytes = 64 << 20
+	cleanInstallBoundaryVersion         = "0.6.0"
 	// updateMigrationBaselineVersion is the oldest release whose database
 	// migrates forward to this release. v0.14.0 rewrote the initial migration.
 	updateMigrationBaselineVersion = "0.14.0"
@@ -318,29 +321,41 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 			composeFiles = append(composeFiles, "deploy/compose.bundled-database.yml")
 		}
 	}
+	resources, gvisorRelease, err := resolveStandardResources(base, manifest)
+	if err != nil {
+		return ResolvedDeployment{}, err
+	}
+	gvisorMaterializationDigest := ""
+	for _, runner := range manifest.Runners {
+		if runner.ComputeBackend == computeBackendGVisor {
+			if gvisorRelease == nil {
+				return ResolvedDeployment{}, manifestError("Runner "+runner.RunnerID+" uses compute_backend gvisor, but standard_resources.artifact_manifest carries no gVisor release", nil)
+			}
+			gvisorMaterializationDigest = gvisorRelease.MaterializationDigest
+		}
+	}
 	for _, runner := range manifest.Runners {
 		contextConfig, err := encodeRunnerEgressContextConfig(runner.EgressContexts)
 		if err != nil {
 			return ResolvedDeployment{}, manifestError("Runner "+runner.RunnerID+" egress context configuration", err)
 		}
 		contextConfigs[runner.RunnerID] = contextConfig
-		runnerEnvironment := resolveRunnerEnvironment(runner, credential)
+		runnerEnvironment := resolveRunnerEnvironment(runner, credential, gvisorMaterializationDigest)
 		if runner.Placement == "same-host" {
 			for name, value := range runnerEnvironment {
 				environment[name] = value
 			}
 			environment["SECONDBOX_SAME_HOST_RUNNER_ENABLED"] = "true"
-			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
+			composeFiles = append(composeFiles, sameHostRunnerComposeFile(runner.ComputeBackend))
+			if runner.ComputeBackend == computeBackendGVisor {
+				environment["SECONDBOX_GVISOR_RUNNER_CGROUP_PARENT"] = sameHostGVisorRunnerCgroupParent(deployment.ComposeProjectName)
+			}
 		} else {
 			remote[runner.RunnerID] = runnerEnvironment
 		}
 	}
 
-	resources, err := resolveStandardResources(base, manifest)
-	if err != nil {
-		return ResolvedDeployment{}, err
-	}
-	resolved := ResolvedDeployment{Manifest: manifest, Environment: environment, RemoteRunnerEnvironment: remote, RunnerEgressContextConfigs: contextConfigs, ComposeFiles: composeFiles, SecretPaths: secretPaths, ResourceDocument: resources}
+	resolved := ResolvedDeployment{Manifest: manifest, GVisorMaterializationDigest: gvisorMaterializationDigest, Environment: environment, RemoteRunnerEnvironment: remote, RunnerEgressContextConfigs: contextConfigs, ComposeFiles: composeFiles, SecretPaths: secretPaths, ResourceDocument: resources}
 	if err := validateControlPlaneEnvironment(environment); err != nil {
 		return ResolvedDeployment{}, manifestError("rendered control-plane environment failed production loader validation", err)
 	}
@@ -669,22 +684,59 @@ func runnerGatewayNames(contexts []RunnerEgressContext) map[string]bool {
 }
 
 func validateRunner(prefix string, r Runner) error {
+	if r.ComputeBackend != computeBackendFirecracker && r.ComputeBackend != computeBackendGVisor {
+		return manifestError(prefix+".compute_backend must be firecracker or gvisor", nil)
+	}
 	if r.Placement == "same-host" {
 		for _, path := range r.packagedPaths() {
 			if *path.field != "" {
 				return manifestError(prefix+"."+path.name+" is derived for same-host placement; remove it from the manifest", nil)
 			}
 		}
+		if r.ComputeBackend == computeBackendGVisor {
+			for name, present := range r.sameHostGVisorDerivedSettings() {
+				if present {
+					return manifestError(prefix+"."+name+" is derived for a same-host gVisor Runner; remove it from the manifest", nil)
+				}
+			}
+		}
+	}
+	for name, present := range r.otherBackendSettings() {
+		if present {
+			return manifestError(prefix+"."+name+" does not apply to compute_backend "+r.ComputeBackend+"; remove it from the manifest", nil)
+		}
 	}
 
 	r = r.withPackagedPaths()
-	required := map[string]string{"pool_id": r.PoolID, "software_version": r.SoftwareVersion, "control_plane_address": r.ControlPlaneAddress, "control_plane_server_name": r.ControlPlaneServerName, "identity_directory": r.IdentityDirectory, "log_path": r.LogPath, "firecracker_path": r.FirecrackerPath, "firecracker_jailer_path": r.FirecrackerJailerPath, "firecracker_jail_root": r.FirecrackerJailRoot, "firecracker_cgroup_parent": r.FirecrackerCgroupParent, "firecracker_kernel_path": r.FirecrackerKernelPath, "firecracker_rootfs_path": r.FirecrackerRootFSPath, "firecracker_shared_image_path": r.FirecrackerSharedImagePath, "firecracker_kernel_args": r.FirecrackerKernelArgs, "firecracker_cpu_template": r.FirecrackerCPUTemplate, "firecracker_run_directory": r.FirecrackerRunDirectory, "firecracker_log_directory": r.FirecrackerLogDirectory, "snapshot_template_cache_root": r.SnapshotTemplateCacheRoot, "workspace_root": r.WorkspaceRoot, "sandbox_guest_ip": r.SandboxGuestIP, "sandbox_bridge_name": r.SandboxBridgeName, "sandbox_bridge_cidr": r.SandboxBridgeCIDR, "sandbox_guest_cidr": r.SandboxGuestCIDR, "sandbox_tap_prefix": r.SandboxTapPrefix, "sandbox_network_state_directory": r.SandboxNetworkStateDir, "network_policy_nft_path": r.NetworkPolicyNFTPath, "network_policy_max_dns_ttl": r.NetworkPolicyMaxDNSTTL, "network_policy_runner_addresses": r.NetworkPolicyRunnerAddresses, "network_policy_management_cidrs": r.NetworkPolicyManagementCIDRs, "egress_context_config_path": r.EgressContextConfigPath, "network_policy_dns_upstream": r.NetworkPolicyDNSUpstream, "guest_heartbeat_interval": r.GuestHeartbeatInterval, "data_plane_listen_address": r.DataPlaneListenAddress, "data_plane_advertised_address": r.DataPlaneAdvertisedAddress}
-	required["execution_image_registries"] = r.ExecutionImageRegistries
-	required["execution_image_registry_config_directory"] = r.ExecutionImageRegistryConfigDirectory
+	required := map[string]string{"pool_id": r.PoolID, "software_version": r.SoftwareVersion, "control_plane_address": r.ControlPlaneAddress, "control_plane_server_name": r.ControlPlaneServerName, "identity_directory": r.IdentityDirectory, "log_path": r.LogPath, "log_directory": r.LogDirectory, "workspace_root": r.WorkspaceRoot, "network_policy_max_dns_ttl": r.NetworkPolicyMaxDNSTTL, "network_policy_runner_addresses": r.NetworkPolicyRunnerAddresses, "network_policy_management_cidrs": r.NetworkPolicyManagementCIDRs, "egress_context_config_path": r.EgressContextConfigPath, "network_policy_dns_upstream": r.NetworkPolicyDNSUpstream, "data_plane_listen_address": r.DataPlaneListenAddress, "data_plane_advertised_address": r.DataPlaneAdvertisedAddress, "execution_image_registries": r.ExecutionImageRegistries, "execution_image_registry_config_directory": r.ExecutionImageRegistryConfigDirectory}
+	paths := map[string]string{"identity_directory": r.IdentityDirectory, "log_path": r.LogPath, "log_directory": r.LogDirectory, "workspace_root": r.WorkspaceRoot, "egress_context_config_path": r.EgressContextConfigPath}
+	positive := map[string]*int64{"storage_pressure_recovery_percent": r.StorageRecoveryPercent, "storage_pressure_warning_percent": r.StorageWarningPercent, "storage_pressure_admission_deny_percent": r.StorageAdmissionDenyPercent, "network_policy_max_dns_pins": r.NetworkPolicyMaxDNSPins, "max_concurrent_starts": r.MaxConcurrentStarts, "max_concurrent_workspace_creates": r.MaxConcurrentWorkspaceCreates}
+	if r.ComputeBackend == computeBackendFirecracker {
+		for name, value := range map[string]string{"firecracker_path": r.FirecrackerPath, "firecracker_jailer_path": r.FirecrackerJailerPath, "firecracker_jail_root": r.FirecrackerJailRoot, "firecracker_kernel_path": r.FirecrackerKernelPath, "firecracker_rootfs_path": r.FirecrackerRootFSPath, "firecracker_shared_image_path": r.FirecrackerSharedImagePath, "firecracker_run_directory": r.FirecrackerRunDirectory, "firecracker_log_directory": r.FirecrackerLogDirectory, "snapshot_template_cache_root": r.SnapshotTemplateCacheRoot, "sandbox_network_state_directory": r.SandboxNetworkStateDir, "network_policy_nft_path": r.NetworkPolicyNFTPath} {
+			required[name] = value
+			paths[name] = value
+		}
+		for name, value := range map[string]string{"firecracker_cgroup_parent": r.FirecrackerCgroupParent, "firecracker_kernel_args": r.FirecrackerKernelArgs, "firecracker_cpu_template": r.FirecrackerCPUTemplate, "sandbox_guest_ip": r.SandboxGuestIP, "sandbox_bridge_name": r.SandboxBridgeName, "sandbox_bridge_cidr": r.SandboxBridgeCIDR, "sandbox_guest_cidr": r.SandboxGuestCIDR, "sandbox_tap_prefix": r.SandboxTapPrefix, "guest_heartbeat_interval": r.GuestHeartbeatInterval} {
+			required[name] = value
+		}
+		for name, value := range map[string]*int64{"firecracker_jailer_uid_start": r.FirecrackerJailerUIDStart, "firecracker_jailer_uid_count": r.FirecrackerJailerUIDCount, "firecracker_jailer_gid": r.FirecrackerJailerGID, "firecracker_cgroup_version": r.FirecrackerCgroupVersion, "sandbox_max_vcpus": r.SandboxMaxVCPUs, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB, "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox, "max_concurrent_global": r.MaxConcurrentGlobal, "max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal, "file_transfer_max_bytes": r.FileTransferMaxBytes, "guest_control_vsock_port": r.GuestControlVSockPort, "guest_protocol_vsock_port": r.GuestProtocolVSockPort} {
+			positive[name] = value
+		}
+	} else {
+		for name, value := range map[string]string{"gvisor_runsc_path": r.GVisorRunscPath, "gvisor_agent_path": r.GVisorAgentPath, "gvisor_flat_root_path": r.GVisorFlatRootPath, "gvisor_materialization_path": r.GVisorMaterializationPath, "gvisor_runtime_directory": r.GVisorRuntimeDirectory} {
+			required[name] = value
+			paths[name] = value
+			if value != "" && filepath.Clean(value) != value {
+				return manifestError(prefix+"."+name+" must be a clean absolute Runner-host path", nil)
+			}
+		}
+		for name, value := range map[string]*int64{"gvisor_maximum_vcpus": r.GVisorMaximumVCPUs, "gvisor_maximum_memory_bytes": r.GVisorMaximumMemoryBytes, "gvisor_maximum_disk_bytes": r.GVisorMaximumDiskBytes, "gvisor_maximum_instances": r.GVisorMaximumInstances, "gvisor_maximum_operations": r.GVisorMaximumOperations, "gvisor_workspace_template_capacity_bytes": r.GVisorWorkspaceTemplateCapacityBytes} {
+			positive[name] = value
+		}
+	}
 	if !filepath.IsAbs(r.ExecutionImageRegistryConfigDirectory) || strings.ContainsAny(r.ExecutionImageRegistryConfigDirectory, "<>") {
 		return manifestError(prefix+".execution_image_registry_config_directory must be an absolute configured path", nil)
 	}
-	required["log_directory"] = r.LogDirectory
 	for name, value := range required {
 		if strings.TrimSpace(value) == "" {
 			return manifestError(prefix+"."+name+" is required", nil)
@@ -714,32 +766,10 @@ func validateRunner(prefix string, r Runner) error {
 	if *r.ExecutionImageMaxCacheBytes < *r.ExecutionImageMaxExpandedBytes {
 		return manifestError(prefix+".execution_image_max_cache_bytes must be at least execution_image_max_expanded_bytes", nil)
 	}
-	for name, value := range map[string]string{
-		"identity_directory":              r.IdentityDirectory,
-		"log_path":                        r.LogPath,
-		"log_directory":                   r.LogDirectory,
-		"firecracker_path":                r.FirecrackerPath,
-		"firecracker_jailer_path":         r.FirecrackerJailerPath,
-		"firecracker_jail_root":           r.FirecrackerJailRoot,
-		"firecracker_kernel_path":         r.FirecrackerKernelPath,
-		"firecracker_rootfs_path":         r.FirecrackerRootFSPath,
-		"firecracker_shared_image_path":   r.FirecrackerSharedImagePath,
-		"firecracker_run_directory":       r.FirecrackerRunDirectory,
-		"firecracker_log_directory":       r.FirecrackerLogDirectory,
-		"snapshot_template_cache_root":    r.SnapshotTemplateCacheRoot,
-		"workspace_root":                  r.WorkspaceRoot,
-		"sandbox_network_state_directory": r.SandboxNetworkStateDir,
-		"network_policy_nft_path":         r.NetworkPolicyNFTPath,
-		"egress_context_config_path":      r.EgressContextConfigPath,
-	} {
+	for name, value := range paths {
 		if !filepath.IsAbs(value) {
 			return manifestError(prefix+"."+name+" must be an absolute Runner-host path", nil)
 		}
-	}
-	maximumInstanceID := strings.Repeat("i", maxFirecrackerInstanceIDBytes)
-	maximumSocketPath := filepath.Join(r.FirecrackerJailRoot, filepath.Base(r.FirecrackerPath), maximumInstanceID, "root", "firecracker.sock")
-	if len(maximumSocketPath) >= linuxUnixSocketPathLimit {
-		return manifestError(fmt.Sprintf("%s.firecracker_jail_root must keep the maximum Firecracker API socket path below %d bytes; got %d", prefix, linuxUnixSocketPathLimit, len(maximumSocketPath)), nil)
 	}
 	for name, value := range map[string]string{
 		"identity_host_directory": r.IdentityHostDirectory,
@@ -757,14 +787,9 @@ func validateRunner(prefix string, r Runner) error {
 			}
 		}
 	}
-	for name, value := range map[string]*int64{"firecracker_jailer_uid_start": r.FirecrackerJailerUIDStart, "firecracker_jailer_uid_count": r.FirecrackerJailerUIDCount, "firecracker_jailer_gid": r.FirecrackerJailerGID, "firecracker_cgroup_version": r.FirecrackerCgroupVersion, "storage_pressure_recovery_percent": r.StorageRecoveryPercent, "storage_pressure_warning_percent": r.StorageWarningPercent, "storage_pressure_admission_deny_percent": r.StorageAdmissionDenyPercent, "sandbox_max_vcpus": r.SandboxMaxVCPUs, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB, "network_policy_max_dns_pins": r.NetworkPolicyMaxDNSPins, "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox, "max_concurrent_global": r.MaxConcurrentGlobal, "max_concurrent_starts": r.MaxConcurrentStarts, "max_concurrent_workspace_creates": r.MaxConcurrentWorkspaceCreates, "max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal, "file_transfer_max_bytes": r.FileTransferMaxBytes, "guest_control_vsock_port": r.GuestControlVSockPort, "guest_protocol_vsock_port": r.GuestProtocolVSockPort} {
+	for name, value := range positive {
 		if value == nil || *value < 1 {
 			return manifestError(prefix+"."+name+" must be positive", nil)
-		}
-	}
-	for name, value := range map[string]*bool{"firecracker_jailer_uid_allow_below_1000": r.FirecrackerJailerUIDAllowLow, "sandbox_delete_bridge": r.SandboxDeleteBridge} {
-		if value == nil {
-			return manifestError(prefix+"."+name+" is required", nil)
 		}
 	}
 	if r.StorageRecoveryPercent != nil && r.StorageWarningPercent != nil && r.StorageAdmissionDenyPercent != nil && !(*r.StorageRecoveryPercent < *r.StorageWarningPercent && *r.StorageWarningPercent < *r.StorageAdmissionDenyPercent) {
@@ -776,44 +801,20 @@ func validateRunner(prefix string, r Runner) error {
 	if r.StorageAdmissionMode != "" && r.StorageAdmissionMode != "logical" && r.StorageAdmissionMode != "physical" {
 		return manifestError(prefix+".storage_admission_mode must be logical or physical", nil)
 	}
-	if r.MaxConcurrentStarts != nil && r.MaxConcurrentGlobal != nil && *r.MaxConcurrentStarts > *r.MaxConcurrentGlobal {
-		return manifestError(prefix+".max_concurrent_starts must not exceed max_concurrent_global", nil)
-	}
-	if r.FirecrackerJailerUIDCount != nil && r.MaxConcurrentGlobal != nil && *r.FirecrackerJailerUIDCount < *r.MaxConcurrentGlobal {
-		return manifestError(prefix+".firecracker_jailer_uid_count must be at least max_concurrent_global", nil)
-	}
-	if r.FirecrackerJailerUIDStart != nil && r.FirecrackerJailerUIDAllowLow != nil &&
-		*r.FirecrackerJailerUIDStart < 1000 && !*r.FirecrackerJailerUIDAllowLow {
-		return manifestError(prefix+".firecracker_jailer_uid_start below 1000 requires firecracker_jailer_uid_allow_below_1000=true", nil)
-	}
-	if r.FirecrackerJailerUIDStart != nil && r.FirecrackerJailerUIDCount != nil &&
-		*r.FirecrackerJailerUIDStart > int64(^uint32(0))-*r.FirecrackerJailerUIDCount+1 {
-		return manifestError(prefix+" jailer UID range must fit within unsigned 32-bit user IDs", nil)
-	}
-	if r.GuestControlVSockPort != nil && r.GuestProtocolVSockPort != nil {
-		if *r.GuestControlVSockPort > 65535 || *r.GuestProtocolVSockPort > 65535 || *r.GuestControlVSockPort == *r.GuestProtocolVSockPort {
-			return manifestError(prefix+" guest control and protocol vsock ports must be distinct integers from 1 through 65535", nil)
+	if r.ComputeBackend == computeBackendFirecracker {
+		if err := validateFirecrackerRunner(prefix, r); err != nil {
+			return err
 		}
-	}
-	for _, argument := range []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off", "root=/dev/vda", "rw", "quiet", "loglevel=1", "i8042.noaux", "i8042.nomux", "i8042.nopnp", "i8042.dumbkbd", "init=/init"} {
-		if !slices.Contains(strings.Fields(r.FirecrackerKernelArgs), argument) {
-			return manifestError(prefix+".firecracker_kernel_args must include "+argument, nil)
+	} else {
+		if r.GVisorNetworkProfile == nil || *r.GVisorNetworkProfile < 0 || *r.GVisorNetworkProfile >= maximumGVisorNetworkProfiles {
+			return manifestError(fmt.Sprintf("%s.gvisor_network_profile must be an integer from 0 through %d", prefix, maximumGVisorNetworkProfiles-1), nil)
 		}
-	}
-	if err := validateRunnerDuration(prefix+".guest_heartbeat_interval", r.GuestHeartbeatInterval, time.Millisecond, time.Minute); err != nil {
-		return err
+		if *r.GVisorWorkspaceTemplateCapacityBytes < minimumGVisorWorkspaceTemplateBytes {
+			return manifestError(fmt.Sprintf("%s.gvisor_workspace_template_capacity_bytes must be at least %d", prefix, minimumGVisorWorkspaceTemplateBytes), nil)
+		}
 	}
 	if err := validateRunnerDuration(prefix+".network_policy_max_dns_ttl", r.NetworkPolicyMaxDNSTTL, time.Nanosecond, 0); err != nil {
 		return err
-	}
-	if _, err := netip.ParseAddr(r.SandboxGuestIP); err != nil {
-		return manifestError(prefix+".sandbox_guest_ip must be an IP address", err)
-	}
-	if _, err := netip.ParsePrefix(r.SandboxBridgeCIDR); err != nil {
-		return manifestError(prefix+".sandbox_bridge_cidr must be a CIDR", err)
-	}
-	if _, err := netip.ParsePrefix(r.SandboxGuestCIDR); err != nil {
-		return manifestError(prefix+".sandbox_guest_cidr must be a CIDR", err)
 	}
 	if err := validateAddressList(prefix+".network_policy_runner_addresses", r.NetworkPolicyRunnerAddresses, false); err != nil {
 		return err
@@ -834,6 +835,80 @@ func validateRunner(prefix string, r Runner) error {
 		return err
 	}
 	return nil
+}
+
+func validateFirecrackerRunner(prefix string, r Runner) error {
+	maximumInstanceID := strings.Repeat("i", maxFirecrackerInstanceIDBytes)
+	maximumSocketPath := filepath.Join(r.FirecrackerJailRoot, filepath.Base(r.FirecrackerPath), maximumInstanceID, "root", "firecracker.sock")
+	if len(maximumSocketPath) >= linuxUnixSocketPathLimit {
+		return manifestError(fmt.Sprintf("%s.firecracker_jail_root must keep the maximum Firecracker API socket path below %d bytes; got %d", prefix, linuxUnixSocketPathLimit, len(maximumSocketPath)), nil)
+	}
+	for name, value := range map[string]*bool{"firecracker_jailer_uid_allow_below_1000": r.FirecrackerJailerUIDAllowLow, "sandbox_delete_bridge": r.SandboxDeleteBridge} {
+		if value == nil {
+			return manifestError(prefix+"."+name+" is required", nil)
+		}
+	}
+	if *r.MaxConcurrentStarts > *r.MaxConcurrentGlobal {
+		return manifestError(prefix+".max_concurrent_starts must not exceed max_concurrent_global", nil)
+	}
+	if *r.FirecrackerJailerUIDCount < *r.MaxConcurrentGlobal {
+		return manifestError(prefix+".firecracker_jailer_uid_count must be at least max_concurrent_global", nil)
+	}
+	if *r.FirecrackerJailerUIDStart < 1000 && !*r.FirecrackerJailerUIDAllowLow {
+		return manifestError(prefix+".firecracker_jailer_uid_start below 1000 requires firecracker_jailer_uid_allow_below_1000=true", nil)
+	}
+	if *r.FirecrackerJailerUIDStart > int64(^uint32(0))-*r.FirecrackerJailerUIDCount+1 {
+		return manifestError(prefix+" jailer UID range must fit within unsigned 32-bit user IDs", nil)
+	}
+	if *r.GuestControlVSockPort > 65535 || *r.GuestProtocolVSockPort > 65535 || *r.GuestControlVSockPort == *r.GuestProtocolVSockPort {
+		return manifestError(prefix+" guest control and protocol vsock ports must be distinct integers from 1 through 65535", nil)
+	}
+	for _, argument := range []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off", "root=/dev/vda", "rw", "quiet", "loglevel=1", "i8042.noaux", "i8042.nomux", "i8042.nopnp", "i8042.dumbkbd", "init=/init"} {
+		if !slices.Contains(strings.Fields(r.FirecrackerKernelArgs), argument) {
+			return manifestError(prefix+".firecracker_kernel_args must include "+argument, nil)
+		}
+	}
+	if err := validateRunnerDuration(prefix+".guest_heartbeat_interval", r.GuestHeartbeatInterval, time.Millisecond, time.Minute); err != nil {
+		return err
+	}
+	if _, err := netip.ParseAddr(r.SandboxGuestIP); err != nil {
+		return manifestError(prefix+".sandbox_guest_ip must be an IP address", err)
+	}
+	if _, err := netip.ParsePrefix(r.SandboxBridgeCIDR); err != nil {
+		return manifestError(prefix+".sandbox_bridge_cidr must be a CIDR", err)
+	}
+	if _, err := netip.ParsePrefix(r.SandboxGuestCIDR); err != nil {
+		return manifestError(prefix+".sandbox_guest_cidr must be a CIDR", err)
+	}
+	return nil
+}
+
+// otherBackendSettings reports, by TOML name, whether each setting owned by the
+// compute backend this Runner does not use is present.
+func (r Runner) otherBackendSettings() map[string]bool {
+	if r.ComputeBackend == computeBackendGVisor {
+		return map[string]bool{
+			"firecracker_path": r.FirecrackerPath != "", "firecracker_jailer_path": r.FirecrackerJailerPath != "", "firecracker_jail_root": r.FirecrackerJailRoot != "",
+			"firecracker_jailer_uid_start": r.FirecrackerJailerUIDStart != nil, "firecracker_jailer_uid_count": r.FirecrackerJailerUIDCount != nil, "firecracker_jailer_uid_allow_below_1000": r.FirecrackerJailerUIDAllowLow != nil,
+			"firecracker_jailer_gid": r.FirecrackerJailerGID != nil, "firecracker_cgroup_version": r.FirecrackerCgroupVersion != nil, "firecracker_cgroup_parent": r.FirecrackerCgroupParent != "",
+			"firecracker_kernel_path": r.FirecrackerKernelPath != "", "firecracker_rootfs_path": r.FirecrackerRootFSPath != "", "firecracker_shared_image_path": r.FirecrackerSharedImagePath != "",
+			"firecracker_kernel_args": r.FirecrackerKernelArgs != "", "firecracker_cpu_template": r.FirecrackerCPUTemplate != "", "firecracker_run_directory": r.FirecrackerRunDirectory != "",
+			"firecracker_log_directory": r.FirecrackerLogDirectory != "", "snapshot_template_cache_root": r.SnapshotTemplateCacheRoot != "",
+			"sandbox_max_vcpus": r.SandboxMaxVCPUs != nil, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB != nil, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB != nil, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB != nil,
+			"sandbox_guest_ip": r.SandboxGuestIP != "", "sandbox_bridge_name": r.SandboxBridgeName != "", "sandbox_bridge_cidr": r.SandboxBridgeCIDR != "", "sandbox_guest_cidr": r.SandboxGuestCIDR != "",
+			"sandbox_tap_prefix": r.SandboxTapPrefix != "", "sandbox_network_state_directory": r.SandboxNetworkStateDir != "", "sandbox_delete_bridge": r.SandboxDeleteBridge != nil,
+			"network_policy_nft_path": r.NetworkPolicyNFTPath != "", "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox != nil, "max_concurrent_global": r.MaxConcurrentGlobal != nil,
+			"max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal != nil, "file_transfer_max_bytes": r.FileTransferMaxBytes != nil,
+			"guest_control_vsock_port": r.GuestControlVSockPort != nil, "guest_protocol_vsock_port": r.GuestProtocolVSockPort != nil, "guest_heartbeat_interval": r.GuestHeartbeatInterval != "",
+		}
+	}
+	return map[string]bool{
+		"gvisor_runsc_path": r.GVisorRunscPath != "", "gvisor_agent_path": r.GVisorAgentPath != "", "gvisor_flat_root_path": r.GVisorFlatRootPath != "",
+		"gvisor_materialization_path": r.GVisorMaterializationPath != "", "gvisor_runtime_directory": r.GVisorRuntimeDirectory != "", "gvisor_network_profile": r.GVisorNetworkProfile != nil,
+		"gvisor_maximum_vcpus": r.GVisorMaximumVCPUs != nil, "gvisor_maximum_memory_bytes": r.GVisorMaximumMemoryBytes != nil, "gvisor_maximum_disk_bytes": r.GVisorMaximumDiskBytes != nil,
+		"gvisor_maximum_instances": r.GVisorMaximumInstances != nil, "gvisor_maximum_operations": r.GVisorMaximumOperations != nil,
+		"gvisor_workspace_template_capacity_bytes": r.GVisorWorkspaceTemplateCapacityBytes != nil,
+	}
 }
 
 func validateRunnerEgressContexts(path string, contexts []RunnerEgressContext) error {
@@ -952,33 +1027,33 @@ func addPolicyEnvironment(environment map[string]string, p Policy) {
 	environment["SECONDBOX_RUNNER_ENABLED_FEATURES"] = p.RunnerEnabledFeatures
 }
 
-func resolveStandardResources(base string, manifest ManifestV1) (resourceapply.Document, error) {
+func resolveStandardResources(base string, manifest ManifestV1) (resourceapply.Document, *releasecontract.GVisorArtifact, error) {
 	path, err := resolveRegularReference(base, manifest.StandardResources.ArtifactManifest)
 	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		return resourceapply.Document{}, nil, manifestError("standard_resources.artifact_manifest", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		return resourceapply.Document{}, nil, manifestError("standard_resources.artifact_manifest", err)
 	}
 	releaseManifest, err := releasecontract.DecodeArtifactManifest(data)
 	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		return resourceapply.Document{}, nil, manifestError("standard_resources.artifact_manifest", err)
 	}
 	guestArchitecture, err := releaseManifest.GuestArchitecture()
 	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		return resourceapply.Document{}, nil, manifestError("standard_resources.artifact_manifest", err)
 	}
 	standardPool, err := standardresources.StandardPool(guestArchitecture)
 	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+		return resourceapply.Document{}, nil, manifestError("standard_resources.artifact_manifest", err)
 	}
 	pools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.RunnerPools))
 	for _, configured := range manifest.StandardResources.RunnerPools {
 		pools[configured.Name] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State}
 	}
 	if _, declared := pools[standardPool]; !declared {
-		return resourceapply.Document{}, manifestError("standard_resources.runner_pools must declare pool "+standardPool+" for the "+guestArchitecture+" release", nil)
+		return resourceapply.Document{}, nil, manifestError("standard_resources.runner_pools must declare pool "+standardPool+" for the "+guestArchitecture+" release", nil)
 	}
 	selectedPools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.Bundles))
 	for _, bundle := range manifest.StandardResources.Bundles {
@@ -986,9 +1061,9 @@ func resolveStandardResources(base string, manifest ManifestV1) (resourceapply.D
 	}
 	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: selectedPools})
 	if err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources", err)
+		return resourceapply.Document{}, nil, manifestError("standard_resources", err)
 	}
-	return document, nil
+	return document, releaseManifest.GVisor, nil
 }
 
 func resolveRegularReference(base, reference string) (string, error) {
@@ -1117,9 +1192,9 @@ func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
 	return key, nil
 }
 
-func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
+func resolveRunnerEnvironment(r Runner, credential, gvisorMaterializationDigest string) map[string]string {
 	r = r.withPackagedPaths()
-	env := map[string]string{"SECONDBOX_RUNNER_ID": r.RunnerID, "SECONDBOX_RUNNER_POOL_ID": r.PoolID, "SECONDBOX_RUNNER_SOFTWARE_VERSION": r.SoftwareVersion, "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": r.ControlPlaneAddress, "SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": r.ControlPlaneServerName, "SECONDBOX_RUNNER_CREDENTIAL": credential, "SECONDBOX_RUNNER_LOG_PATH": r.LogPath, "SECONDBOX_RUNNER_FIRECRACKER_PATH": r.FirecrackerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH": r.FirecrackerJailerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT": r.FirecrackerJailRoot, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT": r.FirecrackerCgroupParent, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH": r.FirecrackerKernelPath, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH": r.FirecrackerRootFSPath, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH": r.FirecrackerSharedImagePath, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS": r.FirecrackerKernelArgs, "SECONDBOX_RUNNER_FIRECRACKER_CPU_TEMPLATE": r.FirecrackerCPUTemplate, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR": r.FirecrackerRunDirectory, "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR": r.FirecrackerLogDirectory, "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT": r.SnapshotTemplateCacheRoot, "SECONDBOX_RUNNER_WORKSPACE_ROOT": r.WorkspaceRoot, "SECONDBOX_RUNNER_SANDBOX_GUEST_IP": r.SandboxGuestIP, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME": r.SandboxBridgeName, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR": r.SandboxBridgeCIDR, "SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR": r.SandboxGuestCIDR, "SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX": r.SandboxTapPrefix, "SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR": r.SandboxNetworkStateDir, "SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH": r.NetworkPolicyNFTPath, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL": r.NetworkPolicyMaxDNSTTL, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": r.NetworkPolicyRunnerAddresses, "SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS": r.NetworkPolicyManagementCIDRs, "SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG": r.EgressContextConfigPath, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM": r.NetworkPolicyDNSUpstream, "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL": r.GuestHeartbeatInterval, "SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS": r.DataPlaneListenAddress, "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS": r.DataPlaneAdvertisedAddress}
+	env := map[string]string{"SECONDBOX_RUNNER_ID": r.RunnerID, "SECONDBOX_RUNNER_POOL_ID": r.PoolID, "SECONDBOX_RUNNER_SOFTWARE_VERSION": r.SoftwareVersion, "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": r.ControlPlaneAddress, "SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": r.ControlPlaneServerName, "SECONDBOX_RUNNER_CREDENTIAL": credential, "SECONDBOX_RUNNER_LOG_PATH": r.LogPath, "SECONDBOX_RUNNER_WORKSPACE_ROOT": r.WorkspaceRoot, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL": r.NetworkPolicyMaxDNSTTL, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": r.NetworkPolicyRunnerAddresses, "SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS": r.NetworkPolicyManagementCIDRs, "SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG": r.EgressContextConfigPath, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM": r.NetworkPolicyDNSUpstream, "SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS": r.DataPlaneListenAddress, "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS": r.DataPlaneAdvertisedAddress}
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"] = "/var/lib/secondbox-runner/execution-images"
 	env["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"] = "/run/secondbox-image-fetcher/fetcher.sock"
 	env["SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR"] = r.ExecutionImageRegistryConfigDirectory
@@ -1128,7 +1203,7 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxDownloadBytes)
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxExpandedBytes)
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES"] = fmt.Sprint(*r.ExecutionImageMaxCacheBytes)
-	env["SECONDBOX_COMPUTE_BACKEND"] = "firecracker"
+	env["SECONDBOX_COMPUTE_BACKEND"] = r.ComputeBackend
 	env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] = r.StorageAdmissionMode
 	if env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] == "" {
 		env["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"] = "logical"
@@ -1137,19 +1212,53 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	env["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"] = filepath.Join(r.IdentityDirectory, "runner.crt")
 	env["SECONDBOX_RUNNER_CLIENT_KEY"] = filepath.Join(r.IdentityDirectory, "runner.key")
 	env["SECONDBOX_RUNNER_CONTROL_PLANE_CA"] = filepath.Join(r.IdentityDirectory, "runner-ca.crt")
-	ints := map[string]*int64{"SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START": r.FirecrackerJailerUIDStart, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT": r.FirecrackerJailerUIDCount, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID": r.FirecrackerJailerGID, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION": r.FirecrackerCgroupVersion, "SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT": r.StorageRecoveryPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT": r.StorageWarningPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT": r.StorageAdmissionDenyPercent, "SECONDBOX_RUNNER_SANDBOX_MAX_VCPUS": r.SandboxMaxVCPUs, "SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB": r.SandboxMaxMemoryMiB, "SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB": r.SandboxMaxDiskMiB, "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB": r.SandboxMemoryBudgetMiB, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS": r.NetworkPolicyMaxDNSPins, "SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX": r.MaxConcurrentPerSandbox, "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL": r.MaxConcurrentGlobal, "SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS": r.MaxConcurrentStarts, "SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES": r.MaxConcurrentWorkspaceCreates, "SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL": r.MaxConcurrentOperationsGlobal, "SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES": r.FileTransferMaxBytes, "SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT": r.GuestControlVSockPort, "SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT": r.GuestProtocolVSockPort}
+	ints := map[string]*int64{"SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT": r.StorageRecoveryPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT": r.StorageWarningPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT": r.StorageAdmissionDenyPercent, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS": r.NetworkPolicyMaxDNSPins, "SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS": r.MaxConcurrentStarts, "SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES": r.MaxConcurrentWorkspaceCreates}
+	if r.ComputeBackend == computeBackendGVisor {
+		for name, value := range map[string]string{"SECONDBOX_GVISOR_RUNSC_PATH": r.GVisorRunscPath, "SECONDBOX_GVISOR_AGENT_PATH": r.GVisorAgentPath, "SECONDBOX_GVISOR_FLAT_ROOT_PATH": r.GVisorFlatRootPath, "SECONDBOX_GVISOR_MATERIALIZATION_PATH": r.GVisorMaterializationPath, "SECONDBOX_GVISOR_MATERIALIZATION_DIGEST": gvisorMaterializationDigest, "SECONDBOX_GVISOR_RUNTIME_DIR": r.GVisorRuntimeDirectory} {
+			env[name] = value
+		}
+		for name, value := range map[string]*int64{"SECONDBOX_GVISOR_NETWORK_PROFILE": r.GVisorNetworkProfile, "SECONDBOX_GVISOR_MAXIMUM_VCPUS": r.GVisorMaximumVCPUs, "SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES": r.GVisorMaximumMemoryBytes, "SECONDBOX_GVISOR_MAXIMUM_DISK_BYTES": r.GVisorMaximumDiskBytes, "SECONDBOX_GVISOR_MAXIMUM_INSTANCES": r.GVisorMaximumInstances, "SECONDBOX_GVISOR_MAXIMUM_OPERATIONS": r.GVisorMaximumOperations, "SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES": r.GVisorWorkspaceTemplateCapacityBytes} {
+			ints[name] = value
+		}
+	} else {
+		for name, value := range map[string]string{"SECONDBOX_RUNNER_FIRECRACKER_PATH": r.FirecrackerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH": r.FirecrackerJailerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT": r.FirecrackerJailRoot, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT": r.FirecrackerCgroupParent, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH": r.FirecrackerKernelPath, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH": r.FirecrackerRootFSPath, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH": r.FirecrackerSharedImagePath, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS": r.FirecrackerKernelArgs, "SECONDBOX_RUNNER_FIRECRACKER_CPU_TEMPLATE": r.FirecrackerCPUTemplate, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR": r.FirecrackerRunDirectory, "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR": r.FirecrackerLogDirectory, "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT": r.SnapshotTemplateCacheRoot, "SECONDBOX_RUNNER_SANDBOX_GUEST_IP": r.SandboxGuestIP, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME": r.SandboxBridgeName, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR": r.SandboxBridgeCIDR, "SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR": r.SandboxGuestCIDR, "SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX": r.SandboxTapPrefix, "SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR": r.SandboxNetworkStateDir, "SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH": r.NetworkPolicyNFTPath, "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL": r.GuestHeartbeatInterval} {
+			env[name] = value
+		}
+		for name, value := range map[string]*int64{"SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START": r.FirecrackerJailerUIDStart, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT": r.FirecrackerJailerUIDCount, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID": r.FirecrackerJailerGID, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION": r.FirecrackerCgroupVersion, "SECONDBOX_RUNNER_SANDBOX_MAX_VCPUS": r.SandboxMaxVCPUs, "SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB": r.SandboxMaxMemoryMiB, "SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB": r.SandboxMaxDiskMiB, "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB": r.SandboxMemoryBudgetMiB, "SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX": r.MaxConcurrentPerSandbox, "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL": r.MaxConcurrentGlobal, "SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL": r.MaxConcurrentOperationsGlobal, "SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES": r.FileTransferMaxBytes, "SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT": r.GuestControlVSockPort, "SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT": r.GuestProtocolVSockPort} {
+			ints[name] = value
+		}
+		env["SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED"] = "false"
+		env["SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000"] = strconv.FormatBool(*r.FirecrackerJailerUIDAllowLow)
+		env["SECONDBOX_RUNNER_SANDBOX_DELETE_BRIDGE"] = strconv.FormatBool(*r.SandboxDeleteBridge)
+	}
 	for name, value := range ints {
 		env[name] = strconv.FormatInt(*value, 10)
 	}
-	env["SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED"] = "false"
-	env["SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000"] = strconv.FormatBool(*r.FirecrackerJailerUIDAllowLow)
-	env["SECONDBOX_RUNNER_SANDBOX_DELETE_BRIDGE"] = strconv.FormatBool(*r.SandboxDeleteBridge)
 	if r.Placement == "same-host" {
 		env["SECONDBOX_RUNNER_IDENTITY_HOST_DIR"] = r.IdentityHostDirectory
 		env["SECONDBOX_RUNNER_ARTIFACT_HOST_DIR"] = r.ArtifactHostDirectory
 		env["SECONDBOX_RUNNER_STATE_HOST_DIR"] = r.StateHostDirectory
 	}
 	return env
+}
+
+// sameHostGVisorRunnerCgroupParent places the same-host gVisor Runner in a
+// slice of its own Compose project. The Runner nests Instance cgroups below
+// the nearest ancestor that delegates cpu and memory and sweeps that directory
+// at start, so Runners of two deployments on one host must not share it.
+func sameHostGVisorRunnerCgroupParent(composeProjectName string) string {
+	if composeProjectName == "" {
+		composeProjectName = DefaultComposeProjectName
+	}
+	return "secondbox-" + composeProjectName + "-gvisor.slice"
+}
+
+// sameHostRunnerComposeFile selects the packaged Runner overlay of a backend.
+func sameHostRunnerComposeFile(backend string) string {
+	if backend == computeBackendGVisor {
+		return "deploy/compose.same-host-gvisor-runner.yml"
+	}
+	return "deploy/compose.same-host-runner.yml"
 }
 
 func validateControlPlaneEnvironment(environment map[string]string) (resultErr error) {

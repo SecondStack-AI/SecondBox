@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Upgrade notes
+
+- **Every `[[runners]]` declaration must state `compute_backend`.** Add `compute_backend = 'firecracker'` to each existing declaration before updating; validation refuses a declaration without it. Guided installs regenerate their manifest during the update and need no edit.
+
 ### Added
 
+- `secondbox-deploy` deploys gVisor Runners. A `[[runners]]` declaration states `compute_backend = 'firecracker'` or `'gvisor'`; a gVisor declaration carries the `gvisor_*` settings and none of the Firecracker ones, and the deploy CLI takes its materialization digest from the verified artifact manifest. A same-host gVisor Runner renders from `deploy/compose.same-host-gvisor-runner.yml`: privileged with the host cgroup namespace and a `/dev` bind but no KVM or TUN, on the deployment network in its own network namespace, and in a `secondbox-<project>-gvisor.slice` of its own so several deployments share one host. `runner-init` renders the gVisor environment for a remote Runner. `secondbox-deploy runner-template` takes `--backend firecracker|gvisor`.
 - `secondbox-deploy install` accepts `--sandbox-profile NAME`, `--control-reserve-vcpus N`, and `--control-reserve-memory-mib N` to size a new single-host installation for a smaller standard Profile and control reserve, so `--sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024` installs on a 2 CPU / 2 GiB host. Without them the installer sizes for `durable-coding` with a 2 vCPU / 4 GiB reserve exactly as before. The post-install smoke boots `agent-compartment` only where a Runner can place it: that Profile permits attributed execution, which needs an attributed gateway that a guided install never configures, so an `agent-compartment` or `agent-compartment-isolated` sizing smoke boots only `agent-compartment-isolated`. Release installer qualification now uses these options, and its guests default to 4096 MiB and 4 vCPUs with a 2 GiB host reserve.
 
 ### Changed

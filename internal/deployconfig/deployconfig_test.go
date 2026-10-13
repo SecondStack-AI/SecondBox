@@ -1471,7 +1471,7 @@ func validTestRunner(id, placement string) (runner Runner) {
 		runner.ExecutionImageMaxExpandedBytes = integer(16 << 30)
 		runner.ExecutionImageMaxCacheBytes = integer(64 << 30)
 	}()
-	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUIDStart: integer(10001), FirecrackerJailerUIDCount: integer(16), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", SnapshotTemplateCacheRoot: "/var/lib/secondbox/snapshot-templates", WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), StorageAdmissionMode: "logical", SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", EgressContextConfigPath: "/etc/secondbox/egress-contexts.json", EgressContexts: []RunnerEgressContext{{Name: "secondstack-staging", Gateways: []RunnerLogicalGateway{{LogicalName: "agent-gateway.secondbox.internal", Address: "172.30.0.1"}, {LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.1"}}}}, NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
+	return Runner{RunnerID: id, Placement: placement, ComputeBackend: computeBackendFirecracker, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUIDStart: integer(10001), FirecrackerJailerUIDCount: integer(16), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", SnapshotTemplateCacheRoot: "/var/lib/secondbox/snapshot-templates", WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), StorageAdmissionMode: "logical", SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", EgressContextConfigPath: "/etc/secondbox/egress-contexts.json", EgressContexts: []RunnerEgressContext{{Name: "secondstack-staging", Gateways: []RunnerLogicalGateway{{LogicalName: "agent-gateway.secondbox.internal", Address: "172.30.0.1"}, {LogicalName: "platform-gateway.secondbox.internal", Address: "172.30.0.1"}}}}, NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
 }
 
 func validSameHostTestRunner(id string) Runner {
@@ -1483,7 +1483,50 @@ func validSameHostTestRunner(id string) Runner {
 	return runner
 }
 
+// validGVisorTestRunner is validTestRunner on the gVisor backend: every
+// Firecracker-owned setting is absent and every gVisor setting is explicit.
+func validGVisorTestRunner(id, placement string) Runner {
+	runner := validTestRunner(id, placement)
+	runner.ComputeBackend = computeBackendGVisor
+	for _, field := range []*string{&runner.FirecrackerPath, &runner.FirecrackerJailerPath, &runner.FirecrackerJailRoot, &runner.FirecrackerCgroupParent, &runner.FirecrackerKernelPath, &runner.FirecrackerRootFSPath, &runner.FirecrackerSharedImagePath, &runner.FirecrackerKernelArgs, &runner.FirecrackerCPUTemplate, &runner.FirecrackerRunDirectory, &runner.FirecrackerLogDirectory, &runner.SnapshotTemplateCacheRoot, &runner.SandboxGuestIP, &runner.SandboxBridgeName, &runner.SandboxBridgeCIDR, &runner.SandboxGuestCIDR, &runner.SandboxTapPrefix, &runner.SandboxNetworkStateDir, &runner.NetworkPolicyNFTPath, &runner.GuestHeartbeatInterval} {
+		*field = ""
+	}
+	for _, field := range []**int64{&runner.FirecrackerJailerUIDStart, &runner.FirecrackerJailerUIDCount, &runner.FirecrackerJailerGID, &runner.FirecrackerCgroupVersion, &runner.SandboxMaxVCPUs, &runner.SandboxMaxMemoryMiB, &runner.SandboxMaxDiskMiB, &runner.SandboxMemoryBudgetMiB, &runner.MaxConcurrentPerSandbox, &runner.MaxConcurrentGlobal, &runner.MaxConcurrentOperationsGlobal, &runner.FileTransferMaxBytes, &runner.GuestControlVSockPort, &runner.GuestProtocolVSockPort} {
+		*field = nil
+	}
+	runner.FirecrackerJailerUIDAllowLow, runner.SandboxDeleteBridge = nil, nil
+	runner.GVisorRunscPath = "/opt/secondbox/gvisor/bin/runsc"
+	runner.GVisorAgentPath = "/opt/secondbox/gvisor/bin/secondbox-guest-agent"
+	runner.GVisorFlatRootPath = "/opt/secondbox/gvisor/rootfs"
+	runner.GVisorMaterializationPath = "/opt/secondbox/gvisor/materialization.json"
+	runner.GVisorRuntimeDirectory = "/run/secondbox-gvisor"
+	runner.GVisorNetworkProfile = integer(3)
+	runner.GVisorMaximumVCPUs = integer(8)
+	runner.GVisorMaximumMemoryBytes = integer(16 << 30)
+	runner.GVisorMaximumDiskBytes = integer(64 << 30)
+	runner.GVisorMaximumInstances = integer(8)
+	runner.GVisorMaximumOperations = integer(32)
+	runner.GVisorWorkspaceTemplateCapacityBytes = integer(8 << 30)
+	return runner
+}
+
+func validSameHostGVisorTestRunner(id string) Runner {
+	runner := validGVisorTestRunner(id, "same-host")
+	for _, path := range runner.packagedPaths() {
+		*path.field = ""
+	}
+	runner.ControlPlaneAddress = ""
+	runner.GVisorNetworkProfile = nil
+	runner.StateHostDirectory = "/var/lib/secondbox-runner-storage"
+	return runner
+}
+
 func provisionSameHostTestRunner(t *testing.T, manifestPath, id string) Runner {
+	t.Helper()
+	return provisionSameHostRunnerForTest(t, manifestPath, validSameHostTestRunner(id))
+}
+
+func provisionSameHostRunnerForTest(t *testing.T, manifestPath string, runner Runner) Runner {
 	t.Helper()
 	hostRoot := t.TempDir()
 	storageDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-runner-storage-")
@@ -1491,7 +1534,6 @@ func provisionSameHostTestRunner(t *testing.T, manifestPath, id string) Runner {
 		t.Skipf("dedicated tmpfs unavailable: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(storageDirectory) })
-	runner := validSameHostTestRunner(id)
 	runner.IdentityHostDirectory = filepath.Join(hostRoot, "identity")
 	runner.ArtifactHostDirectory = filepath.Join(storageDirectory, "release", "artifacts")
 	runner.StateHostDirectory = storageDirectory
@@ -1573,14 +1615,14 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 func TestRunnerStorageAdmissionModeRendersExplicitly(t *testing.T) {
 	runner := validTestRunner("runner-storage-admission", "remote")
 	runner.StorageAdmissionMode = ""
-	if got := resolveRunnerEnvironment(runner, "credential")["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"]; got != "logical" {
+	if got := resolveRunnerEnvironment(runner, "credential", "")["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"]; got != "logical" {
 		t.Fatalf("legacy manifest storage admission mode = %q", got)
 	}
 	runner.StorageAdmissionMode = "physical"
 	if err := validateRunner("runners[0]", runner); err != nil {
 		t.Fatal(err)
 	}
-	if got := resolveRunnerEnvironment(runner, "credential")["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"]; got != "physical" {
+	if got := resolveRunnerEnvironment(runner, "credential", "")["SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE"]; got != "physical" {
 		t.Fatalf("physical storage admission mode = %q", got)
 	}
 }
