@@ -15,14 +15,16 @@ import (
 )
 
 func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error {
-	for uid := *runner.FirecrackerJailerUIDStart; uid < *runner.FirecrackerJailerUIDStart+*runner.FirecrackerJailerUIDCount; uid++ {
-		account, err := user.LookupId(strconv.FormatInt(uid, 10))
-		if err == nil {
-			return fmt.Errorf("firecracker jailer UID %d is already assigned to host account %q", uid, account.Username)
-		}
-		var unknown user.UnknownUserIdError
-		if !errors.As(err, &unknown) {
-			return fmt.Errorf("inspect host account assignment for firecracker jailer UID %d: %w", uid, err)
+	if runner.ComputeBackend == computeBackendFirecracker {
+		for uid := *runner.FirecrackerJailerUIDStart; uid < *runner.FirecrackerJailerUIDStart+*runner.FirecrackerJailerUIDCount; uid++ {
+			account, err := user.LookupId(strconv.FormatInt(uid, 10))
+			if err == nil {
+				return fmt.Errorf("firecracker jailer UID %d is already assigned to host account %q", uid, account.Username)
+			}
+			var unknown user.UnknownUserIdError
+			if !errors.As(err, &unknown) {
+				return fmt.Errorf("inspect host account assignment for firecracker jailer UID %d: %w", uid, err)
+			}
 		}
 	}
 	for name, path := range map[string]string{
@@ -58,7 +60,12 @@ func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error 
 	if storageDevice == rootDevice {
 		return fmt.Errorf("state_host_directory must use a dedicated non-root filesystem")
 	}
-	if workspaceDevice != storageDevice || artifactDevice != storageDevice {
+	if workspaceDevice != storageDevice {
+		return fmt.Errorf("state_host_directory and its workspaces child must use one filesystem")
+	}
+	// Firecracker reflinks the guest rootfs out of the artifact directory; gVisor
+	// mounts its flat root read-only and clones nothing from it.
+	if runner.ComputeBackend == computeBackendFirecracker && artifactDevice != storageDevice {
 		return fmt.Errorf("artifact_host_directory, state_host_directory, and its workspaces child must use one filesystem")
 	}
 

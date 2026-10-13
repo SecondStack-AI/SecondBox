@@ -180,7 +180,7 @@ func TestRemoteRunnerPathsSurviveEnvironmentRendering(t *testing.T) {
 	runner.SnapshotTemplateCacheRoot = "/remote/10"
 	runner.SandboxNetworkStateDir = "/remote/12"
 	runner.NetworkPolicyNFTPath = "/remote/13"
-	env := resolveRunnerEnvironment(runner, "runner-credential")
+	env := resolveRunnerEnvironment(runner, "runner-credential", "")
 	want := map[string]string{
 		"SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED":    "false",
 		"SECONDBOX_RUNNER_LOG_PATH":                      "/remote/0",

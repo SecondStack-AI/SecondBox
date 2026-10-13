@@ -2,19 +2,19 @@ package deployconfig
 
 import "fmt"
 
-const runnerTemplate = `# Identity and placement
+const runnerTemplateIdentity = `# Identity and placement
 [[runners]]
 # Immutable opaque Runner ID; start with an ASCII letter or digit, then use at most 127 letters, digits, dots, underscores, colons, or hyphens.
 runner_id = ''
 # Runner location; must be same-host or remote, with at most one same-host Runner.
 placement = ''
+# Compute backend; firecracker or gvisor. A RunnerPool seals to the backend of its Runners.
+compute_backend = '%s'
 # RunnerPool name; required and must match the selected standard-resource inventory that admits this Runner.
 pool_id = ''
 # Runner software version reported to the control plane; required.
 software_version = ''
-# Authenticated control-plane Runner endpoint; required.
-control_plane_address = ''
-# TLS server name for the control-plane Runner endpoint; required.
+%s# TLS server name for the control-plane Runner endpoint; required.
 control_plane_server_name = ''
 # Remote placement requires an absolute Runner identity directory. Leave empty for same-host placement; Compose supplies its identity mount.
 identity_directory = ''
@@ -22,9 +22,7 @@ identity_directory = ''
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
 
 # Artifact trust
-# Execution-asset directory on the Runner host; absolute when set and required for same-host placement.
-artifact_host_directory = '<replace-with-absolute-runner-host-path>'
-# Registry hosts allowed for client-selected execution images.
+%s# Registry hosts allowed for client-selected execution images.
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
 # Private directory containing tenants.json and exported registry credentials on the Runner host.
 execution_image_registry_config_directory = '<replace-with-absolute-tenant-registry-config-directory>'
@@ -53,10 +51,28 @@ storage_pressure_warning_percent = 0
 # Storage-pressure admission-deny threshold; positive, above warning, and below 100.
 storage_pressure_admission_deny_percent = 0
 # Admission accounting: logical reserves full Workspace limits;
-# physical checks measured filesystem usage only. Firecracker or gVisor Runner.
+# physical checks measured filesystem usage only.
 storage_admission_mode = '<replace-with-logical-or-physical>'
 
-# Firecracker
+`
+
+const runnerTemplateControlPlaneAddress = `# Authenticated control-plane Runner endpoint; required.
+control_plane_address = ''
+`
+
+const runnerTemplateGVisorControlPlaneAddress = `# Authenticated control-plane Runner endpoint; required for remote placement. Leave empty for same-host placement; the package dials control-plane:9443 on the deployment network.
+control_plane_address = ''
+`
+
+const runnerTemplateFirecrackerArtifacts = `# Execution-asset directory on the Runner host; absolute when set and required for same-host placement. It must share the Runner storage filesystem, because the Runner reflinks the guest rootfs out of it.
+artifact_host_directory = '<replace-with-absolute-runner-host-path>'
+`
+
+const runnerTemplateGVisorArtifacts = `# Materialized gVisor asset directory (bin/, rootfs/, materialization.json) on the Runner host; absolute when set and required for same-host placement.
+artifact_host_directory = '<replace-with-absolute-runner-host-path>'
+`
+
+const runnerTemplateFirecracker = `# Firecracker
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/local/bin/firecracker.
 firecracker_path = ''
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/local/bin/jailer.
@@ -111,6 +127,37 @@ sandbox_network_state_directory = ''
 sandbox_delete_bridge = '<replace-with-boolean>'
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/sbin/nft.
 network_policy_nft_path = ''
+`
+
+const runnerTemplateGVisor = `# gVisor
+# Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-gvisor/bin/runsc.
+gvisor_runsc_path = ''
+# Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-gvisor/bin/secondbox-guest-agent.
+gvisor_agent_path = ''
+# Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-gvisor/rootfs.
+gvisor_flat_root_path = ''
+# Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-gvisor/materialization.json.
+gvisor_materialization_path = ''
+# Dedicated disposable runtime directory; the Runner removes its children at start. Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /run/secondbox-gvisor.
+gvisor_runtime_directory = ''
+# Network profile from 0 through 15, unique among gVisor Runners that share one network namespace. Remote placement requires it. Remove this line for same-host placement; the package Runner owns a private network namespace.
+gvisor_network_profile = 0
+# Aggregate vCPUs across the Runner's Instances; must be positive.
+gvisor_maximum_vcpus = 0
+# Aggregate Instance memory in bytes; root filesystem writes count against it. Must be positive.
+gvisor_maximum_memory_bytes = 0
+# Aggregate Workspace disk in bytes; must be positive.
+gvisor_maximum_disk_bytes = 0
+# Maximum concurrent Instances; from 1 through 63, the Instance slots of one network profile.
+gvisor_maximum_instances = 0
+# Maximum concurrent operations across the Runner; must be positive.
+gvisor_maximum_operations = 0
+# Largest pre-formatted Workspace template in bytes; at least 67108864.
+gvisor_workspace_template_capacity_bytes = 0
+`
+
+const runnerTemplateNetworkPolicy = `
+# Network policy
 # Maximum pinned DNS answers; must be positive.
 network_policy_max_dns_pins = 0
 # Maximum DNS TTL; must be a positive Go duration.
@@ -130,7 +177,9 @@ egress_contexts = []
 network_policy_dns_upstream = ''
 
 # Capacity
-# Maximum vCPUs per Sandbox; must be positive.
+`
+
+const runnerTemplateFirecrackerCapacity = `# Maximum vCPUs per Sandbox; must be positive.
 sandbox_max_vcpus = 0
 # Maximum memory per Sandbox in MiB; must be positive.
 sandbox_max_memory_mib = 0
@@ -158,24 +207,47 @@ guest_control_vsock_port = 0
 guest_protocol_vsock_port = 0
 # Guest heartbeat cadence; a Go duration from 1ms through 1m.
 guest_heartbeat_interval = ''
-# Runner data-plane listener; a host:port with a port from 0 through 65535.
+`
+
+const runnerTemplateGVisorCapacity = `# Maximum concurrent starts; must be positive.
+max_concurrent_starts = 0
+# Maximum concurrent Workspace creations; must be positive.
+max_concurrent_workspace_creates = 0
+
+# Data plane
+`
+
+const runnerTemplateDataPlane = `# Runner data-plane listener; a host:port with a port from 0 through 65535.
 data_plane_listen_address = ''
 # Reachable Runner data-plane endpoint; host:port with an explicit host and a port from 1 through 65535.
 data_plane_advertised_address = ''
 `
 
-// RunnerTemplate returns the inert, complete Runner declaration scaffold.
-func RunnerTemplate() []byte {
-	return []byte(runnerTemplate)
+// RunnerTemplate returns the inert, complete Runner declaration scaffold for
+// one compute backend.
+func RunnerTemplate(backend string) ([]byte, error) {
+	switch backend {
+	case computeBackendFirecracker:
+		return []byte(fmt.Sprintf(runnerTemplateIdentity, backend, runnerTemplateControlPlaneAddress, runnerTemplateFirecrackerArtifacts) +
+			runnerTemplateFirecracker + runnerTemplateNetworkPolicy + runnerTemplateFirecrackerCapacity + runnerTemplateDataPlane), nil
+	case computeBackendGVisor:
+		return []byte(fmt.Sprintf(runnerTemplateIdentity, backend, runnerTemplateGVisorControlPlaneAddress, runnerTemplateGVisorArtifacts) +
+			runnerTemplateGVisor + runnerTemplateNetworkPolicy + runnerTemplateGVisorCapacity + runnerTemplateDataPlane), nil
+	}
+	return nil, fmt.Errorf("SecondBox Runner declaration template: --backend must be firecracker or gvisor")
 }
 
 // WriteRunnerTemplate creates one Runner declaration scaffold without replacing
 // an existing file.
-func WriteRunnerTemplate(path string) error {
+func WriteRunnerTemplate(path, backend string) error {
 	if path == "" {
 		return fmt.Errorf("SecondBox Runner declaration template: output path is required")
 	}
-	if err := writeAtomic(path, RunnerTemplate(), 0o644, false); err != nil {
+	template, err := RunnerTemplate(backend)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(path, template, 0o644, false); err != nil {
 		return fmt.Errorf("SecondBox Runner declaration template: write output: %w", err)
 	}
 	return nil

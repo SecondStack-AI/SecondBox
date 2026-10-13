@@ -1,8 +1,10 @@
 # gVisor runner on Linux hosts without KVM
 
 The gVisor runner is the supported backend for Linux x86_64 hosts that cannot expose
-`/dev/kvm`, Kubernetes nodes included. It is a separate, operator-managed Runner deployment; it does not alter or replace the qualified
-Linux Firecracker installer, container, systemd units, network setup, or standard Profiles.
+`/dev/kvm`, Kubernetes nodes included. `secondbox-deploy` renders it as a same-host Compose Runner
+or a remote Runner environment, and the reference pod covers Kubernetes; the guided installer
+deploys Firecracker only. It does not alter the Firecracker container, systemd units, network
+setup, or standard Profiles.
 
 Sandboxes use the Profile's fixed flat root unless create or start selects an execution image.
 A gVisor Runner consumes the same image an application publishes for Firecracker: the image's
@@ -102,8 +104,12 @@ identities. Replace every runtime, toolchain, source OCI, flat-root, and launch-
 with the exact values from the operator's reviewed assets, then compute and pin the canonical
 materialization digest. The backend verifies the manifest digest, both launch artifacts, and the
 flat root against these pins before it advertises, and its readiness probe proves `runsc` can
-boot on the host. Do not attach a gVisor runner to `standard-amd64` or change a published
-standard Profile revision.
+boot on the host. Never change a published standard Profile revision.
+
+A RunnerPool seals to the compute backend of its Runners, so one pool never mixes Firecracker
+and gVisor Runners. A deployment whose Runners are all gVisor may bind the release-standard
+`standard-amd64` pool and its standard Profiles, because Profiles name no execution bundle; the
+Compose path below does exactly that.
 
 ## Explicit runner environment
 
@@ -240,13 +246,15 @@ never copied from a document.
    secondbox resources apply --file /absolute/path/to/reviewed-gvisor.resources.json
    ```
 
-3. Issue the Runner identity. On a guided single-host deployment, declare the Runner in
-   `secondbox.toml` and run
-   `secondbox-deploy runner-init <manifest> <runner-id> <handoff-directory>`; note that
-   `runner-init` renders a Firecracker-shaped environment, so keep only the identity files
-   (certificate, key, CA) and the enrollment credential from the handoff and compose the gVisor
-   environment from this document. Install the identity under an operator-owned root such as
-   `/opt/secondbox-runner-identity`.
+3. Issue the Runner identity. Declare the Runner in `secondbox.toml` with
+   `compute_backend = 'gvisor'` (`secondbox-deploy runner-template --backend gvisor` emits the
+   declaration) and run
+   `secondbox-deploy runner-init <manifest> <runner-id> <handoff-directory>`. The handoff
+   contains the identity files (certificate, key, CA), the egress context file, and a
+   `runner.env` with the complete gVisor environment, including the materialization digest of
+   the verified release. For an operator build, replace `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST`
+   with the digest step 1 printed, because the Runner refuses assets that differ from its pin.
+   Install the identity under an operator-owned root such as `/opt/secondbox-runner-identity`.
 
 4. Export the complete environment and start the runner as a root systemd service whose unit
    states exactly these variables — this is the full set the gVisor composition consumes, and
@@ -301,18 +309,20 @@ never copied from a document.
    longer needed. The WorkspaceStore root is the durable authority; never delete it as part of
    a runner restart or upgrade.
 
-   Upgrades have no in-place path either: every Sandbox pins its exact Profile revision and
-   backend materialization, so replacing `bin/runsc`, the guest agent, or `rootfs/` under a
-   live materialization is unsupported and would strand the Sandboxes pinned to it. Deploy a
-   new build directory beside the old one under a new materialization digest, keep the old
-   assets until every Sandbox pinned to them has been deleted or relocated, and treat the
-   forward-only database migrations as unrollbackable without the pre-upgrade backup.
+   An upgrade replaces the materialization while the runner is stopped. A Sandbox pins its
+   Profile revision, not a backend materialization: a default-image start boots whichever
+   materialization its home runner has verified. Stop the runner, replace the asset directory
+   with the verified new materialization, set `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST` to its
+   digest, and start the runner; retained Sandboxes start on the new assets with their
+   Workspaces. Never replace `bin/runsc`, the guest agent, or `rootfs/` under a running runner,
+   and treat the forward-only database migrations as unrollbackable without the pre-upgrade
+   backup.
 
    Relocation is the only path off a gVisor runner: RunnerPools seal to one backend kind, so
    no Sandbox can switch to a Firecracker pool in place, and a gVisor Workspace relocates only
-   to another runner with matching gVisor materialization and free capacity. Provision that
-   destination capacity before decommissioning the final gVisor runner, or its durable
-   Sandboxes remain stranded until an eligible runner enrolls.
+   to another gVisor runner of its pool with free capacity. Provision that destination capacity
+   before decommissioning the final gVisor runner, or its durable Sandboxes remain stranded
+   until an eligible runner enrolls.
 
    Startup also modifies host-wide networking state that per-Instance teardown deliberately
    leaves in place; remove it only when decommissioning the host as a runner entirely:
@@ -328,6 +338,35 @@ never copied from a document.
 
    IPv4 forwarding (`net.ipv4.ip_forward=1`) is enabled but not disabled automatically:
    other services commonly rely on it, so review the host's own policy before reverting it.
+
+## Docker Compose same-host install path
+
+`secondbox-deploy` renders a same-host gVisor Runner from a `[[runners]]` declaration with
+`compute_backend = 'gvisor'`; `secondbox-deploy runner-template --backend gvisor` emits the
+complete declaration. Set `deployment.runner_image` to the artifact manifest's
+`gvisor.runnerReference` after `secondbox-deploy init`, which writes the Firecracker Runner image,
+and materialize the release's `gvisor-artifacts` image into
+`artifact_host_directory` with the extraction and verification commands of the Kubernetes path
+below. The deploy CLI takes `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST` from the verified artifact
+manifest that `standard_resources.artifact_manifest` names, so no digest is copied by hand, and a
+release without a gVisor backend (arm64) refuses the declaration.
+
+The packaged overlay `deploy/compose.same-host-gvisor-runner.yml` runs the privileged Runner with
+the host cgroup namespace, a `/dev` bind for loop devices, and no KVM or TUN device. It differs
+from the Firecracker overlay in two ways:
+
+- The Runner is on the deployment's `secondbox-backend` network, not the host network. It dials
+  the control plane at `control-plane:9443`, and its per-Instance veths, nftables policy, and DNS
+  proxy stay in its private network namespace. The host network namespace is not changed, so the
+  network profile is always 0 and `gvisor_network_profile` and `control_plane_address` are
+  derived. Logical gateway addresses in the egress context must be reachable from that network.
+- The Runner's container runs in the slice `secondbox-<compose project>-gvisor.slice`. The backend
+  nests Instance cgroups below the nearest delegating ancestor and sweeps them at start, so two
+  deployments on one host never share that directory.
+
+The same-host storage contract holds: `state_host_directory` is a dedicated reflink-capable
+filesystem and its `workspaces` child stays below that one mount. The asset directory may live on
+any filesystem; the Runner mounts its flat root read-only and clones nothing from it.
 
 ## Kubernetes pod install path
 

@@ -52,6 +52,25 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 	}
 }
 
+// The gVisor Runner needs no KVM or TUN and keeps its network namespace private
+// so its per-Instance networking never touches the host namespace.
+func TestComposeGVisorRunnerUsesNoVirtualizationDevicesOrHostNetwork(t *testing.T) {
+	runner := readRepositoryFile(t, "deploy/compose.same-host-gvisor-runner.yml")
+	for _, required := range []string{"same-host-runner:", "privileged: true", "cgroup: host", "cgroup_parent: ${SECONDBOX_GVISOR_RUNNER_CGROUP_PARENT:?", "networks: [secondbox-backend]", "- /dev:/dev", "target: /opt/secondbox-gvisor", "stop_grace_period: 45s", "image-fetcher:", "runner-config-init:", "SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE:"} {
+		if !strings.Contains(runner, required) {
+			t.Errorf("same-host gVisor Runner overlay missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"network_mode: host", "/dev/kvm", "/dev/net/tun", "FIRECRACKER", "SANDBOX_BRIDGE", "source: ${SECONDBOX_RUNNER_WORKSPACE_HOST_DIR"} {
+		if strings.Contains(runner, forbidden) {
+			t.Errorf("same-host gVisor Runner overlay contains %q", forbidden)
+		}
+	}
+	if count := strings.Count(runner, "create_host_path: false"); count != 4 {
+		t.Errorf("same-host gVisor Runner overlay disables host path creation for %d of 4 operator-owned binds", count)
+	}
+}
+
 // A privileged runner container receives the host's /dev. It must not boot an
 // init system that can start console, seat, or login services against host
 // devices.

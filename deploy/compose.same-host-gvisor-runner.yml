@@ -1,0 +1,173 @@
+# The gVisor Runner needs no KVM, TUN, or hardware virtualization. It owns a
+# private network namespace on the deployment network: per-Instance veths, its
+# nftables policy, and its DNS proxy stay inside the container, and the host
+# network namespace is not changed.
+services:
+  same-host-runner:
+    image: ${SECONDBOX_RUNNER_IMAGE:?set SECONDBOX_RUNNER_IMAGE}
+    restart: unless-stopped
+    stop_grace_period: 45s
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      runner-config-init:
+        condition: service_completed_successfully
+      image-fetcher:
+        condition: service_healthy
+    privileged: true
+    # runsc enables controllers below the Runner's cgroup. In a private cgroup
+    # namespace that cgroup is the namespace root, which refuses them. The
+    # deployment's own slice keeps each deployment's Instance cgroups apart.
+    cgroup: host
+    cgroup_parent: ${SECONDBOX_GVISOR_RUNNER_CGROUP_PARENT:?set SECONDBOX_GVISOR_RUNNER_CGROUP_PARENT}
+    networks: [secondbox-backend]
+    labels:
+      org.secondbox.runner.qualification: "not-established-by-compose"
+    environment:
+      SECONDBOX_RUNNER_ID: ${SECONDBOX_RUNNER_ID:?set SECONDBOX_RUNNER_ID}
+      SECONDBOX_COMPUTE_BACKEND: ${SECONDBOX_COMPUTE_BACKEND:?set SECONDBOX_COMPUTE_BACKEND}
+      SECONDBOX_RUNNER_POOL_ID: ${SECONDBOX_RUNNER_POOL_ID:?set SECONDBOX_RUNNER_POOL_ID}
+      SECONDBOX_RUNNER_SOFTWARE_VERSION: ${SECONDBOX_RUNNER_SOFTWARE_VERSION:?set SECONDBOX_RUNNER_SOFTWARE_VERSION}
+      SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS: ${SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS:?set SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS}
+      SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME: ${SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME:?set SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME}
+      SECONDBOX_RUNNER_CREDENTIAL: ${SECONDBOX_RUNNER_CREDENTIAL:?set SECONDBOX_RUNNER_CREDENTIAL}
+      SECONDBOX_RUNNER_CLIENT_CERTIFICATE: /run/secondbox-runner-identity/runner.crt
+      SECONDBOX_RUNNER_CLIENT_KEY: /run/secondbox-runner-identity/runner.key
+      SECONDBOX_RUNNER_CONTROL_PLANE_CA: /run/secondbox-runner-identity/runner-ca.crt
+      SECONDBOX_RUNNER_LOG_PATH: ${SECONDBOX_RUNNER_LOG_PATH:?set SECONDBOX_RUNNER_LOG_PATH}
+      SECONDBOX_RUNNER_LOG_DIR: ${SECONDBOX_RUNNER_LOG_DIR:?set SECONDBOX_RUNNER_LOG_DIR}
+      SECONDBOX_GVISOR_RUNSC_PATH: ${SECONDBOX_GVISOR_RUNSC_PATH:?set SECONDBOX_GVISOR_RUNSC_PATH}
+      SECONDBOX_GVISOR_AGENT_PATH: ${SECONDBOX_GVISOR_AGENT_PATH:?set SECONDBOX_GVISOR_AGENT_PATH}
+      SECONDBOX_GVISOR_FLAT_ROOT_PATH: ${SECONDBOX_GVISOR_FLAT_ROOT_PATH:?set SECONDBOX_GVISOR_FLAT_ROOT_PATH}
+      SECONDBOX_GVISOR_MATERIALIZATION_PATH: ${SECONDBOX_GVISOR_MATERIALIZATION_PATH:?set SECONDBOX_GVISOR_MATERIALIZATION_PATH}
+      SECONDBOX_GVISOR_MATERIALIZATION_DIGEST: ${SECONDBOX_GVISOR_MATERIALIZATION_DIGEST:?set SECONDBOX_GVISOR_MATERIALIZATION_DIGEST}
+      SECONDBOX_GVISOR_RUNTIME_DIR: ${SECONDBOX_GVISOR_RUNTIME_DIR:?set SECONDBOX_GVISOR_RUNTIME_DIR}
+      SECONDBOX_GVISOR_NETWORK_PROFILE: ${SECONDBOX_GVISOR_NETWORK_PROFILE:?set SECONDBOX_GVISOR_NETWORK_PROFILE}
+      SECONDBOX_GVISOR_MAXIMUM_VCPUS: ${SECONDBOX_GVISOR_MAXIMUM_VCPUS:?set SECONDBOX_GVISOR_MAXIMUM_VCPUS}
+      SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES: ${SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES:?set SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES}
+      SECONDBOX_GVISOR_MAXIMUM_DISK_BYTES: ${SECONDBOX_GVISOR_MAXIMUM_DISK_BYTES:?set SECONDBOX_GVISOR_MAXIMUM_DISK_BYTES}
+      SECONDBOX_GVISOR_MAXIMUM_INSTANCES: ${SECONDBOX_GVISOR_MAXIMUM_INSTANCES:?set SECONDBOX_GVISOR_MAXIMUM_INSTANCES}
+      SECONDBOX_GVISOR_MAXIMUM_OPERATIONS: ${SECONDBOX_GVISOR_MAXIMUM_OPERATIONS:?set SECONDBOX_GVISOR_MAXIMUM_OPERATIONS}
+      SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES: ${SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES:?set SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES}
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT:?set SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT}
+      SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET: ${SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET:?set SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET}
+      SECONDBOX_RUNNER_WORKSPACE_ROOT: ${SECONDBOX_RUNNER_WORKSPACE_ROOT:?set SECONDBOX_RUNNER_WORKSPACE_ROOT}
+      SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE: ${SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE:?set SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE}
+      SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT: ${SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT:?set SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT}
+      SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT: ${SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT:?set SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT}
+      SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT: ${SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT:?set SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT}
+      SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS: ${SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS:?set SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS}
+      SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL: ${SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL:?set SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL}
+      SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES: ${SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES:?set SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES}
+      SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS: ${SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS:?set SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS}
+      SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG: /run/secondbox-runner-config/egress-contexts.json
+      SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM: ${SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM:?set SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM}
+      SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS: ${SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS:?set SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS}
+      SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES: ${SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES:?set SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES}
+      SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS: ${SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS:?set SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS}
+      SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS: ${SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS:?set SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS}
+    volumes:
+      - type: bind
+        source: ${SECONDBOX_RUNNER_IDENTITY_HOST_DIR:?set SECONDBOX_RUNNER_IDENTITY_HOST_DIR}
+        target: /run/secondbox-runner-identity
+        read_only: true
+        bind:
+          create_host_path: false
+      - runner-config-runtime:/run/secondbox-runner-config:ro
+      - image-fetcher-socket:/run/secondbox-image-fetcher
+      - type: bind
+        source: ${SECONDBOX_RUNNER_ARTIFACT_HOST_DIR:?set SECONDBOX_RUNNER_ARTIFACT_HOST_DIR}
+        target: /opt/secondbox-gvisor
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SECONDBOX_RUNNER_STATE_HOST_DIR:?set SECONDBOX_RUNNER_STATE_HOST_DIR}
+        target: /var/lib/secondbox-runner
+        bind:
+          create_host_path: false
+          # rslave, not rshared: Workspace loop mounts stay Runner-private.
+          propagation: rslave
+      # A privileged container's device list is a snapshot taken at start and
+      # misses loop devices allocated later.
+      - /dev:/dev
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/secondbox-runner", "-healthcheck", "-healthcheck-timeout", "5s"]
+      interval: 10s
+      timeout: 6s
+      retries: 4
+      start_period: 15s
+
+  runner-config-init:
+    image: ${SECONDBOX_RUNNER_IMAGE:?set SECONDBOX_RUNNER_IMAGE}
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - install -m 444 -o 0 -g 0 /source/egress-contexts.json /target/egress-contexts.json
+    volumes:
+      - type: bind
+        source: ${SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG_HOST_PATH:?set SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG_HOST_PATH}
+        target: /source/egress-contexts.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - runner-config-runtime:/target
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+
+  image-fetcher-init:
+    image: ${SECONDBOX_RUNNER_IMAGE:?set SECONDBOX_RUNNER_IMAGE}
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        chown -R 10002:10002 /cache /socket /registry
+        chmod 0700 /cache /socket /registry
+    volumes:
+      - "${SECONDBOX_RUNNER_STATE_HOST_DIR:?set SECONDBOX_RUNNER_STATE_HOST_DIR}/execution-images:/cache"
+      - image-fetcher-socket:/socket
+      - "${SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR:?set SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR}:/registry"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+
+  image-fetcher:
+    image: ${SECONDBOX_RUNNER_IMAGE:?set SECONDBOX_RUNNER_IMAGE}
+    user: "10002:10002"
+    entrypoint: ["/usr/local/bin/secondbox-image-fetcher"]
+    restart: unless-stopped
+    depends_on:
+      image-fetcher-init:
+        condition: service_completed_successfully
+    environment:
+      SECONDBOX_IMAGE_FETCHER_SOCKET: /run/secondbox-image-fetcher/fetcher.sock
+      SECONDBOX_IMAGE_FETCHER_TENANTS: /run/image-registry/tenants.json
+      SECONDBOX_IMAGE_FETCHER_CACHE_ROOT: /cache
+      SECONDBOX_IMAGE_FETCHER_REGISTRIES: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES:?set SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES}
+      SECONDBOX_IMAGE_FETCHER_CERTIFICATES: /run/image-registry/certificates
+      SECONDBOX_IMAGE_FETCHER_MAX_DOWNLOAD_BYTES: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES:?set SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES}
+      SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES:?set SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES}
+      SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES:?set SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES}
+    volumes:
+      - "${SECONDBOX_RUNNER_STATE_HOST_DIR:?set SECONDBOX_RUNNER_STATE_HOST_DIR}/execution-images:/cache"
+      - image-fetcher-socket:/run/secondbox-image-fetcher
+      - "${SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR:?set SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR}:/run/image-registry:ro"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [secondbox-backend]
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/secondbox-image-fetcher/fetcher.sock"]
+      interval: 5s
+      timeout: 2s
+      retries: 6
+
+volumes:
+  runner-config-runtime:
+  image-fetcher-socket:

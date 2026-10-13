@@ -201,15 +201,23 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 			return fmt.Errorf("SecondBox deployment manifest: init mode must be development or production")
 		}
 	case "runner-template":
+		if len(arguments) < 3 || arguments[1] != "--backend" {
+			return usage(renderer)
+		}
+		backend := arguments[2]
 		switch {
-		case len(arguments) == 1:
-			_, err := os.Stdout.Write(deployconfig.RunnerTemplate())
-			return err
-		case len(arguments) == 3 && arguments[1] == "--output":
-			if err := deployconfig.WriteRunnerTemplate(arguments[2]); err != nil {
+		case len(arguments) == 3:
+			template, err := deployconfig.RunnerTemplate(backend)
+			if err != nil {
 				return err
 			}
-			fmt.Println(arguments[2])
+			_, err = os.Stdout.Write(template)
+			return err
+		case len(arguments) == 5 && arguments[3] == "--output":
+			if err := deployconfig.WriteRunnerTemplate(arguments[4], backend); err != nil {
+				return err
+			}
+			fmt.Println(arguments[4])
 			return nil
 		default:
 			return usage(renderer)

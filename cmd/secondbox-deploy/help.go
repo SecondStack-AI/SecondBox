@@ -15,7 +15,7 @@ func secondboxDeployHelp() cliui.Help {
 			{Key: "update", Value: "update a completed guided deployment; use --check or --resume"},
 			{Key: "init", Value: "create an explicit deployment manifest"},
 			{Key: "validate", Value: "validate a deployment manifest"},
-			{Key: "runner-template", Value: "emit the Runner TOML template"},
+			{Key: "runner-template", Value: "emit the Runner TOML template; --backend firecracker or gvisor, optionally --output PATH"},
 			{Key: "runner-init", Value: "issue one Runner identity"},
 			{Key: "verify", Value: "verify a release artifact manifest"},
 			{Key: "inspect", Value: "emit redacted deployment JSON"},

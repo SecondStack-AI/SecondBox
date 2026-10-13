@@ -243,9 +243,11 @@ Packaged deployments always use the Firecracker jailer for both placements. Remo
 Generate the complete inert declaration on stdout, or create one separate file without replacing an existing target:
 
 ```sh
-secondbox-deploy runner-template
-secondbox-deploy runner-template --output /secure/secondbox/runner-east-1.toml
+secondbox-deploy runner-template --backend firecracker
+secondbox-deploy runner-template --backend gvisor --output /secure/secondbox/runner-east-1.toml
 ```
+
+`--backend` selects the compute backend the declaration states in `compute_backend`; each scaffold contains exactly the settings its backend owns, and validation rejects a setting of the other backend.
 
 Replace `runners = []` in the deployment manifest with the completed block.
 Required values are invalid placeholders, and validation cannot accept the scaffold before the operator supplies them.
@@ -299,6 +301,8 @@ Neither lifecycle requests nor Agent Platform receive these credentials.
 runner_id = ''
 # Runner location; must be same-host or remote, with at most one same-host Runner.
 placement = ''
+# Compute backend; firecracker or gvisor. A RunnerPool seals to the backend of its Runners.
+compute_backend = 'firecracker'
 # RunnerPool name; required and must match the selected standard-resource inventory that admits this Runner.
 pool_id = ''
 # Runner software version reported to the control plane; required.
@@ -313,7 +317,7 @@ identity_directory = ''
 identity_host_directory = '<replace-with-absolute-runner-host-path>'
 
 # Artifact trust
-# Execution-asset directory on the Runner host; absolute when set and required for same-host placement.
+# Execution-asset directory on the Runner host; absolute when set and required for same-host placement. It must share the Runner storage filesystem, because the Runner reflinks the guest rootfs out of it.
 artifact_host_directory = '<replace-with-absolute-runner-host-path>'
 # Registry hosts allowed for client-selected execution images.
 execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
@@ -344,7 +348,7 @@ storage_pressure_warning_percent = 0
 # Storage-pressure admission-deny threshold; positive, above warning, and below 100.
 storage_pressure_admission_deny_percent = 0
 # Admission accounting: logical reserves full Workspace limits;
-# physical checks measured filesystem usage only. Firecracker or gVisor Runner.
+# physical checks measured filesystem usage only.
 storage_admission_mode = '<replace-with-logical-or-physical>'
 
 # Firecracker
@@ -402,6 +406,8 @@ sandbox_network_state_directory = ''
 sandbox_delete_bridge = '<replace-with-boolean>'
 # Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /usr/sbin/nft.
 network_policy_nft_path = ''
+
+# Network policy
 # Maximum pinned DNS answers; must be positive.
 network_policy_max_dns_pins = 0
 # Maximum DNS TTL; must be a positive Go duration.
@@ -455,6 +461,125 @@ data_plane_listen_address = ''
 data_plane_advertised_address = ''
 ```
 <!-- runner-template-output:end -->
+
+The gVisor scaffold:
+
+<!-- runner-template-gvisor-output:start -->
+```toml
+# Identity and placement
+[[runners]]
+# Immutable opaque Runner ID; start with an ASCII letter or digit, then use at most 127 letters, digits, dots, underscores, colons, or hyphens.
+runner_id = ''
+# Runner location; must be same-host or remote, with at most one same-host Runner.
+placement = ''
+# Compute backend; firecracker or gvisor. A RunnerPool seals to the backend of its Runners.
+compute_backend = 'gvisor'
+# RunnerPool name; required and must match the selected standard-resource inventory that admits this Runner.
+pool_id = ''
+# Runner software version reported to the control plane; required.
+software_version = ''
+# Authenticated control-plane Runner endpoint; required for remote placement. Leave empty for same-host placement; the package dials control-plane:9443 on the deployment network.
+control_plane_address = ''
+# TLS server name for the control-plane Runner endpoint; required.
+control_plane_server_name = ''
+# Remote placement requires an absolute Runner identity directory. Leave empty for same-host placement; Compose supplies its identity mount.
+identity_directory = ''
+# Identity directory on the Runner host; absolute when set and required for same-host placement.
+identity_host_directory = '<replace-with-absolute-runner-host-path>'
+
+# Artifact trust
+# Materialized gVisor asset directory (bin/, rootfs/, materialization.json) on the Runner host; absolute when set and required for same-host placement.
+artifact_host_directory = '<replace-with-absolute-runner-host-path>'
+# Registry hosts allowed for client-selected execution images.
+execution_image_registries = '<replace-with-comma-separated-registry-hosts>'
+# Private directory containing tenants.json and exported registry credentials on the Runner host.
+execution_image_registry_config_directory = '<replace-with-absolute-tenant-registry-config-directory>'
+# Maximum downloaded OCI archive size per image.
+execution_image_max_download_bytes = 0
+# Maximum expanded bundle size per image.
+execution_image_max_expanded_bytes = 0
+# Maximum retained expanded image cache size.
+execution_image_max_cache_bytes = 0
+
+# Runner storage
+# Dedicated reflink-capable Runner storage root on the host; absolute when set and required for same-host placement. Compose binds this root once at /var/lib/secondbox-runner so its state and workspaces children retain one mount identity.
+state_host_directory = '<replace-with-absolute-runner-host-path>'
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/logs/runner.jsonl.
+log_path = ''
+# Remote placement requires this absolute Runner-host path. Leave empty for same-host placement; the package uses /var/lib/secondbox-runner/state/logs.
+log_directory = ''
+
+# Workspace persistence
+# Remote placement requires an absolute Workspace root. Leave empty for same-host placement; Compose uses the existing workspaces child of state_host_directory.
+workspace_root = ''
+# Storage-pressure recovery threshold; positive and lower than warning and admission-deny thresholds.
+storage_pressure_recovery_percent = 0
+# Storage-pressure warning threshold; positive and between recovery and admission-deny thresholds.
+storage_pressure_warning_percent = 0
+# Storage-pressure admission-deny threshold; positive, above warning, and below 100.
+storage_pressure_admission_deny_percent = 0
+# Admission accounting: logical reserves full Workspace limits;
+# physical checks measured filesystem usage only.
+storage_admission_mode = '<replace-with-logical-or-physical>'
+
+# gVisor
+# Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-gvisor/bin/runsc.
+gvisor_runsc_path = ''
+# Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-gvisor/bin/secondbox-guest-agent.
+gvisor_agent_path = ''
+# Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-gvisor/rootfs.
+gvisor_flat_root_path = ''
+# Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /opt/secondbox-gvisor/materialization.json.
+gvisor_materialization_path = ''
+# Dedicated disposable runtime directory; the Runner removes its children at start. Remote placement requires this clean absolute Runner-host path. Leave empty for same-host placement; the package uses /run/secondbox-gvisor.
+gvisor_runtime_directory = ''
+# Network profile from 0 through 15, unique among gVisor Runners that share one network namespace. Remote placement requires it. Remove this line for same-host placement; the package Runner owns a private network namespace.
+gvisor_network_profile = 0
+# Aggregate vCPUs across the Runner's Instances; must be positive.
+gvisor_maximum_vcpus = 0
+# Aggregate Instance memory in bytes; root filesystem writes count against it. Must be positive.
+gvisor_maximum_memory_bytes = 0
+# Aggregate Workspace disk in bytes; must be positive.
+gvisor_maximum_disk_bytes = 0
+# Maximum concurrent Instances; from 1 through 63, the Instance slots of one network profile.
+gvisor_maximum_instances = 0
+# Maximum concurrent operations across the Runner; must be positive.
+gvisor_maximum_operations = 0
+# Largest pre-formatted Workspace template in bytes; at least 67108864.
+gvisor_workspace_template_capacity_bytes = 0
+
+# Network policy
+# Maximum pinned DNS answers; must be positive.
+network_policy_max_dns_pins = 0
+# Maximum DNS TTL; must be a positive Go duration.
+network_policy_max_dns_ttl = ''
+# Runner-local addresses; a comma-separated list of IP addresses.
+network_policy_runner_addresses = ''
+# Management networks; a comma-separated list of CIDRs.
+network_policy_management_cidrs = ''
+# Remote placement requires an absolute egress-context configuration path. Leave empty for same-host placement; Compose supplies its configuration mount.
+egress_context_config_path = ''
+# Context-indexed Runner-local mappings. Replace the empty list with one or more
+# [[runners.egress_contexts]] tables, each containing a unique valid name, and
+# [[runners.egress_contexts.gateways]] tables containing logical_name and
+# address, attributed_socket, or both. The generator emits the strict JSON file.
+egress_contexts = []
+# Upstream DNS resolver; must be an IP:port with a nonzero port.
+network_policy_dns_upstream = ''
+
+# Capacity
+# Maximum concurrent starts; must be positive.
+max_concurrent_starts = 0
+# Maximum concurrent Workspace creations; must be positive.
+max_concurrent_workspace_creates = 0
+
+# Data plane
+# Runner data-plane listener; a host:port with a port from 0 through 65535.
+data_plane_listen_address = ''
+# Reachable Runner data-plane endpoint; host:port with an explicit host and a port from 1 through 65535.
+data_plane_advertised_address = ''
+```
+<!-- runner-template-gvisor-output:end -->
 
 Review these relationships before enrollment:
 

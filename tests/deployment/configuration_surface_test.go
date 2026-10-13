@@ -106,20 +106,25 @@ func TestDocumentedRunnerTemplateMatchesCommandOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := "<!-- runner-template-output:start -->\n```toml\n"
-	suffix := "```\n<!-- runner-template-output:end -->"
-	start := strings.Index(string(documentation), prefix)
-	if start < 0 {
-		t.Fatal("deployment documentation has no Runner template output block")
-	}
-	start += len(prefix)
-	end := strings.Index(string(documentation[start:]), suffix)
-	if end < 0 {
-		t.Fatal("deployment documentation Runner template output block is not closed")
-	}
-	documented := documentation[start : start+end]
-	if string(documented) != string(deployconfig.RunnerTemplate()) {
-		t.Fatal("documented Runner template differs from secondbox-deploy runner-template output")
+	for backend, marker := range map[string]string{"firecracker": "runner-template-output", "gvisor": "runner-template-gvisor-output"} {
+		prefix := "<!-- " + marker + ":start -->\n```toml\n"
+		suffix := "```\n<!-- " + marker + ":end -->"
+		start := strings.Index(string(documentation), prefix)
+		if start < 0 {
+			t.Fatalf("deployment documentation has no %s Runner template output block", backend)
+		}
+		start += len(prefix)
+		end := strings.Index(string(documentation[start:]), suffix)
+		if end < 0 {
+			t.Fatalf("deployment documentation %s Runner template output block is not closed", backend)
+		}
+		template, err := deployconfig.RunnerTemplate(backend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(documentation[start:start+end]) != string(template) {
+			t.Fatalf("documented %s Runner template differs from secondbox-deploy runner-template output", backend)
+		}
 	}
 	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
 	if err != nil {

@@ -81,7 +81,7 @@ The guided path is deliberately Linux amd64, same-host, loopback-only, and devel
 
 - Download individual release binaries or SDKs from the [latest release](https://github.com/SecondStack-AI/SecondBox/releases/latest) when you only need a client.
 - Follow [deployment and runtime operations](docs/operations/deployment.md) for production authority, remote Runners, or a manually reviewed same-host topology.
-- For a manually reviewed same-host Runner declaration, start with `secondbox-deploy runner-template`; it emits every required Runner-host path and authority field without installing anything.
+- For a manually reviewed same-host Runner declaration, start with `secondbox-deploy runner-template --backend firecracker` (or `--backend gvisor` for a host without KVM); it emits every required Runner-host path and authority field without installing anything.
 - Use `just deploy-development-up .tmp/secondbox-development` for control-plane-only source-checkout development. That topology has synthetic development artifact identity and cannot execute a Sandbox until a real Runner and verified assets are configured.
 - Follow the [microVM image pipeline](docs/operations/microvm-image-pipeline.md) and [release distribution](docs/operations/release-distribution.md) when producing or independently materializing execution assets.
 
