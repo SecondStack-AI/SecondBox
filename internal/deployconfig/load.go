@@ -50,6 +50,7 @@ const (
 	maxFirecrackerInstanceIDBytes = 42
 	// The Runner's gVisor backend owns these bounds; validation mirrors them.
 	maximumGVisorNetworkProfiles        = 16
+	maximumGVisorInstancesPerProfile    = 63
 	minimumGVisorWorkspaceTemplateBytes = 64 << 20
 	cleanInstallBoundaryVersion         = "0.6.0"
 	// updateMigrationBaselineVersion is the oldest release whose database
@@ -503,6 +504,7 @@ func validateManifestShape(manifest ManifestV1) error {
 		return err
 	}
 	seen := make(map[string]bool)
+	poolBackends := make(map[string]string)
 	sameHost := false
 	for i, r := range manifest.Runners {
 		prefix := fmt.Sprintf("runners[%d]", i)
@@ -528,7 +530,14 @@ func validateManifestShape(manifest ManifestV1) error {
 		if err := validateRunner(prefix, r); err != nil {
 			return err
 		}
-		if r.Placement == "same-host" && composeBackendPrefix.IsValid() {
+		// A RunnerPool seals to the backend of the first Runner that registers in it and
+		// refuses every Runner of another backend.
+		if backend, declared := poolBackends[r.PoolID]; declared && backend != r.ComputeBackend {
+			return manifestError(prefix+" declares compute_backend "+r.ComputeBackend+" in pool "+r.PoolID+", whose other Runners use "+backend+"; one pool serves one compute backend", nil)
+		}
+		poolBackends[r.PoolID] = r.ComputeBackend
+		// The gVisor Runner's guest networks are link-local and inside its own network namespace.
+		if r.Placement == "same-host" && r.ComputeBackend == computeBackendFirecracker && composeBackendPrefix.IsValid() {
 			guestPrefix, err := netip.ParsePrefix(r.SandboxGuestCIDR)
 			if err != nil {
 				return manifestError(prefix+".sandbox_guest_cidr must be a valid prefix", err)
@@ -808,6 +817,9 @@ func validateRunner(prefix string, r Runner) error {
 	} else {
 		if r.GVisorNetworkProfile == nil || *r.GVisorNetworkProfile < 0 || *r.GVisorNetworkProfile >= maximumGVisorNetworkProfiles {
 			return manifestError(fmt.Sprintf("%s.gvisor_network_profile must be an integer from 0 through %d", prefix, maximumGVisorNetworkProfiles-1), nil)
+		}
+		if *r.GVisorMaximumInstances > maximumGVisorInstancesPerProfile {
+			return manifestError(fmt.Sprintf("%s.gvisor_maximum_instances must not exceed %d, the Instance slots of one network profile", prefix, maximumGVisorInstancesPerProfile), nil)
 		}
 		if *r.GVisorWorkspaceTemplateCapacityBytes < minimumGVisorWorkspaceTemplateBytes {
 			return manifestError(fmt.Sprintf("%s.gvisor_workspace_template_capacity_bytes must be at least %d", prefix, minimumGVisorWorkspaceTemplateBytes), nil)

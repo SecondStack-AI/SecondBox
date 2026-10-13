@@ -26,6 +26,9 @@ func TestRunnerTemplateSubstitutionValidatesAsSameHostTopology(t *testing.T) {
 			}
 
 			manifestPath := initializedDevelopment(t)
+			if backend == computeBackendGVisor {
+				developmentGVisorReleaseForTest(t, manifestPath)
+			}
 			hostRoot := t.TempDir()
 			storageDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-template-storage-")
 			if err != nil {

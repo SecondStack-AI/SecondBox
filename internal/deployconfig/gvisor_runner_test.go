@@ -202,6 +202,11 @@ func TestGVisorRunnerValidationOwnsBackendSettings(t *testing.T) {
 			runner.GVisorMaximumMemoryBytes = nil
 			return runner
 		}},
+		{"Instances above one network profile", "gvisor_maximum_instances must not exceed 63", func() Runner {
+			runner := validGVisorTestRunner("runner", "remote")
+			runner.GVisorMaximumInstances = integer(64)
+			return runner
+		}},
 		{"small workspace template", "gvisor_workspace_template_capacity_bytes must be at least 67108864", func() Runner {
 			runner := validGVisorTestRunner("runner", "remote")
 			runner.GVisorWorkspaceTemplateCapacityBytes = integer(1 << 20)
@@ -294,5 +299,54 @@ func TestGVisorRunnerRequiresAReleaseWithAGVisorBackend(t *testing.T) {
 	}
 	if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "carries no gVisor release") {
 		t.Fatalf("arm64 gVisor Runner error = %v", err)
+	}
+}
+
+func TestOnePoolServesOneComputeBackend(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	developmentGVisorReleaseForTest(t, manifestPath)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firecracker := validTestRunner("runner-firecracker", "remote")
+	gvisor := validGVisorTestRunner("runner-gvisor", "remote")
+	manifest.Runners = []Runner{firecracker, gvisor}
+	if err := validateManifestShape(manifest); err == nil || !strings.Contains(err.Error(), "one pool serves one compute backend") {
+		t.Fatalf("mixed-backend pool error = %v", err)
+	}
+	gvisor.PoolID = "secondbox-gvisor"
+	manifest.Runners = []Runner{firecracker, gvisor}
+	if err := validateManifestShape(manifest); err != nil {
+		t.Fatalf("separate pools per backend: %v", err)
+	}
+}
+
+// An explicit Compose network constrains only the Firecracker Runner's host bridge; the gVisor
+// Runner's guest networks are link-local inside its own network namespace.
+func TestSameHostGVisorRunnerAcceptsAnExplicitComposeNetwork(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	developmentGVisorReleaseForTest(t, manifestPath)
+	runner := validSameHostGVisorTestRunner("runner-gvisor")
+	runner.PoolID = hostStandardPool(t)
+	provisionSameHostRunnerForTest(t, manifestPath, runner)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Deployment.ComposeBackendCIDR = "10.210.1.0/24"
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Environment["SECONDBOX_COMPOSE_BACKEND_CIDR"] != "10.210.1.0/24" {
+		t.Fatalf("Compose backend CIDR = %q", resolved.Environment["SECONDBOX_COMPOSE_BACKEND_CIDR"])
 	}
 }

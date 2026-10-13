@@ -252,8 +252,9 @@ never copied from a document.
    `secondbox-deploy runner-init <manifest> <runner-id> <handoff-directory>`. The handoff
    contains the identity files (certificate, key, CA), the egress context file, and a
    `runner.env` with the complete gVisor environment, including the materialization digest of
-   the verified release. Install the identity under an operator-owned root such as
-   `/opt/secondbox-runner-identity`.
+   the verified release. For an operator build, replace `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST`
+   with the digest step 1 printed, because the Runner refuses assets that differ from its pin.
+   Install the identity under an operator-owned root such as `/opt/secondbox-runner-identity`.
 
 4. Export the complete environment and start the runner as a root systemd service whose unit
    states exactly these variables — this is the full set the gVisor composition consumes, and
@@ -343,7 +344,8 @@ never copied from a document.
 `secondbox-deploy` renders a same-host gVisor Runner from a `[[runners]]` declaration with
 `compute_backend = 'gvisor'`; `secondbox-deploy runner-template --backend gvisor` emits the
 complete declaration. Set `deployment.runner_image` to the artifact manifest's
-`gvisor.runnerReference`, and materialize the release's `gvisor-artifacts` image into
+`gvisor.runnerReference` after `secondbox-deploy init`, which writes the Firecracker Runner image,
+and materialize the release's `gvisor-artifacts` image into
 `artifact_host_directory` with the extraction and verification commands of the Kubernetes path
 below. The deploy CLI takes `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST` from the verified artifact
 manifest that `standard_resources.artifact_manifest` names, so no digest is copied by hand, and a

@@ -148,7 +148,7 @@ gvisor_maximum_vcpus = 0
 gvisor_maximum_memory_bytes = 0
 # Aggregate Workspace disk in bytes; must be positive.
 gvisor_maximum_disk_bytes = 0
-# Maximum concurrent Instances; must be positive.
+# Maximum concurrent Instances; from 1 through 63, the Instance slots of one network profile.
 gvisor_maximum_instances = 0
 # Maximum concurrent operations across the Runner; must be positive.
 gvisor_maximum_operations = 0
