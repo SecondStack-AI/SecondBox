@@ -438,10 +438,16 @@ deployment_dir="$source_less_consumer/deployment"
 mkdir "$source_less_consumer"
 (
   cd "$source_less_consumer"
-  "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" runner-template >runner.toml
-  grep -q '^egress_context_config_path = ' runner.toml
-  grep -q '^egress_contexts = \[\]$' runner.toml
-  ! grep -q 'network_policy_runner_gateways' runner.toml
+  for backend in firecracker gvisor; do
+    "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" runner-template --backend "$backend" >"runner-$backend.toml"
+    grep -q "^compute_backend = '$backend'\$" "runner-$backend.toml"
+    grep -q '^egress_context_config_path = ' "runner-$backend.toml"
+    grep -q '^egress_contexts = \[\]$' "runner-$backend.toml"
+    if grep -q 'network_policy_runner_gateways' "runner-$backend.toml"; then
+      echo "SecondBox release staging: the $backend Runner template names retired network_policy_runner_gateways" >&2
+      exit 1
+    fi
+  done
   "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" init --mode development "$deployment_dir" >/dev/null
   "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" inspect "$deployment_dir/secondbox.toml" >/dev/null
 )
