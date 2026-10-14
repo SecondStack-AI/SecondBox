@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.27.0 - 2026-10-14
+
+A RunnerPool's compute-backend seal can be cleared, so an installation can switch its Runners between Firecracker and gVisor in place and keep its Sandboxes and Workspaces. Deployments from v0.14.0 onward update in place with no database migration; Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged, and public API v1 gains one platform operation. See the [v0.27.0 release notes](docs/releases/v0.27.0.md).
+
 ### Added
 
 - `POST /v1/runner-pools/{runnerPoolName}:unseal-backend` (`unsealRunnerPoolBackend`) clears a RunnerPool's private compute-backend seal under `If-Match`, so an operator can switch an installation's Runners between Firecracker and gVisor while keeping their identity, WorkspaceStore, Sandboxes, and Workspaces; the next Runner to register seals the pool again. It refuses with the new `409 runner_pool_backend_in_use` while any Runner of the pool is connected or owns a live Instance, and it is audited as `runner_pool.backend_unsealed`. The Go and TypeScript SDKs add `UnsealRunnerPoolBackend` and `unsealRunnerPoolBackend`, and the CLI adds `secondbox runner-pools unseal-backend`.
