@@ -335,6 +335,9 @@ var operations = map[string]OperationMetadata{
 	"touchSandbox": {
 		OperationID: "touchSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:touch",
 	},
+	"unsealRunnerPoolBackend": {
+		OperationID: "unsealRunnerPoolBackend", Method: "POST", PathTemplate: "/v1/runner-pools/{runnerPoolName}:unseal-backend",
+	},
 	"updateRunnerPool": {
 		OperationID: "updateRunnerPool", Method: "PATCH", PathTemplate: "/v1/runner-pools/{runnerPoolName}",
 		RequestBody: []OperationMediaType{

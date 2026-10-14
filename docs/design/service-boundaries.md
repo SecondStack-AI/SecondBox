@@ -31,6 +31,6 @@ SecondBox does not own end-user identity, billing, an LLM runtime, application s
 
 ## Supported v1 shape
 
-Firecracker and gVisor are the supported v1 backends. They and the experimental Microsandbox backend use the same provider-neutral compute port with explicit runner-wide selection and no per-assignment selection or fallback. RunnerPools are homogeneous and privately sealed to one backend kind; backend identity never enters public resources.
+Firecracker and gVisor are the supported v1 backends. They and the experimental Microsandbox backend use the same provider-neutral compute port with explicit runner-wide selection and no per-assignment selection or fallback. RunnerPools are homogeneous and privately sealed to one backend kind. Only the explicit platform operation `unsealRunnerPoolBackend` clears the seal, and only while every Runner of the pool is offline with no live Instance; backend identity never enters public resources.
 
 See [Domain and lifecycle](domain-lifecycle.md), [Profiles and authorization](profiles-and-authorization.md), [Customer-shared tenancy](customer-shared-tenancy.md), [Runner protocol](runner-protocol.md), [Guest-agent protocol](guest-agent-protocol.md), and [Security](security.md).

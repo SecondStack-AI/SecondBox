@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- `POST /v1/runner-pools/{runnerPoolName}:unseal-backend` (`unsealRunnerPoolBackend`) clears a RunnerPool's private compute-backend seal under `If-Match`, so an operator can switch an installation's Runners between Firecracker and gVisor while keeping their identity, WorkspaceStore, Sandboxes, and Workspaces; the next Runner to register seals the pool again. It refuses with the new `409 runner_pool_backend_in_use` while any Runner of the pool is connected or owns a live Instance, and it is audited as `runner_pool.backend_unsealed`. The Go and TypeScript SDKs add `UnsealRunnerPoolBackend` and `unsealRunnerPoolBackend`, and the CLI adds `secondbox runner-pools unseal-backend`.
+
 ## 0.26.1 - 2026-10-14
 
 The first published release of the v0.26.0 changes. v0.26.0 was tagged, but its release staging smoke still ran `secondbox-deploy runner-template` without the now-required `--backend` and failed on both architectures before anything was published; v0.26.0 is retracted. See the [v0.26.1 release notes](docs/releases/v0.26.1.md).

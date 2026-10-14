@@ -107,9 +107,11 @@ flat root against these pins before it advertises, and its readiness probe prove
 boot on the host. Never change a published standard Profile revision.
 
 A RunnerPool seals to the compute backend of its Runners, so one pool never mixes Firecracker
-and gVisor Runners. A deployment whose Runners are all gVisor may bind the release-standard
-`standard-amd64` pool and its standard Profiles, because Profiles name no execution bundle; the
-Compose path below does exactly that.
+and gVisor Runners; only an explicit unseal, while every Runner of the pool is stopped, lets a
+pool change backend (see [switching an installation](#switching-an-installation-between-firecracker-and-gvisor)).
+A deployment whose Runners are all gVisor may bind the release-standard `standard-amd64` pool
+and its standard Profiles, because Profiles name no execution bundle; the Compose path below
+does exactly that.
 
 ## Explicit runner environment
 
@@ -318,11 +320,11 @@ never copied from a document.
    and treat the forward-only database migrations as unrollbackable without the pre-upgrade
    backup.
 
-   Relocation is the only path off a gVisor runner: RunnerPools seal to one backend kind, so
-   no Sandbox can switch to a Firecracker pool in place, and a gVisor Workspace relocates only
-   to another gVisor runner of its pool with free capacity. Provision that destination capacity
-   before decommissioning the final gVisor runner, or its durable Sandboxes remain stranded
-   until an eligible runner enrolls.
+   RunnerPools seal to one backend kind, so a gVisor Workspace relocates only to another gVisor
+   runner of its pool with free capacity. Provision that destination capacity before
+   decommissioning the final gVisor runner, or its durable Sandboxes remain stranded until an
+   eligible runner enrolls. Moving a whole pool to Firecracker in place is the explicit
+   [backend switch](#switching-an-installation-between-firecracker-and-gvisor).
 
    Startup also modifies host-wide networking state that per-Instance teardown deliberately
    leaves in place; remove it only when decommissioning the host as a runner entirely:
@@ -367,6 +369,27 @@ from the Firecracker overlay in two ways:
 The same-host storage contract holds: `state_host_directory` is a dedicated reflink-capable
 filesystem and its `workspaces` child stays below that one mount. The asset directory may live on
 any filesystem; the Runner mounts its flat root read-only and clones nothing from it.
+
+## Switching an installation between Firecracker and gVisor
+
+Both backends attach the same raw ext4 WorkspaceStore images, so a Runner identity can change
+backend and keep its Sandboxes and Workspaces. The pool seal makes this an explicit operator
+step:
+
+1. Drain the Runners of the pool until no Instance runs, then stop every one of them.
+2. Read the pool revision and clear the seal:
+   `secondbox runner-pools unseal-backend --path runnerPoolName=<pool> --header 'If-Match="revision-<n>"'`.
+   It refuses with `409 runner_pool_backend_in_use` while a Runner of the pool is connected or
+   owns a live Instance.
+3. In each `[[runners]]` declaration change `compute_backend` and replace the backend settings
+   (`firecracker_*` for `gvisor_*`, or the reverse), and set `deployment.runner_image` and the
+   backend assets as the install path above requires. Keep `runner_id`, the identity
+   directories, and `state_host_directory`.
+4. Deploy and start the Runners. The first Runner to register seals the pool to its backend.
+
+Every Sandbox homed in the pool keeps its ID and Workspace but now runs in the other isolation
+class. gVisor is amd64 only, and it has no snapshot resume, so a Sandbox pinned to a
+`snapshot_resume` Profile cannot start on it.
 
 ## Kubernetes pod install path
 

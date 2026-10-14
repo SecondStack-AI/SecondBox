@@ -101,6 +101,32 @@ func (service *ControlPlaneService) UpdateRunnerPool(
 	return updated, nil
 }
 
+// UnsealRunnerPoolBackend lets the next registering Runner seal the pool to
+// its compute backend. The store refuses while any Runner of the pool runs.
+func (service *ControlPlaneService) UnsealRunnerPoolBackend(
+	ctx context.Context,
+	principal contracts.Principal,
+	name string,
+	expectedRevision int64,
+) (contracts.RunnerPool, error) {
+	if !profileNamePattern.MatchString(name) {
+		return contracts.RunnerPool{}, invalidField("runnerPoolName", "must match ^[a-z][a-z0-9-]{0,79}$")
+	}
+	if expectedRevision < 1 {
+		return contracts.RunnerPool{}, invalidField("If-Match", "must contain a positive revision ETag")
+	}
+	now := service.now().UTC()
+	audit := service.newAudit(ctx, principal, "runner_pool.backend_unsealed", "runner_pool", name, "", now)
+	unsealed, err := service.store.UnsealRunnerPoolBackend(ctx, name, expectedRevision, now)
+	if err != nil {
+		return contracts.RunnerPool{}, err
+	}
+	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+		return contracts.RunnerPool{}, err
+	}
+	return unsealed, nil
+}
+
 // GetRunnerPool returns one administrative placement boundary.
 func (service *ControlPlaneService) GetRunnerPool(
 	ctx context.Context,

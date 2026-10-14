@@ -117,6 +117,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("POST /v1/runner-pools", apiHandler.authenticate(http.HandlerFunc(apiHandler.createRunnerPool)))
 	mux.Handle("GET /v1/runner-pools/{runnerPoolName}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getRunnerPool)))
 	mux.Handle("PATCH /v1/runner-pools/{runnerPoolName}", apiHandler.authenticate(http.HandlerFunc(apiHandler.updateRunnerPool)))
+	mux.Handle("POST /v1/runner-pools/{runnerPoolAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.mutateRunnerPool)))
 	mux.Handle("GET /v1/runners", apiHandler.authenticate(http.HandlerFunc(apiHandler.listRunners)))
 	mux.Handle("GET /v1/runners/{runnerID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getRunner)))
 	mux.Handle("GET /v1/diagnostics/egress-contexts", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.readEgressContextPreflight)))
@@ -1154,6 +1155,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "execution_node_unavailable", "Compatible execution node unavailable", true
 	case errors.Is(err, ports.ErrRunnerPoolExists):
 		return http.StatusConflict, "state_conflict", "RunnerPool already exists", false
+	case errors.Is(err, ports.ErrRunnerPoolBackendInUse):
+		return http.StatusConflict, "runner_pool_backend_in_use", "RunnerPool backend is in use by a Runner or Instance", false
 	case errors.Is(err, ports.ErrSandboxNameConflict):
 		return http.StatusConflict, "state_conflict", "Sandbox name is already in use", false
 	case errors.Is(err, ports.ErrIdempotencyConflict):

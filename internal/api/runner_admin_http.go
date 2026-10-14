@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -75,6 +76,35 @@ func (apiHandler *handler) updateRunnerPool(writer http.ResponseWriter, request 
 		requestPrincipal(request),
 		request.PathValue("runnerPoolName"),
 		body,
+		expectedRevision,
+	)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	setRevisionETag(writer, pool.Revision)
+	apiHandler.writeJSON(writer, request, http.StatusOK, pool)
+}
+
+func (apiHandler *handler) mutateRunnerPool(writer http.ResponseWriter, request *http.Request) {
+	name, _, ok := splitAction(request.PathValue("runnerPoolAction"), "unseal-backend")
+	if !ok {
+		apiHandler.writeError(writer, request, ports.ErrRunnerPoolNotFound)
+		return
+	}
+	if err := requireEmptyBody(request); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	expectedRevision, err := parseIfMatch(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	pool, err := apiHandler.service.UnsealRunnerPoolBackend(
+		request.Context(),
+		requestPrincipal(request),
+		name,
 		expectedRevision,
 	)
 	if err != nil {

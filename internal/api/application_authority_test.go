@@ -115,6 +115,7 @@ func TestAuthorizeApplicationRequestDeniesAdministrativeAndUnknownRoutes(t *test
 	for _, pattern := range []string{
 		"GET /v1/profiles", "POST /v1/profiles/{profileAction}",
 		"GET /v1/runners", "PATCH /v1/runner-pools/{runnerPoolName}",
+		"POST /v1/runner-pools/{runnerPoolAction}",
 		"GET /v1/timings", "GET /v1/unknown",
 		"GET /v1/runners/{runnerID}/files",
 		"POST /v1/profiles/{profileName}/exec",

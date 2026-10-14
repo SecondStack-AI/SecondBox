@@ -458,6 +458,21 @@ export class SecondBox {
     });
   }
 
+  /** Lets the next registering Runner seal the pool to its compute backend. */
+  public unsealRunnerPoolBackend(
+    name: string,
+    expectedRevision: number,
+    signal?: AbortSignal,
+  ): Promise<RunnerPool> {
+    requireNonempty(name, "RunnerPool name");
+    requirePositiveInteger(expectedRevision, "RunnerPool expected revision");
+    return this.requestJSON<RunnerPool>("unsealRunnerPoolBackend", {
+      pathParameters: { runnerPoolName: name },
+      headers: { "If-Match": revisionETag(expectedRevision) },
+      signal,
+    });
+  }
+
   public listSandboxes(options: SandboxListOptions = {}): Promise<SandboxPage> {
     const metadata = Object.entries(options.metadata ?? {})
       .sort(([left], [right]) => left.localeCompare(right))

@@ -121,6 +121,20 @@ func (client *Client) UpdateRunnerPool(ctx context.Context, name ProfileName, ex
 	return pool, err
 }
 
+// UnsealRunnerPoolBackend lets the next registering Runner seal the pool to its
+// compute backend. The service refuses while any Runner of the pool runs.
+func (client *Client) UnsealRunnerPoolBackend(ctx context.Context, name ProfileName, expectedRevision int64) (RunnerPool, error) {
+	if name == "" {
+		return RunnerPool{}, errors.New("SecondBox RunnerPool name is required")
+	}
+	if expectedRevision < 1 {
+		return RunnerPool{}, errors.New("SecondBox unsealRunnerPoolBackend expected revision must be positive")
+	}
+	var pool RunnerPool
+	err := client.mutateJSON(ctx, "unsealRunnerPoolBackend", map[string]string{"runnerPoolName": name}, expectedRevision, "", nil, &pool)
+	return pool, err
+}
+
 func (client *Client) ListSandboxes(ctx context.Context, options SandboxListOptions) (SandboxPage, error) {
 	query, err := pageQuery(options.PageOptions)
 	if err != nil {
