@@ -46,6 +46,7 @@ type ProfileStore interface {
 type RunnerAdminStore interface {
 	CreateRunnerPool(ctx context.Context, pool contracts.RunnerPool) (contracts.RunnerPool, error)
 	UpdateRunnerPool(ctx context.Context, name string, request contracts.UpdateRunnerPoolRequest, expectedRevision int64, now time.Time) (contracts.RunnerPool, error)
+	UnsealRunnerPoolBackend(ctx context.Context, name string, expectedRevision int64, audit contracts.AuditEvent, now time.Time) (contracts.RunnerPool, error)
 	GetRunnerPool(ctx context.Context, name string) (contracts.RunnerPool, error)
 	ListRunnerPools(ctx context.Context, limit int, cursor string) (contracts.RunnerPoolPage, error)
 	GetRunner(ctx context.Context, runnerID string) (contracts.Runner, error)

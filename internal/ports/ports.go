@@ -33,6 +33,10 @@ var (
 	ErrRunnerPoolExists             = errors.New("SecondBox RunnerPool already exists")
 	ErrRunnerNotFound               = errors.New("SecondBox Runner not found")
 	ErrRunnerPoolUnavailable        = errors.New("SecondBox compatible runner pool unavailable")
+	// ErrRunnerPoolBackendInUse refuses a backend unseal while any Runner of the
+	// pool is not offline, holds an active connection, or owns a non-terminal
+	// Assignment.
+	ErrRunnerPoolBackendInUse = errors.New("SecondBox RunnerPool compute backend is in use")
 	// ErrStartupModeUnsupported reports that the Profile's RunnerPool does not
 	// declare the capability its startup mode requires. It is not retryable:
 	// no Runner in that pool is admissible until an operator either declares the

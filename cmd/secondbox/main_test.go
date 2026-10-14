@@ -48,6 +48,7 @@ func TestResolveCommandAliases(t *testing.T) {
 		{[]string{"profiles", "disable"}, "disableProfile", nil},
 		{[]string{"runner-pools", "create"}, "createRunnerPool", nil},
 		{[]string{"runner-pools", "update"}, "updateRunnerPool", nil},
+		{[]string{"runner-pools", "unseal-backend"}, "unsealRunnerPoolBackend", nil},
 		{[]string{"runners", "list"}, "listRunners", nil},
 		{[]string{"runners", "get"}, "getRunner", nil},
 		{[]string{"sandboxes", "restore"}, "restoreSandboxSnapshot", nil},

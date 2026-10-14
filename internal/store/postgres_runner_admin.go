@@ -126,6 +126,75 @@ func (store *PostgresControlPlaneStore) UpdateRunnerPool(
 	return pool, nil
 }
 
+// UnsealRunnerPoolBackend clears the private compute-backend seal so the next
+// registering Runner seals the pool again, and records the audit event in the
+// same transaction. Registration locks the same pool row, so the guard and a
+// concurrent registration serialize.
+func (store *PostgresControlPlaneStore) UnsealRunnerPoolBackend(
+	ctx context.Context,
+	name string,
+	expectedRevision int64,
+	audit contracts.AuditEvent,
+	now time.Time,
+) (contracts.RunnerPool, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool backend unseal transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	pool, err := scanRunnerPool(tx.QueryRow(ctx, runnerPoolSelect+` WHERE name=$1 FOR UPDATE`, name))
+	if err != nil {
+		return contracts.RunnerPool{}, mapNotFound(err, ports.ErrRunnerPoolNotFound)
+	}
+	if expectedRevision != pool.Revision {
+		return contracts.RunnerPool{}, ports.ErrRevisionConflict
+	}
+	var onlineRunners, connectedRunners, liveAssignments int64
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM secondbox.runners
+			 WHERE pool_name=$1 AND state<>'offline'),
+			(SELECT count(*) FROM secondbox.runners AS runner
+			 JOIN secondbox.runner_connections AS connection ON connection.runner_id=runner.id
+			 WHERE runner.pool_name=$1 AND connection.state='active'),
+			(SELECT count(*) FROM secondbox.assignments AS assignment
+			 JOIN secondbox.runners AS runner ON runner.id=assignment.runner_id
+			 WHERE runner.pool_name=$1
+			   AND (assignment.state NOT IN ('fenced','released','failed_terminal')
+			     -- Fencing that exhausted its retries without termination evidence may have
+			     -- left compute the Runner of another backend cannot clean up.
+			     OR (assignment.state='failed_terminal'
+			       AND assignment.failure_class IN ('fencing','startup_timeout')
+			       AND COALESCE(assignment.release_proof_json->>'terminationEvidenceDigest','')='')))`,
+		name,
+	).Scan(&onlineRunners, &connectedRunners, &liveAssignments); err != nil {
+		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool backend unseal guard failed: %w", err)
+	}
+	if onlineRunners != 0 || connectedRunners != 0 || liveAssignments != 0 {
+		return contracts.RunnerPool{}, fmt.Errorf(
+			"%w: %d Runners not offline, %d active Runner connections, %d non-terminal Assignments",
+			ports.ErrRunnerPoolBackendInUse, onlineRunners, connectedRunners, liveAssignments,
+		)
+	}
+	pool.Revision++
+	pool.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_pools
+		SET backend_kind='',revision=$2,updated_at=$3
+		WHERE name=$1`,
+		pool.Name, pool.Revision, pool.UpdatedAt,
+	); err != nil {
+		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool backend unseal failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.RunnerPool{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool backend unseal commit failed: %w", err)
+	}
+	return pool, nil
+}
+
 // GetRunnerPool returns one administrative placement boundary.
 func (store *PostgresControlPlaneStore) GetRunnerPool(
 	ctx context.Context,

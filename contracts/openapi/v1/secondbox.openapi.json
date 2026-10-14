@@ -2058,6 +2058,72 @@
         }
       }
     },
+    "/v1/runner-pools/{runnerPoolName}:unseal-backend": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TenantRef"
+        },
+        {
+          "$ref": "#/components/parameters/SubjectRef"
+        }
+      ],
+      "post": {
+        "tags": [
+          "RunnerPools"
+        ],
+        "operationId": "unsealRunnerPoolBackend",
+        "description": "Clears the RunnerPool's private compute-backend seal so the next Runner that registers seals the pool to its own backend. Refused with runner_pool_backend_in_use while any Runner of the pool is not offline, still holds a connection, or owns a live Instance. Unsealing an unsealed pool only advances its revision. Every Sandbox homed in the pool changes isolation class when its Runner returns on another backend.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RunnerPoolName"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unsealed RunnerPool.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerPool"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          }
+        }
+      }
+    },
     "/v1/runners": {
       "parameters": [
         {
@@ -10647,6 +10713,7 @@
           "workspace_relocation_target_unavailable",
           "profile_incompatible",
           "profile_switch_snapshots_present",
+          "runner_pool_backend_in_use",
           "quota_exceeded",
           "image_preparation_targets_exceeded",
           "image_preparation_failed",

@@ -600,6 +600,7 @@ const (
 	ProblemCodeWorkspaceRelocationTargetUnavailable ProblemCode = "workspace_relocation_target_unavailable"
 	ProblemCodeProfileIncompatible                  ProblemCode = "profile_incompatible"
 	ProblemCodeProfileSwitchSnapshotsPresent        ProblemCode = "profile_switch_snapshots_present"
+	ProblemCodeRunnerPoolBackendInUse               ProblemCode = "runner_pool_backend_in_use"
 	ProblemCodeQuotaExceeded                        ProblemCode = "quota_exceeded"
 	ProblemCodeImagePreparationTargetsExceeded      ProblemCode = "image_preparation_targets_exceeded"
 	ProblemCodeImagePreparationFailed               ProblemCode = "image_preparation_failed"

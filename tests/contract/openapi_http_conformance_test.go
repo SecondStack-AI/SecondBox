@@ -71,6 +71,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"createRunnerPool":                {"createRunnerPool", "201", "RunnerPool", nil, []string{"ETag"}},
 	"getRunnerPool":                   {"getRunnerPool", "200", "RunnerPool", nil, []string{"ETag"}},
 	"updateRunnerPool":                {"updateRunnerPool", "200", "RunnerPool", []string{"If-Match"}, []string{"ETag"}},
+	"unsealRunnerPoolBackend":         {"mutateRunnerPool", "200", "RunnerPool", []string{"If-Match"}, []string{"ETag"}},
 	"listRunners":                     {"listRunners", "200", "RunnerPage", nil, nil},
 	"getRunner":                       {"getRunner", "200", "Runner", nil, []string{"ETag"}},
 	"getDeploymentTiming":             {"getDeploymentTiming", "200", "DeploymentTimingSummary", nil, nil},
