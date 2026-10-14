@@ -10,6 +10,7 @@ import (
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/store"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -138,7 +139,16 @@ func TestRunnerPoolBackendUnsealSwitchesASameIdentityRunnerToGVisor(t *testing.T
 	}
 	_, err = unseal(1)
 	requireBackendInUse(err, "with a live Assignment")
-	if _, err := databasePool.Exec(t.Context(), `UPDATE secondbox.assignments SET state='released' WHERE runner_id=$1`, runnerID); err != nil {
+	if _, err := databasePool.Exec(t.Context(), `
+		UPDATE secondbox.assignments SET state='failed_terminal',failure_class='fencing'
+		WHERE runner_id=$1`, runnerID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = unseal(1)
+	requireBackendInUse(err, "after fencing exhausted without termination evidence")
+	// A start that failed on the Runner's own report left no compute behind.
+	if _, err := databasePool.Exec(t.Context(), `
+		UPDATE secondbox.assignments SET failure_class='compatibility' WHERE runner_id=$1`, runnerID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,5 +211,64 @@ func TestRunnerPoolBackendUnsealSwitchesASameIdentityRunnerToGVisor(t *testing.T
 	if err := register(firecrackerRunner, firecrackerOther, task4Registration(firecrackerRunner, firecrackerOther, poolName)); err == nil ||
 		!strings.Contains(err.Error(), "sealed to a different compute backend") {
 		t.Fatalf("Firecracker registration into the resealed gVisor pool error = %v", err)
+	}
+}
+
+// TestRunnerPoolBackendUnsealRollsBackWithoutItsAuditEvent proves the seal, the
+// revision and the timestamp change only together with the audit event.
+func TestRunnerPoolBackendUnsealRollsBackWithoutItsAuditEvent(t *testing.T) {
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	poolName := task4ID("unseal-audit-pool")
+	task4InsertRunnerPool(t, poolName, now)
+	databasePool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databasePool.Close)
+	databaseStore, err := store.NewPostgresControlPlaneStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databaseStore.Close)
+	if _, err := databasePool.Exec(t.Context(), `UPDATE secondbox.runner_pools SET backend_kind='firecracker' WHERE name=$1`, poolName); err != nil {
+		t.Fatal(err)
+	}
+	audit := func(id string) contracts.AuditEvent {
+		return contracts.AuditEvent{
+			ID: id, ActorKind: "platform", ActorID: "platform", Action: "runner_pool.backend_unsealed",
+			ResourceKind: "runner_pool", ResourceID: poolName, Outcome: "accepted", RequestID: id, CreatedAt: now,
+		}
+	}
+	collidingID := task4ID("unseal-audit-colliding")
+	if _, err := databasePool.Exec(t.Context(), `
+		INSERT INTO secondbox.audit_events (
+			id,tenant_ref,subject_ref,actor_kind,actor_id,action,resource_kind,resource_id,
+			outcome,request_id,details_json,created_at
+		) VALUES ($1,'secondbox','platform','platform','platform','fixture','fixture',$1,'accepted',$1,'{}',$2)`,
+		collidingID, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(time.Minute)
+	if _, err := databaseStore.UnsealRunnerPoolBackend(t.Context(), poolName, 1, audit(collidingID), later); err == nil {
+		t.Fatal("unseal with a failing audit insert succeeded")
+	}
+	var backendKind string
+	var revision int64
+	var updatedAt time.Time
+	if err := databasePool.QueryRow(t.Context(), `
+		SELECT backend_kind,revision,updated_at FROM secondbox.runner_pools WHERE name=$1`, poolName,
+	).Scan(&backendKind, &revision, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if backendKind != "firecracker" || revision != 1 || !updatedAt.Equal(now) {
+		t.Fatalf("pool after failed unseal: backend=%q revision=%d updatedAt=%s", backendKind, revision, updatedAt)
+	}
+	unsealed, err := databaseStore.UnsealRunnerPoolBackend(t.Context(), poolName, 1, audit(task4ID("unseal-audit-retry")), later)
+	if err != nil {
+		t.Fatalf("retry with the original revision: %v", err)
+	}
+	if unsealed.Revision != 2 || !unsealed.UpdatedAt.Equal(later) {
+		t.Fatalf("unsealed RunnerPool = %#v", unsealed)
 	}
 }

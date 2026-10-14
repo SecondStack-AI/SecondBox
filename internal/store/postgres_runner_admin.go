@@ -160,7 +160,12 @@ func (store *PostgresControlPlaneStore) UnsealRunnerPoolBackend(
 			(SELECT count(*) FROM secondbox.assignments AS assignment
 			 JOIN secondbox.runners AS runner ON runner.id=assignment.runner_id
 			 WHERE runner.pool_name=$1
-			   AND assignment.state NOT IN ('fenced','released','failed_terminal'))`,
+			   AND (assignment.state NOT IN ('fenced','released','failed_terminal')
+			     -- Fencing that exhausted its retries without termination evidence may have
+			     -- left compute the Runner of another backend cannot clean up.
+			     OR (assignment.state='failed_terminal'
+			       AND assignment.failure_class IN ('fencing','startup_timeout')
+			       AND COALESCE(assignment.release_proof_json->>'terminationEvidenceDigest','')='')))`,
 		name,
 	).Scan(&onlineRunners, &connectedRunners, &liveAssignments); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool backend unseal guard failed: %w", err)
