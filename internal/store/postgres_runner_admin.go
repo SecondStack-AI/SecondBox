@@ -127,12 +127,14 @@ func (store *PostgresControlPlaneStore) UpdateRunnerPool(
 }
 
 // UnsealRunnerPoolBackend clears the private compute-backend seal so the next
-// registering Runner seals the pool again. Registration locks the same pool row,
-// so the guard and a concurrent registration serialize.
+// registering Runner seals the pool again, and records the audit event in the
+// same transaction. Registration locks the same pool row, so the guard and a
+// concurrent registration serialize.
 func (store *PostgresControlPlaneStore) UnsealRunnerPoolBackend(
 	ctx context.Context,
 	name string,
 	expectedRevision int64,
+	audit contracts.AuditEvent,
 	now time.Time,
 ) (contracts.RunnerPool, error) {
 	tx, err := store.pool.Begin(ctx)
@@ -178,6 +180,9 @@ func (store *PostgresControlPlaneStore) UnsealRunnerPoolBackend(
 		pool.Name, pool.Revision, pool.UpdatedAt,
 	); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool backend unseal failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.RunnerPool{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool backend unseal commit failed: %w", err)

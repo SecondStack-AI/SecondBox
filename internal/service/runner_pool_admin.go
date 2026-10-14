@@ -117,14 +117,7 @@ func (service *ControlPlaneService) UnsealRunnerPoolBackend(
 	}
 	now := service.now().UTC()
 	audit := service.newAudit(ctx, principal, "runner_pool.backend_unsealed", "runner_pool", name, "", now)
-	unsealed, err := service.store.UnsealRunnerPoolBackend(ctx, name, expectedRevision, now)
-	if err != nil {
-		return contracts.RunnerPool{}, err
-	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
-		return contracts.RunnerPool{}, err
-	}
-	return unsealed, nil
+	return service.store.UnsealRunnerPoolBackend(ctx, name, expectedRevision, audit, now)
 }
 
 // GetRunnerPool returns one administrative placement boundary.

@@ -376,7 +376,9 @@ Both backends attach the same raw ext4 WorkspaceStore images, so a Runner identi
 backend and keep its Sandboxes and Workspaces. The pool seal makes this an explicit operator
 step:
 
-1. Drain the Runners of the pool until no Instance runs, then stop every one of them.
+1. Drain the Runners of the pool until no Instance runs, then stop every one of them. Stop the
+   whole Runner process tree, such as the Compose service or systemd unit: Instances are its
+   child processes, and the Runner of the other backend cannot clean up compute that outlives it.
 2. Read the pool revision and clear the seal:
    `secondbox runner-pools unseal-backend --path runnerPoolName=<pool> --header 'If-Match="revision-<n>"'`.
    It refuses with `409 runner_pool_backend_in_use` while a Runner of the pool is connected or
