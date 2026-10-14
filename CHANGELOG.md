@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.26.0 - 2026-10-14
+
+`secondbox-deploy` deploys gVisor Runners for Linux amd64 hosts without KVM, same-host in Compose or remote, and every `[[runners]]` declaration now states `compute_backend`. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles and standard Profile revisions are unchanged. Add `compute_backend = 'firecracker'` to each existing Runner declaration before updating. A same-host Compose Runner now honours `storage_admission_mode`. See the [v0.26.0 release notes](docs/releases/v0.26.0.md).
+
 ### Upgrade notes
 
 - **Every `[[runners]]` declaration must state `compute_backend`.** Add `compute_backend = 'firecracker'` to each existing declaration before updating; validation refuses a declaration without it. Guided installs regenerate their manifest during the update and need no edit.
