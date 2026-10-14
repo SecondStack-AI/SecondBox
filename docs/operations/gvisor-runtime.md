@@ -382,8 +382,10 @@ step:
 2. Read the pool revision and clear the seal:
    `secondbox runner-pools unseal-backend --path runnerPoolName=<pool> --header 'If-Match="revision-<n>"'`.
    It refuses with `409 runner_pool_backend_in_use` while a Runner of the pool is connected, owns
-   a live Instance, or has a fence that exhausted its retries without termination evidence. Start
-   that Runner on its old backend so it fences the Instance, then stop it again.
+   a live Instance, or has a fence that exhausted its retries without termination evidence. A
+   restart does not retry an exhausted fence: start that Runner on its old backend, stop each
+   affected Sandbox through the lifecycle API and wait for its Operation to succeed, then stop the
+   Runner again.
 3. In each `[[runners]]` declaration change `compute_backend` and replace the backend settings
    (`firecracker_*` for `gvisor_*`, or the reverse), and set `deployment.runner_image` and the
    backend assets as the install path above requires. Keep `runner_id`, the identity
