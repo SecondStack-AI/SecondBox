@@ -376,21 +376,25 @@ Both backends attach the same raw ext4 WorkspaceStore images, so a Runner identi
 backend and keep its Sandboxes and Workspaces. The pool seal makes this an explicit operator
 step:
 
-1. Drain the Runners of the pool until no Instance runs, then stop every one of them. Stop the
-   whole Runner process tree, such as the Compose service or systemd unit: Instances are its
-   child processes, and the Runner of the other backend cannot clean up compute that outlives it.
-2. Read the pool revision and clear the seal:
+1. Stop new work, then stop every Sandbox homed in the pool through the lifecycle API and wait
+   for its Operation, while the Runners are still connected. A stopping Runner disconnects before
+   it ends its Instances, so an Instance it leaves running stays fencing until the same Runner
+   reconnects on its old backend.
+2. Stop every Runner of the pool. Stop the whole Runner process tree, such as the Compose service
+   or systemd unit: Instances are its child processes, and the Runner of the other backend cannot
+   clean up compute that outlives it.
+3. Read the pool revision and clear the seal:
    `secondbox runner-pools unseal-backend --path runnerPoolName=<pool> --header 'If-Match="revision-<n>"'`.
    It refuses with `409 runner_pool_backend_in_use` while a Runner of the pool is connected, owns
    a live Instance, or has a fence that exhausted its retries without termination evidence. A
    restart does not retry an exhausted fence: start that Runner on its old backend, stop each
    affected Sandbox through the lifecycle API and wait for its Operation to succeed, then stop the
    Runner again.
-3. In each `[[runners]]` declaration change `compute_backend` and replace the backend settings
+4. In each `[[runners]]` declaration change `compute_backend` and replace the backend settings
    (`firecracker_*` for `gvisor_*`, or the reverse), and set `deployment.runner_image` and the
    backend assets as the install path above requires. Keep `runner_id`, the identity
    directories, and `state_host_directory`.
-4. Deploy and start the Runners. The first Runner to register seals the pool to its backend.
+5. Deploy and start the Runners. The first Runner to register seals the pool to its backend.
 
 Every Sandbox homed in the pool keeps its ID and Workspace but now runs in the other isolation
 class. gVisor is amd64 only, and it has no snapshot resume, so a Sandbox pinned to a
