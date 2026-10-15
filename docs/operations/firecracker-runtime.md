@@ -214,6 +214,9 @@ guest-to-host input, forwarding, and IPv6 remain denied; no redirect or
 service-port exception is installed. Each bridge owns separate firewall
 chains so applying or removing one Runner network cannot alter another
 Runner's baseline on the same host network namespace.
+Every apply moves the Runner's `INPUT` and `FORWARD` jumps to the top of those chains, also when they already exist.
+dockerd re-inserts its own jumps at the top whenever it starts, so after a Docker daemon restart the Runner restart puts its jumps back above Docker's isolation rules.
+With Docker `live-restore`, a daemon restart does not restart the Runner; restart the Runner container afterwards.
 
 `runner/scripts/microvm-network-namespace-test.sh` exercises the real bridge and firewall script in isolated Linux network namespaces and proves that an unassigned host port remains unreachable.
 

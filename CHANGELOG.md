@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- A restarted Firecracker Runner moves its host `INPUT` and `FORWARD` jumps back above Docker's. Before, a Docker daemon restart re-inserted Docker's jumps above the surviving Runner jumps, and on a same-host Runner whose gateway is on an internal Docker network, Docker's isolation rule then dropped all guest egress to the gateway until the jumps were moved by hand ([#228](https://github.com/SecondStack-AI/SecondBox/issues/228)).
+
 ## 0.27.0 - 2026-10-14
 
 A RunnerPool's compute-backend seal can be cleared, so an installation can switch its Runners between Firecracker and gVisor in place and keep its Sandboxes and Workspaces. Deployments from v0.14.0 onward update in place with no database migration; Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged, and public API v1 gains one platform operation. See the [v0.27.0 release notes](docs/releases/v0.27.0.md).
