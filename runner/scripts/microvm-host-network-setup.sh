@@ -90,12 +90,6 @@ for command_name in ip iptables ip6tables sysctl sync; do
   }
 done
 
-iptables_insert() {
-  local chain="$1"
-  shift
-  iptables -t filter -C "$chain" "$@" >/dev/null 2>&1 ||
-    iptables -t filter -I "$chain" 1 "$@"
-}
 
 iptables_add() {
   local chain="$1"
@@ -110,6 +104,18 @@ iptables_delete() {
   while iptables -t filter -C "$chain" "$@" >/dev/null 2>&1; do
     iptables -t filter -D "$chain" "$@"
   done
+}
+
+# dockerd re-inserts its own jumps at the top of INPUT and FORWARD every time it
+# starts, so a jump that survived a daemon restart can sit below Docker's
+# isolation rules. Re-seat the Runner's jumps at the top on every apply instead
+# of keeping one that merely exists. The Runner is not running during apply, so
+# no guest traffic crosses the short gap.
+iptables_insert_first() {
+  local chain="$1"
+  shift
+  iptables_delete "$chain" "$@"
+  iptables -t filter -I "$chain" 1 "$@"
 }
 
 iptables_nat_add() {
@@ -127,12 +133,6 @@ iptables_nat_delete() {
   done
 }
 
-ip6tables_insert() {
-  local chain="$1"
-  shift
-  ip6tables -t filter -C "$chain" "$@" >/dev/null 2>&1 ||
-    ip6tables -t filter -I "$chain" 1 "$@"
-}
 
 ip6tables_add() {
   local chain="$1"
@@ -147,6 +147,13 @@ ip6tables_delete() {
   while ip6tables -t filter -C "$chain" "$@" >/dev/null 2>&1; do
     ip6tables -t filter -D "$chain" "$@"
   done
+}
+
+ip6tables_insert_first() {
+  local chain="$1"
+  shift
+  ip6tables_delete "$chain" "$@"
+  ip6tables -t filter -I "$chain" 1 "$@"
 }
 
 fingerprint() {
@@ -196,7 +203,7 @@ install_firewall() {
   done
   iptables_add "$ipv4_input_chain" -m comment --comment secondbox-runner-host-input-deny -j DROP
   for interface_name in "$bridge" "$tap_pattern"; do
-    iptables_insert INPUT -i "$interface_name" -m comment --comment secondbox-runner-host-input -j "$ipv4_input_chain"
+    iptables_insert_first INPUT -i "$interface_name" -m comment --comment secondbox-runner-host-input -j "$ipv4_input_chain"
   done
 
   iptables -N "$ipv4_forward_chain" >/dev/null 2>&1 || true
@@ -206,8 +213,8 @@ install_firewall() {
     -m comment --comment secondbox-sandbox-policy-allow -j ACCEPT
   iptables_add "$ipv4_forward_chain" -m comment --comment secondbox-sandbox-forward-deny -j DROP
   for interface_name in "$bridge" "$tap_pattern"; do
-    iptables_insert FORWARD -i "$interface_name" -m comment --comment secondbox-sandbox-forward-out -j "$ipv4_forward_chain"
-    iptables_insert FORWARD -o "$interface_name" -m comment --comment secondbox-sandbox-forward-in -j "$ipv4_forward_chain"
+    iptables_insert_first FORWARD -i "$interface_name" -m comment --comment secondbox-sandbox-forward-out -j "$ipv4_forward_chain"
+    iptables_insert_first FORWARD -o "$interface_name" -m comment --comment secondbox-sandbox-forward-in -j "$ipv4_forward_chain"
   done
   iptables_nat_add POSTROUTING -s "$guest_cidr" ! -d "$guest_cidr" \
     -m connmark --mark "$policy_connection_mark" \
@@ -217,9 +224,9 @@ install_firewall() {
   ip6tables -F "$ipv6_chain"
   ip6tables_add "$ipv6_chain" -m comment --comment secondbox-sandbox-ipv6-deny -j DROP
   for interface_name in "$bridge" "$tap_pattern"; do
-    ip6tables_insert INPUT -i "$interface_name" -m comment --comment secondbox-sandbox-ipv6-input -j "$ipv6_chain"
-    ip6tables_insert FORWARD -i "$interface_name" -m comment --comment secondbox-sandbox-ipv6-forward-out -j "$ipv6_chain"
-    ip6tables_insert FORWARD -o "$interface_name" -m comment --comment secondbox-sandbox-ipv6-forward-in -j "$ipv6_chain"
+    ip6tables_insert_first INPUT -i "$interface_name" -m comment --comment secondbox-sandbox-ipv6-input -j "$ipv6_chain"
+    ip6tables_insert_first FORWARD -i "$interface_name" -m comment --comment secondbox-sandbox-ipv6-forward-out -j "$ipv6_chain"
+    ip6tables_insert_first FORWARD -o "$interface_name" -m comment --comment secondbox-sandbox-ipv6-forward-in -j "$ipv6_chain"
   done
 }
 

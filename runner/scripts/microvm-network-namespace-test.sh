@@ -74,6 +74,24 @@ ip -n "$host_ns" link show "$bridge" >/dev/null
 ip -n "$host_ns" -4 addr show dev "$bridge" | grep -qw "$bridge_cidr"
 [[ "$(ip netns exec "$host_ns" sysctl -n net.ipv4.ip_forward)" == 1 ]]
 
+# Model a dockerd restart: Docker re-inserts its jumps above the surviving
+# Runner jumps. The next apply must put the Runner jumps back on top.
+for firewall in iptables ip6tables; do
+  ip netns exec "$host_ns" "$firewall" -N SBX_TEST_DOCKER
+  ip netns exec "$host_ns" "$firewall" -I FORWARD 1 -j SBX_TEST_DOCKER
+done
+network_setup apply
+for firewall in iptables ip6tables; do
+  leading="$(ip netns exec "$host_ns" "$firewall" -S FORWARD | grep -v '^-P' | head -n 4)"
+  if [[ "$(grep -c -- '--comment secondbox-sandbox-' <<<"$leading")" != 4 ]]; then
+    echo "SecondBox runner $firewall FORWARD jumps do not lead after re-apply:" >&2
+    ip netns exec "$host_ns" "$firewall" -S FORWARD >&2
+    exit 1
+  fi
+  ip netns exec "$host_ns" "$firewall" -D FORWARD -j SBX_TEST_DOCKER
+  ip netns exec "$host_ns" "$firewall" -X SBX_TEST_DOCKER
+done
+
 ip link add "$host_veth" type veth peer name "$guest_veth"
 ip link set "$host_veth" netns "$host_ns"
 ip link set "$guest_veth" netns "$guest_ns"

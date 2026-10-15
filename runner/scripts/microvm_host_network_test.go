@@ -50,28 +50,29 @@ printf '%s\n' "$*" >> "${FAKE_FIREWALL_LOG}.${name}"
 args=" $* "
 if [[ "$args" == *" -C "* ]]; then
   key="$(printf '%s' "$args" | xargs)"
-  grep -Fxq "$key" "$state"
+  grep -Fxq -- "$key" "$state"
   exit
 fi
 if [[ "$args" == *" -F "* ]]; then
   chain="$(printf '%s' "$args" | sed -E 's/.* -F ([^ ]+).*/\1/')"
-  grep -Fv " -C $chain " "$state" > "$state.tmp" || true
+  grep -Fv -- " -C $chain " "$state" > "$state.tmp" || true
   mv "$state.tmp" "$state"
   exit 0
 fi
 if [[ "$args" == *" -I "* ]]; then
   key="$(printf '%s' "$args" | sed -E 's/ -I ([^ ]+) 1 / -C \1 /' | xargs)"
-  grep -Fxq "$key" "$state" || printf '%s\n' "$key" >> "$state"
+  { printf '%s\n' "$key"; cat "$state"; } > "$state.tmp"
+  mv "$state.tmp" "$state"
   exit 0
 fi
 if [[ "$args" == *" -A "* ]]; then
   key="$(printf '%s' "$args" | sed 's/ -A / -C /' | xargs)"
-  grep -Fxq "$key" "$state" || printf '%s\n' "$key" >> "$state"
+  grep -Fxq -- "$key" "$state" || printf '%s\n' "$key" >> "$state"
   exit 0
 fi
 if [[ "$args" == *" -D "* ]]; then
   key="$(printf '%s' "$args" | sed 's/ -D / -C /' | xargs)"
-  grep -Fxv "$key" "$state" > "$state.tmp" || true
+  grep -Fxv -- "$key" "$state" > "$state.tmp" || true
   mv "$state.tmp" "$state"
   exit 0
 fi
@@ -140,6 +141,18 @@ exit 0
 	}
 	runNetworkScript(t, env, "apply", true)
 	assertFileContains(t, firewallState+".iptables", "-C INPUT -i sbx0 -m comment --comment secondbox-runner-host-input -j SBX_INPUT_sbx0")
+
+	// dockerd re-inserts its jumps at the top of FORWARD when it restarts and
+	// leaves the surviving Runner jumps below them. The next apply must move the
+	// Runner jumps back above Docker's instead of accepting them where they are.
+	dockerJump := "-t filter -C FORWARD -j DOCKER-FORWARD"
+	for _, path := range []string{firewallState + ".iptables", firewallState + ".ip6tables"} {
+		prependLine(t, path, dockerJump)
+	}
+	runNetworkScript(t, env, "apply", true)
+	for _, path := range []string{firewallState + ".iptables", firewallState + ".ip6tables"} {
+		assertRunnerJumpsLead(t, path, "FORWARD", dockerJump)
+	}
 
 	logBefore := firewallLogSize(t, firewallLog)
 	changedEnv := envWith(env, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR=172.31.0.1/24")
@@ -254,6 +267,40 @@ func assertFileContains(t *testing.T, path, want string) {
 	}
 	if !strings.Contains(string(data), want) {
 		t.Fatalf("%s does not contain %q:\n%s", path, want, data)
+	}
+}
+
+func prependLine(t *testing.T, path, line string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append([]byte(line+"\n"), data...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertRunnerJumpsLead(t *testing.T, path, chain, foreignRule string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runnerJumps, foreignSeen := 0, false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		switch {
+		case line == foreignRule:
+			foreignSeen = true
+		case strings.HasPrefix(line, "-t filter -C "+chain+" ") && strings.Contains(line, "--comment secondbox-"):
+			if foreignSeen {
+				t.Fatalf("%s: Runner jump %q follows %q:\n%s", path, line, foreignRule, data)
+			}
+			runnerJumps++
+		}
+	}
+	if !foreignSeen || runnerJumps != 4 {
+		t.Fatalf("%s: want 4 Runner %s jumps above %q, got %d:\n%s", path, chain, foreignRule, runnerJumps, data)
 	}
 }
 
