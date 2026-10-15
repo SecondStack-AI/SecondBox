@@ -25,8 +25,8 @@ const (
 	workspaceReclaimMinimumBytes = 1 << 20
 	// The guest controls how many free ranges exist, and every punch is a host
 	// filesystem transaction on the runner's command path, so one pass punches
-	// at most this many. Ranges that are already holes do not count, so the
-	// next stop continues where this one ended.
+	// at most this many. Ranges with no host extent, written or unwritten, do
+	// not count, so the next stop continues where this one ended.
 	workspaceReclaimMaximumPunches = 4096
 
 	workspaceReclaimRelocationSealed     = "relocation_sealed"
@@ -99,7 +99,7 @@ func reclaimFreeImageBlocks(
 		return result, nil
 	}
 	if err := punchWorkspaceReclaimRanges(
-		ctx, image, ranges, punch, workspaceReclaimMaximumPunches, &result,
+		ctx, image, ranges, platformRangeAllocated, punch, workspaceReclaimMaximumPunches, &result,
 	); err != nil {
 		return freeBlockReclaim{}, err
 	}
@@ -110,11 +110,12 @@ func reclaimFreeImageBlocks(
 }
 
 // punchWorkspaceReclaimRanges punches, in offset order, up to limit ranges that
-// still hold host data.
+// still hold host allocation.
 func punchWorkspaceReclaimRanges(
 	ctx context.Context,
 	image *os.File,
 	ranges []ext4ByteRange,
+	allocated func(*os.File, int64, int64) (bool, error),
 	punch func(*os.File, int64, int64) error,
 	limit int,
 	result *freeBlockReclaim,
@@ -123,14 +124,11 @@ func punchWorkspaceReclaimRanges(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		data, err := unix.Seek(int(image.Fd()), free.Offset, unix.SEEK_DATA)
-		if errors.Is(err, unix.ENXIO) {
-			return nil
-		}
+		held, err := allocated(image, free.Offset, free.Length)
 		if err != nil {
 			return fmt.Errorf("SecondBox WorkspaceStore locate allocated Workspace blocks: %w", err)
 		}
-		if data >= free.Offset+free.Length {
+		if !held {
 			continue
 		}
 		if result.Ranges == limit {

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func qualifiedMke2fsStore(t *testing.T, capacity int64) *Store {
@@ -152,5 +154,43 @@ func TestQualifiedGenerationAdvanceReclaimsFreedBlocksAndKeepsSnapshot(t *testin
 	}
 	if !bytes.Equal(debugfsDump(t, cloneImage, "/snapshotted.bin"), snapshotted.data) {
 		t.Fatal("Workspace cloned from the Snapshot lost its file")
+	}
+}
+
+// TestQualifiedRangeAllocationCountsUnwrittenExtents covers the host state that
+// SEEK_DATA reports as a hole although the meters charge it: an unwritten
+// extent, as FALLOC_FL_ZERO_RANGE from a loop device's write-zeroes leaves.
+func TestQualifiedRangeAllocationCountsUnwrittenExtents(t *testing.T) {
+	parent := strings.TrimSpace(os.Getenv("SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM"))
+	if parent == "" {
+		if os.Getenv("SECONDBOX_REQUIRE_WORKSPACESTORE_LINUX") == "1" {
+			t.Fatal("SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM is required")
+		}
+		t.Skip("SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM names no reflink filesystem")
+	}
+	file, err := os.CreateTemp(parent, ".secondbox-workspacestore-unwritten-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(file.Name()) })
+	defer file.Close()
+	const length = 4 << 20
+	if err := unix.Fallocate(int(file.Fd()), 0, 0, length); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unix.Seek(int(file.Fd()), 0, unix.SEEK_DATA); !errors.Is(err, unix.ENXIO) {
+		t.Logf("SEEK_DATA on an unwritten extent returned %v; the fixture still checks FIEMAP", err)
+	}
+	if allocated, err := platformRangeAllocated(file, 1<<20, 1<<20); err != nil || !allocated {
+		t.Fatalf("unwritten extent allocation = %v, %v", allocated, err)
+	}
+	if err := platformPunchHole(file, 1<<20, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if allocated, err := platformRangeAllocated(file, 1<<20, 1<<20); err != nil || allocated {
+		t.Fatalf("punched range allocation = %v, %v", allocated, err)
+	}
+	if allocated, err := platformRangeAllocated(file, 2<<20, 1<<20); err != nil || !allocated {
+		t.Fatalf("remaining unwritten extent allocation = %v, %v", allocated, err)
 	}
 }

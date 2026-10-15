@@ -588,8 +588,11 @@ func TestPunchWorkspaceReclaimRangesBoundsEachPassAndResumes(t *testing.T) {
 		ranges = append(ranges, ext4ByteRange{Offset: int64(index) * 2 << 20, Length: 1 << 20})
 	}
 	var punched []int64
+	holes := map[int64]bool{}
+	allocated := func(_ *os.File, offset int64, _ int64) (bool, error) { return !holes[offset], nil }
 	punch := func(image *os.File, offset int64, length int64) error {
 		punched = append(punched, offset)
+		holes[offset] = true
 		return platformPunchHole(image, offset, length)
 	}
 	for pass, want := range []struct {
@@ -602,7 +605,7 @@ func TestPunchWorkspaceReclaimRangesBoundsEachPassAndResumes(t *testing.T) {
 		{reason: "", ranges: 0},
 	} {
 		var result freeBlockReclaim
-		if err := punchWorkspaceReclaimRanges(t.Context(), file, ranges, punch, 3, &result); err != nil {
+		if err := punchWorkspaceReclaimRanges(t.Context(), file, ranges, allocated, punch, 3, &result); err != nil {
 			t.Fatal(err)
 		}
 		if result.Reason != want.reason || result.Ranges != want.ranges {
@@ -622,7 +625,7 @@ func TestPunchWorkspaceReclaimRangesBoundsEachPassAndResumes(t *testing.T) {
 
 	full := func(*os.File, int64, int64) error { return syscall.ENOSPC }
 	var exhausted freeBlockReclaim
-	if err := punchWorkspaceReclaimRanges(t.Context(), file, []ext4ByteRange{{Offset: 1 << 20, Length: 1 << 20}}, full, 3, &exhausted); err != nil {
+	if err := punchWorkspaceReclaimRanges(t.Context(), file, []ext4ByteRange{{Offset: 1 << 20, Length: 1 << 20}}, allocated, full, 3, &exhausted); err != nil {
 		t.Fatalf("a full host filesystem failed the pass: %v", err)
 	}
 	if exhausted.Reason != workspaceReclaimHostStorageExhausted || exhausted.Ranges != 0 {
@@ -630,7 +633,7 @@ func TestPunchWorkspaceReclaimRangesBoundsEachPassAndResumes(t *testing.T) {
 	}
 	broken := func(*os.File, int64, int64) error { return syscall.EIO }
 	var failed freeBlockReclaim
-	if err := punchWorkspaceReclaimRanges(t.Context(), file, []ext4ByteRange{{Offset: 1 << 20, Length: 1 << 20}}, broken, 3, &failed); err == nil {
+	if err := punchWorkspaceReclaimRanges(t.Context(), file, []ext4ByteRange{{Offset: 1 << 20, Length: 1 << 20}}, allocated, broken, 3, &failed); err == nil {
 		t.Fatal("an I/O error was not returned")
 	}
 }
