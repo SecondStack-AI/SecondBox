@@ -16,6 +16,7 @@ type platformDriver interface {
 	LinkDescriptor(*os.File, string) error
 	ResetSparse(*os.File, int64) error
 	CompactSparse(*os.File, int64) error
+	PunchHole(file *os.File, offset int64, length int64) error
 	TryLock(*os.File) error
 	SyncDirectory(string) error
 	ChildDescriptorPath(int) string
@@ -60,3 +61,7 @@ func (injectedDriver) ResetSparse(file *os.File, capacity int64) error {
 }
 
 func (injectedDriver) CompactSparse(*os.File, int64) error { return nil }
+
+func (injectedDriver) PunchHole(file *os.File, offset int64, length int64) error {
+	return platformPunchHole(file, offset, length)
+}

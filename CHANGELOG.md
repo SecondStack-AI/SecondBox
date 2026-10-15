@@ -5,6 +5,7 @@
 ### Fixed
 
 - A restarted Firecracker Runner moves its host `INPUT` and `FORWARD` jumps back above Docker's. Before, a Docker daemon restart re-inserted Docker's jumps above the surviving Runner jumps, and on a same-host Runner whose gateway is on an internal Docker network, Docker's isolation rule then dropped all guest egress to the gateway until the jumps were moved by hand ([#228](https://github.com/SecondStack-AI/SecondBox/issues/228)).
+- Stopping a Sandbox releases the host blocks behind files its guest deleted, so a Workspace's `allocatedBytes` and `exclusiveBytes` fall after files are deleted. Before, freed ext4 blocks stayed allocated in the Workspace image indefinitely on both Firecracker and gVisor, and storage meters built on `exclusiveBytes` kept charging them ([SecondStack-AI/SecondStack#1441](https://github.com/SecondStack-AI/SecondStack/issues/1441)). Blocks still shared with a Snapshot remain held by the Snapshot.
 
 ## 0.27.0 - 2026-10-14
 

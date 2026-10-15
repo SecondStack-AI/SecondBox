@@ -208,6 +208,16 @@ func (linuxDriver) ResetSparse(file *os.File, capacity int64) error {
 
 func (linuxDriver) CompactSparse(*os.File, int64) error { return nil }
 
+func (linuxDriver) PunchHole(file *os.File, offset int64, length int64) error {
+	return platformPunchHole(file, offset, length)
+}
+
+// platformPunchHole deallocates a byte range without changing the file size.
+// The range then reads as zeros.
+func platformPunchHole(file *os.File, offset int64, length int64) error {
+	return unix.Fallocate(int(file.Fd()), unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, offset, length)
+}
+
 func (linuxDriver) TryLock(file *os.File) error     { return platformTryLock(file) }
 func (linuxDriver) SyncDirectory(path string) error { return platformSyncDirectory(path) }
 func (linuxDriver) ChildDescriptorPath(descriptor int) string {

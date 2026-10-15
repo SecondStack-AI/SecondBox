@@ -38,7 +38,14 @@ until the VM and every host-side user are stopped. A manifest selected by atomic
 rename names the current writable image and generation.
 
 An ordinary stop first detaches compute, then durably advances the local
-manifest generation. PostgreSQL advances the Sandbox and Workspace generations
+manifest generation. Before advancing it, and with the writer lock held, the
+runner releases the host allocation behind ext4 blocks the guest has freed: it
+reads the stopped image's block bitmaps and punches holes over free runs of at
+least 1 MiB, aligned inward to 64 KiB. Punching drops only this image's
+reference, so a Snapshot sharing those blocks keeps them. The pass punches
+nothing when the filesystem awaits journal recovery, records errors, uses an
+unsupported layout, or fails a checksum or free-count check; the next clean stop
+retries. PostgreSQL advances the Sandbox and Workspace generations
 only after recording the matching receipt. Replays converge on the same receipt,
 and start remains blocked while local and database generations disagree.
 
