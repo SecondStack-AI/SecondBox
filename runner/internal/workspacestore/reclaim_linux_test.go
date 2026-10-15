@@ -102,19 +102,26 @@ func TestQualifiedGenerationAdvanceReclaimsFreedBlocksAndKeepsSnapshot(t *testin
 	before := store.observeWorkspaceStorage(workspaceID)
 	advance("reclaim-stop-2", 2)
 	after := store.observeWorkspaceStorage(workspaceID)
-	if before.AllocatedBytes == nil || before.ExclusiveBytes == nil ||
-		after.AllocatedBytes == nil || after.ExclusiveBytes == nil || after.Generation != 3 {
+	if before.AllocatedBytes == nil || after.AllocatedBytes == nil || after.Generation != 3 {
 		t.Fatalf("storage observations are incomplete: before=%+v after=%+v", before, after)
 	}
-	t.Logf(
-		"generation advance reclaim: allocatedBytes %d -> %d, exclusiveBytes %d -> %d",
-		*before.AllocatedBytes, *after.AllocatedBytes, *before.ExclusiveBytes, *after.ExclusiveBytes,
-	)
+	t.Logf("generation advance reclaim: allocatedBytes %d -> %d", *before.AllocatedBytes, *after.AllocatedBytes)
 	if released := *before.AllocatedBytes - *after.AllocatedBytes; released < 46<<20 {
 		t.Fatalf("allocated bytes fell by %d, want the 48 MiB of freed blocks", released)
 	}
-	if released := *before.ExclusiveBytes - *after.ExclusiveBytes; released < 30<<20 {
-		t.Fatalf("exclusive bytes fell by %d, want the 32 MiB exclusive scratch copies", released)
+	// A compressing Btrfs encodes some extents, and the meter then reports no
+	// exclusive bytes at all; the uncompressed (XFS, or Btrfs nocow or
+	// nocompress) qualification roots measure them.
+	switch {
+	case before.ExclusiveBytes != nil && after.ExclusiveBytes != nil:
+		t.Logf("generation advance reclaim: exclusiveBytes %d -> %d", *before.ExclusiveBytes, *after.ExclusiveBytes)
+		if released := *before.ExclusiveBytes - *after.ExclusiveBytes; released < 30<<20 {
+			t.Fatalf("exclusive bytes fell by %d, want the 32 MiB exclusive scratch copies", released)
+		}
+	case before.ExclusiveReason == "exclusive_extents_encoded" || after.ExclusiveReason == "exclusive_extents_encoded":
+		t.Logf("exclusive bytes unavailable on an encoding filesystem: before=%s after=%s", before.ExclusiveReason, after.ExclusiveReason)
+	default:
+		t.Fatalf("exclusive bytes unavailable: before=%+v after=%+v", before, after)
 	}
 	requireCleanExt4(t, image)
 	if !bytes.Equal(debugfsDump(t, image, "/retained.bin"), retained.data) {

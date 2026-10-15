@@ -1,12 +1,15 @@
 package workspacestore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -20,12 +23,20 @@ const (
 	// the host extent splits, that one fragmented or hostile guest filesystem
 	// can cause per reclaim.
 	workspaceReclaimMinimumBytes = 1 << 20
+	// The guest controls how many free ranges exist, and every punch is a host
+	// filesystem transaction on the runner's command path, so one pass punches
+	// at most this many. Ranges that are already holes do not count, so the
+	// next stop continues where this one ended.
+	workspaceReclaimMaximumPunches = 4096
 
-	workspaceReclaimRelocationSealed = "relocation_sealed"
+	workspaceReclaimRelocationSealed     = "relocation_sealed"
+	workspaceReclaimPunchLimitReached    = "punch_limit_reached"
+	workspaceReclaimHostStorageExhausted = "host_storage_exhausted"
 )
 
 // freeBlockReclaim reports one pass. Reason is empty when the pass punched
-// every eligible free range and otherwise names why it punched nothing.
+// every eligible free range; otherwise it names why the pass punched nothing
+// or stopped early, leaving the remaining ranges to the next stop.
 type freeBlockReclaim struct {
 	Reason          string
 	Ranges          int
@@ -37,14 +48,16 @@ type freeBlockReclaim struct {
 // reclaimFreeBlocks releases the host allocation behind ext4 blocks that the
 // guest has freed, which the guest cannot do itself: the pinned VMM offers no
 // discard and the image is never mounted with it. The caller must hold the
-// Workspace writer lock. Every compute holder shares that lock's open file
-// description, so holding it proves no guest or host helper can still write
-// the image and its on-disk ext4 allocation state is final.
+// Workspace writer lock. The gVisor and Microsandbox helpers inherit that
+// lock's open file description, and the Firecracker attachment releases it
+// only after the jailer supervisor has reaped the VMM, so holding it proves no
+// guest or host helper can still write the image and its on-disk ext4
+// allocation state is final.
 //
 // Punching only drops this image's reference to an extent. A Snapshot or
 // template that shares the extent keeps its bytes, and the extent becomes
 // exclusive to that holder rather than being copied or counted twice.
-func (store *Store) reclaimFreeBlocks(workspaceID string, manifest currentManifest) error {
+func (store *Store) reclaimFreeBlocks(ctx context.Context, workspaceID string, manifest currentManifest) error {
 	if manifest.RelocationSealed {
 		logFreeBlockReclaim(workspaceID, freeBlockReclaim{Reason: workspaceReclaimRelocationSealed}, 0)
 		return nil
@@ -58,7 +71,7 @@ func (store *Store) reclaimFreeBlocks(workspaceID string, manifest currentManife
 		return fmt.Errorf("SecondBox WorkspaceStore open image for freed-block reclaim: %w", err)
 	}
 	startedAt := time.Now()
-	result, err := reclaimFreeImageBlocks(image, manifest.CapacityBytes, store.driver.PunchHole)
+	result, err := reclaimFreeImageBlocks(ctx, image, manifest.CapacityBytes, store.driver.PunchHole)
 	if closeErr := image.Close(); err != nil || closeErr != nil {
 		return errors.Join(err, closeErr)
 	}
@@ -67,6 +80,7 @@ func (store *Store) reclaimFreeBlocks(workspaceID string, manifest currentManife
 }
 
 func reclaimFreeImageBlocks(
+	ctx context.Context,
 	image *os.File,
 	capacityBytes int64,
 	punch func(*os.File, int64, int64) error,
@@ -76,7 +90,7 @@ func reclaimFreeImageBlocks(
 		return freeBlockReclaim{}, err
 	}
 	result := freeBlockReclaim{AllocatedBefore: before, AllocatedAfter: before}
-	ranges, reason, err := ext4FreeRanges(image, capacityBytes)
+	ranges, reason, err := ext4FreeRanges(image, capacityBytes, alignWorkspaceReclaimRange)
 	if err != nil {
 		return freeBlockReclaim{}, err
 	}
@@ -84,14 +98,10 @@ func reclaimFreeImageBlocks(
 		result.Reason = reason
 		return result, nil
 	}
-	for _, free := range alignWorkspaceReclaimRanges(ranges) {
-		if err := punch(image, free.Offset, free.Length); err != nil {
-			return freeBlockReclaim{}, fmt.Errorf(
-				"SecondBox WorkspaceStore punch freed Workspace blocks: %w", err,
-			)
-		}
-		result.Ranges++
-		result.PunchedBytes += free.Length
+	if err := punchWorkspaceReclaimRanges(
+		ctx, image, ranges, punch, workspaceReclaimMaximumPunches, &result,
+	); err != nil {
+		return freeBlockReclaim{}, err
 	}
 	if result.AllocatedAfter, err = allocatedImageBytes(image, capacityBytes); err != nil {
 		return freeBlockReclaim{}, err
@@ -99,19 +109,59 @@ func reclaimFreeImageBlocks(
 	return result, nil
 }
 
-// alignWorkspaceReclaimRanges shrinks each free range to whole alignment units
-// and drops ranges below the minimum punch length.
-func alignWorkspaceReclaimRanges(ranges []ext4ByteRange) []ext4ByteRange {
-	aligned := make([]ext4ByteRange, 0, len(ranges))
+// punchWorkspaceReclaimRanges punches, in offset order, up to limit ranges that
+// still hold host data.
+func punchWorkspaceReclaimRanges(
+	ctx context.Context,
+	image *os.File,
+	ranges []ext4ByteRange,
+	punch func(*os.File, int64, int64) error,
+	limit int,
+	result *freeBlockReclaim,
+) error {
 	for _, free := range ranges {
-		start := (free.Offset + workspaceReclaimAlignmentBytes - 1) /
-			workspaceReclaimAlignmentBytes * workspaceReclaimAlignmentBytes
-		end := (free.Offset + free.Length) / workspaceReclaimAlignmentBytes * workspaceReclaimAlignmentBytes
-		if end-start >= workspaceReclaimMinimumBytes {
-			aligned = append(aligned, ext4ByteRange{Offset: start, Length: end - start})
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+		data, err := unix.Seek(int(image.Fd()), free.Offset, unix.SEEK_DATA)
+		if errors.Is(err, unix.ENXIO) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("SecondBox WorkspaceStore locate allocated Workspace blocks: %w", err)
+		}
+		if data >= free.Offset+free.Length {
+			continue
+		}
+		if result.Ranges == limit {
+			result.Reason = workspaceReclaimPunchLimitReached
+			return nil
+		}
+		if err := punch(image, free.Offset, free.Length); err != nil {
+			// A full host filesystem can refuse the metadata a punch needs.
+			// The blocks stay allocated and the next stop retries.
+			if errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
+				result.Reason = workspaceReclaimHostStorageExhausted
+				return nil
+			}
+			return fmt.Errorf("SecondBox WorkspaceStore punch freed Workspace blocks: %w", err)
+		}
+		result.Ranges++
+		result.PunchedBytes += free.Length
 	}
-	return aligned
+	return nil
+}
+
+// alignWorkspaceReclaimRange shrinks a free range to whole alignment units and
+// drops it when the result is below the minimum punch length.
+func alignWorkspaceReclaimRange(free ext4ByteRange) (ext4ByteRange, bool) {
+	start := (free.Offset + workspaceReclaimAlignmentBytes - 1) /
+		workspaceReclaimAlignmentBytes * workspaceReclaimAlignmentBytes
+	end := (free.Offset + free.Length) / workspaceReclaimAlignmentBytes * workspaceReclaimAlignmentBytes
+	if end-start < workspaceReclaimMinimumBytes {
+		return ext4ByteRange{}, false
+	}
+	return ext4ByteRange{Offset: start, Length: end - start}, true
 }
 
 func allocatedImageBytes(image *os.File, capacityBytes int64) (int64, error) {

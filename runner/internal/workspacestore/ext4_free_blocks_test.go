@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -164,6 +165,30 @@ func dumpe2fsFreeRanges(t *testing.T, image string, honorUninit bool) []ext4Byte
 	return ranges
 }
 
+func keepEveryExt4Range(free ext4ByteRange) (ext4ByteRange, bool) { return free, true }
+
+// dumpe2fsUninitGroups returns the byte ranges of the BLOCK_UNINIT groups.
+func dumpe2fsUninitGroups(t *testing.T, image string) []ext4ByteRange {
+	t.Helper()
+	output := runExt4TestTool(t, "dumpe2fs", image)
+	size := regexp.MustCompile(`(?m)^Block size:\s+(\d+)`).FindStringSubmatch(output)
+	if size == nil {
+		t.Fatalf("dumpe2fs printed no block size: %s", output)
+	}
+	blockBytes, _ := strconv.ParseInt(size[1], 10, 64)
+	var groups []ext4ByteRange
+	for _, line := range strings.Split(output, "\n") {
+		match := dumpe2fsGroupPattern.FindStringSubmatch(line)
+		if match == nil || !strings.Contains(match[4], "BLOCK_UNINIT") {
+			continue
+		}
+		first, _ := strconv.ParseInt(match[2], 10, 64)
+		last, _ := strconv.ParseInt(match[3], 10, 64)
+		groups = append(groups, ext4ByteRange{Offset: first * blockBytes, Length: (last - first + 1) * blockBytes})
+	}
+	return groups
+}
+
 func ext4FreeRangesOf(t *testing.T, image string) ([]ext4ByteRange, string) {
 	t.Helper()
 	file, err := os.Open(image)
@@ -175,7 +200,7 @@ func ext4FreeRangesOf(t *testing.T, image string) ([]ext4ByteRange, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ranges, reason, err := ext4FreeRanges(file, info.Size())
+	ranges, reason, err := ext4FreeRanges(file, info.Size(), keepEveryExt4Range)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,8 +217,10 @@ func TestExt4FreeRangesMatchLibext2fsAcrossLayouts(t *testing.T) {
 		{name: "checksum seed", options: []string{"-O", "metadata_csum_seed"}, honorUninit: true},
 		{name: "uninit_bg crc16 64bit", options: []string{"-O", "^metadata_csum,uninit_bg"}, honorUninit: true},
 		{name: "uninit_bg crc16 32bit", options: []string{"-O", "^64bit,^metadata_csum,uninit_bg"}, honorUninit: true},
+		{name: "metadata_csum 32bit", options: []string{"-O", "^64bit"}, honorUninit: true},
 		{name: "no group checksums", options: []string{"-O", "^metadata_csum,^uninit_bg"}},
 		{name: "1 KiB blocks", options: []string{"-b", "1024"}, honorUninit: true},
+		{name: "no journal", options: []string{"-O", "^has_journal"}, honorUninit: true},
 	} {
 		t.Run(layout.name, func(t *testing.T) {
 			image := filepath.Join(t.TempDir(), "workspace.ext4")
@@ -206,7 +233,8 @@ func TestExt4FreeRangesMatchLibext2fsAcrossLayouts(t *testing.T) {
 			for index := range 40 {
 				files = append(files, randomExt4TestFile(t, fmt.Sprintf("many/%02d", index), 12<<10))
 			}
-			makeExt4TestImage(t, image, ext4TestImageBytes, layout.options, files)
+			// 2 GiB leaves 4 KiB-block layouts with BLOCK_UNINIT groups to skip.
+			makeExt4TestImage(t, image, 2<<30, layout.options, files)
 			commands := []string{"rm /deleted.bin", "rm /nested/deleted-small"}
 			for index := 0; index < 40; index += 3 {
 				commands = append(commands, fmt.Sprintf("rm /many/%02d", index))
@@ -221,6 +249,19 @@ func TestExt4FreeRangesMatchLibext2fsAcrossLayouts(t *testing.T) {
 			expected := dumpe2fsFreeRanges(t, image, layout.honorUninit)
 			if fmt.Sprint(actual) != fmt.Sprint(expected) {
 				t.Fatalf("free ranges disagree with libext2fs:\nactual   %v\nexpected %v", actual, expected)
+			}
+			if layout.honorUninit {
+				uninit := dumpe2fsUninitGroups(t, image)
+				if len(uninit) == 0 {
+					t.Fatal("layout has no BLOCK_UNINIT group to skip")
+				}
+				for _, free := range actual {
+					for _, group := range uninit {
+						if free.Offset < group.Offset+group.Length && group.Offset < free.Offset+free.Length {
+							t.Fatalf("free range %+v overlaps BLOCK_UNINIT group %+v", free, group)
+						}
+					}
+				}
 			}
 			var freeBytes int64
 			for _, free := range actual {
@@ -249,7 +290,7 @@ func TestReclaimFreeImageBlocksReleasesOnlyFreedBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	result, err := reclaimFreeImageBlocks(file, ext4TestImageBytes, platformPunchHole)
+	result, err := reclaimFreeImageBlocks(t.Context(), file, ext4TestImageBytes, platformPunchHole)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +302,7 @@ func TestReclaimFreeImageBlocksReleasesOnlyFreedBlocks(t *testing.T) {
 		t.Fatalf("reclaim released %d bytes for a 32 MiB deletion: %+v", released, result)
 	}
 	t.Logf("reclaim: allocated %d -> %d bytes over %d ranges", result.AllocatedBefore, result.AllocatedAfter, result.Ranges)
-	again, err := reclaimFreeImageBlocks(file, ext4TestImageBytes, platformPunchHole)
+	again, err := reclaimFreeImageBlocks(t.Context(), file, ext4TestImageBytes, platformPunchHole)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,12 +320,17 @@ func TestReclaimFreeImageBlocksReleasesOnlyFreedBlocks(t *testing.T) {
 
 func TestAlignWorkspaceReclaimRangesNeverPunchesPartialUnits(t *testing.T) {
 	const unit = workspaceReclaimAlignmentBytes
-	actual := alignWorkspaceReclaimRanges([]ext4ByteRange{
+	var actual []ext4ByteRange
+	for _, free := range []ext4ByteRange{
 		{Offset: 4096, Length: workspaceReclaimMinimumBytes + unit},
 		{Offset: 8 * unit, Length: workspaceReclaimMinimumBytes - 4096},
 		{Offset: 64 * unit, Length: workspaceReclaimMinimumBytes},
 		{Offset: 128*unit + 4096, Length: workspaceReclaimMinimumBytes},
-	})
+	} {
+		if aligned, ok := alignWorkspaceReclaimRange(free); ok {
+			actual = append(actual, aligned)
+		}
+	}
 	expected := []ext4ByteRange{
 		{Offset: unit, Length: workspaceReclaimMinimumBytes},
 		{Offset: 64 * unit, Length: workspaceReclaimMinimumBytes},
@@ -344,6 +390,12 @@ func TestExt4FreeRangesDeclineUntrustedAllocationState(t *testing.T) {
 			reason:  ext4ReclaimNeedsRecovery,
 		},
 		{
+			name:    "journal-less filesystem stopped uncleanly",
+			options: []string{"-O", "^has_journal"},
+			corrupt: func(t *testing.T, image string) { debugfsWrite(t, image, "ssv state 0") },
+			reason:  ext4ReclaimUnclean,
+		},
+		{
 			name:    "filesystem recorded errors",
 			corrupt: func(t *testing.T, image string) { debugfsWrite(t, image, "ssv state 3") },
 			reason:  ext4ReclaimFilesystemErrors,
@@ -392,7 +444,7 @@ func TestExt4FreeRangesDeclineUntrustedAllocationState(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer file.Close()
-			result, err := reclaimFreeImageBlocks(file, ext4TestImageBytes, func(*os.File, int64, int64) error {
+			result, err := reclaimFreeImageBlocks(t.Context(), file, ext4TestImageBytes, func(*os.File, int64, int64) error {
 				t.Fatal("declined reclaim punched the image")
 				return nil
 			})
@@ -437,7 +489,7 @@ func FuzzExt4FreeRanges(f *testing.F) {
 		copy(mutated[position:min(position+len(patch), len(mutated))], patch)
 		superblock := mutated[ext4SuperblockOffset : ext4SuperblockOffset+ext4SuperblockBytes]
 		binary.LittleEndian.PutUint32(superblock[0x3FC:], ext4Checksum(0xffffffff, superblock[:0x3FC]))
-		ranges, _, err := ext4FreeRanges(bytes.NewReader(mutated), imageBytes)
+		ranges, _, err := ext4FreeRanges(bytes.NewReader(mutated), imageBytes, keepEveryExt4Range)
 		if err != nil {
 			return
 		}
@@ -449,4 +501,136 @@ func FuzzExt4FreeRanges(f *testing.F) {
 			end = free.Offset + free.Length
 		}
 	})
+}
+
+// TestExt4FreeRangesBoundsFragmentedBitmaps rewrites every group's data area to
+// alternate free and used blocks with matching descriptor counts, the most
+// fragmented state a guest can commit. No run reaches the punch minimum, so the
+// reader must retain nothing however many runs it visits.
+func TestExt4FreeRangesBoundsFragmentedBitmaps(t *testing.T) {
+	const imageBytes = 1 << 30
+	image := filepath.Join(t.TempDir(), "workspace.ext4")
+	makeExt4TestImage(t, image, imageBytes, []string{"-b", "1024", "-O", "^64bit,^metadata_csum,^uninit_bg"}, nil)
+	file, err := os.OpenFile(image, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	superblock := make([]byte, ext4SuperblockBytes)
+	if _, err := file.ReadAt(superblock, ext4SuperblockOffset); err != nil {
+		t.Fatal(err)
+	}
+	geometry, reason := parseExt4Superblock(superblock, imageBytes)
+	if reason != "" || geometry.descriptorBytes != ext4DescriptorBytes32 {
+		t.Fatalf("fixture geometry = %+v, %s", geometry, reason)
+	}
+	descriptors := make([]byte, geometry.groupCount*ext4DescriptorBytes32)
+	descriptorOffset := int64(geometry.firstDataBlock+1) * geometry.blockBytes
+	if _, err := file.ReadAt(descriptors, descriptorOffset); err != nil {
+		t.Fatal(err)
+	}
+	bitmap := make([]byte, geometry.blockBytes)
+	rawRuns := 0
+	for group := uint64(0); group < geometry.groupCount; group++ {
+		descriptor := descriptors[group*ext4DescriptorBytes32:][:ext4DescriptorBytes32]
+		bitmapOffset := int64(binary.LittleEndian.Uint32(descriptor[ext4DescBlockBitmapLo:])) * geometry.blockBytes
+		if _, err := file.ReadAt(bitmap, bitmapOffset); err != nil {
+			t.Fatal(err)
+		}
+		// Fragment every wholly free byte; bytes holding metadata keep it.
+		for index, value := range bitmap {
+			if value == 0 {
+				bitmap[index] = 0x55
+			}
+		}
+		groupBlocks := min(geometry.blocksPerGroup, geometry.blocksCount-(geometry.firstDataBlock+group*geometry.blocksPerGroup))
+		binary.LittleEndian.PutUint16(descriptor[ext4DescFreeBlocksLo:], uint16(countExt4FreeBits(bitmap, groupBlocks)))
+		rawRuns += int(groupBlocks) / 2
+		if _, err := file.WriteAt(bitmap, bitmapOffset); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := file.WriteAt(descriptors, descriptorOffset); err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	ranges, reason, err := ext4FreeRanges(file, imageBytes, alignWorkspaceReclaimRange)
+	runtime.ReadMemStats(&after)
+	if err != nil || reason != "" {
+		t.Fatalf("fragmented bitmaps: reason=%q err=%v", reason, err)
+	}
+	if len(ranges) != 0 {
+		t.Fatalf("fragmented bitmaps kept %d ranges", len(ranges))
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
+		t.Fatalf("visiting about %d one-block runs allocated %d bytes", rawRuns, allocated)
+	}
+}
+
+func TestPunchWorkspaceReclaimRangesBoundsEachPassAndResumes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image")
+	data := make([]byte, 32<<20)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var ranges []ext4ByteRange
+	for index := range 8 {
+		ranges = append(ranges, ext4ByteRange{Offset: int64(index) * 2 << 20, Length: 1 << 20})
+	}
+	var punched []int64
+	punch := func(image *os.File, offset int64, length int64) error {
+		punched = append(punched, offset)
+		return platformPunchHole(image, offset, length)
+	}
+	for pass, want := range []struct {
+		reason string
+		ranges int
+	}{
+		{reason: workspaceReclaimPunchLimitReached, ranges: 3},
+		{reason: workspaceReclaimPunchLimitReached, ranges: 3},
+		{reason: "", ranges: 2},
+		{reason: "", ranges: 0},
+	} {
+		var result freeBlockReclaim
+		if err := punchWorkspaceReclaimRanges(t.Context(), file, ranges, punch, 3, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Reason != want.reason || result.Ranges != want.ranges {
+			t.Fatalf("pass %d = %+v, want reason %q and %d ranges", pass, result, want.reason, want.ranges)
+		}
+	}
+	if fmt.Sprint(punched) != fmt.Sprint([]int64{0, 2 << 20, 4 << 20, 6 << 20, 8 << 20, 10 << 20, 12 << 20, 14 << 20}) {
+		t.Fatalf("punched offsets = %v, want each range once in order", punched)
+	}
+	retained := make([]byte, 1<<20)
+	if _, err := file.ReadAt(retained, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(retained, data[1<<20:2<<20]) {
+		t.Fatal("bytes between punched ranges changed")
+	}
+
+	full := func(*os.File, int64, int64) error { return syscall.ENOSPC }
+	var exhausted freeBlockReclaim
+	if err := punchWorkspaceReclaimRanges(t.Context(), file, []ext4ByteRange{{Offset: 1 << 20, Length: 1 << 20}}, full, 3, &exhausted); err != nil {
+		t.Fatalf("a full host filesystem failed the pass: %v", err)
+	}
+	if exhausted.Reason != workspaceReclaimHostStorageExhausted || exhausted.Ranges != 0 {
+		t.Fatalf("full host filesystem pass = %+v", exhausted)
+	}
+	broken := func(*os.File, int64, int64) error { return syscall.EIO }
+	var failed freeBlockReclaim
+	if err := punchWorkspaceReclaimRanges(t.Context(), file, []ext4ByteRange{{Offset: 1 << 20, Length: 1 << 20}}, broken, 3, &failed); err == nil {
+		t.Fatal("an I/O error was not returned")
+	}
 }

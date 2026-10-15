@@ -60,6 +60,9 @@ const (
 		ext4FeatureROCompatMetadataCsum | ext4FeatureROCompatReadonly |
 		ext4FeatureROCompatProject | ext4FeatureROCompatVerity | ext4FeatureROCompatOrphanPresent
 
+	ext4FeatureCompatHasJournal = 0x0004
+
+	ext4StateValid    = 0x0001
 	ext4StateErrors   = 0x0002
 	ext4StateFCReplay = 0x0020
 
@@ -67,7 +70,9 @@ const (
 
 	ext4DescriptorBytes32 = 32
 	ext4DescriptorBytes64 = 64
-	ext4MaxDescriptorSize = 1024
+	// The kernel accepts up to 1024, but mke2fs never writes more than 64,
+	// and larger guest-chosen values only inflate the descriptor table read.
+	ext4MaxDescriptorSize = 64
 	ext4MaxLogBlockSize   = 6 // 64 KiB
 	ext4ChecksumTypeCRC32 = 1
 
@@ -87,6 +92,7 @@ const (
 	ext4ReclaimSuperblockInvalid   = "ext4_superblock_invalid"
 	ext4ReclaimFeaturesUnsupported = "ext4_features_unsupported"
 	ext4ReclaimNeedsRecovery       = "ext4_needs_recovery"
+	ext4ReclaimUnclean             = "ext4_unclean"
 	ext4ReclaimFilesystemErrors    = "ext4_filesystem_errors"
 	ext4ReclaimChecksumMismatch    = "ext4_checksum_mismatch"
 	ext4ReclaimGroupInvalid        = "ext4_group_invalid"
@@ -115,11 +121,18 @@ type ext4Geometry struct {
 	uuid             []byte
 }
 
-// ext4FreeRanges returns the merged byte ranges that the ext4 filesystem in
-// image marks free in its initialized block groups. A non-empty reason means
-// the on-disk allocation state cannot be trusted and no ranges are returned.
-// Errors are reserved for failures to read the image itself.
-func ext4FreeRanges(image io.ReaderAt, imageBytes int64) ([]ext4ByteRange, string, error) {
+// ext4FreeRanges returns the byte ranges that the ext4 filesystem in image
+// marks free in its initialized block groups. Contiguous runs, including runs
+// that continue across groups, are merged and then passed through keep, which
+// may shrink a range or drop it; only kept ranges are retained, so a hostile
+// fragmented bitmap cannot grow the result beyond what keep admits. A
+// non-empty reason means the on-disk allocation state cannot be trusted and no
+// ranges are returned. Errors are reserved for failures to read the image.
+func ext4FreeRanges(
+	image io.ReaderAt,
+	imageBytes int64,
+	keep func(ext4ByteRange) (ext4ByteRange, bool),
+) ([]ext4ByteRange, string, error) {
 	superblock := make([]byte, ext4SuperblockBytes)
 	if _, err := image.ReadAt(superblock, ext4SuperblockOffset); err != nil {
 		return nil, "", fmt.Errorf("SecondBox WorkspaceStore read ext4 superblock: %w", err)
@@ -136,7 +149,7 @@ func ext4FreeRanges(image io.ReaderAt, imageBytes int64) ([]ext4ByteRange, strin
 		return nil, "", fmt.Errorf("SecondBox WorkspaceStore read ext4 group descriptors: %w", err)
 	}
 	bitmap := make([]byte, geometry.blockBytes)
-	var ranges []ext4ByteRange
+	runs := ext4RunCollector{keep: keep}
 	for group := uint64(0); group < geometry.groupCount; group++ {
 		descriptor := descriptors[group*uint64(geometry.descriptorBytes):][:geometry.descriptorBytes]
 		if !geometry.descriptorChecksumValid(uint32(group), descriptor) {
@@ -172,9 +185,10 @@ func ext4FreeRanges(image io.ReaderAt, imageBytes int64) ([]ext4ByteRange, strin
 		if countExt4FreeBits(bitmap, groupBlocks) != freeBlocks {
 			return nil, ext4ReclaimFreeCountMismatch, nil
 		}
-		ranges = appendExt4FreeRuns(ranges, bitmap, groupBlocks, groupStart, geometry.blockBytes)
+		collectExt4FreeRuns(&runs, bitmap, groupBlocks, groupStart, geometry.blockBytes)
 	}
-	return ranges, "", nil
+	runs.flush()
+	return runs.kept, "", nil
 }
 
 func parseExt4Superblock(superblock []byte, imageBytes int64) (ext4Geometry, string) {
@@ -206,7 +220,13 @@ func parseExt4Superblock(superblock []byte, imageBytes int64) (ext4Geometry, str
 	if incompat&ext4FeatureIncompatRecover != 0 {
 		return ext4Geometry{}, ext4ReclaimNeedsRecovery
 	}
-	if state := le16(0x3A); state&ext4StateErrors != 0 {
+	state := le16(0x3A)
+	// Without a journal the kernel clears VALID while mounted, and an unclean
+	// stop can leave bitmaps that disagree with inodes still naming the blocks.
+	if le32(0x5C)&ext4FeatureCompatHasJournal == 0 && state&ext4StateValid == 0 {
+		return ext4Geometry{}, ext4ReclaimUnclean
+	}
+	if state&ext4StateErrors != 0 {
 		return ext4Geometry{}, ext4ReclaimFilesystemErrors
 	} else if state&ext4StateFCReplay != 0 {
 		return ext4Geometry{}, ext4ReclaimNeedsRecovery
@@ -326,23 +346,43 @@ func countExt4FreeBits(bitmap []byte, blocks uint64) uint64 {
 	return blocks - used
 }
 
-// appendExt4FreeRuns appends the group's free-bit runs as byte ranges, merging
-// a run with the previous range when they are contiguous across groups.
-func appendExt4FreeRuns(
-	ranges []ext4ByteRange,
+// ext4RunCollector merges contiguous free runs and retains only the merged
+// ranges that keep admits.
+type ext4RunCollector struct {
+	keep    func(ext4ByteRange) (ext4ByteRange, bool)
+	pending ext4ByteRange
+	kept    []ext4ByteRange
+}
+
+func (collector *ext4RunCollector) add(offset int64, length int64) {
+	if collector.pending.Length != 0 && collector.pending.Offset+collector.pending.Length == offset {
+		collector.pending.Length += length
+		return
+	}
+	collector.flush()
+	collector.pending = ext4ByteRange{Offset: offset, Length: length}
+}
+
+func (collector *ext4RunCollector) flush() {
+	if collector.pending.Length == 0 {
+		return
+	}
+	if kept, ok := collector.keep(collector.pending); ok {
+		collector.kept = append(collector.kept, kept)
+	}
+	collector.pending = ext4ByteRange{}
+}
+
+// collectExt4FreeRuns adds the group's free-bit runs as byte ranges.
+func collectExt4FreeRuns(
+	runs *ext4RunCollector,
 	bitmap []byte,
 	blocks uint64,
 	groupStart uint64,
 	blockBytes int64,
-) []ext4ByteRange {
+) {
 	appendRun := func(start, end uint64) {
-		offset := int64(groupStart+start) * blockBytes
-		length := int64(end-start) * blockBytes
-		if last := len(ranges) - 1; last >= 0 && ranges[last].Offset+ranges[last].Length == offset {
-			ranges[last].Length += length
-			return
-		}
-		ranges = append(ranges, ext4ByteRange{Offset: offset, Length: length})
+		runs.add(int64(groupStart+start)*blockBytes, int64(end-start)*blockBytes)
 	}
 	runStart, inRun := uint64(0), false
 	for block := uint64(0); block < blocks; {
@@ -375,5 +415,4 @@ func appendExt4FreeRuns(
 	if inRun {
 		appendRun(runStart, blocks)
 	}
-	return ranges
 }
