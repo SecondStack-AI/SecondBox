@@ -15,8 +15,9 @@ import (
 
 // TestScenarioWorkspaceStopReclaimsFreedBlocksAndKeepsSnapshot deletes guest
 // files that a Snapshot still holds, writes and deletes scratch data, and
-// proves the stop releases both from the Workspace's physical meters while
-// the Snapshot still restores the deleted file byte for byte.
+// proves the stop releases both from the Workspace's physical meters, that the
+// reclaimed Workspace boots with its retained files intact, and that the
+// Snapshot still restores the deleted file byte for byte.
 func TestScenarioWorkspaceStopReclaimsFreedBlocksAndKeepsSnapshot(t *testing.T) {
 	const fileMiB = 16
 	fixture := newScenarioFixture(t)
@@ -31,24 +32,31 @@ func TestScenarioWorkspaceStopReclaimsFreedBlocksAndKeepsSnapshot(t *testing.T) 
 	waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
 	waitForScenarioOperation(t, ctx, fixture.subject, operation)
 
-	digestCommand := "sha256sum /workspace/snapshotted.bin | cut -d' ' -f1"
-	written := executeScenarioCommand(t, ctx, handle,
-		"dd if=/dev/urandom of=/workspace/snapshotted.bin bs=1048576 count=16 2>/dev/null && sync && "+digestCommand,
-		1024, "storage-reclaim-write")
-	if written.ExecExited == nil || written.ExecExited.ExitCode != 0 {
-		t.Fatalf("write Snapshot file: %s", describeScenarioExecOutcome(written))
+	digests := func(key string, command string) string {
+		t.Helper()
+		outcome := executeScenarioCommand(t, ctx, handle, "cd /workspace && "+command, 1024, key)
+		if outcome.ExecExited == nil || outcome.ExecExited.ExitCode != 0 {
+			t.Fatalf("%s: %s", key, describeScenarioExecOutcome(outcome))
+		}
+		return decodeScenarioOutput(t, outcome.ExecExited.Output.StdoutBase64)
 	}
-	digest := strings.TrimSpace(decodeScenarioOutput(t, written.ExecExited.Output.StdoutBase64))
-	if len(digest) != 64 {
-		t.Fatalf("Snapshot file digest = %q", digest)
+	// retained.bin is shared with the Snapshot; kept.bin is written after it,
+	// next to the blocks the guest frees, so it is exclusive to the Workspace.
+	snapshotDigests := digests("storage-reclaim-write",
+		"dd if=/dev/urandom of=snapshotted.bin bs=1048576 count=16 2>/dev/null && "+
+			"dd if=/dev/urandom of=retained.bin bs=1048576 count=4 2>/dev/null && sync && "+
+			"sha256sum snapshotted.bin retained.bin")
+	if strings.Count(snapshotDigests, "\n") != 2 {
+		t.Fatalf("Snapshot file digests = %q", snapshotDigests)
 	}
 	stopScenarioSandbox(t, ctx, fixture, handle, "storage-reclaim-stop-for-snapshot")
 	snapshot, _ := createScenarioSnapshot(t, ctx, fixture, handle, "storage-reclaim-point", map[string]string{"scenario": "storage-reclaim"}, false)
 	startScenarioSandbox(t, ctx, fixture, handle, "storage-reclaim-start-after-snapshot")
 
-	assertScenarioExited(t, executeScenarioCommand(t, ctx, handle,
-		"rm /workspace/snapshotted.bin && dd if=/dev/urandom of=/workspace/scratch.bin bs=1048576 count=16 2>/dev/null && sync && rm /workspace/scratch.bin && sync",
-		1024, "storage-reclaim-delete"), 0, "", "")
+	retainedDigests := digests("storage-reclaim-delete",
+		"rm snapshotted.bin && dd if=/dev/urandom of=scratch.bin bs=1048576 count=16 2>/dev/null && "+
+			"dd if=/dev/urandom of=kept.bin bs=1048576 count=4 2>/dev/null && sync && "+
+			"rm scratch.bin && sync && sha256sum retained.bin kept.bin")
 	before := waitScenarioStorageObservation(t, ctx, fixture, handle.Snapshot().ID, time.Now().UTC())
 	stopped := stopScenarioSandbox(t, ctx, fixture, handle, "storage-reclaim-stop")
 	after := waitScenarioStorageObservation(t, ctx, fixture, stopped.ID, stopped.UpdatedAt)
@@ -70,9 +78,19 @@ func TestScenarioWorkspaceStopReclaimsFreedBlocksAndKeepsSnapshot(t *testing.T) 
 		t.Logf("exclusive bytes unavailable: before=%s after=%s", before.ExclusiveReason, after.ExclusiveReason)
 	}
 
+	// Boot the reclaimed image itself: a fresh guest reads the retained files
+	// from disk, so any punch into live blocks would change their digests.
+	startScenarioSandbox(t, ctx, fixture, handle, "storage-reclaim-start-reclaimed")
+	if actual := digests("storage-reclaim-verify-retained", "test ! -e snapshotted.bin && sha256sum retained.bin kept.bin"); actual != retainedDigests {
+		t.Fatalf("reclaimed Workspace files = %q, want %q", actual, retainedDigests)
+	}
+	stopScenarioSandbox(t, ctx, fixture, handle, "storage-reclaim-stop-for-restore")
+
 	restoreScenarioSnapshotWithReplay(t, ctx, fixture, handle, snapshot.ID)
 	startScenarioSandbox(t, ctx, fixture, handle, "storage-reclaim-start-restored")
-	assertScenarioExited(t, executeScenarioCommand(t, ctx, handle, digestCommand, 1024, "storage-reclaim-verify"), 0, digest+"\n", "")
+	if actual := digests("storage-reclaim-verify-snapshot", "sha256sum snapshotted.bin retained.bin"); actual != snapshotDigests {
+		t.Fatalf("restored Snapshot files = %q, want %q", actual, snapshotDigests)
+	}
 }
 
 func waitScenarioStorageObservation(

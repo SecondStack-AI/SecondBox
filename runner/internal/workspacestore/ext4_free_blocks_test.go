@@ -377,6 +377,131 @@ func markLastBitmapBlockUsed(t *testing.T, image string) {
 	}
 }
 
+type ext4TestGroup struct {
+	firstBlock  int64
+	lastBlock   int64
+	bitmapBlock int64
+	uninit      bool
+}
+
+// ext4TestGroups returns libext2fs's group layout and the block size.
+func ext4TestGroups(t *testing.T, image string) ([]ext4TestGroup, int64) {
+	t.Helper()
+	output := runExt4TestTool(t, "dumpe2fs", image)
+	size := regexp.MustCompile(`(?m)^Block size:\s+(\d+)`).FindStringSubmatch(output)
+	if size == nil {
+		t.Fatalf("dumpe2fs printed no block size: %s", output)
+	}
+	blockBytes, _ := strconv.ParseInt(size[1], 10, 64)
+	bitmapPattern := regexp.MustCompile(`^\s+Block bitmap at (\d+)`)
+	var groups []ext4TestGroup
+	for _, line := range strings.Split(output, "\n") {
+		if match := dumpe2fsGroupPattern.FindStringSubmatch(line); match != nil {
+			first, _ := strconv.ParseInt(match[2], 10, 64)
+			last, _ := strconv.ParseInt(match[3], 10, 64)
+			groups = append(groups, ext4TestGroup{
+				firstBlock: first, lastBlock: last, uninit: strings.Contains(match[4], "BLOCK_UNINIT"),
+			})
+			continue
+		}
+		if match := bitmapPattern.FindStringSubmatch(line); match != nil && len(groups) > 0 {
+			groups[len(groups)-1].bitmapBlock, _ = strconv.ParseInt(match[1], 10, 64)
+		}
+	}
+	return groups, blockBytes
+}
+
+// TestExt4FreeRangesDeclineCorruptionAfterReclaimableGroups corrupts the last
+// initialized group after earlier groups already yielded punchable ranges. The
+// whole filesystem is validated before anything is punched, so nothing is.
+func TestExt4FreeRangesDeclineCorruptionAfterReclaimableGroups(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		options []string
+		reason  string
+	}{
+		{name: "bitmap checksum mismatch", reason: ext4ReclaimChecksumMismatch},
+		{name: "free count mismatch without checksums", options: []string{"-O", "^metadata_csum,^uninit_bg"}, reason: ext4ReclaimFreeCountMismatch},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := t.TempDir()
+			image := filepath.Join(directory, "workspace.ext4")
+			makeExt4TestImage(t, image, ext4TestImageBytes, testCase.options, []ext4TestFile{
+				randomExt4TestFile(t, "deleted.bin", 32<<20),
+			})
+			debugfsWrite(t, image, "rm /deleted.bin")
+			groups, blockBytes := ext4TestGroups(t, image)
+			corrupted := -1
+			for index := len(groups) - 1; index > 0; index-- {
+				if !groups[index].uninit && groups[index].bitmapBlock != 0 {
+					corrupted = index
+					break
+				}
+			}
+			if corrupted < 0 {
+				t.Fatalf("no initialized group after group 0: %+v", groups)
+			}
+			corruptedStart := groups[corrupted].firstBlock * blockBytes
+
+			// An identical clean copy proves the earlier groups would be punched.
+			clean := filepath.Join(directory, "clean.ext4")
+			runExt4TestTool(t, "cp", "--sparse=always", image, clean)
+			cleanFile, err := os.OpenFile(clean, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var earlier int
+			cleanResult, err := reclaimFreeImageBlocks(t.Context(), cleanFile, ext4TestImageBytes, func(file *os.File, offset int64, length int64) error {
+				if offset < corruptedStart {
+					earlier++
+				}
+				return platformPunchHole(file, offset, length)
+			})
+			if closeErr := cleanFile.Close(); err != nil || closeErr != nil {
+				t.Fatal(err, closeErr)
+			}
+			if cleanResult.Reason != "" || earlier == 0 || cleanResult.AllocatedAfter >= cleanResult.AllocatedBefore {
+				t.Fatalf("clean copy did not punch before group %d: %+v (earlier=%d)", corrupted, cleanResult, earlier)
+			}
+
+			file, err := os.OpenFile(image, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			bitmap := make([]byte, blockBytes)
+			bitmapOffset := groups[corrupted].bitmapBlock * blockBytes
+			if _, err := file.ReadAt(bitmap, bitmapOffset); err != nil {
+				t.Fatal(err)
+			}
+			blocks := groups[corrupted].lastBlock - groups[corrupted].firstBlock + 1
+			flipped := false
+			for bit := int64(0); bit < blocks && !flipped; bit++ {
+				if bitmap[bit/8]&(1<<(bit%8)) == 0 {
+					bitmap[bit/8] |= 1 << (bit % 8)
+					flipped = true
+				}
+			}
+			if !flipped {
+				t.Fatalf("group %d has no free block to corrupt", corrupted)
+			}
+			if _, err := file.WriteAt(bitmap, bitmapOffset); err != nil {
+				t.Fatal(err)
+			}
+			result, err := reclaimFreeImageBlocks(t.Context(), file, ext4TestImageBytes, func(*os.File, int64, int64) error {
+				t.Fatal("reclaim punched before validating every group")
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Reason != testCase.reason || result.AllocatedAfter != result.AllocatedBefore {
+				t.Fatalf("reclaim = %+v, want reason %s and no change", result, testCase.reason)
+			}
+		})
+	}
+}
+
 func TestExt4FreeRangesDeclineUntrustedAllocationState(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
