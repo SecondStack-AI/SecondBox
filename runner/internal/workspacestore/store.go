@@ -648,6 +648,11 @@ func (store *Store) AdvanceGeneration(
 		} else if pending {
 			return Receipt{}, ErrRestorePending
 		}
+		// Every stop and fence ends here with the writer lock held, which is
+		// the one point where the guest's freed blocks can be safely released.
+		if err := store.reclaimFreeBlocks(ctx, request.WorkspaceID, manifest); err != nil {
+			return Receipt{}, err
+		}
 		manifest.Generation = request.NextGeneration
 		if err := store.publishCurrentManifest(request.WorkspaceID, manifest); err != nil {
 			return Receipt{}, err

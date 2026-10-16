@@ -92,3 +92,31 @@ func measureWorkspaceExclusiveBytes(probe func(*workspaceFiemap) error) (*int64,
 	}
 	return &exclusive, ""
 }
+
+// workspaceFiemapProbe is struct fiemap with room for one extent.
+type workspaceFiemapProbe struct {
+	Start         uint64
+	Length        uint64
+	Flags         uint32
+	MappedExtents uint32
+	ExtentCount   uint32
+	Reserved      uint32
+	Extents       [1]workspaceFiemapExtent
+}
+
+// platformRangeAllocated reports whether any host extent maps part of the
+// range. Unlike SEEK_DATA it counts unwritten extents, which the meters charge
+// and which a guest's write-zeroes can leave behind through a loop device. A
+// filesystem without FIEMAP reports the range as allocated, so it is punched.
+func platformRangeAllocated(file *os.File, offset int64, length int64) (bool, error) {
+	probe := workspaceFiemapProbe{Start: uint64(offset), Length: uint64(length), ExtentCount: 1}
+	// FS_IOC_FIEMAP without FIEMAP_FLAG_SYNC, as in observeExclusiveBytes.
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, file.Fd(), 0xc020660b, uintptr(unsafe.Pointer(&probe)))
+	if errno == unix.ENOTTY || errno == unix.EOPNOTSUPP {
+		return true, nil
+	}
+	if errno != 0 {
+		return false, errno
+	}
+	return probe.MappedExtents > 0, nil
+}

@@ -180,16 +180,10 @@ func compactDarwinSparseFile(file *os.File, capacity int64) error {
 		if zeroStart < 0 {
 			return nil
 		}
-		hole := darwinPunchHole{Offset: zeroStart, Length: end - zeroStart}
-		_, _, errno := unix.Syscall(
-			unix.SYS_FCNTL,
-			file.Fd(),
-			uintptr(unix.F_PUNCHHOLE),
-			uintptr(unsafe.Pointer(&hole)),
-		)
+		err := platformPunchHole(file, zeroStart, end-zeroStart)
 		zeroStart = -1
-		if errno != 0 {
-			return fmt.Errorf("%w: SecondBox WorkspaceStore APFS punch hole: %v", ErrStorageIncompatible, errno)
+		if err != nil {
+			return fmt.Errorf("%w: SecondBox WorkspaceStore APFS punch hole: %v", ErrStorageIncompatible, err)
 		}
 		return nil
 	}
@@ -336,6 +330,26 @@ func (darwinDriver) ResetSparse(file *os.File, capacity int64) error {
 
 func (darwinDriver) CompactSparse(file *os.File, capacity int64) error {
 	return compactDarwinSparseFile(file, capacity)
+}
+
+func (darwinDriver) PunchHole(file *os.File, offset int64, length int64) error {
+	return platformPunchHole(file, offset, length)
+}
+
+// platformPunchHole deallocates a block-aligned byte range without changing
+// the file size. The range then reads as zeros.
+func platformPunchHole(file *os.File, offset int64, length int64) error {
+	hole := darwinPunchHole{Offset: offset, Length: length}
+	_, _, errno := unix.Syscall(
+		unix.SYS_FCNTL,
+		file.Fd(),
+		uintptr(unix.F_PUNCHHOLE),
+		uintptr(unsafe.Pointer(&hole)),
+	)
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func (darwinDriver) TryLock(file *os.File) error     { return platformTryLock(file) }
