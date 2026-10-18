@@ -46,9 +46,10 @@ image's FIEMAP extent lengths without `FIEMAP_EXTENT_SHARED`, including allocate
 unwritten extents and excluding holes. Exclusive means unshared with anything:
 the capacity template, Snapshots, or other Workspaces. It represents image bytes
 that deleting this Workspace would free. Neither field is guest filesystem usage.
-Blocks the guest frees stay allocated while compute runs; the next stop releases
-them (see [Workspace durability](../design/workspace-durability.md)), so both
-fields fall after files are deleted and the Sandbox stops.
+Blocks the guest frees stay allocated while compute runs; the next stop or fence
+releases them (see [Workspace durability](../design/workspace-durability.md)), so
+after files are deleted and the Sandbox stops `allocatedBytes` falls and
+`exclusiveBytes` falls by the released unshared extents.
 Summing `exclusiveBytes` across Workspaces gives a physical lower bound; summing
 `allocatedBytes` overcounts shared blocks and is not a physical consumption total.
 On filesystems that never set the shared flag (such as ext4 or overlay), all
