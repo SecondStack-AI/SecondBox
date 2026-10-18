@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+## 0.27.1 - 2026-10-18
+
+Stopping or fencing a Sandbox releases the host blocks behind files its guest deleted, and a restarted Firecracker Runner re-seats its host firewall jumps above Docker's. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged. See the [v0.27.1 release notes](docs/releases/v0.27.1.md).
+
 ### Fixed
 
 - A restarted Firecracker Runner moves its host `INPUT` and `FORWARD` jumps back above Docker's. Before, a Docker daemon restart re-inserted Docker's jumps above the surviving Runner jumps, and on a same-host Runner whose gateway is on an internal Docker network, Docker's isolation rule then dropped all guest egress to the gateway until the jumps were moved by hand ([#228](https://github.com/SecondStack-AI/SecondBox/issues/228)).
-- Stopping a Sandbox releases the host blocks behind files its guest deleted, so a Workspace's `allocatedBytes` and `exclusiveBytes` fall after files are deleted. Before, freed ext4 blocks stayed allocated in the Workspace image indefinitely on both Firecracker and gVisor, and storage meters built on `exclusiveBytes` kept charging them ([SecondStack-AI/SecondStack#1441](https://github.com/SecondStack-AI/SecondStack/issues/1441)). Blocks still shared with a Snapshot remain held by the Snapshot.
+- Stopping or fencing a Sandbox releases the host blocks behind files its guest deleted, so a Workspace's `allocatedBytes` falls and its measured `exclusiveBytes` falls by the released unshared extents. Before, freed ext4 blocks stayed allocated in the Workspace image indefinitely on both Firecracker and gVisor, and storage meters built on `exclusiveBytes` kept charging them ([SecondStack-AI/SecondStack#1441](https://github.com/SecondStack-AI/SecondStack/issues/1441)). Blocks still shared with a Snapshot remain held by the Snapshot.
 
 ## 0.27.0 - 2026-10-14
 
