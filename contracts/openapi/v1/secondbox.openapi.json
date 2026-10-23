@@ -7472,6 +7472,13 @@
         "properties": {
           "image": {
             "$ref": "#/components/schemas/ExecutionImage"
+          },
+          "capacityWaitMilliseconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 3600000,
+            "description": "Bounds how long the start may remain unplaced. A start not placed on its home Runner within this interval fails its Operation with capacity_wait_expired, releases the Workspace, and leaves the Sandbox wanted stopped. Omission waits until the home Runner can place the start."
           }
         }
       },
@@ -8536,6 +8543,13 @@
           },
           "resources": {
             "$ref": "#/components/schemas/SandboxResourceRequest"
+          },
+          "capacityWaitMilliseconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 3600000,
+            "description": "Bounds how long the start of a Profile whose initial state is running may remain unplaced after the Workspace is created. If it is not placed on the home Runner within this interval, measured from admission, the create Operation fails with capacity_wait_expired; the Sandbox and its Workspace remain, stopped and wanted stopped, and an ordinary start runs it. Ignored by a Profile whose initial state is stopped. Omission waits until the home Runner can place the start."
           }
         }
       },
@@ -10726,6 +10740,7 @@
           "internal_error",
           "terminal_replay_evicted",
           "wait_expired",
+          "capacity_wait_expired",
           "profile_policy_ceiling_exceeded",
           "file_not_found",
           "workspace_full"

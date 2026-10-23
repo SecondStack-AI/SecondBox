@@ -36,6 +36,15 @@ Creation also accepts optional `resources` (`vcpuCount`, `memoryBytes`, and
 a ready Snapshot into a new Sandbox on the same home Runner. Clone admission
 requires the source disk capacity and compatible asset identity. See
 [Profiles and authorization](profiles-and-authorization.md) for sizing rules.
+A Profile whose initial state is `running` also starts the Sandbox once its
+Workspace exists, and the create Operation completes only when that start is
+ready. Optional `capacityWaitMilliseconds` bounds that start exactly as it bounds
+an explicit start (see [Lifecycle semantics](#lifecycle-semantics)), measured from
+create admission; on expiry the create Operation fails with
+`capacity_wait_expired` and the Sandbox remains, stopped and wanted stopped, with
+its Workspace; the caller starts that Sandbox rather than creating another, since a
+replayed create returns the same failed Operation. A Profile whose initial state is
+`stopped` ignores the bound.
 
 Tenant and Subject ownership come from the authenticated request context.
 The request cannot select a backend, image, network, port policy, runner pool,
@@ -66,7 +75,11 @@ not imply every use of that error code will resolve automatically. Once DELETE
 returns `202`, poll its Operation; an identical accepted request replays that
 Operation even after the Sandbox revision advances.
 
-Start accepts an optional `image` body member. The Go SDK accepts `StartSandboxRequest` before `LifecycleOptions`; the TypeScript start options include the same optional member.
+Start accepts optional `image` and `capacityWaitMilliseconds` body members. The Go SDK accepts `StartSandboxRequest` before `LifecycleOptions`; the TypeScript start options include the same optional members.
+
+A start whose home Runner cannot place it yet stays `pending` and is retried by reconciliation; see [Domain and lifecycle](domain-lifecycle.md#unplaced-starts). `capacityWaitMilliseconds` (1 to 3600000) bounds that wait. A start not placed within it fails its Operation with the retryable `capacity_wait_expired` problem, releases the Workspace mutation slot, and leaves the Sandbox wanted `stopped` in its prior observed state, so the abandoned start never boots compute later. The bound is part of the canonical request: reusing an `Idempotency-Key` with a different bound returns `409 idempotency_conflict`. A start that omits it waits until the home Runner places it.
+
+The bound is admission, not cancellation: a caller that gives up before it still leaves the start pending until it places or expires, and the expiry lands within about one reconciliation poll interval after the deadline. An expired Operation stays failed, so replaying its `Idempotency-Key` returns that failure; starting again needs a fresh read of the Sandbox revision and a new key.
 
 `get` and `list` return durable projections. `inspect` returns the latest generation-fenced guest heartbeat and active-session evidence persisted by the runner path; it does not renew activity or synthesize a fresh observation while no synchronous runner-effect broker exists. `ping` reports that same persisted guest liveness without touch. `touch` explicitly renews useful activity for the current generation and may carry a Lease. `drain` rejects new work immediately, waits only through the profile grace, and then allows stop to fence remaining work. `stop` removes compute without deleting the Sandbox or workspace. `delete` never occurs on connection loss.
 

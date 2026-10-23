@@ -559,6 +559,9 @@ type CreateSandboxRequest struct {
 	Profile          string                  `json:"profile"`
 	Metadata         map[string]string       `json:"metadata"`
 	SourceSnapshotID string                  `json:"sourceSnapshotId,omitempty"`
+	// CapacityWaitMilliseconds, when positive, bounds how long the start a
+	// running-initial Profile performs after creation may wait unplaced.
+	CapacityWaitMilliseconds CapacityWaitBound `json:"capacityWaitMilliseconds,omitempty"`
 }
 
 // SwitchSandboxProfileRequest names the Profile whose current revision a stopped
@@ -909,13 +912,16 @@ type Operation struct {
 	State            string            `json:"state"`
 	RequestID        string            `json:"requestId"`
 	RequestMetadata  map[string]string `json:"-"`
-	Sandbox          *Sandbox          `json:"sandbox,omitempty"`
-	Snapshot         *Snapshot         `json:"snapshot,omitempty"`
-	Error            *Problem          `json:"error,omitempty"`
-	CreatedAt        time.Time         `json:"createdAt"`
-	StartedAt        *time.Time        `json:"startedAt,omitempty"`
-	CompletedAt      *time.Time        `json:"completedAt,omitempty"`
-	UpdatedAt        time.Time         `json:"updatedAt"`
+	// CapacityWaitDeadline is when a still-unplaced start fails with
+	// capacity_wait_expired. It is internal admission state.
+	CapacityWaitDeadline *time.Time `json:"-"`
+	Sandbox              *Sandbox   `json:"sandbox,omitempty"`
+	Snapshot             *Snapshot  `json:"snapshot,omitempty"`
+	Error                *Problem   `json:"error,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	StartedAt            *time.Time `json:"startedAt,omitempty"`
+	CompletedAt          *time.Time `json:"completedAt,omitempty"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
 }
 
 // DurationPercentiles is one bounded duration distribution.

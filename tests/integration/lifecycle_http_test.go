@@ -132,6 +132,19 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	if replayedOperation.ID != startOperation.ID {
 		t.Fatalf("start replay operation=%q want %q", replayedOperation.ID, startOperation.ID)
 	}
+	boundedReplay := lifecycleHTTPRequest(
+		t, server.URL, credential, http.MethodPost,
+		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-start",
+		strconv.FormatInt(sandbox.Revision, 10), "",
+		contracts.StartSandboxRequest{Image: testExecutionImage(), CapacityWaitMilliseconds: 30_000},
+	)
+	assertProblem(t, boundedReplay, http.StatusConflict, "idempotency_conflict")
+	unboundedWait := lifecycleHTTPRequest(
+		t, server.URL, credential, http.MethodPost,
+		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-start-unbounded-wait",
+		strconv.FormatInt(sandbox.Revision, 10), "", map[string]any{"capacityWaitMilliseconds": 3_600_001},
+	)
+	assertProblem(t, unboundedWait, http.StatusBadRequest, "invalid_request")
 	isolated := lifecycleHTTPRequest(
 		t, server.URL, otherCredential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-isolated",

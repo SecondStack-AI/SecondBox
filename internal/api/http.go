@@ -597,16 +597,27 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 		if body == nil {
 			body = &contracts.StartSandboxRequest{}
 		}
-		apiHandler.mutateSandboxLifecycle(
-			writer, request, sandboxID, action,
-			body.Image.LifecycleMetadata(),
+		expectedRevision, err := parseIfMatch(request)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		operation, replayed, err := apiHandler.service.StartSandboxOperation(
+			request.Context(), requestPrincipal(request), sandboxID,
+			request.Header.Get("Idempotency-Key"), expectedRevision, *body,
 		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 	case "drain", "stop":
 		if err := requireEmptyBody(request); err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, nil)
+		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action)
 	case "relocate":
 		var body contracts.RelocateSandboxRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
@@ -755,7 +766,6 @@ func (apiHandler *handler) mutateSandboxLifecycle(
 	request *http.Request,
 	sandboxID string,
 	action string,
-	metadata map[string]string,
 ) {
 	expectedRevision, err := parseIfMatch(request)
 	if err != nil {
@@ -764,7 +774,7 @@ func (apiHandler *handler) mutateSandboxLifecycle(
 	}
 	operation, replayed, err := apiHandler.service.MutateSandbox(
 		request.Context(), requestPrincipal(request), sandboxID, action,
-		request.Header.Get("Idempotency-Key"), expectedRevision, metadata,
+		request.Header.Get("Idempotency-Key"), expectedRevision,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -780,7 +790,7 @@ func (apiHandler *handler) deleteSandbox(writer http.ResponseWriter, request *ht
 		return
 	}
 	apiHandler.mutateSandboxLifecycle(
-		writer, request, request.PathValue("sandboxID"), "delete", nil,
+		writer, request, request.PathValue("sandboxID"), "delete",
 	)
 }
 
