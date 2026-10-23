@@ -105,6 +105,39 @@ or offline Runners produce unavailable or stale observations; no estimate is
 substituted. Migration `0027_workspace_storage_observations` adds nullable
 observation columns without rewriting Workspace data or changing retention.
 
+## RunnerPool capacity
+
+Subject usage cannot tell a full quota from a full pool or a Runner latched on host
+disk pressure. `GET /v1/pool-capacity` (application authority with `sandbox:read`,
+or the platform token) and `GET /v1/tenant-pool-capacity` (tenant controller) return
+one entry per RunnerPool the caller can place into or already has Sandboxes in: the
+pools of the current revision of each enabled Profile it may use, plus the pools its
+own Sandboxes are pinned to, whatever their Profile. An application authority's
+Profiles are its grants and its Sandboxes its Subject's; a controller's are the Tenant
+ceiling and every Sandbox of the Tenant; the platform sees every pool. Each entry
+reports the pool `state` and:
+
+- `placeableRunnerCount`: Runners placement can currently choose (ready, not draining,
+  connected). The RunnerPool resource's `readyRunnerCount` counts ready Runners only.
+- `allocatable` and `reserved`: the Instances, vCPU, memory, and concurrent-operation
+  slots those Runners advertise and hold, summed. Workspace disk and storage admission
+  are not summed; see the next item.
+- `storageAdmissionDeniedRunnerCount`: connected Runners whose latest storage-pressure
+  report denies new Workspaces and Instances. A Runner whose readiness fails while the
+  latch holds disconnects, and then shows only as missing from `placeableRunnerCount`.
+- `pendingStartCount`: Sandboxes wanted running on a home Runner in the pool and not
+  yet placed: admitted starts, the start a running-initial create performs, and
+  automatic restarts, including ones the reconciler has not attempted yet and ones
+  waiting for a selected image's preparation. A failed Sandbox parked on a failure class
+  waits for an operator and is not counted.
+
+The figures span every Tenant placing into the pool, so a tenant observes aggregate
+pool load. No Runner identity or address is exposed, but a pool with one placeable
+Runner reports that Runner's figures. A Sandbox is homed on one Runner, so free pool
+capacity does not mean that a particular Sandbox's home has room. The reading is not a
+reservation. Go and TypeScript SDKs provide `GetPoolCapacity`/`getPoolCapacity` and
+`GetTenantPoolCapacity`/`getTenantPoolCapacity`; there is no CLI verb.
+
 ## Signals
 
 - `GET /healthz` reports only that the HTTP process can answer.

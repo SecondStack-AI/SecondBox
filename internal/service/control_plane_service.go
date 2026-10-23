@@ -66,6 +66,7 @@ type SandboxStore interface {
 	GetSubjectSandboxPolicy(context.Context, string, string, string, time.Time) (contracts.SubjectSandboxPolicyObservation, error)
 	UpdateSubjectSandboxPolicy(context.Context, string, string, contracts.SubjectSandboxPolicy, int64, time.Time, ports.AdminIdempotencyInput) (contracts.SubjectSandboxPolicyObservation, ports.AdminIdempotencyResult, error)
 	GetSubjectCapacity(ctx context.Context, tenantRef, subjectRef string, observedAt time.Time) (contracts.SubjectCapacity, error)
+	GetPoolCapacity(ctx context.Context, scope ports.PoolCapacityScope, observedAt time.Time) (contracts.PoolCapacityObservation, error)
 	RelocateSandbox(ctx context.Context, input ports.WorkspaceRelocationInput) (contracts.Operation, error)
 	SwitchSandboxProfile(ctx context.Context, input ports.SwitchSandboxProfileInput) (contracts.Sandbox, bool, error)
 }
@@ -562,6 +563,36 @@ func (service *ControlPlaneService) GetSubjectCapacity(ctx context.Context, prin
 		return contracts.SubjectCapacity{}, ports.ErrAuthorizationDenied
 	}
 	return service.store.GetSubjectCapacity(ctx, principal.TenantRef, principal.SubjectRef, service.now().UTC())
+}
+
+// GetPoolCapacity observes the RunnerPools the caller can place Sandboxes
+// into or already has Sandboxes in. An application authority sees the pools
+// of its enabled granted Profiles and of its Subject's Sandboxes; a tenant
+// controller sees those of the enabled Profiles in the Tenant ceiling and of
+// every Sandbox of its Tenant; the platform sees every pool.
+func (service *ControlPlaneService) GetPoolCapacity(
+	ctx context.Context,
+	principal contracts.Principal,
+) (contracts.PoolCapacityObservation, error) {
+	var scope ports.PoolCapacityScope
+	switch principal.Kind {
+	case contracts.AuthorityKindPlatform:
+		scope.AllPools = true
+	case contracts.AuthorityKindTenantController:
+		if principal.TenantRef == "" {
+			return contracts.PoolCapacityObservation{}, ports.ErrAuthorizationDenied
+		}
+		scope = ports.PoolCapacityScope{TenantRef: principal.TenantRef, TenantCeiling: true}
+	default:
+		grants := applicationProfileGrants(ctx)
+		if grants == nil || principal.TenantRef == "" || principal.SubjectRef == "" {
+			return contracts.PoolCapacityObservation{}, ports.ErrAuthorizationDenied
+		}
+		scope = ports.PoolCapacityScope{
+			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef, ProfileNames: grants,
+		}
+	}
+	return service.store.GetPoolCapacity(ctx, scope, service.now().UTC())
 }
 
 // GetOperation returns one durable mutation observation inside the authenticated Project.

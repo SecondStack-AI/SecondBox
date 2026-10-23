@@ -538,6 +538,18 @@ export interface PingResult {
 /** A finite nonnegative policy ceiling, or explicit null for no ceiling at this scope. Zero is a finite limit. Ancestor limits and physical capacity still apply. */
 export type PolicyLimit = number | null;
 
+export interface PoolCapacityObservation {
+  readonly observedAt: Timestamp;
+  readonly pools: readonly RunnerPoolCapacity[];
+}
+
+export interface PoolComputeCapacity {
+  readonly instances: number;
+  readonly memoryBytes: number;
+  readonly operations: number;
+  readonly vcpuCount: number;
+}
+
 export interface PortPolicy {
   readonly maximumSessionSeconds: number;
   readonly maximumSessions: PositivePolicyLimit;
@@ -753,6 +765,16 @@ export interface RunnerPool {
   readonly revision: number;
   readonly state: RunnerPoolState;
   readonly updatedAt: Timestamp;
+}
+
+export interface RunnerPoolCapacity {
+  readonly allocatable: PoolComputeCapacity;
+  readonly name: ProfileName;
+  readonly pendingStartCount: number;
+  readonly placeableRunnerCount: number;
+  readonly reserved: PoolComputeCapacity;
+  readonly state: RunnerPoolState;
+  readonly storageAdmissionDeniedRunnerCount: number;
 }
 
 export interface RunnerPoolPage {
@@ -1223,6 +1245,7 @@ export type OperationID =
   | "getDeploymentUsage"
   | "getOperation"
   | "getOperationTiming"
+  | "getPoolCapacity"
   | "getProfile"
   | "getRunner"
   | "getRunnerPool"
@@ -1236,6 +1259,7 @@ export type OperationID =
   | "getSubjectSandboxPolicy"
   | "getTenant"
   | "getTenantControllerAuthority"
+  | "getTenantPoolCapacity"
   | "getTenantUsage"
   | "inspectSandbox"
   | "listApplicationAuthorities"
@@ -1319,6 +1343,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   getDeploymentUsage: { method: "GET", path: "/v1/deployment-usage" },
   getOperation: { method: "GET", path: "/v1/operations/{operationId}" },
   getOperationTiming: { method: "GET", path: "/v1/operations/{operationId}/timings" },
+  getPoolCapacity: { method: "GET", path: "/v1/pool-capacity" },
   getProfile: { method: "GET", path: "/v1/profiles/{profileName}" },
   getRunner: { method: "GET", path: "/v1/runners/{runnerId}" },
   getRunnerPool: { method: "GET", path: "/v1/runner-pools/{runnerPoolName}" },
@@ -1332,6 +1357,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   getSubjectSandboxPolicy: { method: "GET", path: "/v1/subjects/{subjectRef}/sandbox-policy" },
   getTenant: { method: "GET", path: "/v1/tenants/{tenantRef}" },
   getTenantControllerAuthority: { method: "GET", path: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}" },
+  getTenantPoolCapacity: { method: "GET", path: "/v1/tenant-pool-capacity" },
   getTenantUsage: { method: "GET", path: "/v1/usage" },
   inspectSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:inspect" },
   listApplicationAuthorities: { method: "GET", path: "/v1/application-authorities" },

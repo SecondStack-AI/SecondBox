@@ -197,6 +197,22 @@ func (client *Client) GetSubjectCapacity(ctx context.Context) (SubjectCapacity, 
 	return capacity, err
 }
 
+// GetPoolCapacity observes the RunnerPools of the application authority's
+// granted Profiles and its Subject's Sandboxes; the platform sees every pool.
+func (client *Client) GetPoolCapacity(ctx context.Context) (PoolCapacityObservation, error) {
+	var observation PoolCapacityObservation
+	err := client.RequestJSON(ctx, "getPoolCapacity", CallOptions{}, &observation)
+	return observation, err
+}
+
+// GetTenantPoolCapacity observes the RunnerPools of the Tenant ceiling and the
+// Tenant's Sandboxes under tenant-controller authority.
+func (client *Client) GetTenantPoolCapacity(ctx context.Context) (PoolCapacityObservation, error) {
+	var observation PoolCapacityObservation
+	err := client.RequestJSON(ctx, "getTenantPoolCapacity", CallOptions{}, &observation)
+	return observation, err
+}
+
 func (client *Client) GetTenantUsage(ctx context.Context, supplied ...PageOptions) (TenantUsage, error) {
 	if len(supplied) > 1 {
 		return TenantUsage{}, errors.New("SecondBox Tenant usage accepts at most one page option")

@@ -544,6 +544,18 @@ type PingResult struct {
 // PolicyLimit A finite nonnegative policy ceiling, or explicit null for no ceiling at this scope. Zero is a finite limit. Ancestor limits and physical capacity still apply.
 type PolicyLimit = contracts.PolicyLimit
 
+type PoolCapacityObservation struct {
+	ObservedAt Timestamp            `json:"observedAt"`
+	Pools      []RunnerPoolCapacity `json:"pools"`
+}
+
+type PoolComputeCapacity struct {
+	Instances   int64 `json:"instances"`
+	MemoryBytes int64 `json:"memoryBytes"`
+	Operations  int64 `json:"operations"`
+	VcpuCount   int64 `json:"vcpuCount"`
+}
+
 type PortPolicy = contracts.PortPolicy
 
 // PortSession A PortSession lives while the Lease it was admitted under is renewed. expiresAt is the latest instant it can live; it ends earlier when that Lease is released, lapses, or is fenced.
@@ -723,6 +735,16 @@ type RunnerID = string
 type RunnerPage = contracts.RunnerPage
 
 type RunnerPool = contracts.RunnerPool
+
+type RunnerPoolCapacity struct {
+	Allocatable                       PoolComputeCapacity `json:"allocatable"`
+	Name                              ProfileName         `json:"name"`
+	PendingStartCount                 int64               `json:"pendingStartCount"`
+	PlaceableRunnerCount              int64               `json:"placeableRunnerCount"`
+	Reserved                          PoolComputeCapacity `json:"reserved"`
+	State                             RunnerPoolState     `json:"state"`
+	StorageAdmissionDeniedRunnerCount int64               `json:"storageAdmissionDeniedRunnerCount"`
+}
 
 type RunnerPoolPage = contracts.RunnerPoolPage
 

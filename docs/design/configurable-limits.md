@@ -132,6 +132,11 @@ the optional attributed selection. Once cleared, reintroducing it is a new selec
 `GET /v1/subject-usage` returns finite or null `available` per dimension and
 `constrainingScopes` (`subject`, `tenant`, `tenant_and_subject`, or `none`). It exposes no
 peer identities. Expired port sessions do not consume observed admission headroom.
+`GET /v1/pool-capacity` and `GET /v1/tenant-pool-capacity` complement it with the
+physical side: allocatable and reserved compute, waiting starts, and storage-latched
+Runners per RunnerPool the caller can place into, aggregated without Runner
+identities. Physical Runner limits stay Runner configuration; no API writes them. See
+[Observability and diagnostics](../operations/observability-and-diagnostics.md#runnerpool-capacity).
 Policy integers must fit exact JSON integers (at most 2^53−1); durations additionally must
 fit the implementation's duration clock. These representation bounds are not unlimited.
 

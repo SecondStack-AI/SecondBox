@@ -1436,6 +1436,96 @@
         }
       }
     },
+    "/v1/pool-capacity": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TenantRef"
+        },
+        {
+          "$ref": "#/components/parameters/SubjectRef"
+        }
+      ],
+      "get": {
+        "tags": [
+          "RunnerPools"
+        ],
+        "operationId": "getPoolCapacity",
+        "description": "Requires sandbox:read. Returns aggregate compute capacity for the RunnerPools of the application authority's enabled granted Profiles and of its Subject's Sandboxes; the platform authority sees every RunnerPool. Figures span every Tenant placing into the pool. No Runner identity is exposed, although a pool with one placeable Runner reports that Runner's figures. Free pool capacity does not imply room on a particular Sandbox's home Runner, and the reading is not a reservation.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RunnerPool capacity observation.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolCapacityObservation"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/tenant-pool-capacity": {
+      "get": {
+        "tags": [
+          "RunnerPools"
+        ],
+        "operationId": "getTenantPoolCapacity",
+        "security": [
+          {
+            "tenantControllerBearer": []
+          }
+        ],
+        "description": "Returns aggregate compute capacity for the RunnerPools of the enabled Profiles in the Tenant ceiling and of every Sandbox of the tenant fixed by the authenticated controller. Figures span every Tenant placing into the pool. No Runner identity is exposed, although a pool with one placeable Runner reports that Runner's figures. Free pool capacity does not imply room on a particular Sandbox's home Runner, and the reading is not a reservation.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RunnerPool capacity observation.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolCapacityObservation"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementUnavailable"
+          }
+        }
+      }
+    },
     "/v1/usage": {
       "get": {
         "tags": [
@@ -7076,6 +7166,105 @@
           },
           "bearerToken": {
             "$ref": "#/components/schemas/ApplicationBearerToken"
+          }
+        }
+      },
+      "PoolCapacityObservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pools",
+          "observedAt"
+        ],
+        "properties": {
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunnerPoolCapacity"
+            }
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "RunnerPoolCapacity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "state",
+          "placeableRunnerCount",
+          "storageAdmissionDeniedRunnerCount",
+          "allocatable",
+          "reserved",
+          "pendingStartCount"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/ProfileName"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunnerPoolState"
+          },
+          "placeableRunnerCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Runners placement can currently choose: ready, not draining, and connected."
+          },
+          "storageAdmissionDeniedRunnerCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Connected Runners whose latest storage-pressure report denies new Workspaces and Instances until an operator frees host disk. A Runner whose readiness fails under storage pressure is disconnected and shows only as missing from placeableRunnerCount."
+          },
+          "allocatable": {
+            "$ref": "#/components/schemas/PoolComputeCapacity",
+            "description": "Sum of the placeable Runners' advertised capacity."
+          },
+          "reserved": {
+            "$ref": "#/components/schemas/PoolComputeCapacity",
+            "description": "Sum of the placeable Runners' current reservations."
+          },
+          "pendingStartCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Sandboxes, across every Tenant, wanted running on a home Runner in this pool and not yet placed: admitted starts, the start a running-initial create performs, and automatic restarts, including ones not yet attempted or waiting for a selected image's preparation."
+          }
+        }
+      },
+      "PoolComputeCapacity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "instances",
+          "vcpuCount",
+          "memoryBytes",
+          "operations"
+        ],
+        "properties": {
+          "instances": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "vcpuCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "operations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Concurrent-operation slots, which placement reserves per Instance."
           }
         }
       },

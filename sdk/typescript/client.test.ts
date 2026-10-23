@@ -1308,3 +1308,26 @@ test("Subject connection policy preserves finite selection, null inheritance and
     assert.equal(result.attributedExecution?.maximumConnectionsCeiling, 4096);
   }
 });
+
+test("pool capacity reads use the application and tenant-controller operations", async () => {
+  const observation = {
+    pools: [{
+      name: "default", state: "ready", placeableRunnerCount: 1, storageAdmissionDeniedRunnerCount: 0,
+      allocatable: { instances: 32, vcpuCount: 64, memoryBytes: 68719476736, operations: 128 },
+      reserved: { instances: 32, vcpuCount: 64, memoryBytes: 68719476736, operations: 128 },
+      pendingStartCount: 3,
+    }],
+    observedAt: "2026-10-23T00:00:00Z",
+  };
+  const requested: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    assert.equal(request.method, "GET");
+    requested.push(new URL(request.url).pathname);
+    return Response.json(observation);
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  assert.deepEqual(await api.getPoolCapacity(), observation);
+  assert.deepEqual(await api.getTenantPoolCapacity(), observation);
+  assert.deepEqual(requested, ["/v1/pool-capacity", "/v1/tenant-pool-capacity"]);
+});
