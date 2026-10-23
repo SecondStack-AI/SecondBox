@@ -1,7 +1,10 @@
 package integration_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -66,23 +69,49 @@ func TestQuotaRefusalsDistinguishComputeFromDurableAxes(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	createRunning := func(label string) error {
-		_, _, err := fixture.controlPlane.CreateSandboxOperation(
-			t.Context(), fixture.principal,
-			label+"-"+strconv.FormatInt(integrationIdentitySequence.Add(1), 10),
-			contracts.CreateSandboxRequest{Image: testExecutionImage(),
-				Profile: fixture.profileName, Metadata: map[string]string{},
-			},
-		)
-		return err
+	// Through the HTTP API, a compute-only refusal is retryable and paced, and
+	// a refusal that also exhausts the Sandbox count is neither.
+	createRunning := func(label string) (*http.Response, contracts.Problem) {
+		t.Helper()
+		body, err := json.Marshal(contracts.CreateSandboxRequest{Image: testExecutionImage(),
+			Profile: fixture.profileName, Metadata: map[string]string{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fixture.server+"/v1/sandboxes", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+testPlatformToken)
+		request.Header.Set("X-SecondBox-Tenant-Ref", fixture.tenantRef)
+		request.Header.Set("X-SecondBox-Subject-Ref", fixture.subjectRef)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", label+"-"+strconv.FormatInt(integrationIdentitySequence.Add(1), 10))
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var problem contracts.Problem
+		if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+			t.Fatal(err)
+		}
+		return response, problem
 	}
-	if err := createRunning("compute-quota-create"); !errors.Is(err, ports.ErrComputeQuotaExceeded) {
-		t.Fatalf("running-initial create over the active-Instance quota error = %v, want the compute quota refusal", err)
+	response, problem := createRunning("compute-quota-create")
+	if response.StatusCode != http.StatusTooManyRequests || problem.Code != "quota_exceeded" || !problem.Retryable ||
+		problem.RetryAfterMilliseconds == nil || *problem.RetryAfterMilliseconds != 1000 ||
+		response.Header.Get("Retry-After") != "1" {
+		t.Fatalf("running-initial create over the active-Instance quota = %d Retry-After=%q %#v",
+			response.StatusCode, response.Header.Get("Retry-After"), problem)
 	}
 	setFixtureSubjectQuota(t, fixture, "max_sandboxes", 2)
-	if err := createRunning("durable-quota-create"); !errors.Is(err, ports.ErrQuotaExceeded) ||
-		errors.Is(err, ports.ErrComputeQuotaExceeded) {
-		t.Fatalf("create over both the Sandbox and active-Instance quotas error = %v, want the durable refusal", err)
+	response, problem = createRunning("durable-quota-create")
+	if response.StatusCode != http.StatusTooManyRequests || problem.Code != "quota_exceeded" || problem.Retryable ||
+		problem.RetryAfterMilliseconds != nil || response.Header.Get("Retry-After") != "" {
+		t.Fatalf("create over both the Sandbox and active-Instance quotas = %d Retry-After=%q %#v",
+			response.StatusCode, response.Header.Get("Retry-After"), problem)
 	}
 }
 
