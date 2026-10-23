@@ -60,6 +60,8 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"extendApplicationAuthority":      {"extendApplicationAuthority", "200", "ApplicationAuthority", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getTenantUsage":                  {"getTenantUsage", "200", "TenantUsage", nil, nil},
 	"getSubjectCapacity":              {"getSubjectCapacity", "200", "SubjectCapacity", nil, nil},
+	"getPoolCapacity":                 {"getPoolCapacity", "200", "PoolCapacityObservation", nil, nil},
+	"getTenantPoolCapacity":           {"getPoolCapacity", "200", "PoolCapacityObservation", nil, nil},
 	"updateTenantQuota":               {"updateTenantQuota", "200", "Tenant", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getDeploymentUsage":              {"getDeploymentUsage", "200", "DeploymentUsage", nil, nil},
 	"listProfiles":                    {"listProfiles", "200", "ProfilePage", nil, nil},

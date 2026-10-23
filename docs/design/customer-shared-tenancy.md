@@ -8,6 +8,12 @@ reports admission headroom capped by both Subject and shared tenant limits. It
 does not expose tenant totals or other Subjects. Headroom is an observation;
 other applications can consume it before the next admission.
 
+`GET /v1/pool-capacity` and its tenant-controller counterpart report aggregate
+capacity, reservations, waiting starts, and storage-latched Runners for each
+RunnerPool the caller can place into or has Sandboxes in. Because pools are shared,
+those figures include other Tenants' load; they name no Runner, Tenant, or Sandbox,
+though a pool with a single placeable Runner reports that Runner's figures.
+
 The platform operator can replace a Tenant's aggregate quota through
 `PUT /v1/tenants/{tenantRef}/quota`, using `If-Match` and `Idempotency-Key` and a
 complete `aggregateQuota` object. The transaction uses the existing tenant quota

@@ -48,6 +48,7 @@ import {
   type ApplicationCredentialResponse,
   type TenantUsage,
   type SubjectCapacity,
+  type PoolCapacityObservation,
   type SubjectSandboxPolicy,
   type SubjectSandboxPolicyObservation,
   type SubjectQuota,
@@ -112,6 +113,9 @@ export type {
   ApplicationCredentialResponse,
   TenantUsage,
   SubjectCapacity,
+  PoolCapacityObservation,
+  RunnerPoolCapacity,
+  PoolComputeCapacity,
   Snapshot,
   SnapshotPage,
   RunnerPool,
@@ -251,6 +255,11 @@ export class SecondBox {
     return this.requestJSON("getTenantUsage", { queryParameters: pageQuery(options), signal });
   }
 
+  /** Observes the RunnerPools of the Tenant ceiling and the Tenant's Sandboxes; requires tenant-controller authority. */
+  public getTenantPoolCapacity(signal?: AbortSignal): Promise<PoolCapacityObservation> {
+    return this.requestJSON("getTenantPoolCapacity", { signal });
+  }
+
   private mutateController<T>(operationID: OperationID, pathParameters: Readonly<Record<string, string>>, revision: number | undefined, key: string, request: unknown, signal?: AbortSignal): Promise<T> {
     if (!/^[\x21-\x7e]{1,128}$/.test(key)) throw new Error("SecondBox management Idempotency-Key must contain 1 through 128 visible ASCII characters");
     return this.requestJSON(operationID, {
@@ -263,6 +272,15 @@ export class SecondBox {
 
   public async getSubjectCapacity(): Promise<SubjectCapacity> {
     return this.requestJSON<SubjectCapacity>("getSubjectCapacity");
+  }
+
+  /**
+   * Observes the RunnerPools of the authority's granted Profiles and its
+   * Subject's Sandboxes: allocatable and reserved compute, queued starts, and
+   * storage-latched Runners. Figures span every Tenant in a pool.
+   */
+  public getPoolCapacity(signal?: AbortSignal): Promise<PoolCapacityObservation> {
+    return this.requestJSON<PoolCapacityObservation>("getPoolCapacity", { signal });
   }
 
   public async getApplicationSandboxPolicy(profile: string, signal?: AbortSignal): Promise<SubjectSandboxPolicyObservation> {
