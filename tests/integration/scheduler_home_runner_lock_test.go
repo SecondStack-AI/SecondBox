@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -221,24 +222,54 @@ func TestSchedulerRefusesPlacementAfterTheCapacityWait(t *testing.T) {
 // deadline ends in expiry rather than in compute.
 func TestSchedulerRefusesPlacementWhenTheRunnerLockOutlastsTheCapacityWait(t *testing.T) {
 	fixture := newSchedulerLockFixture(t)
-	startedAt := time.Now()
-	advancing, err := scheduler.NewPostgresStore(t.Context(), scheduler.PostgresStoreConfig{
+	deadline := fixture.now.Add(time.Minute)
+	var pastDeadline atomic.Bool
+	controlled, err := scheduler.NewPostgresStore(t.Context(), scheduler.PostgresStoreConfig{
 		DatabaseURL: integrationDatabaseURL,
-		Now:         func() time.Time { return fixture.now.Add(time.Since(startedAt)) },
+		Now: func() time.Time {
+			if pastDeadline.Load() {
+				return deadline.Add(time.Second)
+			}
+			return fixture.now
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(advancing.Close)
-	deadline := fixture.now.Add(200 * time.Millisecond)
+	t.Cleanup(controlled.Close)
 	fixture.request.CapacityWaitDeadline = &deadline
 	runner := fixture.holdRow(t, `SELECT id FROM secondbox.runners WHERE id=$1 FOR UPDATE`, fixture.homeRunnerID)
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := advancing.Schedule(t.Context(), fixture.request)
+		_, _, err := controlled.Schedule(t.Context(), fixture.request)
 		result <- err
 	}()
-	time.Sleep(500 * time.Millisecond)
+	// Advance the clock only once placement holds the Sandbox and waits on
+	// the Runner row, so the Sandbox-lock time is before the deadline.
+	waitStarted := time.Now()
+	for {
+		var waiting int64
+		if err := fixture.pool.QueryRow(t.Context(), `
+			SELECT count(*) FROM pg_locks
+			WHERE NOT granted AND locktype IN ('relation','tuple','transactionid')
+			  AND pid<>pg_backend_pid()`,
+		).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case err := <-result:
+			t.Fatalf("placement finished before reaching the held Runner lock: %v", err)
+		default:
+		}
+		if time.Since(waitStarted) > 10*time.Second {
+			t.Fatal("placement never waited on the held Runner lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pastDeadline.Store(true)
 	if err := runner.Rollback(t.Context()); err != nil {
 		t.Fatal(err)
 	}
