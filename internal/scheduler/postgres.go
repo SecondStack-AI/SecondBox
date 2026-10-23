@@ -299,14 +299,6 @@ func (store *PostgresStore) scheduleOnce(
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return DurableAssignment{}, false, err
 	}
-	// A plan loaded by a worker that has since lost its claim may still reach
-	// this point after a concurrent worker expired the start, released its
-	// mutation, and returned the desired state. Expiry happens only after the
-	// deadline, so checking it here under the Sandbox lock refuses that plan
-	// instead of letting it adopt the free mutation slot.
-	if request.CapacityWaitDeadline != nil && !timing.sandboxLockedAt.Before(*request.CapacityWaitDeadline) {
-		return DurableAssignment{}, false, ErrCapacityWaitExpired
-	}
 	if workspace.Mutation.State != "" &&
 		(workspace.Mutation.ID != request.StartMutationID || workspace.Mutation.Kind != "start") {
 		return DurableAssignment{}, false, errors.New("SecondBox scheduler Workspace has a conflicting local mutation")
@@ -375,6 +367,15 @@ func (store *PostgresStore) scheduleOnce(
 	placementAt, err := store.observeAtOrAfter(timing.candidateSelectedAt)
 	if err != nil {
 		return DurableAssignment{}, false, err
+	}
+	// A plan loaded by a worker that has since lost its claim may still reach
+	// this point after a concurrent worker expired the start, released its
+	// mutation, and returned the desired state. Expiry happens only after the
+	// deadline and needs the Sandbox lock this transaction holds, so checking
+	// the deadline here, after every blocking lock and immediately before the
+	// writes, refuses that plan instead of letting it adopt the free slot.
+	if request.CapacityWaitDeadline != nil && !placementAt.Before(*request.CapacityWaitDeadline) {
+		return DurableAssignment{}, false, ErrCapacityWaitExpired
 	}
 	assignment := DurableAssignment{
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,
