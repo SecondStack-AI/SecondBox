@@ -49,16 +49,40 @@ func TestQuotaRefusalsDistinguishComputeFromDurableAxes(t *testing.T) {
 		t.Fatalf("start over the Tenant active-Instance quota error = %v, want the compute quota refusal", err)
 	}
 
+	// A create whose Profile starts the Sandbox reserves an Instance, so it is
+	// refused on compute; with the Sandbox count exhausted as well, the durable
+	// refusal wins and carries no retry hint.
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.tenant_quotas SET max_active_instances=10 WHERE tenant_ref=$1`, fixture.tenantRef,
+	); err != nil {
+		t.Fatal(err)
+	}
+	setFixtureSubjectQuota(t, fixture, "max_active_instances", 1)
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.profile_revisions AS revision
+		SET spec_json=jsonb_set(revision.spec_json,'{lifecycle,initialState}','"running"')
+		FROM secondbox.profiles AS profile
+		WHERE profile.name=$1 AND revision.id=profile.current_revision_id`, fixture.profileName,
+	); err != nil {
+		t.Fatal(err)
+	}
+	createRunning := func(label string) error {
+		_, _, err := fixture.controlPlane.CreateSandboxOperation(
+			t.Context(), fixture.principal,
+			label+"-"+strconv.FormatInt(integrationIdentitySequence.Add(1), 10),
+			contracts.CreateSandboxRequest{Image: testExecutionImage(),
+				Profile: fixture.profileName, Metadata: map[string]string{},
+			},
+		)
+		return err
+	}
+	if err := createRunning("compute-quota-create"); !errors.Is(err, ports.ErrComputeQuotaExceeded) {
+		t.Fatalf("running-initial create over the active-Instance quota error = %v, want the compute quota refusal", err)
+	}
 	setFixtureSubjectQuota(t, fixture, "max_sandboxes", 2)
-	_, _, err = fixture.controlPlane.CreateSandboxOperation(
-		t.Context(), fixture.principal,
-		"durable-quota-create-"+strconv.FormatInt(integrationIdentitySequence.Add(1), 10),
-		contracts.CreateSandboxRequest{Image: testExecutionImage(),
-			Profile: fixture.profileName, Metadata: map[string]string{},
-		},
-	)
-	if !errors.Is(err, ports.ErrQuotaExceeded) || errors.Is(err, ports.ErrComputeQuotaExceeded) {
-		t.Fatalf("create over the Sandbox quota error = %v, want a durable quota refusal", err)
+	if err := createRunning("durable-quota-create"); !errors.Is(err, ports.ErrQuotaExceeded) ||
+		errors.Is(err, ports.ErrComputeQuotaExceeded) {
+		t.Fatalf("create over both the Sandbox and active-Instance quotas error = %v, want the durable refusal", err)
 	}
 }
 
