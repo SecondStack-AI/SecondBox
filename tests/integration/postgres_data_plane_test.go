@@ -956,7 +956,7 @@ func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testin
 	if _, _, err := relay.AdmitDataPlane(t.Context(), saturatedOutput); !errors.Is(err, runnercontrol.ErrDataPlaneOutputLimit) {
 		t.Fatalf("output bound above the Profile at saturated capacity error = %v", err)
 	}
-	if _, _, err := relay.AdmitDataPlane(t.Context(), execAdmission("exec_saturated")); !errors.Is(err, ports.ErrQuotaExceeded) {
+	if _, _, err := relay.AdmitDataPlane(t.Context(), execAdmission("exec_saturated")); !errors.Is(err, ports.ErrComputeQuotaExceeded) {
 		t.Fatalf("in-policy exec at saturated capacity error = %v", err)
 	}
 }

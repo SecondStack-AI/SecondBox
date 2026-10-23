@@ -1073,7 +1073,9 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 	if errors.As(err, &incompatibleProfile) {
 		problem.Details = []contracts.ProblemDetail{{Field: incompatibleProfile.Property, Reason: incompatibleProfile.Reason}}
 	}
-	if errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+	// Refusals that other work ending can resolve carry a pacing hint.
+	if errors.Is(err, ports.ErrHomeRunnerUnavailable) ||
+		errors.Is(err, ports.ErrComputeQuotaExceeded) {
 		retryAfterMilliseconds := int64(time.Second / time.Millisecond)
 		problem.RetryAfterMilliseconds = &retryAfterMilliseconds
 		writer.Header().Set("Retry-After", "1")
@@ -1182,6 +1184,8 @@ func classifyError(err error) (int, string, string, bool) {
 	case errors.Is(err, ports.ErrImagePreparationTargetsExceeded):
 		return http.StatusBadRequest, "image_preparation_targets_exceeded",
 			"Eligible execution node set exceeds the image preparation limit; select a narrower Profile", false
+	case errors.Is(err, ports.ErrComputeQuotaExceeded):
+		return http.StatusTooManyRequests, "quota_exceeded", "Compute quota exceeded", true
 	case errors.Is(err, ports.ErrQuotaExceeded):
 		return http.StatusTooManyRequests, "quota_exceeded", "Quota exceeded", false
 	case errors.Is(err, ports.ErrRevisionConflict):

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- A `429 quota_exceeded` refused only on compute dimensions (active Instances, vCPU, memory, or concurrent operations at Subject or Tenant scope, or a Profile's per-Sandbox execution concurrency) is now `retryable` and carries `retryAfterMilliseconds: 1000` and `Retry-After: 1`, as `503 home_runner_unavailable` already did. A refusal on Sandboxes, Snapshots, or port sessions is unchanged: not retryable and without a hint.
+
 ## 0.27.1 - 2026-10-18
 
 Stopping or fencing a Sandbox releases the host blocks behind files its guest deleted, and a restarted Firecracker Runner re-seats its host firewall jumps above Docker's. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged. See the [v0.27.1 release notes](docs/releases/v0.27.1.md).
