@@ -40,6 +40,19 @@ test("Sandbox start sends only the execution image", async () => {
   assert.equal(operation.id, "operation-start");
 });
 
+test("Sandbox start sends the capacity wait bound", async () => {
+  const fetcher: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    assert.equal(new URL(request.url).pathname, "/v1/sandboxes/sandbox-1:start");
+    assert.deepEqual(await request.json(), { capacityWaitMilliseconds: 300000 });
+    return Response.json({ id: "operation-start", state: "pending", kind: "start" });
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, { ...sandbox("stopped"), revision: 7 });
+  const operation = await handle.start({ capacityWaitMilliseconds: 300000, idempotencyKey: "start-wait" });
+  assert.equal(operation.id, "operation-start");
+});
+
 test("Sandbox exec sends attributed execution for that exec", async () => {
   const attributedExecution = { authorizationRef: "command-sdk", expiresAt: "2026-09-10T12:00:00Z" };
   let requestBody: unknown;
@@ -817,6 +830,7 @@ test("createSandbox returns a handle for the created resource", async () => {
         profile: "durable-coding",
         metadata: {},
         resources,
+        capacityWaitMilliseconds: 300000,
       });
       idempotency = new Headers(init.headers).get("Idempotency-Key") ?? "";
       return Response.json({
@@ -832,7 +846,9 @@ test("createSandbox returns a handle for the created resource", async () => {
     return Response.json(sandbox("creating"));
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
-  const { handle, operation } = await api.createSandbox({ image: executionImage, profile: "durable-coding", resources });
+  const { handle, operation } = await api.createSandbox({
+    image: executionImage, profile: "durable-coding", resources, capacityWaitMilliseconds: 300000,
+  });
   assert.equal(operation.sandboxId, "sandbox-1");
   assert.equal(handle.snapshot.id, "sandbox-1");
   assert.notEqual(idempotency, "");

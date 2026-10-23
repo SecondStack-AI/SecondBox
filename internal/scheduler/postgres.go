@@ -22,6 +22,9 @@ import (
 
 var (
 	ErrProfileRevisionMismatch = errors.New("SecondBox scheduler ProfileRevision mismatch")
+	// ErrCapacityWaitExpired refuses placement once the originating start's
+	// capacity wait has ended.
+	ErrCapacityWaitExpired = errors.New("SecondBox scheduler start capacity wait expired")
 )
 
 // Serialization backoff bounds. The ceiling keeps a retry well inside a
@@ -65,6 +68,10 @@ type ScheduleRequest struct {
 	Now                     time.Time
 	EffectStartedAt         time.Time
 	PlanReadyAt             time.Time
+	// CapacityWaitDeadline, when set, is the instant after which the
+	// originating start may no longer be placed. It is checked under the
+	// Sandbox lock, so a plan loaded before the deadline cannot place after it.
+	CapacityWaitDeadline *time.Time
 	// LifecycleClaimOwner is the lifecycle worker whose claim on the Sandbox
 	// this placement completes. While that worker still owns the claim, a new
 	// Assignment releases it and schedules the starting Sandbox at its
@@ -291,6 +298,14 @@ func (store *PostgresStore) scheduleOnce(
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return DurableAssignment{}, false, err
+	}
+	// A plan loaded by a worker that has since lost its claim may still reach
+	// this point after a concurrent worker expired the start, released its
+	// mutation, and returned the desired state. Expiry happens only after the
+	// deadline, so checking it here under the Sandbox lock refuses that plan
+	// instead of letting it adopt the free mutation slot.
+	if request.CapacityWaitDeadline != nil && !timing.sandboxLockedAt.Before(*request.CapacityWaitDeadline) {
+		return DurableAssignment{}, false, ErrCapacityWaitExpired
 	}
 	if workspace.Mutation.State != "" &&
 		(workspace.Mutation.ID != request.StartMutationID || workspace.Mutation.Kind != "start") {
