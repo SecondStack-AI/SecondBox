@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -90,6 +91,47 @@ func TestHomeRunnerUnavailableCarriesTypedRetryBackoff(t *testing.T) {
 			response.Header.Get("Retry-After"),
 			problem,
 		)
+	}
+}
+
+// TestCapacityRefusalsCarryRetryBackoffOnlyWhenWaitingCanHelp pins which
+// refusals pace a retry. Compute quota frees as other work ends. A durable
+// quota axis frees only by the caller's own action or an operator, and
+// execution_node_unavailable also covers a stopped Sandbox, a pool its Profile
+// can never match, and a Runner latched on storage pressure.
+func TestCapacityRefusalsCarryRetryBackoffOnlyWhenWaitingCanHelp(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		err       error
+		status    int
+		code      string
+		retryable bool
+		hinted    bool
+	}{
+		{"compute quota", fmt.Errorf("start admission: %w", ports.ErrComputeQuotaExceeded), http.StatusTooManyRequests, "quota_exceeded", true, true},
+		{"durable quota", ports.ErrQuotaExceeded, http.StatusTooManyRequests, "quota_exceeded", false, false},
+		{"pool without a ready Runner", ports.ErrRunnerPoolUnavailable, http.StatusConflict, "execution_node_unavailable", true, false},
+		{"Sandbox without current compute", ports.ErrLifecycleUnavailable, http.StatusConflict, "execution_node_unavailable", true, false},
+		{"workspace full", runnercontrol.ErrWorkspaceFull, http.StatusInsufficientStorage, "workspace_full", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			apiHandler := &handler{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			writer := httptest.NewRecorder()
+			apiHandler.writeError(writer, httptest.NewRequest(http.MethodPost, "/v1/sandboxes", nil), test.err)
+			response := writer.Result()
+			defer response.Body.Close()
+			var problem contracts.Problem
+			if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+				t.Fatal(err)
+			}
+			hinted := problem.RetryAfterMilliseconds != nil
+			if response.StatusCode != test.status || problem.Code != test.code ||
+				problem.Retryable != test.retryable || hinted != test.hinted ||
+				(response.Header.Get("Retry-After") != "") != test.hinted ||
+				(hinted && (*problem.RetryAfterMilliseconds != 1000 || response.Header.Get("Retry-After") != "1")) {
+				t.Fatalf("status=%d Retry-After=%q problem=%#v", response.StatusCode, response.Header.Get("Retry-After"), problem)
+			}
+		})
 	}
 }
 

@@ -449,13 +449,18 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		requestedCPU = resolvedResources.VCPUCount
 		requestedMemory = resolvedResources.MemoryBytes
 	}
-	if quotaWouldExceed(
-		subjectQuota, subjectUsage, requestedCPU, requestedMemory, requestedActiveInstances,
-	) || tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, quotaUsage{
+	tenantDelta := quotaUsage{
 		sandboxes: 1, activeInstances: requestedActiveInstances,
 		vcpuCount: requestedCPU, memoryBytes: requestedMemory,
-	}) {
-		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrQuotaExceeded
+	}
+	if quotaWouldExceed(
+		subjectQuota, subjectUsage, requestedCPU, requestedMemory, requestedActiveInstances,
+	) || tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, tenantDelta) {
+		if subjectDurableQuotaWouldExceed(subjectQuota, subjectUsage) ||
+			tenantDurableQuotaWouldExceed(tenantQuota, tenantUsage, tenantDelta) {
+			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrQuotaExceeded
+		}
+		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrComputeQuotaExceeded
 	}
 
 	sandbox := input.Sandbox
@@ -1679,6 +1684,26 @@ func tenantDataPlaneQuotaWouldExceed(
 		!quota.MaxSnapshots.Allows(usage.Snapshots+delta.snapshots) ||
 		!quota.MaxPortSessions.Allows(usage.PortSessions+delta.portSessions) ||
 		!quota.MaxConcurrentOperations.Allows(usage.ConcurrentOperations+delta.concurrentOperations)
+}
+
+// tenantDurableQuotaWouldExceed reports the Tenant axes that only deletion or
+// an operator frees. A refusal on any other axis is a compute refusal.
+func tenantDurableQuotaWouldExceed(
+	quota contracts.TenantQuota,
+	usage contracts.TenantQuotaUsage,
+	delta quotaUsage,
+) bool {
+	return !quota.MaxSandboxes.Allows(usage.Sandboxes+delta.sandboxes) ||
+		!quota.MaxSnapshots.Allows(usage.Snapshots+delta.snapshots) ||
+		!quota.MaxPortSessions.Allows(usage.PortSessions+delta.portSessions)
+}
+
+// subjectDurableQuotaWouldExceed is the Subject counterpart for one new
+// Sandbox, mirroring the durable terms of quotaWouldExceed.
+func subjectDurableQuotaWouldExceed(quota contracts.QuotaLimits, usage quotaUsage) bool {
+	return !quota.MaxSandboxes.Allows(usage.sandboxes+1) ||
+		!quota.MaxSnapshots.Allows(usage.snapshots) ||
+		!quota.MaxPortSessions.Allows(usage.portSessions)
 }
 
 func quotaWouldExceed(

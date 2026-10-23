@@ -6168,10 +6168,13 @@
         }
       },
       "Problem429": {
-        "description": "Quota or concurrent-operation limit exceeded.",
+        "description": "Quota or concurrent-operation limit exceeded. Retry-After is present only when every exhausted dimension is a compute dimension.",
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/RequestID"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
           }
         },
         "content": {
@@ -10995,7 +10998,8 @@
             "type": "integer",
             "format": "int64",
             "minimum": 1,
-            "maximum": 60000
+            "maximum": 60000,
+            "description": "Pacing hint, mirrored in Retry-After, for a refusal other work ending can resolve: home_runner_unavailable, and quota_exceeded on compute dimensions only. Clients should add jitter."
           },
           "details": {
             "type": "array",

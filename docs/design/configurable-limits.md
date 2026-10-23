@@ -137,6 +137,15 @@ physical side: allocatable and reserved compute, waiting starts, and storage-lat
 Runners per RunnerPool the caller can place into, aggregated without Runner
 identities. Physical Runner limits stay Runner configuration; no API writes them. See
 [Observability and diagnostics](../operations/observability-and-diagnostics.md#runnerpool-capacity).
+
+A quota refusal is `429 quota_exceeded`. When every exhausted dimension is a compute
+dimension (`maxActiveInstances`, `maxVcpuCount`, `maxMemoryBytes`, or
+`maxConcurrentOperations` at either scope, or a Profile's per-Sandbox execution
+concurrency), the refusal frees as other work ends: it is `retryable` and carries
+`retryAfterMilliseconds` with a matching `Retry-After`; clients should add jitter. A
+refusal on `maxSandboxes`, `maxSnapshots`, or `maxPortSessions` frees only by the
+caller's own action (deleting, closing, or letting sessions expire) or an operator, so it
+is not retryable and carries no hint, even when a compute dimension is exhausted too.
 Policy integers must fit exact JSON integers (at most 2^53−1); durations additionally must
 fit the implementation's duration clock. These representation bounds are not unlimited.
 

@@ -12,6 +12,9 @@
 ### Added
 
 - `POST /v1/sandboxes/{sandboxId}:start` accepts an optional `capacityWaitMilliseconds` (1 to 3600000) that bounds how long the start may wait for its home Runner to place it. A start still unplaced when the bound ends fails its Operation with the new retryable `capacity_wait_expired` problem, releases the Workspace mutation slot, and leaves the Sandbox wanted `stopped`. Before, a start deferred on a full or unavailable home Runner stayed pending indefinitely, refused stop and delete with `workspace_mutation_conflict` meanwhile, and booted compute whenever the Runner freed up, whether or not its caller was still waiting. `POST /v1/sandboxes` accepts the same member for the start a Profile with a `running` initial state performs after creation; on expiry the create Operation fails and the Sandbox remains, stopped. The Go `StartSandboxRequest` and `CreateSandboxRequest` and the TypeScript `start` and `createSandbox` options carry the new member.
+### Changed
+
+- A `429 quota_exceeded` refused only on compute dimensions (active Instances, vCPU, memory, or concurrent operations at Subject or Tenant scope, or a Profile's per-Sandbox execution concurrency) is now `retryable` and carries `retryAfterMilliseconds: 1000` and `Retry-After: 1`, as `503 home_runner_unavailable` already did. A refusal on Sandboxes, Snapshots, or port sessions is unchanged: not retryable and without a hint.
 
 ## 0.27.1 - 2026-10-18
 
