@@ -198,3 +198,32 @@ func (fixture schedulerLockFixture) scheduleWithin(t *testing.T, timeout time.Du
 			created, assignment.RunnerID, fixture.homeRunnerID)
 	}
 }
+
+// A placement plan can outlive the claim that loaded it. Placement therefore
+// rechecks, under the Sandbox lock, that the start's capacity wait has not
+// ended, so a stale plan cannot boot compute its waiter abandoned.
+func TestSchedulerRefusesPlacementAfterTheCapacityWait(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	expired := fixture.now.Add(-time.Millisecond)
+	fixture.request.CapacityWaitDeadline = &expired
+	if _, _, err := fixture.scheduler.Schedule(t.Context(), fixture.request); !errors.Is(err, scheduler.ErrCapacityWaitExpired) {
+		t.Fatalf("placement after the capacity wait = %v, want ErrCapacityWaitExpired", err)
+	}
+	fixture.requireNoAssignment(t)
+	open := fixture.now.Add(time.Minute)
+	fixture.request.CapacityWaitDeadline = &open
+	fixture.scheduleWithin(t, 5*time.Second)
+}
+
+func (fixture schedulerLockFixture) requireNoAssignment(t *testing.T) {
+	t.Helper()
+	var count int64
+	if err := fixture.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.assignments WHERE sandbox_id=$1`, fixture.request.SandboxID,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("refused placement left %d Assignments", count)
+	}
+}

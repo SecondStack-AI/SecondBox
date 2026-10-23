@@ -175,6 +175,7 @@
       "profile"
     ],
     "optional": [
+      "capacityWaitMilliseconds",
       "image",
       "resources",
       "sourceSnapshotId"
@@ -963,6 +964,7 @@
   "StartSandboxRequest": {
     "required": [],
     "optional": [
+      "capacityWaitMilliseconds",
       "image"
     ]
   },

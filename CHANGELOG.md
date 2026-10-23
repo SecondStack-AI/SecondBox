@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Upgrade notes
+
+- Migration `0038_start_capacity_wait_deadline` adds a nullable column to `operations`. Back up PostgreSQL before updating; rollback requires the backup.
+
+### Added
+
+- `POST /v1/sandboxes/{sandboxId}:start` accepts an optional `capacityWaitMilliseconds` (1 to 3600000) that bounds how long the start may wait for its home Runner to place it. A start still unplaced when the bound ends fails its Operation with the new retryable `capacity_wait_expired` problem, releases the Workspace mutation slot, and leaves the Sandbox wanted `stopped`. Before, a start deferred on a full or unavailable home Runner stayed pending indefinitely, refused stop and delete with `workspace_mutation_conflict` meanwhile, and booted compute whenever the Runner freed up, whether or not its caller was still waiting. `POST /v1/sandboxes` accepts the same member for the start a Profile with a `running` initial state performs after creation; on expiry the create Operation fails and the Sandbox remains, stopped. The Go `StartSandboxRequest` and `CreateSandboxRequest` and the TypeScript `start` and `createSandbox` options carry the new member.
+
 ## 0.27.1 - 2026-10-18
 
 Stopping or fencing a Sandbox releases the host blocks behind files its guest deleted, and a restarted Firecracker Runner re-seats its host firewall jumps above Docker's. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged. See the [v0.27.1 release notes](docs/releases/v0.27.1.md).

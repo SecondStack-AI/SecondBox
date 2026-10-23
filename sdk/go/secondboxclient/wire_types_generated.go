@@ -613,6 +613,7 @@ const (
 	ProblemCodeInternalError                        ProblemCode = "internal_error"
 	ProblemCodeTerminalReplayEvicted                ProblemCode = "terminal_replay_evicted"
 	ProblemCodeWaitExpired                          ProblemCode = "wait_expired"
+	ProblemCodeCapacityWaitExpired                  ProblemCode = "capacity_wait_expired"
 	ProblemCodeProfilePolicyCeilingExceeded         ProblemCode = "profile_policy_ceiling_exceeded"
 	ProblemCodeFileNotFound                         ProblemCode = "file_not_found"
 	ProblemCodeWorkspaceFull                        ProblemCode = "workspace_full"
