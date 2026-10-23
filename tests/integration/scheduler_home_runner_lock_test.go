@@ -215,6 +215,39 @@ func TestSchedulerRefusesPlacementAfterTheCapacityWait(t *testing.T) {
 	fixture.scheduleWithin(t, 5*time.Second)
 }
 
+// Placement can block on the home Runner row after it locked the Sandbox,
+// and expiry cannot run while placement holds that lock. The deadline is
+// therefore checked after the last blocking lock, so a wait that crosses the
+// deadline ends in expiry rather than in compute.
+func TestSchedulerRefusesPlacementWhenTheRunnerLockOutlastsTheCapacityWait(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	startedAt := time.Now()
+	advancing, err := scheduler.NewPostgresStore(t.Context(), scheduler.PostgresStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Now:         func() time.Time { return fixture.now.Add(time.Since(startedAt)) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(advancing.Close)
+	deadline := fixture.now.Add(200 * time.Millisecond)
+	fixture.request.CapacityWaitDeadline = &deadline
+	runner := fixture.holdRow(t, `SELECT id FROM secondbox.runners WHERE id=$1 FOR UPDATE`, fixture.homeRunnerID)
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := advancing.Schedule(t.Context(), fixture.request)
+		result <- err
+	}()
+	time.Sleep(500 * time.Millisecond)
+	if err := runner.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, scheduler.ErrCapacityWaitExpired) {
+		t.Fatalf("placement released after the capacity wait = %v, want ErrCapacityWaitExpired", err)
+	}
+	fixture.requireNoAssignment(t)
+}
+
 func (fixture schedulerLockFixture) requireNoAssignment(t *testing.T) {
 	t.Helper()
 	var count int64
