@@ -45,9 +45,11 @@ func TestPoolCapacityIsScopedToPlaceablePoolsAndNamesNoRunner(t *testing.T) {
 	ceiling := fmt.Sprintf("capacity-ceiling-%d", sequence)
 	disabled := fmt.Sprintf("capacity-disabled-%d", sequence)
 	foreign := fmt.Sprintf("capacity-foreign-%d", sequence)
+	sibling := fmt.Sprintf("capacity-sibling-%d", sequence)
+	other := fmt.Sprintf("capacity-other-%d", sequence)
 	runnerIDs := map[string]string{}
 	profiles := map[string]contracts.Profile{}
-	for _, name := range []string{granted, ceiling, disabled, foreign} {
+	for _, name := range []string{granted, ceiling, disabled, foreign, sibling, other} {
 		if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
 			Name: name, State: contracts.RunnerPoolStateReady,
 			Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"},
@@ -163,6 +165,73 @@ func TestPoolCapacityIsScopedToPlaceablePoolsAndNamesNoRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A sibling Subject of the same Tenant and a Subject of another Tenant each
+	// hold a Sandbox in a pool nobody granted. The sibling's pool is the
+	// controller's but not the application's; the other Tenant's is neither.
+	// The other Tenant also waits to start in the granted pool, which every
+	// view counts, and in its own pool, which the granted pool does not.
+	siblingSubject, err := controllerClient.CreateSubject(t.Context(), secondboxclient.CreateSubjectRequest{
+		Ref: "capacity-sibling-subject", Metadata: map[string]string{}, ExpiresAt: &expiresAt,
+		Quota: secondboxclient.SubjectQuota{
+			MaxSandboxes: 2, MaxActiveInstances: 2, MaxVcpuCount: 2, MaxMemoryBytes: 2 << 30,
+			MaxSnapshots: 2, MaxPortSessions: 2, MaxConcurrentOperations: 2,
+		},
+	}, "capacity-sibling-subject-create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTenantRequest := persistedHTTPTenantRequest(secondboxclient.OwnershipRef(newFixtureID("capacity-other-tenant")))
+	otherTenantRequest.AllowedProfileGrants = []string{granted, other}
+	otherTenant, err := operator.CreateTenant(t.Context(), otherTenantRequest, "capacity-other-tenant-create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherController, err := operator.CreateTenantControllerAuthority(t.Context(), otherTenant.Ref, secondboxclient.CreateTenantControllerAuthorityRequest{
+		ExpiresAt: expiresAt, Metadata: map[string]string{},
+	}, "capacity-other-controller-create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherControllerClient, err := secondboxclient.NewSecondBoxTenantControllerClient(server.URL, otherController.BearerToken, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSubject, err := otherControllerClient.CreateSubject(t.Context(), secondboxclient.CreateSubjectRequest{
+		Ref: "capacity-other-subject", Metadata: map[string]string{}, ExpiresAt: &expiresAt,
+		Quota: secondboxclient.SubjectQuota{
+			MaxSandboxes: 2, MaxActiveInstances: 2, MaxVcpuCount: 2, MaxMemoryBytes: 2 << 30,
+			MaxSnapshots: 2, MaxPortSessions: 2, MaxConcurrentOperations: 2,
+		},
+	}, "capacity-other-subject-create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	platformCreate := func(tenantRef, subjectRef, profile, key string) string {
+		t.Helper()
+		operation, _, err := controlPlane.CreateSandboxOperation(t.Context(), contracts.Principal{
+			Kind: contracts.AuthorityKindPlatform, ID: "platform", TenantRef: tenantRef, SubjectRef: subjectRef,
+		}, key, contracts.CreateSandboxRequest{Profile: profile, Metadata: map[string]string{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return operation.SandboxID
+	}
+	platformCreate(string(tenant.Ref), string(siblingSubject.Ref), sibling, "capacity-sibling-create")
+	for _, profile := range []string{granted, other} {
+		sandboxID := platformCreate(string(otherTenant.Ref), string(otherSubject.Ref), profile, "capacity-other-create-"+profile)
+		if _, err := database.Exec(t.Context(), `
+			WITH waiting AS (
+				UPDATE secondbox.sandboxes SET state='stopped',desired_state='running'
+				WHERE id=$1 RETURNING workspace_id
+			)
+			UPDATE secondbox.workspaces
+			SET state='ready',mutation_kind='start',mutation_state='queued'
+			WHERE id=(SELECT workspace_id FROM waiting)`, sandboxID,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// Distinct figures make the placeable sums observable. A connected Runner
 	// latched on storage pressure is still placeable here and is counted in
 	// both; a disconnected latched Runner is in neither.
@@ -194,7 +263,7 @@ func TestPoolCapacityIsScopedToPlaceablePoolsAndNamesNoRunner(t *testing.T) {
 		PlaceableRunnerCount: 2, StorageAdmissionDeniedRunnerCount: 1,
 		Allocatable:       secondboxclient.PoolComputeCapacity{Instances: 12, VcpuCount: 24, MemoryBytes: 48, Operations: 12},
 		Reserved:          secondboxclient.PoolComputeCapacity{Instances: 4, VcpuCount: 8, MemoryBytes: 16, Operations: 4},
-		PendingStartCount: 2,
+		PendingStartCount: 3,
 	}
 	applicationView, err := applicationClient.GetPoolCapacity(t.Context())
 	if err != nil {
@@ -211,17 +280,28 @@ func TestPoolCapacityIsScopedToPlaceablePoolsAndNamesNoRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if names := poolCapacityNames(controllerView); !slices.Equal(names, sortedNames(granted, ceiling, foreign)) {
+	if names := poolCapacityNames(controllerView); !slices.Equal(names, sortedNames(granted, ceiling, foreign, sibling)) {
 		t.Fatalf("tenant-controller pool capacity names = %v, want the enabled ceiling and Tenant Sandbox pools", names)
 	}
 	platformView, err := operator.GetPoolCapacity(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{granted, ceiling, disabled, foreign} {
+	for _, name := range []string{granted, ceiling, disabled, foreign, sibling, other} {
 		if !slices.Contains(poolCapacityNames(platformView), name) {
 			t.Fatalf("platform pool capacity omits %s: %v", name, poolCapacityNames(platformView))
 		}
+	}
+	// The pool figures are the same aggregate whoever reads them.
+	for view, observation := range map[string]secondboxclient.PoolCapacityObservation{
+		"tenant-controller": controllerView, "platform": platformView,
+	} {
+		if got := poolCapacityByName(t, observation, granted); got != wantGranted {
+			t.Fatalf("%s granted pool capacity = %#v, want %#v", view, got, wantGranted)
+		}
+	}
+	if got := poolCapacityByName(t, platformView, other).PendingStartCount; got != 1 {
+		t.Fatalf("other pool pending starts = %d, want only its own one", got)
 	}
 
 	// Each operation admits only its own authority kind, and no response names a Runner.
