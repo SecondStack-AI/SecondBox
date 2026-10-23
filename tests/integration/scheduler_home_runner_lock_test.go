@@ -239,20 +239,23 @@ func TestSchedulerRefusesPlacementWhenTheRunnerLockOutlastsTheCapacityWait(t *te
 	t.Cleanup(controlled.Close)
 	fixture.request.CapacityWaitDeadline = &deadline
 	runner := fixture.holdRow(t, `SELECT id FROM secondbox.runners WHERE id=$1 FOR UPDATE`, fixture.homeRunnerID)
+	var holder int64
+	if err := runner.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
 	result := make(chan error, 1)
 	go func() {
 		_, _, err := controlled.Schedule(t.Context(), fixture.request)
 		result <- err
 	}()
-	// Advance the clock only once placement holds the Sandbox and waits on
-	// the Runner row, so the Sandbox-lock time is before the deadline.
+	// Advance the clock only once placement holds the Sandbox and is blocked
+	// by the transaction holding the Runner row, so the Sandbox-lock time is
+	// before the deadline. Placement locks the Runner row last.
 	waitStarted := time.Now()
 	for {
 		var waiting int64
 		if err := fixture.pool.QueryRow(t.Context(), `
-			SELECT count(*) FROM pg_locks
-			WHERE NOT granted AND locktype IN ('relation','tuple','transactionid')
-			  AND pid<>pg_backend_pid()`,
+			SELECT count(*) FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))`, holder,
 		).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
