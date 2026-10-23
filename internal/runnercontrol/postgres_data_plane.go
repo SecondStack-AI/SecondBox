@@ -370,7 +370,7 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	// so a malformed bound is reported as such even while the Sandbox,
 	// Subject, or Tenant is saturated.
 	if capacity.exhausted() {
-		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
+		return DataPlaneSession{}, false, ports.ErrComputeQuotaExceeded
 	}
 	var executionAuthorizationRef *string
 	var executionExpiresAt *time.Time
