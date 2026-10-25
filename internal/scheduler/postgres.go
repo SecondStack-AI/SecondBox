@@ -377,6 +377,11 @@ func (store *PostgresStore) scheduleOnce(
 	if request.CapacityWaitDeadline != nil && !placementAt.Before(*request.CapacityWaitDeadline) {
 		return DurableAssignment{}, false, ErrCapacityWaitExpired
 	}
+	// The deadline compares this worker's clock; an expiry another worker
+	// already committed shows as the desired state it returned.
+	if request.CapacityWaitDeadline != nil && locked.DesiredState != contracts.SandboxDesiredStateRunning {
+		return DurableAssignment{}, false, ErrProfileRevisionMismatch
+	}
 	assignment := DurableAssignment{
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,
 		RunnerID: selected.ID, ProfileRevisionID: request.ProfileRevisionID,

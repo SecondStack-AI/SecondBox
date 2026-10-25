@@ -216,6 +216,24 @@ func TestSchedulerRefusesPlacementAfterTheCapacityWait(t *testing.T) {
 	fixture.scheduleWithin(t, 5*time.Second)
 }
 
+// A worker whose clock trails the one that expired the start still sees the
+// deadline open, so placement also refuses once expiry returned the desired
+// state.
+func TestSchedulerRefusesPlacementAfterAnotherWorkerExpiredTheStart(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	open := fixture.now.Add(time.Minute)
+	fixture.request.CapacityWaitDeadline = &open
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes SET desired_state='stopped' WHERE id=$1`, fixture.request.SandboxID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.scheduler.Schedule(t.Context(), fixture.request); !errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
+		t.Fatalf("placement after a committed expiry = %v, want ErrProfileRevisionMismatch", err)
+	}
+	fixture.requireNoAssignment(t)
+}
+
 // Placement can block on the home Runner row after it locked the Sandbox,
 // and expiry cannot run while placement holds that lock. The deadline is
 // therefore checked after the last blocking lock, so a wait that crosses the
