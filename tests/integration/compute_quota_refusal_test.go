@@ -95,18 +95,37 @@ func TestQuotaRefusalsDistinguishComputeFromDurableAxes(t *testing.T) {
 	response, problem = createRunning("durable-quota-create")
 	requireNonRetryableQuotaRefusal(t, "create over both the Sandbox and active-Instance quotas", response, problem)
 
-	// A create that alone needs more vCPU or memory than a positive limit
-	// allows frees with no work ending, so it is not retryable either.
-	setFixtureSubjectQuota(t, fixture, "max_sandboxes", 100)
-	setFixtureSubjectQuota(t, fixture, "max_active_instances", 100)
-	setFixtureSubjectQuota(t, fixture, "max_memory_bytes", 1)
-	response, problem = createRunning("oversized-memory-create")
-	requireNonRetryableQuotaRefusal(t, "create needing more memory than the limit", response, problem)
-	setFixtureSubjectQuota(t, fixture, "max_memory_bytes", 100<<30)
-	// The fixture Profile has one vCPU, so the only smaller vCPU limit is zero.
-	setFixtureSubjectQuota(t, fixture, "max_vcpu_count", second.Resources.VCPUCount-1)
-	response, problem = createRunning("oversized-vcpu-create")
-	requireNonRetryableQuotaRefusal(t, "create needing more vCPU than the limit", response, problem)
+}
+
+// TestCreateLargerThanAPositiveComputeLimitIsNotRetryable covers a first
+// create, with no compute reserved, whose own allocation exceeds a positive
+// vCPU or memory limit. No work ending frees that, so the refusal carries no
+// retry hint.
+func TestCreateLargerThanAPositiveComputeLimitIsNotRetryable(t *testing.T) {
+	for _, test := range []struct {
+		name, column string
+		vcpuCount    int64
+		limit        int64
+	}{
+		{"vcpu", "max_vcpu_count", 2, 1},
+		{"memory", "max_memory_bytes", 1, 1<<30 - 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newTeardownFixture(t)
+			if _, err := fixture.pool.Exec(t.Context(), `
+				UPDATE secondbox.profile_revisions AS revision
+				SET spec_json=jsonb_set(jsonb_set(revision.spec_json,'{lifecycle,initialState}','"running"'),
+				    '{resources,vcpuCount}',to_jsonb($2::bigint))
+				FROM secondbox.profiles AS profile
+				WHERE profile.name=$1 AND revision.id=profile.current_revision_id`, fixture.profileName, test.vcpuCount,
+			); err != nil {
+				t.Fatal(err)
+			}
+			setFixtureSubjectQuota(t, fixture, test.column, test.limit)
+			response, problem := createOverHTTP(t, fixture, "oversized-"+test.name+"-create")
+			requireNonRetryableQuotaRefusal(t, "first create larger than the "+test.name+" limit", response, problem)
+		})
+	}
 }
 
 // TestImagePreparationConcurrencyRefusals distinguishes a zero concurrent
