@@ -21,6 +21,16 @@ func TestQuotaRefusalsDistinguishComputeFromDurableAxes(t *testing.T) {
 	fixture := newTeardownFixture(t)
 	first := createStoppedQuotaSandbox(t, fixture, "first")
 	second := createStoppedQuotaSandbox(t, fixture, "second")
+	// A limit the request exceeds on its own frees with no work ending, so it
+	// is refused without the compute class even with nothing running.
+	setFixtureSubjectQuota(t, fixture, "max_active_instances", 0)
+	_, err := fixture.controlPlane.StartSandbox(
+		t.Context(), fixture.principal, first.ID, "zero-quota-first-"+first.ID,
+		first.Revision, testExecutionImage(),
+	)
+	if !errors.Is(err, ports.ErrQuotaExceeded) || errors.Is(err, ports.ErrComputeQuotaExceeded) {
+		t.Fatalf("start under a zero active-Instance quota error = %v, want the non-retryable quota refusal", err)
+	}
 	setFixtureSubjectQuota(t, fixture, "max_active_instances", 1)
 	if _, err := fixture.controlPlane.StartSandbox(
 		t.Context(), fixture.principal, first.ID, "compute-quota-first-"+first.ID,
@@ -28,7 +38,7 @@ func TestQuotaRefusalsDistinguishComputeFromDurableAxes(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	_, err := fixture.controlPlane.StartSandbox(
+	_, err = fixture.controlPlane.StartSandbox(
 		t.Context(), fixture.principal, second.ID, "compute-quota-second-"+second.ID,
 		second.Revision, testExecutionImage(),
 	)

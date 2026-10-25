@@ -457,7 +457,8 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		subjectQuota, subjectUsage, requestedCPU, requestedMemory, requestedActiveInstances,
 	) || tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, tenantDelta) {
 		if subjectDurableQuotaWouldExceed(subjectQuota, subjectUsage) ||
-			tenantDurableQuotaWouldExceed(tenantQuota, tenantUsage, tenantDelta) {
+			tenantDurableQuotaWouldExceed(tenantQuota, tenantUsage, tenantDelta) ||
+			!computeQuotaCanFit(subjectQuota, tenantQuota, tenantDelta) {
 			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrQuotaExceeded
 		}
 		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrComputeQuotaExceeded
@@ -1704,6 +1705,24 @@ func subjectDurableQuotaWouldExceed(quota contracts.QuotaLimits, usage quotaUsag
 	return !quota.MaxSandboxes.Allows(usage.sandboxes+1) ||
 		!quota.MaxSnapshots.Allows(usage.snapshots) ||
 		!quota.MaxPortSessions.Allows(usage.portSessions)
+}
+
+// computeQuotaCanFit reports whether the request fits the compute axes once
+// all other work has ended. A request larger than a compute limit never does,
+// so its refusal is not a compute refusal.
+func computeQuotaCanFit(
+	subject contracts.QuotaLimits,
+	tenant contracts.TenantQuota,
+	delta quotaUsage,
+) bool {
+	return subject.MaxActiveInstances.Allows(delta.activeInstances) &&
+		subject.MaxVCPUCount.Allows(delta.vcpuCount) &&
+		subject.MaxMemoryBytes.Allows(delta.memoryBytes) &&
+		subject.MaxConcurrentOperations.Allows(delta.concurrentOperations) &&
+		tenant.MaxActiveInstances.Allows(delta.activeInstances) &&
+		tenant.MaxVCPUCount.Allows(delta.vcpuCount) &&
+		tenant.MaxMemoryBytes.Allows(delta.memoryBytes) &&
+		tenant.MaxConcurrentOperations.Allows(delta.concurrentOperations)
 }
 
 func quotaWouldExceed(

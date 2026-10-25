@@ -146,6 +146,7 @@ concurrency), the refusal frees as other work ends: it is `retryable` and carrie
 refusal on `maxSandboxes`, `maxSnapshots`, or `maxPortSessions` frees only by the
 caller's own action (deleting, closing, or letting sessions expire) or an operator, so it
 is not retryable and carries no hint, even when a compute dimension is exhausted too.
+Neither is a request that exceeds a compute limit on its own, since no work ending frees it.
 Policy integers must fit exact JSON integers (at most 2^53−1); durations additionally must
 fit the implementation's duration clock. These representation bounds are not unlimited.
 

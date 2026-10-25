@@ -182,7 +182,8 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			!subjectQuota.MaxVCPUCount.Allows(subjectUsage.vcpuCount+delta.vcpuCount) ||
 			!subjectQuota.MaxMemoryBytes.Allows(subjectUsage.memoryBytes+delta.memoryBytes) ||
 			tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, delta) {
-			if tenantDurableQuotaWouldExceed(tenantQuota, tenantUsage, delta) {
+			if tenantDurableQuotaWouldExceed(tenantQuota, tenantUsage, delta) ||
+				!computeQuotaCanFit(subjectQuota, tenantQuota, delta) {
 				return contracts.Operation{}, ports.ErrQuotaExceeded
 			}
 			return contracts.Operation{}, ports.ErrComputeQuotaExceeded
