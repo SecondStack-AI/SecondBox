@@ -2,6 +2,8 @@
 
 ## Release upgrade boundary
 
+[v0.28.0](../releases/v0.28.0.md) updates in place from v0.14.0 onward and retains Runner protocol 7, execution bundles, gVisor materialization inputs, and standard Profile revisions; its changes are all in the control plane, so v0.27.1 Runners need no update. Public API v1 gains the `capacityWaitMilliseconds` bound on start and create and the RunnerPool capacity reads. Back up PostgreSQL first: migration `0038_start_capacity_wait_deadline` adds a nullable `operations` column, so rollback to v0.27.1 requires the backup. Stop every v0.27.x control-plane process before v0.28.0 starts. Upgrades from earlier versions must also follow the intervening release boundaries below.
+
 [v0.27.1](../releases/v0.27.1.md) updates in place from v0.14.0 onward with no database migration and retains public API v1, Runner protocol 7, execution bundles, gVisor materialization inputs, and standard Profile revisions, so v0.27.0 and v0.27.1 peers connect in either update order. Its fixes are in the Runner: stopped Workspaces release the host blocks of deleted guest files, and a restarted Firecracker Runner re-seats its firewall jumps above Docker's. Upgrades from earlier versions must also follow the intervening release boundaries below.
 
 [v0.27.0](../releases/v0.27.0.md) updates in place from v0.14.0 onward with no database migration and retains Runner protocol 7, execution bundles, gVisor materialization inputs, and standard Profile revisions, so v0.26.1 and v0.27.0 peers connect in either update order. Public API v1 gains the platform operation that unseals a RunnerPool's compute backend. Upgrades from earlier versions must also follow the intervening release boundaries below.
