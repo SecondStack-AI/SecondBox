@@ -160,6 +160,9 @@ var operations = map[string]OperationMetadata{
 	"getOperationTiming": {
 		OperationID: "getOperationTiming", Method: "GET", PathTemplate: "/v1/operations/{operationId}/timings",
 	},
+	"getPoolCapacity": {
+		OperationID: "getPoolCapacity", Method: "GET", PathTemplate: "/v1/pool-capacity",
+	},
 	"getProfile": {
 		OperationID: "getProfile", Method: "GET", PathTemplate: "/v1/profiles/{profileName}",
 	},
@@ -198,6 +201,9 @@ var operations = map[string]OperationMetadata{
 	},
 	"getTenantControllerAuthority": {
 		OperationID: "getTenantControllerAuthority", Method: "GET", PathTemplate: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}",
+	},
+	"getTenantPoolCapacity": {
+		OperationID: "getTenantPoolCapacity", Method: "GET", PathTemplate: "/v1/tenant-pool-capacity",
 	},
 	"getTenantUsage": {
 		OperationID: "getTenantUsage", Method: "GET", PathTemplate: "/v1/usage",

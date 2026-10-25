@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- `GET /v1/pool-capacity` (`getPoolCapacity`, application authority with `sandbox:read` or the platform token) and `GET /v1/tenant-pool-capacity` (`getTenantPoolCapacity`, tenant controller) report, for each RunnerPool the caller can place into or has Sandboxes in, the placeable Runner count, the allocatable and reserved Instances, vCPU, memory, and concurrent-operation slots of those Runners, the number of Sandboxes wanted running and not yet placed, and the number of connected Runners whose storage pressure denies admission. Figures aggregate every Tenant in the pool and name no Runner. The Go and TypeScript SDKs add `GetPoolCapacity`/`getPoolCapacity` and `GetTenantPoolCapacity`/`getTenantPoolCapacity`.
+
 ## 0.27.1 - 2026-10-18
 
 Stopping or fencing a Sandbox releases the host blocks behind files its guest deleted, and a restarted Firecracker Runner re-seats its host firewall jumps above Docker's. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged. See the [v0.27.1 release notes](docs/releases/v0.27.1.md).

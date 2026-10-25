@@ -117,6 +117,18 @@ type ImagePreparationInput struct {
 	Idempotency   AdminIdempotencyInput
 }
 
+// PoolCapacityScope selects the RunnerPools one caller may observe: every pool,
+// or the pools of the enabled Profiles it may use together with the pools its
+// own Sandboxes are pinned to. An empty SubjectRef widens the Sandbox scope to
+// the Tenant, and TenantCeiling takes the Profiles from the Tenant's ceiling.
+type PoolCapacityScope struct {
+	AllPools      bool
+	TenantRef     string
+	SubjectRef    string
+	ProfileNames  []string
+	TenantCeiling bool
+}
+
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
 	Resources                *contracts.SandboxResourceRequest

@@ -108,6 +108,8 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("GET /v1/usage", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getTenantUsage)))
 	mux.Handle("GET /v1/subject-policy", apiHandler.authenticate(http.HandlerFunc(apiHandler.getApplicationSandboxPolicy)))
 	mux.Handle("GET /v1/subject-usage", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSubjectCapacity)))
+	mux.Handle("GET /v1/pool-capacity", apiHandler.authenticate(http.HandlerFunc(apiHandler.getPoolCapacity)))
+	mux.Handle("GET /v1/tenant-pool-capacity", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getPoolCapacity)))
 	mux.Handle("GET /v1/deployment-usage", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.getDeploymentUsage)))
 	mux.Handle("GET /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.listProfiles)))
 	mux.Handle("POST /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.createProfile)))

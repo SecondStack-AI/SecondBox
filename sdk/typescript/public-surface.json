@@ -599,6 +599,22 @@
     ],
     "optional": []
   },
+  "PoolCapacityObservation": {
+    "required": [
+      "observedAt",
+      "pools"
+    ],
+    "optional": []
+  },
+  "PoolComputeCapacity": {
+    "required": [
+      "instances",
+      "memoryBytes",
+      "operations",
+      "vcpuCount"
+    ],
+    "optional": []
+  },
   "PortPolicy": {
     "required": [
       "maximumSessionSeconds",
@@ -846,6 +862,18 @@
       "revision",
       "state",
       "updatedAt"
+    ],
+    "optional": []
+  },
+  "RunnerPoolCapacity": {
+    "required": [
+      "allocatable",
+      "name",
+      "pendingStartCount",
+      "placeableRunnerCount",
+      "reserved",
+      "state",
+      "storageAdmissionDeniedRunnerCount"
     ],
     "optional": []
   },
