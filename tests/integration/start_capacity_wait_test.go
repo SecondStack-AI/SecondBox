@@ -311,3 +311,131 @@ func createStoppedFixtureSandbox(
 	}
 	return operation.SandboxID, current
 }
+
+// TestStartCapacityWaitExpiresWhileImagePreparationIsQueued covers a placeable
+// home Runner whose execution image never finishes preparing. The start must
+// still end at its bound rather than wait for the preparation.
+func TestStartCapacityWaitExpiresWhileImagePreparationIsQueued(t *testing.T) {
+	fixture := newTeardownFixture(t)
+	sandboxID, stopped := createStoppedFixtureSandbox(t, fixture, "capacity-wait-preparing")
+	const capacityWait = 1500
+	admittedAt := time.Now().UTC()
+	operation, _, err := fixture.controlPlane.StartSandboxOperation(
+		t.Context(), fixture.principal, sandboxID, "capacity-wait-preparing-"+sandboxID, stopped.Revision,
+		contracts.StartSandboxRequest{Image: testExecutionImage(), CapacityWaitMilliseconds: capacityWait},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for passes := 0; ; passes++ {
+		if passes == deferralPasses {
+			t.Fatalf("bounded start was still pending after %d reconciliation passes", passes)
+		}
+		fixture.reconcileWithoutPreparation(t, sandboxID, time.Now().UTC())
+		current, err := fixture.controlPlane.GetOperation(t.Context(), fixture.principal, operation.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.State != contracts.OperationStatePending {
+			operation = current
+			break
+		}
+	}
+	requireExpiredStartReleased(t, fixture, sandboxID, operation, admittedAt.Add(capacityWait*time.Millisecond))
+}
+
+// TestStartCapacityWaitExpiresWhenThePlacementPassCrossesTheDeadline covers a
+// pass that passes the lifecycle deadline check and reaches placement after
+// the deadline. The scheduler refuses the placement under the Sandbox lock,
+// and lifecycle must expire the start, not leave it pending.
+func TestStartCapacityWaitExpiresWhenThePlacementPassCrossesTheDeadline(t *testing.T) {
+	fixture := newTeardownFixture(t)
+	sandboxID, stopped := createStoppedFixtureSandbox(t, fixture, "capacity-wait-crossing")
+	const capacityWait = 1500
+	admittedAt := time.Now().UTC()
+	operation, _, err := fixture.controlPlane.StartSandboxOperation(
+		t.Context(), fixture.principal, sandboxID, "capacity-wait-crossing-"+sandboxID, stopped.Revision,
+		contracts.StartSandboxRequest{Image: testExecutionImage(), CapacityWaitMilliseconds: capacityWait},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first pass queues the image preparation, which then completes.
+	fixture.reconcileWithoutPreparation(t, sandboxID, time.Now().UTC())
+	if !completeTestImagePreparation(t, fixture.pool, sandboxID, time.Now().UTC()) {
+		t.Fatal("bounded start queued no image preparation")
+	}
+	deadline := admittedAt.Add(capacityWait * time.Millisecond)
+	time.Sleep(time.Until(deadline.Add(200 * time.Millisecond)))
+	// The pass observes a time before the deadline; placement reads the real
+	// clock, which is already past it.
+	fixture.reconcileWithoutPreparation(t, sandboxID, deadline.Add(-100*time.Millisecond))
+	current, err := fixture.controlPlane.GetOperation(t.Context(), fixture.principal, operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireExpiredStartReleased(t, fixture, sandboxID, current, deadline)
+}
+
+// reconcileWithoutPreparation runs one lifecycle pass at now once the Sandbox
+// is due, leaving any queued image preparation as it is.
+func (fixture *teardownFixture) reconcileWithoutPreparation(t *testing.T, sandboxID string, now time.Time) {
+	t.Helper()
+	fixture.deferOtherSandboxes(t, sandboxID)
+	dueAt, scheduled := fixture.sandboxDueAt(t, sandboxID)
+	if !scheduled {
+		t.Fatalf("Sandbox %s is not scheduled for reconciliation", sandboxID)
+	}
+	if wait := time.Until(dueAt); wait > 0 {
+		time.Sleep(wait)
+	}
+	if now.Before(dueAt) {
+		if _, err := fixture.pool.Exec(t.Context(), `
+			UPDATE secondbox.sandboxes SET next_reconcile_at=$2 WHERE id=$1`, sandboxID, now,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decision, found, err := fixture.reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
+	if err != nil || !found || decision.Action != lifecycle.ActionStartInstance {
+		t.Fatalf("lifecycle pass for %s = %#v found=%t error=%v", sandboxID, decision, found, err)
+	}
+}
+
+func requireExpiredStartReleased(
+	t *testing.T,
+	fixture *teardownFixture,
+	sandboxID string,
+	operation contracts.Operation,
+	deadline time.Time,
+) {
+	t.Helper()
+	if operation.State != contracts.OperationStateFailed || operation.Error == nil ||
+		operation.Error.Code != "capacity_wait_expired" {
+		t.Fatalf("bounded start Operation = %#v error=%#v, want capacity_wait_expired", operation, operation.Error)
+	}
+	if operation.CompletedAt == nil || operation.CompletedAt.Before(deadline) {
+		t.Fatalf("bounded start failed at %v, before its capacity wait ended at %s", operation.CompletedAt, deadline)
+	}
+	expired, err := fixture.controlPlane.GetSandbox(t.Context(), fixture.principal, sandboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.DesiredState != contracts.SandboxDesiredStateStopped {
+		t.Fatalf("expired start left the Sandbox wanted %q", expired.DesiredState)
+	}
+	var mutationState string
+	if err := fixture.pool.QueryRow(t.Context(), `
+		SELECT workspace.mutation_state FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		WHERE sandbox.id=$1`, sandboxID,
+	).Scan(&mutationState); err != nil {
+		t.Fatal(err)
+	}
+	if mutationState != "" {
+		t.Fatalf("expired start kept the Workspace mutation %q", mutationState)
+	}
+	if count := sandboxAssignmentCount(t, fixture, sandboxID); count != 0 {
+		t.Fatalf("expired start placed %d Assignments, want none", count)
+	}
+}
