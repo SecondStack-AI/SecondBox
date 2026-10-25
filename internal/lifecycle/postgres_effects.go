@@ -419,9 +419,12 @@ type startPlan struct {
 	profileRevisionID string
 	operationID       string
 	requestID         string
-	egressContext     *string
-	spec              contracts.ProfileRevisionSpec
-	image             contracts.PublicExecutionImage
+	// capacityWaitDeadline is when the originating start Operation stops
+	// waiting for placement. Nil waits until the home Runner places it.
+	capacityWaitDeadline *time.Time
+	egressContext        *string
+	spec                 contracts.ProfileRevisionSpec
+	image                contracts.PublicExecutionImage
 }
 
 func (broker *PostgresEffectBroker) scheduleAndStart(
@@ -437,6 +440,16 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	plan, err := broker.loadStartPlan(ctx, claim)
 	if err != nil {
 		return err
+	}
+	// A start whose waiter has given up must never boot compute later, so the
+	// deadline is checked before every placement attempt, including the one
+	// that would follow a selected image's preparation.
+	if plan.capacityWaitDeadline != nil && !now.Before(*plan.capacityWaitDeadline) {
+		return broker.expireStartCapacityWait(ctx, claim, plan, now.UTC())
+	}
+	deferUntil := nextReconcileAt.UTC()
+	if plan.capacityWaitDeadline != nil && plan.capacityWaitDeadline.Before(deferUntil) {
+		deferUntil = plan.capacityWaitDeadline.UTC()
 	}
 	assignmentID := broker.config.NewID("assignment")
 	instanceID := broker.config.NewID("instance")
@@ -471,7 +484,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			return broker.failStartPreparation(ctx, claim, plan, err, now.UTC(), "image_preparation_failed", "Selected execution image could not be prepared")
 		}
 		if !prepared {
-			return broker.deferUnavailableHomeRunnerStart(ctx, claim, plan.generation, nextReconcileAt.UTC())
+			return broker.deferUnavailableHomeRunnerStart(ctx, claim, plan.generation, deferUntil)
 		}
 		resolvedArtifacts = map[string]string{
 			"runtime": assets[0].ManifestDigest, "toolchain": assets[1].ManifestDigest,
@@ -561,9 +574,10 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			},
 		},
 		AssignmentCommand: assignmentCommand, FencingToken: fencingToken,
-		ResolvedArtifacts: resolvedArtifacts,
-		ClaimExpiresAt:    now.UTC().Add(broker.config.AssignmentClaimDuration),
-		OperationDeadline: deadline, RetryLimit: broker.config.RetryLimit,
+		ResolvedArtifacts:    resolvedArtifacts,
+		ClaimExpiresAt:       now.UTC().Add(broker.config.AssignmentClaimDuration),
+		CapacityWaitDeadline: plan.capacityWaitDeadline,
+		OperationDeadline:    deadline, RetryLimit: broker.config.RetryLimit,
 		SerializationRetryLimit: broker.config.SerializationRetryLimit,
 		HeartbeatTimeout:        broker.config.HeartbeatTimeout, Now: now.UTC(),
 		EffectStartedAt: effectStartedAt, PlanReadyAt: planReadyAt,
@@ -573,10 +587,17 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		if errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
 			return ports.ErrRevisionConflict
 		}
+		if errors.Is(err, scheduler.ErrCapacityWaitExpired) {
+			expiredAt, err := broker.observeAtOrAfter(now)
+			if err != nil {
+				return err
+			}
+			return broker.expireStartCapacityWait(ctx, claim, plan, expiredAt)
+		}
 		if errors.Is(err, scheduler.ErrHomeRunnerUnavailable) ||
 			errors.Is(err, scheduler.ErrEgressContextUnavailable) {
 			return broker.deferUnavailableHomeRunnerStart(
-				ctx, claim, plan.generation, nextReconcileAt.UTC(),
+				ctx, claim, plan.generation, deferUntil,
 			)
 		}
 		return err
@@ -728,6 +749,81 @@ func (broker *PostgresEffectBroker) failStartPreparation(ctx context.Context, cl
 	return nil
 }
 
+// expireStartCapacityWait fails a start Operation whose capacity wait ended
+// before placement. It releases the Workspace start mutation and returns the
+// Sandbox's desired state to stopped: leaving it wanted running would turn the
+// abandoned start into an automatic one that still boots compute nobody waits
+// for. The Sandbox keeps its observed state and Workspace, so the caller can
+// start it again with a new request.
+func (broker *PostgresEffectBroker) expireStartCapacityWait(
+	ctx context.Context,
+	claim ports.LifecycleReconcileClaim,
+	plan startPlan,
+	now time.Time,
+) error {
+	tx, err := broker.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle capacity wait expiry transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := rowlock.SandboxQuota(ctx, tx, claim.SandboxID); err != nil {
+		return fmt.Errorf("SecondBox lifecycle capacity wait expiry quota lock failed: %w", err)
+	}
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, claim.SandboxID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ports.ErrRevisionConflict
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle capacity wait expiry lock failed: %w", err)
+	}
+	if locked.Revision != claim.Revision || locked.Generation != plan.generation ||
+		locked.CurrentInstanceID != "" || locked.ReconcileOwner != claim.WorkerID ||
+		locked.DesiredState != contracts.SandboxDesiredStateRunning {
+		return ports.ErrRevisionConflict
+	}
+	if locked.Workspace.Mutation.Kind != "start" ||
+		locked.Workspace.Mutation.OperationID != plan.operationID ||
+		locked.Workspace.Mutation.ExpectedGeneration != plan.generation {
+		return ports.ErrWorkspaceMutation
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET mutation_kind='',mutation_id='',mutation_effect_id='',
+		    mutation_operation_id='',mutation_expected_generation=NULL,
+		    mutation_target_generation=NULL,mutation_state='',updated_at=$2
+		WHERE id=$1 AND mutation_kind='start' AND mutation_operation_id=$3
+		  AND mutation_expected_generation=$4`,
+		locked.WorkspaceID, now, plan.operationID, plan.generation,
+	); err != nil {
+		return fmt.Errorf("SecondBox lifecycle capacity wait expiry Workspace release failed: %w", err)
+	}
+	// Stopped or failed under a stopped desired state is at rest, so the
+	// Sandbox leaves the reconciliation schedule until a new intent wakes it.
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET desired_state='stopped',lifecycle_action='capacity_wait_expired',
+		    next_reconcile_at=NULL,reconcile_owner='',reconcile_claim_expires_at=NULL,
+		    revision=revision+1,updated_at=$2
+		WHERE id=$1`, claim.SandboxID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox lifecycle capacity wait expiry Sandbox update failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.operations
+		SET state='failed',error_code='capacity_wait_expired',error_message=$2,
+		    retryable=true,started_at=COALESCE(started_at,$3),
+		    completed_at=$3,updated_at=$3
+		WHERE id=$1 AND state IN ('pending','running')`,
+		plan.operationID, "Sandbox start was not placed before its capacity wait ended", now,
+	); err != nil {
+		return fmt.Errorf("SecondBox lifecycle capacity wait expiry Operation failure failed: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox lifecycle capacity wait expiry commit failed: %w", err)
+	}
+	return nil
+}
+
 // deferUnavailableHomeRunnerStart defers a start whose home Runner cannot
 // currently take it. The Sandbox is wanted running, so it keeps its poll
 // deadline and starts as soon as the Runner is placeable again, and it holds
@@ -780,6 +876,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		       sandbox.egress_context,sandbox.vcpu_count,sandbox.memory_bytes,sandbox.workspace_bytes,
 		       revision.spec_json,workspace.mutation_id,
 		       COALESCE(operation.id,''),COALESCE(operation.request_id,''),
+		       operation.capacity_wait_deadline,
 		       sandbox.execution_image_reference,sandbox.execution_image_digest
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
@@ -793,6 +890,7 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 		&plan.workspaceID, &plan.generation, &plan.profileRevisionID, &plan.egressContext,
 		&plan.resources.VCPUCount, &plan.resources.MemoryBytes, &plan.resources.WorkspaceBytes,
 		&specJSON, &plan.mutationID, &plan.operationID, &plan.requestID,
+		&plan.capacityWaitDeadline,
 		&imageReference, &imageDigest,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

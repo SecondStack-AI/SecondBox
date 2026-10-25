@@ -22,6 +22,9 @@ import (
 
 var (
 	ErrProfileRevisionMismatch = errors.New("SecondBox scheduler ProfileRevision mismatch")
+	// ErrCapacityWaitExpired refuses placement once the originating start's
+	// capacity wait has ended.
+	ErrCapacityWaitExpired = errors.New("SecondBox scheduler start capacity wait expired")
 )
 
 // Serialization backoff bounds. The ceiling keeps a retry well inside a
@@ -65,6 +68,10 @@ type ScheduleRequest struct {
 	Now                     time.Time
 	EffectStartedAt         time.Time
 	PlanReadyAt             time.Time
+	// CapacityWaitDeadline, when set, is the instant after which the
+	// originating start may no longer be placed. It is checked under the
+	// Sandbox lock, so a plan loaded before the deadline cannot place after it.
+	CapacityWaitDeadline *time.Time
 	// LifecycleClaimOwner is the lifecycle worker whose claim on the Sandbox
 	// this placement completes. While that worker still owns the claim, a new
 	// Assignment releases it and schedules the starting Sandbox at its
@@ -360,6 +367,20 @@ func (store *PostgresStore) scheduleOnce(
 	placementAt, err := store.observeAtOrAfter(timing.candidateSelectedAt)
 	if err != nil {
 		return DurableAssignment{}, false, err
+	}
+	// A plan loaded by a worker that has since lost its claim may still reach
+	// this point after a concurrent worker expired the start, released its
+	// mutation, and returned the desired state. Expiry happens only after the
+	// deadline and needs the Sandbox lock this transaction holds, so checking
+	// the deadline here, after every blocking lock and immediately before the
+	// writes, refuses that plan instead of letting it adopt the free slot.
+	if request.CapacityWaitDeadline != nil && !placementAt.Before(*request.CapacityWaitDeadline) {
+		return DurableAssignment{}, false, ErrCapacityWaitExpired
+	}
+	// The deadline compares this worker's clock; an expiry another worker
+	// already committed shows as the desired state it returned.
+	if request.CapacityWaitDeadline != nil && locked.DesiredState != contracts.SandboxDesiredStateRunning {
+		return DurableAssignment{}, false, ErrProfileRevisionMismatch
 	}
 	assignment := DurableAssignment{
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,

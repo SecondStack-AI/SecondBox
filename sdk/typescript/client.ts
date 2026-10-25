@@ -561,6 +561,9 @@ export class SecondBox {
         ...(request.sourceSnapshotId === undefined
           ? {}
           : { sourceSnapshotId: request.sourceSnapshotId }),
+        ...(request.capacityWaitMilliseconds === undefined
+          ? {}
+          : { capacityWaitMilliseconds: request.capacityWaitMilliseconds }),
       }),
       signal: request.signal,
     });
@@ -1222,9 +1225,17 @@ export class SandboxHandle implements SandboxFilesystem {
     return new LeaseKeeper(this.#api, lease, durationSeconds, minimumDelayMilliseconds);
   }
 
+  /**
+   * Requests that the Sandbox become ready. `capacityWaitMilliseconds` bounds
+   * how long the start may remain unplaced: the Operation then fails with
+   * `capacity_wait_expired` and the Sandbox is left wanted stopped.
+   */
   public start(options: LifecycleOptions & StartSandboxRequest): Promise<Operation> {
     const request: JSONValue = {
-	  ...(options.image === undefined ? {} : { image: executionImageJSON(options.image) }),
+      ...(options.image === undefined ? {} : { image: executionImageJSON(options.image) }),
+      ...(options.capacityWaitMilliseconds === undefined
+        ? {}
+        : { capacityWaitMilliseconds: options.capacityWaitMilliseconds }),
     };
     return this.lifecycle("startSandbox", options, request);
   }
@@ -1814,6 +1825,11 @@ export interface CreateSandboxOptions {
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
   readonly resources?: SandboxResourceRequest;
+  /**
+   * Bounds how long the start of a running-initial Profile may remain
+   * unplaced; the create Operation then fails with `capacity_wait_expired`.
+   */
+  readonly capacityWaitMilliseconds?: number;
   readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }

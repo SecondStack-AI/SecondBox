@@ -1258,9 +1258,9 @@ func insertOperation(
 			INSERT INTO secondbox.operations (
 				id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,
 				request_metadata_json,error_code,error_message,retryable,created_at,
-				started_at,completed_at,updated_at
+				started_at,completed_at,updated_at,capacity_wait_deadline
 			) VALUES (
-				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
 			)
 			RETURNING id,sandbox_id,kind,created_at
 		)
@@ -1278,7 +1278,7 @@ func insertOperation(
 		operation.ID, tenantRef, subjectRef,
 		operation.SandboxID, operationSnapshotID(operation), operation.Kind, operation.State, operation.RequestID,
 		requestMetadataJSON, errorCode, errorMessage, retryable, operation.CreatedAt,
-		operation.StartedAt, completedAt, operation.UpdatedAt,
+		operation.StartedAt, completedAt, operation.UpdatedAt, operation.CapacityWaitDeadline,
 	); err != nil {
 		return fmt.Errorf("SecondBox Operation insert failed: %w", err)
 	}

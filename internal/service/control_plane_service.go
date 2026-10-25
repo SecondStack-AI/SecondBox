@@ -427,6 +427,11 @@ func (service *ControlPlaneService) createSandboxOperation(
 		return contracts.Sandbox{}, contracts.Operation{}, false,
 			invalidField("sourceSnapshotId", "must not exceed 128 bytes")
 	}
+	if request.CapacityWaitMilliseconds < 0 ||
+		int64(request.CapacityWaitMilliseconds) > contracts.MaximumCapacityWaitMilliseconds {
+		return contracts.Sandbox{}, contracts.Operation{}, false,
+			invalidField("capacityWaitMilliseconds", "must be an integer between 1 and 3600000")
+	}
 	canonicalRequest, err := json.Marshal(request)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox request canonicalization failed: %w", err)
@@ -452,6 +457,12 @@ func (service *ControlPlaneService) createSandboxOperation(
 	operation := contracts.Operation{
 		ID: operationID, SandboxID: sandboxID, Kind: "create", State: contracts.OperationStatePending,
 		RequestID: requestID, CreatedAt: now, UpdatedAt: now,
+	}
+	// A running-initial Profile hands the Workspace from its create mutation to
+	// a start mutation that keeps this Operation, so the bound covers that start.
+	if request.CapacityWaitMilliseconds > 0 {
+		deadline := now.Add(time.Duration(request.CapacityWaitMilliseconds) * time.Millisecond)
+		operation.CapacityWaitDeadline = &deadline
 	}
 	audit := service.newAudit(ctx, principal, "sandbox.created", "sandbox", sandboxID, principal.TenantRef, now)
 	storedSandbox, storedOperation, created, err := service.store.CreateSandbox(ctx, ports.CreateSandboxInput{
@@ -621,15 +632,40 @@ func (service *ControlPlaneService) StartSandbox(
 	expectedRevision int64,
 	image contracts.ExecutionImage,
 ) (contracts.Operation, error) {
-	if image.Reference != "" {
-		if err := image.Validate(); err != nil {
-			return contracts.Operation{}, errors.Join(executionImageFieldError(), err)
+	operation, _, err := service.StartSandboxOperation(
+		ctx, principal, sandboxID, idempotencyKey, expectedRevision,
+		contracts.StartSandboxRequest{Image: image},
+	)
+	return operation, err
+}
+
+// StartSandboxOperation records running intent with replay evidence. A
+// positive capacity wait bounds how long the start may remain unplaced.
+func (service *ControlPlaneService) StartSandboxOperation(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	idempotencyKey string,
+	expectedRevision int64,
+	request contracts.StartSandboxRequest,
+) (contracts.Operation, bool, error) {
+	if request.Image.Reference != "" {
+		if err := request.Image.Validate(); err != nil {
+			return contracts.Operation{}, false, errors.Join(executionImageFieldError(), err)
 		}
 	}
-	return service.setSandboxDesiredState(
+	if request.CapacityWaitMilliseconds < 0 ||
+		int64(request.CapacityWaitMilliseconds) > contracts.MaximumCapacityWaitMilliseconds {
+		return contracts.Operation{}, false,
+			invalidField("capacityWaitMilliseconds", "must be an integer between 1 and 3600000")
+	}
+	var replayed bool
+	operation, err := service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "start", contracts.SandboxDesiredStateRunning,
-		idempotencyKey, expectedRevision, image.LifecycleMetadata(), nil,
+		idempotencyKey, expectedRevision, request.Image.LifecycleMetadata(),
+		int64(request.CapacityWaitMilliseconds), &replayed,
 	)
+	return operation, replayed, err
 }
 
 // StopSandbox converges the Sandbox to stopped after durable local generation advance.
@@ -642,7 +678,7 @@ func (service *ControlPlaneService) StopSandbox(
 ) (contracts.Operation, error) {
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "stop", contracts.SandboxDesiredStateStopped,
-		idempotencyKey, expectedRevision, nil, nil,
+		idempotencyKey, expectedRevision, nil, 0, nil,
 	)
 }
 
@@ -656,7 +692,7 @@ func (service *ControlPlaneService) DeleteSandbox(
 ) (contracts.Operation, error) {
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "delete", contracts.SandboxDesiredStateDeleted,
-		idempotencyKey, expectedRevision, nil, nil,
+		idempotencyKey, expectedRevision, nil, 0, nil,
 	)
 }
 
@@ -774,6 +810,7 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 	idempotencyKey string,
 	expectedRevision int64,
 	requestMetadata map[string]string,
+	capacityWaitMilliseconds int64,
 	replayed *bool,
 ) (contracts.Operation, error) {
 	if principal.TenantRef == "" {
@@ -785,10 +822,13 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 	if expectedRevision < 1 {
 		return contracts.Operation{}, invalidField("If-Match", "must contain a positive revision ETag")
 	}
+	// The capacity wait is part of the canonical request; omission keeps the
+	// hash every earlier start recorded.
 	canonicalRequest, err := json.Marshal(struct {
-		Kind     string            `json:"kind"`
-		Metadata map[string]string `json:"metadata"`
-	}{Kind: kind, Metadata: requestMetadata})
+		Kind                     string            `json:"kind"`
+		Metadata                 map[string]string `json:"metadata"`
+		CapacityWaitMilliseconds int64             `json:"capacityWaitMilliseconds,omitempty"`
+	}{Kind: kind, Metadata: requestMetadata, CapacityWaitMilliseconds: capacityWaitMilliseconds})
 	if err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle request canonicalization failed: %w", err)
 	}
@@ -798,6 +838,10 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 		ID: service.newID("op"), SandboxID: sandboxID, Kind: kind,
 		State: contracts.OperationStatePending, RequestID: service.requestID(ctx),
 		RequestMetadata: cloneMetadata(requestMetadata), CreatedAt: now, UpdatedAt: now,
+	}
+	if capacityWaitMilliseconds > 0 {
+		deadline := now.Add(time.Duration(capacityWaitMilliseconds) * time.Millisecond)
+		operation.CapacityWaitDeadline = &deadline
 	}
 	audit := service.newAudit(
 		ctx, principal, "sandbox."+kind, "sandbox", sandboxID, principal.TenantRef, now,
@@ -826,12 +870,9 @@ func (service *ControlPlaneService) MutateSandbox(
 	kind string,
 	idempotencyKey string,
 	expectedRevision int64,
-	metadata map[string]string,
 ) (contracts.Operation, bool, error) {
 	desiredState := contracts.SandboxDesiredStateStopped
 	switch kind {
-	case "start":
-		desiredState = contracts.SandboxDesiredStateRunning
 	case "drain", "stop":
 	case "delete":
 		desiredState = contracts.SandboxDesiredStateDeleted
@@ -841,7 +882,7 @@ func (service *ControlPlaneService) MutateSandbox(
 	var replayed bool
 	operation, err := service.setSandboxDesiredState(
 		ctx, principal, sandboxID, kind, desiredState, idempotencyKey,
-		expectedRevision, metadata, &replayed,
+		expectedRevision, nil, 0, &replayed,
 	)
 	return operation, replayed, err
 }

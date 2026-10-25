@@ -5,6 +5,13 @@
 ### Added
 
 - `GET /v1/pool-capacity` (`getPoolCapacity`, application authority with `sandbox:read` or the platform token) and `GET /v1/tenant-pool-capacity` (`getTenantPoolCapacity`, tenant controller) report, for each RunnerPool the caller can place into or has Sandboxes in, the placeable Runner count, the allocatable and reserved Instances, vCPU, memory, and concurrent-operation slots of those Runners, the number of Sandboxes wanted running and not yet placed, and the number of connected Runners whose storage pressure denies admission. Figures aggregate every Tenant in the pool and name no Runner. The Go and TypeScript SDKs add `GetPoolCapacity`/`getPoolCapacity` and `GetTenantPoolCapacity`/`getTenantPoolCapacity`.
+### Upgrade notes
+
+- Migration `0038_start_capacity_wait_deadline` adds a nullable column to `operations`. Back up PostgreSQL before updating; rollback requires the backup.
+
+### Added
+
+- `POST /v1/sandboxes/{sandboxId}:start` accepts an optional `capacityWaitMilliseconds` (1 to 3600000) that bounds how long the start may wait for its home Runner to place it. A start still unplaced when the bound ends fails its Operation with the new retryable `capacity_wait_expired` problem, releases the Workspace mutation slot, and leaves the Sandbox wanted `stopped`. Before, a start deferred on a full or unavailable home Runner stayed pending indefinitely, refused stop and delete with `workspace_mutation_conflict` meanwhile, and booted compute whenever the Runner freed up, whether or not its caller was still waiting. `POST /v1/sandboxes` accepts the same member for the start a Profile with a `running` initial state performs after creation; on expiry the create Operation fails and the Sandbox remains, stopped. The Go `StartSandboxRequest` and `CreateSandboxRequest` and the TypeScript `start` and `createSandbox` options carry the new member.
 
 ## 0.27.1 - 2026-10-18
 

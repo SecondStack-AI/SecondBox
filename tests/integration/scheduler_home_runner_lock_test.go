@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,5 +197,118 @@ func (fixture schedulerLockFixture) scheduleWithin(t *testing.T, timeout time.Du
 	if !created || assignment.RunnerID != fixture.homeRunnerID {
 		t.Fatalf("placement = created %t runner %q, want new Assignment on home Runner %q",
 			created, assignment.RunnerID, fixture.homeRunnerID)
+	}
+}
+
+// A placement plan can outlive the claim that loaded it. Placement therefore
+// rechecks, under the Sandbox lock, that the start's capacity wait has not
+// ended, so a stale plan cannot boot compute its waiter abandoned.
+func TestSchedulerRefusesPlacementAfterTheCapacityWait(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	expired := fixture.now.Add(-time.Millisecond)
+	fixture.request.CapacityWaitDeadline = &expired
+	if _, _, err := fixture.scheduler.Schedule(t.Context(), fixture.request); !errors.Is(err, scheduler.ErrCapacityWaitExpired) {
+		t.Fatalf("placement after the capacity wait = %v, want ErrCapacityWaitExpired", err)
+	}
+	fixture.requireNoAssignment(t)
+	open := fixture.now.Add(time.Minute)
+	fixture.request.CapacityWaitDeadline = &open
+	fixture.scheduleWithin(t, 5*time.Second)
+}
+
+// A worker whose clock trails the one that expired the start still sees the
+// deadline open, so placement also refuses once expiry returned the desired
+// state.
+func TestSchedulerRefusesPlacementAfterAnotherWorkerExpiredTheStart(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	open := fixture.now.Add(time.Minute)
+	fixture.request.CapacityWaitDeadline = &open
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes SET desired_state='stopped' WHERE id=$1`, fixture.request.SandboxID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.scheduler.Schedule(t.Context(), fixture.request); !errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
+		t.Fatalf("placement after a committed expiry = %v, want ErrProfileRevisionMismatch", err)
+	}
+	fixture.requireNoAssignment(t)
+}
+
+// Placement can block on the home Runner row after it locked the Sandbox,
+// and expiry cannot run while placement holds that lock. The deadline is
+// therefore checked after the last blocking lock, so a wait that crosses the
+// deadline ends in expiry rather than in compute.
+func TestSchedulerRefusesPlacementWhenTheRunnerLockOutlastsTheCapacityWait(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	deadline := fixture.now.Add(time.Minute)
+	var pastDeadline atomic.Bool
+	controlled, err := scheduler.NewPostgresStore(t.Context(), scheduler.PostgresStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Now: func() time.Time {
+			if pastDeadline.Load() {
+				return deadline.Add(time.Second)
+			}
+			return fixture.now
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(controlled.Close)
+	fixture.request.CapacityWaitDeadline = &deadline
+	runner := fixture.holdRow(t, `SELECT id FROM secondbox.runners WHERE id=$1 FOR UPDATE`, fixture.homeRunnerID)
+	var holder int64
+	if err := runner.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := controlled.Schedule(t.Context(), fixture.request)
+		result <- err
+	}()
+	// Advance the clock only once placement holds the Sandbox and is blocked
+	// by the transaction holding the Runner row, so the Sandbox-lock time is
+	// before the deadline. Placement locks the Runner row last.
+	waitStarted := time.Now()
+	for {
+		var waiting int64
+		if err := fixture.pool.QueryRow(t.Context(), `
+			SELECT count(*) FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))`, holder,
+		).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case err := <-result:
+			t.Fatalf("placement finished before reaching the held Runner lock: %v", err)
+		default:
+		}
+		if time.Since(waitStarted) > 10*time.Second {
+			t.Fatal("placement never waited on the held Runner lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pastDeadline.Store(true)
+	if err := runner.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, scheduler.ErrCapacityWaitExpired) {
+		t.Fatalf("placement released after the capacity wait = %v, want ErrCapacityWaitExpired", err)
+	}
+	fixture.requireNoAssignment(t)
+}
+
+func (fixture schedulerLockFixture) requireNoAssignment(t *testing.T) {
+	t.Helper()
+	var count int64
+	if err := fixture.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.assignments WHERE sandbox_id=$1`, fixture.request.SandboxID,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("refused placement left %d Assignments", count)
 	}
 }

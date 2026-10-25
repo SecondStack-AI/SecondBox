@@ -684,14 +684,15 @@ func TestSandboxCreateRejectsInfrastructureAuthorityOverrides(t *testing.T) {
 	document := loadOpenAPIContract(t)
 	createSchema := componentSchema(t, document, "CreateSandboxRequest")
 	properties := object(t, createSchema["properties"], "CreateSandboxRequest.properties")
-	if len(properties) != 5 ||
+	if len(properties) != 6 ||
+		properties["capacityWaitMilliseconds"] == nil ||
 		properties["resources"] == nil ||
 		properties["profile"] == nil ||
 		properties["image"] == nil ||
 		properties["metadata"] == nil ||
 		properties["sourceSnapshotId"] == nil {
 		t.Fatalf(
-			"CreateSandboxRequest properties must be profile, image, metadata, sourceSnapshotId, and resources, got %v",
+			"CreateSandboxRequest properties must be profile, image, metadata, sourceSnapshotId, resources, and capacityWaitMilliseconds, got %v",
 			properties,
 		)
 	}

@@ -79,3 +79,27 @@ func TestExecRequestsCarryAttributionAndRefuseNull(t *testing.T) {
 		t.Fatalf("null streaming attribution error = %v", err)
 	}
 }
+
+func TestStartCapacityWaitRoundTripsAndResetsOnReuse(t *testing.T) {
+	var request StartSandboxRequest
+	if err := json.Unmarshal([]byte(`{"capacityWaitMilliseconds":300000}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.CapacityWaitMilliseconds != 300000 {
+		t.Fatalf("capacity wait = %d, want 300000", request.CapacityWaitMilliseconds)
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"capacityWaitMilliseconds":300000}` {
+		t.Fatalf("start request encoded as %s", body)
+	}
+	// Decoding into a reused value must not keep an earlier bound.
+	if err := json.Unmarshal([]byte(`{}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.CapacityWaitMilliseconds != 0 {
+		t.Fatalf("omitted capacity wait kept %d", request.CapacityWaitMilliseconds)
+	}
+}

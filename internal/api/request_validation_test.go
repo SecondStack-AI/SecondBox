@@ -177,6 +177,41 @@ func TestDecodeStrictJSONLocatesContractsDecoderRefusals(t *testing.T) {
 			ports.InvalidFieldError{Field: "image", Reason: "must be an object, not null"},
 		},
 		{
+			"start capacity wait below range", `{"capacityWaitMilliseconds":0}`,
+			func() any { return new(contracts.StartSandboxRequest) },
+			ports.InvalidFieldError{Field: "capacityWaitMilliseconds", Reason: "must be an integer between 1 and 3600000"},
+		},
+		{
+			"start capacity wait above range", `{"capacityWaitMilliseconds":3600001}`,
+			func() any { return new(contracts.StartSandboxRequest) },
+			ports.InvalidFieldError{Field: "capacityWaitMilliseconds", Reason: "must be an integer between 1 and 3600000"},
+		},
+		{
+			"null start capacity wait", `{"capacityWaitMilliseconds":null}`,
+			func() any { return new(contracts.StartSandboxRequest) },
+			ports.InvalidFieldError{Field: "capacityWaitMilliseconds", Reason: "must be an integer between 1 and 3600000"},
+		},
+		{
+			"fractional start capacity wait", `{"capacityWaitMilliseconds":1.5}`,
+			func() any { return new(contracts.StartSandboxRequest) },
+			ports.InvalidFieldError{Field: "capacityWaitMilliseconds", Reason: "must be an integer between 1 and 3600000"},
+		},
+		{
+			"zero create capacity wait", `{"profile":"profile-a","metadata":{},"capacityWaitMilliseconds":0}`,
+			func() any { return new(contracts.CreateSandboxRequest) },
+			ports.InvalidFieldError{Field: "capacityWaitMilliseconds", Reason: "must be an integer between 1 and 3600000"},
+		},
+		{
+			"null create capacity wait", `{"profile":"profile-a","metadata":{},"capacityWaitMilliseconds":null}`,
+			func() any { return new(contracts.CreateSandboxRequest) },
+			ports.InvalidFieldError{Field: "capacityWaitMilliseconds", Reason: "must be an integer between 1 and 3600000"},
+		},
+		{
+			"fractional create capacity wait", `{"profile":"profile-a","metadata":{},"capacityWaitMilliseconds":2.5}`,
+			func() any { return new(contracts.CreateSandboxRequest) },
+			ports.InvalidFieldError{Field: "capacityWaitMilliseconds", Reason: "must be an integer between 1 and 3600000"},
+		},
+		{
 			"nested required policy field", `{"ref":"tenant-a","aggregateQuota":{` + quotaWithoutMaxSandboxes + `,"maxVcpuCount":1}}`,
 			func() any { return new(contracts.CreateTenantRequest) },
 			ports.InvalidFieldError{Field: "aggregateQuota.maxSandboxes", Reason: "is required"},
