@@ -3,6 +3,7 @@ package ports
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -48,6 +49,12 @@ var (
 	ErrIdempotencyConflict           = errors.New("SecondBox idempotency key payload conflict")
 	ErrCredentialResponseUnavailable = errors.New("SecondBox credential response is unavailable")
 	ErrQuotaExceeded                 = errors.New("SecondBox quota exceeded")
+	// ErrComputeQuotaExceeded refuses admission on an axis that frees as other
+	// work ends: active Instances, vCPU, memory, or concurrent operations,
+	// including a Profile's per-Sandbox execution concurrency. It is an
+	// ErrQuotaExceeded; the other axes (Sandboxes, Snapshots, port sessions)
+	// free only by the caller's own action or an operator.
+	ErrComputeQuotaExceeded = fmt.Errorf("%w on a compute axis", ErrQuotaExceeded)
 	// ErrImagePreparationTargetsExceeded reports that more eligible Runners than
 	// one preparation Operation may carry answered admission. Waiting cannot help:
 	// the request must select a Profile that narrows the eligible Runner set.

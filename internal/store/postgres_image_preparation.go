@@ -42,7 +42,10 @@ func (store *PostgresControlPlaneStore) PrepareImage(ctx context.Context, input 
 		return contracts.Operation{}, false, err
 	}
 	if !tenantQuota.MaxConcurrentOperations.Allows(tenantUsage.ConcurrentOperations+1) || !subjectQuota.MaxConcurrentOperations.Allows(subjectUsage.concurrentOperations+1) {
-		return contracts.Operation{}, false, ports.ErrQuotaExceeded
+		if !tenantQuota.MaxConcurrentOperations.Allows(1) || !subjectQuota.MaxConcurrentOperations.Allows(1) {
+			return contracts.Operation{}, false, ports.ErrQuotaExceeded
+		}
+		return contracts.Operation{}, false, ports.ErrComputeQuotaExceeded
 	}
 	rows, err := tx.Query(ctx, `SELECT runner.id,jsonb_agg(DISTINCT revision.spec_json->>'architecture')
 	 FROM secondbox.runners runner

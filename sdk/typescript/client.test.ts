@@ -112,6 +112,29 @@ test("requestJSON decodes structured SecondBox errors", async () => {
   );
 });
 
+test("a compute quota refusal surfaces its retry hint", async () => {
+  const fetcher: typeof fetch = async () =>
+    Response.json({
+      type: "https://secondbox.dev/problems/quota_exceeded",
+      title: "Compute quota exceeded",
+      status: 429,
+      code: "quota_exceeded",
+      requestId: "request-1",
+      retryable: true,
+      retryAfterMilliseconds: 1000,
+    }, { status: 429, headers: { "Retry-After": "1" } });
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, { ...sandbox("stopped"), revision: 3 });
+  await assert.rejects(
+    handle.start({ idempotencyKey: "start-quota" }),
+    (error: unknown) =>
+      error instanceof SecondBoxProblemError &&
+      error.status === 429 &&
+      error.problem.retryable &&
+      error.problem.retryAfterMilliseconds === 1000,
+  );
+});
+
 test("request surfaces the transport error when the error body is not a Problem", async () => {
   const fetcher: typeof fetch = async () =>
     new Response("<html>Bad Gateway</html>", {

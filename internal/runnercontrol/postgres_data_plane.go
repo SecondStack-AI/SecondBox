@@ -370,7 +370,10 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	// so a malformed bound is reported as such even while the Sandbox,
 	// Subject, or Tenant is saturated.
 	if capacity.exhausted() {
-		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
+		if !capacity.canFit() {
+			return DataPlaneSession{}, false, ports.ErrQuotaExceeded
+		}
+		return DataPlaneSession{}, false, ports.ErrComputeQuotaExceeded
 	}
 	var executionAuthorizationRef *string
 	var executionExpiresAt *time.Time
@@ -618,6 +621,12 @@ func (capacity dataPlaneCapacity) exhausted() bool {
 	return capacity.sandboxActive >= capacity.sandboxMaximum ||
 		!capacity.subjectMaximum.Allows(capacity.subjectActive+1) ||
 		!capacity.tenantMaximum.Allows(capacity.tenantActive+1)
+}
+
+// canFit reports whether one session fits once every other session has ended.
+func (capacity dataPlaneCapacity) canFit() bool {
+	return capacity.sandboxMaximum >= 1 &&
+		capacity.subjectMaximum.Allows(1) && capacity.tenantMaximum.Allows(1)
 }
 
 func lockDataPlaneAuthority(
