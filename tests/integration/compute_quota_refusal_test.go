@@ -82,32 +82,7 @@ func TestQuotaRefusalsDistinguishComputeFromDurableAxes(t *testing.T) {
 	// Through the HTTP API, a compute-only refusal is retryable and paced, and
 	// a refusal that also exhausts the Sandbox count is neither.
 	createRunning := func(label string) (*http.Response, contracts.Problem) {
-		t.Helper()
-		body, err := json.Marshal(contracts.CreateSandboxRequest{Image: testExecutionImage(),
-			Profile: fixture.profileName, Metadata: map[string]string{},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fixture.server+"/v1/sandboxes", bytes.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		request.Header.Set("Authorization", "Bearer "+testPlatformToken)
-		request.Header.Set("X-SecondBox-Tenant-Ref", fixture.tenantRef)
-		request.Header.Set("X-SecondBox-Subject-Ref", fixture.subjectRef)
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Idempotency-Key", label+"-"+strconv.FormatInt(integrationIdentitySequence.Add(1), 10))
-		response, err := http.DefaultClient.Do(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		var problem contracts.Problem
-		if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
-			t.Fatal(err)
-		}
-		return response, problem
+		return createOverHTTP(t, fixture, label)
 	}
 	response, problem := createRunning("compute-quota-create")
 	if response.StatusCode != http.StatusTooManyRequests || problem.Code != "quota_exceeded" || !problem.Retryable ||
@@ -118,10 +93,112 @@ func TestQuotaRefusalsDistinguishComputeFromDurableAxes(t *testing.T) {
 	}
 	setFixtureSubjectQuota(t, fixture, "max_sandboxes", 2)
 	response, problem = createRunning("durable-quota-create")
+	requireNonRetryableQuotaRefusal(t, "create over both the Sandbox and active-Instance quotas", response, problem)
+
+	// A create that alone needs more vCPU or memory than a positive limit
+	// allows frees with no work ending, so it is not retryable either.
+	setFixtureSubjectQuota(t, fixture, "max_sandboxes", 100)
+	setFixtureSubjectQuota(t, fixture, "max_active_instances", 100)
+	setFixtureSubjectQuota(t, fixture, "max_memory_bytes", 1)
+	response, problem = createRunning("oversized-memory-create")
+	requireNonRetryableQuotaRefusal(t, "create needing more memory than the limit", response, problem)
+	setFixtureSubjectQuota(t, fixture, "max_memory_bytes", 100<<30)
+	// The fixture Profile has one vCPU, so the only smaller vCPU limit is zero.
+	setFixtureSubjectQuota(t, fixture, "max_vcpu_count", second.Resources.VCPUCount-1)
+	response, problem = createRunning("oversized-vcpu-create")
+	requireNonRetryableQuotaRefusal(t, "create needing more vCPU than the limit", response, problem)
+}
+
+// TestImagePreparationConcurrencyRefusals distinguishes a zero concurrent
+// operation limit, which no work ending frees, from an occupied positive one.
+func TestImagePreparationConcurrencyRefusals(t *testing.T) {
+	preparation := newPreparationFixture(t)
+	fixture := preparation.fixture
+	request := contracts.PrepareImageRequest{Image: contracts.ExecutionImage{Reference: "registry.example/secondbox/integration-agent:stable"}}
+	prepare := func(key string) (*http.Response, contracts.Problem) {
+		t.Helper()
+		response := authenticatedJSONRequest(t, http.MethodPost, fixture.server+"/v1/images:prepare", fixture.credential, key, request)
+		var problem contracts.Problem
+		if response.StatusCode != http.StatusAccepted {
+			decodeResponseJSON(t, response, &problem)
+		} else {
+			response.Body.Close()
+		}
+		return response, problem
+	}
+	setFixtureSubjectQuota(t, fixture, "max_concurrent_operations", 0)
+	response, problem := prepare("prepare-zero-subject")
+	requireNonRetryableQuotaRefusal(t, "preparation under a zero Subject concurrency limit", response, problem)
+	setFixtureSubjectQuota(t, fixture, "max_concurrent_operations", 100)
+	setFixtureTenantQuota(t, fixture, "max_concurrent_operations", 0)
+	response, problem = prepare("prepare-zero-tenant")
+	requireNonRetryableQuotaRefusal(t, "preparation under a zero Tenant concurrency limit", response, problem)
+
+	setFixtureTenantQuota(t, fixture, "max_concurrent_operations", 100)
+	setFixtureSubjectQuota(t, fixture, "max_concurrent_operations", 1)
+	if response, problem := prepare("prepare-occupying"); response.StatusCode != http.StatusAccepted {
+		t.Fatalf("first preparation under a limit of one = %d %#v", response.StatusCode, problem)
+	}
+	request.Image.Reference = "registry.example/secondbox/integration-agent:next"
+	response, problem = prepare("prepare-occupied")
+	if response.StatusCode != http.StatusTooManyRequests || problem.Code != "quota_exceeded" || !problem.Retryable ||
+		problem.RetryAfterMilliseconds == nil || response.Header.Get("Retry-After") != "1" {
+		t.Fatalf("preparation behind an occupied limit = %d Retry-After=%q %#v",
+			response.StatusCode, response.Header.Get("Retry-After"), problem)
+	}
+}
+
+func createOverHTTP(t *testing.T, fixture *teardownFixture, label string) (*http.Response, contracts.Problem) {
+	t.Helper()
+	body, err := json.Marshal(contracts.CreateSandboxRequest{Image: testExecutionImage(),
+		Profile: fixture.profileName, Metadata: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fixture.server+"/v1/sandboxes", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+testPlatformToken)
+	request.Header.Set("X-SecondBox-Tenant-Ref", fixture.tenantRef)
+	request.Header.Set("X-SecondBox-Subject-Ref", fixture.subjectRef)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", label+"-"+strconv.FormatInt(integrationIdentitySequence.Add(1), 10))
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var problem contracts.Problem
+	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+		t.Fatal(err)
+	}
+	return response, problem
+}
+
+func requireNonRetryableQuotaRefusal(t *testing.T, label string, response *http.Response, problem contracts.Problem) {
+	t.Helper()
 	if response.StatusCode != http.StatusTooManyRequests || problem.Code != "quota_exceeded" || problem.Retryable ||
 		problem.RetryAfterMilliseconds != nil || response.Header.Get("Retry-After") != "" {
-		t.Fatalf("create over both the Sandbox and active-Instance quotas = %d Retry-After=%q %#v",
-			response.StatusCode, response.Header.Get("Retry-After"), problem)
+		t.Fatalf("%s = %d Retry-After=%q %#v", label, response.StatusCode, response.Header.Get("Retry-After"), problem)
+	}
+}
+
+// setFixtureTenantQuota sets one limit of the fixture's own Tenant.
+func setFixtureTenantQuota(t *testing.T, fixture *teardownFixture, column string, limit int64) {
+	t.Helper()
+	if column != "max_concurrent_operations" {
+		t.Fatalf("Tenant quota column %q is not settable here", column)
+	}
+	tag, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.tenant_quotas SET `+column+`=$2 WHERE tenant_ref=$1`, fixture.tenantRef, limit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("Tenant quota update changed %d rows", tag.RowsAffected())
 	}
 }
 
@@ -150,7 +227,7 @@ func createStoppedQuotaSandbox(t *testing.T, fixture *teardownFixture, label str
 func setFixtureSubjectQuota(t *testing.T, fixture *teardownFixture, column string, limit int64) {
 	t.Helper()
 	switch column {
-	case "max_active_instances", "max_sandboxes":
+	case "max_active_instances", "max_sandboxes", "max_vcpu_count", "max_memory_bytes", "max_concurrent_operations":
 	default:
 		t.Fatalf("Subject quota column %q is not settable here", column)
 	}

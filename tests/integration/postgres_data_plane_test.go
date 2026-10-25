@@ -961,6 +961,75 @@ func TestPostgresDataPlaneRequestBoundsAboveProfileAreNotQuotaRefusals(t *testin
 	}
 }
 
+// TestPostgresDataPlaneZeroConcurrencyLimitIsNotAComputeRefusal pins that a
+// zero Subject or Tenant concurrency limit, which no session ending frees,
+// refuses an exec without the retryable compute class.
+func TestPostgresDataPlaneZeroConcurrencyLimitIsNotAComputeRefusal(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "zero-concurrency")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-zero-concurrency")
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "zero-concurrency-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 4, 12, 30, 0, 0, time.UTC)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	admit := func(id string) error {
+		_, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
+			ID: "dps_" + id + "_" + sandbox.ID, StreamID: "stream_" + id + "_" + sandbox.ID,
+			TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+			SubjectRef: principal.SubjectRef, RequestID: "request-" + id,
+			Generation: sandbox.Generation, Kind: "exec", Operation: "exec",
+			IdempotencyKey: id, RequestHash: id + "-hash",
+			DeadlineAt: now.Add(time.Minute), MaximumResponseBytes: 1024,
+			UseProfileStreamWindow: true,
+			ExecOpen: &runnerv1.ExecOpen{
+				Command:        &runnerv1.ExecOpen_Shell{Shell: "true"},
+				DeadlineUnixMs: uint64(now.Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024,
+			},
+			Request: map[string]any{"command": "true", "id": id}, Now: now,
+		})
+		return err
+	}
+	for _, scope := range []struct{ name, zero, restore string }{
+		{"subject",
+			`UPDATE secondbox.subject_quotas SET max_concurrent_operations=0 WHERE tenant_ref=$1 AND subject_ref=$2`,
+			`UPDATE secondbox.subject_quotas SET max_concurrent_operations=100 WHERE tenant_ref=$1 AND subject_ref=$2`},
+		{"tenant",
+			`UPDATE secondbox.tenant_quotas SET max_concurrent_operations=0 WHERE tenant_ref=$1 AND $2::text IS NOT NULL`,
+			`UPDATE secondbox.tenant_quotas SET max_concurrent_operations=100 WHERE tenant_ref=$1 AND $2::text IS NOT NULL`},
+	} {
+		if tag, err := pool.Exec(t.Context(), scope.zero, principal.TenantRef, principal.SubjectRef); err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("%s zero concurrency update changed %d rows, error %v", scope.name, tag.RowsAffected(), err)
+		}
+		if err := admit("exec_zero_" + scope.name); !errors.Is(err, ports.ErrQuotaExceeded) ||
+			errors.Is(err, ports.ErrComputeQuotaExceeded) {
+			t.Fatalf("exec under a zero %s concurrency limit error = %v, want the non-retryable quota refusal", scope.name, err)
+		}
+		if _, err := pool.Exec(t.Context(), scope.restore, principal.TenantRef, principal.SubjectRef); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestPostgresDataPlaneDistinguishesRetainedAndMissingSandbox(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
