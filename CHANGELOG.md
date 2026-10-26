@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+
+- SecondBox builds with Go 1.26.10, whose `crypto/x509` distrusts the eight compromised eMudhra intermediate CAs whatever the host trust store says. Go 1.25 is out of support and gets no fix: a 1.25.12 binary given a trust store older than Debian `ca-certificates` `20250419~deb12u2` accepted certificates forged under those intermediates for any domain. The control-plane, Runner, gVisor and installer images move to `debian:12.15-slim` and the Go builders to `golang:1.26.10-bookworm`; the Microsandbox probe and helper lock `rustls-webpki` 0.103.16 and `webpki-roots`/`webpki-root-certs` 1.0.11. Release hosts need a Go 1.26.10 `RELEASE_GOROOT`. The Firecracker guest rootfs and the gVisor flat root are unchanged.
+
 ## 0.28.0 - 2026-10-25
 
 A start can bound how long it waits for its home Runner to place it, compute-only quota refusals carry a retry hint, and two read operations report RunnerPool capacity without naming Runners. Deployments from v0.14.0 onward update in place; migration `0038_start_capacity_wait_deadline` adds one nullable column, so back up PostgreSQL first. Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged, and the Runners need no update. See the [v0.28.0 release notes](docs/releases/v0.28.0.md).

@@ -42,7 +42,7 @@ grep -Fxq 'patched_tree=daf8457b13e5f124a63e23a12edbd8482d7da43a' "$evidence" ||
   echo "SecondBox Microsandbox local build has the wrong patched tree" >&2
   exit 1
 }
-grep -Fxq 'helper_lock_sha256=72ba8a7f40cc17eb75386425cdb387c46cb394913d30d51b811f08e9f14d681c' "$evidence" || {
+grep -Fxq 'helper_lock_sha256=e56006193b817e651fc498f608c4bbdbcc2cd74798003c2b20375773c809aca4' "$evidence" || {
   echo "SecondBox Microsandbox local build has the wrong helper lock" >&2
   exit 1
 }

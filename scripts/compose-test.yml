@@ -19,7 +19,7 @@ services:
     # deployment does. Live fixtures are inserted afterwards by test-compose.sh.
 
   control-plane:
-    image: docker.io/library/golang:1.25.12-bookworm
+    image: docker.io/library/golang:1.26.10-bookworm
     user: "${SECONDBOX_COMPOSE_TEST_UID:?SECONDBOX_COMPOSE_TEST_UID is required}:${SECONDBOX_COMPOSE_TEST_GID:?SECONDBOX_COMPOSE_TEST_GID is required}"
     command: ["/opt/secondbox/secondboxd"]
     depends_on:

@@ -18,7 +18,7 @@ services:
       retries: 60
 
   control-plane:
-    image: docker.io/library/golang:1.25.12-bookworm
+    image: docker.io/library/golang:1.26.10-bookworm
     user: "${SECONDBOX_SCENARIO_UID:?SECONDBOX_SCENARIO_UID is required}:${SECONDBOX_SCENARIO_GID:?SECONDBOX_SCENARIO_GID is required}"
     command: ["/opt/secondbox/secondboxd"]
     depends_on:

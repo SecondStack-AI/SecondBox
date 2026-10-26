@@ -18,7 +18,7 @@ build_root="$(cd "$SECONDBOX_MICROSANDBOX_MACOS_BUILD" && pwd -P)"
 [[ "$build_root" == "$SECONDBOX_MICROSANDBOX_MACOS_BUILD" && ! -L "$build_root" ]] ||
   fail "SECONDBOX_MICROSANDBOX_MACOS_BUILD must be a clean absolute non-symlink directory"
 
-export PATH="/opt/homebrew/opt/go@1.25/bin:/opt/homebrew/bin:/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/opt/homebrew/opt/go@1.26/bin:/opt/homebrew/bin:/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 for tool in diskutil docker e2fsck go ipconfig jq mke2fs otool route shasum sysctl tune2fs; do
   command -v "$tool" >/dev/null || fail "missing command: $tool"
 done
@@ -47,7 +47,7 @@ grep -Fxq 'upstream_commit=5b335537afad433ad2c0308cb54de13b7015b4e7' "$evidence"
   fail "local build has the wrong Microsandbox revision"
 grep -Fxq 'patched_tree=daf8457b13e5f124a63e23a12edbd8482d7da43a' "$evidence" ||
   fail "local build has the wrong patched tree"
-grep -Fxq 'helper_lock_sha256=72ba8a7f40cc17eb75386425cdb387c46cb394913d30d51b811f08e9f14d681c' "$evidence" ||
+grep -Fxq 'helper_lock_sha256=e56006193b817e651fc498f608c4bbdbcc2cd74798003c2b20375773c809aca4' "$evidence" ||
   fail "local build has the wrong helper lock"
 
 temporary="$(mktemp -d /tmp/secondbox-microsandbox-macos-scenario.XXXXXXXX)"
