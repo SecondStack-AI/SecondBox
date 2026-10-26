@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.29.0 - 2026-10-27
+
+SecondBox now builds with Go 1.26.10 and ships refreshed trust stores in response to the eMudhra intermediate CA compromise. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles and standard Profile revisions are unchanged. The gVisor materialization changes. The Firecracker guest trust store is not yet replaced. See the [v0.29.0 release notes](docs/releases/v0.29.0.md).
+
+### Upgrade notes
+
+- Update the control plane, every Runner, image fetchers and the `secondbox` and `secondbox-deploy` binaries: binaries from v0.28.0 and earlier were built with Go 1.25.12. Update gVisor Runners to the new `gvisor-artifacts` materialization while each Runner is stopped.
+
 ### Security
 
 - SecondBox builds with Go 1.26.10, whose `crypto/x509` distrusts the eight compromised eMudhra intermediate CAs whatever the host trust store says. Go 1.25 is out of support and gets no fix: a 1.25.12 binary given a trust store older than Debian `ca-certificates` `20250419~deb12u2` accepted certificates forged under those intermediates for any domain. The control-plane, Runner, gVisor and installer images move to `debian:12.15-slim` and the Go builders to `golang:1.26.10-bookworm`; the Microsandbox probe and helper lock `rustls-webpki` 0.103.16 and `webpki-roots`/`webpki-root-certs` 1.0.11. Release hosts need a Go 1.26.10 `RELEASE_GOROOT`.
