@@ -4,7 +4,8 @@
 
 ### Security
 
-- SecondBox builds with Go 1.26.10, whose `crypto/x509` distrusts the eight compromised eMudhra intermediate CAs whatever the host trust store says. Go 1.25 is out of support and gets no fix: a 1.25.12 binary given a trust store older than Debian `ca-certificates` `20250419~deb12u2` accepted certificates forged under those intermediates for any domain. The control-plane, Runner, gVisor and installer images move to `debian:12.15-slim` and the Go builders to `golang:1.26.10-bookworm`; the Microsandbox probe and helper lock `rustls-webpki` 0.103.16 and `webpki-roots`/`webpki-root-certs` 1.0.11. Release hosts need a Go 1.26.10 `RELEASE_GOROOT`. The Firecracker guest rootfs and the gVisor flat root are unchanged.
+- SecondBox builds with Go 1.26.10, whose `crypto/x509` distrusts the eight compromised eMudhra intermediate CAs whatever the host trust store says. Go 1.25 is out of support and gets no fix: a 1.25.12 binary given a trust store older than Debian `ca-certificates` `20250419~deb12u2` accepted certificates forged under those intermediates for any domain. The control-plane, Runner, gVisor and installer images move to `debian:12.15-slim` and the Go builders to `golang:1.26.10-bookworm`; the Microsandbox probe and helper lock `rustls-webpki` 0.103.16 and `webpki-roots`/`webpki-root-certs` 1.0.11. Release hosts need a Go 1.26.10 `RELEASE_GOROOT`.
+- The gVisor flat root moves from Alpine 3.22.5 to 3.22.7, whose `ca-certificates-bundle` 20261020 no longer trusts the compromised intermediates; 3.22.5 accepted a forged `dv-g3b-emudhra` chain. The gVisor materialization digest changes.
 
 ## 0.28.0 - 2026-10-25
 

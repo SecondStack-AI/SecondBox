@@ -6,7 +6,7 @@
 ARG RELEASE_VERSION
 ARG SOURCE_COMMIT
 
-FROM docker.io/library/alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS flat-root-source
+FROM docker.io/library/alpine@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f AS flat-root-source
 
 FROM docker.io/library/golang:1.26.10-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS tools
 
@@ -53,7 +53,7 @@ RUN set -eu; \
     jq -cn \
       --arg runtime "$(digest_text "secondbox-gvisor-runtime-release-$runsc_release-linux-amd64")" \
       --arg toolchain "$(digest_text "secondbox-gvisor-toolchain-release-$runsc_release-linux-amd64")" \
-      --arg source "$(digest_text 'alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce')" \
+      --arg source "$(digest_text 'alpine@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f')" \
       --arg flatRoot "$flat_root_digest" \
       --arg agent "$(digest_file "$root/bin/secondbox-guest-agent")" \
       --arg runsc "$(digest_file "$root/bin/runsc")" \
