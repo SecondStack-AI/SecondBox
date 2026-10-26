@@ -1,6 +1,6 @@
 module github.com/SecondStack-AI/SecondBox
 
-go 1.25.12
+go 1.26.10
 
 retract v0.7.0 // The public Go proxy cached an intermediate release-preparation commit; use v0.7.1.
 

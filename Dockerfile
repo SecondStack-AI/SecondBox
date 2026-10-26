@@ -4,7 +4,7 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG PUBLIC_CONTRACT_DIGEST
 
-FROM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS builder
+FROM docker.io/library/golang:1.26.10-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS builder
 
 ARG RELEASE_VERSION
 ARG SOURCE_COMMIT
@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -buil
     -ldflags="-s -w -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.Version=${RELEASE_VERSION} -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.SourceCommit=${SOURCE_COMMIT}" \
     -o /out/secondboxd ./cmd/secondboxd
 
-FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c
+FROM docker.io/library/debian:12.15-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 
 ARG RELEASE_VERSION
 ARG SOURCE_COMMIT

@@ -1,6 +1,6 @@
 module github.com/SecondStack-AI/SecondBox/runner
 
-go 1.25.12
+go 1.26.10
 
 require (
 	golang.org/x/sys v0.43.0

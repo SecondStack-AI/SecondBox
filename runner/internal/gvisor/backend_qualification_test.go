@@ -119,7 +119,7 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 			RuntimeManifestDigest:   qualificationDigestText("gvisor-qualification-runtime"),
 			ToolchainManifestDigest: qualificationDigestText("gvisor-qualification-toolchain"),
 		},
-		SourceOCIManifestDigest: qualificationDigestText("alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"),
+		SourceOCIManifestDigest: qualificationDigestText("alpine@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f"),
 		FlatRootDigest:          qualificationDigestFlatRoot(t, rootfs),
 		LaunchArtifacts: []materialization.LaunchArtifact{
 			{ID: agentArtifactID, SHA256: qualificationDigestFile(t, agent)},

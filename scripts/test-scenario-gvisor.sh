@@ -67,7 +67,7 @@ digest_canonical_json() {
 runsc_release="$(sed -n 's/^readonly RUNSC_RELEASE="\([0-9.]*\)"$/\1/p' "$repo_root/runner/scripts/fetch-runsc.sh")"
 runtime_digest="$(digest_text "secondbox-gvisor-runtime-release-$runsc_release-linux-amd64")"
 toolchain_digest="$(digest_text "secondbox-gvisor-toolchain-release-$runsc_release-linux-amd64")"
-source_oci_digest="$(digest_text 'alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce')"
+source_oci_digest="$(digest_text 'alpine@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f')"
 (flock 9; cd "$repo_root/runner" && go run ./cmd/secondbox-prepare-gvisor-flat-root "$flat_root") 9>"$build_root/prepare.lock"
 flat_root_digest="$(cd "$repo_root/runner" && go run ./cmd/secondbox-flat-root-digest "$flat_root")"
 materialization="$temporary/materialization.json"
