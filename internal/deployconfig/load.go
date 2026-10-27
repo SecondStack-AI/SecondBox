@@ -456,6 +456,10 @@ func validateManifestShape(manifest ManifestV1) error {
 			if parsedURL.Scheme != "http" || parsedURL.Hostname() != "127.0.0.1" || d.APIBindIP != "127.0.0.1" {
 				return manifestError("production loopback TLS termination requires an http://127.0.0.1 public_base_url and api_bind_ip 127.0.0.1", nil)
 			}
+			// No proxy sits in between, so the URL must name the published API port itself.
+			if parsedURL.Port() != strconv.FormatInt(*d.APIPublishedPort, 10) {
+				return manifestError("production loopback TLS termination requires public_base_url to name api_published_port explicitly", nil)
+			}
 		default:
 			return manifestError("production deployment.tls_termination must be external or loopback", nil)
 		}
