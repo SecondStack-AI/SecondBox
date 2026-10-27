@@ -79,6 +79,7 @@ if not isinstance(debian, dict):
 suite = debian.get("suite")
 architecture = debian.get("architecture")
 snapshot = debian.get("snapshot")
+security_snapshot = debian.get("securitySnapshot")
 apt_check_valid_until = debian.get("aptCheckValidUntil")
 include = debian.get("debootstrapInclude")
 if not isinstance(suite, str) or not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", suite):
@@ -89,6 +90,10 @@ if not isinstance(snapshot, str) or not re.fullmatch(
     r"https://snapshot\.debian\.org/archive/debian/[0-9]{8}T[0-9]{6}Z/", snapshot
 ):
     raise SystemExit("SecondBox image definition rejected: Debian snapshot must be dated and immutable")
+if not isinstance(security_snapshot, str) or not re.fullmatch(
+    r"https://snapshot\.debian\.org/archive/debian-security/[0-9]{8}T[0-9]{6}Z/", security_snapshot
+):
+    raise SystemExit("SecondBox image definition rejected: Debian security snapshot must be dated and immutable")
 if not isinstance(apt_check_valid_until, bool):
     raise SystemExit("SecondBox image definition rejected: aptCheckValidUntil must be boolean")
 if (
@@ -102,6 +107,7 @@ values = [
     suite,
     architecture,
     snapshot,
+    security_snapshot,
     "true" if apt_check_valid_until else "false",
     ",".join(sorted(include)),
     str(guest_minimum),
@@ -110,7 +116,7 @@ values = [
 print("\t".join(values))
 PY
     )"
-    IFS=$'\t' read -r debian_suite debian_arch debian_snapshot apt_check_valid_until \
+    IFS=$'\t' read -r debian_suite debian_arch debian_snapshot debian_security_snapshot apt_check_valid_until \
         debootstrap_include guest_protocol_minimum guest_protocol_maximum <<<"$definition_record"
     image_definition_sha256="$(sha256_secondbox_build_file "$definition_file")"
 }
@@ -153,6 +159,7 @@ write_secondbox_source_manifest() {
     DEBIAN_ARCHITECTURE="$debian_arch" \
     ARCHITECTURE="$architecture" \
     DEBIAN_SNAPSHOT="$debian_snapshot" \
+    DEBIAN_SECURITY_SNAPSHOT="$debian_security_snapshot" \
     GUEST_PROTOCOL_MINIMUM="$guest_protocol_minimum" \
     GUEST_PROTOCOL_MAXIMUM="$guest_protocol_maximum" \
     APT_PACKAGES_SHA256="$apt_packages_sha256" \
@@ -181,6 +188,7 @@ manifest = {
         "debianSuite": os.environ["DEBIAN_SUITE"],
         "debianArchitecture": os.environ["DEBIAN_ARCHITECTURE"],
         "debianSnapshot": os.environ["DEBIAN_SNAPSHOT"],
+        "debianSecuritySnapshot": os.environ["DEBIAN_SECURITY_SNAPSHOT"] or None,
         "guestProtocolMinimum": os.environ["GUEST_PROTOCOL_MINIMUM"],
         "guestProtocolMaximum": os.environ["GUEST_PROTOCOL_MAXIMUM"],
     },
@@ -214,6 +222,7 @@ out_dir="${SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR-}"
 debian_suite=""
 debian_arch=""
 debian_snapshot=""
+debian_security_snapshot=""
 guest_protocol_minimum=""
 guest_protocol_maximum=""
 image_definition_sha256=""
@@ -367,6 +376,10 @@ else
         "$debian_suite" \
         "$stage_dir" \
         "$debian_snapshot"
+    # Security updates, including trust-store fixes, publish to the separate
+    # security archive; apt-get upgrade in the Dockerfile applies them.
+    printf 'deb %s %s-security main\n' "$debian_security_snapshot" "$debian_suite" |
+        run_secondbox_build_as_root tee -a "$stage_dir/etc/apt/sources.list" >/dev/null
     if [ "$apt_check_valid_until" = "false" ]; then
         run_secondbox_build_as_root install -d -m 0755 "$stage_dir/etc/apt/apt.conf.d"
         printf 'Acquire::Check-Valid-Until "false";\n' |

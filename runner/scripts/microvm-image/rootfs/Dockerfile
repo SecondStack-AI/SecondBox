@@ -22,6 +22,7 @@ RUN case "${APT_CHECK_VALID_UNTIL}" in \
 
 COPY secondbox-apt-packages.txt /tmp/secondbox-build/secondbox-apt-packages.txt
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
       $(grep -vE '^\s*#|^\s*$' /tmp/secondbox-build/secondbox-apt-packages.txt) \
  && rm -rf /var/lib/apt/lists/*

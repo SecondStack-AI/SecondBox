@@ -8,7 +8,8 @@
   "debian": {
     "suite": "bookworm",
     "architecture": "amd64",
-    "snapshot": "https://snapshot.debian.org/archive/debian/20250701T000000Z/",
+    "snapshot": "https://snapshot.debian.org/archive/debian/20261026T000000Z/",
+    "securitySnapshot": "https://snapshot.debian.org/archive/debian-security/20261026T000000Z/",
     "aptCheckValidUntil": false,
     "debootstrapInclude": [
       "bash",

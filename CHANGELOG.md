@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+
+- The guest root filesystem image definition requires a dated `debian.securitySnapshot`, and the build applies its updates to every installed package. Both committed definitions move to the 2026-10-26 Debian and Debian security snapshots, so a guest built from them carries `ca-certificates` `20250419~deb12u2`, which no longer trusts the compromised eMudhra intermediates. Bookworm is in LTS, where security fixes publish only to the security archive; the previous definitions resolved `ca-certificates` `20230311` and no bookworm security update since 2025-07-01. The Firecracker bundles are unchanged until a release ships bundles built from these definitions.
+
 ## 0.29.0 - 2026-10-27
 
 SecondBox now builds with Go 1.26.10 and ships refreshed trust stores in response to the eMudhra intermediate CA compromise. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles and standard Profile revisions are unchanged. The gVisor materialization changes. The Firecracker guest trust store is not yet replaced. See the [v0.29.0 release notes](docs/releases/v0.29.0.md).
