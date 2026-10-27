@@ -2,26 +2,23 @@
 
 ## Unreleased
 
+## 0.29.0 - 2026-10-27
+
+SecondBox now builds with Go 1.26.10 and ships refreshed trust stores in response to the eMudhra intermediate CA compromise. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles and standard Profile revisions are unchanged. The gVisor materialization changes. The Firecracker guest trust store is not yet replaced. Production deployments can publish the API on host loopback without TLS. See the [v0.29.0 release notes](docs/releases/v0.29.0.md).
+
+### Upgrade notes
+
+- Update the control plane, every Runner, image fetchers and the `secondbox` and `secondbox-deploy` binaries: binaries from v0.28.0 and earlier were built with Go 1.25.12. Update gVisor Runners to the new `gvisor-artifacts` materialization while each Runner is stopped.
+
 ### Added
 
 - Production accepts `tls_termination = 'loopback'`, which publishes the API without TLS on host loopback only: `public_base_url` must be exactly `http://127.0.0.1:<api_published_port>` and `api_bind_ip` must be `127.0.0.1`, and no TLS terminator or DNS name is needed. Returned WebSocket endpoints are then `ws://127.0.0.1` URLs, which a client inside a container must rebase onto its own route to the API. Remote Runners keep their mTLS listener and are still allowed. Before, production required external TLS on an HTTPS `public_base_url` even when nothing reached the API from off the host, and `secondbox-deploy` applied standard resources over that URL, so a same-host installation had to route its own resource apply through a TLS ingress. `tls_termination = 'external'` is unchanged.
 
 ### Security
 
-- The guest root filesystem image definition requires a dated `debian.securitySnapshot`, and the build applies its updates to every installed package. Both committed definitions move to the 2026-10-26 Debian and Debian security snapshots, so a guest built from them carries `ca-certificates` `20250419~deb12u2`, which no longer trusts the compromised eMudhra intermediates. Bookworm is in LTS, where security fixes publish only to the security archive; the previous definitions resolved `ca-certificates` `20230311` and no bookworm security update since 2025-07-01. The Firecracker bundles are unchanged until a release ships bundles built from these definitions.
-
-## 0.29.0 - 2026-10-27
-
-SecondBox now builds with Go 1.26.10 and ships refreshed trust stores in response to the eMudhra intermediate CA compromise. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles and standard Profile revisions are unchanged. The gVisor materialization changes. The Firecracker guest trust store is not yet replaced. See the [v0.29.0 release notes](docs/releases/v0.29.0.md).
-
-### Upgrade notes
-
-- Update the control plane, every Runner, image fetchers and the `secondbox` and `secondbox-deploy` binaries: binaries from v0.28.0 and earlier were built with Go 1.25.12. Update gVisor Runners to the new `gvisor-artifacts` materialization while each Runner is stopped.
-
-### Security
-
 - SecondBox builds with Go 1.26.10, whose `crypto/x509` distrusts the eight compromised eMudhra intermediate CAs whatever the host trust store says. Go 1.25 is out of support and gets no fix: a 1.25.12 binary given a trust store older than Debian `ca-certificates` `20250419~deb12u2` accepted certificates forged under those intermediates for any domain. The control-plane, Runner, gVisor and installer images move to `debian:12.15-slim` and the Go builders to `golang:1.26.10-bookworm`; the Microsandbox probe and helper lock `rustls-webpki` 0.103.16 and `webpki-roots`/`webpki-root-certs` 1.0.11. Release hosts need a Go 1.26.10 `RELEASE_GOROOT`.
 - The gVisor flat root moves from Alpine 3.22.5 to 3.22.7, whose `ca-certificates-bundle` 20261020 no longer trusts the compromised intermediates; 3.22.5 accepted a forged `dv-g3b-emudhra` chain. The gVisor materialization digest changes.
+- The guest root filesystem image definition requires a dated `debian.securitySnapshot`, and the build applies its updates to every installed package. Both committed definitions move to the 2026-10-26 Debian and Debian security snapshots, so a guest built from them carries `ca-certificates` `20250419~deb12u2`, which no longer trusts the compromised eMudhra intermediates. Bookworm is in LTS, where security fixes publish only to the security archive; the previous definitions resolved `ca-certificates` `20230311` and no bookworm security update since 2025-07-01. The Firecracker bundles are unchanged until a release ships bundles built from these definitions.
 
 ## 0.28.0 - 2026-10-25
 
