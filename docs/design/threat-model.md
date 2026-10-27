@@ -14,7 +14,7 @@ The control-plane image has no reason to access KVM, TUN/TAP, host cgroups, host
 
 | Threat | Security property | Required control and evidence |
 | --- | --- | --- |
-| Stolen platform token | Bounded incident response | Secret storage, transport TLS, bounded request inputs, audit correlation, token replacement, and control-plane restart |
+| Stolen platform token | Bounded incident response | Secret storage, transport TLS or host-loopback-only API publication, bounded request inputs, audit correlation, token replacement, and control-plane restart |
 | Stolen tenant-controller credential | Tenant-confined incident response | Persisted one-way verifier, current-state check on each request, fixed Tenant grant, audit correlation, rotation or revocation, and no Sandbox-route authority |
 | Stolen application credential | Subject-confined incident response | Persisted one-way verifier, exact bound headers, fixed scopes and Profile grants, immediate rotation or revocation, and non-enumerating cross-tenant reads |
 | Profile switch widening a Sandbox's authority | Grant-bounded, stopped-only repin | Switch only a stopped Sandbox with no Instance or Snapshot; require grants for both the current and target Profile, the current one checked against the locked pin; keep the egress-context pin, pool, architecture, startup mode, and resources; build the next Assignment from the new revision only; audit both revisions; and evaluate every data-plane and Port admission grant against the Profile read under the admission lock rather than an earlier read |

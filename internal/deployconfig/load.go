@@ -445,8 +445,21 @@ func validateManifestShape(manifest ManifestV1) error {
 		return manifestError("deployment.public_base_url must be an absolute HTTP URL", err)
 	}
 	if d.Mode == "production" {
-		if d.TLSTermination != "external" || parsedURL.Scheme != "https" {
-			return manifestError("production requires external TLS and an HTTPS public_base_url", nil)
+		// Plaintext is acceptable only while the API never leaves the host:
+		// remote Runners still use their own mTLS listener.
+		switch d.TLSTermination {
+		case "external":
+			if parsedURL.Scheme != "https" {
+				return manifestError("production external TLS requires an HTTPS public_base_url", nil)
+			}
+		case "loopback":
+			// No proxy sits in between, so the URL names the published API root exactly:
+			// resource apply and returned WebSocket URLs append paths to it verbatim.
+			if d.PublicBaseURL != "http://127.0.0.1:"+strconv.FormatInt(*d.APIPublishedPort, 10) || d.APIBindIP != "127.0.0.1" {
+				return manifestError("production loopback TLS termination requires public_base_url to be exactly http://127.0.0.1:<api_published_port> and api_bind_ip 127.0.0.1", nil)
+			}
+		default:
+			return manifestError("production deployment.tls_termination must be external or loopback", nil)
 		}
 		for path, image := range map[string]string{"deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage} {
 			if !strings.Contains(image, "@sha256:") {

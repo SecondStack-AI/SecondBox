@@ -1176,6 +1176,71 @@ func TestProductionQualifiesBundledAndExternalDatabase(t *testing.T) {
 	}
 }
 
+func TestProductionTLSTerminationAllowsPlaintextOnlyOnHostLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name, termination, publicBaseURL, apiBindIP, wantErr string
+	}{
+		{"external_https", "external", "https://secondbox.example.com", "10.0.0.5", ""},
+		{"external_http", "external", "http://secondbox.example.com", "10.0.0.5", "requires an HTTPS public_base_url"},
+		{"loopback", "loopback", "http://127.0.0.1:8080", "127.0.0.1", ""},
+		{"loopback_default_port", "loopback", "http://127.0.0.1", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_other_port", "loopback", "http://127.0.0.1:8097", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_root_slash", "loopback", "http://127.0.0.1:8080/", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_path", "loopback", "http://127.0.0.1:8080/api", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_empty_query", "loopback", "http://127.0.0.1:8080?", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_query", "loopback", "http://127.0.0.1:8080?x=1", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_empty_fragment", "loopback", "http://127.0.0.1:8080#", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_fragment", "loopback", "http://127.0.0.1:8080#x", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_userinfo", "loopback", "http://user@127.0.0.1:8080", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_https", "loopback", "https://127.0.0.1:8080", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_hostname", "loopback", "http://localhost:8080", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_ipv6", "loopback", "http://[::1]:8080", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_routable_url", "loopback", "http://10.0.0.5:8080", "127.0.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_wildcard_bind", "loopback", "http://127.0.0.1:8080", "0.0.0.0", "exactly http://127.0.0.1:<api_published_port>"},
+		{"loopback_bridge_bind", "loopback", "http://127.0.0.1:8080", "172.18.0.1", "exactly http://127.0.0.1:<api_published_port>"},
+		{"development_loopback", "development-loopback", "http://127.0.0.1:8080", "127.0.0.1", "must be external or loopback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifestPath := initializedDevelopment(t)
+			manifest, err := ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digestRef := "registry.example/secondbox@sha256:" + strings.Repeat("a", 64)
+			manifest.Deployment.Mode = "production"
+			manifest.Deployment.PublicBaseURL = tc.publicBaseURL
+			manifest.Deployment.TLSTermination = tc.termination
+			manifest.Deployment.APIBindIP = tc.apiBindIP
+			// A remote Runner on a routable listener is what development mode cannot express.
+			manifest.Deployment.RunnerBindIP = "10.0.0.5"
+			manifest.Runners = []Runner{validTestRunner("runner-remote", "remote")}
+			manifest.Deployment.ControlPlaneImage = digestRef
+			manifest.Deployment.RunnerImage = digestRef
+			manifest.Deployment.PostgresImage = digestRef
+			encoded, err := encodeManifest(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := Resolve(manifestPath)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resolved.Environment["SECONDBOX_PUBLIC_BASE_URL"] != tc.publicBaseURL {
+					t.Fatalf("rendered public base URL = %q", resolved.Environment["SECONDBOX_PUBLIC_BASE_URL"])
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	manifest, err := ReadManifest(manifestPath)

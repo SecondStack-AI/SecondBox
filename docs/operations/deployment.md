@@ -193,7 +193,7 @@ just deploy-init-production /secure/secondbox-deployment
 
 An incomplete production initialization is intentionally unusable and reports every unresolved decision group in one error. Before validation, production operators must supply:
 
-- digest-pinned control-plane and Runner images, public HTTPS ingress, and external TLS termination;
+- digest-pinned control-plane and Runner images, and either public HTTPS ingress with `tls_termination = 'external'`, or `tls_termination = 'loopback'` with `public_base_url = 'http://127.0.0.1:<api_published_port>'` and `api_bind_ip = '127.0.0.1'` (see [Loopback API in production](#loopback-api-in-production));
 - bundled or external database authority, with `sslmode=verify-full` for an external database;
 - zero or more explicit immutable Runner declarations and their placement;
 - a verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
@@ -209,6 +209,10 @@ secondbox-deploy init --mode production \
 ```
 
 Production initialization materializes only the explicitly supplied platform authority. It creates no implicit Tenant, Subject, tenant controller, or application authority. After startup, use the authenticated management CLI sequence documented in [SDK, CLI, and Flue integration](sdk-cli-and-flue.md). No generated development authority is accepted as a production default. Any dependency image selected in production is immutable by digest.
+
+### Loopback API in production
+
+`tls_termination = 'loopback'` publishes the API's host port without TLS on loopback only, for an installation whose API clients run on the control-plane host. Remote Runners are still allowed, because they connect to the separate mTLS Runner listener. The other production requirements do not change. The control plane derives Exec stream, terminal and proxied Port tunnel WebSocket URLs from `public_base_url`, so it returns `ws://127.0.0.1:...` endpoints. Inside a container, `127.0.0.1` is that container's own loopback: a container client must reach the API on its own network address and must rebase each returned WebSocket URL onto it, because the SDK connects to the returned URL as it is. Any container network attached to the control plane stays inside the trusted host and must not forward the plaintext API elsewhere.
 
 ## Rendering and Compose
 
