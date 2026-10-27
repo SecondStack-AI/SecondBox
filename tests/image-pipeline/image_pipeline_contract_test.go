@@ -61,13 +61,13 @@ func TestSecondBoxImagePipelineRequiresExplicitImmutableInput(t *testing.T) {
 	}
 
 	undatedDefinition := filepath.Join(t.TempDir(), "undated-image-definition.json")
-	definitionContent, err := os.ReadFile(definitionPath)
+	originalDefinition, err := os.ReadFile(definitionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	definitionContent = []byte(strings.Replace(
-		string(definitionContent),
-		"https://snapshot.debian.org/archive/debian/20250701T000000Z/",
+	definitionContent := []byte(strings.Replace(
+		string(originalDefinition),
+		"https://snapshot.debian.org/archive/debian/20261026T000000Z/",
 		"https://deb.debian.org/debian/",
 		1,
 	))
@@ -81,6 +81,24 @@ func TestSecondBoxImagePipelineRequiresExplicitImmutableInput(t *testing.T) {
 	output, err = runSecondBoxInputValidation(t, undatedEnvironment)
 	if err == nil || !strings.Contains(output, "Debian snapshot must be dated and immutable") {
 		t.Fatalf("undated image definition = (%v, %q), want rejection", err, output)
+	}
+
+	undatedSecurityDefinition := filepath.Join(t.TempDir(), "undated-security-image-definition.json")
+	if err := os.WriteFile(undatedSecurityDefinition, []byte(strings.Replace(
+		string(originalDefinition),
+		"https://snapshot.debian.org/archive/debian-security/20261026T000000Z/",
+		"https://security.debian.org/debian-security/",
+		1,
+	)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	undatedSecurityEnvironment := append(
+		slicesClone(baseEnvironment),
+		"SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="+undatedSecurityDefinition,
+	)
+	output, err = runSecondBoxInputValidation(t, undatedSecurityEnvironment)
+	if err == nil || !strings.Contains(output, "Debian security snapshot must be dated and immutable") {
+		t.Fatalf("undated security snapshot = (%v, %q), want rejection", err, output)
 	}
 
 	ambiguousEnvironment := append(
@@ -478,10 +496,10 @@ func TestDebianSnapshotSourcePolicyAcceptsBothCanonicalURLForms(t *testing.T) {
 		"runner/scripts/microvm-image/rootfs/config/verify-debian-snapshot-sources.sh",
 	)
 	pattern := regexp.MustCompile(
-		`https://snapshot\\\.debian\\\.org/archive/debian/\[0-9\]\{8\}T\[0-9\]\{6\}Z/\?\(\[\[:space:\]\]\|\$\)`,
+		`https://snapshot\\\.debian\\\.org/archive/debian\(-security\)\?/\[0-9\]\{8\}T\[0-9\]\{6\}Z/\?\(\[\[:space:\]\]\|\$\)`,
 	)
 	if !pattern.MatchString(policy) {
-		t.Fatal("snapshot source policy must accept dated Debian URLs with or without a trailing slash")
+		t.Fatal("snapshot source policy must accept dated Debian and Debian security URLs with or without a trailing slash")
 	}
 }
 
