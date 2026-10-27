@@ -1183,9 +1183,13 @@ func TestProductionTLSTerminationAllowsPlaintextOnlyOnHostLoopback(t *testing.T)
 		{"external_https", "external", "https://secondbox.example.com", "10.0.0.5", ""},
 		{"external_http", "external", "http://secondbox.example.com", "10.0.0.5", "requires an HTTPS public_base_url"},
 		{"loopback", "loopback", "http://127.0.0.1:8080", "127.0.0.1", ""},
+		{"loopback_default_port", "loopback", "http://127.0.0.1", "127.0.0.1", ""},
 		{"loopback_https", "loopback", "https://127.0.0.1:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
 		{"loopback_hostname", "loopback", "http://localhost:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
-		{"loopback_public_bind", "loopback", "http://127.0.0.1:8080", "0.0.0.0", "api_bind_ip 127.0.0.1"},
+		{"loopback_ipv6", "loopback", "http://[::1]:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
+		{"loopback_routable_url", "loopback", "http://10.0.0.5:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
+		{"loopback_wildcard_bind", "loopback", "http://127.0.0.1:8080", "0.0.0.0", "api_bind_ip 127.0.0.1"},
+		{"loopback_bridge_bind", "loopback", "http://127.0.0.1:8080", "172.18.0.1", "api_bind_ip 127.0.0.1"},
 		{"development_loopback", "development-loopback", "http://127.0.0.1:8080", "127.0.0.1", "must be external or loopback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1199,6 +1203,9 @@ func TestProductionTLSTerminationAllowsPlaintextOnlyOnHostLoopback(t *testing.T)
 			manifest.Deployment.PublicBaseURL = tc.publicBaseURL
 			manifest.Deployment.TLSTermination = tc.termination
 			manifest.Deployment.APIBindIP = tc.apiBindIP
+			// A remote Runner on a routable listener is what development mode cannot express.
+			manifest.Deployment.RunnerBindIP = "10.0.0.5"
+			manifest.Runners = []Runner{validTestRunner("runner-remote", "remote")}
 			manifest.Deployment.ControlPlaneImage = digestRef
 			manifest.Deployment.RunnerImage = digestRef
 			manifest.Deployment.PostgresImage = digestRef
