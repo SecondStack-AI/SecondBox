@@ -2,12 +2,13 @@
 
 ## Unreleased
 
-### Security
-
-- The guest root filesystem image definition requires a dated `debian.securitySnapshot`, and the build applies its updates to every installed package. Both committed definitions move to the 2026-10-26 Debian and Debian security snapshots, so a guest built from them carries `ca-certificates` `20250419~deb12u2`, which no longer trusts the compromised eMudhra intermediates. Bookworm is in LTS, where security fixes publish only to the security archive; the previous definitions resolved `ca-certificates` `20230311` and no bookworm security update since 2025-07-01. The Firecracker bundles are unchanged until a release ships bundles built from these definitions.
 ### Added
 
 - Production accepts `tls_termination = 'loopback'`, which publishes the API without TLS on host loopback only: `public_base_url` must be `http://127.0.0.1:<api_published_port>` and `api_bind_ip` must be `127.0.0.1`, and no TLS terminator or DNS name is needed. Returned WebSocket endpoints are then `ws://127.0.0.1` URLs, which a client inside a container must rebase onto its own route to the API. Remote Runners keep their mTLS listener and are still allowed. Before, production required external TLS on an HTTPS `public_base_url` even when nothing reached the API from off the host, and `secondbox-deploy` applied standard resources over that URL, so a same-host installation had to route its own resource apply through a TLS ingress. `tls_termination = 'external'` is unchanged.
+
+### Security
+
+- The guest root filesystem image definition requires a dated `debian.securitySnapshot`, and the build applies its updates to every installed package. Both committed definitions move to the 2026-10-26 Debian and Debian security snapshots, so a guest built from them carries `ca-certificates` `20250419~deb12u2`, which no longer trusts the compromised eMudhra intermediates. Bookworm is in LTS, where security fixes publish only to the security archive; the previous definitions resolved `ca-certificates` `20230311` and no bookworm security update since 2025-07-01. The Firecracker bundles are unchanged until a release ships bundles built from these definitions.
 
 ## 0.29.0 - 2026-10-27
 
