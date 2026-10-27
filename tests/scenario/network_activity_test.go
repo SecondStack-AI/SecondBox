@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -498,12 +497,10 @@ func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *te
 	ensureScenarioRunnerPool(t, fixture)
 	waitForScenarioRunner(t, fixture, 90*time.Second)
 	bridgeAddress := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_BRIDGE_ADDRESS")
-	const gatewayPort = int64(18443)
 	const gatewayContext = "network-enabled-egress-context"
-	gatewayAddress := net.JoinHostPort(bridgeAddress, strconv.FormatInt(gatewayPort, 10))
-	managementAddress := net.JoinHostPort(bridgeAddress, "18444")
-	startScenarioNetworkTarget(t, gatewayAddress, gatewayContext)
-	startScenarioNetworkTarget(t, managementAddress, "management-network")
+	// Ephemeral ports: a host service on a fixed port, bound to every address, would collide with the bridge listener.
+	gatewayAddress := startScenarioNetworkTarget(t, bridgeAddress, gatewayContext)
+	managementAddress := startScenarioNetworkTarget(t, bridgeAddress, "management-network")
 
 	isolatedLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated, runtime.GOARCH)
 	if err != nil {
@@ -638,12 +635,13 @@ func TestScenarioClosedGuestPortFailsOnlyItsPortSession(t *testing.T) {
 	assertScenarioExited(t, outcome, 0, "neighbour-ready\nneighbour:survived\n", "")
 }
 
-func startScenarioNetworkTarget(t *testing.T, address string, response string) {
+func startScenarioNetworkTarget(t *testing.T, host string, response string) string {
 	t.Helper()
-	listener, err := net.Listen("tcp4", address)
+	listener, err := net.Listen("tcp4", net.JoinHostPort(host, "0"))
 	if err != nil {
-		t.Fatalf("SecondBox scenario listen on %s: %v", address, err)
+		t.Fatalf("SecondBox scenario listen on %s: %v", host, err)
 	}
+	address := listener.Addr().String()
 	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		if _, err := io.WriteString(writer, response); err != nil {
 			t.Errorf("SecondBox scenario write network target response: %v", err)
@@ -661,6 +659,7 @@ func startScenarioNetworkTarget(t *testing.T, address string, response string) {
 			t.Errorf("SecondBox scenario stop network target %s: %v", address, err)
 		}
 	})
+	return address
 }
 
 func TestScenarioTouchExtendsIdleExpiry(t *testing.T) {
