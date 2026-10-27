@@ -4,7 +4,7 @@
 
 ### Added
 
-- Production accepts `tls_termination = 'loopback'`, which publishes the API without TLS on host loopback only: `public_base_url` must be `http://127.0.0.1:<api_published_port>` and `api_bind_ip` must be `127.0.0.1`, and no TLS terminator or DNS name is needed. Returned WebSocket endpoints are then `ws://127.0.0.1` URLs, which a client inside a container must rebase onto its own route to the API. Remote Runners keep their mTLS listener and are still allowed. Before, production required external TLS on an HTTPS `public_base_url` even when nothing reached the API from off the host, and `secondbox-deploy` applied standard resources over that URL, so a same-host installation had to route its own resource apply through a TLS ingress. `tls_termination = 'external'` is unchanged.
+- Production accepts `tls_termination = 'loopback'`, which publishes the API without TLS on host loopback only: `public_base_url` must be exactly `http://127.0.0.1:<api_published_port>` and `api_bind_ip` must be `127.0.0.1`, and no TLS terminator or DNS name is needed. Returned WebSocket endpoints are then `ws://127.0.0.1` URLs, which a client inside a container must rebase onto its own route to the API. Remote Runners keep their mTLS listener and are still allowed. Before, production required external TLS on an HTTPS `public_base_url` even when nothing reached the API from off the host, and `secondbox-deploy` applied standard resources over that URL, so a same-host installation had to route its own resource apply through a TLS ingress. `tls_termination = 'external'` is unchanged.
 
 ### Security
 
