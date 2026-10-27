@@ -1185,6 +1185,8 @@ func TestProductionTLSTerminationAllowsPlaintextOnlyOnHostLoopback(t *testing.T)
 		{"loopback", "loopback", "http://127.0.0.1:8080", "127.0.0.1", ""},
 		{"loopback_default_port", "loopback", "http://127.0.0.1", "127.0.0.1", "name api_published_port explicitly"},
 		{"loopback_other_port", "loopback", "http://127.0.0.1:8097", "127.0.0.1", "name api_published_port explicitly"},
+		{"loopback_root_slash", "loopback", "http://127.0.0.1:8080/", "127.0.0.1", "without a path"},
+		{"loopback_path", "loopback", "http://127.0.0.1:8080/api", "127.0.0.1", "without a path"},
 		{"loopback_https", "loopback", "https://127.0.0.1:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
 		{"loopback_hostname", "loopback", "http://localhost:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
 		{"loopback_ipv6", "loopback", "http://[::1]:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
