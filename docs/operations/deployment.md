@@ -193,7 +193,7 @@ just deploy-init-production /secure/secondbox-deployment
 
 An incomplete production initialization is intentionally unusable and reports every unresolved decision group in one error. Before validation, production operators must supply:
 
-- digest-pinned control-plane and Runner images, public HTTPS ingress, and external TLS termination;
+- digest-pinned control-plane and Runner images, and either public HTTPS ingress with `tls_termination = 'external'`, or `tls_termination = 'loopback'` with an `http://127.0.0.1` `public_base_url` and `api_bind_ip = '127.0.0.1'` when every API client runs on the control-plane host;
 - bundled or external database authority, with `sslmode=verify-full` for an external database;
 - zero or more explicit immutable Runner declarations and their placement;
 - a verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;

@@ -1176,6 +1176,56 @@ func TestProductionQualifiesBundledAndExternalDatabase(t *testing.T) {
 	}
 }
 
+func TestProductionTLSTerminationAllowsPlaintextOnlyOnHostLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name, termination, publicBaseURL, apiBindIP, wantErr string
+	}{
+		{"external_https", "external", "https://secondbox.example.com", "10.0.0.5", ""},
+		{"external_http", "external", "http://secondbox.example.com", "10.0.0.5", "requires an HTTPS public_base_url"},
+		{"loopback", "loopback", "http://127.0.0.1:8080", "127.0.0.1", ""},
+		{"loopback_https", "loopback", "https://127.0.0.1:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
+		{"loopback_hostname", "loopback", "http://localhost:8080", "127.0.0.1", "requires an http://127.0.0.1 public_base_url"},
+		{"loopback_public_bind", "loopback", "http://127.0.0.1:8080", "0.0.0.0", "api_bind_ip 127.0.0.1"},
+		{"development_loopback", "development-loopback", "http://127.0.0.1:8080", "127.0.0.1", "must be external or loopback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifestPath := initializedDevelopment(t)
+			manifest, err := ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digestRef := "registry.example/secondbox@sha256:" + strings.Repeat("a", 64)
+			manifest.Deployment.Mode = "production"
+			manifest.Deployment.PublicBaseURL = tc.publicBaseURL
+			manifest.Deployment.TLSTermination = tc.termination
+			manifest.Deployment.APIBindIP = tc.apiBindIP
+			manifest.Deployment.ControlPlaneImage = digestRef
+			manifest.Deployment.RunnerImage = digestRef
+			manifest.Deployment.PostgresImage = digestRef
+			encoded, err := encodeManifest(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := Resolve(manifestPath)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resolved.Environment["SECONDBOX_PUBLIC_BASE_URL"] != tc.publicBaseURL {
+					t.Fatalf("rendered public base URL = %q", resolved.Environment["SECONDBOX_PUBLIC_BASE_URL"])
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	manifest, err := ReadManifest(manifestPath)

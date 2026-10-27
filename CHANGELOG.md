@@ -13,6 +13,9 @@ SecondBox now builds with Go 1.26.10 and ships refreshed trust stores in respons
 ### Upgrade notes
 
 - Update the control plane, every Runner, image fetchers and the `secondbox` and `secondbox-deploy` binaries: binaries from v0.28.0 and earlier were built with Go 1.25.12. Update gVisor Runners to the new `gvisor-artifacts` materialization while each Runner is stopped.
+### Added
+
+- Production accepts `tls_termination = 'loopback'` for a control plane whose API clients all run on its host: `public_base_url` must be `http://127.0.0.1` and `api_bind_ip` must be `127.0.0.1`, and no TLS terminator or DNS name is needed. Remote Runners keep their mTLS listener and are still allowed. Before, production required external TLS on an HTTPS `public_base_url` even when nothing reached the API from off the host, and `secondbox-deploy` applied standard resources over that URL, so a same-host installation had to route its own resource apply through a TLS ingress. `tls_termination = 'external'` is unchanged.
 
 ### Security
 
