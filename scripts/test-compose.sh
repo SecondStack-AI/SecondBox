@@ -20,7 +20,12 @@ fi
 
 mkdir -p "$binary_dir"
 cd "$repo_root"
-CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -o "$binary_dir/secondboxd" ./cmd/secondboxd
+# A linked identity proves /healthz reports the running binary's release, not a constant.
+compose_test_version="0.0.0-compose-test"
+compose_test_commit="compose-test-commit"
+CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false \
+  -ldflags "-X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.Version=$compose_test_version -X github.com/SecondStack-AI/SecondBox/pkg/buildinfo.SourceCommit=$compose_test_commit" \
+  -o "$binary_dir/secondboxd" ./cmd/secondboxd
 chmod 0755 "$binary_dir/secondboxd"
 # The Go live half is compiled before the fixture Runner is stamped alive so that
 # compilation never consumes the fixture's heartbeat window.
@@ -129,7 +134,7 @@ fi
 live_base_url="http://$published_address"
 
 health_body="$(curl --fail --silent --show-error "$live_base_url/healthz")"
-if [[ "$health_body" != '{"status":"healthy"}' ]]; then
+if [[ "$health_body" != "{\"status\":\"healthy\",\"version\":\"$compose_test_version\",\"sourceCommit\":\"$compose_test_commit\"}" ]]; then
   echo "SecondBox Compose smoke test failed: unexpected health response: $health_body" >&2
   exit 1
 fi

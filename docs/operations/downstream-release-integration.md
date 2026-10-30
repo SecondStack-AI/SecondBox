@@ -36,6 +36,12 @@ For [v0.17.0](../releases/v0.17.0.md), the new Firecracker bundle changes runtim
 Historically, [v0.16.0](../releases/v0.16.0.md) allowed v0.15.0 to update in place, and [v0.15.0](../releases/v0.15.0.md) accepted the exact v0.14.0 migration baseline. Other clean-install boundaries still require the procedure in their target release notes.
 The Go module's `retract` directives identify withdrawn versions.
 
+## Server feature checks
+
+`GET /healthz` reports the release identity of the control-plane process that answered: `{"status":"healthy","version":"VERSION","sourceCommit":"COMMIT"}`. The probe needs no credential. A client that depends on a feature added after the release it was built against compares `version` with the release that introduced the feature, as named in the changelog, before it sends requests that use the feature. For example, `capacityWaitMilliseconds` on start and create needs `0.28.0` or later; an older control plane rejects the request member as unknown. Treat the feature as unsupported when the fields are absent (control planes released before this field) or when `version` is not a release number, such as `0.0.0-development` from a local build.
+
+The value describes only the answering control-plane process. It does not report connected Runners: the Runner protocol generation is negotiated on each Runner connection, and the release notes state when a feature also needs updated Runners. Bounded start waits need only the control plane. Behind a load balancer each control-plane process answers for itself; the update procedures stop every older control-plane process before a newer one starts, so differing answers mean the update is incomplete.
+
 ## Linux arm64 hosts
 
 A release can also publish an arm64 artifact set under the same tag, described by `secondbox-VERSION-arm64-artifact-manifest.json`; check that the selected release carries it.

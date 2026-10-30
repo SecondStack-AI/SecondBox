@@ -29,6 +29,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
+	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -370,8 +371,18 @@ func (apiHandler *handler) removeSandboxPath(writer http.ResponseWriter, request
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// healthResponse carries this control-plane process's linked release identity so a client can
+// decide feature support without creating a resource.
+type healthResponse struct {
+	Status string `json:"status"`
+	buildinfo.Identity
+}
+
 func (apiHandler *handler) health(writer http.ResponseWriter, request *http.Request) {
-	apiHandler.writeJSON(writer, request, http.StatusOK, map[string]string{"status": "healthy"})
+	apiHandler.writeJSON(writer, request, http.StatusOK, healthResponse{
+		Status:   "healthy",
+		Identity: buildinfo.Identity{Version: buildinfo.Version, SourceCommit: buildinfo.SourceCommit},
+	})
 }
 
 func (apiHandler *handler) ready(writer http.ResponseWriter, request *http.Request) {

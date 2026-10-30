@@ -682,7 +682,7 @@ curl --fail --silent --show-error http://127.0.0.1:8080/readyz
 curl --fail --silent --show-error http://127.0.0.1:8080/metrics
 ```
 
-`/healthz` proves the process answers, `/readyz` proves PostgreSQL connectivity, and `/metrics` exports fixed-cardinality state counts without tenant or resource identifiers.
+`/healthz` proves the process answers and reports its release `version` and `sourceCommit`, `/readyz` proves PostgreSQL connectivity, and `/metrics` exports fixed-cardinality state counts without tenant or resource identifiers.
 
 See [backup and restore](backup-and-restore.md), [Firecracker runtime](firecracker-runtime.md), [multirunner qualification](multirunner-qualification.md), and [observability and diagnostics](observability-and-diagnostics.md).
 
