@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- `GET /healthz` reports the answering control-plane process's release `version` and `sourceCommit`, so a client can check that an independently operated server supports a feature, such as `capacityWaitMilliseconds` (0.28.0), before it sends a request that uses it. Before, the API protocol string and the client's own version were the only signals, and an older server rejected the newer request member only at start. The value does not describe connected Runners.
+
 ## 0.29.0 - 2026-10-27
 
 SecondBox now builds with Go 1.26.10 and ships refreshed trust stores in response to the eMudhra intermediate CA compromise. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles and standard Profile revisions are unchanged. The gVisor materialization changes. The Firecracker guest trust store is not yet replaced. Production deployments can publish the API on host loopback without TLS. See the [v0.29.0 release notes](docs/releases/v0.29.0.md).
