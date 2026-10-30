@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.30.0 - 2026-10-30
+
+Clients can read the answering control-plane process's release identity from `GET /healthz` before using a server feature. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged. See the [v0.30.0 release notes](docs/releases/v0.30.0.md).
+
 ### Added
 
 - `GET /healthz` reports the answering control-plane process's release `version` and `sourceCommit`, so a client can check that an independently operated server supports a feature, such as `capacityWaitMilliseconds` (0.28.0), before it sends a request that uses it. Before, the API protocol string and the client's own version were the only signals, and an older server rejected the newer request member only at start. The value does not describe connected Runners.
