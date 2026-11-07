@@ -199,14 +199,15 @@ func (connection *guestPortConnection) receive(ctx context.Context) {
 			frame.Binding.StreamId != connection.binding.StreamId ||
 			!sameConnectionBinding(frame.Binding.Connection, connection.binding.Connection) ||
 			frame.Binding.Sequence != expectedSequence {
-			fail(fmt.Errorf("Firecracker guest Port frame binding or sequence is invalid"))
+			fail(fmt.Errorf("Firecracker guest Port frame binding or sequence is invalid (sequence %d, want %d): %w",
+				frame.GetBinding().GetSequence(), expectedSequence, runnercontrol.ErrPortGuestProtocolViolation))
 			return
 		}
 		expectedSequence++
 		switch {
 		case frame.GetCredit() != nil:
 			if err := connection.credit.add(frame.GetCredit().ByteCount); err != nil {
-				fail(err)
+				fail(fmt.Errorf("%w: %w", runnercontrol.ErrPortGuestProtocolViolation, err))
 				return
 			}
 			if initial {
@@ -215,15 +216,15 @@ func (connection *guestPortConnection) receive(ctx context.Context) {
 			}
 		case frame.GetBytes() != nil:
 			if initial || len(frame.GetBytes().Data) == 0 {
-				fail(fmt.Errorf("Firecracker guest Port byte ordering is invalid"))
+				fail(fmt.Errorf("Firecracker guest Port byte ordering is invalid: %w", runnercontrol.ErrPortGuestProtocolViolation))
 				return
 			}
 			if len(frame.GetBytes().Data) > firecrackerGuestPortFrameBytes {
-				fail(fmt.Errorf("Firecracker guest Port bytes exceed the frame bound"))
+				fail(fmt.Errorf("Firecracker guest Port bytes exceed the frame bound: %w", runnercontrol.ErrPortGuestProtocolViolation))
 				return
 			}
 			if err := connection.enqueueReceived(frame.GetBytes().Data); err != nil {
-				fail(err)
+				fail(fmt.Errorf("%w: %w", runnercontrol.ErrPortGuestProtocolViolation, err))
 				return
 			}
 		case frame.GetTerminal() != nil:
@@ -231,10 +232,14 @@ func (connection *guestPortConnection) receive(ctx context.Context) {
 			if detail == "" {
 				detail = frame.GetTerminal().Kind.String()
 			}
+			if frame.GetTerminal().Kind == guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED {
+				fail(fmt.Errorf("Firecracker guest Port terminated: %s: %w", detail, runnercontrol.ErrPortGuestClosed))
+				return
+			}
 			fail(fmt.Errorf("Firecracker guest Port terminated: %s", detail))
 			return
 		default:
-			fail(fmt.Errorf("Firecracker guest Port payload is invalid"))
+			fail(fmt.Errorf("Firecracker guest Port payload is invalid: %w", runnercontrol.ErrPortGuestProtocolViolation))
 			return
 		}
 		select {

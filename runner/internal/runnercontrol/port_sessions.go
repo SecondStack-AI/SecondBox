@@ -6,12 +6,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"google.golang.org/protobuf/proto"
 )
+
+// ErrPortGuestClosed wraps a guest's own CLOSED terminal, so the Runner reports
+// a normal guest-side close as closed rather than as a failed read.
+var ErrPortGuestClosed = errors.New("SecondBox guest Port closed")
+
+// ErrPortGuestProtocolViolation wraps a guest Port frame that broke the stream
+// contract: a sequence gap, a foreign binding, or bytes beyond granted credit.
+var ErrPortGuestProtocolViolation = errors.New("SecondBox guest Port protocol violation")
 
 // PortConnection is a Runner-private stream to one guest loopback port.
 type PortConnection interface {
@@ -124,6 +133,7 @@ func (s *RunnerProtocolService) handlePortFrame(
 			portCtx, state.cancel = context.WithCancelCause(ctx)
 			connection, err := s.portBackend.OpenPort(portCtx, cloneRunnerFence(frame.Fence), proto.Clone(frame.GetOpen()).(*runnerprotocol.PortOpen))
 			if err != nil {
+				slog.Warn("SecondBox runner Port open failed", "operationId", frame.OperationId, "sandboxId", frame.Fence.GetSandboxId(), "error", err)
 				state.cancel(err)
 				refusal, refusalDetail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable"
 			} else {
@@ -180,6 +190,7 @@ func (s *RunnerProtocolService) handlePortFrame(
 			return fmt.Errorf("SecondBox runner Port bytes exceed the frame bound")
 		}
 		if err := state.connection.Write(ctx, data); err != nil {
+			slog.Warn("SecondBox runner Port write failed", "operationId", state.operationID, "sandboxId", state.fence.GetSandboxId(), "error", err)
 			return s.sendPortTerminal(stream, state, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port write failed")
 		}
 		return s.sendPortCredit(stream, state, uint64(len(data)))
@@ -225,17 +236,28 @@ func (s *RunnerProtocolService) pumpPortReads(
 			}
 		}
 		if err != nil {
-			kind := runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED
-			detail := "guest port read failed"
-			switch {
-			case errors.Is(err, io.EOF):
-				kind, detail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, "guest port closed"
-			case ctx.Err() != nil:
-				kind, detail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED, "port session cancelled"
+			kind, detail := portReadTerminal(ctx, err)
+			if kind == runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED {
+				slog.Warn("SecondBox runner Port read failed", "operationId", state.operationID, "sandboxId", state.fence.GetSandboxId(), "error", err)
 			}
 			s.finishPortPump(stream, state, kind, detail, asyncErrors)
 			return
 		}
+	}
+}
+
+// portReadTerminal classifies why a guest Port read ended. The safe detail is a
+// fixed Runner vocabulary; the cause itself goes only to the Runner log.
+func portReadTerminal(ctx context.Context, err error) (runnerprotocol.PortTerminalKind, string) {
+	switch {
+	case errors.Is(err, io.EOF), errors.Is(err, ErrPortGuestClosed):
+		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, "guest port closed"
+	case ctx.Err() != nil:
+		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED, "port session cancelled"
+	case errors.Is(err, ErrPortGuestProtocolViolation):
+		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "guest port protocol violation"
+	default:
+		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "guest port read failed"
 	}
 }
 
