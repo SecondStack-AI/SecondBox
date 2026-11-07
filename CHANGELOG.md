@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+## 0.31.0 - 2026-11-07
+
+Proxied Port tunnels no longer drop on reordered guest frames or on messages larger than the Runner can credit, and the SDKs split Port writes themselves. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7 and standard Profile revisions are unchanged. The amd64 Firecracker bundle rotates to `secondbox-0.31.0` and the gVisor materialization changes; the arm64 bundle is unchanged. See the [v0.31.0 release notes](docs/releases/v0.31.0.md).
+
 ### Upgrade notes
 
 - Before updating, check that `SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES` (`overrides.data_plane_maximum_session_bytes`) is unset or at least 65,536: the control plane and `secondbox-deploy` now refuse a smaller value. Profiles that declare ports with `execution.streamWindowBytes` below 65,536 now refuse proxied PortSessions. Publish a revision with a larger window; an existing Sandbox stays pinned to its revision, so switch it to the new revision (`:switch-profile`, stopped and Snapshot-free) or recreate it. Neither configuration could carry a working proxied tunnel before.
-- The guest agent changes. Firecracker Sandboxes get the fix from a rebuilt microVM bundle, and client-selected images get it only when rebuilt with this release's image builder; gVisor Runners need the new materialization.
+- The guest agent changes. amd64 Firecracker Sandboxes get the fix from the new `secondbox-0.31.0` bundle, gVisor Sandboxes from the new materialization, and client-selected images only when rebuilt with this release's image builder. The arm64 bundle is unchanged and keeps the old guest agent.
+
+### Security
+
+- The amd64 Firecracker bundle's guest root filesystem is built from the 2026-10-26 Debian and Debian security snapshots and installs `ca-certificates` `20250419~deb12u2`, so workloads on the default image that use the system trust store no longer trust the compromised eMudhra intermediates once their Sandbox restarts on the new bundle. The arm64 bundle still trusts them.
 
 ### Fixed
 
