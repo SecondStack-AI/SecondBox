@@ -537,3 +537,20 @@ func TestDirectPortTerminalReportsGuestCloseAndProtocolViolation(t *testing.T) {
 		}
 	}
 }
+
+func TestPortOpenTerminalReportsGuestProtocolViolation(t *testing.T) {
+	for _, testCase := range []struct {
+		err    error
+		kind   runnerprotocol.PortTerminalKind
+		detail string
+	}{
+		{fmt.Errorf("first frame: %w", ErrPortGuestProtocolViolation), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "guest port protocol violation"},
+		{fmt.Errorf("guest refused: %w", ErrPortGuestClosed), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable"},
+		{errors.New("guest stream reset"), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable"},
+	} {
+		kind, detail := portOpenTerminal(testCase.err)
+		if kind != testCase.kind || detail != testCase.detail {
+			t.Fatalf("%v: terminal = %s %q, want %s %q", testCase.err, kind, detail, testCase.kind, testCase.detail)
+		}
+	}
+}

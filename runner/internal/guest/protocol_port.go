@@ -16,6 +16,11 @@ import (
 
 const guestPortFrameBytes = 64 << 10
 
+// guestPortClosedDetail marks a normal loopback close. Socket errors also end
+// with a CLOSED terminal but carry another detail; the Runner's Firecracker
+// adapter matches this exact text to tell them apart.
+const guestPortClosedDetail = "guest loopback port closed"
+
 type protocolPortState struct {
 	mu           sync.Mutex
 	binding      *guestv1.OperationBinding
@@ -209,7 +214,7 @@ func (c *protocolConnection) pumpPortConnection(
 		}
 		if readErr != nil {
 			kind := guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED
-			detail := "guest loopback port closed"
+			detail := guestPortClosedDetail
 			if !errors.Is(readErr, io.EOF) && ctx.Err() == nil {
 				detail = "guest loopback port read failed"
 			}

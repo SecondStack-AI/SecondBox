@@ -22,6 +22,10 @@ const (
 	// firecrackerGuestPortCreditGrantBytes is the smallest top-up the adapter
 	// sends, so a stream of small reads does not become a stream of credit frames.
 	firecrackerGuestPortCreditGrantBytes = firecrackerGuestPortFrameBytes
+	// firecrackerGuestPortClosedDetail is the guest agent's safe detail for a
+	// normal loopback close. The guest also reports socket errors as CLOSED, with
+	// other details, so only this one is a normal close.
+	firecrackerGuestPortClosedDetail = "guest loopback port closed"
 )
 
 type guestPortConnection struct {
@@ -232,7 +236,8 @@ func (connection *guestPortConnection) receive(ctx context.Context) {
 			if detail == "" {
 				detail = frame.GetTerminal().Kind.String()
 			}
-			if frame.GetTerminal().Kind == guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED {
+			if frame.GetTerminal().Kind == guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED &&
+				frame.GetTerminal().SafeDetail == firecrackerGuestPortClosedDetail {
 				fail(fmt.Errorf("Firecracker guest Port terminated: %s: %w", detail, runnercontrol.ErrPortGuestClosed))
 				return
 			}

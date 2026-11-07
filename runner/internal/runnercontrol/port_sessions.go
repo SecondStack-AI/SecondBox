@@ -135,7 +135,7 @@ func (s *RunnerProtocolService) handlePortFrame(
 			if err != nil {
 				slog.Warn("SecondBox runner Port open failed", "operationId", frame.OperationId, "sandboxId", frame.Fence.GetSandboxId(), "error", err)
 				state.cancel(err)
-				refusal, refusalDetail = runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable"
+				refusal, refusalDetail = portOpenTerminal(err)
 			} else {
 				state.connection = connection
 			}
@@ -244,6 +244,15 @@ func (s *RunnerProtocolService) pumpPortReads(
 			return
 		}
 	}
+}
+
+// portOpenTerminal classifies a failed guest Port open: a guest that broke the
+// stream contract while opening failed; any other refusal leaves the port unavailable.
+func portOpenTerminal(err error) (runnerprotocol.PortTerminalKind, string) {
+	if errors.Is(err, ErrPortGuestProtocolViolation) {
+		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "guest port protocol violation"
+	}
+	return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable"
 }
 
 // portReadTerminal classifies why a guest Port read ended. The safe detail is a

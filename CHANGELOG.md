@@ -4,7 +4,7 @@
 
 ### Upgrade notes
 
-- Before updating, check that `SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES` (`overrides.data_plane_maximum_session_bytes`) is unset or at least 65,536: the control plane and `secondbox-deploy` now refuse a smaller value. Profiles that declare ports with `execution.streamWindowBytes` below 65,536 now refuse proxied PortSessions; publish a revision with a larger window. Neither configuration could carry a working proxied tunnel before.
+- Before updating, check that `SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES` (`overrides.data_plane_maximum_session_bytes`) is unset or at least 65,536: the control plane and `secondbox-deploy` now refuse a smaller value. Profiles that declare ports with `execution.streamWindowBytes` below 65,536 now refuse proxied PortSessions. Publish a revision with a larger window; an existing Sandbox stays pinned to its revision, so switch it to the new revision (`:switch-profile`, stopped and Snapshot-free) or recreate it. Neither configuration could carry a working proxied tunnel before.
 - The guest agent changes. Firecracker Sandboxes get the fix from a rebuilt microVM bundle, and client-selected images get it only when rebuilt with this release's image builder; gVisor Runners need the new materialization.
 
 ### Fixed

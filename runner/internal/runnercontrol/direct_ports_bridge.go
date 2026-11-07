@@ -64,11 +64,8 @@ func (s *RunnerProtocolService) bridgeDirectPortConnection(
 		},
 	)
 	if err != nil {
-		s.finishDirectPortSession(
-			session,
-			runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE,
-			"guest port is unavailable",
-		)
+		kind, detail := portOpenTerminal(err)
+		s.finishDirectPortSession(session, kind, detail)
 		_ = portdirect.WriteVerdict(connection, portdirect.VerdictDenied, "guest port unavailable")
 		return fmt.Errorf("SecondBox runner direct Port guest open: %w", err)
 	}

@@ -344,6 +344,9 @@ func TestGuestPortAdapterClassifiesGuestCloseAndProtocolViolation(t *testing.T) 
 		{"guest closed", frameAt(2, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Terminal{Terminal: &guestv1.PortTerminal{
 			Kind: guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, SafeDetail: "guest loopback port closed",
 		}}}), runnercontrol.ErrPortGuestClosed},
+		{"guest socket error", frameAt(2, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Terminal{Terminal: &guestv1.PortTerminal{
+			Kind: guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, SafeDetail: "guest loopback port read failed",
+		}}}), nil},
 		{"sequence gap", frameAt(3, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: 1}}}),
 			runnercontrol.ErrPortGuestProtocolViolation},
 	} {
@@ -353,6 +356,13 @@ func TestGuestPortAdapterClassifiesGuestCloseAndProtocolViolation(t *testing.T) 
 			connection.receive(t.Context())
 			if err := <-connection.opened; err != nil {
 				t.Fatalf("initial writable credit did not open the Port: %v", err)
+			}
+			if testCase.want == nil {
+				if connection.receiveErr == nil || errors.Is(connection.receiveErr, runnercontrol.ErrPortGuestClosed) ||
+					errors.Is(connection.receiveErr, runnercontrol.ErrPortGuestProtocolViolation) {
+					t.Fatalf("guest socket error outcome = %v, want an unclassified failure", connection.receiveErr)
+				}
+				return
 			}
 			if !errors.Is(connection.receiveErr, testCase.want) {
 				t.Fatalf("receive outcome = %v, want %v", connection.receiveErr, testCase.want)
