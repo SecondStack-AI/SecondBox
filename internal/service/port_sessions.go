@@ -339,7 +339,7 @@ func (stream *SandboxPortStream) send(payload any) error {
 // It waits for that credit, woken by the credit frame itself, so a client that
 // outpaces the guest is slowed by exactly the Runner's grants.
 func (stream *SandboxPortStream) Send(ctx context.Context, payload []byte) error {
-	if len(payload) == 0 || int64(len(payload)) > stream.tunnel.StreamWindowBytes {
+	if len(payload) == 0 || len(payload) > contracts.PortTunnelMaximumMessageBytes {
 		return runnercontrol.ErrDataPlaneFrameLimit
 	}
 	for {

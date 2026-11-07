@@ -91,6 +91,13 @@ const (
 	// transport between the caller and the Runner differs.
 	PortTransportDirect = "direct"
 
+	// PortTunnelMaximumMessageBytes bounds one proxied secondbox.port.v1
+	// message. It equals the Runner's data-plane frame bound, which is also the
+	// most Port credit a Runner grants, so a larger message can never be
+	// forwarded. Profiles that declare ports need a stream window at least this
+	// large, and the data-plane body cap may not be smaller.
+	PortTunnelMaximumMessageBytes = 64 << 10
+
 	DataPlaneTransportProxied = "proxied"
 	DataPlaneTransportDirect  = "direct"
 

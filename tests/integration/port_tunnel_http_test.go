@@ -233,6 +233,44 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	}
 }
 
+// The Runner credits at most one Port message bound, so a larger client
+// message can never be forwarded. On a Profile whose window exceeds that bound
+// the tunnel must end at once rather than wait for credit until it expires.
+func TestPublicPortTunnelRefusesMessagesAboveTheBoundOnLargeWindows(t *testing.T) {
+	fixture := newPortTunnelHTTPFixture(t, "port-tunnel-bound")
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.profile_revisions revision
+		SET spec_json=jsonb_set(revision.spec_json,'{execution,streamWindowBytes}','1048576')
+		FROM secondbox.sandboxes sandbox
+		WHERE sandbox.id=$1 AND revision.id=sandbox.profile_revision_id`, fixture.sandbox.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	session := createPortSessionHTTP(t, fixture.serverURL, fixture.credential, fixture.sandbox, fixture.lease.ID)
+	connection := dialPortTunnel(t, session.Endpoint)
+	defer connection.Close()
+	waitPortFakeEvent(t, fixture.fake.events, "open")
+	close(fixture.fake.grantClientCredit)
+	waitPortFakeEvent(t, fixture.fake.events, "credit")
+
+	atBound := bytes.Repeat([]byte{5}, contracts.PortTunnelMaximumMessageBytes)
+	if err := connection.WriteMessage(websocket.BinaryMessage, atBound); err != nil {
+		t.Fatal(err)
+	}
+	if forwarded := waitPortFakeEvent(t, fixture.fake.events, "bytes"); !bytes.Equal(forwarded.frame.GetBytes().GetData(), atBound) {
+		t.Fatalf("runner received %d bytes, want the whole %d-byte message", len(forwarded.frame.GetBytes().GetData()), len(atBound))
+	}
+	if err := connection.WriteMessage(websocket.BinaryMessage, make([]byte, contracts.PortTunnelMaximumMessageBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := connection.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
+		t.Fatalf("oversized Port message: read error = %v, want close %d", err, websocket.CloseMessageTooBig)
+	}
+}
+
 // Streaming through a proxied tunnel never writes to PostgreSQL: payload,
 // credit, and sequence state live in memory, and only the session's close is
 // recorded. Data-plane traffic never changes the Sandbox resource revision that

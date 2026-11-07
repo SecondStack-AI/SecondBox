@@ -1140,6 +1140,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusBadRequest, "invalid_request", "List page cursor is invalid", false
 	case errors.Is(err, ports.ErrPortPolicyDenied):
 		return http.StatusForbidden, "authorization_failed", "Exposed port is not permitted", false
+	case errors.Is(err, ports.ErrPortStreamWindowTooSmall):
+		return http.StatusForbidden, "authorization_failed", "Profile stream window is smaller than the 65536-byte Port message bound", false
 	case errors.Is(err, runnercontrol.ErrFilePermission):
 		return http.StatusForbidden, "file_permission_denied", "File operation permission denied", false
 	case errors.Is(err, runnercontrol.ErrWorkspaceFull):

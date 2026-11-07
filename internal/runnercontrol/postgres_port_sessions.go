@@ -106,6 +106,12 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 	if tunnel.StreamWindowBytes < 1 {
 		return PortTunnel{}, false, ports.ErrPortPolicyDenied
 	}
+	// Profile validation refuses this for new revisions; a revision created
+	// before that rule would admit a proxied tunnel that cannot carry a message.
+	if tunnel.Session.Transport == contracts.PortTransportProxied &&
+		tunnel.StreamWindowBytes < contracts.PortTunnelMaximumMessageBytes {
+		return PortTunnel{}, false, ports.ErrPortStreamWindowTooSmall
+	}
 	session := DataPlaneSession{
 		ID: input.Session.ID, StreamID: input.StreamID,
 		TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef,

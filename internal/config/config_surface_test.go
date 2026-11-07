@@ -171,3 +171,15 @@ func TestFromEnvironmentDoesNotReadProtocolVersionDeclarations(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFromEnvironmentRejectsDataPlaneBodyCapBelowPortMessageBound(t *testing.T) {
+	setRequiredControlPlaneEnvironment(t)
+	t.Setenv("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES", "65535")
+	if _, err := FromEnvironment(); err == nil || !strings.Contains(err.Error(), "Port message bound") {
+		t.Fatalf("body cap below the Port message bound: error = %v", err)
+	}
+	t.Setenv("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES", "65536")
+	if _, err := FromEnvironment(); err != nil {
+		t.Fatalf("body cap at the Port message bound: %v", err)
+	}
+}
