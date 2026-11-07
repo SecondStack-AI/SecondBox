@@ -243,3 +243,74 @@ func receiveProtocolPort(
 	}
 	return frame.GetPort()
 }
+
+// The frame handler returns write credit while the socket pump sends output on
+// the same Port stream. The Runner fails the Port on any sequence gap, so frames
+// must leave in the order their sequence was assigned.
+func TestGuestPortFramesLeaveInSequenceOrderUnderConcurrentSenders(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		connection, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		_, _ = io.Copy(connection, connection)
+	}()
+	stream, binding, cleanup := openNegotiatedProtocolTestStreamWithFeatures(
+		t, t.TempDir(), []guestv1.GuestFeature{guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY},
+	)
+	defer cleanup()
+	const operationID, frames = "port-ordering", 2000
+	send := func(sequence uint64, frame *guestv1.PortFrame) {
+		t.Helper()
+		frame.Binding = protocolTestOperationBinding(binding, operationID, sequence)
+		if err := stream.Send(&guestv1.RunnerToGuest{Message: &guestv1.RunnerToGuest_Port{Port: frame}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(1, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Request{Request: &guestv1.PortRequest{
+		GuestPort: uint32(listener.Addr().(*net.TCPAddr).Port), Protocol: "tcp", IdleTimeoutMs: 30_000,
+	}}})
+	send(2, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: frames}}})
+	received := make(chan *guestv1.PortFrame, 4*frames)
+	receiveErrors := make(chan error, 1)
+	go func() {
+		for {
+			message, err := stream.Recv()
+			if err != nil {
+				receiveErrors <- err
+				return
+			}
+			received <- message.GetPort()
+		}
+	}()
+	for index := range uint64(frames) {
+		send(index+3, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Bytes{Bytes: &guestv1.PortBytes{Data: []byte{byte(index)}}}})
+	}
+	credits, echoed := 0, 0
+	for next := uint64(1); credits < frames+1 || echoed < frames; next++ {
+		select {
+		case frame := <-received:
+			if got := frame.GetBinding().GetSequence(); got != next {
+				t.Fatalf("guest Port frame %d left with sequence %d", next, got)
+			}
+			switch {
+			case frame.GetCredit() != nil:
+				credits++
+			case frame.GetBytes() != nil:
+				echoed += len(frame.GetBytes().Data)
+			default:
+				t.Fatalf("unexpected guest Port frame: %v", frame)
+			}
+		case err := <-receiveErrors:
+			t.Fatal(err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("guest Port stalled after %d credit frames and %d echoed bytes", credits, echoed)
+		}
+	}
+}

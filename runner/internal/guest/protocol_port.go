@@ -269,14 +269,17 @@ func (c *protocolConnection) sendPortTerminal(
 	})
 }
 
+// sendPort holds sendMu across assigning the sequence and sending the frame.
+// The frame handler and the socket pump both send on one Port stream, and the
+// Runner fails the Port when a sequence arrives out of order.
 func (c *protocolConnection) sendPort(state *protocolPortState, frame *guestv1.PortFrame) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	state.mu.Lock()
 	frame.Binding = cloneOperationBinding(state.binding)
 	frame.Binding.Sequence = state.nextOutgoing
 	state.nextOutgoing++
 	state.mu.Unlock()
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
 	return c.stream.Send(&guestv1.GuestToRunner{
 		Message: &guestv1.GuestToRunner_Port{Port: frame},
 	})
