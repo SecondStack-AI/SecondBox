@@ -133,3 +133,32 @@ func TestValidateProfileResourcesRequireWholeMiB(t *testing.T) {
 		}
 	}
 }
+
+// A proxied Port message may carry up to the Port message bound, so a Profile
+// that exposes ports needs a stream window that can credit one whole message.
+func TestValidateProfilePortsRequireStreamWindowForOneMessage(t *testing.T) {
+	port := contracts.PortPolicy{Name: "http", Port: 8080, Protocol: "http", MaximumSessions: 1, MaximumSessionSeconds: 60}
+	for _, test := range []struct {
+		name   string
+		window int64
+		ports  []contracts.PortPolicy
+		valid  bool
+	}{
+		{"ports below bound", contracts.PortTunnelMaximumMessageBytes - 1, []contracts.PortPolicy{port}, false},
+		{"ports at bound", contracts.PortTunnelMaximumMessageBytes, []contracts.PortPolicy{port}, true},
+		{"no ports at floor", 4096, []contracts.PortPolicy{}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := validProfileRevisionSpecForValidation()
+			spec.Execution.StreamWindowBytes = test.window
+			spec.Ports = test.ports
+			err := validateProfileRevisionSpec(spec)
+			if (err == nil) != test.valid {
+				t.Fatalf("validateProfileRevisionSpec() error = %v, valid %v", err, test.valid)
+			}
+			if err != nil && !strings.Contains(err.Error(), "spec.execution.streamWindowBytes") {
+				t.Fatalf("error does not name the window: %v", err)
+			}
+		})
+	}
+}

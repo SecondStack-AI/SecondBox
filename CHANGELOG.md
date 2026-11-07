@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Upgrade notes
+
+- Before updating, check that `SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES` (`overrides.data_plane_maximum_session_bytes`) is unset or at least 65,536: the control plane and `secondbox-deploy` now refuse a smaller value. Profiles that declare ports with `execution.streamWindowBytes` below 65,536 now refuse proxied PortSessions. Publish a revision with a larger window; an existing Sandbox stays pinned to its revision, so switch it to the new revision (`:switch-profile`, stopped and Snapshot-free) or recreate it. Neither configuration could carry a working proxied tunnel before.
+- The guest agent changes. Firecracker Sandboxes get the fix from a rebuilt microVM bundle, and client-selected images get it only when rebuilt with this release's image builder; gVisor Runners need the new materialization.
+
+### Fixed
+
+- The guest agent sent Port frames out of sequence when it returned write credit while forwarding guest output, and the Runner then failed the PortSession. It now sends them in order.
+- A proxied Port message larger than 65,536 bytes waited for Runner credit until the session expired on Profiles with a larger stream window; the control plane now closes the tunnel at once with "message too big". The TypeScript `PortTunnel.send` and Go `PortTunnel.Write` split writes into messages within that bound, so callers no longer chunk, and a failed TypeScript `send` now also rejects every later one instead of continuing a partly written stream.
+- A guest-side close of a Port was reported as a failed read, and the cause of every other Port failure was discarded. A guest close is now reported as closed on both transports, a guest frame that breaks the stream contract is reported as "guest port protocol violation", and the Runner logs the cause of failed Port opens, writes and reads.
+
 ## 0.30.0 - 2026-10-30
 
 Clients can read the answering control-plane process's release identity from `GET /healthz` before using a server feature. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged. See the [v0.30.0 release notes](docs/releases/v0.30.0.md).

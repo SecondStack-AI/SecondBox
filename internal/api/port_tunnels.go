@@ -110,8 +110,7 @@ func (apiHandler *handler) connectPortTunnel(writer http.ResponseWriter, request
 		return
 	}
 	defer connection.Close()
-	readLimit := min(apiHandler.maximumDataPlaneBodyBytes, tunnel.StreamWindowBytes)
-	connection.SetReadLimit(readLimit)
+	connection.SetReadLimit(contracts.PortTunnelMaximumMessageBytes)
 	if err := connection.SetReadDeadline(tunnel.Session.ExpiresAt); err != nil {
 		apiHandler.logger.InfoContext(request.Context(), "SecondBox Port WebSocket deadline failed", "error", err)
 		return

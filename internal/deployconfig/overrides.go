@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	controlconfig "github.com/SecondStack-AI/SecondBox/internal/config"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 type OverrideDefinition struct {
@@ -62,6 +63,9 @@ func resolvedOverrides(overrides TuningOverrides) (map[string]string, error) {
 		integer := field.Elem().Int()
 		if integer < 0 || (!definition.AllowZero && integer == 0) {
 			return nil, fmt.Errorf("SecondBox deployment manifest overrides.%s must be %s", definition.TOMLName, map[bool]string{true: "non-negative", false: "positive"}[definition.AllowZero])
+		}
+		if definition.Environment == "SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES" && integer < contracts.PortTunnelMaximumMessageBytes {
+			return nil, fmt.Errorf("SecondBox deployment manifest overrides.%s must be at least the %d-byte Port message bound", definition.TOMLName, contracts.PortTunnelMaximumMessageBytes)
 		}
 		values[definition.Environment] = fmt.Sprintf("%d", integer)
 	}

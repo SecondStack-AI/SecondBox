@@ -635,6 +635,93 @@ func TestScenarioClosedGuestPortFailsOnlyItsPortSession(t *testing.T) {
 	assertScenarioExited(t, outcome, 0, "neighbour-ready\nneighbour:survived\n", "")
 }
 
+// A guest echo makes the guest agent return write credit for every inbound
+// frame while it forwards the echoed bytes, so both guest senders interleave on
+// one Port stream. Full-size messages across several windows must arrive
+// byte-exact, and the session must stay open.
+func TestScenarioPortTunnelCarriesFullMessagesWhileGuestEchoes(t *testing.T) {
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") != "firecracker" {
+		t.Skip("SecondBox scenario guest echo server requires python3 in the Firecracker guest")
+	}
+	fixture := newScenarioFixture(t)
+	ensureScenarioRunnerPool(t, fixture)
+	waitForScenarioRunner(t, fixture, 90*time.Second)
+	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
+	spec.Ports = []contracts.PortPolicy{{
+		Name: "web", Port: 8080, Protocol: "tcp", MaximumSessions: 1, MaximumSessionSeconds: 30,
+	}}
+	// The scenario authority holds at most 32 Profile grants, so this test
+	// replays the identical scenario-port-lease Profile.
+	profile := createScenarioProfile(t, fixture, "scenario-port-lease", spec)
+	handle, _ := createScenarioSandbox(t, fixture, profile, "port-echo")
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	ready := waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateReady)
+	server := executeScenarioCommand(t, ctx, handle, `nohup python3 -c 'import socket
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", 8080))
+listener.listen(1)
+while True:
+    connection, _ = listener.accept()
+    while True:
+        data = connection.recv(65536)
+        if not data:
+            break
+        connection.sendall(data)
+    connection.close()' >/workspace/port-echo.log 2>&1 </dev/null & python3 -c 'import socket, time
+for _ in range(50):
+    try:
+        socket.create_connection(("127.0.0.1", 8080), 1).close()
+        raise SystemExit(0)
+    except OSError:
+        time.sleep(0.1)
+raise SystemExit(1)'`, 4096, "port-echo-server")
+	assertScenarioExited(t, server, 0, "", "")
+
+	lease := acquireScenarioLease(t, ctx, fixture, handle, 60, "port-echo-lease")
+	session := createScenarioPortSession(t, ctx, fixture, handle, lease.ID, "port-echo-session")
+	connection := dialScenarioPortTunnel(t, ctx, session.Endpoint)
+	defer connection.Close()
+	const messages = 32
+	payload := make([]byte, messages*contracts.PortTunnelMaximumMessageBytes)
+	for index := range payload {
+		payload[index] = byte(index % 251)
+	}
+	writeErrors := make(chan error, 1)
+	go func() {
+		for offset := 0; offset < len(payload); offset += contracts.PortTunnelMaximumMessageBytes {
+			if err := connection.WriteMessage(websocket.BinaryMessage, payload[offset:offset+contracts.PortTunnelMaximumMessageBytes]); err != nil {
+				writeErrors <- err
+				return
+			}
+		}
+		writeErrors <- nil
+	}()
+	echoed := make([]byte, 0, len(payload))
+	for len(echoed) < len(payload) {
+		if err := connection.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		_, message, err := connection.ReadMessage()
+		if err != nil {
+			t.Fatalf("SecondBox scenario Port echo after %d of %d bytes: %v", len(echoed), len(payload), err)
+		}
+		echoed = append(echoed, message...)
+	}
+	if err := <-writeErrors; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(echoed, payload) {
+		t.Fatal("SecondBox scenario Port echo differs from the bytes sent")
+	}
+	if got := scenarioJSON[contracts.PortSession](t, ctx, fixture.subject, "getSandboxPortSession",
+		secondboxclient.CallOptions{PathParameters: map[string]string{"sandboxId": ready.ID, "portSessionId": session.ID}},
+	); got.State != contracts.PortSessionStateOpen {
+		t.Fatalf("SecondBox scenario Port echo session state = %q", got.State)
+	}
+}
+
 func startScenarioNetworkTarget(t *testing.T, host string, response string) string {
 	t.Helper()
 	listener, err := net.Listen("tcp4", net.JoinHostPort(host, "0"))

@@ -857,6 +857,25 @@ func TestOverridesPreserveAbsenceAndExactValues(t *testing.T) {
 	}
 }
 
+func TestOverridesRejectDataPlaneBodyCapBelowPortMessageBound(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Overrides.DataPlaneMaximumSessionBytes = integer(65535)
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "Port message bound") {
+		t.Fatalf("body cap below the Port message bound: error = %v", err)
+	}
+}
+
 func TestResolutionIgnoresAmbientSecondBoxAndComposeVariables(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	t.Setenv("SECONDBOX_PLATFORM_TOKEN", "poison")

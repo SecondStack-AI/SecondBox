@@ -16,6 +16,11 @@ import (
 
 const guestPortFrameBytes = 64 << 10
 
+// guestPortClosedDetail marks a normal loopback close. Socket errors also end
+// with a CLOSED terminal but carry another detail; the Runner's Firecracker
+// adapter matches this exact text to tell them apart.
+const guestPortClosedDetail = "guest loopback port closed"
+
 type protocolPortState struct {
 	mu           sync.Mutex
 	binding      *guestv1.OperationBinding
@@ -209,7 +214,7 @@ func (c *protocolConnection) pumpPortConnection(
 		}
 		if readErr != nil {
 			kind := guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED
-			detail := "guest loopback port closed"
+			detail := guestPortClosedDetail
 			if !errors.Is(readErr, io.EOF) && ctx.Err() == nil {
 				detail = "guest loopback port read failed"
 			}
@@ -269,14 +274,17 @@ func (c *protocolConnection) sendPortTerminal(
 	})
 }
 
+// sendPort holds sendMu across assigning the sequence and sending the frame.
+// The frame handler and the socket pump both send on one Port stream, and the
+// Runner fails the Port when a sequence arrives out of order.
 func (c *protocolConnection) sendPort(state *protocolPortState, frame *guestv1.PortFrame) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	state.mu.Lock()
 	frame.Binding = cloneOperationBinding(state.binding)
 	frame.Binding.Sequence = state.nextOutgoing
 	state.nextOutgoing++
 	state.mu.Unlock()
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
 	return c.stream.Send(&guestv1.GuestToRunner{
 		Message: &guestv1.GuestToRunner_Port{Port: frame},
 	})

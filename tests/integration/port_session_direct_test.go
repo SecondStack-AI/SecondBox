@@ -495,3 +495,36 @@ func directPortCredentialDigest(t *testing.T, endpoint string) [sha256.Size]byte
 func prototext(message proto.Message) string {
 	return message.(interface{ String() string }).String()
 }
+
+// Profile validation now refuses ports with a stream window below the Port
+// message bound, but a revision created before that rule is immutable. Its
+// proxied tunnels could never carry a whole message, so admission refuses them;
+// the direct transport does not use the window and is still admitted.
+func TestPostgresPortAdmissionRefusesProxiedTunnelOnPreBoundStreamWindow(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	fixture := newDirectPortFixture(t, directPortFixtureName(t), &now)
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.profile_revisions revision
+		SET spec_json=jsonb_set(revision.spec_json,'{execution,streamWindowBytes}','4096')
+		FROM secondbox.sandboxes sandbox
+		WHERE sandbox.id=$1 AND revision.id=sandbox.profile_revision_id`, fixture.sandboxID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.portService.CreateSandboxPortSession(
+		t.Context(), fixture.principal, "request-small-window-proxied", fixture.sandboxID,
+		fixture.generation, fixture.leaseID, "small-window-proxied",
+		contracts.PortTransportProxied,
+		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 60},
+	); !errors.Is(err, ports.ErrPortStreamWindowTooSmall) {
+		t.Fatalf("proxied PortSession on a 4096-byte window: error = %v", err)
+	}
+	if _, _, err := fixture.portService.CreateSandboxPortSession(
+		t.Context(), fixture.principal, "request-small-window-direct", fixture.sandboxID,
+		fixture.generation, fixture.leaseID, "small-window-direct",
+		contracts.PortTransportDirect,
+		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 60},
+	); err != nil {
+		t.Fatalf("direct PortSession on a 4096-byte window: %v", err)
+	}
+}

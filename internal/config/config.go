@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 // Code-owned tuning defaults. Each corresponding environment variable is an
@@ -150,6 +152,12 @@ func FromEnvironment() (Config, error) {
 	dataPlaneMaximumSessionBytes, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES", DefaultDataPlaneMaximumSessionBytes)
 	if err != nil {
 		return Config{}, err
+	}
+	if dataPlaneMaximumSessionBytes < contracts.PortTunnelMaximumMessageBytes {
+		return Config{}, errorsForEnvironment(fmt.Sprintf(
+			"SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES must be at least the %d-byte Port message bound",
+			contracts.PortTunnelMaximumMessageBytes,
+		))
 	}
 	idempotencyRetentionSeconds, err := optionalPositiveInt64("SECONDBOX_IDEMPOTENCY_RETENTION_SECONDS", DefaultIdempotencyRetentionSeconds)
 	if err != nil {

@@ -202,7 +202,7 @@ func NewPostgresDataPlaneStore(
 	ctx context.Context,
 	config PostgresDataPlaneStoreConfig,
 ) (*PostgresDataPlaneStore, error) {
-	if config.DatabaseURL == "" || config.Retention <= 0 || config.MaximumSessionBytes < 1024 {
+	if config.DatabaseURL == "" || config.Retention <= 0 || config.MaximumSessionBytes < contracts.PortTunnelMaximumMessageBytes {
 		return nil, errors.New("SecondBox PostgreSQL data-plane store requires database, retention, and byte bounds")
 	}
 	pool, err := pgxpool.New(ctx, config.DatabaseURL)

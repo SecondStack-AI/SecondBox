@@ -64,11 +64,8 @@ func (s *RunnerProtocolService) bridgeDirectPortConnection(
 		},
 	)
 	if err != nil {
-		s.finishDirectPortSession(
-			session,
-			runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE,
-			"guest port is unavailable",
-		)
+		kind, detail := portOpenTerminal(err)
+		s.finishDirectPortSession(session, kind, detail)
 		_ = portdirect.WriteVerdict(connection, portdirect.VerdictDenied, "guest port unavailable")
 		return fmt.Errorf("SecondBox runner direct Port guest open: %w", err)
 	}
@@ -194,12 +191,15 @@ func directPortTerminal(
 	case errors.Is(context.Cause(ctx), errDirectPortDeadline):
 		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED,
 			"port session deadline passed"
-	case failure == nil || errors.Is(failure, io.EOF):
+	case failure == nil || errors.Is(failure, io.EOF), errors.Is(failure, ErrPortGuestClosed):
 		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED,
 			"port connection closed"
 	case errors.Is(failure, net.ErrClosed), errors.Is(failure, context.Canceled):
 		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED,
 			"port connection cancelled"
+	case errors.Is(failure, ErrPortGuestProtocolViolation):
+		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED,
+			"guest port protocol violation"
 	default:
 		return runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED,
 			"port connection failed"

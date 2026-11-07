@@ -11,7 +11,9 @@ import (
 	"time"
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
+	"google.golang.org/protobuf/proto"
 )
 
 // The adapter grants the guest only what the receive window has room for and
@@ -321,5 +323,50 @@ func TestGuestPortAdapterBackpressuresFastGuestProducer(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+}
+
+// A guest's own CLOSED terminal and a guest frame that breaks the stream
+// contract reach the Runner as distinguishable causes.
+func TestGuestPortAdapterClassifiesGuestCloseAndProtocolViolation(t *testing.T) {
+	binding := &guestv1.OperationBinding{Connection: &guestv1.ConnectionBinding{}, Sequence: 1}
+	frameAt := func(sequence uint64, frame *guestv1.PortFrame) *guestv1.GuestToRunner {
+		frame.Binding = cloneGuestOperationBinding(binding)
+		frame.Binding.Sequence = sequence
+		return &guestv1.GuestToRunner{Message: &guestv1.GuestToRunner_Port{Port: frame}}
+	}
+	credit := &guestv1.PortFrame{Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: 8}}}
+	for _, testCase := range []struct {
+		name   string
+		second *guestv1.GuestToRunner
+		want   error
+	}{
+		{"guest closed", frameAt(2, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Terminal{Terminal: &guestv1.PortTerminal{
+			Kind: guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, SafeDetail: "guest loopback port closed",
+		}}}), runnercontrol.ErrPortGuestClosed},
+		{"guest socket error", frameAt(2, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Terminal{Terminal: &guestv1.PortTerminal{
+			Kind: guestv1.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, SafeDetail: "guest loopback port read failed",
+		}}}), nil},
+		{"sequence gap", frameAt(3, &guestv1.PortFrame{Payload: &guestv1.PortFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: 1}}}),
+			runnercontrol.ErrPortGuestProtocolViolation},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stream := &scriptedPortReceiveStream{frames: []*guestv1.GuestToRunner{frameAt(1, proto.Clone(credit).(*guestv1.PortFrame)), testCase.second}}
+			connection := newGuestPortConnection(stream, binding, func() {})
+			connection.receive(t.Context())
+			if err := <-connection.opened; err != nil {
+				t.Fatalf("initial writable credit did not open the Port: %v", err)
+			}
+			if testCase.want == nil {
+				if connection.receiveErr == nil || errors.Is(connection.receiveErr, runnercontrol.ErrPortGuestClosed) ||
+					errors.Is(connection.receiveErr, runnercontrol.ErrPortGuestProtocolViolation) {
+					t.Fatalf("guest socket error outcome = %v, want an unclassified failure", connection.receiveErr)
+				}
+				return
+			}
+			if !errors.Is(connection.receiveErr, testCase.want) {
+				t.Fatalf("receive outcome = %v, want %v", connection.receiveErr, testCase.want)
+			}
+		})
 	}
 }

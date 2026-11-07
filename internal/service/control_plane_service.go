@@ -1430,6 +1430,9 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	if len(spec.Ports) > 32 {
 		return invalidField("spec.ports", "must not exceed 32 entries")
 	}
+	if len(spec.Ports) > 0 && spec.Execution.StreamWindowBytes < contracts.PortTunnelMaximumMessageBytes {
+		return invalidField("spec.execution.streamWindowBytes", fmt.Sprintf("must be at least %d when spec.ports is not empty", contracts.PortTunnelMaximumMessageBytes))
+	}
 	for _, port := range spec.Ports {
 		if port.Name == "" || port.Port < 1 || port.Port > 65535 ||
 			(port.Protocol != "tcp" && port.Protocol != "http") ||

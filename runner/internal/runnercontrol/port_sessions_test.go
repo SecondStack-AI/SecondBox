@@ -3,6 +3,8 @@ package runnercontrol
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -468,6 +470,87 @@ func TestRunnerPortFramesLeaveInSequenceOrderUnderConcurrentSenders(t *testing.T
 	for index, message := range stream.messages() {
 		if got := message.GetPort().GetSequence(); got != uint64(index+1) {
 			t.Fatalf("Port frame %d left with sequence %d", index+1, got)
+		}
+	}
+}
+
+// A guest that closes its own Port is a closed session; a guest that breaks the
+// stream contract is a failed one with a cause operators can name.
+func TestRunnerPortPumpReportsGuestCloseAndProtocolViolation(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		kind   runnerprotocol.PortTerminalKind
+		detail string
+	}{
+		{"end of stream", io.EOF, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, "guest port closed"},
+		{"guest closed", fmt.Errorf("guest terminated: %w", ErrPortGuestClosed), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, "guest port closed"},
+		{"protocol violation", fmt.Errorf("sequence gap: %w", ErrPortGuestProtocolViolation), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "guest port protocol violation"},
+		{"transport failure", errors.New("guest stream reset"), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "guest port read failed"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, err := NewRunnerProtocolService(testRunnerConfig(), &portRelayAssignmentBackend{
+				connection: newTestPortConnection(),
+			}, staticProtocolConnector{stream: &threadSafeRunnerStream{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			open := relayPortOpen(relayRunnerFence(), "ending", "ending-stream")
+			connection := newTestPortConnection()
+			connection.queueRead(nil, testCase.err)
+			state := &runnerPortOperation{
+				fence: open.Fence, correlation: open.Correlation, operationID: open.OperationId,
+				streamID: open.StreamId, nextOutgoing: 1, credit: newRunnerCreditWindow(),
+				connection: connection,
+			}
+			if err := state.credit.add(8); err != nil {
+				t.Fatal(err)
+			}
+			stream := &threadSafeRunnerStream{}
+			service.pumpPortReads(t.Context(), stream, state, make(chan error, 1))
+			messages := stream.messages()
+			if len(messages) != 1 {
+				t.Fatalf("pump sent %d frames, want one terminal", len(messages))
+			}
+			terminal := messages[0].GetPort().GetTerminal()
+			if terminal.GetKind() != testCase.kind || terminal.GetSafeDetail() != testCase.detail {
+				t.Fatalf("terminal = %s %q, want %s %q", terminal.GetKind(), terminal.GetSafeDetail(), testCase.kind, testCase.detail)
+			}
+		})
+	}
+}
+
+func TestDirectPortTerminalReportsGuestCloseAndProtocolViolation(t *testing.T) {
+	for _, testCase := range []struct {
+		err    error
+		kind   runnerprotocol.PortTerminalKind
+		detail string
+	}{
+		{fmt.Errorf("guest terminated: %w", ErrPortGuestClosed), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_CLOSED, "port connection closed"},
+		{fmt.Errorf("sequence gap: %w", ErrPortGuestProtocolViolation), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "guest port protocol violation"},
+		{errors.New("guest stream reset"), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "port connection failed"},
+	} {
+		kind, detail := directPortTerminal(t.Context(), testCase.err)
+		if kind != testCase.kind || detail != testCase.detail {
+			t.Fatalf("%v: terminal = %s %q, want %s %q", testCase.err, kind, detail, testCase.kind, testCase.detail)
+		}
+	}
+}
+
+func TestPortOpenTerminalReportsGuestProtocolViolation(t *testing.T) {
+	for _, testCase := range []struct {
+		err    error
+		kind   runnerprotocol.PortTerminalKind
+		detail string
+	}{
+		{fmt.Errorf("first frame: %w", ErrPortGuestProtocolViolation), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "guest port protocol violation"},
+		{fmt.Errorf("guest refused: %w", ErrPortGuestClosed), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable"},
+		{errors.New("guest stream reset"), runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "guest port is unavailable"},
+	} {
+		kind, detail := portOpenTerminal(testCase.err)
+		if kind != testCase.kind || detail != testCase.detail {
+			t.Fatalf("%v: terminal = %s %q, want %s %q", testCase.err, kind, detail, testCase.kind, testCase.detail)
 		}
 	}
 }
