@@ -1025,11 +1025,19 @@ export interface PortTunnelConnector {
   ): Promise<PortTunnelConnection>;
 }
 
+/**
+ * The most bytes one proxied `secondbox.port.v1` message carries. The Runner
+ * credits no more than this at a time, so the control plane refuses a larger
+ * message.
+ */
+export const PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES = 65_536;
+
 /** Binary stream carried by one generation-fenced authenticated PortSession. */
 export class PortTunnel {
   readonly #connection: PortTunnelConnection;
   #writeTail: Promise<void> = Promise.resolve();
   #readTail: Promise<void> = Promise.resolve();
+  #writeFailure: Error | null = null;
 
   public constructor(connection: PortTunnelConnection) {
     if (connection.subprotocol !== "secondbox.port.v1") {
@@ -1038,12 +1046,34 @@ export class PortTunnel {
     this.#connection = connection;
   }
 
+  /**
+   * Writes the payload after every earlier `send`, in messages of at most
+   * {@link PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES}. The tunnel is a byte stream:
+   * message boundaries are not preserved. A failed write may leave part of its
+   * payload delivered, so it rejects this and every later `send`.
+   */
   public send(payload: Uint8Array): Promise<void> {
     if (payload.byteLength === 0) {
       return Promise.reject(new Error("SecondBox Port tunnel frame is empty"));
     }
     const owned = new Uint8Array(payload);
-    const result = this.#writeTail.then(() => this.#connection.sendBinary(owned));
+    const result = this.#writeTail.then(async () => {
+      if (this.#writeFailure !== null) {
+        throw new Error("SecondBox Port tunnel failed an earlier write", {
+          cause: this.#writeFailure,
+        });
+      }
+      try {
+        for (let offset = 0; offset < owned.byteLength; offset += PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES) {
+          await this.#connection.sendBinary(
+            owned.subarray(offset, offset + PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES),
+          );
+        }
+      } catch (error) {
+        this.#writeFailure = error instanceof Error ? error : new Error(String(error));
+        throw error;
+      }
+    });
     this.#writeTail = result.then(
       () => undefined,
       () => undefined,

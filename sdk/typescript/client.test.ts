@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   LeaseKeeper,
   OperationFailedError,
+  PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES,
   PortTunnel,
   SandboxHandle,
   SecondBox,
@@ -1147,6 +1148,11 @@ test("SandboxHandle admits a direct PortSession through the framed handshake", a
     ]),
   ]);
   assert.deepEqual(await tunnel.receive(), new Uint8Array([4, 5, 6]));
+  written.length = 0;
+  const large = patternedBytes(PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES + 7);
+  await tunnel.send(large);
+  assert.deepEqual(written.map((write) => write.byteLength), [PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES, 7]);
+  assert.deepEqual(concatBytes(written), large);
   await tunnel.close();
   assert.equal(closed, true);
 });
@@ -1369,4 +1375,84 @@ test("pool capacity reads use the application and tenant-controller operations",
   assert.deepEqual(await api.getPoolCapacity(), observation);
   assert.deepEqual(await api.getTenantPoolCapacity(), observation);
   assert.deepEqual(requested, ["/v1/pool-capacity", "/v1/tenant-pool-capacity"]);
+});
+
+function patternedBytes(length: number): Uint8Array {
+  return Uint8Array.from({ length }, (_, index) => index % 251);
+}
+
+function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
+  const joined = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return joined;
+}
+
+function recordingPortTunnelConnection(
+  onSend: (payload: Uint8Array, sent: readonly Uint8Array[]) => Promise<void> = async () => {},
+): { connection: PortTunnelConnection; sent: Uint8Array[] } {
+  const sent: Uint8Array[] = [];
+  return {
+    sent,
+    connection: {
+      subprotocol: "secondbox.port.v1",
+      async sendBinary(payload) {
+        await onSend(payload, sent);
+        sent.push(payload.slice());
+      },
+      async receiveBinary() {
+        throw new Error("test Port tunnel has no inbound frames");
+      },
+      async close() {},
+    },
+  };
+}
+
+test("PortTunnel splits a write into messages within the Port message bound", async () => {
+  for (const length of [
+    PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES,
+    PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES + 1,
+    3 * PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES + 5,
+  ]) {
+    const { connection, sent } = recordingPortTunnelConnection();
+    const tunnel = new PortTunnel(connection);
+    const payload = patternedBytes(length);
+    const sending = tunnel.send(payload);
+    payload.fill(0);
+    await sending;
+    assert.ok(sent.every((message) => message.byteLength <= PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES));
+    assert.equal(sent.length, Math.ceil(length / PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES));
+    assert.deepEqual(concatBytes(sent), patternedBytes(length));
+  }
+});
+
+test("PortTunnel keeps concurrent writes contiguous", async () => {
+  const { connection, sent } = recordingPortTunnelConnection(
+    () => new Promise((resolve) => setImmediate(resolve)),
+  );
+  const tunnel = new PortTunnel(connection);
+  const first = patternedBytes(2 * PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES + 3);
+  const second = new Uint8Array([9, 8, 7]);
+  await Promise.all([tunnel.send(first), tunnel.send(second)]);
+  assert.deepEqual(concatBytes(sent), concatBytes([first, second]));
+  assert.deepEqual(sent.at(-1), second);
+});
+
+test("PortTunnel rejects every write after a failed one", async () => {
+  let sends = 0;
+  const failure = new Error("Port WebSocket closed");
+  const { connection } = recordingPortTunnelConnection(async () => {
+    sends += 1;
+    if (sends === 2) throw failure;
+  });
+  const tunnel = new PortTunnel(connection);
+  const failed = tunnel.send(patternedBytes(2 * PORT_TUNNEL_MAXIMUM_MESSAGE_BYTES));
+  const queued = tunnel.send(new Uint8Array([1]));
+  await assert.rejects(failed, (error) => error === failure);
+  await assert.rejects(queued, (error: Error) => error.cause === failure && /failed an earlier write/.test(error.message));
+  await assert.rejects(tunnel.send(new Uint8Array([2])), /failed an earlier write/);
+  assert.equal(sends, 2);
 });

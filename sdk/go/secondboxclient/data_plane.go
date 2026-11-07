@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/pkg/portdirect"
 	"github.com/gorilla/websocket"
 )
@@ -275,6 +276,10 @@ func (tunnel *PortTunnel) Read(payload []byte) (int, error) {
 	return 0, net.ErrClosed
 }
 
+// Write sends payload in proxied messages of at most
+// contracts.PortTunnelMaximumMessageBytes. The tunnel is a byte stream, so
+// message boundaries are not preserved. On failure it returns the bytes already
+// sent; the WebSocket keeps the failure, so every later Write fails too.
 func (tunnel *PortTunnel) Write(payload []byte) (int, error) {
 	tunnel.writeMu.Lock()
 	defer tunnel.writeMu.Unlock()
@@ -284,10 +289,15 @@ func (tunnel *PortTunnel) Write(payload []byte) (int, error) {
 	if tunnel.websocket == nil {
 		return 0, net.ErrClosed
 	}
-	if err := tunnel.websocket.WriteMessage(websocket.BinaryMessage, payload); err != nil {
-		return 0, err
+	written := 0
+	for written < len(payload) {
+		end := min(len(payload), written+contracts.PortTunnelMaximumMessageBytes)
+		if err := tunnel.websocket.WriteMessage(websocket.BinaryMessage, payload[written:end]); err != nil {
+			return written, err
+		}
+		written = end
 	}
-	return len(payload), nil
+	return written, nil
 }
 
 func (tunnel *PortTunnel) Close() error {
