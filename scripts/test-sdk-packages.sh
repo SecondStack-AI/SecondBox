@@ -9,13 +9,15 @@ typescript_root="$test_root/typescript"
 mkdir -p "$typescript_root"
 package_json="$(npm pack "$repo_root/sdk/typescript" --silent --json --pack-destination "$typescript_root")"
 tarball_name="$(jq -er 'first(.[].filename)' <<<"$package_json")"
-# The Flue peer is installed at the repository's reviewed pin, not the newest
-# release: @flue/runtime 2.3.0 imports an export that @earendil-works/pi-ai 1.5.0 removed.
-flue_runtime_version="$(jq -er '.devDependencies["@flue/runtime"]' "$repo_root/package.json")"
 (
     cd "$typescript_root"
     npm init --yes >/dev/null
-    npm install --ignore-scripts --no-audit --no-fund "./$tarball_name" "@flue/runtime@$flue_runtime_version" >/dev/null
+    # The declared Flue peer resolves normally. @flue/runtime 2.3.0 allows
+    # @earendil-works/pi-ai ^1.1.0 but imports an export that pi-ai 1.5.0
+    # removed, so the consumer pins pi-ai to the last release Flue loads with.
+    jq '.overrides = {"@earendil-works/pi-ai": "1.4.0"}' package.json >package.json.next
+    mv package.json.next package.json
+    npm install --ignore-scripts --no-audit --no-fund "./$tarball_name" >/dev/null
     node --input-type=module -e '
       import { SecondBox, SecondBoxClient } from "@secondstack-ai/secondbox";
       import { createSecondBoxFlueAdapter } from "@secondstack-ai/secondbox/flue";
