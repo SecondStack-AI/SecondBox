@@ -89,3 +89,14 @@ func TestDigestFlatRootCoversContentMetadataLinksAndXattrs(t *testing.T) {
 		}
 	})
 }
+
+func TestDigestFlatRootIgnoresHostAssignedXattrs(t *testing.T) {
+	if !hostAssignedXattr("security.selinux") {
+		t.Fatal("SELinux label must not enter the flat-root digest")
+	}
+	for _, name := range []string{"security.capability", "security.ima", "user.secondbox.guest", "trusted.overlay.opaque"} {
+		if hostAssignedXattr(name) {
+			t.Fatalf("%s must enter the flat-root digest", name)
+		}
+	}
+}
