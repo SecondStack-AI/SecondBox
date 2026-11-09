@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- A gVisor Runner on an SELinux host, such as RHEL or CentOS, refused to start with "SecondBox gVisor flat root differs from the pinned materialization", because the host labels every unpacked file and the flat-root digest counted the `security.selinux` label. The digest now ignores that label; the pinned materialization digests are unchanged.
+
 ## 0.31.0 - 2026-11-07
 
 Proxied Port tunnels no longer drop on reordered guest frames or on messages larger than the Runner can credit, and the SDKs split Port writes themselves. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7 and standard Profile revisions are unchanged. The amd64 Firecracker bundle rotates to `secondbox-0.31.0` and the gVisor materialization changes; the arm64 bundle is unchanged. See the [v0.31.0 release notes](docs/releases/v0.31.0.md).
