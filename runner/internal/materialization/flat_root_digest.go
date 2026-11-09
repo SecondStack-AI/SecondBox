@@ -17,7 +17,8 @@ const flatRootDigestVersion = "secondbox.flat-root-digest/v1"
 
 // DigestFlatRoot returns the content identity of a pre-materialized Unix flat
 // root. The identity covers names, entry kinds, ownership, modes, modification
-// times, symlink targets, extended attributes, and regular-file bytes.
+// times, symlink targets, extended attributes except host-assigned labels,
+// and regular-file bytes.
 func DigestFlatRoot(root string) (string, error) {
 	root = filepath.Clean(root)
 	info, err := os.Lstat(root)
