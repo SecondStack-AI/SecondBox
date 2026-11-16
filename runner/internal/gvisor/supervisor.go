@@ -19,6 +19,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/SecondStack-AI/SecondBox/runner/internal/subreaper"
 )
 
 // MountSupervisorInvocation is the hidden argv verb the runner binary
@@ -454,6 +456,12 @@ func holdUntilControl(control *os.File) error {
 }
 
 func superviseRunsc(plan MountSupervisorPlan, control, status *os.File) error {
+	// The sandbox and gofer processes that runsc starts outlive it for a short
+	// time when it is killed. Without a subreaper here they reparent to the
+	// runner, the container PID 1, and stay zombies there.
+	if err := subreaper.Enable(); err != nil {
+		return fmt.Errorf("SecondBox gVisor mount supervisor: %w", err)
+	}
 	arguments := append([]string{"--root", plan.StateRoot}, plan.RunscGlobal...)
 	arguments = append(arguments, "run", "-bundle", plan.BundleDir, plan.ContainerID)
 	command := exec.Command(plan.RunscPath, arguments...)
@@ -486,6 +494,9 @@ func superviseRunsc(plan MountSupervisorPlan, control, status *os.File) error {
 	}()
 
 	waitErr := command.Wait()
+	if err := subreaper.WaitForDescendants(); err != nil {
+		return err
+	}
 	outcome, code := classifyRunscExit(command, waitErr)
 	emitStatus(status, "compute-exit", "outcome="+outcome, "code="+strconv.Itoa(code))
 	return nil

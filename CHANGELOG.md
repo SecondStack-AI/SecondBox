@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- The gVisor Runner left zombie processes behind, about two for each Sandbox Instance, because the processes that runsc started reparented to the Runner, which is PID 1 of its container and did not reap them. Each mount supervisor now adopts and reaps them before it reports compute exit. The count grew until the Runner container restarted; it had no effect on capacity.
+
 ## 0.31.0 - 2026-11-07
 
 Proxied Port tunnels no longer drop on reordered guest frames or on messages larger than the Runner can credit, and the SDKs split Port writes themselves. Deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7 and standard Profile revisions are unchanged. The amd64 Firecracker bundle rotates to `secondbox-0.31.0` and the gVisor materialization changes; the arm64 bundle is unchanged. See the [v0.31.0 release notes](docs/releases/v0.31.0.md).

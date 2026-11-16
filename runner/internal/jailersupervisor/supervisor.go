@@ -7,9 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 
-	"golang.org/x/sys/unix"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/subreaper"
 )
 
 const (
@@ -58,8 +57,8 @@ func RunInvocation(arguments []string) (bool, error) {
 	if spec.Executable == "" {
 		return true, fmt.Errorf("SecondBox jailer supervisor executable is required")
 	}
-	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
-		return true, fmt.Errorf("configure SecondBox jailer child subreaper: %w", err)
+	if err := subreaper.Enable(); err != nil {
+		return true, fmt.Errorf("SecondBox jailer supervisor: %w", err)
 	}
 
 	command := exec.Command(spec.Executable, spec.Arguments...)
@@ -71,28 +70,11 @@ func RunInvocation(arguments []string) (bool, error) {
 		return true, fmt.Errorf("start SecondBox jailer: %w", err)
 	}
 	jailerErr := command.Wait()
-	reapErr := waitForDescendants()
+	reapErr := subreaper.WaitForDescendants()
 	if jailerErr != nil {
 		jailerErr = fmt.Errorf("SecondBox jailer exited: %w", jailerErr)
 	}
 	return true, errors.Join(jailerErr, reapErr)
-}
-
-func waitForDescendants() error {
-	for {
-		var status syscall.WaitStatus
-		_, err := syscall.Wait4(-1, &status, 0, nil)
-		switch {
-		case err == nil:
-			continue
-		case errors.Is(err, syscall.EINTR):
-			continue
-		case errors.Is(err, syscall.ECHILD):
-			return nil
-		default:
-			return fmt.Errorf("reap SecondBox jailer descendant: %w", err)
-		}
-	}
 }
 
 func environmentWithoutSupervisorSpec(environment []string) []string {
