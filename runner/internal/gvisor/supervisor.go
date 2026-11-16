@@ -494,7 +494,9 @@ func superviseRunsc(plan MountSupervisorPlan, control, status *os.File) error {
 	}()
 
 	waitErr := command.Wait()
-	if err := subreaper.WaitForDescendants(); err != nil {
+	// Nothing below runsc may outlive it: kill what remains instead of
+	// waiting, so a stuck descendant cannot hold back compute exit.
+	if err := subreaper.KillAndReapDescendants(); err != nil {
 		return err
 	}
 	outcome, code := classifyRunscExit(command, waitErr)

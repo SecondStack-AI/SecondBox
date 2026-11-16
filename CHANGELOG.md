@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- The gVisor Runner left zombie processes behind, about two for each Sandbox Instance, because the processes that runsc started reparented to the Runner, which is PID 1 of its container and did not reap them. Each mount supervisor now adopts and reaps them before it reports compute exit. The count grew until the Runner container restarted; it had no effect on capacity.
+- The gVisor Runner left zombie processes behind, about two for each Sandbox Instance, because the processes that runsc started reparented to the Runner, which is PID 1 of its container and did not reap them. Each mount supervisor now adopts them, stops any that remain after runsc exits, and reaps them before it reports compute exit. The count grew until the Runner container restarted; it had no effect on capacity.
 
 ## 0.31.0 - 2026-11-07
 

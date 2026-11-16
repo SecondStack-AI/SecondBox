@@ -249,14 +249,19 @@ func runSuperviseRunscTestInvocation(runscPath string) error {
 	return superviseRunsc(plan, controlRead, os.Stdout)
 }
 
-// TestSuperviseRunscReapsOrphanedRunscDescendants proves that a process runsc
-// leaves behind is reaped by the mount supervisor before compute exit is
-// reported, instead of reaching the runner as an unreaped orphan.
-func TestSuperviseRunscReapsOrphanedRunscDescendants(t *testing.T) {
+// TestSuperviseRunscKillsAndReapsRunscDescendants proves that processes runsc
+// leaves behind, including a grandchild orphaned through a subshell, are killed
+// and reaped by the mount supervisor before compute exit is reported, instead
+// of reaching the runner as orphans or holding back compute exit.
+func TestSuperviseRunscKillsAndReapsRunscDescendants(t *testing.T) {
 	dir := t.TempDir()
-	pidPath := filepath.Join(dir, "orphan.pid")
+	pidPath := filepath.Join(dir, "orphan.pids")
 	runscPath := filepath.Join(dir, "fake-runsc")
-	script := "#!/bin/sh\nsleep 0.25 >/dev/null 2>&1 &\nprintf '%s\\n' \"$!\" > \"$" + orphanPIDPathEnvironment + "\"\nexit 0\n"
+	script := "#!/bin/sh\n" +
+		"sleep 30 >/dev/null 2>&1 &\n" +
+		"printf '%s\\n' \"$!\" >> \"$" + orphanPIDPathEnvironment + "\"\n" +
+		"(sleep 30 >/dev/null 2>&1 & printf '%s\\n' \"$!\" >> \"$" + orphanPIDPathEnvironment + "\")\n" +
+		"exit 0\n"
 	if err := os.WriteFile(runscPath, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -268,8 +273,8 @@ func TestSuperviseRunscReapsOrphanedRunscDescendants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("supervisor: %v\n%s", err, output)
 	}
-	if elapsed := time.Since(started); elapsed < 200*time.Millisecond {
-		t.Fatalf("supervisor reported compute exit after %s without reaping the orphaned descendant", elapsed)
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("supervisor waited %s for descendants instead of killing them", elapsed)
 	}
 	if !strings.Contains(string(output), "compute-exit outcome=exit code=0") {
 		t.Fatalf("supervisor status = %q", output)
@@ -279,11 +284,17 @@ func TestSuperviseRunscReapsOrphanedRunscDescendants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if err != nil {
-		t.Fatal(err)
+	pidLines := strings.Fields(string(pidData))
+	if len(pidLines) != 2 {
+		t.Fatalf("fake runsc recorded %d descendant pids, want 2", len(pidLines))
 	}
-	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("orphaned descendant pid %d remains after supervisor exit: %v", pid, err)
+	for _, pidLine := range pidLines {
+		pid, err := strconv.Atoi(pidLine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("descendant pid %d remains after supervisor exit: %v", pid, err)
+		}
 	}
 }
