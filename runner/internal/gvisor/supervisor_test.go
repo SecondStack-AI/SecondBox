@@ -8,9 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestMountSupervisorPlanRoundTrip(t *testing.T) {
@@ -225,5 +227,74 @@ func TestClassifyRunscExitSeparatesExitCodesFromSignals(t *testing.T) {
 
 	if outcome, code := classifyRunscExit(clean, errors.New("wait interrupted")); outcome != "wait-failure" || code != -1 {
 		t.Fatalf("wait failure = %s/%d", outcome, code)
+	}
+}
+
+const (
+	superviseRunscTestInvocation = "gvisor-supervise-runsc-test"
+	orphanPIDPathEnvironment     = "SECONDBOX_GVISOR_TEST_ORPHAN_PID_PATH"
+)
+
+// runSuperviseRunscTestInvocation runs superviseRunsc in a re-executed test
+// process, because the subreaper setting and the wait for any child must not
+// affect the test binary itself.
+func runSuperviseRunscTestInvocation(runscPath string) error {
+	controlRead, controlWrite, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer controlWrite.Close()
+	dir := filepath.Dir(runscPath)
+	plan := MountSupervisorPlan{RunscPath: runscPath, StateRoot: dir, BundleDir: dir, ContainerID: "orphan-test"}
+	return superviseRunsc(plan, controlRead, os.Stdout)
+}
+
+// TestSuperviseRunscKillsAndReapsRunscDescendants proves that processes runsc
+// leaves behind, including a grandchild orphaned through a subshell, are killed
+// and reaped by the mount supervisor before compute exit is reported, instead
+// of reaching the runner as orphans or holding back compute exit.
+func TestSuperviseRunscKillsAndReapsRunscDescendants(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "orphan.pids")
+	runscPath := filepath.Join(dir, "fake-runsc")
+	script := "#!/bin/sh\n" +
+		"sleep 30 >/dev/null 2>&1 &\n" +
+		"printf '%s\\n' \"$!\" >> \"$" + orphanPIDPathEnvironment + "\"\n" +
+		"(sleep 30 >/dev/null 2>&1 & printf '%s\\n' \"$!\" >> \"$" + orphanPIDPathEnvironment + "\")\n" +
+		"exit 0\n"
+	if err := os.WriteFile(runscPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(os.Args[0], superviseRunscTestInvocation, runscPath)
+	command.Env = append(os.Environ(), orphanPIDPathEnvironment+"="+pidPath)
+	started := time.Now()
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("supervisor: %v\n%s", err, output)
+	}
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("supervisor waited %s for descendants instead of killing them", elapsed)
+	}
+	if !strings.Contains(string(output), "compute-exit outcome=exit code=0") {
+		t.Fatalf("supervisor status = %q", output)
+	}
+
+	pidData, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pidLines := strings.Fields(string(pidData))
+	if len(pidLines) != 2 {
+		t.Fatalf("fake runsc recorded %d descendant pids, want 2", len(pidLines))
+	}
+	for _, pidLine := range pidLines {
+		pid, err := strconv.Atoi(pidLine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("descendant pid %d remains after supervisor exit: %v", pid, err)
+		}
 	}
 }
