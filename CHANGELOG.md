@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.32.2 - 2026-11-19
+
+The same code as v0.32.1, with the Linux arm64 runtime artifact set restored. Deployments already on v0.32.1 need no update. See the [v0.32.2 release notes](docs/releases/v0.32.2.md).
+
+### Fixed
+
+- The release workflow again qualifies, stages and publishes the arm64 runtime artifact set next to the amd64 set.
+
 ## 0.32.1 - 2026-11-19
 
 The runtime artifact set is amd64-only. Stopped Workspaces can move to S3 and return on another Runner, and the AWS fleet reference provisions and evacuates workers from durable demand. Deployments from v0.14.0 onward update in place with migrations 0039–0043 and a coordinated Runner protocol 7 → 8 cutover. See the [v0.32.1 release notes](docs/releases/v0.32.1.md).

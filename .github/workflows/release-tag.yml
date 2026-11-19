@@ -1,9 +1,11 @@
 name: SecondBox release from tag
 
-# A pushed v* tag on main builds the shared release files, qualifies and stages
-# the Linux amd64 runtime set, then dispatches the hosted publisher. Client CLI
-# binaries and SDKs remain portable; no arm64 runtime set is published.
-# Dry-run tags qualify and stage without uploading.
+# A pushed v* tag on main builds the architecture-neutral release files once on
+# a hosted runner, then qualifies and stages the amd64 and arm64 artifact sets in
+# parallel on the self-hosted release runners from those files. When both sets
+# are staged, it uploads the arm64 set and then the amd64 set, which dispatches
+# the hosted publisher (release.yml). A vX.Y.Z-dryrun.N tag builds and stages
+# everything and uploads nothing. See docs/operations/release-operator-setup.md.
 on:
   push:
     tags: ['v[0-9]*']
@@ -92,8 +94,66 @@ jobs:
           mkdir -p "$RELEASE_LOGS"
           for logs in .tmp/release .tmp/qualify; do [[ ! -d "$logs" ]] || cp -a "$logs" "$RELEASE_LOGS/"; done
 
+  stage-arm64:
+    needs: build-shared
+    runs-on: [self-hosted, Linux, ARM64, secondbox-release-arm64]
+    timeout-minutes: 240
+    env:
+      RELEASE_VERSION: ${{ needs.build-shared.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.22.1
+      - run: npm ci --ignore-scripts
+      - name: Replace an earlier attempt of this version
+        run: |
+          root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
+          rm -rf -- "$root/$RELEASE_VERSION-arm64" "$RUNNER_TEMP/shared-download" "$RUNNER_TEMP/shared-$RELEASE_VERSION"
+          {
+            echo "RELEASE_SHARED=$RUNNER_TEMP/shared-$RELEASE_VERSION"
+            echo "RELEASE_LOGS=$root/logs/$RELEASE_VERSION-arm64-$RUN_KEY"
+          } >>"$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: shared-${{ github.run_id }}
+          path: ${{ runner.temp }}/shared-download
+      - run: |
+          mkdir "$RELEASE_SHARED"
+          tar -C "$RELEASE_SHARED" -xpf "$RUNNER_TEMP/shared-download/shared.tar"
+      - run: /usr/bin/just release-arm64 "$RELEASE_VERSION" "$RELEASE_SHARED"
+      - name: Keep run logs on the host
+        if: always() && env.RELEASE_LOGS != ''
+        run: |
+          mkdir -p "$RELEASE_LOGS"
+          [[ ! -d .tmp/release ]] || cp -a .tmp/release "$RELEASE_LOGS/"
+
+  # Nothing is uploaded until both artifact sets are staged. The arm64 set goes
+  # first because the amd64 upload dispatches the publisher.
+  upload-arm64:
+    needs: [build-shared, stage-amd64, stage-arm64]
+    if: ${{ !contains(github.ref_name, '-dryrun.') }}
+    runs-on: [self-hosted, Linux, ARM64, secondbox-release-arm64]
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.build-shared.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - name: Upload the arm64 set
+        run: |
+          root="$(set -a; source "${RELEASE_ENV_FILE:-$HOME/.config/secondbox/release.env}"; printf '%s' "$RELEASE_OUTPUT_ROOT")"
+          scripts/release-upload.sh "$RELEASE_VERSION" "$root/$RELEASE_VERSION-arm64"
+
   upload-amd64:
-    needs: [build-shared, stage-amd64]
+    needs: [build-shared, upload-arm64]
     if: ${{ !contains(github.ref_name, '-dryrun.') }}
     runs-on: [self-hosted, Linux, X64, secondbox-release-amd64]
     timeout-minutes: 60

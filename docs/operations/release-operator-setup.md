@@ -1,16 +1,17 @@
 # Release operator setup
 
 A SecondBox release starts when a maintainer pushes a `vVERSION` tag on `main`.
-The `release-tag.yml` workflow builds the architecture-neutral files once on a GitHub-hosted runner, then qualifies and stages the Linux amd64 runtime set on its self-hosted release runner, and the hosted `release.yml` workflow publishes the staged bytes.
+The `release-tag.yml` workflow builds the architecture-neutral files once on a GitHub-hosted runner, then qualifies and stages the release on two self-hosted release runners in parallel, and the hosted `release.yml` workflow publishes the staged bytes.
 The amd64 runner stages a non-publishable installer candidate, qualifies that exact candidate in disposable virtual machines, and stages the final release from the resulting evidence.
-The current tag workflow publishes no arm64 runtime set. Portable client binaries and SDKs remain part of the shared release.
+The arm64 runner qualifies the same commit and stages the arm64 artifact set.
+Both sets carry the same shared files byte for byte.
 
 ## One-time setup
 
 - Configure npm trusted publishing for `@secondstack-ai/secondbox` and `.github/workflows/release.yml`.
 - Allow that workflow `contents: write`, `packages: write`, and `id-token: write`.
 - Give the repository workflow access to the public `control-plane`, `runner`, `installer-tools`, `microvm-artifacts`, `runner-gvisor`, and `gvisor-artifacts` GHCR packages.
-- Register the amd64 release runner (below) in an organization runner group that admits only this repository, and only `release-tag.yml` from tag refs.
+- Register the two release runners (below) in an organization runner group that admits only this repository, and only `release-tag.yml` from tag refs.
   The repository is public: a runner that accepts other workflows would run pull-request code from forks on a privileged KVM host.
 
 The release runners need Docker Buildx, `jq`, `openssl`, npm, Go, `gh`, and `/usr/bin/just`.
@@ -34,8 +35,9 @@ Consult the target release notes before choosing bundle inputs. Point `SECONDBOX
 | Runner | Labels | Configuration |
 |---|---|---|
 | amd64 | `self-hosted`, `Linux`, `X64`, `secondbox-release-amd64` | `deploy/release.env.example` |
+| arm64 | `self-hosted`, `Linux`, `ARM64`, `secondbox-release-arm64` | `deploy/release-arm64.env.example` |
 
-Register exactly one runner for the release label: the upload job reads the output that staging left on that host.
+Register exactly one runner per label: each upload job reads the output that the staging job of its architecture left on its host.
 Each runner account copies its example to `~/.config/secondbox/release.env` (or names another file in `RELEASE_ENV_FILE` in the runner service environment), and every path and digest in it is reviewed for that host.
 Place the runner work directory on the reflink filesystem that holds the scenario workspace root, because scenarios reflink from the checkout.
 The runner account needs access to `/dev/kvm`, `/dev/net/tun`, Docker and, on amd64, `qemu:///system` with nested KVM.
@@ -62,21 +64,23 @@ git tag vVERSION origin/main
 git push origin vVERSION
 ```
 
-`release-tag.yml` then runs three jobs:
+`release-tag.yml` then runs five jobs:
 
 1. `build-shared` runs `scripts/release-build-shared.sh` on a GitHub-hosted runner, in a few minutes.
    It requires the tag to identify the checked-out commit on `origin/main` and the Go version of `go.mod`, then builds the OpenAPI document, Go module archive, TypeScript package, package metadata, SBOM, the `secondbox`, `secondbox-deploy`, `secondbox-fleet`, and `secondbox-fleet-enroll` binaries of the four host platforms, and `install.sh`, which embeds the Linux amd64 deploy-binary digest. The guided installer installs only the CLI and deploy tool; fleet operators install the fleet tools separately.
    `shared-artifacts.json` records each file's digest, the version, tag and source commit, and the bundled PostgreSQL image pinned in that script.
-   The job passes the directory to staging as a tar workflow artifact, which keeps the binaries' executable modes.
+   The job passes the directory to both staging jobs as a tar workflow artifact, which keeps the binaries' executable modes.
 2. `stage-amd64` runs `just release VERSION SHARED_DIR` (`scripts/release.sh`).
    It requires the tag to identify the checked-out commit on `origin/main`, checks the toolchain, inputs and headroom, verifies the shared set, then runs qualification, the unbound artifact build, the installer candidate, installer qualification, and final staging, sequentially so their memory demands do not overlap.
    The installer candidate contains the shared deploy binary and `install.sh`, so installer qualification covers the bytes that are published.
-3. `upload-amd64` uploads the final amd64 set, dispatches the hosted publisher, and removes the intermediate build and candidate directories. It runs only after staging succeeds and is skipped for dry-run tags.
+3. `stage-arm64` runs `just release-arm64 VERSION SHARED_DIR` (`scripts/release-arm64.sh`) at the same time: `just test-scenario` for `linux-arm64` evidence, then the arm64 set.
+4. `upload-arm64` uploads the arm64 set to the draft release after both staging jobs succeed.
+5. `upload-amd64` then uploads the amd64 set from the amd64 runner, which dispatches the hosted publisher, and removes the intermediate build and candidate directories.
 
 Each staging accepts the shared set only when `secondbox-release-tool verify-shared-artifacts` confirms that the directory holds exactly the shared files of this version with their modes, that each digest matches the record, that the record names this version and source commit, and that `install.sh` embeds the shared Linux amd64 deploy binary digest.
-The artifact manifest therefore pins the shared files. The publisher also rejects inconsistent shared files if an optional, separately qualified arm64 set is supplied.
+Both artifact manifests therefore pin the same shared files, and the publisher refuses sets that differ.
 
-A tag such as `v0.0.0-dryrun.1` on `main` runs the shared build and amd64 staging and uploads nothing; use it to validate the runner, then delete the tag and the runners' outputs of that version.
+A tag such as `v0.0.0-dryrun.1` on `main` runs the shared build and both staging jobs and uploads nothing; use it to validate the runners, then delete the tag and the runners' outputs of that version.
 
 Lean releases build amd64 images and test one `btrfs_image` installer guest: the wizard, reboot recovery, and hello-world microVMs.
 Installer qualification installs the candidate with `--sandbox-profile agent-compartment --control-reserve-vcpus 1 --control-reserve-memory-mib 1024`, so its guest needs 2 GiB of usable RAM; `QUALIFY_GUEST_MEMORY_MIB` defaults to 4096 (minimum 2560, for kernel reservations); the larger default keeps page cache for the smoke's first cold preparation of the release image, which took 5m50s to 6m13s at 4096 MiB and over 8 minutes at 3072 MiB on a 4 vCPU nested guest.
@@ -86,7 +90,7 @@ For a loopback workspace filesystem, also budget physical space on its backing f
 On smaller hosts, set `QUALIFY_GATES_FIRST=1` and `QUALIFY_MAX_STACKS=1` in `release.env` to limit scenario concurrency without omitting scenarios.
 The final stage reuses the checksummed build and requires installer evidence for exactly those release bytes; unbound builds cannot be published.
 
-Outputs are `RELEASE_OUTPUT_ROOT/VERSION`, `VERSION-build` and `VERSION-candidate`.
+Outputs are `RELEASE_OUTPUT_ROOT/VERSION`, `VERSION-build`, `VERSION-candidate` and, on arm64, `VERSION-arm64`.
 Each staging job first removes the outputs of an earlier attempt of the same version, so a failed job is recovered with **Re-run failed jobs**.
 Stage logs (`.tmp/release/RUN/` with `timing.md`, and `.tmp/qualify/RUN/`) are copied to `RELEASE_OUTPUT_ROOT/logs/` on the runner host after every attempt.
 They are not uploaded as workflow artifacts, because the repository is public.
@@ -101,5 +105,5 @@ It appends the install and SDK footer and refreshes the draft on retry; the publ
 A pushed tag is immutable even when its release fails: the Go module proxy can cache the tagged source as soon as anyone requests it.
 A code fix after a failed staging therefore lands on `main` and ships as the next patch version; retract the failed version in `go.mod` and note it in the changelog.
 Validate a risky release with a dry-run tag first.
-If publication fails while the amd64-only release is still a draft, fix the cause and re-run `upload-amd64` to restore the staged archives and dispatch publication again.
+If publication fails while the release is still a draft, fix the cause and re-run `upload-arm64`, which also re-runs `upload-amd64` after it, because the publisher may already have deleted archives of either set.
 Never move a published tag.
