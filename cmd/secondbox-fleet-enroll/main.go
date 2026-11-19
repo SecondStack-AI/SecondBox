@@ -101,7 +101,11 @@ func run(endpoint, region, caFile, output string, renew bool, gatewayCopy string
 	}
 	enrollment := fleet.EnrollmentRequest{InstanceID: identity.InstanceID, Nonce: string(nonce), RunnerCSR: runnerCSR, GatewayCSR: gatewayCSR, Renew: renew}
 	binding := fleet.EnrollmentBinding(enrollment)
-	proofURL := "https://sts." + region + ".amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15&X-Amz-Expires=60"
+	identityEndpoint, _, err := fleet.AWSFleetIdentityEndpoint(region)
+	if err != nil {
+		return err
+	}
+	proofURL := identityEndpoint + "/?Action=GetCallerIdentity&Version=2011-06-15&X-Amz-Expires=60"
 	proof, err := http.NewRequestWithContext(ctx, http.MethodGet, proofURL, nil)
 	if err != nil {
 		return err

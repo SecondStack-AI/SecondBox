@@ -4,13 +4,26 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
+
+// AWSFleetIdentityEndpoint keeps proof signing and verification on the same
+// regional STS endpoint and ARN partition from the SDK's endpoint metadata.
+func AWSFleetIdentityEndpoint(region string) (endpointURL, partition string, err error) {
+	endpoint, err := sts.NewDefaultEndpointResolver().ResolveEndpoint(region, sts.EndpointResolverOptions{})
+	if err != nil {
+		return "", "", fmt.Errorf("SecondBox AWS fleet identity endpoint: %w", err)
+	}
+	return endpoint.URL, endpoint.PartitionID, nil
+}
 
 type AWSIdentityVerifier struct {
 	AccountID        string
@@ -28,8 +41,12 @@ func (verifier AWSIdentityVerifier) Verify(ctx context.Context, enrollment Enrol
 	if verifier.AccountID == "" || verifier.RoleName == "" || verifier.Region == "" || verifier.Cloud == nil || verifier.Client == nil || verifier.Now == nil || verifier.EnrollmentWindow <= 0 {
 		return errors.New("SecondBox AWS fleet enrollment verifier is incomplete")
 	}
+	endpointURL, partition, err := AWSFleetIdentityEndpoint(verifier.Region)
+	if err != nil {
+		return err
+	}
 	proof, err := url.Parse(enrollment.IdentityProofURL)
-	expectedHost := "sts." + verifier.Region + ".amazonaws.com"
+	expectedHost := strings.TrimPrefix(endpointURL, "https://")
 	if err != nil || proof.Scheme != "https" || proof.Host != expectedHost || proof.User != nil || proof.Fragment != "" || proof.Path != "/" || len(proof.RawQuery) > 8192 {
 		return errors.New("SecondBox AWS fleet enrollment proof endpoint is invalid")
 	}
@@ -76,7 +93,7 @@ func (verifier AWSIdentityVerifier) Verify(ctx context.Context, enrollment Enrol
 	if err := xml.NewDecoder(io.LimitReader(response.Body, 32<<10)).Decode(&caller); err != nil {
 		return errors.New("SecondBox AWS fleet enrollment STS response is invalid")
 	}
-	expectedARN := "arn:aws:sts::" + verifier.AccountID + ":assumed-role/" + verifier.RoleName + "/" + enrollment.InstanceID
+	expectedARN := "arn:" + partition + ":sts::" + verifier.AccountID + ":assumed-role/" + verifier.RoleName + "/" + enrollment.InstanceID
 	if caller.Result.Account != verifier.AccountID || caller.Result.ARN != expectedARN {
 		return errors.New("SecondBox AWS fleet enrollment caller is not its expected instance role")
 	}

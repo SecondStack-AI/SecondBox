@@ -8,8 +8,35 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/fleet"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
+
+func TestFleetArchiveUsesPlatformSubjectAuthority(t *testing.T) {
+	fixture := newTeardownFixture(t)
+	if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), startRehomeArchiveProvider{}, map[string]int64{fixture.profileName: 3600}); err != nil {
+		t.Fatal(err)
+	}
+	sandboxID, sandbox := createStoppedFixtureSandbox(t, fixture, "fleet-archive-http")
+	control := fleet.HTTPControlPlane{BaseURL: fixture.server, Token: testPlatformToken, Pool: "fleet", Client: http.DefaultClient}
+	if err := control.Archive(t.Context(), contracts.FleetWorkspace{
+		SandboxID: sandboxID, TenantRef: fixture.tenantRef, SubjectRef: fixture.subjectRef, Revision: sandbox.Revision,
+	}); err != nil {
+		t.Fatalf("fleet platform-token archive: %v", err)
+	}
+	client, err := secondboxclient.NewSecondBoxSubjectClient(fixture.server, testPlatformToken, fixture.tenantRef, fixture.subjectRef, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := client.AdoptSandbox(t.Context(), sandboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handle.Snapshot().Workspace.Residency != "archiving" {
+		t.Fatalf("fleet request did not admit archive: %#v", handle.Snapshot().Workspace)
+	}
+}
 
 func TestArchiveStartConflictExposesResidencyThenAdmitsFreshRevision(t *testing.T) {
 	fixture := newTeardownFixture(t)
