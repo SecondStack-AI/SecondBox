@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Runners denied new work by storage pressure stay connected so stops, fences and deletes can release storage. Placement and pool capacity exclude connected Runners reporting `admission_denied` or `unavailable` until a measured recovery, including across reconnects. The first heartbeat uses the newest completed pressure probe. Firecracker reports pressure refusal as a retryable capacity shortage instead of failing the Sandbox.
+- A failed local Workspace create or clone that produced no receipt, such as one refused by storage pressure, was rejected by the control plane as conflicting with durable authority. The rejection ended the Runner session and left the command pending for redelivery. The control plane now records the failure.
 - The gVisor Runner left zombie processes behind, about two for each Sandbox Instance, because the processes that runsc started reparented to the Runner, which is PID 1 of its container and did not reap them. Each mount supervisor now adopts them, stops any that remain after runsc exits, and reaps them before it reports compute exit. The count grew until the Runner container restarted; it had no effect on capacity.
 - A gVisor Runner on an SELinux host, such as RHEL or CentOS, refused to start with "SecondBox gVisor flat root differs from the pinned materialization", because the host labels every unpacked file and the flat-root digest counted the `security.selinux` label. The digest now ignores that label; published materialization digests are unchanged. Rebuild custom materializations whose pinned digests included SELinux labels with the updated tools before upgrading their Runners.
 

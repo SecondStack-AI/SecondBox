@@ -10,6 +10,7 @@ import (
 	"math/bits"
 	"sync"
 	"syscall"
+	"time"
 )
 
 var errPhysicalStoragePressure = errors.New("SecondBox gVisor workspace storage admission denied")
@@ -17,13 +18,14 @@ var errPhysicalStoragePressure = errors.New("SecondBox gVisor workspace storage 
 // physicalStoragePressure checks the filesystem visible through the Workspace
 // mount. Logical Workspace capacities do not contribute to this measurement.
 type physicalStoragePressure struct {
-	mu       sync.Mutex
-	root     string
-	recovery uint64
-	warning  uint64
-	deny     uint64
-	state    string
-	probe    func(string) (uint64, uint64, error)
+	mu           sync.Mutex
+	root         string
+	recovery     uint64
+	warning      uint64
+	deny         uint64
+	state        string
+	lastReported uint64
+	probe        func(string) (uint64, uint64, error)
 }
 
 func newPhysicalStoragePressure(config Config) (*physicalStoragePressure, error) {
@@ -59,6 +61,20 @@ func probeWorkspaceFilesystem(root string) (uint64, uint64, error) {
 func (pressure *physicalStoragePressure) observe(context.Context) (string, error) {
 	pressure.mu.Lock()
 	defer pressure.mu.Unlock()
+	return pressure.observeLocked()
+}
+
+// observePressure orders completed probes across readiness and background polls.
+func (pressure *physicalStoragePressure) observePressure(context.Context) (string, uint64, error) {
+	pressure.mu.Lock()
+	defer pressure.mu.Unlock()
+	state, err := pressure.observeLocked()
+	observedAt := max(uint64(time.Now().UnixMilli()), pressure.lastReported+1)
+	pressure.lastReported = observedAt
+	return state, observedAt, err
+}
+
+func (pressure *physicalStoragePressure) observeLocked() (string, error) {
 	used, total, err := pressure.probe(pressure.root)
 	if err != nil {
 		return "unavailable", err

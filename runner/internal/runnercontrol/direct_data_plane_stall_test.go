@@ -95,7 +95,9 @@ func TestCancelledDirectPeerDoesNotBlockControlConnection(t *testing.T) {
 			}
 			waitForDirectWrite(t, runner.writing)
 			controlDone := make(chan error, 1)
-			go func() { controlDone <- service.sendHeartbeat(t.Context(), control, "connection-1", BackendReadiness{}) }()
+			go func() {
+				controlDone <- service.sendHeartbeat(t.Context(), control, "connection-1", BackendReadiness{}, nil)
+			}()
 			select {
 			case err := <-controlDone:
 				if err != nil {

@@ -1278,7 +1278,8 @@ func task4Heartbeat(
 			Instances: 8, Operations: 32,
 		},
 		Reserved: &runnerv1.Capacity{}, DrainPhase: phase,
-		StartupTiming: &runnerv1.StartupTiming{SampleCount: 4, P95Milliseconds: 75},
+		StartupTiming:   &runnerv1.StartupTiming{SampleCount: 4, P95Milliseconds: 75},
+		StoragePressure: &runnerv1.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: 1},
 	}
 }
 

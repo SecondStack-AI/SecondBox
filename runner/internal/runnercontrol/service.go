@@ -69,6 +69,9 @@ type BackendReadiness struct {
 	BackendKind       runnerprotocol.ComputeBackendKind
 	Materializations  []*runnerprotocol.BackendMaterializationEvidence
 	ReadinessFailures []runnerprotocol.RunnerReadinessFailure
+	// StoragePressure is the pressure readiness measured, or nil for a
+	// backend without a storage-pressure controller.
+	StoragePressure *runnerprotocol.StoragePressureObservation
 }
 
 // BackendInstance is the provider-private identity of a ready compute instance.
@@ -239,6 +242,7 @@ type RunnerProtocolService struct {
 	storageObservationMu       sync.Mutex
 	storageObservationRunning  bool
 	storageObservationResult   *workspaceStorageResult
+	storagePressureReportedAt  uint64
 	// ptyAttachmentReadHook is nil outside tests. It runs after a PTY frame
 	// has read its attachment and before it locks that attachment, the
 	// window in which a detach can overtake the send.
@@ -521,7 +525,11 @@ func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, e
 	); err != nil {
 		return false, err
 	}
-	if err := s.sendHeartbeat(ctx, stream, welcome.ConnectionId, readiness); err != nil {
+	// Registration awaits its first heartbeat. Pressure-enabled backends send
+	// the newest measurement, including a poll that overtook readiness.
+	if err := s.sendHeartbeat(
+		ctx, stream, welcome.ConnectionId, readiness, readiness.StoragePressure,
+	); err != nil {
 		return true, err
 	}
 	return true, s.consumeCommands(ctx, stream, welcome, readiness)
@@ -864,7 +872,7 @@ func (s *RunnerProtocolService) sendHeartbeats(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.sendHeartbeat(ctx, stream, connectionID, readiness); err != nil {
+			if err := s.sendHeartbeat(ctx, stream, connectionID, readiness, nil); err != nil {
 				select {
 				case asyncErrors <- err:
 				case <-ctx.Done():
@@ -1508,11 +1516,28 @@ func (s *RunnerProtocolService) sendHeartbeat(
 	stream RunnerProtocolStream,
 	connectionID string,
 	readiness BackendReadiness,
+	measuredPressure *runnerprotocol.StoragePressureObservation,
 ) error {
 	observation := s.pollWorkspaceStorage(ctx)
 	if observation.err != nil {
 		return fmt.Errorf("SecondBox Runner storage observation failed: %w", observation.err)
 	}
+	pressure := observation.pressure
+	if measuredPressure != nil && (pressure == nil || measuredPressure.ObservedAtUnixMs > pressure.ObservedAtUnixMs) {
+		pressure = measuredPressure
+	}
+	// A poll from the previous session may publish after readiness superseded
+	// its measurement. Keep sample ordering here; the control plane orders the
+	// authenticated heartbeat stream, independently of Runner wall-clock time.
+	s.storageObservationMu.Lock()
+	if pressure != nil {
+		if pressure.ObservedAtUnixMs < s.storagePressureReportedAt {
+			pressure = nil
+		} else {
+			s.storagePressureReportedAt = pressure.ObservedAtUnixMs
+		}
+	}
+	s.storageObservationMu.Unlock()
 	return s.sendSequencedRunnerFrame(
 		stream,
 		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
@@ -1530,7 +1555,7 @@ func (s *RunnerProtocolService) sendHeartbeat(
 						DrainPhase:        s.drainPhase(),
 						StartupTiming:     s.startupTiming(),
 						WorkspaceStorage:  observation.storage,
-						StoragePressure:   observation.pressure,
+						StoragePressure:   pressure,
 
 						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
 					},

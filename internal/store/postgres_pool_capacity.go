@@ -64,8 +64,8 @@ func (store *PostgresControlPlaneStore) GetPoolCapacity(
 		       COALESCE(placeable.reserved_instances,0),COALESCE(placeable.reserved_vcpu_count,0),
 		       COALESCE(placeable.reserved_memory_bytes,0),COALESCE(placeable.reserved_operations,0),
 		       (SELECT count(*) FROM secondbox.runners AS runner
-		        WHERE runner.pool_name=pool.name AND runner.active_connection_id<>''
-		          AND runner.storage_pressure_json->>'status'='admission_denied'),
+		        WHERE runner.pool_name=pool.name AND runner.state='ready' AND runner.active_connection_id<>''
+		          AND runner.storage_pressure_json->>'status' IN ('admission_denied','unavailable')),
 		       (SELECT count(*)
 		        FROM secondbox.sandboxes AS sandbox
 		        JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
@@ -91,6 +91,7 @@ func (store *PostgresControlPlaneStore) GetPoolCapacity(
 			FROM secondbox.runners AS runner
 			WHERE runner.pool_name=pool.name AND runner.state='ready'
 			  AND runner.drain_phase='active' AND runner.active_connection_id<>''
+			  AND COALESCE(runner.storage_pressure_json->>'status','') NOT IN ('admission_denied','unavailable')
 		) AS placeable ON true
 		WHERE $1 OR pool.name IN (SELECT pool_name FROM visible_pools)
 		ORDER BY pool.name`,

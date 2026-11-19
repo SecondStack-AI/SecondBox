@@ -65,6 +65,9 @@ func testPostgresInstanceTerminalReason(
 	); err != nil || duplicate {
 		t.Fatalf("registration duplicate, error = %t, %v", duplicate, err)
 	}
+	if _, err := boundary.stateStore.RecordHeartbeat(t.Context(), task4Heartbeat("runner-conformance", connectionID, "terminal-heartbeat-2", 2, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE), now); err != nil {
+		t.Fatal(err)
+	}
 
 	sandboxID := task4ID("terminal-sandbox")
 	instanceID := task4ID("terminal-instance")
@@ -102,7 +105,7 @@ func testPostgresInstanceTerminalReason(
 	ready := &runnerv1.RunnerToControlPlane{
 		Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 			AssignmentResult: &runnerv1.AssignmentResult{
-				MessageId: "terminal-ready-2", Sequence: 2, Fence: fence,
+				MessageId: "terminal-ready-3", Sequence: 3, Fence: fence,
 				Terminal:                runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
 				BackendKind:             "firecracker",
 				BackendReference:        "fc-terminal",
@@ -128,7 +131,7 @@ func testPostgresInstanceTerminalReason(
 	}
 
 	terminal := &runnerv1.InstanceTerminal{
-		MessageId: "instance-terminal-3", Sequence: 3, Fence: fence,
+		MessageId: "instance-terminal-4", Sequence: 4, Fence: fence,
 		Reason:                    protocolReason,
 		ObservedAtUnixMs:          uint64(now.Add(2 * time.Millisecond).UnixMilli()),
 		TerminationEvidenceDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -200,7 +203,7 @@ func testPostgresInstanceTerminalReason(
 	}
 	changed = proto.Clone(event.Message).(*runnerv1.RunnerToControlPlane)
 	changed.GetInstanceTerminal().MessageId = "instance-terminal-changed-4"
-	changed.GetInstanceTerminal().Sequence = 4
+	changed.GetInstanceTerminal().Sequence = 5
 	changed.GetInstanceTerminal().TerminationEvidenceDigest =
 		"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	if _, err := boundary.stateStore.RecordEvent(t.Context(), runnercontrol.Event{
@@ -211,7 +214,7 @@ func testPostgresInstanceTerminalReason(
 	}
 	stale := proto.Clone(event.Message).(*runnerv1.RunnerToControlPlane)
 	stale.GetInstanceTerminal().MessageId = "instance-terminal-stale-4"
-	stale.GetInstanceTerminal().Sequence = 4
+	stale.GetInstanceTerminal().Sequence = 5
 	stale.GetInstanceTerminal().Fence.FencingToken = []byte("stale-stale-stale-stale-stale-stale")
 	if _, err := boundary.stateStore.RecordEvent(t.Context(), runnercontrol.Event{
 		Kind: runnercontrol.EventInstanceTerminal, RunnerID: "runner-conformance",
@@ -252,6 +255,9 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 	); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := boundary.stateStore.RecordHeartbeat(t.Context(), task4Heartbeat("runner-conformance", connectionID, "reason-heartbeat-2", 2, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE), now); err != nil {
+		t.Fatal(err)
+	}
 	causes := []struct {
 		reason                 string
 		sandboxLifecycle       bool
@@ -270,7 +276,7 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 		{"fenced", false, false, ""},
 		{"internal_failure", false, true, ""},
 	}
-	sequence := uint64(2)
+	sequence := uint64(3)
 	for _, cause := range causes {
 		t.Run(cause.reason, func(t *testing.T) {
 			sandboxID := task4ID("reason-sandbox")

@@ -3,12 +3,14 @@ package runnercontrol
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
+	"google.golang.org/protobuf/proto"
 )
 
 type storageProbeBackend struct {
@@ -18,6 +20,80 @@ type storageProbeBackend struct {
 
 func (backend *storageProbeBackend) ObserveWorkspaceStorage(ctx context.Context) ([]*runnerprotocol.WorkspaceStorageObservation, *runnerprotocol.StoragePressureObservation, error) {
 	return backend.probe(ctx)
+}
+
+func TestReconnectFirstHeartbeatUsesNewestStoragePressure(t *testing.T) {
+	older := &runnerprotocol.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: 100}
+	newer := &runnerprotocol.StoragePressureObservation{Status: "admission_denied", ObservedAtUnixMs: 200}
+	for _, test := range []struct {
+		name                       string
+		measured, queued, expected *runnerprotocol.StoragePressureObservation
+	}{
+		{name: "newer queued refusal", measured: older, queued: newer, expected: newer},
+		{name: "newer readiness refusal", measured: newer, queued: older, expected: newer},
+		{name: "readiness without a queued result", measured: newer, expected: newer},
+		{name: "queued result without readiness pressure", queued: newer, expected: newer},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			backend := &storageProbeBackend{
+				recordingAssignmentBackend: recordingAssignmentBackend{readiness: BackendReadiness{
+					Capacity: &runnerprotocol.Capacity{}, Capabilities: &runnerprotocol.RunnerCapabilities{},
+					StoragePressure: test.measured,
+				}},
+				probe: func(ctx context.Context) ([]*runnerprotocol.WorkspaceStorageObservation, *runnerprotocol.StoragePressureObservation, error) {
+					<-ctx.Done()
+					return nil, nil, ctx.Err()
+				},
+			}
+			stream := &recordingProtocolStream{inbound: []*runnerprotocol.ControlPlaneToRunner{runnerWelcomeFrame("reconnected")}}
+			service, err := NewRunnerProtocolService(testRunnerConfig(), backend, staticProtocolConnector{stream: stream})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A completed filesystem poll can survive the previous connection.
+			service.storageObservationResult = &workspaceStorageResult{pressure: test.queued}
+			if _, err := service.runProtocolSession(ctx); !errors.Is(err, io.EOF) {
+				t.Fatalf("reconnected session error = %v, want stream EOF", err)
+			}
+			if len(stream.outbound) < 3 || stream.outbound[2].GetHeartbeat() == nil {
+				t.Fatalf("reconnected session did not send its first heartbeat: %d frames", len(stream.outbound))
+			}
+			pressure := stream.outbound[2].GetHeartbeat().StoragePressure
+			if !proto.Equal(pressure, test.expected) {
+				t.Fatalf("first heartbeat pressure = %v, want newest %v", pressure, test.expected)
+			}
+		})
+	}
+}
+
+func TestHeartbeatSkipsDelayedPressureSupersededByReadiness(t *testing.T) {
+	service, err := NewRunnerProtocolService(testRunnerConfig(), &storageProbeBackend{}, staticProtocolConnector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A poll is still completing while readiness produces a newer refusal.
+	service.storageObservationRunning = true
+	stream := &recordingProtocolStream{}
+	readiness := BackendReadiness{Capacity: &runnerprotocol.Capacity{}}
+	if err := service.sendHeartbeat(t.Context(), stream, "new-connection", readiness, &runnerprotocol.StoragePressureObservation{Status: "admission_denied", ObservedAtUnixMs: 200}); err != nil {
+		t.Fatal(err)
+	}
+	service.storageObservationResult = &workspaceStorageResult{pressure: &runnerprotocol.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: 100}}
+	if err := service.sendHeartbeat(t.Context(), stream, "new-connection", readiness, nil); err != nil {
+		t.Fatal(err)
+	}
+	if pressure := stream.outbound[1].GetHeartbeat().StoragePressure; pressure != nil {
+		t.Fatalf("delayed poll overwrote newer readiness pressure: %v", pressure)
+	}
+	service.storageObservationResult = &workspaceStorageResult{pressure: &runnerprotocol.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: 300}}
+	if err := service.sendHeartbeat(t.Context(), stream, "new-connection", readiness, nil); err != nil {
+		t.Fatal(err)
+	}
+	if pressure := stream.outbound[2].GetHeartbeat().StoragePressure; pressure == nil || pressure.Status != "healthy" {
+		t.Fatalf("newer measured recovery was lost: %v", pressure)
+	}
 }
 
 type storageProbeStream struct {

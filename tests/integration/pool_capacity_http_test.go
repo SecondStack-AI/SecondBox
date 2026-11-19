@@ -233,8 +233,8 @@ func TestPoolCapacityIsScopedToPlaceablePoolsAndNamesNoRunner(t *testing.T) {
 	}
 
 	// Distinct figures make the placeable sums observable. A connected Runner
-	// latched on storage pressure is still placeable here and is counted in
-	// both; a disconnected latched Runner is in neither.
+	// latched on storage pressure is connected but not placeable; a disconnected
+	// latched Runner is in neither count.
 	if _, err := database.Exec(t.Context(), `
 		UPDATE secondbox.runners
 		SET capacity_json='{"VCPUCount":20,"MemoryBytes":40,"DiskBytes":100,"Instances":10,"Operations":10}',
@@ -247,12 +247,18 @@ func TestPoolCapacityIsScopedToPlaceablePoolsAndNamesNoRunner(t *testing.T) {
 	disconnectedRunnerID := "runner-disconnected-" + granted
 	seedFixtureHomeRunner(t, granted, latchedRunnerID)
 	seedFixtureHomeRunner(t, granted, disconnectedRunnerID)
+	unavailableRunnerID := "runner-unavailable-" + granted
+	seedFixtureHomeRunner(t, granted, unavailableRunnerID)
+	if _, err := database.Exec(t.Context(), `UPDATE secondbox.runners
+		SET storage_pressure_json=jsonb_build_object('status','unavailable','observedAt',$2::timestamptz)
+		WHERE id=$1`, unavailableRunnerID, now); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.Exec(t.Context(), `
 		UPDATE secondbox.runners
 		SET capacity_json='{"VCPUCount":4,"MemoryBytes":8,"DiskBytes":100,"Instances":2,"Operations":2}',
 		    storage_pressure_json=jsonb_build_object('status','admission_denied','observedAt',$2::timestamptz),
-		    state=CASE WHEN id=$3 THEN 'offline' ELSE state END,
-		    active_connection_id=CASE WHEN id=$3 THEN '' ELSE active_connection_id END
+		    state=CASE WHEN id=$3 THEN 'offline' ELSE state END
 		WHERE id IN ($1,$3)`, latchedRunnerID, now, disconnectedRunnerID,
 	); err != nil {
 		t.Fatal(err)
@@ -260,8 +266,8 @@ func TestPoolCapacityIsScopedToPlaceablePoolsAndNamesNoRunner(t *testing.T) {
 
 	wantGranted := secondboxclient.RunnerPoolCapacity{
 		Name: granted, State: contracts.RunnerPoolStateReady,
-		PlaceableRunnerCount: 2, StorageAdmissionDeniedRunnerCount: 1,
-		Allocatable:       secondboxclient.PoolComputeCapacity{Instances: 12, VcpuCount: 24, MemoryBytes: 48, Operations: 12},
+		PlaceableRunnerCount: 1, StorageAdmissionDeniedRunnerCount: 2,
+		Allocatable:       secondboxclient.PoolComputeCapacity{Instances: 10, VcpuCount: 20, MemoryBytes: 40, Operations: 10},
 		Reserved:          secondboxclient.PoolComputeCapacity{Instances: 4, VcpuCount: 8, MemoryBytes: 16, Operations: 4},
 		PendingStartCount: 3,
 	}

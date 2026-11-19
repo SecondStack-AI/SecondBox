@@ -309,7 +309,7 @@ func failDisconnectedRunnerDataPlaneSessions(
 	return nil
 }
 
-// RecordRegistration durably records schedulable capability evidence exactly once.
+// RecordRegistration records capabilities; the first heartbeat opens placement.
 func (store *PostgresStateStore) RecordRegistration(
 	ctx context.Context,
 	registration *runnerv1.RunnerRegistration,
@@ -484,7 +484,7 @@ func (store *PostgresStateStore) RecordRegistration(
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runners
-		SET state='ready',architectures_json=$3,capabilities_json=$4,
+		SET state='connected',architectures_json=$3,capabilities_json=$4,
 			capacity_json=$5,protocol_versions_json=$6,
 			guest_protocol_minimum=$7,guest_protocol_maximum=$8,software_version=$9,
 			last_sequence=$10,drain_phase='active',reserved_capacity_json=$11,
@@ -616,14 +616,17 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runners
-		SET state=$2,capacity_json=$3,reserved_capacity_json=$4,last_sequence=$5,
+		SET state=CASE WHEN state IN ('connected','offline') AND $2='ready' AND $11
+		               AND (backend_kind='firecracker' OR capabilities_json ? 'physical-storage-admission')
+		               THEN 'connected' ELSE $2 END,
+			capacity_json=$3,reserved_capacity_json=$4,last_sequence=$5,
 			drain_phase=$6,sandbox_start_sample_count=$7,
 			sandbox_start_p95_milliseconds=$8,last_seen_at=$9,
 			revision=revision+1,updated_at=$9
 		WHERE id=$1 AND active_connection_id=$10`,
 		heartbeat.RunnerId, runnerState, allocatableJSON, reservedJSON,
 		heartbeat.Sequence, drainPhase, startCount, startP95Milliseconds,
-		now.UTC(), heartbeat.ConnectionId,
+		now.UTC(), heartbeat.ConnectionId, heartbeat.StoragePressure == nil,
 	)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner Heartbeat update: %w", err)
@@ -1228,6 +1231,11 @@ func recordLocalWorkspaceResult(
 			conflict,
 		)
 	}
+	// A failed reservation release may follow a committed local create. Reject
+	// that contradictory result so command replay can return its durable receipt.
+	if result.Terminal != runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED && result.ReceiptRecordedAtUnixMs != 0 {
+		return errors.New("SecondBox runner Workspace create or clone failure contains a durable receipt")
+	}
 	switch result.Kind {
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
 		if workspace.Mutation.Kind != "create" ||
@@ -1373,6 +1381,13 @@ func localWorkspaceAuthorityConflict(
 			"durable mutationOperationId %q != reported operationId %q",
 			workspace.Mutation.OperationID, result.OperationId,
 		))
+	}
+	// Skip receipt-derived comparisons only for a failure carrying no local
+	// evidence. A failure after a local commit must retain its authority checks.
+	if result.Terminal != runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED &&
+		result.Generation == 0 && result.PreviousGeneration == 0 && result.LogicalCapacityBytes == 0 &&
+		result.ReceiptRecordedAtUnixMs == 0 && len(result.Inventory) == 0 && len(result.Receipts) == 0 {
+		return strings.Join(conflicts, "; ")
 	}
 	if workspace.Generation != int64(result.Generation) {
 		conflicts = append(conflicts, fmt.Sprintf(

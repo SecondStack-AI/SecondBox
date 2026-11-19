@@ -282,10 +282,20 @@ never copied from a document.
    values. With `SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE=physical`, aggregate logical disk
    reservations do not block home placement or assignment starts. The Runner checks measured
    use of the Workspace filesystem at creation, start, and readiness; it denies admission at
-   the configured threshold and reopens at recovery. Probe failures deny admission. Per-Instance
+   the configured threshold and reopens at recovery. A Runner denying admission stays connected
+   so stops and deletes can free storage, and the control plane places nothing new on it until
+   it reports recovery. Probe failures deny admission and fail readiness; on a connected Runner
+   they report `unavailable`, which also blocks placement until a measured recovery. Per-Instance
    disk ceilings, CPU, memory, instance limits, and Sandbox-count quotas still apply. The
    default mode is `logical`, which retains aggregate disk reservations without a gVisor
-   filesystem-pressure gate. The `SECONDBOX_RUNNER_SANDBOX_*`, file-transfer, and remaining
+   filesystem-pressure gate. Before switching a physical-mode Runner to logical mode,
+   free disk below its recovery threshold and wait for a `healthy` pressure heartbeat
+   while it still runs in physical mode. A failed probe must be repaired first.
+   Then stop the Runner, change the mode and restart it. Reconnection retains its last
+   pressure report; logical mode does not clear an earlier refusal by reporting recovery.
+   If already switched while refused, return to physical mode and complete this recovery
+   procedure before switching again.
+   The `SECONDBOX_RUNNER_SANDBOX_*`, file-transfer, and remaining
    concurrency variables are Firecracker-only and ignored by this backend. Readiness is
    observable:
 

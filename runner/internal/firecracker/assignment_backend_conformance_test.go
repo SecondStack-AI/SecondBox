@@ -457,6 +457,13 @@ func (store *conformanceWorkspaceStore) Advance(
 	return nil
 }
 
+func (*conformanceWorkspaceStore) ObserveStorage(
+	context.Context,
+	int,
+) ([]workspacestore.WorkspaceStorageObservation, error) {
+	return nil, nil
+}
+
 type conformanceComputeAttachment struct {
 	workspaceID string
 	generation  uint64
