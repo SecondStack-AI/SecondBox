@@ -288,7 +288,14 @@ never copied from a document.
    they report `unavailable`, which also blocks placement until a measured recovery. Per-Instance
    disk ceilings, CPU, memory, instance limits, and Sandbox-count quotas still apply. The
    default mode is `logical`, which retains aggregate disk reservations without a gVisor
-   filesystem-pressure gate. The `SECONDBOX_RUNNER_SANDBOX_*`, file-transfer, and remaining
+   filesystem-pressure gate. Before switching a physical-mode Runner to logical mode,
+   free disk below its recovery threshold and wait for a `healthy` pressure heartbeat
+   while it still runs in physical mode. A failed probe must be repaired first.
+   Then stop the Runner, change the mode and restart it. Reconnection retains its last
+   pressure report; logical mode does not clear an earlier refusal by reporting recovery.
+   If already switched while refused, return to physical mode and complete this recovery
+   procedure before switching again.
+   The `SECONDBOX_RUNNER_SANDBOX_*`, file-transfer, and remaining
    concurrency variables are Firecracker-only and ignored by this backend. Readiness is
    observable:
 

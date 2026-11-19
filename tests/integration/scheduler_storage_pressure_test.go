@@ -88,9 +88,11 @@ func TestSchedulerDefersStartWhileHomeRunnerDeniesStorageAdmission(t *testing.T)
 	}
 	fixture.homeConnectionID = connectionID
 	// A heartbeat without a completed probe must not erase the refusal either.
-	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), task4Heartbeat(
+	unmeasured := task4Heartbeat(
 		fixture.homeRunnerID, connectionID, task4ID("heartbeat"), 2, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
-	), fixture.now.Add(5*time.Second)); err != nil {
+	)
+	unmeasured.StoragePressure = nil
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), unmeasured, fixture.now.Add(5*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if status := readPressure(); status == nil || *status != contracts.StoragePressureStatusAdmissionDenied {
@@ -99,5 +101,62 @@ func TestSchedulerDefersStartWhileHomeRunnerDeniesStorageAdmission(t *testing.T)
 	reportPressure(3, "healthy", fixture.now.Add(6*time.Second))
 	if status := readPressure(); status == nil || *status != "healthy" {
 		t.Fatalf("storage pressure after measured recovery = %v, want healthy", status)
+	}
+}
+
+func TestSchedulerWaitsForPressureAfterRegistration(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	connectionID := task4ID("connection")
+	if err := fixture.stateStore.OpenConnection(t.Context(), fixture.homeIdentity, connectionID, 1, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.stateStore.RecordRegistration(t.Context(), task4Registration(fixture.homeRunnerID, connectionID, fixture.poolName), fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	assertBlocked := func() {
+		t.Helper()
+		if _, _, err := fixture.scheduler.Schedule(t.Context(), fixture.request); !errors.Is(err, scheduler.ErrHomeRunnerUnavailable) {
+			t.Fatalf("placement before pressure-bearing heartbeat = %v", err)
+		}
+	}
+	assertBlocked()
+	heartbeat := task4Heartbeat(fixture.homeRunnerID, connectionID, task4ID("heartbeat"), 2, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE)
+	heartbeat.StoragePressure = nil
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	assertBlocked()
+	heartbeat.MessageId, heartbeat.Sequence = task4ID("heartbeat"), 3
+	heartbeat.StoragePressure = &runnerv1.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: uint64(fixture.now.UnixMilli())}
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	fixture.scheduleWithin(t, 5*time.Second)
+}
+
+func TestSchedulerAcceptsRecoveryAfterRunnerClockRollback(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	heartbeat := task4Heartbeat(fixture.homeRunnerID, fixture.homeConnectionID, task4ID("heartbeat"), 4, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE)
+	heartbeat.StoragePressure = &runnerv1.StoragePressureObservation{Status: "admission_denied", ObservedAtUnixMs: uint64(fixture.now.UnixMilli())}
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	connectionID := task4ID("connection")
+	if err := fixture.stateStore.OpenConnection(t.Context(), fixture.homeIdentity, connectionID, 1, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.stateStore.RecordRegistration(t.Context(), task4Registration(fixture.homeRunnerID, connectionID, fixture.poolName), fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat.ConnectionId, heartbeat.MessageId, heartbeat.Sequence = connectionID, task4ID("heartbeat"), 2
+	heartbeat.StoragePressure = &runnerv1.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: uint64(fixture.now.Add(-time.Hour).UnixMilli())}
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	fixture.scheduleWithin(t, 5*time.Second)
+	heartbeat.ConnectionId, heartbeat.MessageId, heartbeat.Sequence = fixture.homeConnectionID, task4ID("heartbeat"), 5
+	heartbeat.StoragePressure.Status = "admission_denied"
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now); err == nil {
+		t.Fatal("superseded connection overwrote the recovery")
 	}
 }

@@ -17,7 +17,7 @@ type RunnerPoolCapacity struct {
 	// PlaceableRunnerCount counts Runners placement can currently choose:
 	// ready, not draining, connected, and without storage refusal.
 	PlaceableRunnerCount int64 `json:"placeableRunnerCount"`
-	// StorageAdmissionDeniedRunnerCount counts connected Runners whose latest
+	// StorageAdmissionDeniedRunnerCount counts ready, connected Runners whose latest
 	// storage-pressure report is admission_denied or unavailable.
 	StorageAdmissionDeniedRunnerCount int64 `json:"storageAdmissionDeniedRunnerCount"`
 	// Allocatable and Reserved sum the placeable Runners' advertised capacity

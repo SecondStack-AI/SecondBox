@@ -144,6 +144,7 @@ func (runner *FakeRunner) Heartbeat(phase runnerv1.DrainPhase) *runnerv1.RunnerT
 				},
 				Reserved: &runnerv1.Capacity{}, DrainPhase: phase,
 				StartupTiming:              &runnerv1.StartupTiming{},
+				StoragePressure:            &runnerv1.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: 1},
 				DataPlaneAdvertisedAddress: "10.0.0.5:7443",
 			},
 		},
@@ -418,6 +419,13 @@ func connectAndRegister(
 	)
 	if err != nil || outcome != OutcomeRegistration {
 		t.Fatalf("Registration outcome, error = %q, %v", outcome, err)
+	}
+	if snapshot := readSnapshot(t, boundary, runner.RunnerID); snapshot.RunnerState != "connected" {
+		t.Fatalf("registration admitted placement before heartbeat: %#v", snapshot)
+	}
+	outcome, err = boundary.Receive(t.Context(), runner.ConnectionID, runner.Heartbeat(runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE), now)
+	if err != nil || outcome != OutcomeHeartbeat {
+		t.Fatalf("first Heartbeat outcome, error = %q, %v", outcome, err)
 	}
 }
 

@@ -83,8 +83,10 @@ func persistWorkspaceStorageObservations(ctx context.Context, tx pgx.Tx, heartbe
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE secondbox.runners SET storage_pressure_json=$3 WHERE id=$1 AND active_connection_id=$2
-			AND (storage_pressure_json IS NULL OR (storage_pressure_json->>'observedAt')::timestamptz <= $4)`, heartbeat.RunnerId, heartbeat.ConnectionId, encoded, observedAt)
+		// RecordHeartbeat already fences connection identity and message sequence.
+		// Runner clocks can move backwards across reconnects; they are telemetry,
+		// not authority for ordering a recovery against the previous connection.
+		_, err = tx.Exec(ctx, `UPDATE secondbox.runners SET storage_pressure_json=$3 WHERE id=$1 AND active_connection_id=$2`, heartbeat.RunnerId, heartbeat.ConnectionId, encoded)
 		if err != nil {
 			return fmt.Errorf("SecondBox storage pressure observation persistence failed: %w", err)
 		}

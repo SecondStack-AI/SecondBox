@@ -258,8 +258,7 @@ func TestPoolCapacityIsScopedToPlaceablePoolsAndNamesNoRunner(t *testing.T) {
 		UPDATE secondbox.runners
 		SET capacity_json='{"VCPUCount":4,"MemoryBytes":8,"DiskBytes":100,"Instances":2,"Operations":2}',
 		    storage_pressure_json=jsonb_build_object('status','admission_denied','observedAt',$2::timestamptz),
-		    state=CASE WHEN id=$3 THEN 'offline' ELSE state END,
-		    active_connection_id=CASE WHEN id=$3 THEN '' ELSE active_connection_id END
+		    state=CASE WHEN id=$3 THEN 'offline' ELSE state END
 		WHERE id IN ($1,$3)`, latchedRunnerID, now, disconnectedRunnerID,
 	); err != nil {
 		t.Fatal(err)

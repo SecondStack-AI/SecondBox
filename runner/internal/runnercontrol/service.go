@@ -242,6 +242,7 @@ type RunnerProtocolService struct {
 	storageObservationMu       sync.Mutex
 	storageObservationRunning  bool
 	storageObservationResult   *workspaceStorageResult
+	storagePressureReportedAt  uint64
 	// ptyAttachmentReadHook is nil outside tests. It runs after a PTY frame
 	// has read its attachment and before it locks that attachment, the
 	// window in which a detach can overtake the send.
@@ -524,9 +525,8 @@ func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, e
 	); err != nil {
 		return false, err
 	}
-	// Registration clears the previous connection's storage-pressure report.
-	// The first heartbeat restores the newest measurement, including a poll
-	// that completed while this session was checking readiness.
+	// Registration awaits its first heartbeat. Pressure-enabled backends send
+	// the newest measurement, including a poll that overtook readiness.
 	if err := s.sendHeartbeat(
 		ctx, stream, welcome.ConnectionId, readiness, readiness.StoragePressure,
 	); err != nil {
@@ -1526,6 +1526,18 @@ func (s *RunnerProtocolService) sendHeartbeat(
 	if measuredPressure != nil && (pressure == nil || measuredPressure.ObservedAtUnixMs > pressure.ObservedAtUnixMs) {
 		pressure = measuredPressure
 	}
+	// A poll from the previous session may publish after readiness superseded
+	// its measurement. Keep sample ordering here; the control plane orders the
+	// authenticated heartbeat stream, independently of Runner wall-clock time.
+	s.storageObservationMu.Lock()
+	if pressure != nil {
+		if pressure.ObservedAtUnixMs < s.storagePressureReportedAt {
+			pressure = nil
+		} else {
+			s.storagePressureReportedAt = pressure.ObservedAtUnixMs
+		}
+	}
+	s.storageObservationMu.Unlock()
 	return s.sendSequencedRunnerFrame(
 		stream,
 		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {

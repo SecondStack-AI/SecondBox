@@ -123,7 +123,7 @@ reports the pool `state` and:
 - `allocatable` and `reserved`: the Instances, vCPU, memory, and concurrent-operation
   slots those Runners advertise and hold, summed. Workspace disk and storage admission
   are not summed; see the next item.
-- `storageAdmissionDeniedRunnerCount`: connected Runners whose latest storage-pressure
+- `storageAdmissionDeniedRunnerCount`: ready, connected Runners whose latest storage-pressure
   report is `admission_denied` or `unavailable`. Denied Runners stay connected to
   receive cleanup commands. Reconnection retains the last pressure report until a
   measured recovery; missing probe results do not clear it. Offline Runners appear
@@ -140,6 +140,12 @@ Runner reports that Runner's figures. A Sandbox is homed on one Runner, so free 
 capacity does not mean that a particular Sandbox's home has room. The reading is not a
 reservation. Go and TypeScript SDKs provide `GetPoolCapacity`/`getPoolCapacity` and
 `GetTenantPoolCapacity`/`getTenantPoolCapacity`; there is no CLI verb.
+
+A registration is connected but not placeable until its first heartbeat. Firecracker
+and physical-mode gVisor require that heartbeat to carry measured storage pressure.
+Subsequent missing probe results retain the last report. Heartbeats are ordered by
+their authenticated connection and message sequence; a Runner clock moving backwards
+does not prevent a measured recovery from replacing the previous connection's refusal.
 
 ## Signals
 

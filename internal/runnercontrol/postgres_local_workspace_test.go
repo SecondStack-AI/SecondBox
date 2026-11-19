@@ -720,6 +720,59 @@ func TestWorkspaceCreateFailureWithoutReceiptIsRecorded(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCreateFailureWithReceiptPreservesPendingAuthority(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Now().UTC()
+	seedPendingWorkspaceCreation(t, store, now)
+	result := &runnerv1.LocalWorkspaceResult{
+		CommandVersion: 1, Kind: runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		Terminal:    runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED,
+		OperationId: "operation-create-reconcile", EffectId: "effect-create-reconcile",
+		SandboxId: "sandbox-create-reconcile", WorkspaceId: "workspace-create-reconcile",
+		Generation: 1, LogicalCapacityBytes: 8 << 30,
+		ReceiptRecordedAtUnixMs: uint64(now.UnixMilli()), SafeDetail: "local workspace operation failed",
+	}
+	for _, test := range []struct {
+		name                 string
+		generation, capacity uint64
+	}{
+		{"matching durable receipt", 1, 8 << 30},
+		{"wrong generation", 2, 8 << 30},
+		{"wrong capacity", 1, 9 << 30},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result.Generation, result.LogicalCapacityBytes = test.generation, test.capacity
+			tx, err := store.pool.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(t.Context())
+			if err := recordLocalWorkspaceResult(t.Context(), tx, "runner-home", result, now); err == nil {
+				t.Fatal("failure with a durable receipt was accepted")
+			}
+		})
+	}
+	var workspaceState, effectState string
+	if err := store.pool.QueryRow(t.Context(), `SELECT workspace.state,effect.state
+		FROM secondbox.workspaces workspace,secondbox.lifecycle_effects effect
+		WHERE workspace.id=$1 AND effect.id=$2`, result.WorkspaceId, result.EffectId).Scan(&workspaceState, &effectState); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceState != "creating" || effectState != "queued" {
+		t.Fatalf("failure changed pending authority: workspace=%s effect=%s", workspaceState, effectState)
+	}
+	// A retry reads the committed local receipt and reports success.
+	result.Generation, result.LogicalCapacityBytes = 1, 8<<30
+	result.Terminal, result.SafeDetail = runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED, ""
+	recordLocalWorkspaceTestResult(t, store, result, now)
+	if err := store.pool.QueryRow(t.Context(), `SELECT state FROM secondbox.workspaces WHERE id=$1`, result.WorkspaceId).Scan(&workspaceState); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceState != "ready" {
+		t.Fatalf("receipt replay left Workspace %s", workspaceState)
+	}
+}
+
 func TestReturningRunnerMissingWorkspaceFailsAndExactEvidenceRecoversWithoutRelocation(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 18, 45, 0, 0, time.UTC)

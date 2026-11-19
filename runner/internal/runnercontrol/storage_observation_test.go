@@ -68,6 +68,34 @@ func TestReconnectFirstHeartbeatUsesNewestStoragePressure(t *testing.T) {
 	}
 }
 
+func TestHeartbeatSkipsDelayedPressureSupersededByReadiness(t *testing.T) {
+	service, err := NewRunnerProtocolService(testRunnerConfig(), &storageProbeBackend{}, staticProtocolConnector{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A poll is still completing while readiness produces a newer refusal.
+	service.storageObservationRunning = true
+	stream := &recordingProtocolStream{}
+	readiness := BackendReadiness{Capacity: &runnerprotocol.Capacity{}}
+	if err := service.sendHeartbeat(t.Context(), stream, "new-connection", readiness, &runnerprotocol.StoragePressureObservation{Status: "admission_denied", ObservedAtUnixMs: 200}); err != nil {
+		t.Fatal(err)
+	}
+	service.storageObservationResult = &workspaceStorageResult{pressure: &runnerprotocol.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: 100}}
+	if err := service.sendHeartbeat(t.Context(), stream, "new-connection", readiness, nil); err != nil {
+		t.Fatal(err)
+	}
+	if pressure := stream.outbound[1].GetHeartbeat().StoragePressure; pressure != nil {
+		t.Fatalf("delayed poll overwrote newer readiness pressure: %v", pressure)
+	}
+	service.storageObservationResult = &workspaceStorageResult{pressure: &runnerprotocol.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: 300}}
+	if err := service.sendHeartbeat(t.Context(), stream, "new-connection", readiness, nil); err != nil {
+		t.Fatal(err)
+	}
+	if pressure := stream.outbound[2].GetHeartbeat().StoragePressure; pressure == nil || pressure.Status != "healthy" {
+		t.Fatalf("newer measured recovery was lost: %v", pressure)
+	}
+}
+
 type storageProbeStream struct {
 	ctx      context.Context
 	incoming chan *runnerprotocol.ControlPlaneToRunner

@@ -58,6 +58,10 @@ func TestRunnerPoolBackendUnsealSwitchesASameIdentityRunnerToGVisor(t *testing.T
 			return err
 		}
 		_, err = stateStore.RecordRegistration(t.Context(), registration, now)
+		if err != nil {
+			return err
+		}
+		_, err = stateStore.RecordHeartbeat(t.Context(), task4Heartbeat(runnerID, connectionID, "unseal-heartbeat-2", 2, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE), now)
 		return err
 	}
 	gvisorRegistration := func(runnerID, connectionID string) *runnerv1.RunnerRegistration {
