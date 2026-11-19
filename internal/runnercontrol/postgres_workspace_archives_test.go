@@ -35,7 +35,9 @@ func TestWorkspaceArchiveReceiptCommitsBeforeIndependentSourceCleanup(t *testing
 	if err := recordLocalWorkspaceResult(t.Context(), tx, "runner-home", result, now); err == nil {
 		t.Fatal("wrong archive receipt kind accepted")
 	}
-	tx.Rollback(t.Context())
+	if err := tx.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	result.Kind = runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT
 	recordLocalWorkspaceTestResult(t, storage, result, now)
 	// The acknowledged upload may replay after its phase has advanced.
@@ -145,7 +147,9 @@ UPDATE secondbox.workspace_archives SET target_runner_id='runner-home',source_ru
 	if err := recordLocalWorkspaceResult(t.Context(), tx, "runner-home", result, now); err == nil {
 		t.Fatal("checksum mismatch accepted")
 	}
-	tx.Rollback(t.Context())
+	if err := tx.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	result.ArchiveDescriptor.ArchiveBytes--
 	recordLocalWorkspaceTestResult(t, storage, result, now)
 	var home, state, mutation, operation, desired string

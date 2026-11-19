@@ -54,9 +54,13 @@ func TestFleetEnrollmentRenewalRefreshesLeavesAndGatewayCopyWithoutChangingBoots
 	identityServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/latest/api/token":
-			io.WriteString(w, "metadata-test-token")
+			if _, err := io.WriteString(w, "metadata-test-token"); err != nil {
+				t.Error(err)
+			}
 		case "/latest/dynamic/instance-identity/document":
-			io.WriteString(w, `{"instanceId":"i-0123456789abcdef0","region":"us-east-1"}`)
+			if _, err := io.WriteString(w, `{"instanceId":"i-0123456789abcdef0","region":"us-east-1"}`); err != nil {
+				t.Error(err)
+			}
 		default:
 			http.NotFound(w, r)
 		}

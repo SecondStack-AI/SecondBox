@@ -83,7 +83,7 @@ func main() {
 	}
 }
 
-func run(path string) error {
+func run(path string) (resultErr error) {
 	if path == "" {
 		return errors.New("SecondBox fleet --config is required")
 	}
@@ -128,7 +128,11 @@ func run(path string) error {
 	if !leader {
 		return errors.New("SecondBox fleet pool already has an active manager")
 	}
-	defer lock.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, "secondbox-fleet-"+cfg.Pool)
+	defer func() {
+		if _, err := lock.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, "secondbox-fleet-"+cfg.Pool); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("SecondBox fleet leader unlock: %w", err))
+		}
+	}()
 	awsConfig, err := config.LoadDefaultConfig(ctx, config.WithRegion(cfg.Region))
 	if err != nil {
 		return err

@@ -113,7 +113,7 @@ func validateRenewedEnrollmentLeaf(currentPEM, renewedPEM, keyPEM, authorityPEM 
 
 // The directory mount, rather than an individual-file bind, makes each rename
 // visible to existing containers without restarting active guest processes.
-func replaceEnrollmentCertificate(path string, content []byte) error {
+func replaceEnrollmentCertificate(path string, content []byte) (resultErr error) {
 	block, _ := pem.Decode(content)
 	if block == nil || block.Type != "CERTIFICATE" {
 		return errors.New("renewal leaf PEM is invalid")
@@ -129,7 +129,11 @@ func replaceEnrollmentCertificate(path string, content []byte) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() {
+		if err := os.Remove(file.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	_, writeErr := file.Write(content)
 	err = errors.Join(writeErr, file.Sync(), file.Close())
 	if err != nil {

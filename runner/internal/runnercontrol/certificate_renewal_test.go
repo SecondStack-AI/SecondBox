@@ -121,8 +121,14 @@ func TestRunnerCertificateRenewalReconnectsAfterExpiryWithDistinctControlPlaneCA
 	}
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{serverPair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots, Time: func() time.Time { return time.Unix(clock.Load(), 0) }})))
 	runnerprotocol.RegisterRunnerControlServer(server, renewalControlServer{})
-	go server.Serve(listener)
-	defer server.Stop()
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		if err := <-serveResult; err != nil {
+			t.Error(err)
+		}
+	}()
 	directory := t.TempDir()
 	certPath, keyPath, caPath := filepath.Join(directory, "runner.crt"), filepath.Join(directory, "runner.key"), filepath.Join(directory, "server-ca.crt")
 	writeRenewalLeaf(t, certPath, runnerLeaf)
