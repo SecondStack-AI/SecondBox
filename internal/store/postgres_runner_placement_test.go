@@ -763,3 +763,141 @@ func TestScanRunnerPlacementCandidateSeparatesLegacyFromMalformedCache(t *testin
 		t.Fatalf("current cache candidate = %#v, %v", current, err)
 	}
 }
+
+func TestConcurrentRunningCreatesReserveHomeComputeBeforeAssignments(t *testing.T) {
+	storage := openStoreTest(t)
+	now := time.Now().UTC()
+	spec := placementTestSpec("pool-pending-home-burst")
+	spec.Resources.VCPUCount = 2
+	const revision = "revision-pending-home-burst"
+	const first = "runner-pending-home-a"
+	const second = "runner-pending-home-b"
+	seedPlacementProfileRevision(t, storage, revision, spec, now)
+	seedRunner := func(id string) {
+		seedPlacementRunner(t, storage, spec.Pool, id, now)
+		if _, err := storage.pool.Exec(t.Context(), `UPDATE secondbox.runners SET capabilities_json=capabilities_json || '["physical-storage-admission"]'::jsonb,capacity_json='{"VCPUCount":4,"MemoryBytes":4294967296,"DiskBytes":10737418240,"Instances":2,"Operations":2}' WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedRunner(first)
+	ids := []string{"pending-home-burst-0", "pending-home-burst-1", "pending-home-burst-2"}
+	for _, suffix := range ids {
+		tx, err := storage.pool.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		insertPlacementReservation(t, tx, suffix, revision, "", spec.Resources.WorkspaceBytes, now)
+		if _, err := tx.Exec(t.Context(), `UPDATE secondbox.sandboxes SET desired_state='running',vcpu_count=2 WHERE id=$1; UPDATE secondbox.workspaces SET mutation_kind='create',mutation_state='queued' WHERE id=$2`, pgx.QueryExecModeSimpleProtocol, "sandbox-placement-"+suffix, "workspace-placement-"+suffix); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			ctx := context.WithoutCancel(t.Context())
+			if _, err := storage.pool.Exec(ctx, `DELETE FROM secondbox.sandboxes WHERE id=$1; DELETE FROM secondbox.workspaces WHERE id=$2`, pgx.QueryExecModeSimpleProtocol, "sandbox-placement-"+suffix, "workspace-placement-"+suffix); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	bind := func(suffix string) (string, error) {
+		tx, err := storage.pool.Begin(t.Context())
+		if err != nil {
+			return "", err
+		}
+		defer tx.Rollback(t.Context())
+		runner, err := selectInitialHomeRunner(t.Context(), tx, spec)
+		if err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(t.Context(), `UPDATE secondbox.workspaces SET home_runner_id=$2 WHERE id=$1`, "workspace-placement-"+suffix, runner); err != nil {
+			return "", err
+		}
+		return runner, tx.Commit(t.Context())
+	}
+	type result struct {
+		suffix, runner string
+		err            error
+	}
+	results := make(chan result, len(ids))
+	start := make(chan struct{})
+	for _, suffix := range ids {
+		go func() {
+			<-start
+			runner, err := bind(suffix)
+			results <- result{suffix: suffix, runner: runner, err: err}
+		}()
+	}
+	close(start)
+	bound := 0
+	waiting := ""
+	for range ids {
+		select {
+		case result := <-results:
+			if errors.Is(result.err, ports.ErrHomeRunnerUnavailable) {
+				if waiting != "" {
+					t.Fatal("more than one create remained unhomed")
+				}
+				waiting = result.suffix
+				continue
+			}
+			if result.err != nil || result.runner != first {
+				t.Fatalf("placement=%+v", result)
+			}
+			bound++
+		case <-time.After(10 * time.Second):
+			t.Fatal("concurrent initial home placement did not finish")
+		}
+	}
+	if bound != 2 || waiting == "" {
+		t.Fatalf("bound=%d waiting=%q", bound, waiting)
+	}
+	seedRunner(second)
+	runner, err := bind(waiting)
+	if err != nil || runner != second {
+		t.Fatalf("waiting placement runner=%q error=%v", runner, err)
+	}
+	var assignments int
+	if err := storage.pool.QueryRow(t.Context(), `SELECT count(*) FROM secondbox.assignments WHERE runner_id IN ($1,$2)`, first, second).Scan(&assignments); err != nil {
+		t.Fatal(err)
+	}
+	if assignments != 0 {
+		t.Fatal("test did not exercise pre-assignment reservations")
+	}
+}
+
+func TestHomeComputeReservationDoesNotDoubleCountAssignedRunnerReport(t *testing.T) {
+	storage := openStoreTest(t)
+	now := time.Now().UTC()
+	spec := placementTestSpec("pool-home-assigned-report")
+	spec.Resources.VCPUCount = 2
+	const runner = "runner-home-assigned-report"
+	const revision = "revision-home-assigned-report"
+	const suffix = "home-assigned-report"
+	seedPlacementRunner(t, storage, spec.Pool, runner, now)
+	seedPlacementProfileRevision(t, storage, revision, spec, now)
+	tx, err := storage.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	insertPlacementReservation(t, tx, suffix, revision, runner, spec.Resources.WorkspaceBytes, now)
+	if _, err := tx.Exec(t.Context(), `UPDATE secondbox.sandboxes SET desired_state='running',current_instance_id='home-assigned-instance',vcpu_count=2 WHERE id='sandbox-placement-home-assigned-report';
+UPDATE secondbox.runners SET capabilities_json=capabilities_json || '["physical-storage-admission"]'::jsonb,capacity_json='{"VCPUCount":4,"MemoryBytes":4294967296,"DiskBytes":10737418240,"Instances":2,"Operations":2}',reserved_capacity_json='{"VCPUCount":2,"MemoryBytes":1073741824,"Instances":1,"Operations":1}' WHERE id=$1;
+INSERT INTO secondbox.assignments(id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,backend_reference,generation,fencing_token,state,capability_snapshot_json,resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,revision,created_at,updated_at)
+VALUES('assignment-home-assigned-report','sandbox-placement-home-assigned-report','home-assigned-instance',$1,$2,'firecracker','test',1,'fence','ready','{}','{}','{}','',0,8,$3,$3,'',$3,$3,1,$3,$3)`, pgx.QueryExecModeSimpleProtocol, runner, revision, now); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := selectInitialHomeRunner(t.Context(), tx, spec)
+	if err != nil || selected != runner {
+		t.Fatalf("assigned/report overlap double-counted runner=%q error=%v", selected, err)
+	}
+	if _, err := tx.Exec(t.Context(), `UPDATE secondbox.runners SET reserved_capacity_json='{}' WHERE id=$1`, runner); err != nil {
+		t.Fatal(err)
+	}
+	tooLarge := spec
+	tooLarge.Resources.VCPUCount = 3
+	if selected, err := selectInitialHomeRunner(t.Context(), tx, tooLarge); !errors.Is(err, ports.ErrHomeRunnerUnavailable) || selected != "" {
+		t.Fatalf("lagging report lost durable assignment reservation runner=%q error=%v", selected, err)
+	}
+}

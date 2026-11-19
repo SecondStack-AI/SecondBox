@@ -312,6 +312,19 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	remote := make(map[string]map[string]string)
 	contextConfigs := make(map[string][]byte, len(manifest.Runners))
 	composeFiles := []string{"deploy/compose.yml"}
+	if deployment.WorkspaceArchiveConfigFile != "" {
+		archivePath := deployment.WorkspaceArchiveConfigFile
+		if !filepath.IsAbs(archivePath) {
+			archivePath = filepath.Join(base, archivePath)
+		}
+		info, err := os.Stat(archivePath)
+		if err != nil || !info.Mode().IsRegular() {
+			return ResolvedDeployment{}, manifestError("deployment.workspace_archive_config_file must name a regular file", err)
+		}
+		put("SECONDBOX_WORKSPACE_ARCHIVE_CONFIG_HOST_PATH", archivePath)
+		put("SECONDBOX_WORKSPACE_ARCHIVE_CONFIG_FILE", "/run/secondbox-archive/config.json")
+		composeFiles = append(composeFiles, "deploy/compose.workspace-archives.yml")
+	}
 	if deployment.ComposeBackendCIDR != "" {
 		composeFiles = append(composeFiles, "deploy/compose.explicit-network.yml")
 	}

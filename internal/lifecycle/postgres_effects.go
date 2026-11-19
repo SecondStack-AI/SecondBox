@@ -481,6 +481,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		var prepared bool
 		assets, selectedReference, prepared, err = broker.prepareStartImage(ctx, claim, plan, now.UTC())
 		if err != nil {
+			if errors.Is(err, ports.ErrRevisionConflict) || errors.Is(err, ports.ErrWorkspaceMutation) {
+				return err
+			}
 			return broker.failStartPreparation(ctx, claim, plan, err, now.UTC(), "image_preparation_failed", "Selected execution image could not be prepared")
 		}
 		if !prepared {

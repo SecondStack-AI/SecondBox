@@ -20,9 +20,9 @@ SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, l
 
 ## How it works
 
-A **Sandbox** is the durable public resource; the **Instance** running it is replaceable compute fenced to one Sandbox generation. Each Sandbox is placed at creation on one home **Runner**, whose reflink-capable filesystem owns that Sandbox's **Workspace** and local **Snapshots**. Ordinary lifecycle and automatic recovery never relocate it. An operator may relocate a stopped Sandbox with no retained Snapshots through the explicit asynchronous relocation operation.
+A **Sandbox** is the durable public resource; the **Instance** running it is replaceable compute fenced to one Sandbox generation. A resident Sandbox has one home **Runner**, whose reflink-capable filesystem owns its **Workspace** and local **Snapshots**. An operator may relocate a stopped Sandbox with no retained Snapshots through the explicit asynchronous relocation operation. An explicitly configured archive tier can instead offload its sealed Workspace to object storage and restore it on compatible compute. A running Sandbox never relocates.
 
-`secondboxd` stores desired state in PostgreSQL. Workspace bytes stay on the owning Runner except while `secondboxd` forwards a bounded, in-memory stream for an explicit stopped-Sandbox relocation; it never persists those bytes.
+`secondboxd` stores desired state and authoritative Workspace residency in PostgreSQL. Archive transfers run directly between a Runner and object storage through short-lived grants. The separate explicit relocation operation forwards a bounded, in-memory stream through the control plane; it never persists Workspace bytes there. See [Workspace durability](docs/design/workspace-durability.md#object-store-archive-tier) for transfer fencing and failure behavior.
 
 ## Getting started
 
@@ -81,6 +81,7 @@ The guided path is deliberately Linux amd64, same-host, loopback-only, and devel
 
 - Download individual release binaries or SDKs from the [latest release](https://github.com/SecondStack-AI/SecondBox/releases/latest) when you only need a client.
 - Follow [deployment and runtime operations](docs/operations/deployment.md) for production authority, remote Runners, or a manually reviewed same-host topology.
+- The candidate [AWS elastic worker reference](deploy/aws-fleet/README.md) adds S3 Workspace tiering and demand-driven EC2 capacity. It requires matching protocol-8 control-plane and Runner builds; existing releases do not gain this behavior through configuration alone.
 - For a manually reviewed same-host Runner declaration, start with `secondbox-deploy runner-template --backend firecracker` (or `--backend gvisor` for a host without KVM); it emits every required Runner-host path and authority field without installing anything.
 - Use `just deploy-development-up .tmp/secondbox-development` for control-plane-only source-checkout development. That topology has synthetic development artifact identity and cannot execute a Sandbox until a real Runner and verified assets are configured.
 - Follow the [microVM image pipeline](docs/operations/microvm-image-pipeline.md) and [release distribution](docs/operations/release-distribution.md) when producing or independently materializing execution assets.

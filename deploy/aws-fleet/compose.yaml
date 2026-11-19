@@ -1,0 +1,97 @@
+services:
+  runner:
+    image: ${SECONDBOX_RUNNER_IMAGE:?}
+    restart: unless-stopped
+    privileged: true
+    networks: [gateway]
+    cgroup: host
+    cgroup_parent: ${SECONDBOX_GVISOR_RUNNER_CGROUP_PARENT:?}
+    stop_grace_period: 45s
+    env_file: [/etc/secondbox/runner/runner.env]
+    environment:
+      SECONDBOX_COMPUTE_BACKEND: gvisor
+      SECONDBOX_RUNNER_CLIENT_CERTIFICATE: /etc/secondbox/runner/runner.crt
+      SECONDBOX_RUNNER_CLIENT_KEY: /etc/secondbox/runner/runner.key
+      SECONDBOX_RUNNER_CONTROL_PLANE_CA: /etc/secondbox/runner/runner-ca.crt
+      SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG: /etc/secondbox/runner/egress-contexts.json
+      SECONDBOX_RUNNER_WORKSPACE_ROOT: /var/lib/secondbox/state/workspaces
+      SECONDBOX_RUNNER_LOG_DIR: /var/lib/secondbox/state/log
+      SECONDBOX_RUNNER_LOG_PATH: /var/lib/secondbox/state/log/runner.jsonl
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /var/lib/secondbox/state/execution-images
+      SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET: /run/secondbox-image-fetcher/fetcher.sock
+      SECONDBOX_GVISOR_FLAT_ROOT_PATH: /var/lib/secondbox/artifacts/rootfs
+      SECONDBOX_GVISOR_MATERIALIZATION_PATH: /var/lib/secondbox/artifacts/materialization.json
+      SECONDBOX_GVISOR_RUNSC_PATH: /var/lib/secondbox/artifacts/bin/runsc
+      SECONDBOX_GVISOR_AGENT_PATH: /var/lib/secondbox/artifacts/bin/secondbox-guest-agent
+      SECONDBOX_GVISOR_RUNTIME_DIR: /var/lib/secondbox/state/gvisor-runtime
+    volumes:
+      - /srv/secondbox:/var/lib/secondbox:rslave
+      - /etc/secondbox/runner:/etc/secondbox/runner:ro
+      - /run/secondbox-image-fetcher:/run/secondbox-image-fetcher
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /dev:/dev
+    depends_on:
+      image-fetcher: {condition: service_healthy}
+      gateway: {condition: service_started}
+    healthcheck:
+      test: [CMD, /usr/local/bin/secondbox-runner, -healthcheck, -healthcheck-timeout, 5s]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 30s
+  image-fetcher:
+    image: ${SECONDBOX_RUNNER_IMAGE:?}
+    entrypoint: [/usr/local/bin/secondbox-image-fetcher]
+    user: '10002:10002'
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    environment:
+      TMPDIR: /cache/tmp
+      SECONDBOX_IMAGE_FETCHER_SOCKET: /run/secondbox-image-fetcher/fetcher.sock
+      SECONDBOX_IMAGE_FETCHER_TENANTS: /etc/secondbox-image-registry/tenants.json
+      SECONDBOX_IMAGE_FETCHER_CACHE_ROOT: /cache
+      SECONDBOX_IMAGE_FETCHER_REGISTRIES: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES:?}
+      SECONDBOX_IMAGE_FETCHER_CERTIFICATES: /etc/secondbox-image-registry/certificates
+      SECONDBOX_IMAGE_FETCHER_MAX_DOWNLOAD_BYTES: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES:?}
+      SECONDBOX_IMAGE_FETCHER_MAX_EXPANDED_BYTES: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES:?}
+      SECONDBOX_IMAGE_FETCHER_MAX_CACHE_BYTES: ${SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES:?}
+    volumes:
+      - /srv/secondbox/state/execution-images:/cache
+      - /run/secondbox-image-fetcher:/run/secondbox-image-fetcher
+      - /etc/secondbox/image-registry:/etc/secondbox-image-registry:ro
+    healthcheck:
+      test: [CMD, test, -S, /run/secondbox-image-fetcher/fetcher.sock]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+  gateway:
+    image: ${AGENT_RUNNER_GATEWAY_IMAGE:?}
+    restart: unless-stopped
+    env_file: [/etc/secondbox/runner/agent-runner-gateway.env]
+    environment:
+      AGENT_RUNNER_GATEWAY_CLIENT_CERT_FILE: /run/agent-runner-gateway/client.crt
+      AGENT_RUNNER_GATEWAY_CLIENT_KEY_FILE: /run/agent-runner-gateway/client.key
+      AGENT_RUNNER_GATEWAY_PROXY_CA_FILE: /run/agent-runner-gateway/workload-ca.crt
+      AGENT_RUNNER_GATEWAY_ATTRIBUTION_SOCKET: /run/agent-runner-gateway-attribution/attribution.sock
+      AGENT_RUNNER_GATEWAY_OFFLINE_ATTRIBUTION_SOCKET: /run/agent-runner-gateway-attribution/offline-attribution.sock
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ['no-new-privileges:true']
+    volumes:
+      - /etc/secondstack/gateway:/run/agent-runner-gateway:ro
+      - /etc/secondbox/runner/agent-gateway:/run/agent-runner-gateway-attribution
+    networks:
+      gateway:
+        ipv4_address: ${AGENT_RUNNER_GATEWAY_BRIDGE_ADDRESS:?}
+networks:
+  gateway:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: nat-unprotected
+      com.docker.network.driver.mtu: '1280'
+    ipam:
+      config:
+        - subnet: ${AGENT_RUNNER_GATEWAY_BRIDGE_CIDR:?}

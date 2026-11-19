@@ -9,6 +9,8 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/imagepreparation"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -19,8 +21,19 @@ func recordImagePreparationResult(ctx context.Context, tx pgx.Tx, runnerID strin
 		return errors.New("SecondBox image preparation evidence exceeds protocol bounds")
 	}
 	var commandID, state string
+	var sandboxID string
+	var generation int64
 	var deadline time.Time
-	err := tx.QueryRow(ctx, `SELECT command_id,state,effect_deadline FROM secondbox.lifecycle_effects WHERE id=$1 AND runner_id=$2 AND kind='prepare_image' FOR UPDATE`, result.OperationId, runnerID).Scan(&commandID, &state, &deadline)
+	var bindingJSON []byte
+	if err := tx.QueryRow(ctx, `SELECT sandbox_id,generation FROM secondbox.lifecycle_effects WHERE id=$1 AND runner_id=$2 AND kind='prepare_image'`, result.OperationId, runnerID).Scan(&sandboxID, &generation); err != nil {
+		return fmt.Errorf("SecondBox image preparation Sandbox authority lookup: %w", err)
+	}
+	if sandboxID != "" {
+		if _, err := rowlock.SandboxWorkspaceByID(ctx, tx, sandboxID); err != nil {
+			return fmt.Errorf("SecondBox image preparation Sandbox authority lock: %w", err)
+		}
+	}
+	err := tx.QueryRow(ctx, `SELECT command_id,state,effect_deadline,payload_json FROM secondbox.lifecycle_effects WHERE id=$1 AND runner_id=$2 AND kind='prepare_image' FOR UPDATE`, result.OperationId, runnerID).Scan(&commandID, &state, &deadline, &bindingJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errors.New("SecondBox image preparation result has no authorized command")
 	}
@@ -52,6 +65,18 @@ func recordImagePreparationResult(ctx context.Context, tx pgx.Tx, runnerID strin
 	if terminal {
 		if _, err := tx.Exec(ctx, `UPDATE secondbox.runner_commands SET state='acknowledged',updated_at=$2 WHERE id=$1`, commandID, now); err != nil {
 			return err
+		}
+		// Release an old start claim as well as scheduling its successor. A
+		// preparation can finish before that claim commits its bounded wait;
+		// the old owner must not overwrite this terminal-evidence wakeup.
+		if sandboxID != "" {
+			startOperationID, err := imagepreparation.SandboxStartOperationID(bindingJSON, result.OperationId)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE secondbox.sandboxes s SET next_reconcile_at=$4,reconcile_owner='',reconcile_claim_expires_at=NULL WHERE s.id=$1 AND s.generation=$2 AND s.desired_state='running' AND s.current_instance_id='' AND EXISTS(SELECT 1 FROM secondbox.workspaces w WHERE w.id=s.workspace_id AND w.home_runner_id=$5 AND w.mutation_kind='start' AND w.mutation_operation_id=$3)`, sandboxID, generation, startOperationID, now, runnerID); err != nil {
+				return fmt.Errorf("SecondBox image preparation lifecycle wake: %w", err)
+			}
 		}
 	}
 	return nil

@@ -921,6 +921,26 @@ enum LocalWorkspaceCommandKind {
   LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_IMPORT = 14;
   LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE = 15;
   LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE = 16;
+  LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT = 17;
+  LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT = 18;
+}
+
+message WorkspaceArchiveDescriptor {
+  uint64 archive_bytes = 1;
+  string archive_checksum = 2;
+  string image_checksum = 3;
+}
+
+// Transfer grants never enter public Sandbox records or audit evidence.
+message WorkspaceArchiveTransfer {
+  string url = 1;
+  map<string, string> headers = 2;
+  uint64 expires_at_unix_ms = 3;
+  WorkspaceArchiveDescriptor archive_descriptor = 4;
+  repeated string part_urls = 5;
+  uint64 part_size_bytes = 6;
+  string complete_url = 7;
+  string abort_url = 8;
 }
 
 message LocalWorkspaceCommand {
@@ -938,6 +958,7 @@ message LocalWorkspaceCommand {
   uint64 logical_capacity_bytes = 12;
   bytes fencing_token = 13;
   Correlation correlation = 14;
+  WorkspaceArchiveTransfer archive_transfer = 15;
 }
 
 enum LocalWorkspaceTerminalKind {
@@ -997,6 +1018,7 @@ message LocalWorkspaceResult {
   string safe_detail = 16;
   Correlation correlation = 17;
   repeated LocalWorkspaceReceiptItem receipts = 18;
+  WorkspaceArchiveDescriptor archive_descriptor = 19;
 }
 
 // Evidence is deliberately unable to carry fencing tokens, command values,

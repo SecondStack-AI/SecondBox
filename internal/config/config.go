@@ -37,6 +37,7 @@ const (
 
 // Config contains only explicitly configured control-plane settings.
 type Config struct {
+	WorkspaceArchiveConfigFile       string
 	ListenAddress                    string
 	PublicBaseURL                    string
 	RunnerListenAddress              string
@@ -208,7 +209,8 @@ func FromEnvironment() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		ListenAddress: listenAddress, PublicBaseURL: publicBaseURL, RunnerListenAddress: runnerListenAddress,
+		WorkspaceArchiveConfigFile: os.Getenv("SECONDBOX_WORKSPACE_ARCHIVE_CONFIG_FILE"),
+		ListenAddress:              listenAddress, PublicBaseURL: publicBaseURL, RunnerListenAddress: runnerListenAddress,
 		DatabaseURL: databaseURL, LogPath: logPath,
 		PlatformToken:                    platformToken,
 		HTTPTimeout:                      time.Duration(httpSeconds) * time.Second,

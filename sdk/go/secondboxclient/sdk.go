@@ -213,6 +213,11 @@ func (handle *SandboxHandle) Stop(ctx context.Context, options LifecycleOptions)
 	return handle.lifecycle(ctx, "stopSandbox", options, nil)
 }
 
+// Archive offloads one stopped Snapshot-free Workspace to the configured object store.
+func (handle *SandboxHandle) Archive(ctx context.Context, options LifecycleOptions) (Operation, error) {
+	return handle.lifecycle(ctx, "archiveSandbox", options, nil)
+}
+
 // Relocate moves one stopped Snapshot-free Sandbox Workspace to a compatible Runner.
 func (handle *SandboxHandle) Relocate(
 	ctx context.Context,

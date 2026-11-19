@@ -100,6 +100,13 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 		err     error
 	)
 	switch command.Kind {
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT:
+		evidence, err := runnercontrol.ExecuteWorkspaceArchive(ctx, command, b.manager.workspaceStore)
+		if err != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+		}
+		return evidence, nil
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
 		receipt, err = b.manager.workspaceStore.Create(ctx, workspacestore.CreateWorkspaceRequest{
 			Mutation:      mutation,
@@ -143,7 +150,7 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 		receipt, err = b.manager.workspaceStore.DeleteWorkspace(
 			ctx,
 			workspacestore.DeleteWorkspaceRequest{
-				Mutation: mutation, ExpectedGeneration: command.ExpectedGeneration,
+				Mutation: mutation, ExpectedGeneration: command.ExpectedGeneration, RelocationSource: true,
 			},
 		)
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:

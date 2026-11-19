@@ -286,6 +286,8 @@ type RestoreMutation struct {
 type DeleteWorkspaceRequest struct {
 	Mutation
 	ExpectedGeneration uint64
+	// RelocationSource retains replay receipts across later same-home restores.
+	RelocationSource bool `json:"relocationSource,omitempty"`
 }
 
 // RelocationExportRequest seals and opens one stopped current Workspace image.

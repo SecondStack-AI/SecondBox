@@ -19,8 +19,9 @@ type Target struct {
 }
 
 type Payload struct {
-	Role    string   `json:"role"`
-	Targets []Target `json:"targets,omitempty"`
+	Role             string   `json:"role"`
+	Targets          []Target `json:"targets,omitempty"`
+	StartOperationID string   `json:"startOperationId,omitempty"`
 }
 
 // ResolveTarget selects the captured Runner that resolves and verifies the

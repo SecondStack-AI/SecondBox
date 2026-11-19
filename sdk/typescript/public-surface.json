@@ -460,6 +460,64 @@
     ],
     "optional": []
   },
+  "FleetPoolObservation": {
+    "required": [
+      "demand",
+      "observedAt",
+      "poolName",
+      "runners",
+      "truncated",
+      "workspaces"
+    ],
+    "optional": []
+  },
+  "FleetResourceDemand": {
+    "required": [
+      "instances",
+      "memoryBytes",
+      "vcpuCount",
+      "workspaceBytes"
+    ],
+    "optional": [
+      "oldestWaitAt"
+    ]
+  },
+  "FleetRunner": {
+    "required": [
+      "activeAssignments",
+      "allocatable",
+      "connected",
+      "fleetState",
+      "id",
+      "pendingCommands",
+      "pendingMutations",
+      "reserved",
+      "reservedWorkspaceBytes",
+      "revision",
+      "snapshotCount",
+      "state",
+      "storageAdmissionDenied",
+      "workspaceCapacityBytes",
+      "workspaceCount"
+    ],
+    "optional": [
+      "lastActivityAt",
+      "lastSeenAt"
+    ]
+  },
+  "FleetWorkspace": {
+    "required": [
+      "desiredState",
+      "mutation",
+      "revision",
+      "runnerId",
+      "sandboxId",
+      "state",
+      "subjectRef",
+      "tenantRef"
+    ],
+    "optional": []
+  },
   "HTTPRouteTimingSummary": {
     "required": [
       "duration",
@@ -1387,12 +1445,15 @@
       "createdAt",
       "generation",
       "id",
+      "residency",
       "sizeBytes",
       "state",
       "storageObservation",
       "updatedAt"
     ],
-    "optional": []
+    "optional": [
+      "archivedBytes"
+    ]
   },
   "WorkspaceStorageObservation": {
     "required": [

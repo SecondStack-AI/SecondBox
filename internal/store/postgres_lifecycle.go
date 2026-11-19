@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/imagepreparation"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
@@ -123,20 +124,48 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		return contracts.Operation{}, ports.ErrGenerationFenced
 	}
 	kind := input.Operation.Kind
+	finishUnhomedCreate := (kind == "stop" || kind == "delete") && locked.Workspace.HomeRunnerID == "" &&
+		((locked.Workspace.State == "creating" && locked.Workspace.Mutation.Kind == "create" && locked.Workspace.Mutation.State == "queued") || (locked.Workspace.State == "failed" && locked.Workspace.Mutation.State == ""))
 	deleteWaitingForCreate := kind == "delete" &&
 		(locked.Workspace.Mutation.Kind == "create" ||
 			locked.Workspace.Mutation.Kind == "clone") &&
 		locked.Workspace.Mutation.State != ""
-	if locked.Workspace.Mutation.State != "" && !deleteWaitingForCreate {
+	cancelArchiveRestore := (kind == "stop" || kind == "delete") && locked.Workspace.Mutation.Kind == "archive_restore"
+	cancelStartArchive := false
+	if (kind == "stop" || kind == "delete") && locked.Workspace.Mutation.Kind == "archive" && locked.CurrentInstanceID == "" {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.operations WHERE id=$1 AND kind IN ('start','create'))`, locked.Workspace.Mutation.OperationID).Scan(&cancelStartArchive); err != nil {
+			return contracts.Operation{}, err
+		}
+	}
+	cancelQueuedStart := (kind == "stop" || kind == "delete") && locked.Workspace.Mutation.Kind == "start" && locked.Workspace.Mutation.State == "queued" && locked.CurrentInstanceID == ""
+	if locked.Workspace.Mutation.State != "" && !deleteWaitingForCreate && !cancelArchiveRestore && !cancelStartArchive && !cancelQueuedStart && !finishUnhomedCreate {
 		return contracts.Operation{}, ports.ErrWorkspaceMutation
 	}
 	if locked.Workspace.Generation != generation {
 		return contracts.Operation{}, ports.ErrGenerationFenced
 	}
-	if locked.Workspace.State != "ready" &&
+	if locked.Workspace.State != "ready" && locked.Workspace.State != "archived" && !cancelArchiveRestore && !finishUnhomedCreate &&
 		!(kind == "delete" &&
 			(locked.Workspace.State == "creating" || locked.Workspace.State == "failed")) {
 		return contracts.Operation{}, ports.ErrGenerationFenced
+	}
+	if (kind == "stop" || kind == "delete") && locked.CurrentInstanceID == "" {
+		if _, err := imagepreparation.CancelSandboxPreparations(ctx, tx, input.SandboxID, input.Now); err != nil {
+			return contracts.Operation{}, err
+		}
+	}
+	if cancelQueuedStart {
+		if _, err := tx.Exec(ctx, `UPDATE secondbox.operations SET state='cancelled',error_code='start_cancelled',error_message='workspace start was cancelled before compute admission',completed_at=$2,updated_at=$2 WHERE id=$1 AND state IN ('pending','running')`, locked.Workspace.Mutation.OperationID, input.Now); err != nil {
+			return contracts.Operation{}, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE secondbox.workspaces SET mutation_kind='',mutation_id='',mutation_effect_id='',mutation_operation_id='',mutation_state='',mutation_expected_generation=NULL,mutation_target_generation=NULL,updated_at=$2 WHERE id=$1`, locked.WorkspaceID, input.Now); err != nil {
+			return contracts.Operation{}, err
+		}
+	}
+	if cancelStartArchive {
+		if _, err := tx.Exec(ctx, `UPDATE secondbox.operations SET state='cancelled',error_code='start_cancelled',error_message='workspace start was cancelled before compute admission',completed_at=$2,updated_at=$2 WHERE id=$1 AND state IN ('pending','running')`, locked.Workspace.Mutation.OperationID, input.Now); err != nil {
+			return contracts.Operation{}, err
+		}
 	}
 	var tenantQuota contracts.TenantQuota
 	var subjectQuota contracts.QuotaLimits
@@ -188,8 +217,18 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			}
 			return contracts.Operation{}, ports.ErrComputeQuotaExceeded
 		}
-		if err := requireHomeRunnerReady(ctx, tx, locked.Workspace.HomeRunnerID); err != nil {
-			return contracts.Operation{}, err
+		if locked.Workspace.State != "archived" {
+			if err := requireHomeRunnerReady(ctx, tx, locked.Workspace.HomeRunnerID); err != nil {
+				var canOffload bool
+				if store.archiveTransfers != nil && errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+					if lookupErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.runners WHERE id=$1 AND state='draining' AND active_connection_id<>'')`, locked.Workspace.HomeRunnerID).Scan(&canOffload); lookupErr != nil {
+						return contracts.Operation{}, lookupErr
+					}
+				}
+				if !canOffload {
+					return contracts.Operation{}, err
+				}
+			}
 		}
 		if err := setWorkspaceMutation(
 			ctx, tx, locked.WorkspaceID, "start", input.Operation.ID,
@@ -198,7 +237,7 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			return contracts.Operation{}, err
 		}
 	}
-	databaseSatisfied := observed == contracts.SandboxStateStopped && (kind == "drain" || kind == "stop")
+	databaseSatisfied := observed == contracts.SandboxStateStopped && (kind == "drain" || kind == "stop") || finishUnhomedCreate
 	nextState := observed
 	switch input.DesiredState {
 	case contracts.SandboxDesiredStateRunning,
@@ -217,7 +256,15 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 	} else if kind == "stop" || kind == "delete" {
 		terminationReason = contracts.TerminationReasonRequestedStop
 	}
-	if _, err := tx.Exec(ctx, `
+	if finishUnhomedCreate {
+		state := "failed"
+		if kind == "delete" {
+			state = "deleted"
+		}
+		if err := finishUnhomedWorkspaceCreate(ctx, tx, locked, state, "create_cancelled", "workspace creation was cancelled before placement", input.Now); err != nil {
+			return contracts.Operation{}, err
+		}
+	} else if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET desired_state=$4,state=$5,next_reconcile_at=$6,lifecycle_failure_class='',
 		    lifecycle_failure_message='',lifecycle_intent_kind=$7,
@@ -321,6 +368,7 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		SELECT sandbox.id
 		FROM secondbox.sandboxes AS sandbox
 		WHERE sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$1
+		  AND EXISTS (SELECT 1 FROM secondbox.workspaces workspace WHERE workspace.id=sandbox.workspace_id AND workspace.state NOT IN ('archived','restoring') AND workspace.mutation_kind<>'archive')
 		  AND NOT (
 		    sandbox.state='failed' AND sandbox.lifecycle_failure_class<>''
 		  )

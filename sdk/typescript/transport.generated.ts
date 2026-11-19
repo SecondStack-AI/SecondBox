@@ -404,6 +404,54 @@ export interface FileWriteResult {
   readonly sizeBytes: number;
 }
 
+export interface FleetPoolObservation {
+  readonly demand: FleetResourceDemand;
+  readonly observedAt: Timestamp;
+  readonly poolName: string;
+  readonly runners: readonly FleetRunner[];
+  readonly truncated: boolean;
+  readonly workspaces: readonly FleetWorkspace[];
+}
+
+export interface FleetResourceDemand {
+  readonly instances: number;
+  readonly memoryBytes: number;
+  readonly oldestWaitAt?: Timestamp;
+  readonly vcpuCount: number;
+  readonly workspaceBytes: number;
+}
+
+export interface FleetRunner {
+  readonly activeAssignments: number;
+  readonly allocatable: PoolComputeCapacity;
+  readonly connected: boolean;
+  readonly fleetState: "active" | "evacuating" | "evacuated" | "retired";
+  readonly id: string;
+  readonly lastActivityAt?: Timestamp;
+  readonly lastSeenAt?: Timestamp;
+  readonly pendingCommands: number;
+  readonly pendingMutations: number;
+  readonly reserved: PoolComputeCapacity;
+  readonly reservedWorkspaceBytes: number;
+  readonly revision: number;
+  readonly snapshotCount: number;
+  readonly state: string;
+  readonly storageAdmissionDenied: boolean;
+  readonly workspaceCapacityBytes: number;
+  readonly workspaceCount: number;
+}
+
+export interface FleetWorkspace {
+  readonly desiredState: string;
+  readonly mutation: string;
+  readonly revision: number;
+  readonly runnerId: string;
+  readonly sandboxId: string;
+  readonly state: string;
+  readonly subjectRef: string;
+  readonly tenantRef: string;
+}
+
 export type GuestLiveness = "unknown" | "starting" | "ready" | "lost" | "stopped";
 
 export interface HTTPRouteTimingSummary {
@@ -493,7 +541,7 @@ export interface Operation {
   readonly updatedAt: Timestamp;
 }
 
-export type OperationKind = "prepare_image" | "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "subject_cleanup" | "cancel_exec" | "cancel_terminal";
+export type OperationKind = "prepare_image" | "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "subject_cleanup" | "cancel_exec" | "cancel_terminal" | "archive";
 
 export interface OperationStageTiming {
   readonly cumulativeMilliseconds: number;
@@ -1193,11 +1241,13 @@ export interface WaitSandboxRequest {
 }
 
 export interface Workspace {
+  readonly archivedBytes?: number;
   readonly createdAt: Timestamp;
   readonly generation: number;
   readonly id: OpaqueID;
+  readonly residency: "resident" | "archiving" | "archived" | "restoring";
   readonly sizeBytes: number;
-  readonly state: "creating" | "ready" | "deleting" | "deleted" | "failed";
+  readonly state: "creating" | "ready" | "deleting" | "deleted" | "failed" | "archived" | "restoring";
   readonly storageObservation: WorkspaceStorageObservation;
   readonly updatedAt: Timestamp;
 }
@@ -1217,6 +1267,7 @@ export interface WorkspaceStorageObservation {
 
 export type OperationID =
   | "acquireSandboxLease"
+  | "archiveSandbox"
   | "cancelSandboxExecStream"
   | "cancelSandboxTerminal"
   | "cleanupSubject"
@@ -1238,6 +1289,7 @@ export type OperationID =
   | "deleteSnapshot"
   | "disableProfile"
   | "drainSandbox"
+  | "evacuateFleetRunner"
   | "executeSandboxCommand"
   | "extendApplicationAuthority"
   | "extendTenantCeiling"
@@ -1278,6 +1330,7 @@ export type OperationID =
   | "prepareImage"
   | "reactivateTenant"
   | "readEgressContextPreflight"
+  | "readRunnerFleet"
   | "readSandboxFile"
   | "reconnectSandboxTerminal"
   | "releaseSandboxLease"
@@ -1285,6 +1338,7 @@ export type OperationID =
   | "removeSandboxPath"
   | "renewSandboxLease"
   | "restoreSandboxSnapshot"
+  | "retireFleetRunner"
   | "reviseProfile"
   | "revokeApplicationAuthority"
   | "revokeTenantControllerAuthority"
@@ -1315,6 +1369,7 @@ export type Route = {
 
 export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   acquireSandboxLease: { method: "POST", path: "/v1/sandboxes/{sandboxId}/leases", contentType: "application/json" },
+  archiveSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:archive" },
   cancelSandboxExecStream: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec-streams/{execSessionId}:cancel" },
   cancelSandboxTerminal: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
   cleanupSubject: { method: "POST", path: "/v1/subjects/{subjectRef}:cleanup" },
@@ -1336,6 +1391,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   deleteSnapshot: { method: "DELETE", path: "/v1/snapshots/{snapshotId}" },
   disableProfile: { method: "POST", path: "/v1/profiles/{profileName}:disable" },
   drainSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:drain" },
+  evacuateFleetRunner: { method: "POST", path: "/v1/runner-pools/{runnerPoolName}/runners/{runnerId}:evacuate" },
   executeSandboxCommand: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec", contentType: "application/json" },
   extendApplicationAuthority: { method: "POST", path: "/v1/application-authorities/{authorityId}:extend", contentType: "application/json" },
   extendTenantCeiling: { method: "POST", path: "/v1/tenants/{tenantRef}:extend-ceiling", contentType: "application/json" },
@@ -1376,6 +1432,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   prepareImage: { method: "POST", path: "/v1/images:prepare", contentType: "application/json" },
   reactivateTenant: { method: "POST", path: "/v1/tenants/{tenantRef}:reactivate" },
   readEgressContextPreflight: { method: "GET", path: "/v1/diagnostics/egress-contexts" },
+  readRunnerFleet: { method: "GET", path: "/v1/runner-pools/{runnerPoolName}/fleet" },
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },
   reconnectSandboxTerminal: { method: "GET", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
   releaseSandboxLease: { method: "DELETE", path: "/v1/leases/{leaseId}" },
@@ -1383,6 +1440,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   removeSandboxPath: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/directories", contentType: "application/json" },
   renewSandboxLease: { method: "POST", path: "/v1/leases/{leaseId}:renew", contentType: "application/json" },
   restoreSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}:restore", contentType: "application/json" },
+  retireFleetRunner: { method: "POST", path: "/v1/runner-pools/{runnerPoolName}/runners/{runnerId}:retire" },
   reviseProfile: { method: "POST", path: "/v1/profiles/{profileName}:revise", contentType: "application/json" },
   revokeApplicationAuthority: { method: "POST", path: "/v1/application-authorities/{authorityId}:revoke" },
   revokeTenantControllerAuthority: { method: "POST", path: "/v1/tenants/{tenantRef}/controller-authorities/{authorityId}:revoke" },

@@ -156,6 +156,9 @@ func (store *Store) initialize(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := store.cleanupWorkspaceArchiveStaging(); err != nil {
+		return err
+	}
 	if err := store.probeReflink(ctx); err != nil {
 		return err
 	}
@@ -1114,8 +1117,10 @@ func (store *Store) DeleteWorkspace(
 					statErr,
 				)
 			}
-			if err := store.deleteWorkspaceReceipts(request.WorkspaceID); err != nil {
-				return Receipt{}, err
+			if !request.RelocationSource {
+				if err := store.deleteWorkspaceReceipts(request.WorkspaceID); err != nil {
+					return Receipt{}, err
+				}
 			}
 			return Receipt{Generation: request.ExpectedGeneration}, nil
 		}
@@ -1139,8 +1144,10 @@ func (store *Store) DeleteWorkspace(
 		if err := syncDir(store.workspacesRoot()); err != nil {
 			return Receipt{}, err
 		}
-		if err := store.deleteWorkspaceReceipts(request.WorkspaceID); err != nil {
-			return Receipt{}, err
+		if !request.RelocationSource {
+			if err := store.deleteWorkspaceReceipts(request.WorkspaceID); err != nil {
+				return Receipt{}, err
+			}
 		}
 		return Receipt{
 			Generation: manifest.Generation, CapacityBytes: manifest.CapacityBytes,

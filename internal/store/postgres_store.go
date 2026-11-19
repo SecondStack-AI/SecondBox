@@ -18,12 +18,14 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/observability"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
+	"github.com/SecondStack-AI/SecondBox/internal/workspacearchive"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 // PostgresControlPlaneStore persists standalone SecondBox authority.
 type PostgresControlPlaneStore struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	archiveTransfers workspacearchive.TransferProvider
 }
 
 // NewPostgresControlPlaneStore connects to the required PostgreSQL authority.
@@ -413,7 +415,8 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	} else {
 		tenantEgressContext = nil
 	}
-	if err := ensureCompatibleRunnerPool(ctx, tx, profile.CurrentRevision.Spec); err != nil {
+	waitForInitialCapacity := input.SourceSnapshotID == "" && input.Operation.CapacityWaitDeadline != nil && store.archiveTransfers != nil
+	if err := ensureCompatibleRunnerPool(ctx, tx, profile.CurrentRevision.Spec, waitForInitialCapacity); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	homeRunnerID := ""
@@ -431,7 +434,9 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		)
 	}
 	if err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, err
+		if !(errors.Is(err, ports.ErrHomeRunnerUnavailable) && waitForInitialCapacity) {
+			return contracts.Sandbox{}, contracts.Operation{}, false, err
+		}
 	}
 	subjectUsage, err := readSubjectQuotaUsage(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Sandbox.CreatedAt)
 	if err != nil {
@@ -1092,6 +1097,8 @@ const sandboxSelect = `
 	       workspace.generation,workspace.state,workspace.logical_capacity_bytes,
 	       workspace.created_at,workspace.updated_at,
 	       workspace.storage_observation_json,home_runner.storage_pressure_json,
+	       CASE WHEN workspace.state='restoring' THEN 'restoring' WHEN workspace.state='archived' THEN 'archived' WHEN workspace.mutation_kind='archive' THEN 'archiving' ELSE 'resident' END,
+	       (workspace.archive_descriptor_json->>'archive_bytes')::bigint,
  COALESCE(sandbox.lifecycle_policy_json,pinned_profile.spec_json->'lifecycle'),
 	       instance.id,instance.state,COALESCE(instance.guest_liveness,''),instance.termination_reason,
 	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at,instance.guest_features,
@@ -1123,7 +1130,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		&sandbox.Workspace.TenantRef, &sandbox.Workspace.SubjectRef,
 		&sandbox.Workspace.Generation, &sandbox.Workspace.State, &sandbox.Workspace.SizeBytes,
 		&sandbox.Workspace.CreatedAt, &sandbox.Workspace.UpdatedAt,
-		&storageJSON, &pressureJSON, &lifecycleJSON,
+		&storageJSON, &pressureJSON, &sandbox.Workspace.Residency, &sandbox.Workspace.ArchivedBytes, &lifecycleJSON,
 		&instanceID, &instanceState, &guestLiveness, &terminationReason,
 		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt, &guestFeatures,
 		&requestedImageReference, &resolvedImageDigest,
@@ -1152,6 +1159,9 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	}
 	if sandbox.Workspace.State == "deleted" {
 		sandbox.Workspace.StorageObservation = contracts.WorkspaceStorageObservation{Status: "unavailable", Reason: "deleted", Pressure: contracts.StoragePressureObservation{Status: "unavailable"}}
+	}
+	if sandbox.Workspace.Residency == "archived" || sandbox.Workspace.Residency == "restoring" {
+		sandbox.Workspace.StorageObservation = contracts.WorkspaceStorageObservation{Status: "unavailable", Reason: "not_observed", Pressure: contracts.StoragePressureObservation{Status: "unavailable"}}
 	}
 	if sandbox.EgressContext != nil {
 		if err := contracts.ValidateEgressContextName(*sandbox.EgressContext); err != nil {
@@ -1298,12 +1308,12 @@ func operationSnapshotID(operation contracts.Operation) string {
 	return operation.Snapshot.ID
 }
 
-func ensureCompatibleRunnerPool(ctx context.Context, tx pgx.Tx, spec contracts.ProfileRevisionSpec) error {
+func ensureCompatibleRunnerPool(ctx context.Context, tx pgx.Tx, spec contracts.ProfileRevisionSpec, waitForCapacity bool) error {
 	var state string
 	var architecturesJSON, capabilitiesJSON []byte
 	if err := tx.QueryRow(ctx, `
 		SELECT state,architectures_json,capabilities_json
-		FROM secondbox.runner_pools WHERE name=$1 AND ready_runner_count>0`, spec.Pool).Scan(
+		FROM secondbox.runner_pools WHERE name=$1 AND (ready_runner_count>0 OR $2)`, spec.Pool, waitForCapacity).Scan(
 		&state, &architecturesJSON, &capabilitiesJSON,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

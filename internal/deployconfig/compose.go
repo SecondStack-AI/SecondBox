@@ -203,9 +203,10 @@ func RecordedInstallerComposeSubject(manifestPath, environmentPath string) (stri
 // so it may carry keys this release has retired; only these fields are read.
 type recordedInstallerTopology struct {
 	Deployment struct {
-		Mode               string `toml:"mode"`
-		ComposeProjectName string `toml:"compose_project_name"`
-		ComposeBackendCIDR string `toml:"compose_backend_cidr"`
+		Mode                       string `toml:"mode"`
+		ComposeProjectName         string `toml:"compose_project_name"`
+		ComposeBackendCIDR         string `toml:"compose_backend_cidr"`
+		WorkspaceArchiveConfigFile string `toml:"workspace_archive_config_file"`
 	} `toml:"deployment"`
 	Database struct {
 		Mode string `toml:"mode"`
@@ -256,6 +257,9 @@ func recordedInstallerComposeIdentity(manifestPath string) (string, string, []st
 		return "", "", nil, manifestError("recorded Compose database mode is unsupported", nil)
 	}
 	composeFiles := []string{"deploy/compose.yml"}
+	if manifest.Deployment.WorkspaceArchiveConfigFile != "" {
+		composeFiles = append(composeFiles, "deploy/compose.workspace-archives.yml")
+	}
 	if composeBackendCIDR != "" {
 		composeFiles = append(composeFiles, "deploy/compose.explicit-network.yml")
 	}

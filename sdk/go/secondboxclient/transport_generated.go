@@ -10,6 +10,9 @@ var operations = map[string]OperationMetadata{
 		},
 		RequestBodyRequired: true,
 	},
+	"archiveSandbox": {
+		OperationID: "archiveSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:archive",
+	},
 	"cancelSandboxExecStream": {
 		OperationID: "cancelSandboxExecStream", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}/exec-streams/{execSessionId}:cancel",
 	},
@@ -120,6 +123,9 @@ var operations = map[string]OperationMetadata{
 	},
 	"drainSandbox": {
 		OperationID: "drainSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:drain",
+	},
+	"evacuateFleetRunner": {
+		OperationID: "evacuateFleetRunner", Method: "POST", PathTemplate: "/v1/runner-pools/{runnerPoolName}/runners/{runnerId}:evacuate",
 	},
 	"executeSandboxCommand": {
 		OperationID: "executeSandboxCommand", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}/exec",
@@ -257,6 +263,9 @@ var operations = map[string]OperationMetadata{
 	"readEgressContextPreflight": {
 		OperationID: "readEgressContextPreflight", Method: "GET", PathTemplate: "/v1/diagnostics/egress-contexts",
 	},
+	"readRunnerFleet": {
+		OperationID: "readRunnerFleet", Method: "GET", PathTemplate: "/v1/runner-pools/{runnerPoolName}/fleet",
+	},
 	"readSandboxFile": {
 		OperationID: "readSandboxFile", Method: "GET", PathTemplate: "/v1/sandboxes/{sandboxId}/files",
 	},
@@ -293,6 +302,9 @@ var operations = map[string]OperationMetadata{
 			{ContentType: "application/json", Schema: "RestoreSnapshotRequest"},
 		},
 		RequestBodyRequired: true,
+	},
+	"retireFleetRunner": {
+		OperationID: "retireFleetRunner", Method: "POST", PathTemplate: "/v1/runner-pools/{runnerPoolName}/runners/{runnerId}:retire",
 	},
 	"reviseProfile": {
 		OperationID: "reviseProfile", Method: "POST", PathTemplate: "/v1/profiles/{profileName}:revise",

@@ -42,6 +42,13 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 	var receipt workspacestore.Receipt
 	var err error
 	switch command.Kind {
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT:
+		evidence, err := runnercontrol.ExecuteWorkspaceArchive(ctx, command, backend.config.WorkspaceStore)
+		if err != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+		}
+		return evidence, nil
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
 		if command.LogicalCapacityBytes > math.MaxInt64 {
 			err = fmt.Errorf("SecondBox Microsandbox local-workspace capacity exceeds Runner bounds")
@@ -76,6 +83,7 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE:
 		receipt, err = store.DeleteWorkspace(ctx, workspacestore.DeleteWorkspaceRequest{
 			Mutation: mutation, ExpectedGeneration: command.ExpectedGeneration,
+			RelocationSource: command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE,
 		})
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
 		receipt, err = store.AbortRelocation(ctx, workspacestore.RelocationExportRequest{

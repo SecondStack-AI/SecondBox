@@ -186,8 +186,15 @@ func TestLifecycleStartAdmissionOwnsWorkspaceMutationBeforeDesiredStateChanges(t
 		Operation: deleteOperation, Now: now.Add(time.Second), ExpectedRevision: 2,
 		IdempotencyKey: "delete-after-start", RequestHash: "delete-after-start-hash",
 		IdempotencyEnds: now.Add(time.Hour),
-	}); !errors.Is(err, ports.ErrWorkspaceMutation) {
+	}); err != nil {
 		t.Fatalf("Sandbox delete after start admission error = %v", err)
+	}
+	var startState, mutationAfterDelete string
+	if err := store.pool.QueryRow(t.Context(), `SELECT operation.state,workspace.mutation_kind FROM secondbox.operations operation,secondbox.workspaces workspace WHERE operation.id=$1 AND workspace.id=$2`, operation.ID, workspaceID).Scan(&startState, &mutationAfterDelete); err != nil {
+		t.Fatal(err)
+	}
+	if startState != "cancelled" || mutationAfterDelete != "" {
+		t.Fatalf("delete must cancel the unplaced start: state=%q mutation=%q", startState, mutationAfterDelete)
 	}
 }
 

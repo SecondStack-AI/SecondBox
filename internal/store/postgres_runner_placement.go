@@ -16,6 +16,7 @@ import (
 type runnerPlacementOptions struct {
 	exactRunnerID            string
 	excludedRunnerID         string
+	excludedRunnerIDs        []string
 	requireWorkspaceTransfer bool
 	unavailable              error
 	errorPrefix              string
@@ -68,8 +69,9 @@ func selectRunnerForPlacement(
 		WHERE pool_name=$1
 		  AND ($2='' OR id=$2)
 		  AND ($3='' OR id<>$3)
+		  AND NOT(id=ANY(COALESCE($4::text[],'{}'::text[])))
 		ORDER BY id`,
-		spec.Pool, options.exactRunnerID, options.excludedRunnerID,
+		spec.Pool, options.exactRunnerID, options.excludedRunnerID, options.excludedRunnerIDs,
 	)
 	if err != nil {
 		return "", fmt.Errorf("%s candidates failed: %w", options.errorPrefix, err)
@@ -203,6 +205,17 @@ func lockRunnerPlacementCandidate(
 		candidate.reportedReserved,
 		durableReserved,
 	)
+	assignedCompute, pendingCompute, err := runnerHomeComputeReservations(ctx, tx, candidate.id)
+	if err != nil {
+		return "", true, false, fmt.Errorf("%s compute reservation failed: %w", options.errorPrefix, err)
+	}
+	// Assigned compute overlaps the Runner report; pending running intents do
+	// not. The same Runner row lock serializes home binding and assignment.
+	effectiveReserved = maxRunnerPlacementCapacity(effectiveReserved, assignedCompute)
+	effectiveReserved.VCPUCount += pendingCompute.VCPUCount
+	effectiveReserved.MemoryBytes += pendingCompute.MemoryBytes
+	effectiveReserved.Instances += pendingCompute.Instances
+	effectiveReserved.Operations += pendingCompute.Operations
 	if runnerPlacementCompatible(candidate, spec, options, effectiveReserved) {
 		return candidate.id, true, false, nil
 	}
@@ -407,6 +420,11 @@ func durableHomeReservation(ctx context.Context, tx pgx.Tx, runnerID string) (ru
 		  FROM secondbox.workspace_relocations AS relocation
 		  WHERE relocation.target_runner_id=$1
 		    AND relocation.state IN ('queued','source_sealed','aborting')
+		  UNION ALL
+		  SELECT archive.logical_capacity_bytes
+		  FROM secondbox.workspace_archives AS archive
+		  WHERE archive.target_runner_id=$1
+		    AND archive.state IN ('restore_queued','restore_queued_sent')
 		)
 		SELECT COALESCE(sum(logical_capacity_bytes),0)
 		FROM reservations`, runnerID,
@@ -414,6 +432,29 @@ func durableHomeReservation(ctx context.Context, tx pgx.Tx, runnerID string) (ru
 		return runnerCapacity{}, err
 	}
 	return reserved, nil
+}
+
+func runnerHomeComputeReservations(ctx context.Context, tx pgx.Tx, runnerID string) (runnerCapacity, runnerCapacity, error) {
+	var assigned, pending runnerCapacity
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(s.vcpu_count),0),COALESCE(sum(s.memory_bytes),0),count(*),
+ COALESCE(sum((p.spec_json->'resources'->>'concurrentOperations')::bigint),0)
+ FROM secondbox.assignments a JOIN secondbox.sandboxes s ON s.id=a.sandbox_id
+ JOIN secondbox.profile_revisions p ON p.id=a.profile_revision_id
+ WHERE a.runner_id=$1 AND a.state NOT IN ('fenced','released','failed_terminal')`, runnerID).Scan(&assigned.VCPUCount, &assigned.MemoryBytes, &assigned.Instances, &assigned.Operations); err != nil {
+		return assigned, pending, err
+	}
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(s.vcpu_count),0),COALESCE(sum(s.memory_bytes),0),count(*),
+ COALESCE(sum((p.spec_json->'resources'->>'concurrentOperations')::bigint),0)
+ FROM secondbox.sandboxes s JOIN secondbox.workspaces w ON w.id=s.workspace_id
+ JOIN secondbox.profile_revisions p ON p.id=s.profile_revision_id
+ WHERE s.desired_state='running' AND s.current_instance_id=''
+ AND s.state IN ('creating','stopped','starting','failed') AND COALESCE(s.lifecycle_failure_class,'')=''
+ AND w.mutation_kind IN ('create','start','archive_restore') AND w.mutation_state='queued'
+ AND (w.home_runner_id=$1 OR EXISTS(SELECT 1 FROM secondbox.workspace_archives archive
+  WHERE archive.workspace_id=w.id AND archive.target_runner_id=$1 AND archive.state IN ('restore_queued','restore_queued_sent')))`, runnerID).Scan(&pending.VCPUCount, &pending.MemoryBytes, &pending.Instances, &pending.Operations); err != nil {
+		return assigned, pending, err
+	}
+	return assigned, pending, nil
 }
 
 func maxRunnerPlacementCapacity(left, right runnerCapacity) runnerCapacity {

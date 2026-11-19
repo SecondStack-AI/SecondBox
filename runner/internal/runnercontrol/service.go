@@ -107,6 +107,7 @@ type LocalWorkspaceEvidence struct {
 	LogicalCapacity    uint64
 	ReceiptRecordedAt  time.Time
 	Checksum           string
+	ArchiveDescriptor  *runnerprotocol.WorkspaceArchiveDescriptor
 	Inventory          []*runnerprotocol.LocalWorkspaceInventoryItem
 	Receipts           []*runnerprotocol.LocalWorkspaceReceiptItem
 }
@@ -795,7 +796,9 @@ func (s *RunnerProtocolService) consumeCommands(
 				if workspace.Kind ==
 					runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
 					workspace.Kind ==
-						runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT {
+						runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT ||
+					workspace.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT ||
+					workspace.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT {
 					select {
 					case workspaceCreateSlots <- struct{}{}:
 					case <-connectionCtx.Done():
@@ -1036,7 +1039,9 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE,
-		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT:
 		if len(command.FencingToken) == 0 {
 			return fmt.Errorf("SecondBox runner local-workspace fencing token is required")
 		}
@@ -1077,6 +1082,7 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		LogicalCapacityBytes: evidence.LogicalCapacity,
 		Inventory:            evidence.Inventory,
 		Receipts:             evidence.Receipts,
+		ArchiveDescriptor:    evidence.ArchiveDescriptor,
 		Correlation:          cloneRunnerCorrelation(command.Correlation),
 	}
 	if !evidence.ReceiptRecordedAt.IsZero() {

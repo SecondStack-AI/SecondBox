@@ -1,7 +1,9 @@
 package runnercontrol
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +20,7 @@ func TestImagePreparationResultAuthorityAndReplay(t *testing.T) {
 		(id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
 		 command_id,storage_object_id,fencing_token,retry_count,retry_limit,effect_deadline,
 		 claim_owner,claim_expires_at,failure_class,failure_message,payload_json,evidence_json,created_at,updated_at)
-		VALUES ('prepare-op','sandbox',1,'prepare_image','queued','','','runner-authorized',
+		VALUES ('prepare-op','',1,'prepare_image','queued','','','runner-authorized',
 		 'prepare-command','','',0,0,$1,'',$2,'','','{}','{}',$2,$2)`, now.Add(time.Minute), now)
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +177,97 @@ func TestReadySandboxExecutionImagePinKeepsRequestedReference(t *testing.T) {
 			if reference != expectation.wantReference || digest != expectation.wantDigest {
 				t.Fatalf("Sandbox execution image pin = %q %q, want %q %q",
 					reference, digest, expectation.wantReference, expectation.wantDigest)
+			}
+		})
+	}
+}
+
+func TestImagePreparationEventLocksQuotaBeforeConnection(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch-%t", batch), func(t *testing.T) {
+			storage := openRunnerControlDatabase(t)
+			now := time.Now().UTC()
+			seedWorkspaceRelocationAuthority(t, storage, "image-quota-order", now)
+			const runner = "runner-home"
+			const connection = "connection-image-quota-order"
+			if err := storage.OpenConnection(t.Context(), RunnerIdentity{RunnerID: runner, CredentialSerial: "image-quota-cert"}, connection, 8, now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := storage.pool.Exec(t.Context(), `INSERT INTO secondbox.lifecycle_effects(id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,command_id,storage_object_id,fencing_token,retry_count,retry_limit,effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,payload_json,evidence_json,created_at,updated_at) VALUES('image-quota-operation','sandbox-relocation-image-quota-order',3,'prepare_image','queued','','',$1,'image-quota-command','','',0,0,$2,'',$3,'','','{}','{}',$3,$3)`, runner, now.Add(time.Minute), now); err != nil {
+				t.Fatal(err)
+			}
+			blocker, err := storage.pool.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer blocker.Rollback(t.Context())
+			var tenant string
+			if err := blocker.QueryRow(t.Context(), `SELECT tenant_ref FROM secondbox.tenant_quotas WHERE tenant_ref='tenant' FOR UPDATE`).Scan(&tenant); err != nil {
+				t.Fatal(err)
+			}
+			var blockerPID uint32
+			if err := blocker.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
+				t.Fatal(err)
+			}
+			event := func(id string, sequence uint64) Event {
+				return Event{Kind: EventImagePreparation, RunnerID: runner, ConnectionID: connection, Message: &runnerv1.RunnerToControlPlane{Message: &runnerv1.RunnerToControlPlane_PrepareImageResult{PrepareImageResult: &runnerv1.PrepareImageResult{MessageId: id, Sequence: sequence, OperationId: "image-quota-operation", ResolvedDigest: "sha256:" + strings.Repeat("a", 64), Manifest: []byte("verified manifest")}}}}
+			}
+			completed := make(chan error, 1)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			go func() {
+				if batch {
+					completed <- storage.RecordEvents(ctx, []EventPersistenceRecord{{Event: event("image-quota-first", 1), ReceivedAt: now}, {Event: event("image-quota-replay", 2), ReceivedAt: now}})
+				} else {
+					_, err := storage.RecordEvent(ctx, event("image-quota-first", 1), now)
+					completed <- err
+				}
+			}()
+			deadline := time.NewTimer(5 * time.Second)
+			defer deadline.Stop()
+			for {
+				var blocked bool
+				if err := storage.pool.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, blockerPID).Scan(&blocked); err != nil {
+					t.Fatal(err)
+				}
+				if blocked {
+					break
+				}
+				select {
+				case err := <-completed:
+					t.Fatalf("image event completed before quota release: %v", err)
+				case <-deadline.C:
+					t.Fatal("image event never waited on held quota")
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+			probe, err := storage.pool.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var id string
+			err = probe.QueryRow(t.Context(), `SELECT id FROM secondbox.runner_connections WHERE id=$1 FOR UPDATE NOWAIT`, connection).Scan(&id)
+			_ = probe.Rollback(t.Context())
+			if err != nil {
+				t.Fatalf("image event held connection before acquiring quota: %v", err)
+			}
+			if err := blocker.Commit(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-completed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal("image event did not finish after quota release")
+			}
+			var state string
+			if err := storage.pool.QueryRow(t.Context(), `SELECT state FROM secondbox.lifecycle_effects WHERE id='image-quota-operation'`).Scan(&state); err != nil {
+				t.Fatal(err)
+			}
+			if state != "completed" {
+				t.Fatalf("image preparation state=%q", state)
 			}
 		})
 	}

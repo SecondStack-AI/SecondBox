@@ -37,6 +37,7 @@ const (
 	phaseDelete             lifecyclePhase = "delete"
 	phaseSnapshot           lifecyclePhase = "snapshot"
 	phaseRelocation         lifecyclePhase = "relocation"
+	phaseArchive            lifecyclePhase = "archive"
 	phaseTerminalAttachment lifecyclePhase = "terminal attachment"
 )
 
@@ -53,5 +54,6 @@ var lifecyclePhases = map[string][]lifecyclePhase{
 	"sandboxes stop":     {phaseStop},
 	"sandboxes delete":   {phaseDelete},
 	"sandboxes relocate": {phaseRelocation},
+	"sandboxes archive":  {phaseArchive},
 	"snapshots create":   {phaseSnapshot},
 }
