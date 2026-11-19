@@ -61,7 +61,9 @@ func TestElasticCreateWaitsForAnEmptyDeclaredPoolThenPlacesAfterRegistration(t *
 			t.Fatal("background listener did not process the notification barrier")
 		}
 	}
-	fixture.store.ConfigureWorkspaceArchives(elasticCreateArchiveProvider{})
+	if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), elasticCreateArchiveProvider{}, map[string]int64{fixture.profileName: 3600}); err != nil {
+		t.Fatal(err)
+	}
 	setFixtureProfileInitialState(t, fixture, contracts.SandboxDesiredStateRunning)
 	if _, err := fixture.pool.Exec(t.Context(), `DELETE FROM secondbox.runners WHERE id=$1`, fixture.runnerID); err != nil {
 		t.Fatal(err)
@@ -139,7 +141,9 @@ func TestElasticCreateStillRefusesIncompatibleOrUnavailableDeclaredPools(t *test
 	for _, failure := range []string{"offline", "architecture", "capability", "unbounded"} {
 		t.Run(failure, func(t *testing.T) {
 			fixture := newTeardownFixture(t)
-			fixture.store.ConfigureWorkspaceArchives(elasticCreateArchiveProvider{})
+			if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), elasticCreateArchiveProvider{}, map[string]int64{fixture.profileName: 3600}); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := fixture.pool.Exec(t.Context(), `DELETE FROM secondbox.runners WHERE id=$1`, fixture.runnerID); err != nil {
 				t.Fatal(err)
 			}
@@ -177,7 +181,9 @@ func TestElasticCreateCancellationAndExpiryLeaveNoWorkForAbsentRunner(t *testing
 	for _, action := range []string{"stop", "delete", "expiry"} {
 		t.Run(action, func(t *testing.T) {
 			fixture := newTeardownFixture(t)
-			fixture.store.ConfigureWorkspaceArchives(elasticCreateArchiveProvider{})
+			if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), elasticCreateArchiveProvider{}, map[string]int64{fixture.profileName: 3600}); err != nil {
+				t.Fatal(err)
+			}
 			setFixtureProfileInitialState(t, fixture, contracts.SandboxDesiredStateRunning)
 			if _, err := fixture.pool.Exec(t.Context(), `DELETE FROM secondbox.runners WHERE id=$1`, fixture.runnerID); err != nil {
 				t.Fatal(err)

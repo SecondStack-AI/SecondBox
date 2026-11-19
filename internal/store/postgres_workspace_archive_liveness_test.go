@@ -33,7 +33,7 @@ func cleanupArchiveLivenessSandboxes(t *testing.T, storage *PostgresControlPlane
 }
 
 func TestFleetKeepsRestoreDemandAndProtectsItsTarget(t *testing.T) {
-	storage := openStoreTest(t)
+	storage := openArchiveConfigurationTestStore(t)
 	now := time.Now().UTC()
 	const pool, runnerID, revision = "archive-restore-busy-pool", "archive-restore-busy-runner", "archive-restore-busy-revision"
 	if _, err := storage.CreateRunnerPool(t.Context(), contracts.RunnerPool{Name: pool, State: "ready", Architectures: []string{"amd64"}, Capabilities: []string{"compute"}, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
@@ -85,10 +85,12 @@ func TestFleetKeepsRestoreDemandAndProtectsItsTarget(t *testing.T) {
 }
 
 func TestIdleArchiveSkipsOfflineHomesBeforeItsCandidateLimit(t *testing.T) {
-	storage := openStoreTest(t)
+	storage := openArchiveConfigurationTestStore(t)
 	now := time.Now().UTC()
 	seedLocalWorkspacePolicyAndRunner(t, storage, now)
-	storage.ConfigureWorkspaceArchives(&archiveTransferTestProvider{})
+	if err := storage.ConfigureWorkspaceArchives(t.Context(), &archiveTransferTestProvider{}, map[string]int64{"profile-local": 3600}); err != nil {
+		t.Fatal(err)
+	}
 	const offline = "archive-idle-offline-runner"
 	seedPlacementRunner(t, storage, "pool-local", offline, now)
 	if _, err := storage.pool.Exec(t.Context(), `UPDATE secondbox.runners SET state='offline',active_connection_id='' WHERE id=$1`, offline); err != nil {

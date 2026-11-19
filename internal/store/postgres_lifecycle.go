@@ -220,8 +220,12 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		if locked.Workspace.State != "archived" {
 			if err := requireHomeRunnerReady(ctx, tx, locked.Workspace.HomeRunnerID); err != nil {
 				var canOffload bool
-				if store.archiveTransfers != nil && errors.Is(err, ports.ErrHomeRunnerUnavailable) {
-					if lookupErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.runners WHERE id=$1 AND state='draining' AND active_connection_id<>'')`, locked.Workspace.HomeRunnerID).Scan(&canOffload); lookupErr != nil {
+				if store.archiveTransfers != nil && len(store.archiveProfileIdleSeconds) != 0 && errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+					profiles := make([]string, 0, len(store.archiveProfileIdleSeconds))
+					for profile := range store.archiveProfileIdleSeconds {
+						profiles = append(profiles, profile)
+					}
+					if lookupErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.runners WHERE id=$1 AND state='draining' AND active_connection_id<>'' AND (SELECT profile_name FROM secondbox.sandboxes WHERE id=$2)=ANY($3::text[]))`, locked.Workspace.HomeRunnerID, input.SandboxID, profiles).Scan(&canOffload); lookupErr != nil {
 						return contracts.Operation{}, lookupErr
 					}
 				}

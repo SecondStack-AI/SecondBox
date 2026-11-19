@@ -67,7 +67,7 @@ func (manager Manager) Validate() error {
 	return nil
 }
 
-func (manager Manager) Reconcile(ctx context.Context, now time.Time) (ReconcileResult, error) {
+func (manager Manager) Reconcile(ctx context.Context, now time.Time) (result ReconcileResult, reconcileErr error) {
 	if err := manager.Validate(); err != nil {
 		return ReconcileResult{}, err
 	}
@@ -87,15 +87,21 @@ func (manager Manager) Reconcile(ctx context.Context, now time.Time) (ReconcileR
 	if err != nil {
 		return ReconcileResult{}, err
 	}
-	result := ReconcileResult{ObservedNodes: len(nodes), Action: "stable"}
+	result = ReconcileResult{ObservedNodes: len(nodes), Action: "stable"}
 	knownRunners := make(map[string]bool, len(observation.Runners))
 	for _, runner := range observation.Runners {
 		knownRunners[runner.ID] = true
 	}
+	var bootstrapErr error
 	for _, node := range nodes {
 		if !knownRunners[node.RunnerID] && now.Sub(node.CreatedAt) > manager.Config.BootstrapTimeout {
-			return result, fmt.Errorf("SecondBox fleet instance %s did not register within bootstrap timeout; operator recovery is required before replacement", node.InstanceID)
+			bootstrapErr = errors.Join(bootstrapErr, fmt.Errorf("SecondBox fleet instance %s did not register within bootstrap timeout; operator recovery is required before replacement", node.InstanceID))
 		}
+	}
+	if bootstrapErr != nil {
+		result.Action = "bootstrap_timeout"
+		// Report failed bootstrap without suppressing independent safe actions.
+		defer func() { reconcileErr = errors.Join(bootstrapErr, reconcileErr) }()
 	}
 	var usedCPU, usedMemory, usedInstances int64
 	for _, runner := range observation.Runners {
@@ -123,6 +129,10 @@ func (manager Manager) Reconcile(ctx context.Context, now time.Time) (ReconcileR
 		for _, node := range nodes {
 			runner, known := runnerByID[node.RunnerID]
 			if !known {
+				// A failed bootstrap still occupies its physical node slot.
+				if now.Sub(node.CreatedAt) > manager.Config.BootstrapTimeout {
+					continue
+				}
 				// Instances still enrolling count as in-flight capacity.
 				freeCPU += manager.Config.NodeVCPUCount
 				freeMemory += manager.Config.NodeMemoryBytes

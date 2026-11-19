@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Builds the architecture-neutral files of a release exactly once: the OpenAPI
 # document, Go module archive, TypeScript package, package metadata, SBOM, the
-# secondbox and secondbox-deploy binaries of every host platform, and install.sh.
+# CLI, deploy, fleet-controller and enrollment binaries of every host platform,
+# and install.sh.
 # shared-artifacts.json binds them to the version, tag and source commit; every
 # guest architecture's staging consumes the directory through --shared-from.
 # Nothing here needs KVM or host inputs, so release-tag.yml runs it on a
@@ -94,14 +95,16 @@ mkdir "$node_project"
 for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
   os="${platform%/*}"
   arch="${platform#*/}"
-  for command in secondbox secondbox-deploy; do
+  for command in secondbox secondbox-deploy secondbox-fleet secondbox-fleet-enroll; do
     CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go -C "$repo_root" build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$output_dir/${command}_${version}_${os}_${arch}" "./cmd/$command"
     chmod 0755 "$output_dir/${command}_${version}_${os}_${arch}"
   done
 done
 host_platform="$(go env GOHOSTOS)_$(go env GOHOSTARCH)"
-for command in secondbox secondbox-deploy; do
-  "$output_dir/${command}_${version}_${host_platform}" version | jq -e --arg version "$version" --arg commit "$source_commit" '.version == $version and .sourceCommit == $commit' >/dev/null || {
+for command in secondbox secondbox-deploy secondbox-fleet secondbox-fleet-enroll; do
+  version_argument=version
+  [[ "$command" != secondbox-fleet* ]] || version_argument=--version
+  "$output_dir/${command}_${version}_${host_platform}" "$version_argument" | jq -e --arg version "$version" --arg commit "$source_commit" '.version == $version and .sourceCommit == $commit' >/dev/null || {
     echo "$command binary release identity mismatch" >&2
     exit 1
   }

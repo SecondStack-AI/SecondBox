@@ -1,16 +1,23 @@
 # AWS elastic Code workers
 
-This candidate deployment runs an outbound-only, gVisor Runner on each protected
+This reference deployment runs an outbound-only, gVisor Runner on each protected
 On-Demand EC2 worker. PostgreSQL, SecondBox, the fleet controller, the gateway
 issuer and the egress proxy run independently. S3 stores workspace archives; the
 control plane supplies short-lived object-specific transfer URLs. Workers have
 no workspace-bucket credentials. Use a coordinated protocol-8 control-plane and
-Runner candidate build.
+Runner release.
 
 ## Controller host
 
-Build `go build -o /persistent/path/secondbox-fleet ./cmd/secondbox-fleet` and copy
-`fleet.example.json` to a mode-0600 configuration file. Supply every referenced
+The release includes `secondbox-fleet_<version>_<os>_<architecture>` and
+`secondbox-fleet-enroll_<version>_<os>_<architecture>` alongside the other host
+binaries. Verify their published checksums and `--version` identities against
+the control-plane release. Install the controller binary on its trusted host;
+the enrollment binary belongs on EC2 workers. The Linux amd64 worker topology
+below is the qualified reference. A source build uses
+`go build -o /persistent/path/secondbox-fleet ./cmd/secondbox-fleet`.
+
+Copy `fleet.example.json` to a mode-0600 configuration file. Supply every referenced
 file. Private inputs (token, database URL, CA signing key, env templates,
 egress-contexts and every registry file) must be mode 0600. The Runner CA signs
 only worker public CSRs; its private key stays on this controller. The gateway
@@ -32,16 +39,30 @@ issuer. Its AWS principal needs DescribeAutoScalingGroups, DescribeInstances,
 SetDesiredCapacity and TerminateInstanceInAutoScalingGroup for its exact owned
 ASG, plus DescribeVolumes/DeleteVolume for receipted, tagged retired-worker
 volumes. The ASG and instance ownership tag is
-`secondstack.ai/qualification-run=<qualificationRun>`. Keep the node capacity
+`secondstack.ai/fleet-ref=<fleetRef>`. Set the same stable reference in the
+template's `FleetRef` parameter and controller configuration; changing it makes
+existing resources foreign to that controller. Keep the node capacity
 configuration below the measured allocatable Runner capacity. CPU, memory,
 Instance and workspace-byte demand drive scaling. Physically admission-denied
-workers contribute no free placement capacity.
+workers contribute no free placement capacity. Set `maximumNodes` explicitly
+and match it to the CloudFormation `MaximumNodes` value and account quota. The
+example's two nodes are an example budget, not a product limit. `InitialNodes`
+may be any nonnegative capacity up to that ceiling; `minimumNodes` controls the
+controller's steady-state floor.
 
 Run `secondbox-fleet --config /etc/secondbox-fleet/fleet.json`. A PostgreSQL
 session advisory lock permits one manager per pool. A controller outage stops
-reconciliation and enrollment; it does not terminate workers. Current enrollment
-certificates are bounded to 24 hours and immutable per instance; rotate by
-safely evacuating and replacing workers before expiry.
+reconciliation and enrollment; it does not terminate workers.
+
+Enrollment certificates are bounded to 24 hours. The worker's
+`secondbox-fleet-renew.timer` invokes `secondbox-fleet-enroll --renew` two
+minutes after boot and every five minutes, with three bounded one-minute
+retries. The authority renews within the final third of the lifetime, using the
+same keys, fresh same-role STS proof and current owned-ASG membership. Renewal
+refreshes the Runner leaf and both gateway leaf locations atomically while
+preserving keys, CA and environment. New TLS handshakes reload the leaves
+without restarting guests. An expired leaf can recover only through its
+existing key binding; retired identities and substituted keys are refused.
 
 ## Worker bundle and infrastructure
 
@@ -87,8 +108,8 @@ rewrites the pinned materialization digest.
 
 Deploy `fleet.cloudformation.yaml` with an Ubuntu 24.04 amd64 AMI, dedicated VPC
 and public subnets (or supply equivalent outbound connectivity), explicit ports
-and controller CIDR, bundle location/SHA256, workspace capacity, initial capacity
-and UTC expiry. `EnrollmentPort` must match `EnrollmentURL`; `RegistryPort`
+and controller CIDR, bundle location/SHA256, workspace capacity and explicit
+initial/maximum capacity. `EnrollmentPort` must match `EnrollmentURL`; `RegistryPort`
 allows image pulls to the controller CIDR's authenticated TLS registry. There is no inbound
 worker security-group rule. Workers need outbound package/image/S3 access; the
 gateway sends guest upstream traffic through the separately authenticated proxy.
@@ -101,6 +122,14 @@ published in the AWS install guide (fingerprint
 `FB5DB77FD5C118B80511ADA8A6310ACC4672475C`). Downloads, extraction and `TMPDIR`
 stay in `/var/lib/secondbox-bootstrap` on persistent root storage.
 A pre-baked AMI can remove that cold-start work after qualification.
+Production deployments leave `ExpiresAt` empty (the default). No expiry Lambda,
+schedule or expiry IAM roles are then created. Disposable qualification runs
+can opt in by supplying a UTC timestamp such as `2026-11-19T03:00:00`; that
+creates the one-time spend-bound shutdown. It removes scale-in protection and
+requests zero workers even if archival or execution is active. It preserves
+retained data volumes, so inventory and cleanup remain required. This
+destructive test expiry is not a normal retirement or durability policy.
+
 The installer records the XFS filesystem UUID in `fstab` and makes Docker require
 that mount before starting. Docker also recreates the fetcher socket directory
 with UID 10002 before restarting containers, so reboot cannot fall back to an
@@ -142,7 +171,7 @@ planned, fully evacuated and retired worker the controller first commits a
 receipt with exact non-root EBS volume IDs. After termination it deletes only
 those detached, ownership-matching volumes. Unexpected-loss volumes have no such
 receipt and remain available for operator recovery of local-only generations.
-No Spot instances are used. The scheduled test expiry is a spend bound that
+No Spot instances are used. When explicitly enabled, scheduled test expiry is a spend bound that
 unprotects and stops workers independently of archival; unreceipted EBS and S3
 continue billing until explicitly inventoried and cleaned up. Expiry is not a
 durability boundary.

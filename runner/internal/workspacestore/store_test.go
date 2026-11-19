@@ -332,7 +332,7 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 	if _, err := attachment.Descriptor().WriteAt([]byte("A"), 4096); err != nil {
 		t.Fatalf("write state A: %v", err)
 	}
-	activeReport, err := store.Reconcile(t.Context())
+	activeReport, err := store.Reconcile(t.Context(), []ReceiptIdentity{{WorkspaceID: workspaceID, OperationID: create.OperationID, Kind: ReceiptWorkspaceCreate}})
 	if err != nil {
 		t.Fatalf("reconcile active Workspace writer: %v", err)
 	}
@@ -487,7 +487,14 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 	if err := restarted.initialize(t.Context()); err != nil {
 		t.Fatalf("restart WorkspaceStore: %v", err)
 	}
-	report, err := restarted.Reconcile(t.Context())
+	report, err := restarted.Reconcile(t.Context(), []ReceiptIdentity{
+		{WorkspaceID: workspaceID, OperationID: create.OperationID, Kind: ReceiptWorkspaceCreate},
+		{WorkspaceID: workspaceID, OperationID: snapshotCreate.OperationID, Kind: ReceiptSnapshotCreate},
+		{WorkspaceID: workspaceID, OperationID: advance.OperationID, Kind: ReceiptGenerationAdvance},
+		{WorkspaceID: workspaceID, OperationID: prepare.OperationID, Kind: ReceiptRestorePrepare},
+		{WorkspaceID: workspaceID, OperationID: swap.OperationID, Kind: ReceiptRestoreSwap},
+		{WorkspaceID: workspaceID, OperationID: finalize.OperationID, Kind: ReceiptRestoreFinalize},
+	})
 	if err != nil {
 		t.Fatalf("reconcile WorkspaceStore: %v", err)
 	}
@@ -522,7 +529,7 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 	if _, err := restarted.Inspect(t.Context(), workspaceID); !errors.Is(err, ErrWorkspaceNotFound) {
 		t.Fatalf("inspect deleted Workspace error = %v", err)
 	}
-	report, err = restarted.Reconcile(t.Context())
+	report, err = restarted.Reconcile(t.Context(), []ReceiptIdentity{{WorkspaceID: workspaceID, OperationID: deleteWorkspace.OperationID, Kind: ReceiptWorkspaceDelete}})
 	if err != nil {
 		t.Fatalf("reconcile deleted Workspace: %v", err)
 	}
@@ -829,7 +836,7 @@ func TestRunnerRestartReplaysEveryLocalWorkspaceOperation(t *testing.T) {
 		store, cloner, formatter := newFakeStore(t)
 		createWorkspace(t, store)
 		restarted := restart(t, store, cloner, formatter)
-		report, err := restarted.Reconcile(t.Context())
+		report, err := restarted.Reconcile(t.Context(), []ReceiptIdentity{{WorkspaceID: workspaceID, OperationID: createRequest.OperationID, Kind: ReceiptWorkspaceCreate}})
 		if err != nil || len(report.Workspaces) != 1 ||
 			report.Workspaces[0].WorkspaceID != workspaceID ||
 			len(report.Receipts) != 1 ||
@@ -940,7 +947,7 @@ func TestWorkspaceCreateRecoversWhenReceiptDirectoryPreparationFails(t *testing.
 	if err := os.Chmod(workspaceReceiptPath, privateDirectoryMode); err != nil {
 		t.Fatal(err)
 	}
-	report, err := store.Reconcile(t.Context())
+	report, err := store.Reconcile(t.Context(), nil)
 	if err != nil || len(report.Workspaces) != 1 || len(report.Receipts) != 0 {
 		t.Fatalf("reconcile non-authoritative receipt directory = %#v, %v", report, err)
 	}

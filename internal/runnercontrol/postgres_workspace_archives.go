@@ -10,22 +10,23 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
+	"github.com/SecondStack-AI/SecondBox/internal/workspacearchive"
 	"github.com/jackc/pgx/v5"
 )
 
 func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock.SandboxWorkspace, runnerID string, result *runnerv1.LocalWorkspaceResult, now time.Time) error {
-	var id, source, target, state, command, key string
+	var id, operationID, sandboxID, workspaceID, source, target, state, command, key string
 	var generation, capacity int64
 	var descriptorJSON []byte
-	if err := tx.QueryRow(ctx, `SELECT a.id,a.source_runner_id,a.target_runner_id,a.state,a.command_id,a.generation,a.logical_capacity_bytes,a.archive_key,a.descriptor_json FROM secondbox.workspace_archives a JOIN secondbox.runner_commands c ON c.assignment_id=a.id WHERE a.operation_id=$1 AND c.id=$2 AND c.runner_id=$3 FOR UPDATE OF a`, result.OperationId, result.EffectId, runnerID).Scan(&id, &source, &target, &state, &command, &generation, &capacity, &key, &descriptorJSON); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT a.id,a.operation_id,a.sandbox_id,a.workspace_id,a.source_runner_id,a.target_runner_id,a.state,a.command_id,a.generation,a.logical_capacity_bytes,a.archive_key,a.descriptor_json FROM secondbox.workspace_archives a JOIN secondbox.runner_commands c ON c.assignment_id=a.id WHERE a.id=$1 AND c.id=$2 AND c.runner_id=$3 FOR UPDATE OF a`, result.OperationId, result.EffectId, runnerID).Scan(&id, &operationID, &sandboxID, &workspaceID, &source, &target, &state, &command, &generation, &capacity, &key, &descriptorJSON); err != nil {
 		return err
 	}
-	if result.SandboxId != locked.SandboxID || result.WorkspaceId != locked.WorkspaceID {
+	if result.SandboxId != sandboxID || result.WorkspaceId != workspaceID || locked.SandboxID != sandboxID || locked.WorkspaceID != workspaceID {
 		return errors.New("SecondBox workspace archive receipt authority mismatch")
 	}
 	if result.EffectId != command || state == "succeeded" || state == "failed" {
 		var replay bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.runner_commands WHERE id=$1 AND runner_id=$2 AND assignment_id=$3 AND state='acknowledged')`, result.EffectId, runnerID, id).Scan(&replay); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.runner_commands WHERE id=$1 AND runner_id=$2 AND assignment_id=$3 AND state IN ('acknowledged','expired'))`, result.EffectId, runnerID, id).Scan(&replay); err != nil {
 			return err
 		}
 		if replay {
@@ -55,7 +56,7 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 	var startOperation, continueStart bool
 	if state != "cleanup_queued_sent" {
 		var err error
-		startOperation, continueStart, err = archiveStartContinuation(ctx, tx, &locked, result.OperationId, now)
+		startOperation, continueStart, err = archiveStartContinuation(ctx, tx, &locked, operationID, now)
 		if err != nil {
 			return err
 		}
@@ -64,7 +65,8 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 		return err
 	}
 	success := result.Terminal == runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
-	if success && (result.Generation != uint64(generation) || result.LogicalCapacityBytes != uint64(capacity) || result.ReceiptRecordedAtUnixMs == 0) {
+	absentCleanup := state == "cleanup_queued_sent" && result.LogicalCapacityBytes == 0
+	if success && (result.Generation != uint64(generation) || result.LogicalCapacityBytes != uint64(capacity) && !absentCleanup || result.ReceiptRecordedAtUnixMs == 0) {
 		return errors.New("SecondBox workspace archive receipt has invalid generation or size")
 	}
 	switch state {
@@ -86,7 +88,7 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE secondbox.workspaces SET state='archived',home_runner_id='',archive_key=$2,archive_descriptor_json=$3,archived_at=$4,mutation_kind=CASE WHEN $5 THEN 'start' ELSE '' END,mutation_id=CASE WHEN $5 THEN $6 ELSE '' END,mutation_effect_id=CASE WHEN $5 THEN $6 ELSE '' END,mutation_operation_id=CASE WHEN $5 THEN $6 ELSE '' END,mutation_state=CASE WHEN $5 THEN 'queued' ELSE '' END,mutation_expected_generation=CASE WHEN $5 THEN generation ELSE NULL END,mutation_target_generation=CASE WHEN $5 THEN generation ELSE NULL END,updated_at=$4 WHERE id=$1`, locked.WorkspaceID, key, descriptor, now, continueStart, result.OperationId); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE secondbox.workspaces SET state='archived',home_runner_id='',archive_key=$2,archive_descriptor_json=$3,archived_at=$4,mutation_kind=CASE WHEN $5 THEN 'start' ELSE '' END,mutation_id=CASE WHEN $5 THEN $6 ELSE '' END,mutation_effect_id=CASE WHEN $5 THEN $6 ELSE '' END,mutation_operation_id=CASE WHEN $5 THEN $6 ELSE '' END,mutation_state=CASE WHEN $5 THEN 'queued' ELSE '' END,mutation_expected_generation=CASE WHEN $5 THEN generation ELSE NULL END,mutation_target_generation=CASE WHEN $5 THEN generation ELSE NULL END,updated_at=$4 WHERE id=$1`, locked.WorkspaceID, key, descriptor, now, continueStart, operationID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE secondbox.workspace_archives SET state='cleanup_queued',command_id=$2,descriptor_json=$3,updated_at=$4 WHERE id=$1`, id, id+"-cleanup", descriptor, now); err != nil {
@@ -102,9 +104,9 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 			if err := completeArchiveRestoreStop(ctx, tx, locked.SandboxID, now); err != nil {
 				return err
 			}
-			return finishPendingOperation(ctx, tx, result.OperationId, "cancelled", "start_cancelled", "workspace start was cancelled before compute admission", now)
+			return finishPendingOperation(ctx, tx, operationID, "cancelled", "start_cancelled", "workspace start was cancelled before compute admission", now)
 		}
-		return finishPendingOperation(ctx, tx, result.OperationId, "succeeded", "", "", now)
+		return finishPendingOperation(ctx, tx, operationID, "succeeded", "", "", now)
 	case "restore_queued_sent":
 		if locked.Workspace.Mutation.Kind != "archive_restore" || locked.Workspace.Mutation.ID != id || locked.Workspace.HomeRunnerID != "" {
 			return errors.New("SecondBox workspace archive restore lost its mutation")
@@ -122,7 +124,7 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 			if err := completeArchiveRestoreStop(ctx, tx, locked.SandboxID, now); err != nil {
 				return err
 			}
-			return finishPendingOperation(ctx, tx, result.OperationId, "failed", localWorkspaceOperationErrorCode(result.Terminal), result.SafeDetail, now)
+			return finishPendingOperation(ctx, tx, operationID, "failed", localWorkspaceOperationErrorCode(result.Terminal), result.SafeDetail, now)
 		}
 		var expected runnerv1.WorkspaceArchiveDescriptor
 		if err := json.Unmarshal(descriptorJSON, &expected); err != nil {
@@ -132,7 +134,7 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 			return errors.New("SecondBox workspace archive import receipt checksum mismatch")
 		}
 		keepStart := continueStart
-		if _, err := tx.Exec(ctx, `UPDATE secondbox.workspaces SET state='ready',home_runner_id=$2,archive_key='',archive_descriptor_json=NULL,archived_at=NULL,mutation_kind=CASE WHEN $3 THEN 'start' ELSE '' END,mutation_id=CASE WHEN $3 THEN $4 ELSE '' END,mutation_effect_id=CASE WHEN $3 THEN $4 ELSE '' END,mutation_operation_id=CASE WHEN $3 THEN $4 ELSE '' END,mutation_state=CASE WHEN $3 THEN 'queued' ELSE '' END,mutation_expected_generation=CASE WHEN $3 THEN generation ELSE NULL END,mutation_target_generation=CASE WHEN $3 THEN generation ELSE NULL END,updated_at=$5 WHERE id=$1`, locked.WorkspaceID, target, keepStart, result.OperationId, now); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE secondbox.workspaces SET state='ready',home_runner_id=$2,archive_key='',archive_descriptor_json=NULL,archived_at=NULL,mutation_kind=CASE WHEN $3 THEN 'start' ELSE '' END,mutation_id=CASE WHEN $3 THEN $4 ELSE '' END,mutation_effect_id=CASE WHEN $3 THEN $4 ELSE '' END,mutation_operation_id=CASE WHEN $3 THEN $4 ELSE '' END,mutation_state=CASE WHEN $3 THEN 'queued' ELSE '' END,mutation_expected_generation=CASE WHEN $3 THEN generation ELSE NULL END,mutation_target_generation=CASE WHEN $3 THEN generation ELSE NULL END,updated_at=$5 WHERE id=$1`, locked.WorkspaceID, target, keepStart, operationID, now); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE secondbox.workspace_archives SET state='succeeded',updated_at=$2 WHERE id=$1`, id, now); err != nil {
@@ -148,7 +150,7 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 			if err := completeArchiveRestoreStop(ctx, tx, locked.SandboxID, now); err != nil {
 				return err
 			}
-			return finishPendingOperation(ctx, tx, result.OperationId, "cancelled", "start_cancelled", "workspace start was cancelled before compute admission", now)
+			return finishPendingOperation(ctx, tx, operationID, "cancelled", "start_cancelled", "workspace start was cancelled before compute admission", now)
 		}
 		return nil
 	case "cleanup_queued_sent", "abort_queued_sent":
@@ -157,7 +159,7 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 			if state == "abort_queued_sent" {
 				phase = "abort_queued"
 			}
-			_, err := tx.Exec(ctx, `UPDATE secondbox.workspace_archives SET state=$2,command_id=$3,updated_at=$4 WHERE id=$1`, id, phase, fmt.Sprintf("%s-retry-%d", id, now.UnixNano()), now)
+			_, err := tx.Exec(ctx, `UPDATE secondbox.workspace_archives SET state=$2,command_id=$3,updated_at=$4,not_before=$5 WHERE id=$1`, id, phase, fmt.Sprintf("%s-retry-%d", id, now.UnixNano()), now, now.Add(workspacearchive.ReconciliationRetryDelay))
 			return err
 		}
 		terminal := "succeeded"
@@ -173,7 +175,7 @@ func recordWorkspaceArchiveResult(ctx context.Context, tx pgx.Tx, locked rowlock
 			if err := tx.QueryRow(ctx, `SELECT error_code,error_message FROM secondbox.workspace_archives WHERE id=$1`, id).Scan(&code, &message); err != nil {
 				return err
 			}
-			if err := finishPendingOperation(ctx, tx, result.OperationId, "failed", code, message, now); err != nil {
+			if err := finishPendingOperation(ctx, tx, operationID, "failed", code, message, now); err != nil {
 				return err
 			}
 			if startOperation {

@@ -61,11 +61,11 @@ func (cloud AWSCloud) recordRetiredNodeVolumes(ctx context.Context, node Node) e
 	if !retired {
 		return errors.New("SecondBox AWS refuses volume cleanup authority for a non-retired Runner")
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.fleet_node_terminations(instance_id,pool_name,runner_id,group_name,qualification_run,volume_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(instance_id) DO NOTHING`, node.InstanceID, cloud.Pool, node.RunnerID, cloud.GroupName, cloud.QualificationRun, encoded, time.Now().UTC()); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.fleet_node_terminations(instance_id,pool_name,runner_id,group_name,fleet_ref,volume_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(instance_id) DO NOTHING`, node.InstanceID, cloud.Pool, node.RunnerID, cloud.GroupName, cloud.FleetRef, encoded, time.Now().UTC()); err != nil {
 		return err
 	}
 	var same bool
-	if err := tx.QueryRow(ctx, `SELECT pool_name=$2 AND runner_id=$3 AND group_name=$4 AND qualification_run=$5 AND volume_ids=$6::jsonb FROM secondbox.fleet_node_terminations WHERE instance_id=$1`, node.InstanceID, cloud.Pool, node.RunnerID, cloud.GroupName, cloud.QualificationRun, encoded).Scan(&same); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT pool_name=$2 AND runner_id=$3 AND group_name=$4 AND fleet_ref=$5 AND volume_ids=$6::jsonb FROM secondbox.fleet_node_terminations WHERE instance_id=$1`, node.InstanceID, cloud.Pool, node.RunnerID, cloud.GroupName, cloud.FleetRef, encoded).Scan(&same); err != nil {
 		return err
 	}
 	if !same {
@@ -75,23 +75,23 @@ func (cloud AWSCloud) recordRetiredNodeVolumes(ctx context.Context, node Node) e
 }
 
 func (cloud AWSCloud) ownsInstance(instance ec2types.Instance) bool {
-	run, fleet := "", ""
+	fleetRef, fleet := "", ""
 	for _, tag := range instance.Tags {
-		if aws.ToString(tag.Key) == "secondstack.ai/qualification-run" {
-			run = aws.ToString(tag.Value)
+		if aws.ToString(tag.Key) == "secondstack.ai/fleet-ref" {
+			fleetRef = aws.ToString(tag.Value)
 		}
 		if aws.ToString(tag.Key) == "secondbox-fleet" {
 			fleet = aws.ToString(tag.Value)
 		}
 	}
-	return run == cloud.QualificationRun && fleet == cloud.GroupName
+	return fleetRef == cloud.FleetRef && fleet == cloud.GroupName
 }
 
 func (cloud AWSCloud) CleanupRetiredVolumes(ctx context.Context) error {
 	if cloud.Database == nil || cloud.Pool == "" {
 		return errors.New("SecondBox AWS fleet requires durable retired-volume inventory")
 	}
-	rows, err := cloud.Database.Query(ctx, `SELECT t.instance_id,t.volume_ids FROM secondbox.fleet_node_terminations t JOIN secondbox.runners r ON r.id=t.runner_id WHERE t.pool_name=$1 AND t.group_name=$2 AND t.qualification_run=$3 AND t.completed_at IS NULL AND r.fleet_state='retired' ORDER BY t.created_at LIMIT 64`, cloud.Pool, cloud.GroupName, cloud.QualificationRun)
+	rows, err := cloud.Database.Query(ctx, `SELECT t.instance_id,t.volume_ids FROM secondbox.fleet_node_terminations t JOIN secondbox.runners r ON r.id=t.runner_id WHERE t.pool_name=$1 AND t.group_name=$2 AND t.fleet_ref=$3 AND t.completed_at IS NULL AND r.fleet_state='retired' ORDER BY t.created_at LIMIT 64`, cloud.Pool, cloud.GroupName, cloud.FleetRef)
 	if err != nil {
 		return err
 	}
@@ -158,16 +158,16 @@ func (cloud AWSCloud) CleanupRetiredVolumes(ctx context.Context) error {
 				return errors.New("SecondBox AWS retired-volume identity is ambiguous")
 			}
 			volume := result.Volumes[0]
-			run, fleet := "", ""
+			fleetRef, fleet := "", ""
 			for _, tag := range volume.Tags {
-				if aws.ToString(tag.Key) == "secondstack.ai/qualification-run" {
-					run = aws.ToString(tag.Value)
+				if aws.ToString(tag.Key) == "secondstack.ai/fleet-ref" {
+					fleetRef = aws.ToString(tag.Value)
 				}
 				if aws.ToString(tag.Key) == "secondbox-fleet" {
 					fleet = aws.ToString(tag.Value)
 				}
 			}
-			if aws.ToString(volume.VolumeId) != id || run != cloud.QualificationRun || fleet != cloud.GroupName {
+			if aws.ToString(volume.VolumeId) != id || fleetRef != cloud.FleetRef || fleet != cloud.GroupName {
 				return fmt.Errorf("SecondBox AWS retired-volume %s ownership differs", id)
 			}
 			if volume.State != ec2types.VolumeStateAvailable || len(volume.Attachments) != 0 {

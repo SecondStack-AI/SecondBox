@@ -17,6 +17,7 @@ CREATE TABLE secondbox.workspace_archives (
     state text NOT NULL,
     command_id text NOT NULL,
     fencing_token bytea NOT NULL,
+    not_before timestamptz,
     error_code text NOT NULL DEFAULT '',
     error_message text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL,
@@ -28,5 +29,6 @@ CREATE INDEX workspace_archives_pending_idx ON secondbox.workspace_archives(stat
 
 CREATE TABLE secondbox.archive_cleanup (
     archive_key text PRIMARY KEY,
+    not_before timestamptz,
     created_at timestamptz NOT NULL
 );

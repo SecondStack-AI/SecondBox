@@ -23,24 +23,34 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/fleet"
+	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		if err := buildinfo.Write(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	endpoint := flag.String("endpoint", "", "HTTPS fleet enrollment origin")
 	region := flag.String("region", "", "AWS region")
 	caFile := flag.String("ca-file", "", "enrollment server CA PEM file")
 	output := flag.String("output", "", "private absolute handoff directory")
+	renew := flag.Bool("renew", false, "renew certificate leaves using existing instance keys and authority")
+	gatewayCopy := flag.String("gateway-certificate-copy", "", "existing absolute gateway leaf path to refresh during renewal")
 	flag.Parse()
-	if err := run(*endpoint, *region, *caFile, *output); err != nil {
+	if err := run(*endpoint, *region, *caFile, *output, *renew, *gatewayCopy); err != nil {
 		fmt.Fprintln(os.Stderr, "SecondBox fleet enrollment failed:", err)
 		os.Exit(1)
 	}
 }
 
-func run(endpoint, region, caFile, output string) error {
+func run(endpoint, region, caFile, output string, renew bool, gatewayCopy string) error {
 	if !fleet.ValidEnrollmentEndpoint(endpoint) || region == "" || !filepath.IsAbs(output) {
 		return errors.New("HTTPS endpoint, AWS region and absolute output directory are required")
 	}
@@ -64,17 +74,20 @@ func run(endpoint, region, caFile, output string) error {
 	if err != nil {
 		return errors.New("AWS instance identity could not be read")
 	}
-	runnerCSR, err := loadEnrollmentCSR(output, "runner.key")
+	runnerCSR, err := loadEnrollmentCSR(output, "runner.key", renew)
 	if err != nil {
 		return err
 	}
-	gatewayCSR, err := loadEnrollmentCSR(output, "gateway.key")
+	gatewayCSR, err := loadEnrollmentCSR(output, "gateway.key", renew)
 	if err != nil {
 		return err
 	}
 	noncePath := filepath.Join(output, "enrollment.nonce")
 	nonce, err := os.ReadFile(noncePath)
 	if errors.Is(err, os.ErrNotExist) {
+		if renew {
+			return errors.New("renewal requires the existing enrollment nonce")
+		}
 		value := make([]byte, 32)
 		if _, err := rand.Read(value); err != nil {
 			return err
@@ -86,7 +99,7 @@ func run(endpoint, region, caFile, output string) error {
 	} else if err != nil {
 		return err
 	}
-	enrollment := fleet.EnrollmentRequest{InstanceID: identity.InstanceID, Nonce: string(nonce), RunnerCSR: runnerCSR, GatewayCSR: gatewayCSR}
+	enrollment := fleet.EnrollmentRequest{InstanceID: identity.InstanceID, Nonce: string(nonce), RunnerCSR: runnerCSR, GatewayCSR: gatewayCSR, Renew: renew}
 	binding := fleet.EnrollmentBinding(enrollment)
 	proofURL := "https://sts." + region + ".amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15&X-Amz-Expires=60"
 	proof, err := http.NewRequestWithContext(ctx, http.MethodGet, proofURL, nil)
@@ -136,6 +149,9 @@ func run(endpoint, region, caFile, output string) error {
 	}
 	if handoff.RunnerID != "runner-"+identity.InstanceID || !time.Now().Before(handoff.ExpiresAt) {
 		return errors.New("enrollment handoff identity or expiry differs")
+	}
+	if renew {
+		return applyRenewalHandoff(output, gatewayCopy, handoff, time.Now())
 	}
 	runnerKey, err := os.ReadFile(filepath.Join(output, "runner.key"))
 	if err != nil {
@@ -194,11 +210,17 @@ func writeRegistryHandoff(directory string, files map[string]string) error {
 	return nil
 }
 
-func loadEnrollmentCSR(directory, name string) (string, error) {
+func loadEnrollmentCSR(directory, name string, renew bool) (string, error) {
 	path := filepath.Join(directory, name)
 	encoded, err := os.ReadFile(path)
+	if renew {
+		encoded, err = readPrivateEnrollmentFile(path)
+	}
 	var key *rsa.PrivateKey
 	if errors.Is(err, os.ErrNotExist) {
+		if renew {
+			return "", errors.New("renewal requires the existing instance private keys")
+		}
 		key, err = rsa.GenerateKey(rand.Reader, 3072)
 		if err != nil {
 			return "", err

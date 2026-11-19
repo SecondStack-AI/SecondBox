@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	HostBinaryNames     = []string{"secondbox", "secondbox-deploy"}
+	HostBinaryNames     = []string{"secondbox", "secondbox-deploy", "secondbox-fleet", "secondbox-fleet-enroll"}
 	HostBinaryPlatforms = []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}
 )
 

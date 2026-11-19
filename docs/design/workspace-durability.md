@@ -136,6 +136,11 @@ Old source replies cannot complete the target's preparation or change its home.
 Relocation-source deletion retains its local mutation receipts until ordinary
 Workspace deletion, so even a cleanup replay from an earlier tiering cycle cannot
 delete a restored image on the same Runner and generation.
+Reconnect does not advertise that historical ledger. The control plane requests
+only exact receipts for outstanding ordinary mutations or unfinished Snapshot
+restore phases, and the Runner reads those receipt files directly. All live
+Workspaces remain in inspection inventory. Reporting neither deletes tombstones
+nor imposes an age cutoff on their replay protection.
 
 Stop and delete remain admissible while a start holds the archive mutation.
 Cancellation or capacity-wait expiry suppresses compute without clearing the

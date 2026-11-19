@@ -17,7 +17,7 @@ import (
 
 func configureWorkspaceArchives(ctx context.Context, path string, storage *store.PostgresControlPlaneStore) (workspacearchive.ObjectStoreConfig, error) {
 	if path == "" {
-		return workspacearchive.ObjectStoreConfig{}, nil
+		return workspacearchive.ObjectStoreConfig{}, storage.ConfigureWorkspaceArchives(ctx, nil, nil)
 	}
 	if !filepath.IsAbs(path) {
 		return workspacearchive.ObjectStoreConfig{}, errors.New("SecondBox workspace archive configuration path must be absolute")
@@ -48,8 +48,7 @@ func configureWorkspaceArchives(ctx context.Context, path string, storage *store
 	if err != nil {
 		return settings, err
 	}
-	storage.ConfigureWorkspaceArchives(provider)
-	return settings, nil
+	return settings, storage.ConfigureWorkspaceArchives(ctx, provider, settings.ProfileIdleSeconds)
 }
 
 func runWorkspaceArchiveWorker(ctx context.Context, storage *store.PostgresControlPlaneStore, settings workspacearchive.ObjectStoreConfig, logger *slog.Logger) error {

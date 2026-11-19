@@ -118,7 +118,7 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
 		receipt, err = store.AbortRestore(ctx, workspacestore.RestoreMutation{Mutation: mutation})
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE:
-		return backend.reconcileWorkspace(ctx)
+		return backend.reconcileWorkspace(ctx, command.ReceiptRequests)
 	default:
 		err = fmt.Errorf("SecondBox Microsandbox local-workspace command kind is unsupported")
 	}
@@ -128,8 +128,12 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 	return workspaceReceiptEvidence(receipt), nil
 }
 
-func (backend *AssignmentBackend) reconcileWorkspace(ctx context.Context) (runnercontrol.LocalWorkspaceEvidence, error) {
-	report, err := backend.config.WorkspaceStore.Reconcile(ctx)
+func (backend *AssignmentBackend) reconcileWorkspace(ctx context.Context, requests []*runnerprotocol.LocalWorkspaceReceiptRequest) (runnercontrol.LocalWorkspaceEvidence, error) {
+	requested, err := runnercontrol.WorkspaceReceiptRequests(requests)
+	if err != nil {
+		return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+	}
+	report, err := backend.config.WorkspaceStore.Reconcile(ctx, requested)
 	if err != nil {
 		return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
 	}

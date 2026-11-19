@@ -1203,7 +1203,7 @@ func (store *Store) inspectLocked(workspaceID string) (WorkspaceInspection, erro
 // Reconcile returns sorted manifest and receipt evidence after validating every
 // known logical path. It does not infer successful mutations from arbitrary
 // file presence.
-func (store *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
+func (store *Store) Reconcile(ctx context.Context, requested []ReceiptIdentity) (ReconcileReport, error) {
 	workspaceEntries, err := os.ReadDir(store.workspacesRoot())
 	if err != nil {
 		return ReconcileReport{}, fmt.Errorf("SecondBox WorkspaceStore list Workspaces: %w", err)
@@ -1235,59 +1235,30 @@ func (store *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		}
 		report.Workspaces = append(report.Workspaces, inspection)
 	}
-	receiptWorkspaceEntries, err := os.ReadDir(store.receiptsRoot())
-	if err != nil {
-		return ReconcileReport{}, fmt.Errorf("SecondBox WorkspaceStore list receipts: %w", err)
-	}
-	for _, workspaceEntry := range receiptWorkspaceEntries {
-		if !workspaceEntry.IsDir() || validateID(workspaceEntry.Name()) != nil {
-			return ReconcileReport{}, fmt.Errorf("%w: invalid receipt directory", ErrCorruptState)
+	seen := make(map[ReceiptIdentity]struct{}, len(requested))
+	for _, identity := range requested {
+		if err := ctx.Err(); err != nil {
+			return ReconcileReport{}, err
 		}
-		operationEntries, err := os.ReadDir(filepath.Join(store.receiptsRoot(), workspaceEntry.Name()))
+		if _, duplicate := seen[identity]; duplicate {
+			continue
+		}
+		seen[identity] = struct{}{}
+		if err := validateID(identity.WorkspaceID); err != nil {
+			return ReconcileReport{}, err
+		}
+		if err := validateID(identity.OperationID); err != nil {
+			return ReconcileReport{}, err
+		}
+		if !reconcilableReceiptKind(identity.Kind) {
+			return ReconcileReport{}, fmt.Errorf("SecondBox WorkspaceStore requested receipt kind %q is unsupported", identity.Kind)
+		}
+		receipt, found, err := store.loadAnyReceipt(Mutation{WorkspaceID: identity.WorkspaceID, OperationID: identity.OperationID}, identity.Kind)
 		if err != nil {
 			return ReconcileReport{}, err
 		}
-		for _, operationEntry := range operationEntries {
-			if !operationEntry.IsDir() || validateID(operationEntry.Name()) != nil {
-				return ReconcileReport{}, fmt.Errorf("%w: invalid receipt operation directory", ErrCorruptState)
-			}
-			entries, err := os.ReadDir(filepath.Join(
-				store.receiptsRoot(),
-				workspaceEntry.Name(),
-				operationEntry.Name(),
-			))
-			if err != nil {
-				return ReconcileReport{}, err
-			}
-			for _, entry := range entries {
-				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-					return ReconcileReport{}, fmt.Errorf("%w: invalid receipt entry", ErrCorruptState)
-				}
-				var receipt Receipt
-				if err := readJSON(
-					filepath.Join(
-						store.receiptsRoot(),
-						workspaceEntry.Name(),
-						operationEntry.Name(),
-						entry.Name(),
-					),
-					&receipt,
-				); err != nil {
-					return ReconcileReport{}, err
-				}
-				if err := validateReceipt(receipt); err != nil {
-					return ReconcileReport{}, err
-				}
-				if receipt.WorkspaceID != workspaceEntry.Name() ||
-					receipt.OperationID != operationEntry.Name() ||
-					strings.TrimSuffix(entry.Name(), ".json") != receipt.Kind {
-					return ReconcileReport{}, fmt.Errorf(
-						"%w: receipt path disagrees with content",
-						ErrCorruptState,
-					)
-				}
-				report.Receipts = append(report.Receipts, receipt)
-			}
+		if found {
+			report.Receipts = append(report.Receipts, receipt)
 		}
 	}
 	sort.Slice(report.Workspaces, func(i int, j int) bool {
@@ -1300,6 +1271,19 @@ func (store *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		return report.Receipts[i].WorkspaceID < report.Receipts[j].WorkspaceID
 	})
 	return report, nil
+}
+
+func reconcilableReceiptKind(kind string) bool {
+	switch kind {
+	case ReceiptWorkspaceCreate, ReceiptWorkspaceClone, ReceiptWorkspaceDelete,
+		ReceiptGenerationAdvance, ReceiptSnapshotCreate, ReceiptSnapshotDelete,
+		ReceiptRestorePrepare, ReceiptRestoreSwap, ReceiptRestoreFinalize,
+		ReceiptRestoreAbort, ReceiptRelocationExport, ReceiptRelocationImport,
+		ReceiptRelocationAbort:
+		return true
+	default:
+		return false
+	}
 }
 
 func (store *Store) ensureTemplate(ctx context.Context, capacityBytes int64) (string, error) {

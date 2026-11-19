@@ -58,6 +58,8 @@ type RunnerProtocolConfig struct {
 	// DataPlaneCertificate is the runner identity used by the caller-facing
 	// direct data-plane TLS listener.
 	DataPlaneCertificate tls.Certificate
+	// DataPlaneGetCertificate reloads a same-key renewed leaf for new handshakes.
+	DataPlaneGetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 }
 
 // BackendReadiness is verified local capability and capacity evidence.

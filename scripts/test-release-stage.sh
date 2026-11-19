@@ -78,7 +78,7 @@ LC_ALL=C "$repo_root/scripts/release-build-shared.sh" --test-mode 0.7.0 "$shared
 LC_ALL="$dictionary_locale" "$repo_root/scripts/release-build-shared.sh" --test-mode 0.7.0 "$work_dir/shared-again" >/dev/null
 diff -r "$shared" "$work_dir/shared-again" || { echo "shared release build is not reproducible" >&2; exit 1; }
 shared_commit="$(jq -er '.sourceCommit' "$shared/shared-artifacts.json")"
-jq -e --arg commit "$shared_commit" '.schemaVersion == "secondbox.release/shared-artifacts/v1" and .version == "0.7.0" and .tag == "v0.7.0" and .sourceCommit == $commit and (.postgresImage | test("^docker.io/library/postgres@sha256:[0-9a-f]{64}$")) and ([.files[].name] == ([.files[].name] | sort)) and (.files | length == 14)' "$shared/shared-artifacts.json" >/dev/null
+jq -e --arg commit "$shared_commit" '.schemaVersion == "secondbox.release/shared-artifacts/v1" and .version == "0.7.0" and .tag == "v0.7.0" and .sourceCommit == $commit and (.postgresImage | test("^docker.io/library/postgres@sha256:[0-9a-f]{64}$")) and ([.files[].name] == ([.files[].name] | sort)) and (.files | length == 22)' "$shared/shared-artifacts.json" >/dev/null
 while IFS=$'\t' read -r name digest; do
   [[ "sha256:$(sha256sum "$shared/$name" | awk '{print $1}')" == "$digest" ]] || { echo "shared artifacts record misstates $name" >&2; exit 1; }
 done < <(jq -r '.files[] | [.name, .digest] | @tsv' "$shared/shared-artifacts.json")

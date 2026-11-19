@@ -217,8 +217,12 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 			workspacestore.RestoreMutation{Mutation: mutation},
 		)
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE:
+		requested, requestErr := runnercontrol.WorkspaceReceiptRequests(command.ReceiptRequests)
+		if requestErr != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(requestErr)
+		}
 		var report workspacestore.ReconcileReport
-		report, err = b.manager.workspaceStore.Reconcile(ctx)
+		report, err = b.manager.workspaceStore.Reconcile(ctx, requested)
 		if err == nil {
 			evidence := runnercontrol.LocalWorkspaceEvidence{
 				Inventory: make(

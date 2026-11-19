@@ -19,8 +19,36 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (store *PostgresControlPlaneStore) ConfigureWorkspaceArchives(provider workspacearchive.TransferProvider) {
+// ConfigureWorkspaceArchives fixes archive authority and Profile policy before requests or workers start.
+func (store *PostgresControlPlaneStore) ConfigureWorkspaceArchives(ctx context.Context, provider workspacearchive.TransferProvider, profileIdleSeconds map[string]int64) error {
+	if store.archiveConfigured {
+		return errors.New("SecondBox workspace archive configuration is immutable until restart")
+	}
+	for profile, seconds := range profileIdleSeconds {
+		if provider == nil || profile == "" || seconds < 1 || seconds > 365*24*3600 {
+			return errors.New("SecondBox workspace archive policy requires a transfer provider, Profile and positive idle duration no greater than one year")
+		}
+	}
+	if provider == nil {
+		var required bool
+		if err := store.pool.QueryRow(ctx, `SELECT
+ EXISTS(SELECT 1 FROM secondbox.workspaces WHERE state IN ('archived','restoring') OR mutation_kind IN ('archive','archive_restore'))
+ OR EXISTS(SELECT 1 FROM secondbox.workspace_archives WHERE state NOT IN ('succeeded','failed'))
+ OR EXISTS(SELECT 1 FROM secondbox.archive_cleanup)`).Scan(&required); err != nil {
+			return fmt.Errorf("SecondBox workspace archive configuration state check: %w", err)
+		}
+		if required {
+			return errors.New("SecondBox workspace archive configuration is required until all archived Workspaces are restored and archive mutations, transfers and object cleanup finish")
+		}
+	}
+	policy := make(map[string]int64, len(profileIdleSeconds))
+	for profile, seconds := range profileIdleSeconds {
+		policy[profile] = seconds
+	}
 	store.archiveTransfers = provider
+	store.archiveProfileIdleSeconds = policy
+	store.archiveConfigured = true
+	return nil
 }
 
 func (store *PostgresControlPlaneStore) ArchiveSandbox(ctx context.Context, input ports.WorkspaceArchiveInput) (contracts.Operation, error) {
@@ -104,28 +132,27 @@ func (store *PostgresControlPlaneStore) ReconcileWorkspaceArchives(ctx context.C
 	if store.archiveTransfers == nil {
 		return nil
 	}
-	if err := store.expireArchiveStartWaits(ctx, now); err != nil {
-		return err
+	var failures []error
+	record := func(stage string, err error) {
+		if err != nil {
+			failures = append(failures, fmt.Errorf("SecondBox archive reconciliation %s: %w", stage, err))
+		}
 	}
-	if err := store.prepareResidentWorkspaceStarts(ctx, now, profileIdleSeconds); err != nil {
-		return err
-	}
-	if err := store.prepareUnhomedWorkspaceCreates(ctx, now); err != nil {
-		return err
-	}
-	if err := store.prepareArchivedWorkspaceStarts(ctx, now); err != nil {
-		return err
-	}
-	if err := store.deleteArchivedWorkspaces(ctx, now); err != nil {
-		return err
-	}
-	if err := store.archiveIdleWorkspaces(ctx, now, profileIdleSeconds); err != nil {
-		return err
-	}
-	if err := store.archivePressureWorkspaces(ctx, now, profileIdleSeconds); err != nil {
-		return err
-	}
-	rows, err := store.pool.Query(ctx, `SELECT archive.id,archive.operation_id,archive.sandbox_id,archive.workspace_id,archive.source_runner_id,archive.target_runner_id,archive.generation,archive.logical_capacity_bytes,archive.archive_key,archive.state,archive.command_id,archive.fencing_token,archive.descriptor_json,command.payload FROM secondbox.workspace_archives archive LEFT JOIN secondbox.runner_commands command ON command.id=archive.command_id WHERE archive.state IN ('queued','restore_queued','cleanup_queued','abort_queued') OR (archive.state IN ('queued_sent','restore_queued_sent') AND command.state='pending') ORDER BY archive.updated_at,archive.id LIMIT 32`)
+	record("expiry", store.expireArchiveStartWaits(ctx, now))
+	record("lost restore recovery", store.recoverLostWorkspaceRestores(ctx, now))
+	record("resident starts", store.prepareResidentWorkspaceStarts(ctx, now, profileIdleSeconds))
+	record("unhomed creates", store.prepareUnhomedWorkspaceCreates(ctx, now))
+	record("archived starts", store.prepareArchivedWorkspaceStarts(ctx, now))
+	record("archived deletion", store.deleteArchivedWorkspaces(ctx, now))
+	record("idle policy", store.archiveIdleWorkspaces(ctx, now, profileIdleSeconds))
+	record("pressure policy", store.archivePressureWorkspaces(ctx, now, profileIdleSeconds))
+	record("commands", store.queuePendingWorkspaceArchiveCommands(ctx, now))
+	record("object cleanup", store.collectArchiveObjects(ctx, now))
+	return errors.Join(failures...)
+}
+
+func (store *PostgresControlPlaneStore) queuePendingWorkspaceArchiveCommands(ctx context.Context, now time.Time) error {
+	rows, err := store.pool.Query(ctx, `SELECT archive.id,archive.operation_id,archive.sandbox_id,archive.workspace_id,archive.source_runner_id,archive.target_runner_id,archive.generation,archive.logical_capacity_bytes,archive.archive_key,archive.state,archive.command_id,archive.fencing_token,archive.descriptor_json,command.payload FROM secondbox.workspace_archives archive LEFT JOIN secondbox.runner_commands command ON command.id=archive.command_id WHERE (archive.state IN ('queued','restore_queued','cleanup_queued','abort_queued') OR (archive.state IN ('queued_sent','restore_queued_sent') AND command.state='pending')) AND (archive.not_before IS NULL OR archive.not_before<=$1) ORDER BY archive.updated_at,archive.id LIMIT 32`, now)
 	if err != nil {
 		return err
 	}
@@ -143,21 +170,29 @@ func (store *PostgresControlPlaneStore) ReconcileWorkspaceArchives(ctx context.C
 		return err
 	}
 	rows.Close()
+	var failures []error
 	for _, command := range commands {
+		var commandErr error
 		if strings.HasSuffix(command.state, "_sent") {
 			envelope := new(runnerv1.ControlPlaneToRunner)
-			if err := proto.Unmarshal(command.commandPayload, envelope); err != nil {
-				return err
-			}
-			if grant := envelope.GetLocalWorkspace().GetArchiveTransfer(); grant != nil && grant.ExpiresAtUnixMs > uint64(now.Add(time.Minute).UnixMilli()) {
-				continue
+			commandErr = proto.Unmarshal(command.commandPayload, envelope)
+			if commandErr == nil {
+				if grant := envelope.GetLocalWorkspace().GetArchiveTransfer(); grant != nil && grant.ExpiresAtUnixMs > uint64(now.Add(time.Minute).UnixMilli()) {
+					continue
+				}
 			}
 		}
-		if err := store.queueWorkspaceArchiveCommand(ctx, command, now); err != nil {
-			return err
+		if commandErr == nil {
+			commandErr = store.queueWorkspaceArchiveCommand(ctx, command, now)
+		}
+		if commandErr != nil {
+			failures = append(failures, fmt.Errorf("SecondBox archive command %s: %w", command.id, commandErr))
+			if _, err := store.pool.Exec(ctx, `UPDATE secondbox.workspace_archives SET not_before=$2,updated_at=$3 WHERE id=$1 AND state=$4 AND command_id=$5`, command.id, now.Add(workspacearchive.ReconciliationRetryDelay), now, command.state, command.commandID); err != nil {
+				failures = append(failures, err)
+			}
 		}
 	}
-	return store.collectArchiveObjects(ctx)
+	return errors.Join(failures...)
 }
 
 func (store *PostgresControlPlaneStore) queueWorkspaceArchiveCommand(ctx context.Context, record workspaceArchiveCommand, now time.Time) error {
@@ -186,7 +221,8 @@ func (store *PostgresControlPlaneStore) queueWorkspaceArchiveCommand(ctx context
 	if err != nil {
 		return err
 	}
-	command := localWorkspaceCommand(record.commandID, kind, contracts.Operation{ID: record.operationID, RequestID: record.operationID}, record.commandID, record.sandboxID, record.workspaceID, "", record.generation, record.generation, record.capacity, runnerID, record.fence)
+	command := localWorkspaceCommand(record.commandID, kind, contracts.Operation{ID: record.id, RequestID: record.operationID}, record.commandID, record.sandboxID, record.workspaceID, "", record.generation, record.generation, record.capacity, runnerID, record.fence)
+	command.Correlation.OperationId = record.operationID
 	command.ArchiveTransfer = transfer
 	payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{LocalWorkspace: command}})
 	if err != nil {
@@ -198,16 +234,17 @@ func (store *PostgresControlPlaneStore) queueWorkspaceArchiveCommand(ctx context
 	}
 	defer tx.Rollback(ctx)
 	var state, commandID string
-	if err := tx.QueryRow(ctx, `SELECT state,command_id FROM secondbox.workspace_archives WHERE id=$1 FOR UPDATE`, record.id).Scan(&state, &commandID); err != nil {
+	var notBefore *time.Time
+	if err := tx.QueryRow(ctx, `SELECT state,command_id,not_before FROM secondbox.workspace_archives WHERE id=$1 FOR UPDATE`, record.id).Scan(&state, &commandID, &notBefore); err != nil {
 		return err
 	}
-	if state != record.state || commandID != record.commandID {
+	if state != record.state || commandID != record.commandID || notBefore != nil && notBefore.After(now) {
 		return nil
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO secondbox.runner_commands(id,runner_id,assignment_id,kind,payload,state,target_connection_id,delivery_count,created_at,updated_at) VALUES($1,$2,$3,'local-workspace',$4,'pending','',0,$5,$5) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at WHERE secondbox.runner_commands.state='pending'`, record.commandID, runnerID, record.id, payload, now); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE secondbox.workspace_archives SET state=$2,updated_at=$3 WHERE id=$1`, record.id, phase+"_sent", now); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE secondbox.workspace_archives SET state=$2,not_before=NULL,updated_at=$3 WHERE id=$1`, record.id, phase+"_sent", now); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -232,12 +269,13 @@ func (store *PostgresControlPlaneStore) prepareArchivedWorkspaceStarts(ctx conte
 		return err
 	}
 	rows.Close()
+	var failures []error
 	for _, id := range ids {
 		if err := store.prepareArchivedWorkspaceStart(ctx, id, now); err != nil && !errors.Is(err, ports.ErrRelocationTargetUnavailable) && !errors.Is(err, ports.ErrEgressContextUnavailable) && !errors.Is(err, ports.ErrWorkspaceMutation) {
-			return fmt.Errorf("SecondBox archived Workspace start %s: %w", id, err)
+			failures = append(failures, fmt.Errorf("SecondBox archived Workspace start %s: %w", id, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (store *PostgresControlPlaneStore) prepareArchivedWorkspaceStart(ctx context.Context, sandboxID string, now time.Time) error {
@@ -353,12 +391,13 @@ func (store *PostgresControlPlaneStore) prepareUnhomedWorkspaceCreates(ctx conte
 		return err
 	}
 	rows.Close()
+	var failures []error
 	for _, id := range ids {
 		if err := store.placeUnhomedWorkspaceCreate(ctx, id, now); err != nil && !errors.Is(err, ports.ErrHomeRunnerUnavailable) && !errors.Is(err, ports.ErrEgressContextUnavailable) && !errors.Is(err, ports.ErrWorkspaceMutation) {
-			return fmt.Errorf("SecondBox unhomed Workspace placement %s: %w", id, err)
+			failures = append(failures, fmt.Errorf("SecondBox unhomed Workspace placement %s: %w", id, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (store *PostgresControlPlaneStore) placeUnhomedWorkspaceCreate(ctx context.Context, sandboxID string, now time.Time) error {
@@ -436,6 +475,7 @@ func (store *PostgresControlPlaneStore) placeUnhomedWorkspaceCreate(ctx context.
 }
 
 func (store *PostgresControlPlaneStore) archiveIdleWorkspaces(ctx context.Context, now time.Time, profiles map[string]int64) error {
+	var failures []error
 	for profile, idleSeconds := range profiles {
 		if idleSeconds < 1 {
 			return errors.New("SecondBox archive idle policy must be positive")
@@ -477,25 +517,16 @@ func (store *PostgresControlPlaneStore) archiveIdleWorkspaces(ctx context.Contex
 		}
 		rows.Close()
 		for _, candidate := range candidates {
-			if _, err := store.ArchiveSandbox(ctx, candidate); err != nil && !errors.Is(err, ports.ErrWorkspaceMutation) && !errors.Is(err, ports.ErrRevisionConflict) && !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
-				return err
+			if _, err := store.ArchiveSandbox(ctx, candidate); err != nil && !errors.Is(err, ports.ErrWorkspaceMutation) && !errors.Is(err, ports.ErrRevisionConflict) && !errors.Is(err, ports.ErrHomeRunnerUnavailable) && !errors.Is(err, ports.ErrSandboxNotStopped) && !errors.Is(err, ports.ErrRelocationSnapshotsPresent) {
+				failures = append(failures, fmt.Errorf("SecondBox idle archive %s: %w", candidate.SandboxID, err))
 			}
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
-func (store *PostgresControlPlaneStore) deleteArchivedWorkspaces(ctx context.Context, now time.Time) error {
-	_, err := store.pool.Exec(ctx, `WITH candidates AS(SELECT workspace.id,workspace.archive_key,sandbox.id AS sandbox_id FROM secondbox.workspaces workspace JOIN secondbox.sandboxes sandbox ON sandbox.workspace_id=workspace.id WHERE workspace.state='archived' AND sandbox.desired_state='deleted' AND workspace.mutation_state=''), queued AS(INSERT INTO secondbox.archive_cleanup(archive_key,created_at) SELECT archive_key,$1 FROM candidates ON CONFLICT DO NOTHING), disk AS(UPDATE secondbox.workspaces workspace SET state='deleted',archive_key='',archive_descriptor_json=NULL,updated_at=$1 FROM candidates WHERE workspace.id=candidates.id RETURNING workspace.sandbox_id) UPDATE secondbox.sandboxes sandbox SET state='deleted',deleted_at=$1,revision=revision+1,updated_at=$1 FROM disk WHERE sandbox.id=disk.sandbox_id`, now)
-	if err != nil {
-		return err
-	}
-	_, err = store.pool.Exec(ctx, `UPDATE secondbox.operations operation SET state='succeeded',completed_at=$1,updated_at=$1 WHERE operation.kind='delete' AND operation.state IN ('pending','running') AND EXISTS(SELECT 1 FROM secondbox.sandboxes sandbox WHERE sandbox.id=operation.sandbox_id AND sandbox.state='deleted')`, now)
-	return err
-}
-
-func (store *PostgresControlPlaneStore) collectArchiveObjects(ctx context.Context) error {
-	rows, err := store.pool.Query(ctx, `SELECT archive_key FROM secondbox.archive_cleanup ORDER BY created_at LIMIT 16`)
+func (store *PostgresControlPlaneStore) collectArchiveObjects(ctx context.Context, now time.Time) error {
+	rows, err := store.pool.Query(ctx, `SELECT archive_key FROM secondbox.archive_cleanup WHERE not_before IS NULL OR not_before<=$1 ORDER BY created_at LIMIT 16`, now)
 	if err != nil {
 		return err
 	}
@@ -513,13 +544,18 @@ func (store *PostgresControlPlaneStore) collectArchiveObjects(ctx context.Contex
 		return err
 	}
 	rows.Close()
+	var failures []error
 	for _, key := range keys {
 		if err := store.archiveTransfers.Delete(ctx, key); err != nil {
-			return err
+			failures = append(failures, fmt.Errorf("SecondBox archive object cleanup %s: %w", key, err))
+			if _, retryErr := store.pool.Exec(ctx, `UPDATE secondbox.archive_cleanup SET not_before=$2 WHERE archive_key=$1`, key, now.Add(workspacearchive.ReconciliationRetryDelay)); retryErr != nil {
+				failures = append(failures, retryErr)
+			}
+			continue
 		}
 		if _, err := store.pool.Exec(ctx, `DELETE FROM secondbox.archive_cleanup WHERE archive_key=$1`, key); err != nil {
-			return err
+			failures = append(failures, err)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }

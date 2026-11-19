@@ -177,6 +177,9 @@ func (store *Store) ReplayRelocationImport(
 	if err := validateMutation(request.Mutation); err != nil {
 		return Receipt{}, false, err
 	}
+	if err := store.requireRelocationImportNotDeleted(request.Mutation); err != nil {
+		return Receipt{}, false, err
+	}
 	digest, err := inputDigest(request, request.FencingToken)
 	if err != nil {
 		return Receipt{}, false, err
@@ -211,6 +214,9 @@ func (store *Store) BeginRelocationImport(
 	if err := validateMutation(request.Mutation); err != nil {
 		return nil, err
 	}
+	if err := store.requireRelocationImportNotDeleted(request.Mutation); err != nil {
+		return nil, err
+	}
 	digest, err := inputDigest(request, request.FencingToken)
 	if err != nil {
 		return nil, err
@@ -238,6 +244,10 @@ func (store *Store) BeginRelocationImport(
 	}
 	lock, err := store.lockWorkspace(request.WorkspaceID)
 	if err != nil {
+		return nil, err
+	}
+	if err := store.requireRelocationImportNotDeleted(request.Mutation); err != nil {
+		closeLockedFile(lock)
 		return nil, err
 	}
 	if receipt, found, err := store.loadReceipt(
@@ -336,6 +346,20 @@ func (store *Store) BeginRelocationImport(
 		store: store, request: request, digest: digest, file: image, lock: lock,
 		hash: sha256.New(),
 	}, nil
+}
+
+// A lost restore target may receive cleanup before its delayed import starts.
+// The retained deletion receipt fences that exact phase even after a new phase
+// restores the same Workspace generation on this Runner.
+func (store *Store) requireRelocationImportNotDeleted(mutation Mutation) error {
+	_, found, err := store.loadAnyReceipt(mutation, ReceiptWorkspaceDelete)
+	if err != nil {
+		return err
+	}
+	if found {
+		return ErrStaleFence
+	}
+	return nil
 }
 
 func (relocation *relocationImport) CompletedReceipt() (Receipt, bool) {

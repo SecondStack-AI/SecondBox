@@ -4,9 +4,10 @@ Parameters:
   FleetName:
     Type: String
     AllowedPattern: '[a-z][a-z0-9-]{2,63}'
-  QualificationRun:
+  FleetRef:
     Type: String
     AllowedPattern: '[a-z0-9-]+'
+    Description: Stable ownership reference shared with fleetRef in the controller configuration.
   WorkerAMI:
     Type: AWS::EC2::Image::Id
   WorkerInstanceType:
@@ -57,14 +58,18 @@ Parameters:
   MaximumNodes:
     Type: Number
     MinValue: 1
-    MaxValue: 2
+    Description: Explicit operator fleet ceiling. Match maximumNodes in the fleet controller configuration and the account quota.
   InitialNodes:
     Type: Number
     MinValue: 0
-    MaxValue: 1
+    Description: Initial worker capacity, no greater than MaximumNodes.
   ExpiresAt:
     Type: String
-    Description: UTC one-time Scheduler timestamp, e.g. 2026-11-19T03:00:00. Expiry preserves data volumes.
+    Default: ''
+    AllowedPattern: '^$|^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
+    Description: Optional destructive qualification expiry in UTC, e.g. 2026-11-19T03:00:00. Leave empty for production. Expiry stops workers regardless of archival and retains data volumes.
+Conditions:
+  QualificationExpiryEnabled: !Not [!Equals [!Ref ExpiresAt, '']]
 Resources:
   WorkerRole:
     Type: AWS::IAM::Role
@@ -85,7 +90,7 @@ Resources:
                 Action: s3:GetObject
                 Resource: !Sub 'arn:${AWS::Partition}:s3:::${WorkerBundleBucket}/${WorkerBundlePrefix}/${WorkerBundleKey}'
       Tags:
-        - {Key: secondstack.ai/qualification-run, Value: !Ref QualificationRun}
+        - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
   WorkerProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -104,7 +109,7 @@ Resources:
         - {IpProtocol: tcp, FromPort: !Ref EnrollmentPort, ToPort: !Ref EnrollmentPort, CidrIp: !Ref ControllerCIDR}
         - {IpProtocol: tcp, FromPort: !Ref RegistryPort, ToPort: !Ref RegistryPort, CidrIp: !Ref ControllerCIDR}
       Tags:
-        - {Key: secondstack.ai/qualification-run, Value: !Ref QualificationRun}
+        - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
   WorkerLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -126,11 +131,11 @@ Resources:
         TagSpecifications:
           - ResourceType: instance
             Tags:
-              - {Key: secondstack.ai/qualification-run, Value: !Ref QualificationRun}
+              - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
               - {Key: secondbox-fleet, Value: !Ref FleetName}
           - ResourceType: volume
             Tags:
-              - {Key: secondstack.ai/qualification-run, Value: !Ref QualificationRun}
+              - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
               - {Key: secondbox-fleet, Value: !Ref FleetName}
         UserData:
           Fn::Base64: !Sub |
@@ -170,9 +175,10 @@ Resources:
         LaunchTemplateId: !Ref WorkerLaunchTemplate
         Version: !GetAtt WorkerLaunchTemplate.LatestVersionNumber
       Tags:
-        - {Key: secondstack.ai/qualification-run, Value: !Ref QualificationRun, PropagateAtLaunch: true}
+        - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef, PropagateAtLaunch: true}
         - {Key: secondbox-fleet, Value: !Ref FleetName, PropagateAtLaunch: true}
   ExpiryRole:
+    Condition: QualificationExpiryEnabled
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -193,6 +199,7 @@ Resources:
                 Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FleetName}-expiry:*'
   Expiry:
+    Condition: QualificationExpiryEnabled
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${FleetName}-expiry'
@@ -201,7 +208,7 @@ Resources:
       Role: !GetAtt ExpiryRole.Arn
       Timeout: 60
       Environment:
-        Variables: {FLEET_NAME: !Ref FleetName, OWNERSHIP_TAG: !Ref QualificationRun}
+        Variables: {FLEET_NAME: !Ref FleetName, OWNERSHIP_TAG: !Ref FleetRef}
       Code:
         ZipFile: |
           import os
@@ -214,7 +221,7 @@ Resources:
                   return {'state': 'absent'}
               group = groups[0]
               tags = {tag['Key']: tag['Value'] for tag in group['Tags']}
-              if tags.get('secondstack.ai/qualification-run') != os.environ['OWNERSHIP_TAG']:
+              if tags.get('secondstack.ai/fleet-ref') != os.environ['OWNERSHIP_TAG']:
                   raise RuntimeError('Fleet expiry ownership mismatch')
               ids = [node['InstanceId'] for node in group['Instances']]
               if ids:
@@ -222,6 +229,7 @@ Resources:
               api.set_desired_capacity(AutoScalingGroupName=name, DesiredCapacity=0, HonorCooldown=False)
               return {'state': 'expiry_requested', 'retained_data_volumes': True}
   ExpiryScheduleRole:
+    Condition: QualificationExpiryEnabled
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -233,6 +241,7 @@ Resources:
             Version: '2012-10-17'
             Statement: [{Effect: Allow, Action: lambda:InvokeFunction, Resource: !GetAtt Expiry.Arn}]
   ExpirySchedule:
+    Condition: QualificationExpiryEnabled
     Type: AWS::Scheduler::Schedule
     Properties:
       ScheduleExpression: !Sub 'at(${ExpiresAt})'
@@ -248,4 +257,6 @@ Outputs:
   WorkerRoleName: {Value: !Ref WorkerRole}
   WorkerRoleARN: {Value: !GetAtt WorkerRole.Arn}
   WorkerSecurityGroupID: {Value: !Ref WorkerSecurityGroup}
-  ExpiryFunction: {Value: !Ref Expiry}
+  ExpiryFunction:
+    Condition: QualificationExpiryEnabled
+    Value: !Ref Expiry

@@ -19,7 +19,7 @@ UPDATE secondbox.runner_commands SET assignment_id='archive-' || $1 WHERE id='co
 INSERT INTO secondbox.workspace_archives(id,operation_id,sandbox_id,workspace_id,source_runner_id,generation,logical_capacity_bytes,archive_key,state,command_id,fencing_token,created_at,updated_at) VALUES('archive-' || $1,'operation-relocation-' || $1,'sandbox-relocation-' || $1,'workspace-relocation-' || $1,'runner-home',3,8589934592,'workspaces/' || $1,'queued_sent','command-relocation-export-' || $1,$3,$2,$2)`, pgx.QueryExecModeSimpleProtocol, suffix, now, []byte("01234567890123456789012345678901")); err != nil {
 		t.Fatal(err)
 	}
-	return &runnerv1.LocalWorkspaceResult{CommandVersion: 1, Kind: runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT, Terminal: runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED, OperationId: "operation-relocation-" + suffix, EffectId: "command-relocation-export-" + suffix, SandboxId: "sandbox-relocation-" + suffix, WorkspaceId: "workspace-relocation-" + suffix, Generation: 3, LogicalCapacityBytes: 8 << 30, ReceiptRecordedAtUnixMs: uint64(now.UnixMilli()), ArchiveDescriptor: &runnerv1.WorkspaceArchiveDescriptor{ArchiveBytes: 4096, ArchiveChecksum: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", ImageChecksum: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}}
+	return &runnerv1.LocalWorkspaceResult{CommandVersion: 1, Kind: runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT, Terminal: runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED, OperationId: "archive-" + suffix, EffectId: "command-relocation-export-" + suffix, SandboxId: "sandbox-relocation-" + suffix, WorkspaceId: "workspace-relocation-" + suffix, Generation: 3, LogicalCapacityBytes: 8 << 30, ReceiptRecordedAtUnixMs: uint64(now.UnixMilli()), ArchiveDescriptor: &runnerv1.WorkspaceArchiveDescriptor{ArchiveBytes: 4096, ArchiveChecksum: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", ImageChecksum: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}}
 }
 
 func TestWorkspaceArchiveReceiptCommitsBeforeIndependentSourceCleanup(t *testing.T) {
@@ -60,6 +60,67 @@ INSERT INTO secondbox.runner_commands(id,runner_id,assignment_id,kind,payload,st
 	}
 	if home != "new-runner" || state != "ready" {
 		t.Fatalf("source cleanup modified new home=%q state=%q", home, state)
+	}
+}
+
+func TestWorkspaceArchiveCleanupRejectsAnotherSandboxIdentity(t *testing.T) {
+	storage := openRunnerControlDatabase(t)
+	now := time.Now().UTC()
+	first := seedArchiveReceiptAuthority(t, storage, "receipt-scope-first", now)
+	second := seedArchiveReceiptAuthority(t, storage, "receipt-scope-second", now)
+	if _, err := storage.pool.Exec(t.Context(), `UPDATE secondbox.workspace_archives SET state='cleanup_queued_sent' WHERE id=$1`, second.OperationId); err != nil {
+		t.Fatal(err)
+	}
+	first.OperationId, first.EffectId = second.OperationId, second.EffectId
+	first.Kind = runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE
+	tx, err := storage.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if err := recordLocalWorkspaceResult(t.Context(), tx, "runner-home", first, now); err == nil {
+		t.Fatal("archive cleanup accepted another Sandbox's identity")
+	}
+}
+
+func TestExpiredArchiveImportCannotAcquireAReplacementHome(t *testing.T) {
+	storage := openRunnerControlDatabase(t)
+	now := time.Now().UTC()
+	result := seedArchiveReceiptAuthority(t, storage, "late-import", now)
+	if _, err := storage.pool.Exec(t.Context(), `UPDATE secondbox.workspaces SET state='ready',home_runner_id='replacement-home',generation=4,mutation_kind='',mutation_id='',mutation_effect_id='',mutation_operation_id='',mutation_state='' WHERE id=$1;
+ UPDATE secondbox.workspace_archives SET state='cleanup_queued_sent',command_id='late-import-cleanup' WHERE id=$2;
+ UPDATE secondbox.runner_commands SET state='expired' WHERE id=$3;`, pgx.QueryExecModeSimpleProtocol, result.WorkspaceId, result.OperationId, result.EffectId); err != nil {
+		t.Fatal(err)
+	}
+	result.Kind = runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT
+	recordLocalWorkspaceTestResult(t, storage, result, now)
+	var home, command string
+	var generation int64
+	if err := storage.pool.QueryRow(t.Context(), `SELECT w.home_runner_id,w.generation,c.state FROM secondbox.workspaces w,secondbox.runner_commands c WHERE w.id=$1 AND c.id=$2`, result.WorkspaceId, result.EffectId).Scan(&home, &generation, &command); err != nil {
+		t.Fatal(err)
+	}
+	if home != "replacement-home" || generation != 4 || command != "expired" {
+		t.Fatalf("late import changed authority: home=%s generation=%d command=%s", home, generation, command)
+	}
+}
+
+func TestArchiveCleanupAcceptsDurableAbsenceWithoutChangingCurrentHome(t *testing.T) {
+	storage := openRunnerControlDatabase(t)
+	now := time.Now().UTC()
+	result := seedArchiveReceiptAuthority(t, storage, "absent-cleanup", now)
+	if _, err := storage.pool.Exec(t.Context(), `UPDATE secondbox.workspaces SET state='ready',home_runner_id='replacement-home',generation=4 WHERE id=$1;
+ UPDATE secondbox.workspace_archives SET state='cleanup_queued_sent' WHERE id=$2`, pgx.QueryExecModeSimpleProtocol, result.WorkspaceId, result.OperationId); err != nil {
+		t.Fatal(err)
+	}
+	result.Kind = runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE
+	result.LogicalCapacityBytes = 0
+	recordLocalWorkspaceTestResult(t, storage, result, now)
+	var phase, home string
+	if err := storage.pool.QueryRow(t.Context(), `SELECT a.state,w.home_runner_id FROM secondbox.workspace_archives a,secondbox.workspaces w WHERE a.id=$1 AND w.id=$2`, result.OperationId, result.WorkspaceId).Scan(&phase, &home); err != nil {
+		t.Fatal(err)
+	}
+	if phase != "succeeded" || home != "replacement-home" {
+		t.Fatalf("cleanup phase=%s home=%s", phase, home)
 	}
 }
 
@@ -116,7 +177,7 @@ func TestWorkspaceArchiveRestoreReceiptPreservesConcurrentLifecycleIntent(t *tes
 UPDATE secondbox.workspace_archives SET target_runner_id='runner-home',source_runner_id='',state='restore_queued_sent',descriptor_json=$2 WHERE workspace_id=$1;
 UPDATE secondbox.sandboxes SET state='starting',desired_state=$3,reconcile_owner='old-claim',reconcile_claim_expires_at=$4,next_reconcile_at=$4 WHERE id=$5;
 UPDATE secondbox.operations SET kind='start' WHERE id=$6;
-INSERT INTO secondbox.operations(id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,created_at,updated_at) VALUES($7,'tenant','subject',$5,'',$8,'pending',$7,'{}','','',false,$4,$4)`, pgx.QueryExecModeSimpleProtocol, result.WorkspaceId, string(descriptor), desired, now, result.SandboxId, result.OperationId, "intent-"+name, kind); err != nil {
+INSERT INTO secondbox.operations(id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,created_at,updated_at) VALUES($7,'tenant','subject',$5,'',$8,'pending',$7,'{}','','',false,$4,$4)`, pgx.QueryExecModeSimpleProtocol, result.WorkspaceId, string(descriptor), desired, now, result.SandboxId, "operation-relocation-"+name, "intent-"+name, kind); err != nil {
 					t.Fatal(err)
 				}
 				result.Kind = runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT
@@ -127,7 +188,7 @@ INSERT INTO secondbox.operations(id,tenant_ref,subject_ref,sandbox_id,snapshot_i
 				recordLocalWorkspaceTestResult(t, storage, result, now)
 				var actualDesired, state, owner, workspaceState, mutation, intentOperation, startOperation string
 				var scheduled bool
-				if err := storage.pool.QueryRow(t.Context(), `SELECT s.desired_state,s.state,s.reconcile_owner,s.next_reconcile_at IS NOT NULL,w.state,w.mutation_kind,(SELECT state FROM secondbox.operations WHERE id=$2),(SELECT state FROM secondbox.operations WHERE id=$3) FROM secondbox.sandboxes s JOIN secondbox.workspaces w ON w.id=s.workspace_id WHERE s.id=$1`, result.SandboxId, "intent-"+name, result.OperationId).Scan(&actualDesired, &state, &owner, &scheduled, &workspaceState, &mutation, &intentOperation, &startOperation); err != nil {
+				if err := storage.pool.QueryRow(t.Context(), `SELECT s.desired_state,s.state,s.reconcile_owner,s.next_reconcile_at IS NOT NULL,w.state,w.mutation_kind,(SELECT state FROM secondbox.operations WHERE id=$2),(SELECT state FROM secondbox.operations WHERE id=$3) FROM secondbox.sandboxes s JOIN secondbox.workspaces w ON w.id=s.workspace_id WHERE s.id=$1`, result.SandboxId, "intent-"+name, "operation-relocation-"+name).Scan(&actualDesired, &state, &owner, &scheduled, &workspaceState, &mutation, &intentOperation, &startOperation); err != nil {
 					t.Fatal(err)
 				}
 				if actualDesired != desired || state != "stopped" || owner != "" || mutation != "" {

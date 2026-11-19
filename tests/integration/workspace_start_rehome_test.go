@@ -68,18 +68,34 @@ func rehomeImageManifest(t *testing.T) []byte {
 	return manifest
 }
 
-func TestStoppedStartRehomesFromFullOrDrainingHomePreservingOperation(t *testing.T) {
-	for _, draining := range []bool{false, true} {
-		t.Run(fmt.Sprintf("draining-%t", draining), func(t *testing.T) {
+func TestStoppedStartRehomesFromUnavailableCapacityPreservingOperation(t *testing.T) {
+	for _, mode := range []string{"full", "draining", "storage_denied"} {
+		t.Run(mode, func(t *testing.T) {
+			draining := mode == "draining"
 			fixture := newTeardownFixture(t)
-			fixture.store.ConfigureWorkspaceArchives(startRehomeArchiveProvider{})
+			if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), startRehomeArchiveProvider{}, map[string]int64{fixture.profileName: 3600}); err != nil {
+				t.Fatal(err)
+			}
 			sandboxID, stopped := createStoppedFixtureSandbox(t, fixture, "rehome")
 			target, targetConnection := fixture.addEligibleRunner(t, "rehome-target")
+			if mode == "storage_denied" {
+				registration := task4Registration(fixture.runnerID, fixture.connectionID, fixture.poolName)
+				registration.Sequence = fixture.nextSequence()
+				if _, err := fixture.stateStore.RecordRegistration(t.Context(), registration, time.Now().UTC()); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if _, err := fixture.pool.Exec(t.Context(), `UPDATE secondbox.runners SET protocol_versions_json='["8"]',capabilities_json=capabilities_json || '["workspace-relocation"]'::jsonb WHERE pool_name=$1`, fixture.poolName); err != nil {
 				t.Fatal(err)
 			}
 			if draining {
 				if _, err := fixture.pool.Exec(t.Context(), `UPDATE secondbox.runners SET state='draining',drain_phase='draining' WHERE id=$1`, fixture.runnerID); err != nil {
+					t.Fatal(err)
+				}
+			} else if mode == "storage_denied" {
+				heartbeat := task4Heartbeat(fixture.runnerID, fixture.connectionID, "denied-home-heartbeat", fixture.nextSequence(), runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE)
+				heartbeat.StoragePressure = &runnerv1.StoragePressureObservation{Status: "admission_denied", ObservedAtUnixMs: uint64(time.Now().UnixMilli())}
+				if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, time.Now().UTC()); err != nil {
 					t.Fatal(err)
 				}
 			} else if _, err := fixture.pool.Exec(t.Context(), `UPDATE secondbox.runners SET reserved_capacity_json=capacity_json WHERE id=$1`, fixture.runnerID); err != nil {
@@ -100,8 +116,8 @@ func TestStoppedStartRehomesFromFullOrDrainingHomePreservingOperation(t *testing
 				t.Fatal(err)
 			}
 			export := pendingStartArchiveCommand(t, fixture, sandboxID, runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT)
-			if export.OperationId != operation.ID {
-				t.Fatal("offload replaced the admitted start identity")
+			if export.OperationId == operation.ID || export.Correlation.GetOperationId() != operation.ID {
+				t.Fatal("offload must use private receipt identity and preserve public start correlation")
 			}
 			descriptor := &runnerv1.WorkspaceArchiveDescriptor{ArchiveBytes: 4096, ArchiveChecksum: "sha256:" + strings.Repeat("a", 64), ImageChecksum: "sha256:" + strings.Repeat("b", 64)}
 			recordStartArchiveReceipt(t, fixture, fixture.runnerID, fixture.connectionID, fixture.nextSequence(), export, runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED, descriptor)
@@ -114,7 +130,7 @@ func TestStoppedStartRehomesFromFullOrDrainingHomePreservingOperation(t *testing
 			}
 			restore := pendingStartArchiveCommand(t, fixture, sandboxID, runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT)
 			cleanup := pendingStartArchiveCommand(t, fixture, sandboxID, runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE)
-			if restore.Correlation.RunnerId != target || restore.OperationId != operation.ID {
+			if restore.Correlation.RunnerId != target || restore.Correlation.OperationId != operation.ID || restore.OperationId == operation.ID || restore.OperationId == export.OperationId {
 				t.Fatalf("restore target=%q operation=%q", restore.Correlation.RunnerId, restore.OperationId)
 			}
 			recordStartArchiveReceipt(t, fixture, target, targetConnection, 1, restore, runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED, descriptor)
@@ -180,7 +196,9 @@ func TestStoppedStartRehomePreservesIntentAndAuthorityOnCancellationAndFailure(t
 	for _, mode := range []string{"export-stop", "export-delete", "export-expire", "export-failure", "import-stop", "import-delete", "import-failure"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newTeardownFixture(t)
-			fixture.store.ConfigureWorkspaceArchives(startRehomeArchiveProvider{})
+			if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), startRehomeArchiveProvider{}, map[string]int64{fixture.profileName: 3600}); err != nil {
+				t.Fatal(err)
+			}
 			sandboxID, stopped := createStoppedFixtureSandbox(t, fixture, "rehome-"+mode)
 			target, targetConnection := "", ""
 			if strings.HasPrefix(mode, "import-") {
@@ -313,7 +331,9 @@ func TestStoppedStartRehomePreservesIntentAndAuthorityOnCancellationAndFailure(t
 
 func TestStoppedStartDoesNotOffloadItsOwnPendingReservation(t *testing.T) {
 	fixture := newTeardownFixture(t)
-	fixture.store.ConfigureWorkspaceArchives(startRehomeArchiveProvider{})
+	if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), startRehomeArchiveProvider{}, map[string]int64{fixture.profileName: 3600}); err != nil {
+		t.Fatal(err)
+	}
 	sandboxID, stopped := createStoppedFixtureSandbox(t, fixture, "rehome-self")
 	capacity, err := json.Marshal(map[string]int64{"VCPUCount": stopped.Resources.VCPUCount, "MemoryBytes": stopped.Resources.MemoryBytes, "Instances": 1, "Operations": 1000, "DiskBytes": stopped.Resources.WorkspaceBytes * 4})
 	if err != nil {
@@ -352,7 +372,9 @@ func TestStoppedStartUnconfiguredProfileStaysResidentUntilHomeCapacityReturns(t 
 	for _, enabled := range []map[string]int64{nil, {"separate-code-profile": 3600}} {
 		t.Run(fmt.Sprintf("configured-profiles-%d", len(enabled)), func(t *testing.T) {
 			fixture := newTeardownFixture(t)
-			fixture.store.ConfigureWorkspaceArchives(startRehomeArchiveProvider{})
+			if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), startRehomeArchiveProvider{}, enabled); err != nil {
+				t.Fatal(err)
+			}
 			sandboxID, stopped := createStoppedFixtureSandbox(t, fixture, "static-profile")
 			if _, err := fixture.pool.Exec(t.Context(), `UPDATE secondbox.runners SET reserved_capacity_json=capacity_json WHERE id=$1`, fixture.runnerID); err != nil {
 				t.Fatal(err)
@@ -388,7 +410,9 @@ func TestStoppedStartUnconfiguredProfileStaysResidentUntilHomeCapacityReturns(t 
 
 func TestStoppedStartCanReturnToFormerHomeOnlyAfterExactSourceCleanup(t *testing.T) {
 	fixture := newTeardownFixture(t)
-	fixture.store.ConfigureWorkspaceArchives(startRehomeArchiveProvider{})
+	if err := fixture.store.ConfigureWorkspaceArchives(t.Context(), startRehomeArchiveProvider{}, map[string]int64{fixture.profileName: 3600}); err != nil {
+		t.Fatal(err)
+	}
 	sandboxID, stopped := createStoppedFixtureSandbox(t, fixture, "return-home")
 	_, _ = fixture.addEligibleRunner(t, "return-home-full-target")
 	if _, err := fixture.pool.Exec(t.Context(), `UPDATE secondbox.runners SET reserved_capacity_json=capacity_json,protocol_versions_json='["8"]',capabilities_json=capabilities_json || '["workspace-relocation"]'::jsonb WHERE pool_name=$1`, fixture.poolName); err != nil {
@@ -421,7 +445,7 @@ func TestStoppedStartCanReturnToFormerHomeOnlyAfterExactSourceCleanup(t *testing
 	recordStartArchiveReceipt(t, fixture, fixture.runnerID, fixture.connectionID, fixture.nextSequence(), cleanup, runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED, nil)
 	reconcile()
 	restore := pendingStartArchiveCommand(t, fixture, sandboxID, runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT)
-	if restore.Correlation.RunnerId != fixture.runnerID || restore.OperationId != operation.ID {
+	if restore.Correlation.RunnerId != fixture.runnerID || restore.Correlation.OperationId != operation.ID || restore.OperationId == operation.ID {
 		t.Fatalf("freed original home was not selected: %#v", restore.Correlation)
 	}
 	recordStartArchiveReceipt(t, fixture, fixture.runnerID, fixture.connectionID, fixture.nextSequence(), restore, runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED, descriptor)

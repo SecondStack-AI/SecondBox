@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 )
@@ -62,6 +63,41 @@ func TestWorkspaceArchiveRestoresSparseImageOnAnotherStore(t *testing.T) {
 	}
 	if actual := "sha256:" + hex.EncodeToString(hash.Sum(nil)); actual != descriptor.ImageChecksum {
 		t.Fatalf("restored disk checksum=%s expected=%s", actual, descriptor.ImageChecksum)
+	}
+}
+
+func TestWorkspaceArchiveCleanupFencesDelayedImport(t *testing.T) {
+	source, _, _ := newFakeStore(t)
+	const workspaceID = "lost-restore-workspace"
+	if _, err := source.Create(t.Context(), CreateWorkspaceRequest{Mutation: testMutation("lost-create", workspaceID), CapacityBytes: minimumExt4Bytes}); err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	descriptor, err := source.ExportWorkspaceArchive(t.Context(), RelocationExportRequest{Mutation: testMutation("lost-export", workspaceID), ExpectedGeneration: 1}, &archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, imported := range []bool{false, true} {
+		t.Run(fmt.Sprintf("imported-%t", imported), func(t *testing.T) {
+			target, _, _ := newFakeStore(t)
+			mutation := testMutation("lost-import", workspaceID)
+			request := WorkspaceArchiveImportRequest{RelocationImportRequest: RelocationImportRequest{Mutation: mutation, Generation: 1, CapacityBytes: minimumExt4Bytes}, Archive: descriptor}
+			if imported {
+				if _, err := target.ImportWorkspaceArchive(t.Context(), request, bytes.NewReader(archive.Bytes())); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := target.DeleteWorkspace(t.Context(), DeleteWorkspaceRequest{Mutation: mutation, ExpectedGeneration: 1, RelocationSource: true}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := target.ImportWorkspaceArchive(t.Context(), request, bytes.NewReader(archive.Bytes())); !errors.Is(err, ErrStaleFence) {
+				t.Fatalf("delayed import after exact cleanup = %v, want stale fence", err)
+			}
+			request.Mutation = testMutation("replacement-import", workspaceID)
+			if _, err := target.ImportWorkspaceArchive(t.Context(), request, bytes.NewReader(archive.Bytes())); err != nil {
+				t.Fatalf("new phase could not import: %v", err)
+			}
+		})
 	}
 }
 
@@ -197,7 +233,7 @@ func TestWorkspaceArchiveSameHomeRestoreSurvivesExactOldCleanupReplay(t *testing
 	if _, err := store.DeleteWorkspace(t.Context(), DeleteWorkspaceRequest{Mutation: testMutation("return-final-delete", workspaceID), ExpectedGeneration: 1}); err != nil {
 		t.Fatal(err)
 	}
-	report, err := store.Reconcile(t.Context())
+	report, err := store.Reconcile(t.Context(), []ReceiptIdentity{{WorkspaceID: workspaceID, OperationID: "return-final-delete", Kind: ReceiptWorkspaceDelete}})
 	if err != nil || len(report.Workspaces) != 0 || len(report.Receipts) != 1 || report.Receipts[0].OperationID != "return-final-delete" {
 		t.Fatalf("final deletion retained obsolete tiering receipts: report=%#v error=%v", report, err)
 	}

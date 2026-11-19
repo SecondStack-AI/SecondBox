@@ -22,7 +22,9 @@ type AWSIdentityVerifier struct {
 	EnrollmentWindow time.Duration
 }
 
-func (verifier AWSIdentityVerifier) Verify(ctx context.Context, enrollment EnrollmentRequest, binding string) error {
+// existingKeyBound is supplied only after the authority has verified the
+// instance's stored key binding. A request's renewal flag alone grants nothing.
+func (verifier AWSIdentityVerifier) Verify(ctx context.Context, enrollment EnrollmentRequest, binding string, existingKeyBound bool) error {
 	if verifier.AccountID == "" || verifier.RoleName == "" || verifier.Region == "" || verifier.Cloud == nil || verifier.Client == nil || verifier.Now == nil || verifier.EnrollmentWindow <= 0 {
 		return errors.New("SecondBox AWS fleet enrollment verifier is incomplete")
 	}
@@ -84,7 +86,7 @@ func (verifier AWSIdentityVerifier) Verify(ctx context.Context, enrollment Enrol
 	}
 	for _, node := range nodes {
 		if node.InstanceID == enrollment.InstanceID && node.RunnerID == "runner-"+enrollment.InstanceID &&
-			(node.State == "pending" || node.State == "running") && now.Sub(node.CreatedAt) <= verifier.EnrollmentWindow {
+			(node.State == "pending" || node.State == "running") && (existingKeyBound || now.Sub(node.CreatedAt) <= verifier.EnrollmentWindow) {
 			return nil
 		}
 	}

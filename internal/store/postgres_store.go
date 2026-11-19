@@ -24,8 +24,10 @@ import (
 
 // PostgresControlPlaneStore persists standalone SecondBox authority.
 type PostgresControlPlaneStore struct {
-	pool             *pgxpool.Pool
-	archiveTransfers workspacearchive.TransferProvider
+	pool                      *pgxpool.Pool
+	archiveTransfers          workspacearchive.TransferProvider
+	archiveProfileIdleSeconds map[string]int64
+	archiveConfigured         bool
 }
 
 // NewPostgresControlPlaneStore connects to the required PostgreSQL authority.

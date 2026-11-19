@@ -29,11 +29,11 @@ func TestFleetAWSIdentityRejectsWrongRoleAndUnsignedBinding(t *testing.T) {
 	cloud := &fleetCloudFixture{nodes: []Node{{InstanceID: "i-0123456789abcdef0", RunnerID: "runner-i-0123456789abcdef0", CreatedAt: now.Add(-time.Minute), State: "running"}}}
 	verifier := AWSIdentityVerifier{AccountID: "123456789012", RoleName: "fleet-worker", Region: "us-east-1", Cloud: cloud, Client: client, Now: func() time.Time { return now }, EnrollmentWindow: time.Hour}
 	request := EnrollmentRequest{InstanceID: "i-0123456789abcdef0", IdentityProofURL: valid}
-	if err := verifier.Verify(t.Context(), request, "csr-binding"); err != nil {
+	if err := verifier.Verify(t.Context(), request, "csr-binding", false); err != nil {
 		t.Fatal(err)
 	}
 	caller = "arn:aws:sts::123456789012:assumed-role/wrong/i-0123456789abcdef0"
-	if err := verifier.Verify(t.Context(), request, "csr-binding"); err == nil {
+	if err := verifier.Verify(t.Context(), request, "csr-binding", false); err == nil {
 		t.Fatal("wrong role accepted")
 	}
 	for _, invalid := range []string{
@@ -44,7 +44,7 @@ func TestFleetAWSIdentityRejectsWrongRoleAndUnsignedBinding(t *testing.T) {
 	} {
 		request.IdentityProofURL = invalid
 		before := calls
-		if err := verifier.Verify(t.Context(), request, "csr-binding"); err == nil {
+		if err := verifier.Verify(t.Context(), request, "csr-binding", false); err == nil {
 			t.Fatalf("accepted invalid proof %s", invalid)
 		}
 		if calls != before {

@@ -1167,10 +1167,10 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 			inspection.ActiveWriter {
 			t.Fatalf("post-%s filesystem integrity = %#v, %v", cause, inspection, err)
 		}
-		report, err := workspaceStore.Reconcile(ctx)
+		report, err := workspaceStore.Reconcile(ctx, []workspacestore.ReceiptIdentity{{WorkspaceID: workspaceID, OperationID: "stop-qualified-" + cause, Kind: workspacestore.ReceiptGenerationAdvance}})
 		if err != nil || len(report.Workspaces) != 1 ||
 			report.Workspaces[0] != inspection ||
-			len(report.Receipts) != index+2 ||
+			len(report.Receipts) != 1 ||
 			report.Receipts[len(report.Receipts)-1].Kind !=
 				workspacestore.ReceiptGenerationAdvance {
 			t.Fatalf("post-%s local receipt evidence = %#v, %v", cause, report, err)

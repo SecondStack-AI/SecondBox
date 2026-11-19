@@ -14,6 +14,7 @@ import (
 // The Runner's reported warning/denial already applies its configured physical
 // thresholds and recovery hysteresis. One transfer per Runner bounds staging IO.
 func (store *PostgresControlPlaneStore) archivePressureWorkspaces(ctx context.Context, now time.Time, profiles map[string]int64) error {
+	var failures []error
 	for profile, idleSeconds := range profiles {
 		if idleSeconds < 1 {
 			return errors.New("SecondBox archive pressure policy requires a positive cold idle duration")
@@ -64,9 +65,9 @@ func (store *PostgresControlPlaneStore) archivePressureWorkspaces(ctx context.Co
 		}
 		for _, candidate := range candidates {
 			if _, err := store.ArchiveSandbox(ctx, candidate); err != nil && !errors.Is(err, ports.ErrWorkspaceMutation) && !errors.Is(err, ports.ErrRevisionConflict) && !errors.Is(err, ports.ErrHomeRunnerUnavailable) && !errors.Is(err, ports.ErrSandboxNotStopped) && !errors.Is(err, ports.ErrRelocationSnapshotsPresent) {
-				return fmt.Errorf("SecondBox pressure archive %s: %w", candidate.SandboxID, err)
+				failures = append(failures, fmt.Errorf("SecondBox pressure archive %s: %w", candidate.SandboxID, err))
 			}
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }

@@ -24,7 +24,7 @@ compatibility boundaries belong in the release notes.
 ## Operations
 
 - Runners: [Firecracker](operations/firecracker-runtime.md), [gVisor](operations/gvisor-runtime.md), [experimental Microsandbox on macOS](operations/microsandbox-macos.md), and [Kubernetes boundary](operations/kubernetes-boundary.md)
-- Storage: [backup and restore](operations/backup-and-restore.md), [runner decommissioning](operations/runner-decommissioning.md)
+- Storage: [Workspace storage tiering](operations/workspace-storage-tiering.md), [backup and restore](operations/backup-and-restore.md), [runner decommissioning](operations/runner-decommissioning.md)
 - Configuration: [declarative resources](operations/declarative-resources.md), [CLI output](operations/cli-output-contract.md)
 - Diagnostics: [observability](operations/observability-and-diagnostics.md), [lifecycle benchmarks](operations/lifecycle-benchmark.md), [stress qualification](operations/stress-qualification.md), [multiple runners](operations/multirunner-qualification.md)
 - Validation and releases: [scenario qualification](operations/scenario-qualification.md), [release operator setup](operations/release-operator-setup.md), [distribution](operations/release-distribution.md), [microVM image pipeline](operations/microvm-image-pipeline.md)

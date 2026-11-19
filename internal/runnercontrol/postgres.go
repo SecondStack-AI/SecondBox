@@ -62,24 +62,6 @@ func (store *PostgresStateStore) OpenConnection(
 		return errors.New("SecondBox runner connection requires credential identity, connection, and protocol version")
 	}
 	reconcileID := "workspace-reconcile-" + connectionID
-	reconcilePayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
-		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
-			LocalWorkspace: &runnerv1.LocalWorkspaceCommand{
-				CommandVersion: 1,
-				Kind:           runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
-				OperationId:    reconcileID,
-				EffectId:       reconcileID,
-				Correlation: &runnerv1.Correlation{
-					RequestId:   reconcileID,
-					OperationId: reconcileID,
-					RunnerId:    identity.RunnerID,
-				},
-			},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("SecondBox runner Workspace reconciliation command encoding: %w", err)
-	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner connection transaction: %w", err)
@@ -122,6 +104,29 @@ func (store *PostgresStateStore) OpenConnection(
 		identity.RunnerID, now,
 	); err != nil {
 		return fmt.Errorf("SecondBox runner prior Workspace reconciliation expiry: %w", err)
+	}
+	receiptRequests, err := workspaceReconcileReceiptRequests(ctx, tx, identity.RunnerID)
+	if err != nil {
+		return err
+	}
+	reconcilePayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
+			LocalWorkspace: &runnerv1.LocalWorkspaceCommand{
+				CommandVersion:  1,
+				Kind:            runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
+				OperationId:     reconcileID,
+				EffectId:        reconcileID,
+				ReceiptRequests: receiptRequests,
+				Correlation: &runnerv1.Correlation{
+					RequestId:   reconcileID,
+					OperationId: reconcileID,
+					RunnerId:    identity.RunnerID,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation command encoding: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.runner_commands (
@@ -1186,7 +1191,7 @@ func recordLocalWorkspaceResult(
 		return errors.New("SecondBox runner local-workspace result targets the wrong Workspace")
 	}
 	var archiveOperation bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.workspace_archives a JOIN secondbox.runner_commands c ON c.assignment_id=a.id WHERE a.operation_id=$1 AND c.id=$2 AND c.runner_id=$3)`, result.OperationId, result.EffectId, runnerID).Scan(&archiveOperation); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.workspace_archives a JOIN secondbox.runner_commands c ON c.assignment_id=a.id WHERE a.id=$1 AND c.id=$2 AND c.runner_id=$3)`, result.OperationId, result.EffectId, runnerID).Scan(&archiveOperation); err != nil {
 		return err
 	}
 	if archiveOperation {

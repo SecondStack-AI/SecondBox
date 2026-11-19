@@ -1065,9 +1065,22 @@ func validateBinaries(manifest ArtifactManifest) error {
 		return contractError("artifact manifest requires binaries")
 	}
 	want := map[string]bool{}
+	// Recorded releases and development manifests predate the fleet tools.
+	// New releases require them, and any older manifest that includes one must
+	// include the complete fleet tool matrix.
+	names := []string{"secondbox", "secondbox-deploy"}
+	order, err := CompareVersions(manifest.Version, "0.32.0-0")
+	fleetBinaries := err == nil && order >= 0
+	for _, binary := range manifest.Binaries {
+		fleetBinaries = fleetBinaries || binary.Name == "secondbox-fleet" || binary.Name == "secondbox-fleet-enroll"
+	}
+	if fleetBinaries {
+		names = HostBinaryNames
+	}
 	for _, platform := range manifest.Platforms.HostBinaries {
-		want["secondbox\x00"+platform] = false
-		want["secondbox-deploy\x00"+platform] = false
+		for _, name := range names {
+			want[name+"\x00"+platform] = false
+		}
 	}
 	for _, binary := range manifest.Binaries {
 		key := binary.Name + "\x00" + binary.Platform

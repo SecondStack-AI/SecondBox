@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/fleet"
+	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -32,7 +33,7 @@ type fleetConfig struct {
 	ControlPlaneCAFile      string           `json:"controlPlaneCaFile"`
 	Region                  string           `json:"region"`
 	GroupName               string           `json:"groupName"`
-	QualificationRun        string           `json:"qualificationRun"`
+	FleetRef                string           `json:"fleetRef"`
 	MinimumNodes            int              `json:"minimumNodes"`
 	MaximumNodes            int              `json:"maximumNodes"`
 	NodeVCPUCount           int64            `json:"nodeVcpuCount"`
@@ -67,6 +68,13 @@ type enrollmentConfig struct {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		if err := buildinfo.Write(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	path := flag.String("config", "", "absolute fleet configuration JSON path")
 	flag.Parse()
 	if err := run(*path); err != nil {
@@ -125,7 +133,7 @@ func run(path string) error {
 	if err != nil {
 		return err
 	}
-	cloud := fleet.AWSCloud{AutoScaling: autoscaling.NewFromConfig(awsConfig), EC2: ec2.NewFromConfig(awsConfig), GroupName: cfg.GroupName, MaximumNodes: cfg.MaximumNodes, QualificationRun: cfg.QualificationRun, Database: database, Pool: cfg.Pool}
+	cloud := fleet.AWSCloud{AutoScaling: autoscaling.NewFromConfig(awsConfig), EC2: ec2.NewFromConfig(awsConfig), GroupName: cfg.GroupName, MaximumNodes: cfg.MaximumNodes, FleetRef: cfg.FleetRef, Database: database, Pool: cfg.Pool}
 	controlClient, err := httpClient(cfg.ControlPlaneCAFile, "", "")
 	if err != nil {
 		return err

@@ -25,17 +25,17 @@ type EC2API interface {
 }
 
 type AWSCloud struct {
-	AutoScaling      AutoScalingAPI
-	EC2              EC2API
-	GroupName        string
-	MaximumNodes     int
-	QualificationRun string
-	Database         *pgxpool.Pool
-	Pool             string
+	AutoScaling  AutoScalingAPI
+	EC2          EC2API
+	GroupName    string
+	MaximumNodes int
+	FleetRef     string
+	Database     *pgxpool.Pool
+	Pool         string
 }
 
 func (cloud AWSCloud) ListNodes(ctx context.Context) ([]Node, error) {
-	if cloud.AutoScaling == nil || cloud.EC2 == nil || cloud.GroupName == "" || cloud.MaximumNodes < 1 || cloud.QualificationRun == "" {
+	if cloud.AutoScaling == nil || cloud.EC2 == nil || cloud.GroupName == "" || cloud.MaximumNodes < 1 || cloud.FleetRef == "" {
 		return nil, errors.New("SecondBox AWS fleet requires clients, named group, ownership tag and maximum size")
 	}
 	groups, err := cloud.AutoScaling.DescribeAutoScalingGroups(ctx, &autoscaling.DescribeAutoScalingGroupsInput{AutoScalingGroupNames: []string{cloud.GroupName}})
@@ -48,7 +48,7 @@ func (cloud AWSCloud) ListNodes(ctx context.Context) ([]Node, error) {
 	group := groups.AutoScalingGroups[0]
 	owned := false
 	for _, tag := range group.Tags {
-		if aws.ToString(tag.Key) == "secondstack.ai/qualification-run" && aws.ToString(tag.Value) == cloud.QualificationRun {
+		if aws.ToString(tag.Key) == "secondstack.ai/fleet-ref" && aws.ToString(tag.Value) == cloud.FleetRef {
 			owned = true
 		}
 	}
@@ -77,7 +77,7 @@ func (cloud AWSCloud) ListNodes(ctx context.Context) ([]Node, error) {
 			}
 			owned := false
 			for _, tag := range instance.Tags {
-				if aws.ToString(tag.Key) == "secondstack.ai/qualification-run" && aws.ToString(tag.Value) == cloud.QualificationRun {
+				if aws.ToString(tag.Key) == "secondstack.ai/fleet-ref" && aws.ToString(tag.Value) == cloud.FleetRef {
 					owned = true
 				}
 			}

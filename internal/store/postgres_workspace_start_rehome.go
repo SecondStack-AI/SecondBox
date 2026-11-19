@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -40,12 +41,13 @@ func (store *PostgresControlPlaneStore) prepareResidentWorkspaceStarts(ctx conte
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, id := range ids {
 		if err := store.prepareResidentWorkspaceStart(ctx, id, now); err != nil {
-			return fmt.Errorf("SecondBox resident start offload %s: %w", id, err)
+			failures = append(failures, fmt.Errorf("SecondBox resident start offload %s: %w", id, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (store *PostgresControlPlaneStore) prepareResidentWorkspaceStart(ctx context.Context, sandboxID string, now time.Time) error {
@@ -93,15 +95,12 @@ func (store *PostgresControlPlaneStore) prepareResidentWorkspaceStart(ctx contex
 	if (source.state != "ready" && source.state != "draining") || source.activeConnectionID == "" {
 		return nil
 	}
-	assigned, pending, err := runnerHomeComputeReservations(ctx, tx, source.id)
+	assigned, pending, err := runnerHomeComputeReservations(ctx, tx, source.id, w.Mutation.OperationID)
 	if err != nil {
 		return err
 	}
-	// This intent already holds its home reservation. Test its capacity once.
-	pending.VCPUCount = max(0, pending.VCPUCount-locked.Resources.VCPUCount)
-	pending.MemoryBytes = max(0, pending.MemoryBytes-locked.Resources.MemoryBytes)
-	pending.Instances = max(0, pending.Instances-1)
-	pending.Operations = max(0, pending.Operations-spec.Resources.ConcurrentOperations)
+	// Earlier public starts own the available slots. Later queued starts must
+	// not force them to offload; admitted creates/restores keep their reservations.
 	reserved := maxRunnerPlacementCapacity(source.reportedReserved, assigned)
 	reserved.VCPUCount += pending.VCPUCount
 	reserved.MemoryBytes += pending.MemoryBytes
@@ -157,22 +156,30 @@ func (store *PostgresControlPlaneStore) expireArchiveStartWaits(ctx context.Cont
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, id := range ids {
-		tx, err := store.pool.Begin(ctx)
-		if err != nil {
-			return err
-		}
-		locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, id)
-		if err == nil && locked.CurrentInstanceID == "" && locked.DesiredState == "running" && (locked.Workspace.Mutation.Kind == "archive" || locked.Workspace.Mutation.Kind == "archive_restore") {
-			_, err = tx.Exec(ctx, `WITH expired AS(UPDATE secondbox.operations SET state='failed',error_code='capacity_wait_expired',error_message='workspace transfer capacity wait expired before compute admission',retryable=true,completed_at=$2,updated_at=$2 WHERE id=$1 AND state IN ('pending','running') AND capacity_wait_deadline<=$2 RETURNING sandbox_id) UPDATE secondbox.sandboxes SET desired_state='stopped',reconcile_owner='',reconcile_claim_expires_at=NULL,next_reconcile_at=NULL,revision=revision+1,updated_at=$2 WHERE id IN(SELECT sandbox_id FROM expired)`, locked.Workspace.Mutation.OperationID, now)
-		}
-		if err == nil {
-			err = tx.Commit(ctx)
-		}
-		_ = tx.Rollback(ctx)
-		if err != nil {
-			return err
+		if err := store.expireArchiveStartWait(ctx, id, now); err != nil {
+			failures = append(failures, fmt.Errorf("SecondBox archive start expiry %s: %w", id, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
+}
+
+func (store *PostgresControlPlaneStore) expireArchiveStartWait(ctx context.Context, id string, now time.Time) error {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if locked.CurrentInstanceID != "" || locked.DesiredState != "running" || (locked.Workspace.Mutation.Kind != "archive" && locked.Workspace.Mutation.Kind != "archive_restore") {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `WITH expired AS(UPDATE secondbox.operations SET state='failed',error_code='capacity_wait_expired',error_message='workspace transfer capacity wait expired before compute admission',retryable=true,completed_at=$2,updated_at=$2 WHERE id=$1 AND state IN ('pending','running') AND capacity_wait_deadline<=$2 RETURNING sandbox_id) UPDATE secondbox.sandboxes SET desired_state='stopped',reconcile_owner='',reconcile_claim_expires_at=NULL,next_reconcile_at=NULL,revision=revision+1,updated_at=$2 WHERE id IN(SELECT sandbox_id FROM expired)`, locked.Workspace.Mutation.OperationID, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

@@ -9,10 +9,12 @@ import (
 )
 
 func TestWorkspaceArchivePressureOffloadsYoungStoppedCodeOnly(t *testing.T) {
-	storage := openStoreTest(t)
+	storage := openArchiveConfigurationTestStore(t)
 	now := time.Now().UTC()
 	seedLocalWorkspacePolicyAndRunner(t, storage, now)
-	storage.ConfigureWorkspaceArchives(&archiveTransferTestProvider{})
+	if err := storage.ConfigureWorkspaceArchives(t.Context(), &archiveTransferTestProvider{}, map[string]int64{"profile-local": 3600}); err != nil {
+		t.Fatal(err)
+	}
 	var sandboxIDs, runnerIDs []string
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)

@@ -174,7 +174,7 @@ func artifactFixtureRelease(t *testing.T, manifestDigest, runtimeDigest, toolcha
 	}
 	binaries := []releasecontract.BinaryArtifact{}
 	for _, platform := range []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"} {
-		for _, name := range []string{"secondbox", "secondbox-deploy"} {
+		for _, name := range releasecontract.HostBinaryNames {
 			binaries = append(binaries, releasecontract.BinaryArtifact{Identity: identity, Name: name, Platform: platform, Location: releasecontract.BinaryLocation(identity.Version, name, platform), SHA256: strings.Repeat("b", 64)})
 		}
 	}

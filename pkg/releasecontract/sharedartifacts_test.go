@@ -16,18 +16,22 @@ func testSharedArtifactsRecord() SharedArtifactsRecord {
 
 func TestSharedArtifactFileModesNameEveryArchitectureNeutralFile(t *testing.T) {
 	modes := SharedArtifactFileModes("1.2.3")
-	if len(modes) != 14 {
-		t.Fatalf("shared files = %d, want 6 documents and 8 host binaries", len(modes))
+	if len(modes) != 22 {
+		t.Fatalf("shared files = %d, want 6 documents and 16 host binaries", len(modes))
 	}
 	for name, mode := range map[string]uint32{
-		"secondbox-1.2.3-openapi.json":          0o644,
-		"secondbox-1.2.3-go-module.tar.gz":      0o644,
-		"secondstack-ai-secondbox-1.2.3.tgz":    0o644,
-		"secondbox-1.2.3-package-metadata.json": 0o644,
-		"secondbox-1.2.3.spdx.json":             0o644,
-		"install.sh":                            0o644,
-		"secondbox_1.2.3_darwin_arm64":          0o755,
-		"secondbox-deploy_1.2.3_linux_amd64":    0o755,
+		"secondbox-1.2.3-openapi.json":              0o644,
+		"secondbox-1.2.3-go-module.tar.gz":          0o644,
+		"secondstack-ai-secondbox-1.2.3.tgz":        0o644,
+		"secondbox-1.2.3-package-metadata.json":     0o644,
+		"secondbox-1.2.3.spdx.json":                 0o644,
+		"install.sh":                                0o644,
+		"secondbox_1.2.3_darwin_arm64":              0o755,
+		"secondbox-deploy_1.2.3_linux_amd64":        0o755,
+		"secondbox-fleet_1.2.3_linux_amd64":         0o755,
+		"secondbox-fleet_1.2.3_darwin_arm64":        0o755,
+		"secondbox-fleet-enroll_1.2.3_linux_arm64":  0o755,
+		"secondbox-fleet-enroll_1.2.3_darwin_amd64": 0o755,
 	} {
 		if uint32(modes[name]) != mode {
 			t.Errorf("mode of %s = %04o, want %04o", name, modes[name], mode)

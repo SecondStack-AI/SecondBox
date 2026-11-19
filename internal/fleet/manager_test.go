@@ -63,6 +63,20 @@ func TestFleetColdDemandScalesWithoutARegisteredRunner(t *testing.T) {
 	}
 }
 
+func TestFleetRespectsOperatorCapacityBeyondQualificationSize(t *testing.T) {
+	cloud := &fleetCloudFixture{}
+	control := &fleetControlFixture{observation: contracts.FleetPoolObservation{Demand: contracts.FleetResourceDemand{Instances: 12, VCPUCount: 24, MemoryBytes: 48 << 30}}}
+	manager := testFleetManager(cloud, control)
+	manager.Config.MaximumNodes = 5
+	result, err := manager.Reconcile(t.Context(), time.Now())
+	if err != nil || result.Action != "scale_out" || result.DesiredNodes != 5 || len(cloud.desired) != 1 || cloud.desired[0] != 5 {
+		t.Fatalf("operator ceiling not applied: result=%+v desired=%v err=%v", result, cloud.desired, err)
+	}
+	if len(control.actions) != 0 || len(cloud.terminated) != 0 {
+		t.Fatalf("capacity expansion mutated existing authority: actions=%v terminated=%v", control.actions, cloud.terminated)
+	}
+}
+
 func TestFleetInflightCloudInstancesPreventDuplicateScaleOut(t *testing.T) {
 	now := time.Now()
 	cloud := &fleetCloudFixture{nodes: []Node{{InstanceID: "i-pending", RunnerID: "runner-i-pending", CreatedAt: now, State: "pending"}}}
@@ -159,7 +173,9 @@ func TestFleetNeverRegisteredNodeRequiresBoundedOperatorRecovery(t *testing.T) {
 	now := time.Now()
 	cloud := &fleetCloudFixture{nodes: []Node{{InstanceID: "i-stale", RunnerID: "runner-i-stale", CreatedAt: now.Add(-time.Hour), State: "running"}}}
 	control := &fleetControlFixture{observation: contracts.FleetPoolObservation{Demand: contracts.FleetResourceDemand{Instances: 1, VCPUCount: 2, MemoryBytes: 4 << 30}}}
-	if _, err := testFleetManager(cloud, control).Reconcile(t.Context(), now); err == nil || !strings.Contains(err.Error(), "operator recovery is required") {
+	manager := testFleetManager(cloud, control)
+	manager.Config.MaximumNodes = 1
+	if _, err := manager.Reconcile(t.Context(), now); err == nil || !strings.Contains(err.Error(), "operator recovery is required") {
 		t.Fatalf("bootstrap error=%v", err)
 	}
 	if len(cloud.desired) != 0 || len(cloud.terminated) != 0 || len(control.actions) != 0 {

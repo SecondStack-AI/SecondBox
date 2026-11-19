@@ -10,10 +10,12 @@ import (
 )
 
 func TestResidentStartOffloadRefusesSnapshotsAndUnsettledAssignments(t *testing.T) {
-	storage := openStoreTest(t)
+	storage := openArchiveConfigurationTestStore(t)
 	now := time.Now().UTC()
 	seedLocalWorkspacePolicyAndRunner(t, storage, now)
-	storage.ConfigureWorkspaceArchives(&archiveTransferTestProvider{})
+	if err := storage.ConfigureWorkspaceArchives(t.Context(), &archiveTransferTestProvider{}, map[string]int64{"profile-local": 3600}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := storage.pool.Exec(t.Context(), `UPDATE secondbox.runners SET reserved_capacity_json=capacity_json WHERE id='runner-home'`); err != nil {
 		t.Fatal(err)
 	}
@@ -66,5 +68,47 @@ func TestResidentStartOffloadRefusesSnapshotsAndUnsettledAssignments(t *testing.
 				t.Fatalf("%s authority was removed: retained=%d err=%v", barrier, retained, err)
 			}
 		})
+	}
+}
+
+func TestResidentStartOffloadKeepsEarlierIntentOnItsHome(t *testing.T) {
+	storage := openArchiveConfigurationTestStore(t)
+	now := time.Now().UTC()
+	seedLocalWorkspacePolicyAndRunner(t, storage, now)
+	if err := storage.ConfigureWorkspaceArchives(t.Context(), &archiveTransferTestProvider{}, map[string]int64{"profile-local": 3600}); err != nil {
+		t.Fatal(err)
+	}
+	var sandboxIDs []string
+	cleanupArchiveLivenessSandboxes(t, storage, &sandboxIDs)
+	var workspaces []string
+	for index, suffix := range []string{"earlier-start", "later-start"} {
+		workspaceID, sandboxID := seedLocalWorkspace(t, storage, suffix, now)
+		sandboxIDs = append(sandboxIDs, sandboxID)
+		workspaces = append(workspaces, workspaceID)
+		operation := localTestOperation("operation-"+suffix, "start", now.Add(time.Duration(index)*time.Second))
+		if _, err := storage.SetSandboxDesiredState(t.Context(), ports.LifecycleIntentInput{Principal: contracts.Principal{TenantRef: "tenant-local", SubjectRef: "subject-local"}, SandboxID: sandboxID, DesiredState: contracts.SandboxDesiredStateRunning, Operation: operation, AuditEvent: testLifecycleAudit(), ExpectedRevision: 1, IdempotencyKey: operation.ID, RequestHash: operation.ID, IdempotencyEnds: now.Add(time.Hour), Now: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := storage.pool.Exec(t.Context(), `UPDATE secondbox.runners SET capacity_json='{"VCPUCount":1,"MemoryBytes":1073741824,"Instances":1,"Operations":4,"DiskBytes":17179869184}',reserved_capacity_json='{}' WHERE id='runner-home'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, sandboxID := range sandboxIDs {
+		if err := storage.prepareResidentWorkspaceStart(t.Context(), sandboxID, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, workspaceID := range workspaces {
+		var mutation string
+		if err := storage.pool.QueryRow(t.Context(), `SELECT mutation_kind FROM secondbox.workspaces WHERE id=$1`, workspaceID).Scan(&mutation); err != nil {
+			t.Fatal(err)
+		}
+		want := "start"
+		if index == 1 {
+			want = "archive"
+		}
+		if mutation != want {
+			t.Fatalf("intent %d mutation=%s, want %s", index, mutation, want)
+		}
 	}
 }

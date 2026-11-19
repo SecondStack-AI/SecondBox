@@ -38,12 +38,12 @@ func TestFleetRetiredVolumeCleanupRequiresReceiptAndDetachedOwnedDisk(t *testing
 	if _, err := database.Exec(t.Context(), `INSERT INTO secondbox.runners(id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,software_version,active_connection_id,last_sequence,drain_phase,reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,sandbox_start_p95_milliseconds,revision,created_at,updated_at,fleet_state) VALUES('runner-i-test','code','test','offline','[]','[]','{}','[]',1,1,'test','',0,'drained','{}','{}',0,0,1,$1,$1,'retired')`, now); err != nil {
 		t.Fatal(err)
 	}
-	tags := []ec2types.Tag{{Key: aws.String("secondstack.ai/qualification-run"), Value: aws.String("run")}, {Key: aws.String("secondbox-fleet"), Value: aws.String("group")}}
+	tags := []ec2types.Tag{{Key: aws.String("secondstack.ai/fleet-ref"), Value: aws.String("run")}, {Key: aws.String("secondbox-fleet"), Value: aws.String("group")}}
 	ec2Fixture := &fleetEC2Fixture{instance: ec2types.Instance{InstanceId: aws.String("i-test"), Tags: tags, State: &ec2types.InstanceState{Name: ec2types.InstanceStateNameTerminated}}, volumes: map[string]ec2types.Volume{
 		"vol-safe":      {VolumeId: aws.String("vol-safe"), Tags: tags, State: ec2types.VolumeStateInUse, Attachments: []ec2types.VolumeAttachment{{InstanceId: aws.String("i-test")}}},
 		"vol-unplanned": {VolumeId: aws.String("vol-unplanned"), Tags: tags, State: ec2types.VolumeStateAvailable},
 	}}
-	cloud := AWSCloud{Database: database, Pool: "code", GroupName: "group", QualificationRun: "run", EC2: ec2Fixture}
+	cloud := AWSCloud{Database: database, Pool: "code", GroupName: "group", FleetRef: "run", EC2: ec2Fixture}
 	if err := cloud.CleanupRetiredVolumes(t.Context()); err != nil {
 		t.Fatal(err)
 	}

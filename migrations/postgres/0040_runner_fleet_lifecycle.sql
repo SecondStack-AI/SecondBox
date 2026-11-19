@@ -6,7 +6,7 @@ CREATE TABLE secondbox.fleet_node_terminations (
     pool_name text NOT NULL,
     runner_id text NOT NULL,
     group_name text NOT NULL,
-    qualification_run text NOT NULL,
+    fleet_ref text NOT NULL,
     volume_ids jsonb NOT NULL,
     created_at timestamptz NOT NULL,
     completed_at timestamptz

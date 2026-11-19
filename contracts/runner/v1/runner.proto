@@ -959,6 +959,15 @@ message LocalWorkspaceCommand {
   bytes fencing_token = 13;
   Correlation correlation = 14;
   WorkspaceArchiveTransfer archive_transfer = 15;
+  // Reconnect requests only receipts for current authorized mutations. Durable
+  // historical replay tombstones remain local and are never inventoried.
+  repeated LocalWorkspaceReceiptRequest receipt_requests = 16;
+}
+
+message LocalWorkspaceReceiptRequest {
+  string workspace_id = 1;
+  string operation_id = 2;
+  LocalWorkspaceCommandKind kind = 3;
 }
 
 enum LocalWorkspaceTerminalKind {

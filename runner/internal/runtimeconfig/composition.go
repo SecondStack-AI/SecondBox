@@ -82,6 +82,7 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 		return Composition{}, fmt.Errorf("load SecondBox runner mTLS credentials: %w", err)
 	}
 	protocol.DataPlaneCertificate = connector.RunnerCertificate()
+	protocol.DataPlaneGetCertificate = connector.RunnerCertificateForHandshake
 	backendKind := strings.TrimSpace(os.Getenv("SECONDBOX_COMPUTE_BACKEND"))
 	if backendKind != "firecracker" && backendKind != "microsandbox" && backendKind != "gvisor" {
 		return Composition{}, errors.Join(

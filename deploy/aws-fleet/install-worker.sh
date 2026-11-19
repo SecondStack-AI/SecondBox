@@ -11,7 +11,7 @@ while (($#)); do
     *) echo "SecondBox worker bootstrap: unknown argument $1" >&2; exit 2 ;;
   esac
 done
-[[ -n $region && $enrollment_url == https://* && $fleet =~ ^[a-z][a-z0-9-]{2,63}$ ]] || {
+[[ $region =~ ^[a-z0-9-]+$ && $enrollment_url =~ ^https://[a-zA-Z0-9.:/-]+$ && $fleet =~ ^[a-z][a-z0-9-]{2,63}$ ]] || {
   echo 'SecondBox worker bootstrap requires region, HTTPS enrollment URL and fleet ownership' >&2; exit 2;
 }
 [[ $(id -u) == 0 ]] || { echo 'SecondBox worker bootstrap requires root' >&2; exit 1; }
@@ -62,10 +62,46 @@ systemctl daemon-reload
 export TMPDIR=/srv/secondbox/tmp
 install -d -m 0700 "$TMPDIR" /srv/secondbox/state/workspaces /srv/secondbox/state/log /srv/secondbox/state/execution-images/tmp /etc/secondbox/runner /etc/secondstack/gateway /etc/secondbox/image-registry /run/secondbox-image-fetcher /etc/secondbox/runner/agent-gateway
 install -m 0755 "$bundle/bin/secondbox-fleet-enroll" /usr/local/bin/secondbox-fleet-enroll
+install -m 0600 "$bundle/enrollment-ca.pem" /etc/secondbox/enrollment-ca.pem
 /usr/local/bin/secondbox-fleet-enroll --endpoint "$enrollment_url" --region "$region" --ca-file "$bundle/enrollment-ca.pem" --output /etc/secondbox/runner
 install -m 0600 /etc/secondbox/runner/client.crt /etc/secondstack/gateway/client.crt
 install -m 0600 /etc/secondbox/runner/gateway.key /etc/secondstack/gateway/client.key
 install -m 0600 /etc/secondbox/runner/workload-ca.crt /etc/secondstack/gateway/workload-ca.crt
+# Renew leaves on the host. Both consumers mount directories and reload the
+# same-key leaf on new TLS handshakes, so existing guests and tunnels continue.
+cat > /etc/systemd/system/secondbox-fleet-renew.service <<EOF
+[Unit]
+Description=Renew SecondBox fleet worker certificate leaves
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/srv/secondbox
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+UMask=0077
+Environment=TMPDIR=/srv/secondbox/tmp
+ExecStart=/usr/local/bin/secondbox-fleet-enroll --renew --endpoint $enrollment_url --region $region --ca-file /etc/secondbox/enrollment-ca.pem --output /etc/secondbox/runner --gateway-certificate-copy /etc/secondstack/gateway/client.crt
+TimeoutStartSec=210
+Restart=on-failure
+RestartSec=60
+EOF
+cat > /etc/systemd/system/secondbox-fleet-renew.timer <<'EOF'
+[Unit]
+Description=Keep SecondBox fleet worker certificate leaves current
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=30
+Unit=secondbox-fleet-renew.service
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now secondbox-fleet-renew.timer
 cp -a /etc/secondbox/runner/image-registry/. /etc/secondbox/image-registry/
 test -f /etc/secondbox/image-registry/tenants.json
 if [[ ! -d /srv/secondbox/artifacts ]]; then

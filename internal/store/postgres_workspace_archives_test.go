@@ -27,14 +27,16 @@ func archiveTestInput(sandboxID, suffix string, now time.Time) ports.WorkspaceAr
 }
 
 func TestWorkspaceArchiveAdmissionAndDirectTransferCommand(t *testing.T) {
-	storage := openStoreTest(t)
+	storage := openArchiveConfigurationTestStore(t)
 	now := time.Now().UTC()
 	seedLocalWorkspacePolicyAndRunner(t, storage, now)
 	if _, err := storage.pool.Exec(t.Context(), `UPDATE secondbox.runners SET state='draining',drain_phase='draining' WHERE id='runner-home'`); err != nil {
 		t.Fatal(err)
 	}
 	provider := &archiveTransferTestProvider{}
-	storage.ConfigureWorkspaceArchives(provider)
+	if err := storage.ConfigureWorkspaceArchives(t.Context(), provider, map[string]int64{"profile-local": 3600}); err != nil {
+		t.Fatal(err)
+	}
 	workspaceID, sandboxID := seedLocalWorkspace(t, storage, "archive-admission", now)
 	input := archiveTestInput(sandboxID, "admission", now)
 	operation, err := storage.ArchiveSandbox(t.Context(), input)
@@ -65,6 +67,9 @@ func TestWorkspaceArchiveAdmissionAndDirectTransferCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := envelope.GetLocalWorkspace()
+	if command.OperationId != input.ArchiveID || command.Correlation.GetOperationId() != input.Operation.ID {
+		t.Fatalf("archive receipt identity=%q correlation=%q, want private phase %q and public operation %q", command.OperationId, command.Correlation.GetOperationId(), input.ArchiveID, input.Operation.ID)
+	}
 	if home != "runner-home" || state != "queued_sent" || command.GetKind() != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT || command.GetArchiveTransfer().GetUrl() == "" || len(provider.methods) != 1 || provider.methods[0] != http.MethodPut {
 		t.Fatalf("archive command=%#v home=%q state=%q methods=%v", command, home, state, provider.methods)
 	}
@@ -94,7 +99,7 @@ func TestWorkspaceArchiveAdmissionAndDirectTransferCommand(t *testing.T) {
 }
 
 func TestArchivedWorkspaceStartCanBeCancelledBeforePlacement(t *testing.T) {
-	storage := openStoreTest(t)
+	storage := openArchiveConfigurationTestStore(t)
 	now := time.Now().UTC()
 	seedLocalWorkspacePolicyAndRunner(t, storage, now)
 	workspaceID, sandboxID := seedLocalWorkspace(t, storage, "archive-cancel", now)
@@ -124,7 +129,7 @@ func TestArchivedWorkspaceStartCanBeCancelledBeforePlacement(t *testing.T) {
 }
 
 func TestArchivedWorkspaceRestorePlacementAndCapacityDeadline(t *testing.T) {
-	storage := openStoreTest(t)
+	storage := openArchiveConfigurationTestStore(t)
 	now := time.Now().UTC()
 	seedLocalWorkspacePolicyAndRunner(t, storage, now)
 	seedWorkspaceRelocationTarget(t, storage, "runner-archive-restore", "ready", now)

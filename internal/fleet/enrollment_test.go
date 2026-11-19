@@ -22,7 +22,9 @@ import (
 
 type enrollmentVerifierFixture struct{}
 
-func (enrollmentVerifierFixture) Verify(context.Context, EnrollmentRequest, string) error { return nil }
+func (enrollmentVerifierFixture) Verify(context.Context, EnrollmentRequest, string, bool) error {
+	return nil
+}
 
 type enrollmentGatewayFixture struct{ issued int }
 

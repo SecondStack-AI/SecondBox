@@ -250,6 +250,8 @@ verify_binary_identity() {
 }
 verify_binary_identity secondbox "$output_dir/secondbox_${version}_linux_${host_architecture}" version
 verify_binary_identity secondbox-deploy "$output_dir/secondbox-deploy_${version}_linux_${host_architecture}" version
+verify_binary_identity fleet-controller "$output_dir/secondbox-fleet_${version}_linux_${host_architecture}" --version
+verify_binary_identity fleet-enrollment "$output_dir/secondbox-fleet-enroll_${version}_linux_${host_architecture}" --version
 verify_binary_identity control-plane "$temporary/secondboxd_linux_${host_architecture}" --version
 if [[ "$guest_architecture" == "$host_architecture" ]]; then
   verify_binary_identity Runner "$temporary/secondbox-runner" --version
