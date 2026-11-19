@@ -50,6 +50,24 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 		WorkspaceID:  command.WorkspaceId,
 		FencingToken: append([]byte(nil), command.FencingToken...),
 	}
+	if command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT &&
+		b.manager.cfg != nil && b.manager.cfg.MicroVMStorageAdmissionMode == "physical" {
+		if command.LogicalCapacityBytes > math.MaxInt64 {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(workspacestore.ErrStorageIncompatible)
+		}
+		_, replayed, err := b.manager.workspaceStore.ReplayRelocationImport(ctx, workspacestore.RelocationImportRequest{Mutation: mutation, Generation: command.ExpectedGeneration, CapacityBytes: int64(command.LogicalCapacityBytes)})
+		if err != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+		}
+		if !replayed {
+			if b.storagePressure == nil {
+				return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(fmt.Errorf("SecondBox Firecracker archive import storage pressure control is unavailable"))
+			}
+			if err := b.storagePressure.CheckAdmission(ctx, command.LogicalCapacityBytes); err != nil {
+				return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(fmt.Errorf("SecondBox Firecracker archive import storage pressure: %w", err))
+			}
+		}
+	}
 	if command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
 		command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT {
 		if command.LogicalCapacityBytes > math.MaxInt64 {

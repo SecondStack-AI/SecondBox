@@ -203,6 +203,9 @@ func (store *PostgresControlPlaneStore) queueWorkspaceArchiveCommand(ctx context
 	phase := strings.TrimSuffix(record.state, "_sent")
 	switch phase {
 	case "queued":
+		// Keep object-store IO outside lifecycle row locks. An uncommitted grant
+		// has not reached a Runner and has no uploaded parts. Interrupted grants
+		// and uploads are reclaimed by the required bucket multipart lifecycle.
 		transfer, err = store.archiveTransfers.Transfer(ctx, record.key, http.MethodPut, &runnerv1.WorkspaceArchiveDescriptor{ArchiveBytes: uint64(record.capacity) + uint64(record.capacity)/8 + 1<<20})
 	case "restore_queued":
 		kind = runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -98,8 +99,8 @@ func run(path string) (resultErr error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return err
 	}
-	if cfg.Region == "" || cfg.PollSeconds < 1 || cfg.Enrollment.ListenAddress == "" || cfg.Enrollment.WindowSeconds < 1 {
-		return errors.New("SecondBox fleet cloud region, poll interval and enrollment listener/window are required")
+	if err := validateFleetConfig(cfg); err != nil {
+		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
@@ -185,10 +186,18 @@ func run(path string) (resultErr error) {
 	}
 	authority := fleet.EnrollmentAuthority{Database: database, Pool: cfg.Pool, Verifier: fleet.AWSIdentityVerifier{AccountID: cfg.Enrollment.AccountID, RoleName: cfg.Enrollment.WorkerRoleName, Region: cfg.Region, Cloud: cloud, Client: proofClient, Now: time.Now, EnrollmentWindow: time.Duration(cfg.Enrollment.WindowSeconds) * time.Second}, Gateway: gateway, CACertificate: ca, CAKey: signer, CAPEM: string(caPEM), Lifetime: time.Duration(cfg.Enrollment.LifetimeSeconds) * time.Second, RunnerEnvironment: string(runnerEnv), GatewayEnvironment: string(gatewayEnv), EgressContexts: string(egress), Now: time.Now}
 	authority.RegistryFiles = registryFiles
-	server := &http.Server{Addr: cfg.Enrollment.ListenAddress, Handler: authority, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: time.Minute, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
+	serverCertificate, err := tls.LoadX509KeyPair(cfg.Enrollment.ServerCertificateFile, cfg.Enrollment.ServerPrivateKeyFile)
+	if err != nil {
+		return fmt.Errorf("SecondBox fleet enrollment server certificate: %w", err)
+	}
+	listener, err := net.Listen("tcp", cfg.Enrollment.ListenAddress)
+	if err != nil {
+		return fmt.Errorf("SecondBox fleet enrollment listener: %w", err)
+	}
+	server := &http.Server{Addr: cfg.Enrollment.ListenAddress, Handler: authority, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: time.Minute, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{serverCertificate}}}
 	serverErrors := make(chan error, 1)
 	go func() {
-		serverErrors <- server.ListenAndServeTLS(cfg.Enrollment.ServerCertificateFile, cfg.Enrollment.ServerPrivateKeyFile)
+		serverErrors <- server.ServeTLS(listener, "", "")
 	}()
 	defer func() {
 		stop, done := context.WithTimeout(context.Background(), 10*time.Second)

@@ -38,6 +38,9 @@ Parameters:
     MaxValue: 65535
   WorkerBundleBucket:
     Type: String
+    MinLength: 3
+    MaxLength: 63
+    AllowedPattern: '[a-z0-9][a-z0-9.-]+[a-z0-9]'
   WorkerBundleKey:
     Type: String
     AllowedPattern: '[A-Za-z0-9._/-]+'
@@ -50,7 +53,7 @@ Parameters:
     AllowedPattern: '[a-f0-9]{64}'
   EnrollmentURL:
     Type: String
-    AllowedPattern: 'https://.+'
+    AllowedPattern: 'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?'
   WorkspaceGiB:
     Type: Number
     MinValue: 64

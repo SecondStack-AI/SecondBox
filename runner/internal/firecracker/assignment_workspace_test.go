@@ -3,6 +3,10 @@ package firecracker
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -20,9 +24,55 @@ type replayWorkspaceStore struct {
 
 type relocationPressureWorkspaceStore struct {
 	workspacestore.WorkspaceStore
-	replayed    bool
-	beginCalled bool
-	beginErr    error
+	workspacestore.WorkspaceArchiveTransferStore
+	replayed     bool
+	beginCalled  bool
+	beginErr     error
+	importCalled bool
+}
+
+func (store *relocationPressureWorkspaceStore) ImportWorkspaceArchive(_ context.Context, request workspacestore.WorkspaceArchiveImportRequest, _ io.Reader) (workspacestore.Receipt, error) {
+	store.importCalled = true
+	return workspacestore.Receipt{Generation: request.Generation, CapacityBytes: request.CapacityBytes, Checksum: request.Archive.ImageChecksum, RecordedAt: time.Now()}, nil
+}
+
+func TestPhysicalStorageArchiveImportChecksPressureBeforeDownloadAndAllowsReplay(t *testing.T) {
+	probe := &mutableStoragePressureProbe{sample: storagePressureSample{Backend: "ext4", TotalBytes: 100 << 20, UsedBytes: 95 << 20}}
+	controller, err := newStoragePressureController(storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90, PhysicalOnly: true}, probe, func(context.Context, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &relocationPressureWorkspaceStore{}
+	backend := &AssignmentBackend{manager: &Manager{cfg: &config.Config{MicroVMStorageAdmissionMode: "physical"}, workspaceStore: store}, storagePressure: controller}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := io.WriteString(w, "archive"); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	command := &runnerprotocol.LocalWorkspaceCommand{
+		Kind:        runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT,
+		OperationId: "archive-import", WorkspaceId: "target", ExpectedGeneration: 1, LogicalCapacityBytes: 64 << 20, FencingToken: []byte("fencing-token"),
+		ArchiveTransfer: &runnerprotocol.WorkspaceArchiveTransfer{Url: server.URL, ExpiresAtUnixMs: uint64(time.Now().Add(time.Hour).UnixMilli()), ArchiveDescriptor: &runnerprotocol.WorkspaceArchiveDescriptor{ArchiveBytes: 7, ArchiveChecksum: "sha256:" + strings.Repeat("a", 64), ImageChecksum: "sha256:" + strings.Repeat("b", 64)}},
+	}
+	if _, err := backend.ExecuteLocalWorkspace(t.Context(), command); !errors.Is(err, ErrStoragePressureAdmissionDenied) {
+		t.Fatalf("archive pressure denial = %v", err)
+	}
+	if store.importCalled {
+		t.Fatal("archive importer opened under pressure")
+	}
+	probe.err = errors.New("probe failed")
+	if _, err := backend.ExecuteLocalWorkspace(t.Context(), command); !errors.Is(err, ErrStoragePressureProbe) {
+		t.Fatalf("archive probe failure = %v", err)
+	}
+	if store.importCalled {
+		t.Fatal("archive importer opened after failed probe")
+	}
+	store.replayed = true
+	evidence, err := backend.ExecuteLocalWorkspace(t.Context(), command)
+	if err != nil || !store.importCalled || evidence.Generation != 1 {
+		t.Fatalf("completed archive import replay evidence=%+v error=%v", evidence, err)
+	}
 }
 
 func (store *relocationPressureWorkspaceStore) ReplayRelocationImport(
