@@ -958,6 +958,10 @@ type relayAssignmentBackend struct {
 	file      func(context.Context, *runnerprotocol.AssignmentFence, *runnerprotocol.FileOpen, []byte) (FileOperationResult, error)
 }
 
+func (*relayAssignmentBackend) ReservedCapacity() *runnerprotocol.Capacity {
+	return &runnerprotocol.Capacity{}
+}
+
 func (*relayAssignmentBackend) Readiness(context.Context) (BackendReadiness, error) {
 	return BackendReadiness{}, nil
 }

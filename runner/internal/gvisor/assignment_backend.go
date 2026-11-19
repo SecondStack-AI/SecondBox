@@ -312,6 +312,14 @@ func gvisorHostPlatform() string {
 	return "linux-" + architecture
 }
 
+// ReservedCapacity samples allocator state without platform or asset probes.
+func (backend *AssignmentBackend) ReservedCapacity() *runnerprotocol.Capacity {
+	backend.mu.Lock()
+	reserved := backend.reserved
+	backend.mu.Unlock()
+	return &runnerprotocol.Capacity{VcpuCount: reserved.vcpus, MemoryBytes: reserved.memory, DiskBytes: reserved.disk, Instances: reserved.instances, Operations: reserved.operations}
+}
+
 // Readiness proves the sentry platform, pinned launch artifacts, exact
 // materialization, loop reconciliation, and integer capacity.
 func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.BackendReadiness, error) {
@@ -325,9 +333,6 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 	if err := backend.probePlatform(ctx); err != nil {
 		return runnercontrol.BackendReadiness{}, err
 	}
-	backend.mu.Lock()
-	reserved := backend.reserved
-	backend.mu.Unlock()
 	manifest := backend.config.manifest
 	return runnercontrol.BackendReadiness{
 		Architecture: runtime.GOARCH,
@@ -338,13 +343,7 @@ func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.
 			Instances:   backend.config.MaximumInstances,
 			Operations:  backend.config.MaximumOperations,
 		},
-		Reserved: &runnerprotocol.Capacity{
-			VcpuCount:   reserved.vcpus,
-			MemoryBytes: reserved.memory,
-			DiskBytes:   reserved.disk,
-			Instances:   reserved.instances,
-			Operations:  reserved.operations,
-		},
+		Reserved: backend.ReservedCapacity(),
 		Capabilities: &runnerprotocol.RunnerCapabilities{
 			Architecture:          runtime.GOARCH,
 			ComputeBackendVersion: manifest.HelperBuildID,

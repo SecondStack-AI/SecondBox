@@ -202,6 +202,12 @@ func (b *AssignmentBackend) StartupTiming() (uint64, time.Duration) {
 	return b.manager.StartupTiming()
 }
 
+// ReservedCapacity leaves Firecracker assignment accounting to its durable
+// control-plane reservations; this backend has no separate process allocator.
+func (b *AssignmentBackend) ReservedCapacity() *runnerprotocol.Capacity {
+	return &runnerprotocol.Capacity{}
+}
+
 // Readiness verifies bundle artifacts and host prerequisites before capacity advertisement.
 func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.BackendReadiness, error) {
 	if err := b.manager.CleanupHealth(); err != nil {
@@ -289,7 +295,7 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	return runnercontrol.BackendReadiness{
 		Architecture: runtime.GOARCH,
 		Capacity:     runnerAllocatableCapacity(cfg),
-		Reserved:     &runnerprotocol.Capacity{},
+		Reserved:     b.ReservedCapacity(),
 		Capabilities: &runnerprotocol.RunnerCapabilities{
 			Architecture:          runtime.GOARCH,
 			KernelRelease:         strings.TrimSpace(string(kernelRelease)),

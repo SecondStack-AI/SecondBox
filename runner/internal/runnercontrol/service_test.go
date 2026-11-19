@@ -1702,6 +1702,10 @@ func (b *recordingAssignmentBackend) Readiness(context.Context) (BackendReadines
 	return b.readiness, nil
 }
 
+func (b *recordingAssignmentBackend) ReservedCapacity() *runnerprotocol.Capacity {
+	return b.readiness.Reserved
+}
+
 func (b *recordingAssignmentBackend) ValidateAssignment(context.Context, *runnerprotocol.AssignmentCommand) error {
 	return b.validateErr
 }

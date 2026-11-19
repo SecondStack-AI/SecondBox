@@ -154,6 +154,8 @@ type WorkspaceRelocationBackend interface {
 // AssignmentBackend accepts only immutable, profile-resolved assignments.
 type AssignmentBackend interface {
 	Readiness(context.Context) (BackendReadiness, error)
+	// ReservedCapacity samples mutable reservations without readiness IO.
+	ReservedCapacity() *runnerprotocol.Capacity
 	ValidateAssignment(context.Context, *runnerprotocol.AssignmentCommand) error
 	StartAssignment(
 		context.Context,
@@ -1546,6 +1548,7 @@ func (s *RunnerProtocolService) sendHeartbeat(
 		}
 	}
 	s.storageObservationMu.Unlock()
+	reserved := s.backend.ReservedCapacity()
 	return s.sendSequencedRunnerFrame(
 		stream,
 		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
@@ -1558,7 +1561,7 @@ func (s *RunnerProtocolService) sendHeartbeat(
 						ConnectionId:      connectionID,
 						ObservedAtUnixMs:  uint64(time.Now().UnixMilli()),
 						Allocatable:       readiness.Capacity,
-						Reserved:          readiness.Reserved,
+						Reserved:          reserved,
 						ActiveAssignments: s.activeAssignments(),
 						DrainPhase:        s.drainPhase(),
 						StartupTiming:     s.startupTiming(),
