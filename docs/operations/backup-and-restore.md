@@ -2,8 +2,11 @@
 
 SecondBox does not provide a Workspace backup catalog or reconstruct lost
 runner-local images. Its explicit stopped-Sandbox relocation transfers one
-intact Workspace between Runners; it is not a backup. PostgreSQL recovery cannot
-recover a Sandbox whose home Runner filesystem was lost.
+intact Workspace between Runners; it is not a backup. PostgreSQL recovery alone
+cannot recover a resident Workspace whose unbacked Runner filesystem was lost.
+An archived Workspace instead depends on its committed object-store image and
+matching PostgreSQL descriptor; the archive tier is authoritative storage, not
+an independent backup history.
 
 `scripts/backup.sh` creates a quiescent control-plane recovery bundle containing
 the `secondbox` PostgreSQL schema and database fencing evidence. That schema
@@ -16,6 +19,24 @@ The bundle deliberately contains no bearer token, platform-token file,
 Workspace image, local Snapshot, runner receipt directory, runner credential,
 or host path. Back up the operator-owned platform-token file and Runner secrets
 through the customer's secret-management system as separate recovery units.
+
+## Archive recovery boundary
+
+For deployments using the archive tier, quiesce admission, archive transfers,
+object cleanup and fleet evacuation before capturing a coordinated recovery
+point. Preserve PostgreSQL, every resident Runner recovery unit and all committed
+archive objects together. Back up bucket configuration and object-store access
+through the operator's infrastructure and secret-management systems; neither
+archive bytes nor these credentials are included in `scripts/backup.sh`.
+
+Restore the matching objects and descriptors before starting the control plane
+and fleet. Keep the archive provider configured while archived Workspaces or
+unfinished transfer/cleanup records remain. Do not combine an old database with
+newer Runner disks, substitute arbitrary old objects for committed generations,
+or expire committed archives through bucket lifecycle rules. Incomplete
+multipart-upload cleanup remains required. See
+[storage-tiering operations](workspace-storage-tiering.md) for safe disable and
+lost-target recovery.
 
 ## Runner recovery boundary
 

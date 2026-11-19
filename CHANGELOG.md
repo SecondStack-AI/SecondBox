@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.32.0 - 2026-11-19
+
+Stopped Workspaces can move to S3 and return on another Runner, and the AWS fleet reference provisions and evacuates workers from durable demand. Deployments from v0.14.0 onward update in place with migrations 0039–0043 and a coordinated Runner protocol 7 → 8 cutover. See the [v0.32.0 release notes](docs/releases/v0.32.0.md).
+
 ### Added
 
 - Stopped, Snapshot-free Workspaces can move to an explicitly configured S3 archive tier and restore onto compatible Runners. Per-Profile cold-age and storage-pressure policies release local disk space, and the AWS fleet reference provisions capacity from queued demand and evacuates Workspaces before terminating workers.
