@@ -5,6 +5,10 @@ package gvisor
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +22,67 @@ type admissionWorkspaceStore struct {
 	beginCalled bool
 	replayed    bool
 	beginErr    error
+}
+
+type archiveAdmissionWorkspaceStore struct {
+	admissionWorkspaceStore
+	workspacestore.WorkspaceArchiveTransferStore
+	importCalled bool
+}
+
+func (store *archiveAdmissionWorkspaceStore) ImportWorkspaceArchive(_ context.Context, request workspacestore.WorkspaceArchiveImportRequest, _ io.Reader) (workspacestore.Receipt, error) {
+	store.importCalled = true
+	return workspacestore.Receipt{Generation: request.Generation, CapacityBytes: request.CapacityBytes, Checksum: request.Archive.ImageChecksum, RecordedAt: time.Now()}, nil
+}
+
+func TestPhysicalStorageArchiveImportChecksPressureBeforeDownloadAndAllowsReplay(t *testing.T) {
+	store := &archiveAdmissionWorkspaceStore{}
+	config := Config{
+		WorkspaceRoot: "/workspace", WorkspaceStore: store,
+		StorageAdmissionMode: "physical", StorageRecoveryPercent: 70,
+		StorageWarningPercent: 80, StorageDenyPercent: 90,
+	}
+	pressure, err := newPhysicalStoragePressure(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probeErr error
+	pressure.probe = func(string) (uint64, uint64, error) { return 95, 100, probeErr }
+	backend := &AssignmentBackend{config: validatedConfig{Config: config}, storagePressure: pressure}
+	downloads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		downloads++
+		if _, err := io.WriteString(w, "archive"); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	command := &runnerprotocol.LocalWorkspaceCommand{
+		Kind:        runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT,
+		OperationId: "archive-import", WorkspaceId: "target", ExpectedGeneration: 1,
+		LogicalCapacityBytes: 64 << 20, FencingToken: []byte("fencing-token"),
+		ArchiveTransfer: &runnerprotocol.WorkspaceArchiveTransfer{
+			Url: server.URL, ExpiresAtUnixMs: uint64(time.Now().Add(time.Hour).UnixMilli()),
+			ArchiveDescriptor: &runnerprotocol.WorkspaceArchiveDescriptor{
+				ArchiveBytes: 7, ArchiveChecksum: "sha256:" + strings.Repeat("a", 64), ImageChecksum: "sha256:" + strings.Repeat("b", 64),
+			},
+		},
+	}
+	if _, err := backend.ExecuteLocalWorkspace(t.Context(), command); !errors.Is(err, errPhysicalStoragePressure) {
+		t.Fatalf("archive pressure denial = %v", err)
+	}
+	probeErr = errors.New("probe failed")
+	if _, err := backend.ExecuteLocalWorkspace(t.Context(), command); !errors.Is(err, probeErr) {
+		t.Fatalf("archive probe failure = %v", err)
+	}
+	if store.importCalled || downloads != 0 {
+		t.Fatal("fresh archive import downloaded or allocated under pressure")
+	}
+	store.replayed = true
+	evidence, err := backend.ExecuteLocalWorkspace(t.Context(), command)
+	if err != nil || !store.importCalled || evidence.Generation != 1 || downloads != 1 {
+		t.Fatalf("completed archive import replay evidence=%+v downloads=%d error=%v", evidence, downloads, err)
+	}
 }
 
 func TestStoragePressureReadinessOrdersCompletedProbes(t *testing.T) {

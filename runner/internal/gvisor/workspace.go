@@ -74,8 +74,19 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT:
 		if backend.storagePressure != nil && command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT {
-			if err := backend.storagePressure.admit(ctx); err != nil {
+			if command.LogicalCapacityBytes > math.MaxInt64 {
+				return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(workspacestore.ErrStorageIncompatible)
+			}
+			_, replayed, err := store.ReplayRelocationImport(ctx, workspacestore.RelocationImportRequest{
+				Mutation: mutation, Generation: command.ExpectedGeneration, CapacityBytes: int64(command.LogicalCapacityBytes),
+			})
+			if err != nil {
 				return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+			}
+			if !replayed {
+				if err := backend.storagePressure.admit(ctx); err != nil {
+					return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+				}
 			}
 		}
 		evidence, err := runnercontrol.ExecuteWorkspaceArchive(ctx, command, store)
