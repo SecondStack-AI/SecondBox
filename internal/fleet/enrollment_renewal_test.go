@@ -16,9 +16,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 )
 
 type renewalVerifierFunc func(context.Context, EnrollmentRequest, string, bool) error
+
+type renewalGatewayFunc func(context.Context, string, string, time.Duration) (string, string, error)
+
+func (f renewalGatewayFunc) Issue(ctx context.Context, runner, csr string, lifetime time.Duration) (string, string, error) {
+	return f(ctx, runner, csr, lifetime)
+}
+
+func (renewalGatewayFunc) Retire(context.Context, string) error { return nil }
 
 func (f renewalVerifierFunc) Verify(ctx context.Context, r EnrollmentRequest, b string, existing bool) error {
 	return f(ctx, r, b, existing)
@@ -155,6 +166,72 @@ func TestFleetSameKeyRenewalAfterExpiryStillRequiresFreshCloudOwnership(t *testi
 	if _, err := database.Exec(t.Context(), `INSERT INTO secondbox.runners(id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,software_version,active_connection_id,last_sequence,drain_phase,reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,sandbox_start_p95_milliseconds,revision,created_at,updated_at,fleet_state) VALUES($1,'code','renewal','offline','[]','[]','{}','[]',1,1,'test','',0,'drained','{}','{}',0,0,1,$2,$2,'active')`, initial.RunnerID, now); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("slow gateway permits heartbeat and retirement", func(t *testing.T) {
+		now = start.Add(4 * time.Hour)
+		request.IdentityProofURL = proof()
+		expectedBinding = EnrollmentBinding(request)
+		if _, err := database.Exec(t.Context(), `INSERT INTO secondbox.runner_pools(name,state,architectures_json,capabilities_json,ready_runner_count,revision,created_at,updated_at) VALUES('code','ready','["amd64"]','[]',0,1,$1,$1)`, now); err != nil {
+			t.Fatal(err)
+		}
+		stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), database.Config().ConnString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stateStore.Close()
+		const connection = "renewal-live-connection"
+		if err := stateStore.OpenConnection(t.Context(), runnercontrol.RunnerIdentity{RunnerID: initial.RunnerID, CredentialSerial: "renewal-live-leaf"}, connection, 8, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(t.Context(), `UPDATE secondbox.runners SET active_connection_id=$2 WHERE id=$1`, initial.RunnerID, connection); err != nil {
+			t.Fatal(err)
+		}
+		entered, release := make(chan struct{}), make(chan struct{})
+		authority.Gateway = renewalGatewayFunc(func(ctx context.Context, _, _ string, _ time.Duration) (string, string, error) {
+			close(entered)
+			select {
+			case <-release:
+				// A response already signed before retirement can arrive late.
+				return "renewed-gateway-certificate", "gateway-ca", nil
+			case <-ctx.Done():
+				return "", "", ctx.Err()
+			}
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { _, err := authority.Enroll(ctx, request); done <- err }()
+		select {
+		case <-entered:
+		case err := <-done:
+			t.Fatalf("renewal did not reach gateway: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		heartbeatCtx, heartbeatCancel := context.WithTimeout(t.Context(), time.Second)
+		_, heartbeatErr := stateStore.RecordHeartbeat(heartbeatCtx, &runnerv1.RunnerHeartbeat{
+			MessageId: "renewing-heartbeat", Sequence: 1, RunnerId: initial.RunnerID, ConnectionId: connection,
+			ObservedAtUnixMs: uint64(now.UnixMilli()), DrainPhase: runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
+			StartupTiming: &runnerv1.StartupTiming{SampleCount: 1, P95Milliseconds: 100},
+			Allocatable:   &runnerv1.Capacity{VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8, Operations: 32},
+			Reserved:      &runnerv1.Capacity{}, StoragePressure: &runnerv1.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: uint64(now.UnixMilli())},
+		}, now)
+		heartbeatCancel()
+		retireCtx, retireCancel := context.WithTimeout(t.Context(), time.Second)
+		_, retirementErr := database.Exec(retireCtx, `UPDATE secondbox.runners SET fleet_state='retired' WHERE id=$1`, initial.RunnerID)
+		retireCancel()
+		close(release)
+		renewalErr := <-done
+		authority.Gateway = gateway
+		if heartbeatErr != nil {
+			t.Errorf("renewal blocked live heartbeat: %v", heartbeatErr)
+		}
+		if retirementErr != nil {
+			t.Errorf("renewal blocked retirement: %v", retirementErr)
+		}
+		if renewalErr == nil {
+			t.Error("late issuer reply bypassed retirement")
+		}
+	})
 	authority.Verifier = renewalVerifierFunc(func(ctx context.Context, r EnrollmentRequest, b string, existing bool) error {
 		if err := verifier.Verify(ctx, r, b, existing); err != nil {
 			return err

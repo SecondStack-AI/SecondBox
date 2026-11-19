@@ -5,7 +5,9 @@ On-Demand EC2 worker. PostgreSQL, SecondBox, the fleet controller, the gateway
 issuer and the egress proxy run independently. S3 stores workspace archives; the
 control plane supplies short-lived object-specific transfer URLs. Workers have
 no workspace-bucket credentials. Use a coordinated protocol-8 control-plane and
-Runner release.
+Runner release. The fleet manager and enrollment service must use the exact
+same build as the control plane; their database and enrollment contracts are
+private and versioned together.
 
 ## Controller host
 

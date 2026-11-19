@@ -66,6 +66,17 @@ receipts, reassign homes or fabricate empty disks to unblock an Operation.
 Investigate the archive worker's retry error and restore the original Runner's
 identity/connectivity for outstanding cleanup.
 
+A permanently lost target leaves its orphan cleanup pending. Its archived
+Workspace can restore elsewhere, but the tier cannot be disabled until the
+cleanup receipt exists. Recover the target's original identity and retained
+WorkspaceStore to complete cleanup. If that is impossible, keep the archive
+provider configured; there is no forced-forget API. Do not remove database rows
+or fabricate receipts to bypass this boundary.
+
+Lost-target detection uses a 30-second bound. A long control-plane outage can
+therefore abandon and repeat an in-flight restore before its Runner reconnects.
+The committed archive remains authoritative through that retry.
+
 Loss of an unarchived resident disk still loses its Workspace. Preserve each
 Runner identity, WorkspaceStore and receipt directory together. An archived
 Workspace depends on both the committed object and PostgreSQL descriptor; an
@@ -79,6 +90,17 @@ object cleanup to settle. Only then remove the configuration and restart. Startu
 refuses an absent provider while archived/restoring Workspaces, active archive
 mutations/transfers or queued object cleanup remain. Do not delete the bucket or
 revoke its credentials before this boundary.
+
+## Worker certificate availability
+
+Fleet workers renew their original keys' certificate leaves automatically.
+Unreadable, invalid or expired leaves refuse new TLS handshakes; established
+streams can remain connected. In particular, an existing control stream can
+keep its Runner visible while new direct sessions fail. Check the worker's
+renewal timer and enrollment authority, restore same-key renewal and verify a
+new direct and gateway connection before admitting more work. Static Runners
+require operator-managed leaf renewal. An authority outage past leaf expiry is
+an availability boundary, even when the Workspace disk remains intact.
 
 ## Capacity and upgrade boundary
 

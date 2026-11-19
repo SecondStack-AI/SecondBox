@@ -159,13 +159,14 @@ func (authority EnrollmentAuthority) Enroll(ctx context.Context, request Enrollm
 		return EnrollmentResponse{}, errors.New("SecondBox fleet enrollment grant is expired or bound to another key")
 	}
 	var runnerState string
-	if err := tx.QueryRow(ctx, `SELECT fleet_state FROM secondbox.runners WHERE id=$1 FOR UPDATE`, runnerID).Scan(&runnerState); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT fleet_state FROM secondbox.runners WHERE id=$1`, runnerID).Scan(&runnerState); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return EnrollmentResponse{}, err
 	}
 	if runnerState == "retired" {
 		return EnrollmentResponse{}, errors.New("SecondBox fleet enrollment Runner identity is retired")
 	}
 	var response EnrollmentResponse
+	issued := false
 	if len(responseJSON) > 0 && (!request.Renew || grantExpiry.Sub(now) > authority.Lifetime/3) {
 		if err := json.Unmarshal(responseJSON, &response); err != nil {
 			return response, err
@@ -188,6 +189,18 @@ func (authority EnrollmentAuthority) Enroll(ctx context.Context, request Enrollm
 		// Carry the actual issuing chain with the leaf so the Runner can pin
 		// its signer independently of the control-plane server's authority.
 		response = EnrollmentResponse{RunnerID: runnerID, RunnerCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate})) + authority.CAPEM, RunnerCA: authority.CAPEM, GatewayCertificate: gatewayCertificate, GatewayCA: gatewayCA, ExpiresAt: expires}
+		issued = true
+	}
+	// Only the enrollment binding is locked during remote issuance. Heartbeats
+	// and placement must keep acquiring the Runner row while the issuer waits.
+	// Fence retirement after the remote reply, before returning any authority.
+	if err := tx.QueryRow(ctx, `SELECT fleet_state FROM secondbox.runners WHERE id=$1 FOR UPDATE`, runnerID).Scan(&runnerState); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return EnrollmentResponse{}, err
+	}
+	if runnerState == "retired" {
+		return EnrollmentResponse{}, errors.New("SecondBox fleet enrollment Runner identity is retired")
+	}
+	if issued {
 		encoded, err := json.Marshal(response)
 		if err != nil {
 			return response, err
