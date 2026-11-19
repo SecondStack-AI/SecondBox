@@ -5,6 +5,8 @@ version consistently for binaries, SDKs, images, and standard bundles. In the
 examples below, replace `VERSION` with the chosen numeric version. The tag and
 attached files identify one release; the publishing workflow does not rebuild them.
 
+For [v0.32.0](../releases/v0.32.0.md), deployments from v0.14.0 onward update in place with migrations 0039–0043 and a coordinated Runner protocol 7 → 8 cutover. Follow the release's quiescing procedure: pause admission, settle in-flight fleet evacuation and retirement before pausing fleet reconciliation, settle transfers and cleanup, stop Sandboxes and Runners, and preserve matching PostgreSQL, Runner storage and committed archive objects. Update the control plane, all Runners, fleet controller and enrollment tools to the exact same build. Archive tiering remains explicitly configured. The public API retains version v1 with additive archive/fleet routes and residency fields; guest protocol 1, standard Profile revisions and Firecracker bundles are retained. Pin the new release manifests, image digests, binaries and SDKs before enabling tiering or elastic workers.
+
 For [v0.31.0](../releases/v0.31.0.md), deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7 and standard Profile revisions are unchanged, so v0.30.0 and v0.31.0 peers connect in either update order. Before updating, make sure `SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES` is unset or at least 65,536, and that every Profile with ports has `execution.streamWindowBytes` of at least 65,536; switch Sandboxes pinned to a smaller-window revision to a corrected one, or recreate them, before relying on proxied Ports. Pin the amd64 `microvm.bundleManifestDigest` from the artifact manifest, install the bundle, and materialize snapshot-resume templates from it before those Runners start; replace the gVisor materialization while each gVisor Runner is stopped and pin its new digest. The arm64 bundle is unchanged. Rebuild client-selected execution images with this release's image builder to carry the fixed guest agent. Move SDK pins to v0.31.0 and drop any caller-side Port write chunking: `PortTunnel.send` and `PortTunnel.Write` split writes within the 65,536-byte message bound, and a failed TypeScript `send` rejects every later one.
 
 For [v0.30.0](../releases/v0.30.0.md), deployments from v0.14.0 onward update in place with no database migration; public API v1, Runner protocol 7, the Firecracker bundles, gVisor materialization inputs and standard Profile revisions are unchanged, so v0.29.0 and v0.30.0 peers connect in either update order. Update every control-plane process to receive `version` and `sourceCommit` from `GET /healthz`; v0.29.0 Runners need no update for this feature. A client that requires a server feature must treat a missing version as unknown support, and use the responding server's version rather than its own SDK version. The response identifies one control-plane process, not connected Runners or backend capabilities.
@@ -45,6 +47,27 @@ The Go module's `retract` directives identify withdrawn versions.
 `GET /healthz` reports the release identity of the control-plane process that answered: `{"status":"healthy","version":"VERSION","sourceCommit":"COMMIT"}`. The probe needs no credential. A client that depends on a feature added after the release it was built against compares `version` with the release that introduced the feature, as named in the changelog, before it sends requests that use the feature. For example, `capacityWaitMilliseconds` on start and create needs `0.28.0` or later; an older control plane rejects the request member as unknown. Treat the feature as unsupported when the fields are absent (control planes released before this field) or when `version` is not a release number, such as `0.0.0-development` from a local build.
 
 The value describes only the answering control-plane process. It does not report connected Runners: the Runner protocol generation is negotiated on each Runner connection, and the release notes state when a feature also needs updated Runners. Bounded start waits need only the control plane. Behind a load balancer each control-plane process answers for itself; the update procedures stop every older control-plane process before a newer one starts, so differing answers mean the update is incomplete.
+
+## Workspace archive and elastic-fleet integration
+
+Workspace archiving, residency observations and elastic-fleet APIs require
+v0.32.0 or later and Runner protocol generation 8 on every connected Runner.
+Check the answering control plane's release identity and the selected release's
+protocol window; a newer SDK alone does not update the server or its fleet.
+
+Configure the object-store tier and automatic per-Profile policies explicitly.
+Applications should use bounded capacity waits for cold create/start, refresh
+Sandbox observations through `archiving` and `restoring`, and handle a
+`workspace_mutation_conflict` while an archive owns the mutation slot. Report
+compressed archive bytes separately from resident allocated/exclusive bytes;
+reading storage inventory must not start an archived Workspace.
+
+Update the control plane, all Runners, fleet controller and enrollment tools
+together as described by the release's upgrade notes. Pin the execution-image
+builder revision and digest-pinned image alongside the selected release.
+See [storage-tiering operations](workspace-storage-tiering.md) and
+[AWS workers](../../deploy/aws-fleet/README.md) for operator-owned configuration
+and recovery boundaries.
 
 ## Linux arm64 hosts
 
