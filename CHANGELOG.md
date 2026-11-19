@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-## 0.32.0 - 2026-11-19
+## 0.32.1 - 2026-11-19
 
-Stopped Workspaces can move to S3 and return on another Runner, and the AWS fleet reference provisions and evacuates workers from durable demand. Deployments from v0.14.0 onward update in place with migrations 0039–0043 and a coordinated Runner protocol 7 → 8 cutover. See the [v0.32.0 release notes](docs/releases/v0.32.0.md).
+The runtime artifact set is amd64-only. Stopped Workspaces can move to S3 and return on another Runner, and the AWS fleet reference provisions and evacuates workers from durable demand. Deployments from v0.14.0 onward update in place with migrations 0039–0043 and a coordinated Runner protocol 7 → 8 cutover. See the [v0.32.1 release notes](docs/releases/v0.32.1.md).
 
 ### Added
 
@@ -20,6 +20,10 @@ Stopped Workspaces can move to S3 and return on another Runner, and the AWS flee
 - A failed local Workspace create or clone that produced no receipt, such as one refused by storage pressure, was rejected by the control plane as conflicting with durable authority. The rejection ended the Runner session and left the command pending for redelivery. The control plane now records the failure.
 - The gVisor Runner left zombie processes behind, about two for each Sandbox Instance, because the processes that runsc started reparented to the Runner, which is PID 1 of its container and did not reap them. Each mount supervisor now adopts them, stops any that remain after runsc exits, and reaps them before it reports compute exit. The count grew until the Runner container restarted; it had no effect on capacity.
 - A gVisor Runner on an SELinux host, such as RHEL or CentOS, refused to start with "SecondBox gVisor flat root differs from the pinned materialization", because the host labels every unpacked file and the flat-root digest counted the `security.selinux` label. The digest now ignores that label; published materialization digests are unchanged. Rebuild custom materializations whose pinned digests included SELinux labels with the updated tools before upgrading their Runners.
+
+## 0.32.0 - 2026-11-19 (withdrawn before publication)
+
+Release qualification did not complete. The tag remains immutable and is retracted by the Go module; use v0.32.1. No stable release artifacts were published.
 
 ## 0.31.0 - 2026-11-07
 

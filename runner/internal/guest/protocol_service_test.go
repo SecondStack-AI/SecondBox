@@ -552,7 +552,7 @@ func TestProtocolServicePTYStreamDisconnectKillsGuestProcess(t *testing.T) {
 		stream,
 		protocolTestOperationBinding(binding, "pty-disconnect", 1),
 		&guestv1.ExecRequest{
-			Command:          &guestv1.ExecRequest_Shell{Shell: "echo $$ > pty-disconnect.pid; exec sleep 60"},
+			Command:          &guestv1.ExecRequest_Shell{Shell: "echo $$ > pty-disconnect.pid.tmp && mv pty-disconnect.pid.tmp pty-disconnect.pid && exec sleep 60"},
 			OutputLimitBytes: 1024,
 			Streaming:        true,
 			Pty:              &guestv1.PtyDimensions{Rows: 24, Columns: 80},

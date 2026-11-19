@@ -42,11 +42,9 @@ The arm64 set carries no gVisor artifacts and no installer qualification evidenc
 A maintainer lands the release notes on `main`, then tags that commit and pushes the tag.
 The push starts `release-tag.yml`, configured as described in [release operator setup](release-operator-setup.md).
 A GitHub-hosted runner first builds the architecture-neutral files with `scripts/release-build-shared.sh` and records them with their digests, version, tag and source commit in `shared-artifacts.json`.
-The two self-hosted release runners then work in parallel from that shared set.
-The amd64 runner runs `just release VERSION SHARED_DIR`: it qualifies the source, builds the amd64 artifacts, stages a non-publishable installer candidate, qualifies those bytes in a disposable guest, and stages the final amd64 manifest.
-The arm64 runner runs `just release-arm64 VERSION SHARED_DIR`: it qualifies the same commit with `just test-scenario` and stages the arm64 set.
-Both stagings verify the shared files against their record and this commit before they copy them.
-When both sets are staged, each runner uploads its own set to the draft, arm64 first; the amd64 upload dispatches the hosted publisher.
+The self-hosted amd64 runner runs `just release VERSION SHARED_DIR`: it qualifies the source, builds the amd64 artifacts, stages a non-publishable installer candidate, qualifies those bytes in a disposable guest, and stages the final amd64 manifest.
+Staging verifies the shared files against their record and this commit before copying them.
+The amd64 upload then adds the staged set to the draft and dispatches the hosted publisher. The tag workflow publishes no arm64 runtime set; client binaries and SDKs remain portable.
 Do not tag a commit that is not on `main`, and do not upload an unqualified build by hand.
 
 A release qualifies Firecracker and local gVisor, builds amd64 images, and runs the Btrfs-image installer guest.
