@@ -616,7 +616,7 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runners
-		SET state=CASE WHEN state='connected' AND $2='ready' AND $11
+		SET state=CASE WHEN state IN ('connected','offline') AND $2='ready' AND $11
 		               AND (backend_kind='firecracker' OR capabilities_json ? 'physical-storage-admission')
 		               THEN 'connected' ELSE $2 END,
 			capacity_json=$3,reserved_capacity_json=$4,last_sequence=$5,

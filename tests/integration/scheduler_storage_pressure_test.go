@@ -6,6 +6,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/reconcile"
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
@@ -129,6 +130,46 @@ func TestSchedulerWaitsForPressureAfterRegistration(t *testing.T) {
 	heartbeat.MessageId, heartbeat.Sequence = task4ID("heartbeat"), 3
 	heartbeat.StoragePressure = &runnerv1.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: uint64(fixture.now.UnixMilli())}
 	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	fixture.scheduleWithin(t, 5*time.Second)
+}
+
+func TestSchedulerWaitsForPressureAfterRunnerExpiry(t *testing.T) {
+	fixture := newSchedulerLockFixture(t)
+	connectionID := task4ID("connection")
+	if err := fixture.stateStore.OpenConnection(t.Context(), fixture.homeIdentity, connectionID, 1, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.stateStore.RecordRegistration(t.Context(), task4Registration(fixture.homeRunnerID, connectionID, fixture.poolName), fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := reconcile.NewPostgresStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reconciliation.Close()
+	if _, err := reconciliation.MarkExpiredRunners(t.Context(), fixture.now.Add(time.Second), fixture.now.Add(31*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := fixture.pool.QueryRow(t.Context(), `SELECT state FROM secondbox.runners WHERE id=$1`, fixture.homeRunnerID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "offline" {
+		t.Fatalf("expired Runner state = %s, want offline", state)
+	}
+	heartbeat := task4Heartbeat(fixture.homeRunnerID, connectionID, task4ID("heartbeat"), 2, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE)
+	heartbeat.StoragePressure = nil
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now.Add(32*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.scheduler.Schedule(t.Context(), fixture.request); !errors.Is(err, scheduler.ErrHomeRunnerUnavailable) {
+		t.Fatalf("placement after expired Runner's pressure-free heartbeat = %v", err)
+	}
+	heartbeat.MessageId, heartbeat.Sequence = task4ID("heartbeat"), 3
+	heartbeat.StoragePressure = &runnerv1.StoragePressureObservation{Status: "healthy", ObservedAtUnixMs: uint64(fixture.now.Add(33 * time.Second).UnixMilli())}
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), heartbeat, fixture.now.Add(33*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	fixture.scheduleWithin(t, 5*time.Second)
