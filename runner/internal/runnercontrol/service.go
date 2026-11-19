@@ -524,11 +524,9 @@ func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, e
 	); err != nil {
 		return false, err
 	}
-	// Registration clears the previous connection's storage-pressure report and
-	// the asynchronous storage poll has no result for this session yet, so the
-	// first heartbeat carries the pressure readiness just measured. Placement
-	// would otherwise treat a Runner denying admission as unconstrained until
-	// the next heartbeat.
+	// Registration clears the previous connection's storage-pressure report.
+	// The first heartbeat restores the newest measurement, including a poll
+	// that completed while this session was checking readiness.
 	if err := s.sendHeartbeat(
 		ctx, stream, welcome.ConnectionId, readiness, readiness.StoragePressure,
 	); err != nil {
@@ -1525,7 +1523,7 @@ func (s *RunnerProtocolService) sendHeartbeat(
 		return fmt.Errorf("SecondBox Runner storage observation failed: %w", observation.err)
 	}
 	pressure := observation.pressure
-	if measuredPressure != nil {
+	if measuredPressure != nil && (pressure == nil || measuredPressure.ObservedAtUnixMs > pressure.ObservedAtUnixMs) {
 		pressure = measuredPressure
 	}
 	return s.sendSequencedRunnerFrame(
