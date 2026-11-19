@@ -21,7 +21,8 @@ const fleetRunnerQuery = `SELECT runner.id,runner.revision,runner.state,runner.f
  COALESCE(runner.storage_pressure_json->>'status'='admission_denied',false),
  (SELECT count(*) FROM secondbox.workspaces w WHERE w.home_runner_id=runner.id AND w.state<>'deleted'),
  (SELECT count(*) FROM secondbox.snapshots s WHERE s.home_runner_id=runner.id AND s.state<>'deleted'),
- (SELECT count(*) FROM secondbox.workspaces w WHERE w.home_runner_id=runner.id AND w.mutation_state<>''),
+ (SELECT count(*) FROM secondbox.workspaces w WHERE w.home_runner_id=runner.id AND w.mutation_state<>'')+
+ (SELECT count(*) FROM secondbox.workspace_archives a WHERE a.target_runner_id=runner.id AND a.state IN ('restore_queued','restore_queued_sent')),
  (SELECT count(*) FROM secondbox.runner_commands c WHERE c.runner_id=runner.id AND c.state IN ('pending','delivering','delivered')),
  (SELECT count(*) FROM secondbox.assignments a WHERE a.runner_id=runner.id AND a.state NOT IN ('fenced','released','failed_terminal'))
  FROM secondbox.runners runner`
@@ -51,7 +52,7 @@ func (store *PostgresControlPlaneStore) ReadRunnerFleet(ctx context.Context, poo
  AND (s.desired_state='running' OR (s.desired_state='stopped' AND s.state='creating'
    AND w.state='creating' AND w.home_runner_id='' AND w.mutation_kind='create' AND w.mutation_state='queued'))
  AND s.state IN ('creating','stopped','starting','failed') AND s.lifecycle_failure_class=''
- AND w.state IN ('creating','ready','archived')
+ AND w.state IN ('creating','ready','archived','restoring')
  AND EXISTS(SELECT 1 FROM secondbox.operations o WHERE o.sandbox_id=s.id
    AND o.kind IN ('create','start') AND o.state IN ('pending','running')
    AND (o.capacity_wait_deadline IS NULL OR o.capacity_wait_deadline>$2))`, pool, now).Scan(
@@ -184,6 +185,13 @@ func (store *PostgresControlPlaneStore) ChangeRunnerFleetState(ctx context.Conte
 	if action == "evacuate" {
 		if runner.ActiveAssignments != 0 {
 			return runner, fmt.Errorf("%w: Runner still has active Assignments", ports.ErrInvalidLifecycleTransition)
+		}
+		var restoring bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.workspace_archives WHERE target_runner_id=$1 AND state IN ('restore_queued','restore_queued_sent'))`, id).Scan(&restoring); err != nil {
+			return runner, err
+		}
+		if restoring {
+			return runner, fmt.Errorf("%w: Runner still has Workspace restores", ports.ErrInvalidLifecycleTransition)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE secondbox.runners SET fleet_state='evacuating',state='draining',drain_phase='draining',revision=revision+1,updated_at=$2 WHERE id=$1`, id, now); err != nil {
 			return runner, err

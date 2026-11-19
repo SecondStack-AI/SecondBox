@@ -86,7 +86,7 @@ func (store *PostgresControlPlaneStore) prepareResidentWorkspaceStart(ctx contex
 		return err
 	}
 	spec = sandboxPlacementSpec(spec, locked.Resources)
-	source, err := scanRunnerPlacementCandidate(tx.QueryRow(ctx, `SELECT id,pool_name,state,drain_phase,active_connection_id,backend_kind,architectures_json,capabilities_json,protocol_versions_json,capacity_json,reserved_capacity_json,artifact_cache_json,supported_egress_contexts_json FROM secondbox.runners WHERE id=$1 FOR UPDATE`, w.HomeRunnerID), "SecondBox resident start home", false)
+	source, err := scanRunnerPlacementCandidate(tx.QueryRow(ctx, `SELECT id,pool_name,state,drain_phase,active_connection_id,backend_kind,architectures_json,capabilities_json,protocol_versions_json,capacity_json,reserved_capacity_json,artifact_cache_json,supported_egress_contexts_json,COALESCE(storage_pressure_json->>'status','') FROM secondbox.runners WHERE id=$1 FOR UPDATE`, w.HomeRunnerID), "SecondBox resident start home", false)
 	if err != nil {
 		return err
 	}

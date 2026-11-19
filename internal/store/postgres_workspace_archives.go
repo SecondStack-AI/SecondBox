@@ -440,7 +440,7 @@ func (store *PostgresControlPlaneStore) archiveIdleWorkspaces(ctx context.Contex
 		if idleSeconds < 1 {
 			return errors.New("SecondBox archive idle policy must be positive")
 		}
-		rows, err := store.pool.Query(ctx, `SELECT sandbox.id,sandbox.tenant_ref,sandbox.subject_ref,sandbox.revision,sandbox.generation FROM secondbox.sandboxes sandbox JOIN secondbox.workspaces workspace ON workspace.id=sandbox.workspace_id WHERE sandbox.profile_name=$1 AND sandbox.state='stopped' AND sandbox.desired_state='stopped' AND sandbox.updated_at<$2 AND workspace.state='ready' AND workspace.mutation_state='' AND NOT EXISTS(SELECT 1 FROM secondbox.snapshots snapshot WHERE snapshot.workspace_id=workspace.id AND snapshot.state<>'deleted') ORDER BY sandbox.updated_at LIMIT 16`, profile, now.Add(-time.Duration(idleSeconds)*time.Second))
+		rows, err := store.pool.Query(ctx, `SELECT sandbox.id,sandbox.tenant_ref,sandbox.subject_ref,sandbox.revision,sandbox.generation FROM secondbox.sandboxes sandbox JOIN secondbox.workspaces workspace ON workspace.id=sandbox.workspace_id JOIN secondbox.runners runner ON runner.id=workspace.home_runner_id WHERE sandbox.profile_name=$1 AND sandbox.state='stopped' AND sandbox.desired_state='stopped' AND sandbox.updated_at<$2 AND workspace.state='ready' AND workspace.mutation_state='' AND runner.state IN ('ready','draining') AND runner.active_connection_id<>'' AND NOT EXISTS(SELECT 1 FROM secondbox.snapshots snapshot WHERE snapshot.workspace_id=workspace.id AND snapshot.state<>'deleted') ORDER BY sandbox.updated_at LIMIT 16`, profile, now.Add(-time.Duration(idleSeconds)*time.Second))
 		if err != nil {
 			return err
 		}
