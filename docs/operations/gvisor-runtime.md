@@ -416,7 +416,9 @@ remains operator-authored and unqualified.
   runner image digest the artifact manifest names, and extract the artifacts image onto the node
   with ownership, modes, timestamps, and extended attributes preserved (for example
   `tar --xattrs --acls --numeric-owner`), since the flat-root digest covers them. The digest
-  ignores the `security.selinux` label that an SELinux host assigns on extraction. The build
+  ignores the `security.selinux` label that an SELinux host assigns on extraction.
+  Rebuild custom materializations whose pinned digests included those labels with
+  the updated tools before upgrading their Runners. The build
   contract above remains the way to assemble the same directory from source for qualification.
 - Dedicate a tainted node pool: one runner pod per node, tolerating the pool taint, with a
   node-local reflink-capable volume for the WorkspaceStore.

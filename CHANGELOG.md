@@ -5,7 +5,7 @@
 ### Fixed
 
 - The gVisor Runner left zombie processes behind, about two for each Sandbox Instance, because the processes that runsc started reparented to the Runner, which is PID 1 of its container and did not reap them. Each mount supervisor now adopts them, stops any that remain after runsc exits, and reaps them before it reports compute exit. The count grew until the Runner container restarted; it had no effect on capacity.
-- A gVisor Runner on an SELinux host, such as RHEL or CentOS, refused to start with "SecondBox gVisor flat root differs from the pinned materialization", because the host labels every unpacked file and the flat-root digest counted the `security.selinux` label. The digest now ignores that label; the pinned materialization digests are unchanged.
+- A gVisor Runner on an SELinux host, such as RHEL or CentOS, refused to start with "SecondBox gVisor flat root differs from the pinned materialization", because the host labels every unpacked file and the flat-root digest counted the `security.selinux` label. The digest now ignores that label; published materialization digests are unchanged. Rebuild custom materializations whose pinned digests included SELinux labels with the updated tools before upgrading their Runners.
 
 ## 0.31.0 - 2026-11-07
 
