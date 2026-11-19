@@ -12,7 +12,7 @@ Stopped Workspaces can move to S3 and return on another Runner, and the AWS flee
 
 ### Upgrade notes
 
-- Runner protocol generation changes from 7 to 8 and database migrations 0039–0043 are added. Pause admission and fleet activity, settle relocations and configured archive transfers/cleanup, then stop Sandboxes and all Runners before updating the control plane, Runners and fleet manager together. Preserve PostgreSQL, Runner storage and any committed archive objects as one recovery point; restoring an older database alone does not recover archived or relocated Workspace ownership.
+- Runner protocol generation changes from 7 to 8 and database migrations 0039–0043 are added. Pause admission, settle in-flight fleet evacuation and retirement before pausing fleet reconciliation, and settle relocations and configured archive transfers/cleanup, then stop Sandboxes and all Runners before updating the control plane, Runners and fleet manager together. Preserve PostgreSQL, Runner storage and any committed archive objects as one recovery point; restoring an older database alone does not recover archived or relocated Workspace ownership.
 
 ### Fixed
 
