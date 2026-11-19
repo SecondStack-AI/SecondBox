@@ -25,8 +25,9 @@ rg -q 'qualification-evidence' "$stager"
 rg -q '^export LC_ALL=C$' "$stager"
 
 # Only the tag workflow runs on the self-hosted release runners. It builds the
-# shared files once on a hosted runner, stages the amd64 runtime set and leaves
-# publication to the hosted publisher.
+# shared files once on a hosted runner, stages both artifact sets in parallel
+# from them, uploads the arm64 set first, and leaves publication to the hosted
+# publisher.
 if rg -q 'qualif|/dev/kvm|test-scenario|self-hosted' "$workflow" "$repo_root/.github/workflows/ci.yml"; then
   echo "GitHub-hosted workflows contain a forbidden qualification step" >&2
   exit 1
@@ -36,20 +37,23 @@ rg -q "tags: \['v\[0-9\]\*'\]" "$tag_workflow"
 diff -u <(printf '%s\n' \
   $'build-shared\tubuntu-latest\t' \
   $'stage-amd64\t[self-hosted, Linux, X64, secondbox-release-amd64]\tbuild-shared' \
-  $'upload-amd64\t[self-hosted, Linux, X64, secondbox-release-amd64]\t[build-shared, stage-amd64]') \
+  $'stage-arm64\t[self-hosted, Linux, ARM64, secondbox-release-arm64]\tbuild-shared' \
+  $'upload-arm64\t[self-hosted, Linux, ARM64, secondbox-release-arm64]\t[build-shared, stage-amd64, stage-arm64]' \
+  $'upload-amd64\t[self-hosted, Linux, X64, secondbox-release-amd64]\t[build-shared, upload-arm64]') \
   <(awk '/^jobs:$/ {jobs = 1; next}
     jobs && /^  [a-z0-9-]+:$/ {if (job != "") print job "\t" runs "\t" needs; job = substr($1, 1, length($1) - 1); runs = ""; needs = ""; next}
     jobs && /^    runs-on: / {runs = substr($0, 14)}
     jobs && /^    needs: / {needs = substr($0, 12)}
     END {if (job != "") print job "\t" runs "\t" needs}' "$tag_workflow") || {
-  echo "tag workflow job graph differs from shared build, amd64 staging and amd64 upload" >&2
+  echo "tag workflow job graph differs from build-shared, parallel staging, then arm64 and amd64 uploads" >&2
   exit 1
 }
 rg -q 'run: scripts/release-build-shared.sh "\$RELEASE_VERSION" "\$RUNNER_TEMP/shared-\$RELEASE_VERSION"$' "$tag_workflow"
 rg -q '/usr/bin/just release "\$RELEASE_VERSION" "\$RELEASE_SHARED"$' "$tag_workflow"
+rg -q '/usr/bin/just release-arm64 "\$RELEASE_VERSION" "\$RELEASE_SHARED"$' "$tag_workflow"
 # A tar keeps binary modes across the workflow artifact, in and out.
 rg -q 'tar -C "\$RUNNER_TEMP/shared-\$RELEASE_VERSION" -cf "\$RUNNER_TEMP/shared.tar" \.$' "$tag_workflow"
-test "$(rg -c 'tar -C "\$RELEASE_SHARED" -xpf "\$RUNNER_TEMP/shared-download/shared.tar"$' "$tag_workflow")" = 1
+test "$(rg -c 'tar -C "\$RELEASE_SHARED" -xpf "\$RUNNER_TEMP/shared-download/shared.tar"$' "$tag_workflow")" = 2
 # The shared build needs no KVM, Docker or host configuration.
 if rg -q 'qualif|/dev/kvm|test-scenario|docker (buildx|build|run)|release\.env|RELEASE_' "$shared_builder"; then
   echo "shared release build depends on a release runner" >&2
@@ -63,8 +67,8 @@ if awk '/^ +(- )?run:/ {block = 1; indent = match($0, /[^ -]/); if ($0 ~ /\$\{\{
   echo "tag workflow interpolates expressions into shell source" >&2
   exit 1
 fi
-test "$(rg -c 'scripts/release-upload.sh' "$tag_workflow")" = 1
-test "$(rg -c "if: \\$\\{\\{ !contains\\(github.ref_name, '-dryrun.'\\) \\}\\}" "$tag_workflow")" = 1
+test "$(rg -c 'scripts/release-upload.sh' "$tag_workflow")" = 2
+test "$(rg -c "if: \\$\\{\\{ !contains\\(github.ref_name, '-dryrun.'\\) \\}\\}" "$tag_workflow")" = 2
 if rg -q 'release-publish|npm publish|skopeo|id-token|packages: write' "$tag_workflow"; then
   echo "tag workflow publishes instead of dispatching the hosted publisher" >&2
   exit 1

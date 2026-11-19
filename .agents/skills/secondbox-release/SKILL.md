@@ -15,8 +15,8 @@ it. Prepare a reviewable result before requesting any missing authorization.
 
 - A release is cut only by pushing a `vX.Y.Z` tag on a merged commit of
   `origin/main`; `release-tag.yml` builds the shared files once on a hosted
-  runner, qualifies and stages the amd64 runtime set on its
-  self-hosted release runner, and dispatches the hosted publisher. Never tag a PR branch,
+  runner, qualifies and stages both artifact sets in parallel on the
+  self-hosted release runners, and dispatches the hosted publisher. Never tag a PR branch,
   run `release-upload` by hand, or construct a release from separate
   `release-stage` and upload commands.
 - Push the tag only after the notes and the changelog cut are on `main`,
@@ -43,7 +43,7 @@ it. Prepare a reviewable result before requesting any missing authorization.
 2. Choose a minor version pre-1.0 for protocol generation, migration checksum,
    bundle or clean-install boundary changes; patch otherwise.
    Ask only if the evidence leaves a consequential ambiguity.
-3. Check the amd64 release runner is online and idle (`gh api
+3. Check both release runners are online and idle (`gh api
    repos/SecondStack-AI/SecondBox/actions/runners` needs admin; otherwise
    check a recent run or the hosts). For a changed release input (bundle,
    installer image), update each runner's `release.env` first and compare its
@@ -80,12 +80,11 @@ it. Prepare a reviewable result before requesting any missing authorization.
    github.com/SecondStack-AI/SecondBox@vX.Y.Z`. Inspect all six GHCR version tags
    with `docker buildx imagetools inspect` (control-plane, runner, installer-tools,
    microvm-artifacts, runner-gvisor, gvisor-artifacts) and the four `vX.Y.Z-arm64`
-   tags (control-plane, runner, installer-tools, microvm-artifacts) only for a release
-   whose manifest includes that runtime set. The current tag workflow is amd64-only. Verify the latest
+   tags (control-plane, runner, installer-tools, microvm-artifacts). Verify the latest
    downloaded `install.sh` embeds the new version; do not execute it to check.
 9. Append timings, coordinates and lessons to the worklog; Claude also updates
    memory. Supply the [downstream hand-off](../../../docs/operations/downstream-release-integration.md):
-   the selected runtime manifest URL/digest, SHA256SUMS digests, npm integrity, OCI and binary digests,
+   both manifest URLs/digests, SHA256SUMS digests, npm integrity, OCI and binary digests,
    Profile revision/spec digests, platform matrix and protocol window. State
    whether deployments may update or must reinstall. Final outputs stay on the
    runners under `RELEASE_OUTPUT_ROOT`; prune old versions when disk runs short.
