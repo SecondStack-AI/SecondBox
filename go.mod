@@ -2,6 +2,8 @@ module github.com/SecondStack-AI/SecondBox
 
 go 1.26.10
 
+retract v0.32.0 // Release qualification failed before publication; use v0.32.1, whose runtime artifact set is amd64-only.
+
 retract v0.7.0 // The public Go proxy cached an intermediate release-preparation commit; use v0.7.1.
 
 retract [v0.8.0, v0.8.2] // Pre-release tags cut before qualification completed (v0.8.0 has an unresolvable module graph; v0.8.1 and v0.8.2 predate the qualification-driver fixes); use v0.8.3.

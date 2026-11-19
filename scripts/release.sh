@@ -69,10 +69,17 @@ guest_memory="${QUALIFY_GUEST_MEMORY_MIB:-4096}"
 available_mib="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)"
 ((available_mib >= guest_memory+2048)) || fail 'insufficient memory for an installer guest and 2 GiB host reserve'
 required_disk_gib=100
-for path in "$RELEASE_OUTPUT_ROOT" "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT"; do
-  available_kib="$(df -Pk "$path" | awk 'NR==2 {print $4}')"
-  ((available_kib >= required_disk_gib*1024*1024)) || fail "less than $required_disk_gib GiB free at $path"
-done
+release_disk_headroom_available() {
+  local path available_kib
+  for path in "$RELEASE_OUTPUT_ROOT" "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT"; do
+    available_kib="$(df -Pk "$path" | awk 'NR==2 {print $4}')"
+    if ((available_kib < required_disk_gib*1024*1024)); then
+      echo "SecondBox release: less than $required_disk_gib GiB free at $path" >&2
+      return 1
+    fi
+  done
+}
+release_disk_headroom_available || fail 'insufficient disk headroom before qualification'
 export QUALIFY_ENV_FILE="$config"
 scripts/qualify.sh --tier release --preflight
 mkdir -p .tmp/release
@@ -108,6 +115,12 @@ finish() {
 trap finish EXIT
 stage qualification /usr/bin/just qualify --tier release || fail "qualification failed; inspect $directory"
 stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.sh --build-only --shared-from "$shared" "$version" "$build" || fail "build failed; inspect $directory"
+# Exported artifacts no longer depend on the builder cache. Reclaim only unused
+# cache when the build consumed the installer's physical disk headroom.
+if ! release_disk_headroom_available; then
+  stage build-cache-cleanup docker buildx prune --builder "$RELEASE_BUILDX_BUILDER" --all --min-free-space "$((required_disk_gib*1024*1024*1024))" --force
+  release_disk_headroom_available || fail 'insufficient disk headroom after build-cache cleanup'
+fi
 stage candidate scripts/release-stage.sh --candidate --from-build "$build" "$version" "$candidate"
 export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
 export SECONDBOX_INSTALLER_RELEASE_DIRECTORY="$candidate"
