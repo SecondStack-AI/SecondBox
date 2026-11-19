@@ -118,7 +118,7 @@ stage build env BUILDX_BUILDER="$RELEASE_BUILDX_BUILDER" scripts/release-stage.s
 # Exported artifacts no longer depend on the builder cache. Reclaim only unused
 # cache when the build consumed the installer's physical disk headroom.
 if ! release_disk_headroom_available; then
-  stage build-cache-cleanup docker buildx prune --builder "$RELEASE_BUILDX_BUILDER" --all --min-free-space "$((required_disk_gib*1024*1024*1024))" --force
+  stage build-cache-cleanup docker buildx prune --builder "$RELEASE_BUILDX_BUILDER" --all --force
   release_disk_headroom_available || fail 'insufficient disk headroom after build-cache cleanup'
 fi
 stage candidate scripts/release-stage.sh --candidate --from-build "$build" "$version" "$candidate"
