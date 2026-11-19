@@ -13,8 +13,7 @@ import (
 // A connected home Runner that reports storage admission denial, or a failed
 // storage probe, must receive no new Assignment: the start is deferred as an
 // unavailable home, not sent to a Runner that would refuse it. Only a measured
-// healthy report re-admits the Runner, and a new connection discards the
-// previous connection's pressure evidence.
+// healthy report re-admits the Runner, including after a reconnect.
 func TestSchedulerDefersStartWhileHomeRunnerDeniesStorageAdmission(t *testing.T) {
 	fixture := newSchedulerLockFixture(t)
 	reportPressure := func(sequence uint64, status string, observedAt time.Time) {
@@ -84,7 +83,21 @@ func TestSchedulerDefersStartWhileHomeRunnerDeniesStorageAdmission(t *testing.T)
 	); err != nil {
 		t.Fatal(err)
 	}
-	if status := readPressure(); status != nil {
-		t.Fatalf("storage pressure after re-registration = %q, want none until the new connection reports", *status)
+	if status := readPressure(); status == nil || *status != contracts.StoragePressureStatusAdmissionDenied {
+		t.Fatalf("storage pressure after re-registration = %v, want retained admission denial", status)
+	}
+	fixture.homeConnectionID = connectionID
+	// A heartbeat without a completed probe must not erase the refusal either.
+	if _, err := fixture.stateStore.RecordHeartbeat(t.Context(), task4Heartbeat(
+		fixture.homeRunnerID, connectionID, task4ID("heartbeat"), 2, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
+	), fixture.now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if status := readPressure(); status == nil || *status != contracts.StoragePressureStatusAdmissionDenied {
+		t.Fatalf("storage pressure after unmeasured heartbeat = %v, want retained admission denial", status)
+	}
+	reportPressure(3, "healthy", fixture.now.Add(6*time.Second))
+	if status := readPressure(); status == nil || *status != "healthy" {
+		t.Fatalf("storage pressure after measured recovery = %v, want healthy", status)
 	}
 }

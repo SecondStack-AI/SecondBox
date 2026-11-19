@@ -394,13 +394,12 @@ func (backend *AssignmentBackend) storagePressureReadiness(
 	if backend.storagePressure == nil {
 		return nil, nil
 	}
-	observedAt := time.Now()
-	state, err := backend.storagePressure.observe(ctx)
+	state, observedAt, err := backend.storagePressure.observePressure(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox gVisor readiness storage pressure: %w", err)
 	}
 	return &runnerprotocol.StoragePressureObservation{
-		Status: state, ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
+		Status: state, ObservedAtUnixMs: observedAt,
 	}, nil
 }
 

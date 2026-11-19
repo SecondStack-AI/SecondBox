@@ -20,6 +20,36 @@ type admissionWorkspaceStore struct {
 	beginErr    error
 }
 
+func TestStoragePressureReadinessOrdersCompletedProbes(t *testing.T) {
+	pressure, err := newPhysicalStoragePressure(Config{
+		WorkspaceRoot: "/workspace", StorageRecoveryPercent: 70, StorageWarningPercent: 80, StorageDenyPercent: 90,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completedAt uint64
+	pressure.probe = func(string) (uint64, uint64, error) {
+		time.Sleep(5 * time.Millisecond)
+		completedAt = uint64(time.Now().UnixMilli())
+		return 10, 100, nil
+	}
+	backend := &AssignmentBackend{storagePressure: pressure}
+	healthy, err := backend.storagePressureReadiness(t.Context())
+	if err != nil || healthy.ObservedAtUnixMs < completedAt {
+		t.Fatalf("readiness timestamp predates completed probe: %v, completed %d, err %v", healthy, completedAt, err)
+	}
+	pressure.probe = func(string) (uint64, uint64, error) { return 95, 100, nil }
+	state, observedAt, err := pressure.observePressure(t.Context())
+	if err != nil || state != "admission_denied" || observedAt <= healthy.ObservedAtUnixMs {
+		t.Fatalf("later refusal is not strictly newer: state=%s at=%d after=%v err=%v", state, observedAt, healthy, err)
+	}
+	pressure.probe = func(string) (uint64, uint64, error) { return 0, 0, errors.New("probe failed") }
+	_, failedAt, err := pressure.observePressure(t.Context())
+	if err == nil || failedAt <= observedAt {
+		t.Fatalf("probe failure lost its ordering: at=%d after=%d err=%v", failedAt, observedAt, err)
+	}
+}
+
 func (store *admissionWorkspaceStore) ReplayCreate(
 	_ context.Context, request workspacestore.CreateWorkspaceRequest,
 ) (workspacestore.Receipt, bool, error) {

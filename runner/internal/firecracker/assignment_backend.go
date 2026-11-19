@@ -324,14 +324,13 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 func (b *AssignmentBackend) storagePressureReadiness(
 	ctx context.Context,
 ) (*runnerprotocol.StoragePressureObservation, error) {
-	observedAt := time.Now()
-	state, err := b.storagePressure.Observe(ctx)
+	state, observedAt, err := b.storagePressure.ObservePressure(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox Firecracker readiness storage pressure: %w", err)
 	}
 	return &runnerprotocol.StoragePressureObservation{
 		Status:           string(state),
-		ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
+		ObservedAtUnixMs: observedAt,
 	}, nil
 }
 

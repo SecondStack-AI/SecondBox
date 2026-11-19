@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 )
@@ -64,6 +65,7 @@ type storagePressureController struct {
 	policy       storagePressurePolicy
 	probe        storagePressureProbe
 	state        storagePressureState
+	lastReported uint64
 	reservations map[string]uint64
 	emit         func(context.Context, string) error
 }
@@ -114,6 +116,21 @@ func newConfiguredStoragePressureController(
 func (c *storagePressureController) Observe(ctx context.Context) (storagePressureState, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.observeLocked(ctx)
+}
+
+// ObservePressure timestamps completed probes under the controller lock so
+// readiness and background telemetry have one ordering, even in the same ms.
+func (c *storagePressureController) ObservePressure(ctx context.Context) (storagePressureState, uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, err := c.observeLocked(ctx)
+	observedAt := max(uint64(time.Now().UnixMilli()), c.lastReported+1)
+	c.lastReported = observedAt
+	return state, observedAt, err
+}
+
+func (c *storagePressureController) observeLocked(ctx context.Context) (storagePressureState, error) {
 	sample, err := c.sampleLocked(ctx)
 	if err != nil {
 		return "", err

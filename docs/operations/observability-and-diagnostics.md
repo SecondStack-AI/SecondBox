@@ -118,13 +118,16 @@ ceiling and every Sandbox of the Tenant; the platform sees every pool. Each entr
 reports the pool `state` and:
 
 - `placeableRunnerCount`: Runners placement can currently choose (ready, not draining,
-  connected). The RunnerPool resource's `readyRunnerCount` counts ready Runners only.
+  connected, and reporting neither `admission_denied` nor `unavailable`). The RunnerPool
+  resource's `readyRunnerCount` counts ready Runners only, including pressured Runners.
 - `allocatable` and `reserved`: the Instances, vCPU, memory, and concurrent-operation
   slots those Runners advertise and hold, summed. Workspace disk and storage admission
   are not summed; see the next item.
 - `storageAdmissionDeniedRunnerCount`: connected Runners whose latest storage-pressure
-  report denies new Workspaces and Instances. A Runner whose readiness fails while the
-  latch holds disconnects, and then shows only as missing from `placeableRunnerCount`.
+  report is `admission_denied` or `unavailable`. Denied Runners stay connected to
+  receive cleanup commands. Reconnection retains the last pressure report until a
+  measured recovery; missing probe results do not clear it. Offline Runners appear
+  only as missing from `placeableRunnerCount`.
 - `pendingStartCount`: Sandboxes wanted running on a home Runner in the pool and not
   yet placed: admitted starts, the start a running-initial create performs, and
   automatic restarts, including ones the reconciler has not attempted yet and ones

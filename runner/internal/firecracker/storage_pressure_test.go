@@ -16,8 +16,9 @@ import (
 )
 
 type mutableStoragePressureProbe struct {
-	sample storagePressureSample
-	err    error
+	sample   storagePressureSample
+	err      error
+	onSample func()
 }
 
 func (p *mutableStoragePressureProbe) Backend() string {
@@ -25,7 +26,42 @@ func (p *mutableStoragePressureProbe) Backend() string {
 }
 
 func (p *mutableStoragePressureProbe) Sample(context.Context) (storagePressureSample, error) {
+	if p.onSample != nil {
+		p.onSample()
+	}
 	return p.sample, p.err
+}
+
+func TestStoragePressureReadinessOrdersCompletedProbes(t *testing.T) {
+	var completedAt uint64
+	probe := &mutableStoragePressureProbe{sample: storagePressureSample{Backend: "ext4", TotalBytes: 1000, UsedBytes: 100}}
+	probe.onSample = func() {
+		time.Sleep(5 * time.Millisecond)
+		completedAt = uint64(time.Now().UnixMilli())
+	}
+	controller, err := newStoragePressureController(
+		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90},
+		probe, func(context.Context, string) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &AssignmentBackend{storagePressure: controller}
+	healthy, err := backend.storagePressureReadiness(t.Context())
+	if err != nil || healthy.ObservedAtUnixMs < completedAt {
+		t.Fatalf("readiness timestamp predates completed probe: %v, completed %d, err %v", healthy, completedAt, err)
+	}
+	probe.onSample = nil
+	probe.sample.UsedBytes = 950
+	state, observedAt, err := controller.ObservePressure(t.Context())
+	if err != nil || state != storagePressureStateAdmissionDenied || observedAt <= healthy.ObservedAtUnixMs {
+		t.Fatalf("later refusal is not strictly newer: state=%s at=%d after=%v err=%v", state, observedAt, healthy, err)
+	}
+	probe.err = errors.New("probe failed")
+	_, failedAt, err := controller.ObservePressure(t.Context())
+	if err == nil || failedAt <= observedAt {
+		t.Fatalf("probe failure lost its ordering: at=%d after=%d err=%v", failedAt, observedAt, err)
+	}
 }
 
 func TestStoragePressureControllerWarnsDeniesAndRecoversWithHysteresis(t *testing.T) {
