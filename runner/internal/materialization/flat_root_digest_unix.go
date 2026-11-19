@@ -19,6 +19,12 @@ func flatRootOwner(info os.FileInfo) (uint32, uint32, error) {
 	return stat.Uid, stat.Gid, nil
 }
 
+// hostAssignedXattr reports attributes that the host's security policy
+// assigns on unpack, such as SELinux labels, so they never identify content.
+func hostAssignedXattr(name string) bool {
+	return name == "security.selinux"
+}
+
 func flatRootXattrs(path string) (map[string][]byte, error) {
 	size, err := unix.Llistxattr(path, nil)
 	if err != nil {
@@ -44,6 +50,9 @@ func flatRootXattrs(path string) (map[string][]byte, error) {
 		}
 		name := string(buffer[:end])
 		buffer = buffer[end+1:]
+		if hostAssignedXattr(name) {
+			continue
+		}
 		valueSize, err := unix.Lgetxattr(path, name, nil)
 		if errors.Is(err, unix.ENODATA) {
 			return nil, fmt.Errorf("extended attribute %q changed while hashing", name)
