@@ -123,6 +123,8 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("POST /v1/runner-pools/{runnerPoolAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.mutateRunnerPool)))
 	mux.Handle("GET /v1/runners", apiHandler.authenticate(http.HandlerFunc(apiHandler.listRunners)))
 	mux.Handle("GET /v1/runners/{runnerID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getRunner)))
+	mux.Handle("GET /v1/runner-pools/{runnerPoolName}/fleet", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.readRunnerFleet)))
+	mux.Handle("POST /v1/runner-pools/{runnerPoolName}/runners/{runnerAction}", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.mutateRunnerFleet)))
 	mux.Handle("GET /v1/diagnostics/egress-contexts", apiHandler.authenticatePlatformManagement(http.HandlerFunc(apiHandler.readEgressContextPreflight)))
 	mux.Handle("GET /v1/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getDeploymentTiming)))
 	mux.Handle("GET /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.listSandboxes)))
@@ -587,13 +589,30 @@ func (apiHandler *handler) getSandbox(writer http.ResponseWriter, request *http.
 func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *http.Request) {
 	sandboxID, action, ok := splitAction(
 		request.PathValue("sandboxAction"),
-		"start", "drain", "stop", "relocate", "switch-profile", "restore", "wait", "inspect", "ping", "touch",
+		"start", "drain", "stop", "archive", "relocate", "switch-profile", "restore", "wait", "inspect", "ping", "touch",
 	)
 	if !ok {
 		apiHandler.writeError(writer, request, ports.ErrSandboxNotFound)
 		return
 	}
 	switch action {
+	case "archive":
+		if err := requireEmptyBody(request); err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		expectedRevision, err := parseIfMatch(request)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		operation, replayed, err := apiHandler.service.ArchiveSandbox(request.Context(), requestPrincipal(request), sandboxID, request.Header.Get("Idempotency-Key"), expectedRevision)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 	case "start":
 		var body *contracts.StartSandboxRequest
 		if request.Body != nil {

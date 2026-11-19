@@ -34,20 +34,21 @@ type StandardRunnerPool struct {
 }
 
 type Deployment struct {
-	Mode                   string `toml:"mode"`
-	ComposeProjectName     string `toml:"compose_project_name"`
-	ComposeBackendCIDR     string `toml:"compose_backend_cidr,omitempty"`
-	PublicBaseURL          string `toml:"public_base_url"`
-	TLSTermination         string `toml:"tls_termination"`
-	ControlPlaneImage      string `toml:"control_plane_image"`
-	RunnerImage            string `toml:"runner_image"`
-	PostgresImage          string `toml:"postgres_image"`
-	APIBindIP              string `toml:"api_bind_ip"`
-	APIPublishedPort       *int64 `toml:"api_published_port"`
-	RunnerBindIP           string `toml:"runner_bind_ip"`
-	RunnerPublishedPort    *int64 `toml:"runner_published_port"`
-	LogPath                string `toml:"log_path"`
-	DevelopmentWaitSeconds *int64 `toml:"development_prepare_wait_timeout_seconds"`
+	Mode                       string `toml:"mode"`
+	ComposeProjectName         string `toml:"compose_project_name"`
+	ComposeBackendCIDR         string `toml:"compose_backend_cidr,omitempty"`
+	PublicBaseURL              string `toml:"public_base_url"`
+	TLSTermination             string `toml:"tls_termination"`
+	ControlPlaneImage          string `toml:"control_plane_image"`
+	RunnerImage                string `toml:"runner_image"`
+	PostgresImage              string `toml:"postgres_image"`
+	APIBindIP                  string `toml:"api_bind_ip"`
+	APIPublishedPort           *int64 `toml:"api_published_port"`
+	RunnerBindIP               string `toml:"runner_bind_ip"`
+	RunnerPublishedPort        *int64 `toml:"runner_published_port"`
+	LogPath                    string `toml:"log_path"`
+	WorkspaceArchiveConfigFile string `toml:"workspace_archive_config_file,omitempty"`
+	DevelopmentWaitSeconds     *int64 `toml:"development_prepare_wait_timeout_seconds"`
 }
 
 type Database struct {

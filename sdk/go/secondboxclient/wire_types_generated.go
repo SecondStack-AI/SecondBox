@@ -395,6 +395,54 @@ type FileWriteResult struct {
 	SizeBytes int64         `json:"sizeBytes"`
 }
 
+type FleetPoolObservation struct {
+	Demand     FleetResourceDemand `json:"demand"`
+	ObservedAt Timestamp           `json:"observedAt"`
+	PoolName   string              `json:"poolName"`
+	Runners    []FleetRunner       `json:"runners"`
+	Truncated  bool                `json:"truncated"`
+	Workspaces []FleetWorkspace    `json:"workspaces"`
+}
+
+type FleetResourceDemand struct {
+	Instances      int64      `json:"instances"`
+	MemoryBytes    int64      `json:"memoryBytes"`
+	OldestWaitAt   *Timestamp `json:"oldestWaitAt,omitempty"`
+	VcpuCount      int64      `json:"vcpuCount"`
+	WorkspaceBytes int64      `json:"workspaceBytes"`
+}
+
+type FleetRunner struct {
+	ActiveAssignments      int64               `json:"activeAssignments"`
+	Allocatable            PoolComputeCapacity `json:"allocatable"`
+	Connected              bool                `json:"connected"`
+	FleetState             string              `json:"fleetState"`
+	ID                     string              `json:"id"`
+	LastActivityAt         *Timestamp          `json:"lastActivityAt,omitempty"`
+	LastSeenAt             *Timestamp          `json:"lastSeenAt,omitempty"`
+	PendingCommands        int64               `json:"pendingCommands"`
+	PendingMutations       int64               `json:"pendingMutations"`
+	Reserved               PoolComputeCapacity `json:"reserved"`
+	ReservedWorkspaceBytes int64               `json:"reservedWorkspaceBytes"`
+	Revision               int64               `json:"revision"`
+	SnapshotCount          int64               `json:"snapshotCount"`
+	State                  string              `json:"state"`
+	StorageAdmissionDenied bool                `json:"storageAdmissionDenied"`
+	WorkspaceCapacityBytes int64               `json:"workspaceCapacityBytes"`
+	WorkspaceCount         int64               `json:"workspaceCount"`
+}
+
+type FleetWorkspace struct {
+	DesiredState string `json:"desiredState"`
+	Mutation     string `json:"mutation"`
+	Revision     int64  `json:"revision"`
+	RunnerID     string `json:"runnerId"`
+	SandboxID    string `json:"sandboxId"`
+	State        string `json:"state"`
+	SubjectRef   string `json:"subjectRef"`
+	TenantRef    string `json:"tenantRef"`
+}
+
 type GuestLiveness = string
 
 const (
@@ -508,6 +556,7 @@ const (
 	OperationKindSubjectCleanup  OperationKind = "subject_cleanup"
 	OperationKindCancelExec      OperationKind = "cancel_exec"
 	OperationKindCancelTerminal  OperationKind = "cancel_terminal"
+	OperationKindArchive         OperationKind = "archive"
 )
 
 type OperationStageTiming = contracts.OperationStageTiming
@@ -1164,9 +1213,11 @@ type WaitSandboxRequest struct {
 }
 
 type Workspace struct {
+	ArchivedBytes      *int64                      `json:"archivedBytes,omitempty"`
 	CreatedAt          Timestamp                   `json:"createdAt"`
 	Generation         int64                       `json:"generation"`
 	ID                 OpaqueID                    `json:"id"`
+	Residency          string                      `json:"residency"`
 	SizeBytes          int64                       `json:"sizeBytes"`
 	State              string                      `json:"state"`
 	StorageObservation WorkspaceStorageObservation `json:"storageObservation"`

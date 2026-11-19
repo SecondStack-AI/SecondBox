@@ -331,6 +331,7 @@ func materializeProduction(manifest ManifestV1, sourcePath, directory string, re
 	manifest.RunnerTrust.ServerCertificateFile = absoluteReference(manifest.RunnerTrust.ServerCertificateFile)
 	manifest.RunnerTrust.ServerPrivateKeyFile = absoluteReference(manifest.RunnerTrust.ServerPrivateKeyFile)
 	manifest.Applications.PlatformTokenFile = absoluteReference(manifest.Applications.PlatformTokenFile)
+	manifest.Deployment.WorkspaceArchiveConfigFile = absoluteReference(manifest.Deployment.WorkspaceArchiveConfigFile)
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
 		return "", err

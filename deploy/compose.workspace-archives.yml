@@ -1,0 +1,19 @@
+services:
+  control-plane:
+    environment:
+      SECONDBOX_WORKSPACE_ARCHIVE_CONFIG_FILE: /run/secondbox-archive/config.json
+      AWS_SHARED_CREDENTIALS_FILE:
+      AWS_PROFILE:
+      AWS_REGION:
+      AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:
+      AWS_CONTAINER_CREDENTIALS_FULL_URI:
+      AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE:
+      AWS_WEB_IDENTITY_TOKEN_FILE:
+      AWS_ROLE_ARN:
+    volumes:
+      - type: bind
+        source: ${SECONDBOX_WORKSPACE_ARCHIVE_CONFIG_HOST_PATH:?set SECONDBOX_WORKSPACE_ARCHIVE_CONFIG_HOST_PATH}
+        target: /run/secondbox-archive/config.json
+        read_only: true
+        bind:
+          create_host_path: false

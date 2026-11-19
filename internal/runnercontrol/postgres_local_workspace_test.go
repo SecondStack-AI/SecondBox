@@ -129,6 +129,10 @@ func allPostgresLocalWorkspaceCommandKinds() []runnerv1.LocalWorkspaceCommandKin
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE,
 	}
 }
 
@@ -1176,6 +1180,10 @@ func TestLocalRestoreReconcilesAcrossControlPlaneRestartsAndDuplicateReceipts(t 
 			phaseNow,
 		); err != nil {
 			t.Fatal(err)
+		}
+		requested := requestedReconnectReceipts(t, current, fmt.Sprintf("connection-after-restart-%d", index))
+		if len(requested) != 1 || requested[0].Kind != phase.kind || requested[0].OperationId != "operation-restore" {
+			t.Fatalf("restore phase %s reconnect requested %#v", phase.kind, requested)
 		}
 		var commandState string
 		if err := current.pool.QueryRow(t.Context(), `
@@ -2955,7 +2963,7 @@ func seedPendingWorkspaceCreation(
 		now,
 		[]byte("01234567890123456789012345678901"),
 		now.Add(time.Hour),
-		[]byte{},
+		workspaceReceiptRecoveryPayload(t, runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE, "operation-create-reconcile", "effect-create-reconcile", "workspace-create-reconcile", ""),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -3118,7 +3126,7 @@ func seedRunnerLocalRestore(
 		    mutation_state='queued'
 		WHERE id='workspace-restore'`,
 		pgx.QueryExecModeSimpleProtocol, now, now.Add(time.Hour),
-		[]byte("01234567890123456789012345678901"), []byte{},
+		[]byte("01234567890123456789012345678901"), workspaceReceiptRecoveryPayload(t, runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE, "operation-restore", "effect-prepare", "workspace-restore", "snapshot-restore"),
 	); err != nil {
 		t.Fatal(err)
 	}

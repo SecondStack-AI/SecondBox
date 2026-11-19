@@ -58,6 +58,8 @@ type RunnerProtocolConfig struct {
 	// DataPlaneCertificate is the runner identity used by the caller-facing
 	// direct data-plane TLS listener.
 	DataPlaneCertificate tls.Certificate
+	// DataPlaneGetCertificate reloads a same-key renewed leaf for new handshakes.
+	DataPlaneGetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 }
 
 // BackendReadiness is verified local capability and capacity evidence.
@@ -107,6 +109,7 @@ type LocalWorkspaceEvidence struct {
 	LogicalCapacity    uint64
 	ReceiptRecordedAt  time.Time
 	Checksum           string
+	ArchiveDescriptor  *runnerprotocol.WorkspaceArchiveDescriptor
 	Inventory          []*runnerprotocol.LocalWorkspaceInventoryItem
 	Receipts           []*runnerprotocol.LocalWorkspaceReceiptItem
 }
@@ -151,6 +154,8 @@ type WorkspaceRelocationBackend interface {
 // AssignmentBackend accepts only immutable, profile-resolved assignments.
 type AssignmentBackend interface {
 	Readiness(context.Context) (BackendReadiness, error)
+	// ReservedCapacity samples mutable reservations without readiness IO.
+	ReservedCapacity() *runnerprotocol.Capacity
 	ValidateAssignment(context.Context, *runnerprotocol.AssignmentCommand) error
 	StartAssignment(
 		context.Context,
@@ -795,7 +800,9 @@ func (s *RunnerProtocolService) consumeCommands(
 				if workspace.Kind ==
 					runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
 					workspace.Kind ==
-						runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT {
+						runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT ||
+					workspace.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT ||
+					workspace.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT {
 					select {
 					case workspaceCreateSlots <- struct{}{}:
 					case <-connectionCtx.Done():
@@ -1036,7 +1043,9 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE,
-		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT:
 		if len(command.FencingToken) == 0 {
 			return fmt.Errorf("SecondBox runner local-workspace fencing token is required")
 		}
@@ -1077,6 +1086,7 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		LogicalCapacityBytes: evidence.LogicalCapacity,
 		Inventory:            evidence.Inventory,
 		Receipts:             evidence.Receipts,
+		ArchiveDescriptor:    evidence.ArchiveDescriptor,
 		Correlation:          cloneRunnerCorrelation(command.Correlation),
 	}
 	if !evidence.ReceiptRecordedAt.IsZero() {
@@ -1538,6 +1548,7 @@ func (s *RunnerProtocolService) sendHeartbeat(
 		}
 	}
 	s.storageObservationMu.Unlock()
+	reserved := s.backend.ReservedCapacity()
 	return s.sendSequencedRunnerFrame(
 		stream,
 		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
@@ -1550,7 +1561,7 @@ func (s *RunnerProtocolService) sendHeartbeat(
 						ConnectionId:      connectionID,
 						ObservedAtUnixMs:  uint64(time.Now().UnixMilli()),
 						Allocatable:       readiness.Capacity,
-						Reserved:          readiness.Reserved,
+						Reserved:          reserved,
 						ActiveAssignments: s.activeAssignments(),
 						DrainPhase:        s.drainPhase(),
 						StartupTiming:     s.startupTiming(),

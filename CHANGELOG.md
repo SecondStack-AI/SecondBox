@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Stopped, Snapshot-free Workspaces can move to an explicitly configured S3 archive tier and restore onto compatible Runners. Per-Profile cold-age and storage-pressure policies release local disk space, and the AWS fleet reference provisions capacity from queued demand and evacuates Workspaces before terminating workers.
+
+### Upgrade notes
+
+- Runner protocol generation changes from 7 to 8 and database migrations 0039–0043 are added. Finish relocations and stop Sandboxes and all Runners before updating the control plane, Runners and fleet manager together. Take a database and Runner-storage backup before the update; restoring an older database alone does not recover archived or relocated Workspace ownership.
+
 ### Fixed
 
 - Runners denied new work by storage pressure stay connected so stops, fences and deletes can release storage. Placement and pool capacity exclude connected Runners reporting `admission_denied` or `unavailable` until a measured recovery, including across reconnects. The first heartbeat uses the newest completed pressure probe. Firecracker reports pressure refusal as a retryable capacity shortage instead of failing the Sandbox.

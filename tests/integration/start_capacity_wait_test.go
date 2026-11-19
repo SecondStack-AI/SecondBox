@@ -13,8 +13,8 @@ import (
 
 // TestStartCapacityWaitExpiryReleasesTheWorkspaceWithoutPlacing covers a start
 // that its caller bounded and its home Runner never placed. While deferred it
-// holds the Workspace mutation slot, which also refuses stop and delete, so
-// only expiry can end it once the caller has gone. Expiry must fail the
+// holds the Workspace mutation slot until cancellation or expiry. When the
+// caller leaves it pending, expiry must fail the
 // Operation with a typed retryable problem, release the slot, and leave the
 // Sandbox wanted stopped, so that the Runner returning later boots nothing.
 func TestStartCapacityWaitExpiryReleasesTheWorkspaceWithoutPlacing(t *testing.T) {
@@ -63,12 +63,6 @@ func TestStartCapacityWaitExpiryReleasesTheWorkspaceWithoutPlacing(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.controlPlane.StopSandbox(
-		t.Context(), fixture.principal, sandboxID, "capacity-wait-stop-"+sandboxID, deferred.Revision,
-	); !errors.Is(err, ports.ErrWorkspaceMutation) {
-		t.Fatalf("stop during a deferred start error = %v, want the Workspace mutation conflict", err)
-	}
-
 	for passes := 0; ; passes++ {
 		if passes == deferralPasses {
 			t.Fatalf("bounded start was still pending after %d reconciliation passes", passes)
@@ -437,5 +431,61 @@ func requireExpiredStartReleased(
 	}
 	if count := sandboxAssignmentCount(t, fixture, sandboxID); count != 0 {
 		t.Fatalf("expired start placed %d Assignments, want none", count)
+	}
+}
+
+func TestStopCancelsStartWaitingForRunnerCapacity(t *testing.T) {
+	fixture := newTeardownFixture(t)
+	sandboxID, stopped := createStoppedFixtureSandbox(t, fixture, "capacity-wait-cancel")
+	start, _, err := fixture.controlPlane.StartSandboxOperation(t.Context(), fixture.principal, sandboxID, "capacity-wait-cancel-start-"+sandboxID, stopped.Revision, contracts.StartSandboxRequest{Image: testExecutionImage(), CapacityWaitMilliseconds: 60_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setFixtureRunnerState(t, fixture, "offline")
+	fixture.runLifecycle(t, sandboxID, lifecycle.ActionStartInstance)
+	waiting, err := fixture.controlPlane.GetSandbox(t.Context(), fixture.principal, sandboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := fixture.controlPlane.GetSubjectCapacity(t.Context(), fixture.principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, err := fixture.controlPlane.StopSandbox(t.Context(), fixture.principal, sandboxID, "capacity-wait-cancel-stop-"+sandboxID, waiting.Revision)
+	if err != nil || stop.State != contracts.OperationStateSucceeded {
+		t.Fatalf("stop=%#v error=%v", stop, err)
+	}
+	cancelled, err := fixture.controlPlane.GetOperation(t.Context(), fixture.principal, start.ID)
+	if err != nil || cancelled.State != contracts.OperationStateCancelled || cancelled.Error == nil || cancelled.Error.Code != "start_cancelled" {
+		t.Fatalf("start=%#v error=%v", cancelled, err)
+	}
+	current, err := fixture.controlPlane.GetSandbox(t.Context(), fixture.principal, sandboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.State != contracts.SandboxStateStopped || current.DesiredState != contracts.SandboxDesiredStateStopped || current.Generation != waiting.Generation {
+		t.Fatalf("cancelled Sandbox=%#v", current)
+	}
+	var mutationKind, mutationState string
+	if err := fixture.pool.QueryRow(t.Context(), `SELECT w.mutation_kind,w.mutation_state FROM secondbox.workspaces w JOIN secondbox.sandboxes s ON s.workspace_id=w.id WHERE s.id=$1`, sandboxID).Scan(&mutationKind, &mutationState); err != nil {
+		t.Fatal(err)
+	}
+	if mutationKind != "" || mutationState != "" {
+		t.Fatalf("cancelled start retains mutation %q/%q", mutationKind, mutationState)
+	}
+	after, err := fixture.controlPlane.GetSubjectCapacity(t.Context(), fixture.principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Usage.ActiveInstances != before.Usage.ActiveInstances-1 || after.Usage.VCPUCount != before.Usage.VCPUCount-current.Resources.VCPUCount {
+		t.Fatalf("cancelled usage=%#v before=%#v", after.Usage, before.Usage)
+	}
+	fixture.runLifecycle(t, sandboxID, lifecycle.ActionWait)
+	setFixtureRunnerState(t, fixture, "ready")
+	if _, scheduled := fixture.sandboxDueAt(t, sandboxID); scheduled {
+		t.Fatal("Runner return rescheduled cancelled start")
+	}
+	if assignments := sandboxAssignmentCount(t, fixture, sandboxID); assignments != 0 {
+		t.Fatalf("cancelled start placed %d Assignments", assignments)
 	}
 }

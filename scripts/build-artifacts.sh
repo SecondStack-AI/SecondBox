@@ -11,6 +11,8 @@ cd "$repo_root"
 architecture="$(go env GOARCH)"
 CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath -buildvcs=false -o "$output_dir/secondbox" ./cmd/secondbox
 CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath -buildvcs=false -o "$output_dir/secondbox-deploy" ./cmd/secondbox-deploy
+CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath -buildvcs=false -o "$output_dir/secondbox-fleet" ./cmd/secondbox-fleet
+CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath -buildvcs=false -o "$output_dir/secondbox-fleet-enroll" ./cmd/secondbox-fleet-enroll
 CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath -buildvcs=false -o "$output_dir/secondboxd" ./cmd/secondboxd
 
 cd "$repo_root/runner"
@@ -24,6 +26,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath -buildvcs=fal
     secondbox \
     secondbox-artifact-evidence \
     secondbox-deploy \
+    secondbox-fleet \
+    secondbox-fleet-enroll \
     secondbox-guest-agent \
     secondbox-runner \
     secondboxd > SHA256SUMS

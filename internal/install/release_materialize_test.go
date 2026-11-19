@@ -196,7 +196,7 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		}
 		if binary.Name == "secondbox" {
 			binaryData[binary.Location] = secondboxBytes
-		} else {
+		} else if binary.Name == "secondbox-deploy" {
 			binaryData[binary.Location] = deployBytes
 			deployLocation = binary.Location
 		}
@@ -312,7 +312,7 @@ func TestValidateReplaceableSecondBoxBinaryRequiresExactEmbeddedCommandIdentity(
 func releasePlanForMaterializer(release releasecontract.ArtifactManifest, releaseBytes []byte) ReleasePlan {
 	binaries := map[string]string{}
 	for _, binary := range release.Binaries {
-		if binary.Platform == "linux/amd64" {
+		if binary.Platform == "linux/amd64" && (binary.Name == "secondbox" || binary.Name == "secondbox-deploy") {
 			binaries[binary.Name] = binary.SHA256
 		}
 	}

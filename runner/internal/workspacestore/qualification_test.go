@@ -334,11 +334,11 @@ func TestQualifiedTwoRunnerRootsAreDistinctAndIsolated(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create runner B Workspace: %v", err)
 	}
-	reportA, err := storeA.Reconcile(t.Context())
+	reportA, err := storeA.Reconcile(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reportB, err := storeB.Reconcile(t.Context())
+	reportB, err := storeB.Reconcile(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

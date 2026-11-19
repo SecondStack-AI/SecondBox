@@ -228,9 +228,10 @@ func seedWorkspaceRelocationAuthority(
 			delivery_count,created_at,updated_at,delivered_at
 		) VALUES (
 			'command-relocation-export-' || $1,'runner-home','relocation-' || $1,
-			'local-workspace','', 'delivered','connection-source',1,$2,$2,$2
+			'local-workspace',$4, 'delivered','connection-source',1,$2,$2,$2
 		)`, pgx.QueryExecModeSimpleProtocol, suffix, now,
 		[]byte("01234567890123456789012345678901"),
+		workspaceReceiptRecoveryPayload(t, runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT, "operation-relocation-"+suffix, "command-relocation-export-"+suffix, "workspace-relocation-"+suffix, ""),
 	); err != nil {
 		t.Fatal(err)
 	}

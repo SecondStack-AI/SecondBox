@@ -71,6 +71,29 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 	var receipt workspacestore.Receipt
 	var err error
 	switch command.Kind {
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT:
+		if backend.storagePressure != nil && command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT {
+			if command.LogicalCapacityBytes > math.MaxInt64 {
+				return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(workspacestore.ErrStorageIncompatible)
+			}
+			_, replayed, err := store.ReplayRelocationImport(ctx, workspacestore.RelocationImportRequest{
+				Mutation: mutation, Generation: command.ExpectedGeneration, CapacityBytes: int64(command.LogicalCapacityBytes),
+			})
+			if err != nil {
+				return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+			}
+			if !replayed {
+				if err := backend.storagePressure.admit(ctx); err != nil {
+					return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+				}
+			}
+		}
+		evidence, err := runnercontrol.ExecuteWorkspaceArchive(ctx, command, store)
+		if err != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+		}
+		return evidence, nil
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
 		if command.LogicalCapacityBytes > math.MaxInt64 {
 			err = fmt.Errorf("SecondBox gVisor local-workspace capacity exceeds Runner bounds")
@@ -105,6 +128,7 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE:
 		receipt, err = store.DeleteWorkspace(ctx, workspacestore.DeleteWorkspaceRequest{
 			Mutation: mutation, ExpectedGeneration: command.ExpectedGeneration,
+			RelocationSource: command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE,
 		})
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
 		receipt, err = store.AbortRelocation(ctx, workspacestore.RelocationExportRequest{
@@ -139,7 +163,7 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
 		receipt, err = store.AbortRestore(ctx, workspacestore.RestoreMutation{Mutation: mutation})
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE:
-		return backend.reconcileWorkspace(ctx)
+		return backend.reconcileWorkspace(ctx, command.ReceiptRequests)
 	default:
 		err = fmt.Errorf("SecondBox gVisor local-workspace command kind is unsupported")
 	}
@@ -149,8 +173,12 @@ func (backend *AssignmentBackend) ExecuteLocalWorkspace(
 	return workspaceReceiptEvidence(receipt), nil
 }
 
-func (backend *AssignmentBackend) reconcileWorkspace(ctx context.Context) (runnercontrol.LocalWorkspaceEvidence, error) {
-	report, err := backend.config.WorkspaceStore.Reconcile(ctx)
+func (backend *AssignmentBackend) reconcileWorkspace(ctx context.Context, requests []*runnerprotocol.LocalWorkspaceReceiptRequest) (runnercontrol.LocalWorkspaceEvidence, error) {
+	requested, err := runnercontrol.WorkspaceReceiptRequests(requests)
+	if err != nil {
+		return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+	}
+	report, err := backend.config.WorkspaceStore.Reconcile(ctx, requested)
 	if err != nil {
 		return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
 	}

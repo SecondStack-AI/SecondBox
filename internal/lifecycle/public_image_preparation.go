@@ -18,6 +18,10 @@ import (
 
 // ReconcileImagePreparations advances existing Operations without allocating a Sandbox.
 func (broker *PostgresEffectBroker) ReconcileImagePreparations(ctx context.Context, now time.Time) (bool, error) {
+	cleanupChanged, err := broker.cancelObsoleteSandboxImagePreparations(ctx, now)
+	if err != nil {
+		return false, err
+	}
 	tx, err := broker.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -56,7 +60,7 @@ func (broker *PostgresEffectBroker) ReconcileImagePreparations(ctx context.Conte
 	if err != nil {
 		return false, err
 	}
-	changed := false
+	changed := cleanupChanged
 	for _, operation := range operations {
 		updated, err := broker.reconcileImagePreparation(ctx, tx, operation.id, operation.tenant, operation.metadata["executionImageReference"], operation.created.Add(imagepreparation.Deadline), now)
 		if err != nil {

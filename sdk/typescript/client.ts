@@ -1278,6 +1278,10 @@ export class SandboxHandle implements SandboxFilesystem {
     return this.lifecycle("stopSandbox", options);
   }
 
+  public archive(options: LifecycleOptions = {}): Promise<Operation> {
+    return this.lifecycle("archiveSandbox", options);
+  }
+
   public relocate(
     request: RelocateSandboxRequest,
     options: LifecycleOptions,
@@ -1787,6 +1791,7 @@ export class SandboxHandle implements SandboxFilesystem {
       | "startSandbox"
       | "drainSandbox"
       | "stopSandbox"
+      | "archiveSandbox"
       | "relocateSandbox"
       | "restoreSandboxSnapshot"
       | "deleteSandbox",

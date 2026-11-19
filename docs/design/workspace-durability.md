@@ -20,9 +20,10 @@ Public reads use persisted evidence, preserve its original observation time,
 and never dispatch Runner work. Deleted Workspaces report unavailable storage.
 See [operational measurement semantics](../operations/observability-and-diagnostics.md#application-workspace-capacity).
 
-Each Sandbox owns one durable Workspace and one authoritative `home_runner_id`.
+Each Sandbox owns one durable Workspace. A resident Workspace has one authoritative
+`home_runner_id`; an archived Workspace has no home and one committed object.
 The assigned runner's configured `SECONDBOX_RUNNER_WORKSPACE_ROOT` is the only
-writable authoritative copy of that Workspace known to SecondBox. PostgreSQL records the
+writable authoritative copy of a resident Workspace. PostgreSQL records the
 logical owner, generation, desired state, local mutation state, and durable
 runner receipts; it never records a host path.
 
@@ -67,7 +68,7 @@ swap receipt, fences all old-generation authority, and then dispatches
 idempotent finalize cleanup.
 
 One PostgreSQL Workspace mutation slot serializes start, stop, Snapshot, restore,
-relocation, and deletion. Runner-side locking independently enforces one writer.
+relocation, archive, and deletion. Runner-side locking independently enforces one writer.
 
 An operator may relocate only a stopped Sandbox with no retained Snapshots. The
 source Runner first seals the current generation and persists its receipt, so
@@ -87,9 +88,77 @@ WorkspaceStore, while relocation deliberately transfers only one sealed current
 image. Requiring operators to delete them keeps the transfer single-image and
 preserves the existing Snapshot lock and durability model.
 
-If the home runner is unavailable, the Sandbox is unavailable. Scheduling never
-automatically selects another runner, creates an empty replacement, or
-reconstructs a Workspace from another service. Relocation requires the source
+## Object-store archive tier
+
+An operator can archive a stopped, Snapshot-free Sandbox with `POST
+/v1/sandboxes/{sandboxId}:archive`. An explicit per-Profile cold idle policy can
+request the same operation. The Runner seals the current image and uploads a
+compressed sparse archive directly to S3 through bounded multipart grants.
+The receipt contains compressed size and SHA-256 digests for both archive and
+logical image. PostgreSQL commits archived residency and releases the home
+before independently deleting the sealed source. Upload failure keeps the
+source authoritative until an acknowledged abort unseals it.
+
+For configured Profiles, a physical-storage warning or admission denial can archive an eligible stopped Workspace before its idle age.
+The policy uses the Runner's reported pressure state and existing operator thresholds, including recovery hysteresis.
+It selects one Workspace per pressured Runner and waits for archive and source deletion before staging another.
+Active Instances, unsettled Assignments, retained Snapshots and mutations still prevent offload.
+
+Starting an archived Sandbox waits for a compatible Runner in its pinned pool.
+Restore verifies the archive and image digests and exact logical capacity before
+publishing a local manifest. PostgreSQL commits the new home before deleting
+the blob. A concurrent stop suppresses compute admission; delete waits for the
+transfer receipt. An expired capacity wait leaves the committed archive intact.
+Pending transfer grants are refreshed after expiry, including after reconnect.
+Storage observations become unavailable while archived or restoring;
+`workspace.archivedBytes` reports the committed compressed size separately.
+
+For Profiles explicitly configured for cold tiering, a pending start of a
+resident stopped Workspace can use the same archive/restore path when its
+connected home is full or draining. Other Profiles keep their resident home;
+enabling object storage alone does not opt them into automatic re-homing.
+The worker adopts the queued start mutation only while there is no Instance,
+unsettled Assignment or retained local Snapshot. Home capacity excludes that
+start's own pending reservation, so ordinary image preparation does not trigger
+an offload. An offline source remains unavailable; no replacement is fabricated.
+
+The original start Operation stays pending across verified export and restore.
+Each transfer phase has its own archive record and authorized Runner command;
+source cleanup may finish independently after a target import. Restore excludes
+every former home whose exact source cleanup has not succeeded. A cleaned home
+may be selected again if it is connected, ready and has compatible capacity.
+Restore preserves the pinned pool, resources,
+architecture, backend and egress constraints. The new home verifies its own
+selected image under a private preparation identity bound to the original start.
+If that start already resolved an image on a previous home, the target prepares
+the same immutable digest while retaining the public requested reference.
+Old source replies cannot complete the target's preparation or change its home.
+Relocation-source deletion retains its local mutation receipts until ordinary
+Workspace deletion, so even a cleanup replay from an earlier tiering cycle cannot
+delete a restored image on the same Runner and generation.
+Reconnect does not advertise that historical ledger. The control plane requests
+only exact receipts for outstanding ordinary mutations or unfinished Snapshot
+restore phases, and the Runner reads those receipt files directly. All live
+Workspaces remain in inspection inventory. Reporting neither deletes tombstones
+nor imposes an age cutoff on their replay protection.
+
+Stop and delete remain admissible while a start holds the archive mutation.
+Cancellation or capacity-wait expiry suppresses compute without clearing the
+source seal before an abort/unseal receipt or committed blob authority. Failed
+upload retains the source; failed restore retains the authoritative archive.
+Only the eventual compute readiness completes a continuing start successfully.
+
+Enable the tier through `deployment.workspace_archive_config_file` in the deployment
+manifest. The referenced JSON contains `bucket`, `region`, optional `endpoint`
+and `usePathStyle`, `transferLifetimeSeconds` (60–3600), and explicit
+`profileIdleSeconds`. The deployment compiler binds it read-only into the control
+plane. AWS credentials use the official SDK credential chain; use a workload IAM
+role in cloud deployments. Configure an incomplete-multipart lifecycle rule on
+the bucket so interrupted and renewed upload grants cannot retain orphan parts.
+Object bytes never pass through the control plane or guest credential boundary.
+
+If a resident home runner is unavailable, the Sandbox is unavailable. Scheduling
+never creates an empty replacement or assumes a stale archive exists. Relocation requires the source
 Runner and its intact WorkspaceStore to be online. Operators must preserve the
 stable runner identity and workspace filesystem together through their own
 backup system.

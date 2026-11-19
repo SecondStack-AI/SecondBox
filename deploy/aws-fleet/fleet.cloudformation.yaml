@@ -1,0 +1,265 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dedicated SecondBox Code workers. Control services and the archive bucket are supplied separately.
+Parameters:
+  FleetName:
+    Type: String
+    AllowedPattern: '[a-z][a-z0-9-]{2,63}'
+  FleetRef:
+    Type: String
+    AllowedPattern: '[a-z0-9-]+'
+    Description: Stable ownership reference shared with fleetRef in the controller configuration.
+  WorkerAMI:
+    Type: AWS::EC2::Image::Id
+  WorkerInstanceType:
+    Type: String
+    AllowedValues: [m7i.xlarge, m7i.2xlarge, m7i.4xlarge]
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  WorkerSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  ControllerCIDR:
+    Type: String
+    AllowedPattern: '[0-9./]+'
+  RunnerControlPort:
+    Type: Number
+    MinValue: 1
+    MaxValue: 65535
+  EgressProxyPort:
+    Type: Number
+    MinValue: 1
+    MaxValue: 65535
+  EnrollmentPort:
+    Type: Number
+    MinValue: 1
+    MaxValue: 65535
+  RegistryPort:
+    Type: Number
+    MinValue: 1
+    MaxValue: 65535
+  WorkerBundleBucket:
+    Type: String
+    MinLength: 3
+    MaxLength: 63
+    AllowedPattern: '[a-z0-9][a-z0-9.-]+[a-z0-9]'
+  WorkerBundleKey:
+    Type: String
+    AllowedPattern: '[A-Za-z0-9._/-]+'
+    Description: Object key relative to WorkerBundlePrefix.
+  WorkerBundlePrefix:
+    Type: String
+    AllowedPattern: '[A-Za-z0-9._-]+'
+  WorkerBundleSHA256:
+    Type: String
+    AllowedPattern: '[a-f0-9]{64}'
+  EnrollmentURL:
+    Type: String
+    AllowedPattern: 'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9./-]*)?'
+  WorkspaceGiB:
+    Type: Number
+    MinValue: 64
+    MaxValue: 512
+  MaximumNodes:
+    Type: Number
+    MinValue: 1
+    Description: Explicit operator fleet ceiling. Match maximumNodes in the fleet controller configuration and the account quota.
+  InitialNodes:
+    Type: Number
+    MinValue: 0
+    Description: Initial worker capacity, no greater than MaximumNodes.
+  ExpiresAt:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
+    Description: Optional destructive qualification expiry in UTC, e.g. 2026-11-19T03:00:00. Leave empty for production. Expiry stops workers regardless of archival and retains data volumes.
+Conditions:
+  QualificationExpiryEnabled: !Not [!Equals [!Ref ExpiresAt, '']]
+Resources:
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${FleetName}-worker'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DownloadVerifiedWorkerBundle
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${WorkerBundleBucket}/${WorkerBundlePrefix}/${WorkerBundleKey}'
+      Tags:
+        - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
+  WorkerProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref WorkerRole]
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound-only Code workers
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0}
+        - {IpProtocol: udp, FromPort: 53, ToPort: 53, CidrIp: 0.0.0.0/0}
+        - {IpProtocol: tcp, FromPort: 53, ToPort: 53, CidrIp: 0.0.0.0/0}
+        - {IpProtocol: tcp, FromPort: !Ref RunnerControlPort, ToPort: !Ref RunnerControlPort, CidrIp: !Ref ControllerCIDR}
+        - {IpProtocol: tcp, FromPort: !Ref EgressProxyPort, ToPort: !Ref EgressProxyPort, CidrIp: !Ref ControllerCIDR}
+        - {IpProtocol: tcp, FromPort: !Ref EnrollmentPort, ToPort: !Ref EnrollmentPort, CidrIp: !Ref ControllerCIDR}
+        - {IpProtocol: tcp, FromPort: !Ref RegistryPort, ToPort: !Ref RegistryPort, CidrIp: !Ref ControllerCIDR}
+      Tags:
+        - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
+  WorkerLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Ref FleetName
+      LaunchTemplateData:
+        ImageId: !Ref WorkerAMI
+        InstanceType: !Ref WorkerInstanceType
+        IamInstanceProfile: {Arn: !GetAtt WorkerProfile.Arn}
+        MetadataOptions: {HttpEndpoint: enabled, HttpTokens: required, HttpPutResponseHopLimit: 1}
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups: [!Ref WorkerSecurityGroup]
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs: {VolumeSize: 32, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+          - DeviceName: /dev/sdf
+            Ebs: {VolumeSize: !Ref WorkspaceGiB, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false}
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
+              - {Key: secondbox-fleet, Value: !Ref FleetName}
+          - ResourceType: volume
+            Tags:
+              - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
+              - {Key: secondbox-fleet, Value: !Ref FleetName}
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            umask 077
+            export DEBIAN_FRONTEND=noninteractive
+            install -d -m 0700 /var/lib/secondbox-bootstrap
+            export TMPDIR=/var/lib/secondbox-bootstrap
+            sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+            apt-get update
+            apt-get install -y ca-certificates curl unzip docker.io docker-compose-v2 xfsprogs
+            curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /var/lib/secondbox-bootstrap/awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.38.0.zip
+            printf '%s  %s\n' cb037d35cca5cefc3eb89ebabc471a0b4e4fe44135b72228c7eb0da2d2fae9f6 /var/lib/secondbox-bootstrap/awscliv2.zip | sha256sum --check --status
+            unzip -q -o /var/lib/secondbox-bootstrap/awscliv2.zip -d /var/lib/secondbox-bootstrap
+            /var/lib/secondbox-bootstrap/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
+            /usr/local/bin/aws s3 cp 's3://${WorkerBundleBucket}/${WorkerBundlePrefix}/${WorkerBundleKey}' /var/lib/secondbox-bootstrap/worker.tar.gz --region '${AWS::Region}' --only-show-errors
+            printf '%s  %s\n' '${WorkerBundleSHA256}' /var/lib/secondbox-bootstrap/worker.tar.gz | sha256sum --check --status
+            tar --extract --gzip --same-owner --same-permissions --numeric-owner --xattrs --xattrs-include='*' --acls --delay-directory-restore --file /var/lib/secondbox-bootstrap/worker.tar.gz --directory /var/lib/secondbox-bootstrap
+            test -x /var/lib/secondbox-bootstrap/install-worker.sh
+            exec /var/lib/secondbox-bootstrap/install-worker.sh --region '${AWS::Region}' --enrollment-url '${EnrollmentURL}' --fleet '${FleetName}'
+  Workers:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    UpdatePolicy:
+      AutoScalingScheduledAction:
+        IgnoreUnmodifiedGroupSizeProperties: true
+    Properties:
+      AutoScalingGroupName: !Ref FleetName
+      MinSize: '0'
+      MaxSize: !Ref MaximumNodes
+      DesiredCapacity: !Ref InitialNodes
+      NewInstancesProtectedFromScaleIn: true
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 1800
+      VPCZoneIdentifier: !Ref WorkerSubnets
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WorkerLaunchTemplate
+        Version: !GetAtt WorkerLaunchTemplate.LatestVersionNumber
+      Tags:
+        - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef, PropagateAtLaunch: true}
+        - {Key: secondbox-fleet, Value: !Ref FleetName, PropagateAtLaunch: true}
+  ExpiryRole:
+    Condition: QualificationExpiryEnabled
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: StopOnlyThisTestFleet
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [autoscaling:SetDesiredCapacity, autoscaling:SetInstanceProtection]
+                Resource: !Sub 'arn:${AWS::Partition}:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${FleetName}'
+              - Effect: Allow
+                Action: autoscaling:DescribeAutoScalingGroups
+                Resource: '*'
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FleetName}-expiry:*'
+  Expiry:
+    Condition: QualificationExpiryEnabled
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${FleetName}-expiry'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt ExpiryRole.Arn
+      Timeout: 60
+      Environment:
+        Variables: {FLEET_NAME: !Ref FleetName, OWNERSHIP_TAG: !Ref FleetRef}
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+          def handler(event, context):
+              api = boto3.client('autoscaling')
+              name = os.environ['FLEET_NAME']
+              groups = api.describe_auto_scaling_groups(AutoScalingGroupNames=[name])['AutoScalingGroups']
+              if not groups:
+                  return {'state': 'absent'}
+              group = groups[0]
+              tags = {tag['Key']: tag['Value'] for tag in group['Tags']}
+              if tags.get('secondstack.ai/fleet-ref') != os.environ['OWNERSHIP_TAG']:
+                  raise RuntimeError('Fleet expiry ownership mismatch')
+              ids = [node['InstanceId'] for node in group['Instances']]
+              if ids:
+                  api.set_instance_protection(AutoScalingGroupName=name, InstanceIds=ids, ProtectedFromScaleIn=False)
+              api.set_desired_capacity(AutoScalingGroupName=name, DesiredCapacity=0, HonorCooldown=False)
+              return {'state': 'expiry_requested', 'retained_data_volumes': True}
+  ExpiryScheduleRole:
+    Condition: QualificationExpiryEnabled
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: scheduler.amazonaws.com}, Action: sts:AssumeRole}]
+      Policies:
+        - PolicyName: InvokeThisExpiry
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement: [{Effect: Allow, Action: lambda:InvokeFunction, Resource: !GetAtt Expiry.Arn}]
+  ExpirySchedule:
+    Condition: QualificationExpiryEnabled
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      ScheduleExpression: !Sub 'at(${ExpiresAt})'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow: {Mode: 'OFF'}
+      State: ENABLED
+      Target:
+        Arn: !GetAtt Expiry.Arn
+        RoleArn: !GetAtt ExpiryScheduleRole.Arn
+        RetryPolicy: {MaximumEventAgeInSeconds: 86400, MaximumRetryAttempts: 185}
+Outputs:
+  GroupName: {Value: !Ref Workers}
+  WorkerRoleName: {Value: !Ref WorkerRole}
+  WorkerRoleARN: {Value: !GetAtt WorkerRole.Arn}
+  WorkerSecurityGroupID: {Value: !Ref WorkerSecurityGroup}
+  ExpiryFunction:
+    Condition: QualificationExpiryEnabled
+    Value: !Ref Expiry

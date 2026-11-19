@@ -77,7 +77,7 @@ func TestSharedArtifactsRecordBindsTheBuiltFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Tag != "v"+sharedTestVersion || record.SourceCommit != sharedTestCommit || record.PostgresImage != sharedTestPostgres || len(record.Files) != 14 {
+	if record.Tag != "v"+sharedTestVersion || record.SourceCommit != sharedTestCommit || record.PostgresImage != sharedTestPostgres || len(record.Files) != 22 {
 		t.Fatalf("record = %+v", record)
 	}
 	if err := verifySharedArtifacts(directory, sharedTestVersion, sharedTestCommit); err != nil {

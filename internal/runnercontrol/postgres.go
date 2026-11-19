@@ -62,30 +62,15 @@ func (store *PostgresStateStore) OpenConnection(
 		return errors.New("SecondBox runner connection requires credential identity, connection, and protocol version")
 	}
 	reconcileID := "workspace-reconcile-" + connectionID
-	reconcilePayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
-		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
-			LocalWorkspace: &runnerv1.LocalWorkspaceCommand{
-				CommandVersion: 1,
-				Kind:           runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
-				OperationId:    reconcileID,
-				EffectId:       reconcileID,
-				Correlation: &runnerv1.Correlation{
-					RequestId:   reconcileID,
-					OperationId: reconcileID,
-					RunnerId:    identity.RunnerID,
-				},
-			},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("SecondBox runner Workspace reconciliation command encoding: %w", err)
-	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner connection transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	now = now.UTC()
+	if err := validateRunnerFleetRegistration(ctx, tx, identity.RunnerID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_connections
 		SET state='superseded',disconnected_at=$2,last_seen_at=$2
@@ -119,6 +104,29 @@ func (store *PostgresStateStore) OpenConnection(
 		identity.RunnerID, now,
 	); err != nil {
 		return fmt.Errorf("SecondBox runner prior Workspace reconciliation expiry: %w", err)
+	}
+	receiptRequests, err := workspaceReconcileReceiptRequests(ctx, tx, identity.RunnerID)
+	if err != nil {
+		return err
+	}
+	reconcilePayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
+			LocalWorkspace: &runnerv1.LocalWorkspaceCommand{
+				CommandVersion:  1,
+				Kind:            runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
+				OperationId:     reconcileID,
+				EffectId:        reconcileID,
+				ReceiptRequests: receiptRequests,
+				Correlation: &runnerv1.Correlation{
+					RequestId:   reconcileID,
+					OperationId: reconcileID,
+					RunnerId:    identity.RunnerID,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation command encoding: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.runner_commands (
@@ -484,10 +492,10 @@ func (store *PostgresStateStore) RecordRegistration(
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runners
-		SET state='connected',architectures_json=$3,capabilities_json=$4,
+		SET state=CASE WHEN fleet_state='active' THEN 'connected' ELSE 'draining' END,architectures_json=$3,capabilities_json=$4,
 			capacity_json=$5,protocol_versions_json=$6,
 			guest_protocol_minimum=$7,guest_protocol_maximum=$8,software_version=$9,
-			last_sequence=$10,drain_phase='active',reserved_capacity_json=$11,
+			last_sequence=$10,drain_phase=CASE WHEN fleet_state='active' THEN 'active' ELSE 'draining' END,reserved_capacity_json=$11,
 			artifact_cache_json=$12,sandbox_start_sample_count=$13,
 			sandbox_start_p95_milliseconds=$14,last_seen_at=$15,
 			data_plane_address=$17,backend_kind=$18,
@@ -616,11 +624,12 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runners
-		SET state=CASE WHEN state IN ('connected','offline') AND $2='ready' AND $11
+		SET state=CASE WHEN fleet_state<>'active' THEN 'draining'
+		               WHEN state IN ('connected','offline') AND $2='ready' AND $11
 		               AND (backend_kind='firecracker' OR capabilities_json ? 'physical-storage-admission')
 		               THEN 'connected' ELSE $2 END,
 			capacity_json=$3,reserved_capacity_json=$4,last_sequence=$5,
-			drain_phase=$6,sandbox_start_sample_count=$7,
+			drain_phase=CASE WHEN fleet_state='active' THEN $6 ELSE 'draining' END,sandbox_start_sample_count=$7,
 			sandbox_start_p95_milliseconds=$8,last_seen_at=$9,
 			revision=revision+1,updated_at=$9
 		WHERE id=$1 AND active_connection_id=$10`,
@@ -1089,6 +1098,12 @@ func eventSandboxIDs(ctx context.Context, tx pgx.Tx, event Event) ([]string, err
 		// current Instance toward readiness or failure, which never increases
 		// quota usage, so they take no quota ledger lock.
 		return nil, nil
+	case EventImagePreparation:
+		if result := event.Message.GetPrepareImageResult(); result != nil {
+			if err := tx.QueryRow(ctx, `SELECT sandbox_id FROM secondbox.lifecycle_effects WHERE id=$1 AND runner_id=$2 AND kind='prepare_image'`, result.OperationId, event.RunnerID).Scan(&sandboxID); err != nil {
+				return nil, fmt.Errorf("SecondBox runner image preparation quota scope lookup: %w", err)
+			}
+		}
 	case EventFence:
 		if result := event.Message.GetFenceResult(); result != nil && result.Fence != nil {
 			sandboxID = result.Fence.SandboxId
@@ -1174,6 +1189,13 @@ func recordLocalWorkspaceResult(
 	}
 	if locked.WorkspaceID != result.WorkspaceId {
 		return errors.New("SecondBox runner local-workspace result targets the wrong Workspace")
+	}
+	var archiveOperation bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM secondbox.workspace_archives a JOIN secondbox.runner_commands c ON c.assignment_id=a.id WHERE a.id=$1 AND c.id=$2 AND c.runner_id=$3)`, result.OperationId, result.EffectId, runnerID).Scan(&archiveOperation); err != nil {
+		return err
+	}
+	if archiveOperation {
+		return recordWorkspaceArchiveResult(ctx, tx, locked, runnerID, result, now)
 	}
 	switch result.Kind {
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT,
@@ -1948,7 +1970,7 @@ func recordLocalWorkspaceReconciliation(
 			item.LogicalCapacityBytes != uint64(locked.Workspace.LogicalCapacityBytes) ||
 			!item.Formatted ||
 			item.RestorePending != restorePending ||
-			item.RelocationSealed != expectedRelocationSealed ||
+			(item.RelocationSealed != expectedRelocationSealed && locked.Workspace.Mutation.Kind != "archive") ||
 			!writerMatches {
 			if err := failReconciledWorkspace(
 				ctx,
@@ -4514,7 +4536,7 @@ func recordDrainEvent(
 	); err != nil {
 		return fmt.Errorf("SecondBox runner DrainState update: %w", err)
 	}
-	return nil
+	return acknowledgeFleetDrain(ctx, tx, runnerID, now)
 }
 
 func lockAndValidateFence(

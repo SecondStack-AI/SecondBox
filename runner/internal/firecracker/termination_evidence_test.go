@@ -352,6 +352,10 @@ func (*terminalPathBackend) ObserveWorkspaceStorage(context.Context) ([]*runnerp
 	return nil, nil, nil
 }
 
+func (*terminalPathBackend) ReservedCapacity() *runnerprotocol.Capacity {
+	return &runnerprotocol.Capacity{}
+}
+
 func (*terminalPathBackend) Readiness(context.Context) (runnercontrol.BackendReadiness, error) {
 	return runnercontrol.BackendReadiness{
 		Capacity: &runnerprotocol.Capacity{},

@@ -54,6 +54,16 @@ func TestComposeAssetPurgeAcceptsExplicitNetworkOverlay(t *testing.T) {
 	}
 }
 
+func TestComposeAssetPurgeAcceptsWorkspaceArchiveOverlay(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "compose.workspace-archives.yml"), []byte("reviewed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateComposeAssetDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUserPurgeResumesAfterVerifiedArtifactsWereRemoved(t *testing.T) {
 	root := t.TempDir()
 	uid, gid := int64(os.Getuid()), int64(os.Getgid())

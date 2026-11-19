@@ -50,6 +50,24 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 		WorkspaceID:  command.WorkspaceId,
 		FencingToken: append([]byte(nil), command.FencingToken...),
 	}
+	if command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT &&
+		b.manager.cfg != nil && b.manager.cfg.MicroVMStorageAdmissionMode == "physical" {
+		if command.LogicalCapacityBytes > math.MaxInt64 {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(workspacestore.ErrStorageIncompatible)
+		}
+		_, replayed, err := b.manager.workspaceStore.ReplayRelocationImport(ctx, workspacestore.RelocationImportRequest{Mutation: mutation, Generation: command.ExpectedGeneration, CapacityBytes: int64(command.LogicalCapacityBytes)})
+		if err != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+		}
+		if !replayed {
+			if b.storagePressure == nil {
+				return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(fmt.Errorf("SecondBox Firecracker archive import storage pressure control is unavailable"))
+			}
+			if err := b.storagePressure.CheckAdmission(ctx, command.LogicalCapacityBytes); err != nil {
+				return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(fmt.Errorf("SecondBox Firecracker archive import storage pressure: %w", err))
+			}
+		}
+	}
 	if command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
 		command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT {
 		if command.LogicalCapacityBytes > math.MaxInt64 {
@@ -100,6 +118,13 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 		err     error
 	)
 	switch command.Kind {
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT:
+		evidence, err := runnercontrol.ExecuteWorkspaceArchive(ctx, command, b.manager.workspaceStore)
+		if err != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(err)
+		}
+		return evidence, nil
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
 		receipt, err = b.manager.workspaceStore.Create(ctx, workspacestore.CreateWorkspaceRequest{
 			Mutation:      mutation,
@@ -143,7 +168,7 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 		receipt, err = b.manager.workspaceStore.DeleteWorkspace(
 			ctx,
 			workspacestore.DeleteWorkspaceRequest{
-				Mutation: mutation, ExpectedGeneration: command.ExpectedGeneration,
+				Mutation: mutation, ExpectedGeneration: command.ExpectedGeneration, RelocationSource: true,
 			},
 		)
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
@@ -210,8 +235,12 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 			workspacestore.RestoreMutation{Mutation: mutation},
 		)
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE:
+		requested, requestErr := runnercontrol.WorkspaceReceiptRequests(command.ReceiptRequests)
+		if requestErr != nil {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(requestErr)
+		}
 		var report workspacestore.ReconcileReport
-		report, err = b.manager.workspaceStore.Reconcile(ctx)
+		report, err = b.manager.workspaceStore.Reconcile(ctx, requested)
 		if err == nil {
 			evidence := runnercontrol.LocalWorkspaceEvidence{
 				Inventory: make(

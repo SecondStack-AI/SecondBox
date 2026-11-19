@@ -9,16 +9,112 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"math/big"
+	"net"
 	"net/url"
 	"testing"
 	"time"
 
+	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 )
 
 const testRunnerCredential = "runner-test-pre-shared-credential-material"
+
+func TestRunnerConnectAcceptsEnrollmentCertificateChain(t *testing.T) {
+	ca, caKey := testRunnerCertificateAuthority(t)
+	keyPair := func(runner bool) tls.Certificate {
+		public, private, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "localhost"}, DNSNames: []string{"localhost"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(30 * time.Minute), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+		if runner {
+			template.Subject.CommonName = "runner-fleet"
+			template.DNSNames = nil
+			template.URIs = []*url.URL{{Scheme: "spiffe", Host: "secondbox", Path: "/runner/runner-fleet"}}
+			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, ca, public, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tls.Certificate{Certificate: [][]byte{der, ca.Raw}, PrivateKey: private}
+	}
+	authority, err := NewCredentialAuthority(CredentialAuthorityConfig{Credential: testRunnerCredential, CACertificate: ca})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverTLS, err := authority.ServerTLSConfig(keyPair(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := validServerConfig()
+	config.CredentialVerifier = authority
+	config.SupportedVersions = VersionRange{Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum}
+	config.EnabledFeatures = []runnerv1.RunnerFeature{runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE}
+	control, err := NewServer(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS)))
+	runnerv1.RegisterRunnerControlServer(server, control)
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		if err := <-served; err != nil {
+			t.Error(err)
+		}
+	}()
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	for _, test := range []struct {
+		name, credential string
+		chain, accepted  bool
+	}{
+		{name: "leaf only", credential: testRunnerCredential, accepted: true},
+		{name: "fleet leaf and issuing CA", credential: testRunnerCredential, chain: true, accepted: true},
+		{name: "chain cannot replace credential", credential: "unknown-runner-credential-material-000000", chain: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pair := keyPair(true)
+			if !test.chain {
+				pair.Certificate = pair.Certificate[:1]
+			}
+			connection, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: "localhost", Certificates: []tls.Certificate{pair}})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			stream, err := runnerv1.NewRunnerControlClient(connection).Connect(metadata.AppendToOutgoingContext(ctx, runnerCredentialMetadata, test.credential))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := stream.Send(helloFrame("runner-fleet", runnerv1.SupportedProtocolMinimum, runnerv1.SupportedProtocolMaximum)); err != nil {
+				t.Fatal(err)
+			}
+			response, err := stream.Recv()
+			if !test.accepted {
+				if err == nil {
+					t.Fatal("unrecognized credential accepted with a trusted chain")
+				}
+				return
+			}
+			if err != nil || response.GetWelcome() == nil {
+				t.Fatalf("authenticated Runner welcome=%v error=%v", response.GetWelcome(), err)
+			}
+		})
+	}
+}
 
 func TestPeerIdentityRejectsUnknownOrMismatchedRunnerCredentialAtConnect(t *testing.T) {
 	caCertificate, caPrivateKey := testRunnerCertificateAuthority(t)

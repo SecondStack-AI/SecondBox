@@ -182,7 +182,7 @@ func TestRunnerDataPlaneListenerGatesReadinessAndAdvertisesOnlyItsAddress(t *tes
 
 func TestRunnerDataPlaneAcceptFailureReportsUnreadyAndFencesTheSession(t *testing.T) {
 	service, _, _ := newDirectPortTestService(t)
-	if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate); err != nil {
+	if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate, nil); err != nil {
 		t.Fatal(err)
 	}
 	failures := make(chan error, 1)
@@ -399,7 +399,7 @@ func TestDirectPortHandshakeIsBoundedInTimeAndSize(t *testing.T) {
 // before the admitting frame reaches the Runner is admitted rather than denied.
 func TestDirectPortAdmissionWaitsForItsAdmittingFrame(t *testing.T) {
 	service, stream, _ := newDirectPortTestService(t)
-	if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate); err != nil {
+	if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -481,7 +481,7 @@ func admitDirectPortSession(
 	// The Runner refuses to hold a direct session it could never serve, so the
 	// caller-facing listener must be bound before admission.
 	if !service.dataPlane.ready() {
-		if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate); err != nil {
+		if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate, nil); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {

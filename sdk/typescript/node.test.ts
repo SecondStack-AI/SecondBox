@@ -197,6 +197,7 @@ function sandboxFixture(): Sandbox {
     desiredState: "running",
     generation: 7,
     workspace: {
+      residency: "resident",
       id: "workspace-1",
       generation: 7,
       state: "ready",

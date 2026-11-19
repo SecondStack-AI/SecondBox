@@ -485,6 +485,8 @@ type SubjectUsage struct {
 
 // Workspace is public retained-workspace evidence without a provider location.
 type Workspace struct {
+	Residency          string                      `json:"residency"`
+	ArchivedBytes      *int64                      `json:"archivedBytes,omitempty"`
 	StorageObservation WorkspaceStorageObservation `json:"storageObservation"`
 	ID                 string                      `json:"id"`
 	TenantRef          string                      `json:"-"`

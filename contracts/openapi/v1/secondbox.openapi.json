@@ -69,35 +69,73 @@
   "paths": {
     "/v1/images:prepare": {
       "parameters": [
-        { "$ref": "#/components/parameters/TenantRef" },
-        { "$ref": "#/components/parameters/SubjectRef" }
+        {
+          "$ref": "#/components/parameters/TenantRef"
+        },
+        {
+          "$ref": "#/components/parameters/SubjectRef"
+        }
       ],
       "post": {
-        "tags": ["Operations"],
+        "tags": [
+          "Operations"
+        ],
         "operationId": "prepareImage",
         "parameters": [
-          { "$ref": "#/components/parameters/IdempotencyKey" },
-          { "$ref": "#/components/parameters/RequestID" }
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
         ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrepareImageRequest" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareImageRequest"
+              }
+            }
+          }
         },
         "responses": {
           "202": {
             "description": "Image preparation accepted without allocating a Sandbox or VM.",
             "headers": {
-              "X-Request-ID": { "$ref": "#/components/headers/RequestID" },
-              "Idempotency-Replayed": { "$ref": "#/components/headers/IdempotencyReplayed" }
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              },
+              "Idempotency-Replayed": {
+                "$ref": "#/components/headers/IdempotencyReplayed"
+              }
             },
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Operation" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "429": { "$ref": "#/components/responses/TooManyRequests" },
-          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
         }
       }
     },
@@ -4945,6 +4983,198 @@
           "$ref": "#/components/parameters/SubjectRef"
         }
       ]
+    },
+    "/v1/sandboxes/{sandboxId}:archive": {
+      "$ref": "#/components/pathItems/ArchiveSandbox"
+    },
+    "/v1/runner-pools/{runnerPoolName}/fleet": {
+      "get": {
+        "tags": [
+          "RunnerPools"
+        ],
+        "operationId": "readRunnerFleet",
+        "description": "Platform-only bounded demand and residency observation for one elastic RunnerPool. A truncated inventory must not authorize scale-in.",
+        "security": [
+          {
+            "platformBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RunnerPoolName"
+          },
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runner fleet observation.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetPoolObservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          }
+        }
+      }
+    },
+    "/v1/runner-pools/{runnerPoolName}/runners/{runnerId}:evacuate": {
+      "post": {
+        "tags": [
+          "Runners"
+        ],
+        "operationId": "evacuateFleetRunner",
+        "description": "Platform-only graceful drain of an idle Runner. Workspace archival is a separate fenced operation.",
+        "security": [
+          {
+            "platformBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RunnerPoolName"
+          },
+          {
+            "$ref": "#/components/parameters/RunnerID"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runner fleet lifecycle state.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetRunner"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          }
+        }
+      }
+    },
+    "/v1/runner-pools/{runnerPoolName}/runners/{runnerId}:retire": {
+      "post": {
+        "tags": [
+          "Runners"
+        ],
+        "operationId": "retireFleetRunner",
+        "description": "Platform-only permanent retirement after all Workspace, Snapshot, command and assignment references are gone. Retired identities cannot reconnect.",
+        "security": [
+          {
+            "platformBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RunnerPoolName"
+          },
+          {
+            "$ref": "#/components/parameters/RunnerID"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runner fleet lifecycle state.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetRunner"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "412": {
+            "$ref": "#/components/responses/PreconditionFailed"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5605,6 +5835,66 @@
               "$ref": "#/components/responses/Conflict"
             }
           }
+        }
+      },
+      "ArchiveSandbox": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantRef"
+          },
+          {
+            "$ref": "#/components/parameters/SubjectRef"
+          }
+        ],
+        "post": {
+          "tags": [
+            "Sandboxes"
+          ],
+          "operationId": "archiveSandbox",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/SandboxID"
+            },
+            {
+              "$ref": "#/components/parameters/IfMatch"
+            },
+            {
+              "$ref": "#/components/parameters/IdempotencyKey"
+            },
+            {
+              "$ref": "#/components/parameters/RequestID"
+            }
+          ],
+          "responses": {
+            "202": {
+              "$ref": "#/components/responses/AcceptedOperation"
+            },
+            "400": {
+              "$ref": "#/components/responses/BadRequest"
+            },
+            "401": {
+              "$ref": "#/components/responses/Unauthorized"
+            },
+            "403": {
+              "$ref": "#/components/responses/Forbidden"
+            },
+            "404": {
+              "$ref": "#/components/responses/NotFound"
+            },
+            "409": {
+              "$ref": "#/components/responses/Conflict"
+            },
+            "412": {
+              "$ref": "#/components/responses/PreconditionFailed"
+            },
+            "429": {
+              "$ref": "#/components/responses/TooManyRequests"
+            },
+            "503": {
+              "$ref": "#/components/responses/ServiceUnavailable"
+            }
+          },
+          "summary": "Move a stopped workspace to the configured object-storage tier"
         }
       }
     },
@@ -7692,20 +7982,40 @@
       "PrepareImageRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["image"],
+        "required": [
+          "image"
+        ],
         "properties": {
-          "image": { "$ref": "#/components/schemas/ExecutionImage" },
-          "profile": { "type": "string", "minLength": 1, "maxLength": 128 }
+          "image": {
+            "$ref": "#/components/schemas/ExecutionImage"
+          },
+          "profile": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
         }
       },
       "ImagePreparation": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["image", "targetRunners", "preparedRunners"],
+        "required": [
+          "image",
+          "targetRunners",
+          "preparedRunners"
+        ],
         "properties": {
-          "image": { "$ref": "#/components/schemas/PublicExecutionImage" },
-          "targetRunners": { "type": "integer", "minimum": 0 },
-          "preparedRunners": { "type": "integer", "minimum": 0 }
+          "image": {
+            "$ref": "#/components/schemas/PublicExecutionImage"
+          },
+          "targetRunners": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preparedRunners": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       },
       "PublicExecutionImage": {
@@ -8900,7 +9210,8 @@
           "sizeBytes",
           "createdAt",
           "updatedAt",
-          "storageObservation"
+          "storageObservation",
+          "residency"
         ],
         "properties": {
           "id": {
@@ -8918,7 +9229,9 @@
               "ready",
               "deleting",
               "deleted",
-              "failed"
+              "failed",
+              "archived",
+              "restoring"
             ]
           },
           "sizeBytes": {
@@ -8934,6 +9247,20 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "residency": {
+            "type": "string",
+            "enum": [
+              "resident",
+              "archiving",
+              "archived",
+              "restoring"
+            ]
+          },
+          "archivedBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -9051,7 +9378,8 @@
           "snapshot_restore",
           "subject_cleanup",
           "cancel_exec",
-          "cancel_terminal"
+          "cancel_terminal",
+          "archive"
         ]
       },
       "OperationState": {
@@ -9076,7 +9404,9 @@
           "updatedAt"
         ],
         "properties": {
-          "imagePreparation": { "$ref": "#/components/schemas/ImagePreparation" },
+          "imagePreparation": {
+            "$ref": "#/components/schemas/ImagePreparation"
+          },
           "id": {
             "$ref": "#/components/schemas/OpaqueID"
           },
@@ -11338,6 +11668,217 @@
           }
         },
         "description": "Prospective numeric policy for the next attributed Assignment; existing Assignments retain their admitted limit."
+      },
+      "FleetResourceDemand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "instances",
+          "vcpuCount",
+          "memoryBytes",
+          "workspaceBytes"
+        ],
+        "properties": {
+          "instances": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "vcpuCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "workspaceBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "oldestWaitAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "FleetRunner": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "revision",
+          "state",
+          "fleetState",
+          "connected",
+          "storageAdmissionDenied",
+          "workspaceCapacityBytes",
+          "reservedWorkspaceBytes",
+          "allocatable",
+          "reserved",
+          "workspaceCount",
+          "snapshotCount",
+          "pendingMutations",
+          "pendingCommands",
+          "activeAssignments"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string"
+          },
+          "fleetState": {
+            "type": "string",
+            "enum": [
+              "active",
+              "evacuating",
+              "evacuated",
+              "retired"
+            ]
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "lastSeenAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "lastActivityAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "storageAdmissionDenied": {
+            "type": "boolean"
+          },
+          "workspaceCapacityBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reservedWorkspaceBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "allocatable": {
+            "$ref": "#/components/schemas/PoolComputeCapacity"
+          },
+          "reserved": {
+            "$ref": "#/components/schemas/PoolComputeCapacity"
+          },
+          "workspaceCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "snapshotCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pendingMutations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pendingCommands": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "activeAssignments": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FleetWorkspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sandboxId",
+          "tenantRef",
+          "subjectRef",
+          "runnerId",
+          "revision",
+          "state",
+          "desiredState",
+          "mutation"
+        ],
+        "properties": {
+          "sandboxId": {
+            "type": "string"
+          },
+          "tenantRef": {
+            "type": "string"
+          },
+          "subjectRef": {
+            "type": "string"
+          },
+          "runnerId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string"
+          },
+          "desiredState": {
+            "type": "string"
+          },
+          "mutation": {
+            "type": "string"
+          }
+        }
+      },
+      "FleetPoolObservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "poolName",
+          "observedAt",
+          "demand",
+          "runners",
+          "workspaces",
+          "truncated"
+        ],
+        "properties": {
+          "poolName": {
+            "type": "string"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "demand": {
+            "$ref": "#/components/schemas/FleetResourceDemand"
+          },
+          "runners": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetRunner"
+            }
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetWorkspace"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
       }
     }
   }

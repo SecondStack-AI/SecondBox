@@ -9,6 +9,8 @@ SecondBox includes source code that depends on third-party Go modules and builds
 - `charm.land/huh/v2` — MIT
 - `charm.land/lipgloss/v2` — MIT
 - `github.com/atotto/clipboard` — BSD-3-Clause
+- `github.com/aws/aws-sdk-go-v2`, including its configuration, credential, EC2 metadata, service and internal modules — Apache-2.0
+- `github.com/aws/smithy-go` — Apache-2.0
 - `github.com/catppuccin/go` — MIT
 - `github.com/charmbracelet/colorprofile` — MIT
 - `github.com/charmbracelet/harmonica` — MIT

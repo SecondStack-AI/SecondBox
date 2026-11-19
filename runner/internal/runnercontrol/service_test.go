@@ -688,6 +688,10 @@ func allLocalWorkspaceCommandKinds() []runnerprotocol.LocalWorkspaceCommandKind 
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_EXPORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ARCHIVE_IMPORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE,
 	}
 }
 
@@ -1700,6 +1704,10 @@ func (backend *recordingLocalWorkspaceBackend) ExecuteLocalWorkspace(
 
 func (b *recordingAssignmentBackend) Readiness(context.Context) (BackendReadiness, error) {
 	return b.readiness, nil
+}
+
+func (b *recordingAssignmentBackend) ReservedCapacity() *runnerprotocol.Capacity {
+	return b.readiness.Reserved
 }
 
 func (b *recordingAssignmentBackend) ValidateAssignment(context.Context, *runnerprotocol.AssignmentCommand) error {

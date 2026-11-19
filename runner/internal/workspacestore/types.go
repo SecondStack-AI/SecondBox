@@ -286,6 +286,8 @@ type RestoreMutation struct {
 type DeleteWorkspaceRequest struct {
 	Mutation
 	ExpectedGeneration uint64
+	// RelocationSource retains replay receipts across later same-home restores.
+	RelocationSource bool `json:"relocationSource,omitempty"`
 }
 
 // RelocationExportRequest seals and opens one stopped current Workspace image.
@@ -349,6 +351,14 @@ type ReconcileReport struct {
 	Receipts   []Receipt
 }
 
+// ReceiptIdentity selects one durable receipt without exposing its fencing
+// token or enumerating historical replay tombstones.
+type ReceiptIdentity struct {
+	WorkspaceID string
+	OperationID string
+	Kind        string
+}
+
 // WorkspaceStore is the provider-neutral runner-owned local workspace port.
 // Every mutating request includes a stable operation ID.
 type WorkspaceStore interface {
@@ -371,5 +381,5 @@ type WorkspaceStore interface {
 	BeginRelocationImport(context.Context, RelocationImportRequest) (RelocationImport, error)
 	AbortRelocation(context.Context, RelocationExportRequest) (Receipt, error)
 	Inspect(context.Context, string) (WorkspaceInspection, error)
-	Reconcile(context.Context) (ReconcileReport, error)
+	Reconcile(context.Context, []ReceiptIdentity) (ReconcileReport, error)
 }

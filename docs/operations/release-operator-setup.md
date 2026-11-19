@@ -67,7 +67,7 @@ git push origin vVERSION
 `release-tag.yml` then runs five jobs:
 
 1. `build-shared` runs `scripts/release-build-shared.sh` on a GitHub-hosted runner, in a few minutes.
-   It requires the tag to identify the checked-out commit on `origin/main` and the Go version of `go.mod`, then builds the OpenAPI document, Go module archive, TypeScript package, package metadata, SBOM, the `secondbox` and `secondbox-deploy` binaries of the four host platforms, and `install.sh`, which embeds the Linux amd64 deploy-binary digest.
+   It requires the tag to identify the checked-out commit on `origin/main` and the Go version of `go.mod`, then builds the OpenAPI document, Go module archive, TypeScript package, package metadata, SBOM, the `secondbox`, `secondbox-deploy`, `secondbox-fleet`, and `secondbox-fleet-enroll` binaries of the four host platforms, and `install.sh`, which embeds the Linux amd64 deploy-binary digest. The guided installer installs only the CLI and deploy tool; fleet operators install the fleet tools separately.
    `shared-artifacts.json` records each file's digest, the version, tag and source commit, and the bundled PostgreSQL image pinned in that script.
    The job passes the directory to both staging jobs as a tar workflow artifact, which keeps the binaries' executable modes.
 2. `stage-amd64` runs `just release VERSION SHARED_DIR` (`scripts/release.sh`).

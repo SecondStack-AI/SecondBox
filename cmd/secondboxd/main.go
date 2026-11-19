@@ -90,6 +90,10 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer controlPlaneStore.Close()
+	archiveSettings, err := configureWorkspaceArchives(processContext, processConfig.WorkspaceArchiveConfigFile, controlPlaneStore)
+	if err != nil {
+		return err
+	}
 	dataPlaneStore, err := runnercontrol.NewPostgresDataPlaneStore(
 		processContext,
 		runnercontrol.PostgresDataPlaneStoreConfig{
@@ -278,6 +282,12 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	sessionAccountingErrors := make(chan error, 1)
 	workListenerErrors := make(chan error, 1)
 	subjectCleanupErrors := make(chan error, 1)
+	archiveErrors := make(chan error, 1)
+	if processConfig.WorkspaceArchiveConfigFile != "" {
+		go func() {
+			archiveErrors <- runWorkspaceArchiveWorker(processContext, controlPlaneStore, archiveSettings, logger)
+		}()
+	}
 	go func() {
 		logger.Info("SecondBox listening", "address", processConfig.ListenAddress)
 		serverErrors <- server.ListenAndServe()
@@ -351,8 +361,14 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	sessionAccountingExited := false
 	workListenerExited := false
 	subjectCleanupExited := false
+	archiveExited := processConfig.WorkspaceArchiveConfigFile == ""
 	select {
 	case <-processContext.Done():
+	case archiveErr := <-archiveErrors:
+		archiveExited = true
+		if archiveErr != nil && !errors.Is(archiveErr, context.Canceled) {
+			serveErr = fmt.Errorf("SecondBox workspace archive worker stopped: %w", archiveErr)
+		}
 	case httpServeErr := <-serverErrors:
 		if !errors.Is(httpServeErr, http.ErrServerClosed) {
 			serveErr = fmt.Errorf("SecondBox HTTP server failed: %w", httpServeErr)
@@ -484,12 +500,24 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			)
 		}
 	}
+	var archiveShutdownErr error
+	if !archiveExited {
+		select {
+		case archiveShutdownErr = <-archiveErrors:
+			if errors.Is(archiveShutdownErr, context.Canceled) {
+				archiveShutdownErr = nil
+			}
+		case <-shutdownContext.Done():
+			archiveShutdownErr = fmt.Errorf("SecondBox workspace archive worker shutdown: %w", shutdownContext.Err())
+		}
+	}
 	if err := errors.Join(
 		serveErr, httpShutdownErr, grpcShutdownErr, lifecycleShutdownErr,
 		assignmentShutdownErr, snapshotRetentionShutdownErr,
 		dataPlaneShutdownErr, workListenerShutdownErr,
 		sessionAccountingShutdownErr,
 		subjectCleanupShutdownErr,
+		archiveShutdownErr,
 	); err != nil {
 		return fmt.Errorf("SecondBox coordinated server shutdown: %w", err)
 	}

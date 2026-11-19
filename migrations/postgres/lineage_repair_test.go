@@ -57,6 +57,11 @@ var postFenceMigrationFiles = []string{
 	"0036_sandbox_quota_ledger_on_increase.sql",
 	"0037_subject_sandbox_policy_profiles.sql",
 	"0038_start_capacity_wait_deadline.sql",
+	"0039_workspace_archives.sql",
+	"0040_runner_fleet_lifecycle.sql",
+	"0041_unhomed_runner_command_wakeups.sql",
+	"0042_preserve_eager_runner_dispatch.sql",
+	"0043_workspace_start_archive_phases.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

@@ -76,7 +76,7 @@ func newDataPlaneListener() *dataPlaneListener {
 	return &dataPlaneListener{}
 }
 
-func (d *dataPlaneListener) bind(address string, certificate tls.Certificate) error {
+func (d *dataPlaneListener) bind(address string, certificate tls.Certificate, reload func(*tls.ClientHelloInfo) (*tls.Certificate, error)) error {
 	if len(certificate.Certificate) == 0 || certificate.PrivateKey == nil {
 		return fmt.Errorf("SecondBox runner data-plane TLS certificate is required")
 	}
@@ -92,6 +92,10 @@ func (d *dataPlaneListener) bind(address string, certificate tls.Certificate) er
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{certificate},
 	}, false
+	if reload != nil {
+		d.tlsConfig.Certificates = nil
+		d.tlsConfig.GetCertificate = reload
+	}
 	d.mu.Unlock()
 	return nil
 }
@@ -154,6 +158,7 @@ func (s *RunnerProtocolService) startDataPlaneListener(ctx context.Context) (fun
 	if err := s.dataPlane.bind(
 		s.config.DataPlaneListenAddress,
 		s.config.DataPlaneCertificate,
+		s.config.DataPlaneGetCertificate,
 	); err != nil {
 		return nil, err
 	}

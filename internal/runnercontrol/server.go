@@ -772,7 +772,7 @@ func (server *Server) peerIdentity(ctx context.Context) (RunnerIdentity, error) 
 		return RunnerIdentity{}, errors.New("SecondBox runner control peer identity is absent")
 	}
 	tlsInfo, ok := peerInfo.AuthInfo.(credentials.TLSInfo)
-	if !ok || len(tlsInfo.State.PeerCertificates) != 1 {
+	if !ok || len(tlsInfo.State.PeerCertificates) == 0 {
 		return RunnerIdentity{}, errors.New("SecondBox runner control peer is not mutually authenticated")
 	}
 	incoming, ok := metadata.FromIncomingContext(ctx)

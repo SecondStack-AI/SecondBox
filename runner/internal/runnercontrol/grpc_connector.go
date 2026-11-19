@@ -139,12 +139,13 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 
 // GRPCConnector creates one outbound runner stream over mutually authenticated TLS.
 type GRPCConnector struct {
-	address     string
-	credential  string
-	certificate tls.Certificate
-	tlsConfig   *tls.Config
-	mu          sync.Mutex
-	connection  *grpc.ClientConn
+	address             string
+	credential          string
+	certificate         tls.Certificate
+	certificateReloader *runnerCertificateReloader
+	tlsConfig           *tls.Config
+	mu                  sync.Mutex
+	connection          *grpc.ClientConn
 }
 
 // NewGRPCConnector validates runner credentials before any network operation.
@@ -168,6 +169,10 @@ func NewGRPCConnector(config GRPCConnectorConfig) (*GRPCConnector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox runner mTLS client credential: %w", err)
 	}
+	reloader, err := newRunnerCertificateReloader(config.ClientCertificate, certificate)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox runner mTLS renewal binding: %w", err)
+	}
 	certificateAuthority, err := os.ReadFile(config.CertificatePool)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox runner mTLS control-plane CA: %w", err)
@@ -177,14 +182,15 @@ func NewGRPCConnector(config GRPCConnectorConfig) (*GRPCConnector, error) {
 		return nil, fmt.Errorf("SecondBox runner mTLS control-plane CA has no certificates")
 	}
 	return &GRPCConnector{
-		address:     strings.TrimSpace(config.Address),
-		credential:  config.Credential,
-		certificate: certificate,
+		address:             strings.TrimSpace(config.Address),
+		credential:          config.Credential,
+		certificate:         certificate,
+		certificateReloader: reloader,
 		tlsConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			ServerName:   strings.TrimSpace(config.ServerName),
-			Certificates: []tls.Certificate{certificate},
-			RootCAs:      rootCAs,
+			MinVersion:           tls.VersionTLS13,
+			ServerName:           strings.TrimSpace(config.ServerName),
+			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return reloader.load() },
+			RootCAs:              rootCAs,
 		},
 	}, nil
 }
@@ -194,6 +200,10 @@ func NewGRPCConnector(config GRPCConnectorConfig) (*GRPCConnector, error) {
 // separate identity.
 func (c *GRPCConnector) RunnerCertificate() tls.Certificate {
 	return c.certificate
+}
+
+func (c *GRPCConnector) RunnerCertificateForHandshake(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return c.certificateReloader.load()
 }
 
 // Connect opens the generated RunnerControl stream through the configured mTLS channel.

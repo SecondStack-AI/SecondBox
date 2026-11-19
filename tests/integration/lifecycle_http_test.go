@@ -162,26 +162,28 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	operationResponse.Body.Close()
 
 	reloaded := getHTTPSandbox(t, server.URL, credential, sandbox.ID)
-	for _, mutation := range []struct {
-		method string
-		action string
-		key    string
-		body   any
-	}{
-		{http.MethodPost, "drain", "lifecycle-http-drain", nil},
-		{http.MethodPost, "stop", "lifecycle-http-stop", nil},
-	} {
-		response := lifecycleHTTPRequest(
-			t, server.URL, credential, mutation.method,
-			"/v1/sandboxes/"+sandbox.ID+":"+mutation.action, mutation.key,
-			strconv.FormatInt(reloaded.Revision, 10), "", mutation.body,
-		)
-		assertProblem(
-			t,
-			response,
-			http.StatusConflict,
-			"workspace_mutation_conflict",
-		)
+	drain := lifecycleHTTPRequest(
+		t, server.URL, credential, http.MethodPost,
+		"/v1/sandboxes/"+sandbox.ID+":drain", "lifecycle-http-drain",
+		strconv.FormatInt(reloaded.Revision, 10), "", nil,
+	)
+	assertProblem(t, drain, http.StatusConflict, "workspace_mutation_conflict")
+	stop := lifecycleHTTPRequest(
+		t, server.URL, credential, http.MethodPost,
+		"/v1/sandboxes/"+sandbox.ID+":stop", "lifecycle-http-stop",
+		strconv.FormatInt(reloaded.Revision, 10), "", nil,
+	)
+	if stop.StatusCode != http.StatusAccepted {
+		t.Fatalf("queued start cancellation status=%d body=%s", stop.StatusCode, readResponse(t, stop))
+	}
+	var stopOperation contracts.Operation
+	decodeResponseJSON(t, stop, &stopOperation)
+	if stopOperation.State != contracts.OperationStateSucceeded {
+		t.Fatalf("stop before compute admission state=%q", stopOperation.State)
+	}
+	cancelledStart, err := controlPlane.GetOperation(t.Context(), principal, startOperation.ID)
+	if err != nil || cancelledStart.State != contracts.OperationStateCancelled || cancelledStart.Error == nil || cancelledStart.Error.Code != "start_cancelled" {
+		t.Fatalf("cancelled start=%#v error=%v", cancelledStart, err)
 	}
 	deleteSandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "lifecycle-http-delete-create",

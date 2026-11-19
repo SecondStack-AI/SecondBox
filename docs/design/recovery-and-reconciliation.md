@@ -93,10 +93,11 @@ compute receives fence-and-cleanup commands. Missing or conflicting local data
 becomes an explicit operator-visible failure; it never triggers empty Workspace
 creation.
 
-Heartbeat expiry marks the Runner unavailable and makes its Sandboxes
+Heartbeat expiry marks the Runner unavailable and makes its resident Sandboxes
 unavailable. It does not prove compute stopped, advance a generation, or
-authorize another Runner. No scheduler or automatic recovery path relocates or
-reconstructs the Workspace. Explicit relocation still
+authorize another Runner. A committed archived generation has no home and can
+restore independently of its former Runner; an unarchived local generation
+cannot. No recovery path substitutes an empty or stale image. Explicit relocation still
 requires the source Runner to be connected and its local image intact.
 
 Recovery requires the same trusted Runner identity and WorkspaceStore to return.

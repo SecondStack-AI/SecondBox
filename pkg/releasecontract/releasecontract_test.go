@@ -54,6 +54,30 @@ func TestCompareVersionsUsesSemVerPrecedence(t *testing.T) {
 	}
 }
 
+func TestReleaseBinariesPreserveRecordedManifestsAndRequireFleetTools(t *testing.T) {
+	for _, version := range []string{"0.18.1", "0.0.0-development", "0.32.0-rc.1", "0.32.0", "1.2.3"} {
+		t.Run(version, func(t *testing.T) {
+			manifest := validManifest()
+			manifest.Version = version
+			manifest.Binaries = nil
+			for _, platform := range manifest.Platforms.HostBinaries {
+				for _, name := range []string{"secondbox", "secondbox-deploy"} {
+					manifest.Binaries = append(manifest.Binaries, BinaryArtifact{Name: name, Platform: platform, Location: BinaryLocation(version, name, platform), SHA256: strings.TrimPrefix(testDigest, "sha256:")})
+				}
+			}
+			wantFleet := version != "0.18.1" && version != "0.0.0-development"
+			if err := validateBinaries(manifest); (err != nil) != wantFleet {
+				t.Fatalf("CLI-only manifest validation: %v; fleet required=%t", err, wantFleet)
+			}
+			platform := manifest.Platforms.HostBinaries[0]
+			manifest.Binaries = append(manifest.Binaries, BinaryArtifact{Name: "secondbox-fleet", Platform: platform, Location: BinaryLocation(version, "secondbox-fleet", platform), SHA256: strings.TrimPrefix(testDigest, "sha256:")})
+			if err := validateBinaries(manifest); err == nil {
+				t.Fatal("partial fleet matrix accepted")
+			}
+		})
+	}
+}
+
 func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -262,9 +286,9 @@ func validManifest() ArtifactManifest {
 	ref := func(name string) Reference {
 		return Reference{Location: "https://github.com/SecondStack-AI/SecondBox/releases/download/v1.2.3/" + name, Digest: testDigest}
 	}
-	binaries := make([]BinaryArtifact, 0, 8)
+	binaries := make([]BinaryArtifact, 0, len(HostBinaryNames)*len(HostBinaryPlatforms))
 	for _, platform := range []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"} {
-		for _, name := range []string{"secondbox", "secondbox-deploy"} {
+		for _, name := range HostBinaryNames {
 			binaries = append(binaries, BinaryArtifact{
 				Identity: identity, Name: name, Platform: platform,
 				Location: BinaryLocation(identity.Version, name, platform), SHA256: strings.TrimPrefix(testDigest, "sha256:"),
