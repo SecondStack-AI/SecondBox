@@ -347,9 +347,13 @@ func (writer *boundedLogWriter) Write(data []byte) (int, error) {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 	const maximum = 64 << 10
-	remaining := maximum - len(writer.data)
-	if remaining > 0 {
-		writer.data = append(writer.data, data[:min(len(data), remaining)]...)
+	// Keep the terminal error after Skopeo's potentially long layer progress.
+	if len(data) >= maximum {
+		writer.data = append(writer.data[:0], data[len(data)-maximum:]...)
+	} else {
+		retained := min(len(writer.data), maximum-len(data))
+		writer.data = append(writer.data[:0], writer.data[len(writer.data)-retained:]...)
+		writer.data = append(writer.data, data...)
 	}
 	return len(data), nil
 }
@@ -1004,7 +1008,7 @@ func boundedOutput(output []byte) string {
 	const maximum = 1024
 	text := strings.TrimSpace(string(output))
 	if len(text) > maximum {
-		text = text[:maximum]
+		text = text[len(text)-maximum:]
 	}
 	return text
 }
