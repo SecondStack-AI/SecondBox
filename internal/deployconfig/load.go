@@ -333,6 +333,7 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		if !filepath.IsAbs(awsDirectory) {
 			awsDirectory = filepath.Join(base, awsDirectory)
 		}
+		awsDirectory = filepath.Clean(awsDirectory)
 		info, err := os.Lstat(awsDirectory)
 		if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o500 != 0o500 {
 			return ResolvedDeployment{}, manifestError("deployment.workspace_archive_aws_config_directory must name a private readable directory", err)

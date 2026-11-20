@@ -6,8 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/pelletier/go-toml/v2"
 )
 
 func TestWorkspaceArchiveManifestSelectsReadOnlyConfiguration(t *testing.T) {
@@ -61,7 +59,7 @@ func TestWorkspaceArchiveAWSConfigDirectory(t *testing.T) {
 	if resolved.Environment["SECONDBOX_WORKSPACE_ARCHIVE_AWS_CONFIG_HOST_PATH"] != awsDirectory || !slices.Contains(resolved.ComposeFiles, "deploy/compose.workspace-archives.aws-config.yml") {
 		t.Fatalf("archive AWS configuration missing: env=%#v compose=%v", resolved.Environment, resolved.ComposeFiles)
 	}
-	encoded, err := toml.Marshal(manifest)
+	encoded, err := encodeManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +69,10 @@ func TestWorkspaceArchiveAWSConfigDirectory(t *testing.T) {
 	_, _, recordedFiles, err := recordedInstallerComposeIdentity(manifestPath)
 	if err != nil || !slices.Contains(recordedFiles, "deploy/compose.workspace-archives.aws-config.yml") {
 		t.Fatalf("recorded installer lost archive AWS configuration: files=%v err=%v", recordedFiles, err)
+	}
+	inspection, err := Inspect(manifestPath)
+	if err != nil || strings.Contains(string(inspection), awsDirectory) {
+		t.Fatalf("inspection exposed archive AWS credential path: err=%v", err)
 	}
 	if err := os.Chmod(awsDirectory, 0o750); err != nil {
 		t.Fatal(err)
@@ -84,8 +86,10 @@ func TestWorkspaceArchiveAWSConfigDirectory(t *testing.T) {
 	if err := os.Symlink(awsDirectory, filepath.Join(base, "archive-aws-link")); err != nil {
 		t.Fatal(err)
 	}
-	manifest.Deployment.WorkspaceArchiveAWSConfigDirectory = "archive-aws-link"
-	if _, err := resolveManifestWithOptions(manifest, base, true); err == nil {
-		t.Fatal("symlinked AWS credential directory accepted")
+	for _, path := range []string{"archive-aws-link", filepath.Join(base, "archive-aws-link") + "/", filepath.Join(base, "archive-aws-link") + "/."} {
+		manifest.Deployment.WorkspaceArchiveAWSConfigDirectory = path
+		if _, err := resolveManifestWithOptions(manifest, base, true); err == nil {
+			t.Fatalf("symlinked AWS credential directory accepted: %s", path)
+		}
 	}
 }

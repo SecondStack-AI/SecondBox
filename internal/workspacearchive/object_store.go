@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,26 @@ func NewS3TransferProvider(ctx context.Context, settings ObjectStoreConfig) (*S3
 			return nil, errors.New("SecondBox workspace archive idle policy requires a Profile and a positive duration no greater than one year")
 		}
 	}
+	if path := os.Getenv("AWS_CONFIG_FILE"); path != "" {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("SecondBox workspace archive AWS shared configuration: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("SecondBox workspace archive AWS shared configuration must be a readable regular file")
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("SecondBox workspace archive AWS shared configuration: %w", err)
+		}
+		info, statErr := file.Stat()
+		if err := errors.Join(statErr, file.Close()); err != nil {
+			return nil, fmt.Errorf("SecondBox workspace archive AWS shared configuration: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("SecondBox workspace archive AWS shared configuration must be a readable regular file")
+		}
+	}
 	configuration, err := config.LoadDefaultConfig(ctx, config.WithRegion(settings.Region))
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox workspace archive AWS configuration: %w", err)
@@ -70,6 +91,17 @@ func (provider *S3TransferProvider) Transfer(ctx context.Context, key, method st
 	credentials, err := provider.credentials.Retrieve(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox workspace archive credentials: %w", err)
+	}
+	// The SDK cache otherwise retains a process session until its actual expiry,
+	// after it has already become too short for an archive grant. Refresh once.
+	if credentials.CanExpire && time.Until(credentials.Expires) < 90*time.Second {
+		if cache, ok := provider.credentials.(interface{ Invalidate() }); ok {
+			cache.Invalidate()
+			credentials, err = provider.credentials.Retrieve(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("SecondBox workspace archive credentials refresh: %w", err)
+			}
+		}
 	}
 	lifetime := provider.lifetime
 	if credentials.CanExpire {

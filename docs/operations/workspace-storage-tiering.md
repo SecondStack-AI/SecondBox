@@ -39,6 +39,9 @@ plane only; it requires the archive configuration above. Use a real directory,
 owner read/execute permission and no group/other access. Own the directory and
 its private files with control-plane UID 65532 and make the helper executable
 by that UID. Do not mount an operator's entire AWS configuration directory.
+Startup verifies the shared config is a readable regular file under the
+control-plane identity before constructing the archive provider; it does not
+require an AWS request to pass that local prerequisite.
 
 An IAM Roles Anywhere profile can use a checksum-pinned signing helper, its
 client certificate and private key in this directory:
