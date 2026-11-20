@@ -23,6 +23,22 @@ func TestPrebakedWorkerCacheRequiresExactBundleAndImages(t *testing.T) {
 		{name: "different bundle", fail: true, change: func(t *testing.T, cache, _ string) {
 			writePrebakedFixture(t, filepath.Join(cache, "prebaked.bundle.sha256"), strings.Repeat("f", 64), 0o600)
 		}},
+		{name: "missing retained archive", fail: true, change: func(t *testing.T, cache, _ string) {
+			if err := os.Remove(filepath.Join(cache, "worker.tar.gz")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "expanded execution cache", fail: true, change: func(t *testing.T, cache, _ string) {
+			if err := os.Mkdir(filepath.Join(cache, "execution-images"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "invalid execution cache marker", fail: true, change: func(t *testing.T, cache, _ string) {
+			writePrebakedFixture(t, filepath.Join(cache, "prebaked.execution-images"), "invalid", 0o600)
+		}},
+		{name: "compressed execution cache", change: func(t *testing.T, cache, _ string) {
+			writePrebakedFixture(t, filepath.Join(cache, "prebaked.execution-images"), "archive\n", 0o600)
+		}},
 		{name: "mutable image reference", fail: true, change: func(t *testing.T, cache, _ string) {
 			writePrebakedFixture(t, filepath.Join(cache, "runtime.env"), "SECONDBOX_RUNNER_IMAGE=runner:latest\nAGENT_RUNNER_GATEWAY_IMAGE=sha256:"+strings.Repeat("b", 64)+"\n", 0o600)
 		}},
@@ -43,10 +59,10 @@ func TestPrebakedWorkerCacheRequiresExactBundleAndImages(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, name := range []string{"install-worker.sh", "bin/secondbox-fleet-enroll", "bin/secondbox-flat-root-digest"} {
+			for _, name := range []string{"install-worker.sh", "stage-worker-execution-cache.sh", "bin/secondbox-fleet-enroll", "bin/secondbox-flat-root-digest"} {
 				writePrebakedFixture(t, filepath.Join(cache, name), "#!/bin/sh\nexit 0\n", 0o755)
 			}
-			for _, name := range []string{"compose.yaml", "enrollment-ca.pem", "artifacts/materialization.json"} {
+			for _, name := range []string{"compose.yaml", "enrollment-ca.pem", "artifacts/materialization.json", "worker.tar.gz"} {
 				writePrebakedFixture(t, filepath.Join(cache, name), "fixture", 0o600)
 			}
 			writePrebakedFixture(t, filepath.Join(cache, "runtime.env"), "SECONDBOX_RUNNER_IMAGE=sha256:"+strings.Repeat("a", 64)+"\nAGENT_RUNNER_GATEWAY_IMAGE=sha256:"+strings.Repeat("b", 64)+"\n", 0o600)

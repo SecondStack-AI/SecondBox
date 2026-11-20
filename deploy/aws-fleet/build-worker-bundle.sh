@@ -29,17 +29,23 @@ tar --create --format=pax --numeric-owner --xattrs --xattrs-include='*' --acls -
 cp "$enrollment_ca" "$output/enrollment-ca.pem"
 cp "$component/install-worker.sh" "$output/install-worker.sh"
 cp "$component/verify-prebaked-worker.sh" "$output/verify-prebaked-worker.sh"
+cp "$component/stage-worker-execution-cache.sh" "$output/stage-worker-execution-cache.sh"
 chmod 0755 "$output/install-worker.sh" "$output/verify-prebaked-worker.sh"
+chmod 0755 "$output/stage-worker-execution-cache.sh"
 cp "$component/compose.yaml" "$output/compose.yaml"
 printf 'SECONDBOX_RUNNER_IMAGE=%s\nAGENT_RUNNER_GATEWAY_IMAGE=%s\nSECONDBOX_GVISOR_RUNNER_CGROUP_PARENT=secondbox-elastic-worker-gvisor.slice\n' "$runner_id" "$gateway_id" > "$output/runtime.env"
-bundle_files=(bin artifacts enrollment-ca.pem install-worker.sh verify-prebaked-worker.sh worker-images.tar compose.yaml runtime.env)
+bundle_files=(bin artifacts enrollment-ca.pem install-worker.sh verify-prebaked-worker.sh stage-worker-execution-cache.sh worker-images.tar compose.yaml runtime.env)
 if [[ $# == 7 ]]; then
   test -d "$7"
-  cp -a "$7" "$output/execution-images"
+  # Inputs may already be fully allocated. Scan zeros rather than reflink-clone
+  # them, otherwise tar will not recognize these disk files as sparse.
+  cp --reflink=never --sparse=always -a "$7" "$output/execution-images"
   rm -rf "$output/execution-images/tmp"
   bundle_files+=(execution-images)
 fi
-tar --create --gzip --format=pax --numeric-owner --xattrs --xattrs-include='*' --acls --file "$output.tar.gz" --directory "$output" "${bundle_files[@]}"
+# Execution-image disks include large zero regions. Preserve them as sparse
+# extents so fresh AMI workers need not read and copy allocated zeros from EBS.
+tar --create --gzip --sparse --format=pax --numeric-owner --xattrs --xattrs-include='*' --acls --file "$output.tar.gz" --directory "$output" "${bundle_files[@]}"
 roundtrip="$output/roundtrip"
 mkdir -p "$roundtrip"
 tar --extract --gzip --same-owner --same-permissions --numeric-owner --xattrs --xattrs-include='*' --acls --delay-directory-restore --file "$output.tar.gz" --directory "$roundtrip" artifacts bin/secondbox-flat-root-digest

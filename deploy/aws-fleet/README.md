@@ -108,7 +108,10 @@ if needed. Do not recursively change ownership or modes inside the materialized
 artifact or extracted bundle trees. The Docker socket grants host authority, so
 use only the reviewed builder and trusted inputs in this container.
 Artifact staging and the final archive preserve numeric owners, special modes,
-nanosecond mtimes, symlinks, ACLs and all xattr namespaces. Before emitting the
+nanosecond mtimes, symlinks, ACLs and all xattr namespaces. The shipping archive
+records zero regions of execution-image disk files as sparse extents. Their
+logical sizes and content hashes are unchanged; AMI extraction and subsequent
+cache copies avoid allocating and reading those zeros. Before emitting the
 shipping checksum the builder extracts the actual final archive and checks its
 flat-root digest against the unmodified materialization manifest. Worker
 extraction preserves the same metadata, and installation checks the copied XFS
@@ -142,7 +145,11 @@ destructive test expiry is not a normal retirement or durability policy.
 ## Pre-baked worker AMI
 
 The AMI contains Docker, XFS tools, AWS CLI, immutable runtime images, base
-artifacts and an optional execution-image cache. It contains no enrolled Runner
+artifacts and the original compressed worker bundle. Optional execution-image
+disks remain in that compressed archive; bootstrap extracts them sequentially
+onto XFS with sparse extents, avoiding expanded disk copies through cold EBS
+snapshot blocks. The cached archive is an immutable release input; Runner
+execution-image verification still applies before use. The AMI contains no enrolled Runner
 or gateway identity, registry credentials, Workspace disk or application data.
 Each new worker enrolls independently and receives a blank encrypted data disk.
 The enrollment CA is deployment-specific; rebuilding is required when changing

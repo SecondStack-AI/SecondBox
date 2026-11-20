@@ -22,6 +22,11 @@ test -x "$cache/install-worker.sh"
 test -x "$cache/verify-prebaked-worker.sh"
 "$cache/bin/secondbox-flat-root-digest" "$cache/artifacts/rootfs" "$cache/artifacts/materialization.json"
 docker image load --input "$cache/worker-images.tar"
+cp "$archive" "$cache/worker.tar.gz"
+if [[ -d $cache/execution-images ]]; then
+  printf 'archive\n' > "$cache/prebaked.execution-images"
+  rm -rf -- "$cache/execution-images"
+fi
 printf '%s\n' "$expected" > "$cache/prebaked.bundle.sha256"
 "$cache/verify-prebaked-worker.sh" "$cache" "$expected"
 [[ -z $(docker ps --all --quiet) ]] || { echo 'SecondBox pre-baked preparation unexpectedly created containers' >&2; exit 1; }

@@ -118,9 +118,9 @@ rm /srv/secondbox/reflink-probe
 if [[ $prebaked == false ]]; then
   docker image load --input "$bundle/worker-images.tar"
 fi
-if [[ -d $bundle/execution-images ]]; then
-  cp -an "$bundle/execution-images/." /srv/secondbox/state/execution-images/
-fi
+cache_mode=download
+if [[ $prebaked == true ]]; then cache_mode=prebaked; fi
+"$bundle/stage-worker-execution-cache.sh" "$bundle" /srv/secondbox/state "$cache_mode"
 chown -R 10002:10002 /srv/secondbox/state/execution-images /run/secondbox-image-fetcher /etc/secondbox/image-registry
 install -m 0600 "$bundle/runtime.env" /etc/secondbox/runtime.env
 install -m 0644 "$bundle/compose.yaml" /etc/secondbox/compose.yaml
