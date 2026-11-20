@@ -2,6 +2,8 @@ module github.com/SecondStack-AI/SecondBox
 
 go 1.26.10
 
+retract v0.32.3 // Withdrawn before publication: the worker AMI builder read console sealing proof after EC2 shutdown.
+
 retract v0.32.0 // Release qualification failed before publication; use v0.32.1, whose runtime artifact set is amd64-only.
 
 retract v0.7.0 // The public Go proxy cached an intermediate release-preparation commit; use v0.7.1.

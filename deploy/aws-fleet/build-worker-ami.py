@@ -177,25 +177,30 @@ rm -f /root/secondbox-seal-image.sh
 sync
 printf '%s\\n' '{seal_marker}' > /dev/console
 sync
+# EC2 console retrieval can be empty after shutdown. Leave time for the
+# provisioner to observe this seal and stop us; power off if it disappears.
+sleep 300
 systemctl poweroff
 '''
         encoded = base64.b64encode(seal.encode()).decode()
         command('set -eu\nprintf %s ' + quote(encoded) + ' | base64 -d > /root/secondbox-seal-image.sh\n' +
                 'chmod 0700 /root/secondbox-seal-image.sh\n' +
                 'systemd-run --unit secondbox-seal-image --no-block /bin/bash /root/secondbox-seal-image.sh')
-        stopped = wait_until(lambda: aws('ec2', 'describe-instances', '--instance-ids', instance)['Reservations'][0]['Instances'][0],
-                             lambda item: item['State']['Name'] == 'stopped', 'identity scrub and poweroff')
-        require_single_ami_root(stopped)
-        for attempt in range(12):
+        while True:
             console = aws('ec2', 'get-console-output', '--instance-id', instance, '--latest')
             if seal_marker in console.get('Output', ''):
+                (output_directory / 'seal-console.json').write_text(json.dumps(console, indent=2) + '\n')
                 receipt['sealAcknowledgedAt'] = datetime.now(timezone.utc).isoformat()
                 persist()
                 break
-            if attempt < 11:
-                time.sleep(5)
-        else:
-            raise RuntimeError('SecondBox AMI stopped without this build\'s seal acknowledgement; no image created')
+            current = aws('ec2', 'describe-instances', '--instance-ids', instance)['Reservations'][0]['Instances'][0]
+            if current['State']['Name'] not in {'running', 'pending'}:
+                raise RuntimeError('SecondBox AMI stopped without this build\'s seal acknowledgement; no image created')
+            time.sleep(5)
+        aws('ec2', 'stop-instances', '--instance-ids', instance)
+        stopped = wait_until(lambda: aws('ec2', 'describe-instances', '--instance-ids', instance)['Reservations'][0]['Instances'][0],
+                             lambda item: item['State']['Name'] == 'stopped', 'identity scrub and poweroff')
+        require_single_ami_root(stopped)
         image = aws('ec2', 'create-image', '--instance-id', instance, '--name', config['imageName'], '--no-reboot',
                     '--tag-specifications', json.dumps([{'ResourceType': kind, 'Tags': tags +
                         [{'Key':'secondstack.ai/bundle-sha256','Value':config['bundleSHA256']}]} for kind in ['image','snapshot']]))['ImageId']

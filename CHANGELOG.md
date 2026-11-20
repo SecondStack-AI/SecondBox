@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-## 0.32.3 - 2026-11-20
+### Fixed
+
+- AWS worker AMI preparation observes its fresh sealing acknowledgement before stopping the instance, so empty EC2 console output after shutdown no longer blocks imaging. The provisioning role now also needs `ec2:StopInstances` for owned builders. Version v0.32.3 was withdrawn before publication; its tag remains unchanged.
+
+## 0.32.3 - 2026-11-20 (withdrawn before publication)
 
 The AWS fleet reference can prepare identity-free worker AMIs and stage sparse execution caches. Public API v1, Runner protocol 8, migrations, standard Profile revisions and Firecracker bundles are unchanged from v0.32.2. See the [v0.32.3 release notes](docs/releases/v0.32.3.md).
 
