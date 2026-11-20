@@ -332,6 +332,7 @@ func materializeProduction(manifest ManifestV1, sourcePath, directory string, re
 	manifest.RunnerTrust.ServerPrivateKeyFile = absoluteReference(manifest.RunnerTrust.ServerPrivateKeyFile)
 	manifest.Applications.PlatformTokenFile = absoluteReference(manifest.Applications.PlatformTokenFile)
 	manifest.Deployment.WorkspaceArchiveConfigFile = absoluteReference(manifest.Deployment.WorkspaceArchiveConfigFile)
+	manifest.Deployment.WorkspaceArchiveAWSConfigDirectory = absoluteReference(manifest.Deployment.WorkspaceArchiveAWSConfigDirectory)
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
 		return "", err

@@ -31,6 +31,31 @@ mounts. Only the trusted control plane receives bucket authority. Its principal
 needs object read/write/delete and multipart abort permissions for the archive
 prefix, plus the bucket's encryption-key permissions where applicable.
 
+For a control host outside AWS, set
+`deployment.workspace_archive_aws_config_directory` to a private directory
+containing an AWS shared `config` file and only its archive credential-provider inputs. The
+directory is mounted read-only at `/run/secondbox-archive-aws` in the control
+plane only; it requires the archive configuration above. Use a real directory,
+owner read/execute permission and no group/other access. Own the directory and
+its private files with control-plane UID 65532 and make the helper executable
+by that UID. Do not mount an operator's entire AWS configuration directory.
+
+An IAM Roles Anywhere profile can use a checksum-pinned signing helper, its
+client certificate and private key in this directory:
+
+```ini
+[default]
+credential_process = /run/secondbox-archive-aws/aws_signing_helper credential-process --certificate /run/secondbox-archive-aws/client.crt --private-key /run/secondbox-archive-aws/client.key --trust-anchor-arn <trust-anchor-arn> --profile-arn <profile-arn> --role-arn <archive-role-arn>
+```
+
+Keep CA signing keys outside this directory. The AWS SDK refreshes expiring
+credentials through the process; periodically rewriting a static credentials
+file does not provide that contract. The binding disables EC2 metadata lookup
+on the non-AWS host. Configure and qualify the archive role independently from
+the fleet-controller role, including successful S3 access after the previous
+session expires. Preserve the provider configuration and certificate recovery
+materials outside generated Compose files; rendering recreates the binding.
+
 **Configure an incomplete-multipart-upload lifecycle rule before enabling the
 tier.** Interrupted or renewed uploads can leave uncommitted parts; deleting the
 final object does not remove them. Keep committed archive objects until

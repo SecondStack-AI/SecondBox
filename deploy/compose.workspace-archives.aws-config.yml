@@ -1,0 +1,12 @@
+services:
+  control-plane:
+    environment:
+      AWS_CONFIG_FILE: /run/secondbox-archive-aws/config
+      AWS_EC2_METADATA_DISABLED: 'true'
+    volumes:
+      - type: bind
+        source: ${SECONDBOX_WORKSPACE_ARCHIVE_AWS_CONFIG_HOST_PATH:?set SECONDBOX_WORKSPACE_ARCHIVE_AWS_CONFIG_HOST_PATH}
+        target: /run/secondbox-archive-aws
+        read_only: true
+        bind:
+          create_host_path: false

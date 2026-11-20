@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Archive signers on non-AWS control hosts can mount a private AWS shared configuration and renewable credential provider read-only without changing generated Compose files or giving bucket credentials to workers.
+
 ## 0.32.4 - 2026-11-20
 
 The AWS fleet reference can prepare identity-free worker AMIs and stage sparse execution caches. Public API v1, Runner protocol 8, migrations, standard Profile revisions and Firecracker bundles are unchanged from v0.32.2. See the [v0.32.4 release notes](docs/releases/v0.32.4.md).
