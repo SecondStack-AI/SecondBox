@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.32.5 - 2026-11-20
+
+Renewable archive credentials support non-AWS control hosts. This release also includes the AWS AMI/cache helpers from the unpublished v0.32.4 tag. Public API v1, Runner protocol 8, migrations, standard Profiles and Firecracker bundles remain unchanged from v0.32.2. See the [v0.32.5 release notes](docs/releases/v0.32.5.md).
+
 ### Added
 
 - Archive signers on non-AWS control hosts can mount a private AWS shared configuration and renewable credential provider read-only without changing generated Compose files or giving bucket credentials to workers.
@@ -9,8 +13,15 @@
 ### Fixed
 
 - Execution-image download failures retain the final Skopeo diagnostic instead of losing it behind layer-copy progress output.
+- Worker bundles exclude transient registry credentials and incomplete execution-cache records. Rebuild previously distributed bundles from a quiesced cache and revoke any registry credentials they included.
 
-## 0.32.4 - 2026-11-20
+### Upgrade notes
+
+- The worker bundle command requires the checksum-verified enrollment binary from the selected release between the enrollment CA and output-directory arguments.
+
+## 0.32.4 - 2026-11-20 (withdrawn before publication)
+
+AMD selected-image preparation qualification did not complete; no release assets were published. The tag is unchanged and its source changes are included in v0.32.5. The original retrieval failure remains unexplained.
 
 The AWS fleet reference can prepare identity-free worker AMIs and stage sparse execution caches. Public API v1, Runner protocol 8, migrations, standard Profile revisions and Firecracker bundles are unchanged from v0.32.2. See the [v0.32.4 release notes](docs/releases/v0.32.4.md).
 
@@ -29,7 +40,7 @@ The AWS fleet reference can prepare identity-free worker AMIs and stage sparse e
 
 ## 0.32.3 - 2026-11-20 (withdrawn before publication)
 
-Live AWS qualification found that the AMI builder read its sealing proof only after shutdown, when EC2 returned empty console output. The release was withdrawn before publication and the tag remains unchanged. Its AMI and cache changes ship in v0.32.4 with the corrected sealing handoff.
+Live AWS qualification found that the AMI builder read its sealing proof only after shutdown, when EC2 returned empty console output. The release was withdrawn before publication and the tag remains unchanged. Its AMI and cache changes are included in v0.32.5 with the corrected sealing handoff; the intervening v0.32.4 tag was also unpublished.
 
 ## 0.32.2 - 2026-11-19
 
