@@ -1,6 +1,8 @@
 """Fault-boundary tests for the worker AMI provisioning CLI; no AWS calls."""
 import importlib.util
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -36,6 +38,11 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
         self.launch_token = None
         self.ambiguous_launch = False
         self.recovery_reads = 0
+        self.seal_acknowledged = True
+        self.extra_base_disk = False
+        self.extra_builder_disk = False
+        self.interrupt_readiness = False
+        self.interrupt_termination = False
 
     def run_builder(self):
         config_path = self.root / 'config.json'
@@ -52,10 +59,15 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
         elif operation == 'describe-images':
             result = {'Images': [{'Architecture': 'x86_64', 'State': 'available',
                                   'OwnerId': self.config['baseAMIOwner'],
-                                  'PlatformDetails': 'Linux/UNIX', 'RootDeviceName': '/dev/sda1'}]}
+                                  'PlatformDetails': 'Linux/UNIX', 'RootDeviceName': '/dev/sda1',
+                                  'RootDeviceType': 'ebs',
+                                  'BlockDeviceMappings': [{'DeviceName': '/dev/sda1', 'Ebs': {'SnapshotId': 'snap-abcdef'}}] +
+                                      ([{'DeviceName': '/dev/sdf', 'Ebs': {'SnapshotId': 'snap-fedcba'}}] if self.extra_base_disk else [])}]}
         elif operation == 'describe-instances':
             if '--instance-ids' in arguments:
-                result = {'Reservations': [{'Instances': [{'InstanceId': 'i-abcdef', 'State': {'Name': 'stopped'}}]}]}
+                result = {'Reservations': [{'Instances': [{'InstanceId': 'i-abcdef', 'State': {'Name': 'stopped'},
+                    'BlockDeviceMappings': [{'DeviceName': '/dev/sda1', 'Ebs': {'VolumeId': 'vol-abcdef'}}] +
+                        ([{'DeviceName': '/dev/sdf', 'Ebs': {'VolumeId': 'vol-fedcba'}}] if self.extra_builder_disk else [])}]}]}
             elif any('Name=client-token,' in value for value in arguments):
                 self.assertIn('Name=client-token,Values=' + self.launch_token, arguments)
                 self.assertIn('Name=tag:secondstack.ai/fleet-ref,Values=test-fleet', arguments)
@@ -73,7 +85,12 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
                 raise subprocess.TimeoutExpired(arguments, 120)
             result = {'Instances': [{'InstanceId': 'i-abcdef'}]}
         elif operation == 'describe-instance-information':
+            if self.interrupt_readiness:
+                os.kill(os.getpid(), signal.SIGTERM)
             result = {'InstanceInformationList': [{'PingStatus': 'Online'}]}
+        elif operation == 'get-console-output':
+            receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+            result = {'Output': 'SecondBox AMI sealed: ' + (receipt['sealToken'] if self.seal_acknowledged else '0' * 32)}
         elif operation == 'send-command':
             self.parameters.append(json.loads(arguments[arguments.index('--parameters') + 1]))
             result = {'Command': {'CommandId': 'command-' + str(len(self.parameters))}}
@@ -81,6 +98,8 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
             result = {'CommandInvocations': [{'Status': 'Success'}]}
         elif operation == 'create-image':
             result = {'ImageId': 'ami-fedcba'}
+        elif operation == 'terminate-instances' and self.interrupt_termination:
+            os.kill(os.getpid(), signal.SIGTERM)
         elif operation not in {'put-object', 'terminate-instances'}:
             self.fail('Unexpected AWS call: ' + str(arguments))
         return subprocess.CompletedProcess(arguments, 0, json.dumps(result), '')
@@ -115,6 +134,44 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
         seconds = int(self.parameters[0]['executionTimeout'][0])
         self.assertGreater(seconds, 600)
         self.assertLessEqual(seconds, self.config['maximumBuildSeconds'])
+        receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+        self.assertEqual(receipt['state'], 'available')
+        self.assertIn('sealAcknowledgedAt', receipt)
+        self.assertTrue(receipt['builderTerminationRequested'])
+
+    def test_base_with_extra_ebs_disk_is_rejected_before_launch(self):
+        self.extra_base_disk = True
+        with self.assertRaisesRegex(ValueError, 'single EBS root'):
+            self.run_builder()
+        self.assertNotIn('run-instances', [operation for _, operation, _ in self.calls])
+
+    def test_builder_with_extra_attached_disk_is_never_imaged(self):
+        self.extra_builder_disk = True
+        with self.assertRaisesRegex(ValueError, 'single EBS root'):
+            self.run_builder()
+        self.assertNotIn('create-image', [operation for _, operation, _ in self.calls])
+        receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+        self.assertTrue(receipt['builderTerminationRequested'])
+
+    def test_stopped_without_seal_acknowledgement_is_never_imaged(self):
+        self.seal_acknowledged = False
+        with self.assertRaisesRegex(RuntimeError, 'seal acknowledgement'):
+            self.run_builder()
+        self.assertNotIn('create-image', [operation for _, operation, _ in self.calls])
+        receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+        self.assertTrue(receipt['builderTerminationRequested'])
+
+    def test_sigterm_uses_receipted_builder_cleanup(self):
+        self.interrupt_readiness = True
+        with self.assertRaisesRegex(InterruptedError, 'interrupted by signal'):
+            self.run_builder()
+        receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+        self.assertEqual(receipt['state'], 'failed')
+        self.assertTrue(receipt['builderTerminationRequested'])
+
+    def test_first_sigterm_during_cleanup_does_not_cancel_termination(self):
+        self.interrupt_termination = True
+        self.run_builder()
         receipt = json.loads((self.root / 'output/ami-build.json').read_text())
         self.assertEqual(receipt['state'], 'available')
         self.assertTrue(receipt['builderTerminationRequested'])

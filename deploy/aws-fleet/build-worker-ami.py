@@ -9,12 +9,19 @@ import json
 import os
 import re
 import secrets
+import signal
 import shlex
 import subprocess
 import time
 
 
-def build_worker_ami(config_path, output_directory):
+def require_single_ami_root(resource):
+    mappings = resource.get('BlockDeviceMappings', [])
+    if len(mappings) != 1 or mappings[0].get('DeviceName') != '/dev/sda1' or 'Ebs' not in mappings[0]:
+        raise ValueError('SecondBox AMI requires a single EBS root at /dev/sda1 and no other disks')
+
+
+def _build_worker_ami(config_path, output_directory):
     os.umask(0o077)
     config = json.loads(config_path.read_text())
     patterns = {
@@ -88,6 +95,9 @@ def build_worker_ami(config_path, output_directory):
     if (base['Architecture'] != 'x86_64' or base['State'] != 'available' or
             base['OwnerId'] != config['baseAMIOwner'] or base['PlatformDetails'] != 'Linux/UNIX'):
         raise ValueError('SecondBox AMI source must be available Linux amd64 from the explicit owner')
+    if base.get('RootDeviceType') != 'ebs' or base.get('RootDeviceName') != '/dev/sda1':
+        raise ValueError('SecondBox AMI source requires a single EBS root at /dev/sda1')
+    require_single_ami_root(base)
     receipt['baseImage'] = base
     persist()
     owned = aws('ec2', 'describe-instances', '--filters',
@@ -151,7 +161,10 @@ printf '%s\\n' {quote(config['bundleSHA256'])} > /var/lib/secondbox-image-build/
                 '\n/var/lib/secondbox-bootstrap/verify-prebaked-worker.sh /var/lib/secondbox-bootstrap ' + quote(config['bundleSHA256']) +
                 '\ntest ! -e /etc/secondbox/runner\ntest ! -e /srv/secondbox\ntest -z "$(docker ps -aq)"\ndf -h /')
         # Return the SSM receipt first, then stop/scrub its own identity before powering off.
-        seal = '''#!/bin/bash
+        receipt['sealToken'] = secrets.token_hex(16)
+        persist()
+        seal_marker = 'SecondBox AMI sealed: ' + receipt['sealToken']
+        seal = f'''#!/bin/bash
 set -euo pipefail
 sleep 5
 for unit in amazon-ssm-agent.service snap.amazon-ssm-agent.amazon-ssm-agent.service; do
@@ -162,14 +175,27 @@ rm -f /etc/ssh/ssh_host_*
 cloud-init clean --logs --machine-id --seed
 rm -f /root/secondbox-seal-image.sh
 sync
+printf '%s\\n' '{seal_marker}' > /dev/console
+sync
 systemctl poweroff
 '''
         encoded = base64.b64encode(seal.encode()).decode()
         command('set -eu\nprintf %s ' + quote(encoded) + ' | base64 -d > /root/secondbox-seal-image.sh\n' +
                 'chmod 0700 /root/secondbox-seal-image.sh\n' +
                 'systemd-run --unit secondbox-seal-image --no-block /bin/bash /root/secondbox-seal-image.sh')
-        wait_until(lambda: aws('ec2', 'describe-instances', '--instance-ids', instance)['Reservations'][0]['Instances'][0],
-                   lambda item: item['State']['Name'] == 'stopped', 'identity scrub and poweroff')
+        stopped = wait_until(lambda: aws('ec2', 'describe-instances', '--instance-ids', instance)['Reservations'][0]['Instances'][0],
+                             lambda item: item['State']['Name'] == 'stopped', 'identity scrub and poweroff')
+        require_single_ami_root(stopped)
+        for attempt in range(12):
+            console = aws('ec2', 'get-console-output', '--instance-id', instance, '--latest')
+            if seal_marker in console.get('Output', ''):
+                receipt['sealAcknowledgedAt'] = datetime.now(timezone.utc).isoformat()
+                persist()
+                break
+            if attempt < 11:
+                time.sleep(5)
+        else:
+            raise RuntimeError('SecondBox AMI stopped without this build\'s seal acknowledgement; no image created')
         image = aws('ec2', 'create-image', '--instance-id', instance, '--name', config['imageName'], '--no-reboot',
                     '--tag-specifications', json.dumps([{'ResourceType': kind, 'Tags': tags +
                         [{'Key':'secondstack.ai/bundle-sha256','Value':config['bundleSHA256']}]} for kind in ['image','snapshot']]))['ImageId']
@@ -184,6 +210,7 @@ systemctl poweroff
         receipt.update(state='failed', error=str(error)); persist()
         raise
     finally:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if instance is None and receipt.get('launchAttempted'):
             # A CLI timeout can hide a successful launch. Recover only this request,
             # with bounded reads outside the build deadline reserved for cleanup.
@@ -217,6 +244,19 @@ systemctl poweroff
                 receipt['builderCleanupError'] = result.stderr; persist()
                 raise RuntimeError('SecondBox AMI builder cleanup failed: ' + instance)
             receipt['builderTerminationRequested'] = True; persist()
+
+
+def build_worker_ami(config_path, output_directory):
+    def interrupt_worker_ami_build(signal_number, _frame):
+        # Keep the bounded cleanup path alive if a supervisor repeats SIGTERM.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise InterruptedError('SecondBox AMI build interrupted by signal ' + str(signal_number))
+
+    previous_handler = signal.signal(signal.SIGTERM, interrupt_worker_ami_build)
+    try:
+        return _build_worker_ami(config_path, output_directory)
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
 
 
 if __name__ == '__main__':

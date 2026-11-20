@@ -37,10 +37,26 @@ printf 'SECONDBOX_RUNNER_IMAGE=%s\nAGENT_RUNNER_GATEWAY_IMAGE=%s\nSECONDBOX_GVIS
 bundle_files=(bin artifacts enrollment-ca.pem install-worker.sh verify-prebaked-worker.sh stage-worker-execution-cache.sh worker-images.tar compose.yaml runtime.env)
 if [[ $# == 7 ]]; then
   test -d "$7"
-  # Inputs may already be fully allocated. Scan zeros rather than reflink-clone
-  # them, otherwise tar will not recognize these disk files as sparse.
-  cp --reflink=never --sparse=always -a "$7" "$output/execution-images"
-  rm -rf "$output/execution-images/tmp"
+  mkdir -p "$output/execution-images"
+  # Export only immutable bundle inputs. Cache siblings and unlisted files can
+  # contain registry credentials, partial downloads and operation authority.
+  cache_files=(kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-manifest.json
+    secondbox-rootfs-contract.json rootfs-debian-packages.lock rootfs-python.freeze
+    rootfs-debian-license-inventory.json rootfs-python-license-inventory.json
+    runtime-manifest.json toolchain-manifest.json manifest.json SHA256SUMS)
+  for cached_image in "$7"/*; do
+    digest=${cached_image##*/}
+    [[ $digest =~ ^[a-f0-9]{64}$ ]] || continue
+    [[ -d $cached_image && ! -L $cached_image ]] || { echo 'Worker bundle execution cache entry must be a real digest directory' >&2; exit 1; }
+    destination="$output/execution-images/$digest"
+    mkdir -p "$destination"
+    for asset in "${cache_files[@]}"; do
+      [[ -f $cached_image/$asset && ! -L $cached_image/$asset ]] || { echo "Worker bundle execution cache is missing regular artifact $digest/$asset" >&2; exit 1; }
+      # Scan dense zero regions instead of reflink-cloning their allocation.
+      cp --reflink=never --sparse=always -a "$cached_image/$asset" "$destination/$asset"
+    done
+    (cd "$destination" && sha256sum --check --strict SHA256SUMS)
+  done
   bundle_files+=(execution-images)
 fi
 # Execution-image disks include large zero regions. Preserve them as sparse

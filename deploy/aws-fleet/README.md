@@ -92,6 +92,12 @@ CloudFormation `WorkerBundlePrefix` is that single component; `WorkerBundleKey`
 is relative to it (for example `artifacts/worker.tar.gz`). The worker role can
 read exactly this object. No private signing keys belong in the bundle.
 
+Supply a quiesced cache or offline copy. The builder exports only complete
+digest directories and their fixed execution-bundle artifact files, verifies
+their checksums, and excludes registry authentication, operation records,
+preparation retention markers and partial downloads. It never packages the
+whole mutable Runner cache.
+
 The builder requires root and GNU tar with pax, ACL and xattr support. It must
 read every materialized artifact, including root-owned files
 such as `etc/shadow` and private home directories. Run it with root access to
@@ -117,6 +123,11 @@ flat-root digest against the unmodified materialization manifest. Worker
 extraction preserves the same metadata, and installation checks the copied XFS
 artifact again. A metadata mismatch fails the build or worker startup; it never
 rewrites the pinned materialization digest.
+
+Worker bootstrap stages the execution cache privately, verifies checksums and
+publishes complete digest directories atomically under the Runner's digest
+lock. An interrupted extraction cannot publish a partial image. Retries retain
+existing image directories and live lock inodes.
 
 Deploy `fleet.cloudformation.yaml` with an Ubuntu 24.04 amd64 AMI, dedicated VPC
 and public subnets (or supply equivalent outbound connectivity), explicit ports
@@ -157,6 +168,7 @@ it or any pinned bundle input. An AMI is a cache, not a Workspace recovery set.
 
 Copy `ami-build.example.json` outside the checkout and replace every placeholder.
 Select an available Ubuntu 24.04 amd64 base AMI and its expected owner explicitly.
+The base must have only one EBS root at `/dev/sda1`, with no other disk mappings.
 Upload the verified bundle to a private immutable object key. Supply a dedicated
 builder instance profile with `AmazonSSMManagedInstanceCore` and `s3:GetObject`
 for only the bundle and preparer keys. Use a security group with no inbound
@@ -184,12 +196,22 @@ of only that request. If AWS cannot confirm cleanup, inspect the recorded token
 and ownership tags. Failed image/snapshot outputs are
 retained for inspection and must be inventoried and removed by the operator.
 
+Before imaging, the builder confirms that the stopped instance still has only
+its root disk and requires a per-build nonce acknowledgement written to the
+serial console after identity scrubbing. An unrelated stop or a stale console
+acknowledgement does not satisfy this check. Catchable SIGTERM follows the same
+receipted cleanup path; after SIGKILL or host loss, inspect the receipt and AWS
+inventory explicitly.
+
 The provisioning role needs EC2 describe, scoped launch/tag/terminate/create-image
 authority, `iam:PassRole` for only the builder profile's role, `s3:PutObject` for
 the preparer key and SSM RunShellScript on only owned builders. It needs no IAM
 write authority or archive-bucket credentials. Existing account-wide SSM
 associations may run on the builder; account operators must account for these
 when assessing AMI provenance and package-manager contention.
+
+The provisioner also needs `ec2:GetConsoleOutput` on its owned builder instances
+to verify the seal acknowledgement; worker roles do not need that permission.
 
 Deploy `fleet.cloudformation.yaml` with `WorkerAMI` set to the available result,
 and both `PrebakedWorkerBundleSHA256` and `WorkerBundleSHA256` set to the bundle's
