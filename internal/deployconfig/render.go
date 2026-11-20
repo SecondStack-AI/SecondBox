@@ -258,8 +258,9 @@ func Inspect(manifestPath string) ([]byte, error) {
 		"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY": true,
 	}
 	secretPathNames := map[string]bool{
-		"SECONDBOX_RUNNER_PKI_HOST_DIR":      true,
-		"SECONDBOX_RUNNER_IDENTITY_HOST_DIR": true,
+		"SECONDBOX_WORKSPACE_ARCHIVE_AWS_CONFIG_HOST_PATH": true,
+		"SECONDBOX_RUNNER_PKI_HOST_DIR":                    true,
+		"SECONDBOX_RUNNER_IDENTITY_HOST_DIR":               true,
 	}
 	for name, value := range resolved.Environment {
 		if secretNames[name] {

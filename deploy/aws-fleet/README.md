@@ -39,7 +39,11 @@ shared worker bundle and from the persisted certificate receipt.
 The controller needs private connectivity to PostgreSQL, SecondBox and the
 issuer. `controller-policy.example.json` describes its runtime AWS policy;
 replace every angle-bracket placeholder and attach it to the controller's
-existing instance/task role. Role trust and provisioning belong to the operator.
+existing instance/task role when hosted in AWS. On a non-AWS host, configure an
+IAM Roles Anywhere shared profile with `credential_process` instead. The
+control plane needs its own archive-signing role and the
+[archive credential binding](../../docs/operations/workspace-storage-tiering.md).
+Role trust and provisioning belong to the operator.
 The runtime role needs no IAM write, PassRole, AMI creation or S3 access.
 Its AWS principal needs DescribeAutoScalingGroups, DescribeInstances,
 SetDesiredCapacity and TerminateInstanceInAutoScalingGroup for its exact owned

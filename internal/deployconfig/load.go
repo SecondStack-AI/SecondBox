@@ -325,6 +325,22 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		put("SECONDBOX_WORKSPACE_ARCHIVE_CONFIG_FILE", "/run/secondbox-archive/config.json")
 		composeFiles = append(composeFiles, "deploy/compose.workspace-archives.yml")
 	}
+	if deployment.WorkspaceArchiveAWSConfigDirectory != "" {
+		if deployment.WorkspaceArchiveConfigFile == "" {
+			return ResolvedDeployment{}, manifestError("deployment.workspace_archive_aws_config_directory requires workspace_archive_config_file", nil)
+		}
+		awsDirectory := deployment.WorkspaceArchiveAWSConfigDirectory
+		if !filepath.IsAbs(awsDirectory) {
+			awsDirectory = filepath.Join(base, awsDirectory)
+		}
+		awsDirectory = filepath.Clean(awsDirectory)
+		info, err := os.Lstat(awsDirectory)
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o500 != 0o500 {
+			return ResolvedDeployment{}, manifestError("deployment.workspace_archive_aws_config_directory must name a private readable directory", err)
+		}
+		put("SECONDBOX_WORKSPACE_ARCHIVE_AWS_CONFIG_HOST_PATH", awsDirectory)
+		composeFiles = append(composeFiles, "deploy/compose.workspace-archives.aws-config.yml")
+	}
 	if deployment.ComposeBackendCIDR != "" {
 		composeFiles = append(composeFiles, "deploy/compose.explicit-network.yml")
 	}
