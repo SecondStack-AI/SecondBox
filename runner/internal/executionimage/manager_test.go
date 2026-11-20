@@ -20,6 +20,30 @@ import (
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
+func TestExecutionImageDownloadFailureRetainsFinalDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	skopeo := filepath.Join(root, "skopeo")
+	const diagnostic = "fatal: registry returned 503 while reading layer"
+	script := "#!/bin/sh\nprintf '%070000d' 0\nprintf '\\n" + diagnostic + "\\n' >&2\nexit 1\n"
+	if err := os.WriteFile(skopeo, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{skopeoPath: skopeo, maximumDownloadBytes: 1 << 20}
+	output, err := manager.downloadArchive(t.Context(), filepath.Join(root, "image.tar"), nil)
+	if err == nil {
+		t.Fatal("failed image copy returned success")
+	}
+	if len(output) > 64<<10 {
+		t.Fatalf("download output retained %d bytes", len(output))
+	}
+	if text := boundedOutput(output); len(text) > 1024 || !strings.HasSuffix(text, diagnostic) {
+		t.Fatalf("download failure lost final diagnostic: length=%d suffix=%q", len(text), text[max(0, len(text)-80):])
+	}
+	if text := boundedOutput([]byte(" short failure\n")); text != "short failure" {
+		t.Fatalf("short download diagnostic changed: %q", text)
+	}
+}
+
 func TestVerifiedArtifactsRetainIdentityAcrossPublication(t *testing.T) {
 	staging := t.TempDir()
 	for _, name := range []string{"kernel", "rootfs.ext4", "shared.img"} {
