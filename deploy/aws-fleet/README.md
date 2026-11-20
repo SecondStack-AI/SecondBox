@@ -196,14 +196,17 @@ of only that request. If AWS cannot confirm cleanup, inspect the recorded token
 and ownership tags. Failed image/snapshot outputs are
 retained for inspection and must be inventoried and removed by the operator.
 
-Before imaging, the builder confirms that the stopped instance still has only
-its root disk and requires a per-build nonce acknowledgement written to the
-serial console after identity scrubbing. An unrelated stop or a stale console
-acknowledgement does not satisfy this check. Catchable SIGTERM follows the same
+Before imaging, the builder observes a per-build nonce acknowledgement written
+to the serial console after identity scrubbing, then requests an EC2 stop and
+confirms that the stopped instance still has only its root disk. Console output
+is read while the instance runs because EC2 can return empty output after
+shutdown. The sealed guest powers off after five minutes if the provisioner
+disappears. An unrelated stop or a stale console acknowledgement does not
+satisfy this check. Catchable SIGTERM follows the same
 receipted cleanup path; after SIGKILL or host loss, inspect the receipt and AWS
 inventory explicitly.
 
-The provisioning role needs EC2 describe, scoped launch/tag/terminate/create-image
+The provisioning role needs EC2 describe, scoped launch/tag/stop/terminate/create-image
 authority, `iam:PassRole` for only the builder profile's role, `s3:PutObject` for
 the preparer key and SSM RunShellScript on only owned builders. It needs no IAM
 write authority or archive-bucket credentials. Existing account-wide SSM
