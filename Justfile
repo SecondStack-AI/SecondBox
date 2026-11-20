@@ -71,6 +71,9 @@ test-microsandbox-macos:
 test-deployment:
     go test ./tests/deployment -count=1
 
+test-aws-worker-ami:
+    uv run --no-project tests/deployment/aws_worker_ami_test.py
+
 test-sdk-packages:
     scripts/test-sdk-packages.sh
 

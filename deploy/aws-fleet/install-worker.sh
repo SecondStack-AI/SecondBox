@@ -2,12 +2,13 @@
 set -euo pipefail
 umask 077
 
-region= enrollment_url= fleet=
+region= enrollment_url= fleet= prebaked=false
 while (($#)); do
   case "$1" in
     --region) region=$2; shift 2 ;;
     --enrollment-url) enrollment_url=$2; shift 2 ;;
     --fleet) fleet=$2; shift 2 ;;
+    --prebaked) prebaked=true; shift ;;
     *) echo "SecondBox worker bootstrap: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -16,6 +17,10 @@ done
 }
 [[ $(id -u) == 0 ]] || { echo 'SecondBox worker bootstrap requires root' >&2; exit 1; }
 bundle=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [[ $prebaked == true ]]; then
+  [[ -f $bundle/prebaked.bundle.sha256 ]] || { echo 'SecondBox worker bootstrap has no pre-baked bundle identity' >&2; exit 1; }
+  "$bundle/verify-prebaked-worker.sh" "$bundle" "$(cat "$bundle/prebaked.bundle.sha256")"
+fi
 root_source=$(findmnt -n -o SOURCE /)
 root_parent=$(lsblk -ndo PKNAME "$root_source")
 [[ -n $root_parent ]] || root_parent=$(basename "$root_source")
@@ -110,10 +115,12 @@ fi
 "$bundle/bin/secondbox-flat-root-digest" /srv/secondbox/artifacts/rootfs /srv/secondbox/artifacts/materialization.json
 cp --reflink=always /srv/secondbox/artifacts/materialization.json /srv/secondbox/reflink-probe
 rm /srv/secondbox/reflink-probe
-docker image load --input "$bundle/worker-images.tar"
-if [[ -d $bundle/execution-images ]]; then
-  cp -an "$bundle/execution-images/." /srv/secondbox/state/execution-images/
+if [[ $prebaked == false ]]; then
+  docker image load --input "$bundle/worker-images.tar"
 fi
+cache_mode=download
+if [[ $prebaked == true ]]; then cache_mode=prebaked; fi
+"$bundle/stage-worker-execution-cache.sh" "$bundle" /srv/secondbox/state "$cache_mode"
 chown -R 10002:10002 /srv/secondbox/state/execution-images /run/secondbox-image-fetcher /etc/secondbox/image-registry
 install -m 0600 "$bundle/runtime.env" /etc/secondbox/runtime.env
 install -m 0644 "$bundle/compose.yaml" /etc/secondbox/compose.yaml

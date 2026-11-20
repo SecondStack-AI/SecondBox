@@ -51,6 +51,11 @@ Parameters:
   WorkerBundleSHA256:
     Type: String
     AllowedPattern: '[a-f0-9]{64}'
+  PrebakedWorkerBundleSHA256:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[a-f0-9]{64}$'
+    Description: Opt in to an AMI prepared with this exact bundle SHA256. Empty selects download bootstrap.
   EnrollmentURL:
     Type: String
     AllowedPattern: 'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9./-]*)?'
@@ -73,6 +78,12 @@ Parameters:
     Description: Optional destructive qualification expiry in UTC, e.g. 2026-11-19T03:00:00. Leave empty for production. Expiry stops workers regardless of archival and retains data volumes.
 Conditions:
   QualificationExpiryEnabled: !Not [!Equals [!Ref ExpiresAt, '']]
+  PrebakedWorkerEnabled: !Not [!Equals [!Ref PrebakedWorkerBundleSHA256, '']]
+Rules:
+  MatchingPrebakedBundle:
+    Assertions:
+      - Assert: !Or [!Equals [!Ref PrebakedWorkerBundleSHA256, ''], !Equals [!Ref PrebakedWorkerBundleSHA256, !Ref WorkerBundleSHA256]]
+        AssertDescription: The pre-baked AMI and worker bundle must use the same SHA256.
 Resources:
   WorkerRole:
     Type: AWS::IAM::Role
@@ -141,25 +152,37 @@ Resources:
               - {Key: secondstack.ai/fleet-ref, Value: !Ref FleetRef}
               - {Key: secondbox-fleet, Value: !Ref FleetName}
         UserData:
-          Fn::Base64: !Sub |
-            #!/bin/bash
-            set -euo pipefail
-            umask 077
-            export DEBIAN_FRONTEND=noninteractive
-            install -d -m 0700 /var/lib/secondbox-bootstrap
-            export TMPDIR=/var/lib/secondbox-bootstrap
-            sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
-            apt-get update
-            apt-get install -y ca-certificates curl unzip docker.io docker-compose-v2 xfsprogs
-            curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /var/lib/secondbox-bootstrap/awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.38.0.zip
-            printf '%s  %s\n' cb037d35cca5cefc3eb89ebabc471a0b4e4fe44135b72228c7eb0da2d2fae9f6 /var/lib/secondbox-bootstrap/awscliv2.zip | sha256sum --check --status
-            unzip -q -o /var/lib/secondbox-bootstrap/awscliv2.zip -d /var/lib/secondbox-bootstrap
-            /var/lib/secondbox-bootstrap/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
-            /usr/local/bin/aws s3 cp 's3://${WorkerBundleBucket}/${WorkerBundlePrefix}/${WorkerBundleKey}' /var/lib/secondbox-bootstrap/worker.tar.gz --region '${AWS::Region}' --only-show-errors
-            printf '%s  %s\n' '${WorkerBundleSHA256}' /var/lib/secondbox-bootstrap/worker.tar.gz | sha256sum --check --status
-            tar --extract --gzip --same-owner --same-permissions --numeric-owner --xattrs --xattrs-include='*' --acls --delay-directory-restore --file /var/lib/secondbox-bootstrap/worker.tar.gz --directory /var/lib/secondbox-bootstrap
-            test -x /var/lib/secondbox-bootstrap/install-worker.sh
-            exec /var/lib/secondbox-bootstrap/install-worker.sh --region '${AWS::Region}' --enrollment-url '${EnrollmentURL}' --fleet '${FleetName}'
+          Fn::Base64:
+            Fn::If:
+              - PrebakedWorkerEnabled
+              - !Sub |
+                  #!/bin/bash
+                  set -euo pipefail
+                  umask 077
+                  export TMPDIR=/var/lib/secondbox-bootstrap/tmp
+                  test -x /var/lib/secondbox-bootstrap/verify-prebaked-worker.sh
+                  /var/lib/secondbox-bootstrap/verify-prebaked-worker.sh /var/lib/secondbox-bootstrap '${WorkerBundleSHA256}'
+                  exec /var/lib/secondbox-bootstrap/install-worker.sh --prebaked --region '${AWS::Region}' --enrollment-url '${EnrollmentURL}' --fleet '${FleetName}'
+              - !Sub |
+                  #!/bin/bash
+                  set -euo pipefail
+                  umask 077
+                  test ! -e /var/lib/secondbox-bootstrap/prebaked.bundle.sha256
+                  export DEBIAN_FRONTEND=noninteractive
+                  install -d -m 0700 /var/lib/secondbox-bootstrap
+                  export TMPDIR=/var/lib/secondbox-bootstrap
+                  sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+                  apt-get update
+                  apt-get install -y ca-certificates curl unzip docker.io docker-compose-v2 xfsprogs
+                  curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /var/lib/secondbox-bootstrap/awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.38.0.zip
+                  printf '%s  %s\n' cb037d35cca5cefc3eb89ebabc471a0b4e4fe44135b72228c7eb0da2d2fae9f6 /var/lib/secondbox-bootstrap/awscliv2.zip | sha256sum --check --status
+                  unzip -q -o /var/lib/secondbox-bootstrap/awscliv2.zip -d /var/lib/secondbox-bootstrap
+                  /var/lib/secondbox-bootstrap/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
+                  /usr/local/bin/aws s3 cp 's3://${WorkerBundleBucket}/${WorkerBundlePrefix}/${WorkerBundleKey}' /var/lib/secondbox-bootstrap/worker.tar.gz --region '${AWS::Region}' --only-show-errors
+                  printf '%s  %s\n' '${WorkerBundleSHA256}' /var/lib/secondbox-bootstrap/worker.tar.gz | sha256sum --check --status
+                  tar --extract --gzip --same-owner --same-permissions --numeric-owner --xattrs --xattrs-include='*' --acls --delay-directory-restore --file /var/lib/secondbox-bootstrap/worker.tar.gz --directory /var/lib/secondbox-bootstrap
+                  test -x /var/lib/secondbox-bootstrap/install-worker.sh
+                  exec /var/lib/secondbox-bootstrap/install-worker.sh --region '${AWS::Region}' --enrollment-url '${EnrollmentURL}' --fleet '${FleetName}'
   Workers:
     Type: AWS::AutoScaling::AutoScalingGroup
     UpdatePolicy:

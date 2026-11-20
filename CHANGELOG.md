@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- AWS Code fleets can boot from an explicitly pinned, identity-free worker AMI with preloaded runtime images and a sparse execution cache. The reference includes a bounded AMI builder, cache verification and controller IAM policy; every worker still enrolls independently and restores Workspaces from the configured archive tier.
+
 ## 0.32.2 - 2026-11-19
 
 The same code as v0.32.1, with the Linux arm64 runtime artifact set restored. Deployments already on v0.32.1 need no update. See the [v0.32.2 release notes](docs/releases/v0.32.2.md).
