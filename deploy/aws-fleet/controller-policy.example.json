@@ -1,0 +1,40 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ObserveFleetCapacityAndVolumes",
+      "Effect": "Allow",
+      "Action": [
+        "autoscaling:DescribeAutoScalingGroups",
+        "ec2:DescribeInstances",
+        "ec2:DescribeVolumes"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReconcileOnlyOwnedWorkerGroup",
+      "Effect": "Allow",
+      "Action": [
+        "autoscaling:SetDesiredCapacity",
+        "autoscaling:TerminateInstanceInAutoScalingGroup"
+      ],
+      "Resource": "arn:<PARTITION>:autoscaling:<REGION>:<ACCOUNT_ID>:autoScalingGroup:*:autoScalingGroupName/<FLEET_NAME>",
+      "Condition": {
+        "StringEquals": {
+          "autoscaling:ResourceTag/secondstack.ai/fleet-ref": "<FLEET_REF>"
+        }
+      }
+    },
+    {
+      "Sid": "RemoveOnlyOwnedRetiredWorkerVolumes",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteVolume",
+      "Resource": "arn:<PARTITION>:ec2:<REGION>:<ACCOUNT_ID>:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/secondstack.ai/fleet-ref": "<FLEET_REF>"
+        }
+      }
+    }
+  ]
+}

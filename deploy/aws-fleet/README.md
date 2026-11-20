@@ -37,7 +37,11 @@ returned only after EC2/STS enrollment verification; it is excluded from the
 shared worker bundle and from the persisted certificate receipt.
 
 The controller needs private connectivity to PostgreSQL, SecondBox and the
-issuer. Its AWS principal needs DescribeAutoScalingGroups, DescribeInstances,
+issuer. `controller-policy.example.json` describes its runtime AWS policy;
+replace every angle-bracket placeholder and attach it to the controller's
+existing instance/task role. Role trust and provisioning belong to the operator.
+The runtime role needs no IAM write, PassRole, AMI creation or S3 access.
+Its AWS principal needs DescribeAutoScalingGroups, DescribeInstances,
 SetDesiredCapacity and TerminateInstanceInAutoScalingGroup for its exact owned
 ASG, plus DescribeVolumes/DeleteVolume for receipted, tagged retired-worker
 volumes. The ASG and instance ownership tag is
@@ -74,11 +78,14 @@ base artifact and optionally prepare the exact Code execution-image cache.
 ```sh
 deploy/aws-fleet/build-worker-bundle.sh \
   candidate-runner candidate-gateway /persistent/gvisor-artifacts \
-  /etc/secondbox-fleet/enrollment-ca.pem /persistent/worker-bundle \
+  /etc/secondbox-fleet/enrollment-ca.pem /persistent/secondbox-fleet-enroll /persistent/worker-bundle \
   /persistent/prewarmed-execution-images
 ```
 
-The last argument is optional. Copying a prepared cache does not bypass Runner
+Use the checksum-verified Linux amd64 enrollment binary from the same release
+as the control plane and Runner. The builder prints its version; it does not
+build an enrollment client with a development identity. The last argument is
+optional. Copying a prepared cache does not bypass Runner
 execution-image verification. The printed SHA256 pins the whole bundle. Upload
 `worker-bundle.tar.gz` to a private S3 bucket beneath a run-owned prefix. The
 CloudFormation `WorkerBundlePrefix` is that single component; `WorkerBundleKey`
@@ -92,7 +99,7 @@ those inputs. Preserve their numeric owners and modes; changing artifact
 permissions to make a normal-user copy succeed changes the pinned image.
 For an isolated build, use a short-lived root container from a trusted build
 image containing the pinned Go toolchain, Bash, GNU tar and Docker CLI. Mount the source,
-materialized artifacts, enrollment CA and optional prepared cache read-only;
+materialized artifacts, enrollment binary/CA and optional prepared cache read-only;
 mount a task-specific persistent output/cache directory read-write and the
 Docker socket for the builder's image inspect/save commands. Run the same
 `build-worker-bundle.sh` command inside that container with these mounted paths.
@@ -123,7 +130,7 @@ The pin was verified against its detached signature and the AWS CLI Team key
 published in the AWS install guide (fingerprint
 `FB5DB77FD5C118B80511ADA8A6310ACC4672475C`). Downloads, extraction and `TMPDIR`
 stay in `/var/lib/secondbox-bootstrap` on persistent root storage.
-A pre-baked AMI can remove that cold-start work after qualification.
+Alternatively, explicitly select the pre-baked AMI workflow below.
 Production deployments leave `ExpiresAt` empty (the default). No expiry Lambda,
 schedule or expiry IAM roles are then created. Disposable qualification runs
 can opt in by supplying a UTC timestamp such as `2026-11-19T03:00:00`; that
@@ -131,6 +138,78 @@ creates the one-time spend-bound shutdown. It removes scale-in protection and
 requests zero workers even if archival or execution is active. It preserves
 retained data volumes, so inventory and cleanup remain required. This
 destructive test expiry is not a normal retirement or durability policy.
+
+## Pre-baked worker AMI
+
+The AMI contains Docker, XFS tools, AWS CLI, immutable runtime images, base
+artifacts and an optional execution-image cache. It contains no enrolled Runner
+or gateway identity, registry credentials, Workspace disk or application data.
+Each new worker enrolls independently and receives a blank encrypted data disk.
+The enrollment CA is deployment-specific; rebuilding is required when changing
+it or any pinned bundle input. An AMI is a cache, not a Workspace recovery set.
+
+Copy `ami-build.example.json` outside the checkout and replace every placeholder.
+Select an available Ubuntu 24.04 amd64 base AMI and its expected owner explicitly.
+Upload the verified bundle to a private immutable object key. Supply a dedicated
+builder instance profile with `AmazonSSMManagedInstanceCore` and `s3:GetObject`
+for only the bundle and preparer keys. Use a security group with no inbound
+rules and outbound HTTPS/DNS, plus outbound connectivity to Ubuntu, AWS CLI,
+S3 and Systems Manager. The builder never needs controller or enrollment access.
+
+```sh
+export TMPDIR=/persistent/ami-build-tmp
+uv run --no-project deploy/aws-fleet/build-worker-ami.py \
+  --config /persistent/worker-ami-build.json \
+  --output-directory /persistent/new-ami-build
+```
+
+Use an existing task-scoped AWS profile or an operator-assumed role. The script
+checks the account and base owner, launches at most one owned builder, uploads
+and pins the preparer, and prepares the checksum-pinned cache without enrolling.
+It verifies the cache, stops and removes SSM registration, clears cloud-init
+identity and SSH host keys, then powers off before creating the AMI. It records
+the AMI and snapshot identities in `ami-build.json` and requests termination of
+the builder even on failure. The explicit build deadline is at most two hours;
+the guest also schedules shutdown. Inspect the receipt after interruption;
+never blindly rerun against a live builder. A launch token is persisted before
+allocation; an ambiguous CLI response triggers bounded recovery and termination
+of only that request. If AWS cannot confirm cleanup, inspect the recorded token
+and ownership tags. Failed image/snapshot outputs are
+retained for inspection and must be inventoried and removed by the operator.
+
+The provisioning role needs EC2 describe, scoped launch/tag/terminate/create-image
+authority, `iam:PassRole` for only the builder profile's role, `s3:PutObject` for
+the preparer key and SSM RunShellScript on only owned builders. It needs no IAM
+write authority or archive-bucket credentials. Existing account-wide SSM
+associations may run on the builder; account operators must account for these
+when assessing AMI provenance and package-manager contention.
+
+Deploy `fleet.cloudformation.yaml` with `WorkerAMI` set to the available result,
+and both `PrebakedWorkerBundleSHA256` and `WorkerBundleSHA256` set to the bundle's
+exact SHA256. Keep `WorkerBundleBucket`, prefix and key pinned to the same input.
+The root volume is 32 GiB and must accommodate the cached bundle and loaded
+images. The template rejects unequal SHA values; bootstrap checks the cache
+marker and exact Docker image IDs before enrollment. A missing or mismatched
+cache fails explicitly, with no download fallback. Empty
+`PrebakedWorkerBundleSHA256` selects the existing download mode and refuses a
+pre-baked cache. Switching an idle fleet changes subsequent workers; it does
+not roll active Workspaces or authorize forced ASG scale-in.
+
+For a permanent deployment, place the controller, PostgreSQL, issuer and egress
+proxy on stable private connectivity and use an attached instance/task role for
+the controller instead of a long-lived operator key. Configure archive storage
+and lifecycle rules separately. Leave `ExpiresAt` empty, set the Code pool's
+archive TTL and compute-idle policy deliberately, and match the controller's
+minimum/maximum nodes to the chosen cost/latency tradeoff. A minimum of zero
+removes worker compute and data disks after safe evacuation, while controller,
+database, AMI snapshot, object storage and networking costs remain. Qualify the
+exact AMI with a real Code build, authenticated HTTP/WebSocket preview, safe
+archive/retirement to actual AWS zero, fresh-worker restore and native session
+continuation before using it for a permanent site.
+
+Validate the deployment helpers with `just test-deployment` and
+`just test-aws-worker-ami`, then run the live AMI/workload qualification. The
+fault-boundary tests do not contact AWS and do not substitute for a cloud pass.
 
 The installer records the XFS filesystem UUID in `fstab` and makes Docker require
 that mount before starting. Docker also recreates the fetcher socket directory
