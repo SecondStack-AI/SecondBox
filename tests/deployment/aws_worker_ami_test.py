@@ -46,6 +46,10 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
         self.stopped_console_unavailable = False
         self.stopped_observed = False
         self.stop_fails = False
+        self.console_delay = 0
+        self.console_reads = 0
+        self.instance_reads = 0
+        self.stop_requested = False
 
     def run_builder(self):
         config_path = self.root / 'config.json'
@@ -68,8 +72,10 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
                                       ([{'DeviceName': '/dev/sdf', 'Ebs': {'SnapshotId': 'snap-fedcba'}}] if self.extra_base_disk else [])}]}
         elif operation == 'describe-instances':
             if '--instance-ids' in arguments:
-                self.stopped_observed = True
-                result = {'Reservations': [{'Instances': [{'InstanceId': 'i-abcdef', 'State': {'Name': 'stopped'},
+                self.instance_reads += 1
+                state = 'running' if self.console_delay and self.instance_reads == 1 and not self.stop_requested else 'stopped'
+                self.stopped_observed = state == 'stopped'
+                result = {'Reservations': [{'Instances': [{'InstanceId': 'i-abcdef', 'State': {'Name': state},
                     'BlockDeviceMappings': [{'DeviceName': '/dev/sda1', 'Ebs': {'VolumeId': 'vol-abcdef'}}] +
                         ([{'DeviceName': '/dev/sdf', 'Ebs': {'VolumeId': 'vol-fedcba'}}] if self.extra_builder_disk else [])}]}]}
             elif any('Name=client-token,' in value for value in arguments):
@@ -93,8 +99,9 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
                 os.kill(os.getpid(), signal.SIGTERM)
             result = {'InstanceInformationList': [{'PingStatus': 'Online'}]}
         elif operation == 'get-console-output':
+            self.console_reads += 1
             receipt = json.loads((self.root / 'output/ami-build.json').read_text())
-            if self.stopped_console_unavailable and self.stopped_observed:
+            if self.console_reads <= self.console_delay or self.stopped_console_unavailable and self.stopped_observed:
                 result = {}
             else:
                 result = {'Output': 'SecondBox AMI sealed: ' + (receipt['sealToken'] if self.seal_acknowledged else '0' * 32)}
@@ -103,6 +110,7 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
             self.assertIn('sealAcknowledgedAt', receipt)
             if self.stop_fails:
                 return subprocess.CompletedProcess(arguments, 1, '', 'stop denied')
+            self.stop_requested = True
         elif operation == 'send-command':
             self.parameters.append(json.loads(arguments[arguments.index('--parameters') + 1]))
             result = {'Command': {'CommandId': 'command-' + str(len(self.parameters))}}
@@ -175,7 +183,9 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
 
     def test_seal_is_observed_before_stopped_console_becomes_unavailable(self):
         self.stopped_console_unavailable = True
+        self.console_delay = 1
         self.run_builder()
+        self.assertEqual(self.console_reads, 2)
         operations = [operation for _, operation, _ in self.calls]
         self.assertLess(operations.index('get-console-output'), operations.index('stop-instances'))
         self.assertLess(operations.index('stop-instances'), operations.index('create-image'))
