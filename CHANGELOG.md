@@ -2,13 +2,9 @@
 
 ## Unreleased
 
-### Fixed
+## 0.32.4 - 2026-11-20
 
-- AWS worker AMI preparation observes its fresh sealing acknowledgement before stopping the instance, so empty EC2 console output after shutdown no longer blocks imaging. The provisioning role now also needs `ec2:StopInstances` for owned builders. Version v0.32.3 was withdrawn before publication; its tag remains unchanged.
-
-## 0.32.3 - 2026-11-20 (withdrawn before publication)
-
-The AWS fleet reference can prepare identity-free worker AMIs and stage sparse execution caches. Public API v1, Runner protocol 8, migrations, standard Profile revisions and Firecracker bundles are unchanged from v0.32.2. See the [v0.32.3 release notes](docs/releases/v0.32.3.md).
+The AWS fleet reference can prepare identity-free worker AMIs and stage sparse execution caches. Public API v1, Runner protocol 8, migrations, standard Profile revisions and Firecracker bundles are unchanged from v0.32.2. See the [v0.32.4 release notes](docs/releases/v0.32.4.md).
 
 ### Added
 
@@ -17,10 +13,15 @@ The AWS fleet reference can prepare identity-free worker AMIs and stage sparse e
 ### Fixed
 
 - The AWS worker bundle builder copied transient registry authentication and other mutable records when given a Runner execution-image cache. It now exports only complete immutable image artifacts and verifies their checksums; worker bootstrap publishes cache entries atomically so an interrupted extraction cannot leave a partial image that retries keep.
+- AMI preparation observes its fresh sealing acknowledgement before stopping the instance, so empty EC2 console output after shutdown no longer blocks imaging. The provisioning role also needs `ec2:StopInstances` for owned builders.
 
 ### Upgrade notes
 
 - The worker bundle command now requires the checksum-verified enrollment binary from the same release as the control plane and fleet controller, between the enrollment CA and output-directory arguments. Existing v0.32.1/v0.32.2 deployments update in place; earlier versions must also follow the protocol-8 cutover procedure.
+
+## 0.32.3 - 2026-11-20 (withdrawn before publication)
+
+Live AWS qualification found that the AMI builder read its sealing proof only after shutdown, when EC2 returned empty console output. The release was withdrawn before publication and the tag remains unchanged. Its AMI and cache changes ship in v0.32.4 with the corrected sealing handoff.
 
 ## 0.32.2 - 2026-11-19
 
