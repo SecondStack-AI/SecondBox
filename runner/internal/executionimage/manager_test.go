@@ -356,10 +356,17 @@ func TestRegistryCertificateArgsRequireExplicitCA(t *testing.T) {
 
 // Preparation of a digest that is already cached copies nothing, so it must not
 // hold a staging reservation against the cache filesystem while it verifies.
-func TestWarmCacheHitReservesNoStagingCapacity(t *testing.T) {
+// A warm hit neither reserves staging capacity nor hashes the bundle again:
+// the Runner verifies it before launch. The corrupted rootfs proves that the
+// fetcher read no image bytes.
+func TestWarmCacheHitReservesNoStagingCapacityAndDoesNotRehash(t *testing.T) {
 	cacheRoot := t.TempDir()
 	digest := "sha256:" + strings.Repeat("ab", 32)
-	executionimagetest.WriteBundle(t, filepath.Join(cacheRoot, strings.TrimPrefix(digest, "sha256:")), nil)
+	cached := filepath.Join(cacheRoot, strings.TrimPrefix(digest, "sha256:"))
+	executionimagetest.WriteBundle(t, cached, nil)
+	if err := os.WriteFile(filepath.Join(cached, "rootfs.ext4"), []byte("corrupted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	manager := &Manager{
 		cacheRoot:            cacheRoot,
 		registryAllowlist:    []string{"registry.example"},
@@ -396,7 +403,7 @@ func TestWarmCacheHitReservesNoStagingCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer prepared.Release()
-	if prepared.ResolvedDigest != digest || len(prepared.Artifacts) != 3 {
+	if prepared.ResolvedDigest != digest || len(prepared.Artifacts) != 0 {
 		t.Fatalf("warm preparation = %q with %d artifacts", prepared.ResolvedDigest, len(prepared.Artifacts))
 	}
 	if _, err := os.Stat(filepath.Join(prepared.Directory, ".prepare-until")); err != nil {

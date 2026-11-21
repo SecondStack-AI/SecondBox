@@ -152,6 +152,8 @@ export SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 # Runner uses. The cache must be on a reflink-capable filesystem and disjoint
 # from the runtime directory; the fetcher owns it.
 export SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT=/var/lib/secondbox-execution-images
+# Runner-private bundle verification records, outside the fetcher's cache.
+export SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT=/var/lib/secondbox-runner/execution-image-verifications
 export SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET=/run/secondbox-image-fetcher/fetcher.sock
 ```
 
@@ -277,6 +279,7 @@ never copied from a document.
    | `SECONDBOX_RUNNER_NETWORK_POLICY_*` plus `SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG` | Explicit generic enforcement bounds, protected Runner and management destinations, the strict context-indexed logical-gateway file, and the IPv4 DNS upstream. |
    | `SECONDBOX_GVISOR_*` (all values from the environment block above) | The backend block, including capacity maxima, the materialization pin, the runtime directory, and the network profile. |
    | `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT` / `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET` | The reflink-capable image cache shared with the fetcher and the fetcher's socket. |
+   | `SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT` | The Runner-private directory, outside the image cache, that keeps bundle verification records across restarts. |
 
    Instance capacity and per-Instance ceilings come from the `SECONDBOX_GVISOR_MAXIMUM_*`
    values. With `SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE=physical`, aggregate logical disk

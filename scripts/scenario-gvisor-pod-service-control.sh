@@ -254,6 +254,7 @@ $(emit_env \
   "SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES=$SECONDBOX_SCENARIO_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES" \
   "SECONDBOX_GVISOR_NETWORK_PROFILE=$service_network_profile" \
   "SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT=/var/lib/secondbox-execution-images" \
+  "SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT=/var/lib/secondbox-runner/execution-image-verifications" \
   "SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET=/run/secondbox-image-fetcher/fetcher.sock" \
 )
       volumeMounts:

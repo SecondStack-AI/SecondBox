@@ -119,5 +119,17 @@ func (backend *AssignmentBackend) PrepareExecutionImage(
 	command *runnerprotocol.PrepareImageCommand,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (*runnerprotocol.PrepareImageResult, error) {
-	return executionimage.PrepareThroughFetcher(ctx, backend.config.ExecutionImageFetcherSocket, command, progress)
+	result, err := executionimage.PrepareThroughFetcher(ctx, backend.config.ExecutionImageFetcherSocket, command, progress)
+	if err != nil {
+		return nil, err
+	}
+	if err := backend.executionImages.VerifyPrepared(ctx, result.ResolvedDigest, progress); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// PrewarmExecutionImages verifies the cached bundles after a Runner start.
+func (backend *AssignmentBackend) PrewarmExecutionImages(ctx context.Context) error {
+	return backend.executionImages.PrewarmVerifications(ctx)
 }

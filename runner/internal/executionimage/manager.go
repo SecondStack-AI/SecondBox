@@ -48,6 +48,7 @@ var ErrCapacityAdmissionDenied = errors.New("SecondBox execution image capacity 
 type Manager struct {
 	fixedDirectory       string
 	cacheRoot            string
+	verificationRoot     string
 	registryAllowlist    []string
 	registryCertificates string
 	skopeoPath           string
@@ -60,11 +61,17 @@ type Manager struct {
 	pins                 map[string]int
 	verificationMu       sync.Mutex
 	verifications        map[string]bundleVerification
+	// recordMu serializes access to the verification record root. The Runner
+	// is its only writer, and starts of the fixed bundle take no digest lock.
+	recordMu sync.Mutex
 }
 
 func NewManager(cfg *config.Config) (*Manager, error) {
 	if cfg == nil || !filepath.IsAbs(cfg.ExecutionImageCacheRoot) || len(cfg.ExecutionImageRegistryAllowlist) == 0 || !filepath.IsAbs(cfg.ExecutionImageRegistryCertificates) || cfg.ExecutionImageMaximumDownloadBytes <= 0 || cfg.ExecutionImageMaximumExpandedBytes <= 0 || cfg.ExecutionImageMaximumCacheBytes < cfg.ExecutionImageMaximumExpandedBytes {
 		return nil, errors.New("SecondBox execution image manager requires absolute cache and registry certificate roots, a registry allowlist, positive download and expansion limits, and a cache limit at least as large as the expansion limit")
+	}
+	if err := validateVerificationRoot(cfg.ExecutionImageCacheRoot, cfg.ExecutionImageVerificationRoot); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(cfg.ExecutionImageCacheRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("SecondBox execution image cache creation failed: %w", err)
@@ -75,6 +82,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	return &Manager{
 		fixedDirectory:       filepath.Dir(cfg.MicroVMKernelPath),
 		cacheRoot:            cfg.ExecutionImageCacheRoot,
+		verificationRoot:     cfg.ExecutionImageVerificationRoot,
 		registryAllowlist:    append([]string(nil), cfg.ExecutionImageRegistryAllowlist...),
 		registryCertificates: cfg.ExecutionImageRegistryCertificates,
 		maximumDownloadBytes: cfg.ExecutionImageMaximumDownloadBytes,
@@ -138,18 +146,16 @@ func (manager *Manager) Fetch(
 			prepared = PreparedImage{}
 		}
 	}()
+	// A cache hit is not hashed again here: only verified bundles are
+	// published to the cache, and the Runner verifies the bundle itself before
+	// every launch. A warm preparation therefore returns no verified artifacts.
 	manager.cacheMu.RLock()
 	if _, err := os.Stat(cacheDirectory); err == nil {
-		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory)
-		if err != nil {
-			manager.cacheMu.RUnlock()
-			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
-		}
 		if err := os.Chtimes(cacheDirectory, time.Now(), time.Now()); err != nil {
 			manager.cacheMu.RUnlock()
 			return PreparedImage{}, fmt.Errorf("SecondBox execution image cache access-time update failed: %w", err)
 		}
-		prepared := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest, artifacts)
+		prepared := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest, nil)
 		manager.cacheMu.RUnlock()
 		return prepared, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -168,12 +174,7 @@ func (manager *Manager) Fetch(
 	manager.cacheMu.RUnlock()
 	if cacheErr == nil {
 		manager.cacheMu.RLock()
-		artifacts, err := manager.verifiedBundleArtifacts(ctx, cacheDirectory)
-		if err != nil {
-			manager.cacheMu.RUnlock()
-			return PreparedImage{}, fmt.Errorf("SecondBox cached execution image verification failed: %w", err)
-		}
-		prepared := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest, artifacts)
+		prepared := manager.preparedImage(cacheDirectory, image.Reference, resolvedDigest, nil)
 		manager.cacheMu.RUnlock()
 		return prepared, nil
 	}
@@ -743,12 +744,24 @@ func (manager *Manager) digestLockPath(digest string) (string, error) {
 }
 
 func (manager *Manager) lockDigest(ctx context.Context, digest string) (*os.File, error) {
+	return manager.lockDigestFile(ctx, digest, os.O_CREATE)
+}
+
+// lockExistingDigest takes the lock only while its lock file exists and
+// fails with os.ErrNotExist otherwise. Runner background work uses it: a lock
+// file the root Runner created for an evicted digest would be unreadable to
+// the unprivileged fetcher and block that digest's next retrieval.
+func (manager *Manager) lockExistingDigest(ctx context.Context, digest string) (*os.File, error) {
+	return manager.lockDigestFile(ctx, digest, 0)
+}
+
+func (manager *Manager) lockDigestFile(ctx context.Context, digest string, createFlag int) (*os.File, error) {
 	path, err := manager.digestLockPath(digest)
 	if err != nil {
 		return nil, err
 	}
 	for {
-		lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+		lock, err := os.OpenFile(path, createFlag|os.O_RDWR, 0o600)
 		if err != nil {
 			return nil, fmt.Errorf("SecondBox execution image lock open failed: %w", err)
 		}

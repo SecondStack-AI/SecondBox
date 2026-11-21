@@ -24,6 +24,7 @@ func loadPlatformBackendComposition(
 		"SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR",
 		"SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT",
 		"SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT",
 	} {
 		value := strings.TrimSpace(os.Getenv(name))
 		if value == "" || !filepath.IsAbs(value) {

@@ -15,9 +15,9 @@ import (
 // Verifying a bundle hashes its kernel, rootfs and shared image, which
 // are gigabytes. A Sandbox start cannot afford that inside its start deadline,
 // so each bundle directory is verified once and afterwards proven unchanged by
-// the filesystem metadata of every file the verification read. Metadata drift
-// forces one full re-verification. A Runner restart costs one verification per
-// bundle it starts, the fixed release bundle included.
+// the filesystem metadata of every file the verification read. The Runner
+// keeps that proof in memory and in its verification records, so a restart
+// does not repeat it. Metadata drift forces one full re-verification.
 type bundleVerification struct {
 	artifacts  []runtimemanager.VerifiedExecutionImageArtifact
 	identities []runtimemanager.VerifiedExecutionImageArtifact
@@ -42,6 +42,20 @@ func (manager *Manager) memoizedBundleVerification(
 			return slices.Clone(recorded.artifacts), nil
 		}
 	}
+	recorded, stored, err := manager.loadVerificationRecord(directory)
+	if err != nil {
+		return nil, err
+	}
+	if stored {
+		unchanged, err := bundleIdentitiesUnchanged(recorded.identities)
+		if err != nil {
+			return nil, err
+		}
+		if unchanged {
+			manager.rememberBundleVerification(directory, recorded)
+			return slices.Clone(recorded.artifacts), nil
+		}
+	}
 	before, err := captureBundleIdentities(directory)
 	if err != nil {
 		return nil, err
@@ -59,7 +73,11 @@ func (manager *Manager) memoizedBundleVerification(
 			return nil, fmt.Errorf("SecondBox execution image bundle %s changed during bundle verification", before[index].Label)
 		}
 	}
-	manager.rememberBundleVerification(directory, bundleVerification{artifacts: artifacts, identities: after})
+	verification := bundleVerification{artifacts: artifacts, identities: after}
+	if err := manager.storeVerificationRecord(directory, verification); err != nil {
+		return nil, err
+	}
+	manager.rememberBundleVerification(directory, verification)
 	return artifacts, nil
 }
 

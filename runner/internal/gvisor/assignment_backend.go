@@ -205,7 +205,7 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox gVisor network enforcement requires nft: %w", err)
 	}
-	executionImages, err := executionimage.NewVerifier(validated.ExecutionImageCacheRoot)
+	executionImages, err := executionimage.NewVerifier(validated.ExecutionImageCacheRoot, validated.ExecutionImageVerificationRoot)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox gVisor execution images: %w", err)
 	}

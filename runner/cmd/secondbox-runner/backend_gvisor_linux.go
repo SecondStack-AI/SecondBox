@@ -14,6 +14,7 @@ import (
 )
 
 func newGVisorAssignmentBackend(
+	ctx context.Context,
 	composition runtimeconfig.Composition,
 	workspaceStore *workspacestore.Store,
 ) (runnercontrol.AssignmentBackend, func(context.Context) error, error) {
@@ -26,31 +27,33 @@ func newGVisorAssignmentBackend(
 		return nil, nil, fmt.Errorf("resolve SecondBox runner executable: %w", err)
 	}
 	backend, err := gvisor.NewAssignmentBackend(gvisor.Config{
-		RunscPath:                   settings.RunscPath,
-		AgentPath:                   settings.AgentPath,
-		FlatRootPath:                settings.FlatRootPath,
-		MaterializationPath:         settings.MaterializationPath,
-		MaterializationDigest:       settings.MaterializationDigest,
-		RuntimeDir:                  settings.RuntimeDir,
-		WorkspaceRoot:               composition.WorkspaceRoot,
-		SelfExecutable:              selfExecutable,
-		MaximumVCPUs:                settings.MaximumVCPUs,
-		MaximumMemoryBytes:          settings.MaximumMemoryBytes,
-		MaximumDiskBytes:            settings.MaximumDiskBytes,
-		MaximumInstances:            settings.MaximumInstances,
-		MaximumOperations:           settings.MaximumOperations,
-		StorageAdmissionMode:        settings.StorageAdmissionMode,
-		StorageRecoveryPercent:      settings.StorageRecoveryPercent,
-		StorageWarningPercent:       settings.StorageWarningPercent,
-		StorageDenyPercent:          settings.StorageDenyPercent,
-		NetworkProfile:              settings.NetworkProfile,
-		NetworkPolicy:               settings.NetworkPolicy,
-		WorkspaceStore:              workspaceStore,
-		ExecutionImageCacheRoot:     settings.ExecutionImageCacheRoot,
-		ExecutionImageFetcherSocket: settings.ExecutionImageFetcherSocket,
+		RunscPath:                      settings.RunscPath,
+		AgentPath:                      settings.AgentPath,
+		FlatRootPath:                   settings.FlatRootPath,
+		MaterializationPath:            settings.MaterializationPath,
+		MaterializationDigest:          settings.MaterializationDigest,
+		RuntimeDir:                     settings.RuntimeDir,
+		WorkspaceRoot:                  composition.WorkspaceRoot,
+		SelfExecutable:                 selfExecutable,
+		MaximumVCPUs:                   settings.MaximumVCPUs,
+		MaximumMemoryBytes:             settings.MaximumMemoryBytes,
+		MaximumDiskBytes:               settings.MaximumDiskBytes,
+		MaximumInstances:               settings.MaximumInstances,
+		MaximumOperations:              settings.MaximumOperations,
+		StorageAdmissionMode:           settings.StorageAdmissionMode,
+		StorageRecoveryPercent:         settings.StorageRecoveryPercent,
+		StorageWarningPercent:          settings.StorageWarningPercent,
+		StorageDenyPercent:             settings.StorageDenyPercent,
+		NetworkProfile:                 settings.NetworkProfile,
+		NetworkPolicy:                  settings.NetworkPolicy,
+		WorkspaceStore:                 workspaceStore,
+		ExecutionImageCacheRoot:        settings.ExecutionImageCacheRoot,
+		ExecutionImageVerificationRoot: settings.ExecutionImageVerificationRoot,
+		ExecutionImageFetcherSocket:    settings.ExecutionImageFetcherSocket,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create SecondBox gVisor assignment backend: %w", err)
 	}
+	go prewarmExecutionImages(ctx, backend.PrewarmExecutionImages)
 	return backend, backend.Shutdown, nil
 }

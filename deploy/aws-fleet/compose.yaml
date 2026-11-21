@@ -18,6 +18,7 @@ services:
       SECONDBOX_RUNNER_LOG_DIR: /var/lib/secondbox/state/log
       SECONDBOX_RUNNER_LOG_PATH: /var/lib/secondbox/state/log/runner.jsonl
       SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /var/lib/secondbox/state/execution-images
+      SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT: /var/lib/secondbox/state/execution-image-verifications
       SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET: /run/secondbox-image-fetcher/fetcher.sock
       SECONDBOX_GVISOR_FLAT_ROOT_PATH: /var/lib/secondbox/artifacts/rootfs
       SECONDBOX_GVISOR_MATERIALIZATION_PATH: /var/lib/secondbox/artifacts/materialization.json
