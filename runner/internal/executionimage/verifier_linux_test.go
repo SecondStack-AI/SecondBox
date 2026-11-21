@@ -49,10 +49,10 @@ func writeCachedBundle(t *testing.T, cacheRoot string, rootfs []byte) {
 }
 
 func TestVerifierRefusesRelativeCacheRootAndHasNoFixedBundle(t *testing.T) {
-	if _, err := NewVerifier("relative/cache"); err == nil {
+	if _, err := NewVerifier("relative/cache", privateRecordRoot(t)); err == nil {
 		t.Fatal("relative cache root was accepted")
 	}
-	verifier, err := NewVerifier(t.TempDir())
+	verifier, err := NewVerifier(t.TempDir(), privateRecordRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestVerifierRefusesRelativeCacheRootAndHasNoFixedBundle(t *testing.T) {
 func TestCloneVerifiedRootfsRefusesAReplacedFile(t *testing.T) {
 	cacheRoot := t.TempDir()
 	writeCachedBundle(t, cacheRoot, []byte("verified-root"))
-	verifier, err := NewVerifier(cacheRoot)
+	verifier, err := NewVerifier(cacheRoot, privateRecordRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestCloneVerifiedRootfsReflinksAnUnnamedCopy(t *testing.T) {
 	cacheRoot := reflinkCacheRoot(t)
 	content := bytes.Repeat([]byte("selected-root-block"), 4096)
 	writeCachedBundle(t, cacheRoot, content)
-	verifier, err := NewVerifier(cacheRoot)
+	verifier, err := NewVerifier(cacheRoot, privateRecordRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,18 +131,34 @@ func TestCloneVerifiedRootfsReflinksAnUnnamedCopy(t *testing.T) {
 
 func TestRootfsCloningProbeRejectsAFilesystemWithoutReflink(t *testing.T) {
 	cacheRoot := t.TempDir()
-	var filesystem unix.Statfs_t
-	if err := unix.Statfs(cacheRoot, &filesystem); err != nil {
-		t.Fatal(err)
-	}
-	if filesystem.Type == unix.BTRFS_SUPER_MAGIC || filesystem.Type == unix.XFS_SUPER_MAGIC {
+	if filesystemReflinks(t, cacheRoot) {
 		t.Skip("the temporary directory supports reflink; the refusal needs another filesystem")
 	}
-	verifier, err := NewVerifier(cacheRoot)
+	verifier, err := NewVerifier(cacheRoot, privateRecordRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := verifier.ProbeRootfsCloning(); err == nil || !strings.Contains(err.Error(), "cannot reflink") {
 		t.Fatalf("non-reflink probe error = %v", err)
 	}
+}
+
+// filesystemReflinks clones a file directly, so the skip decision does not
+// depend on filesystem names: an overlay over btrfs also reflinks.
+func filesystemReflinks(t *testing.T, directory string) bool {
+	t.Helper()
+	source, err := os.CreateTemp(directory, "reflink-source-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := source.WriteString("reflink probe"); err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.CreateTemp(directory, "reflink-target-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	return unix.IoctlFileClone(int(target.Fd()), int(source.Fd())) == nil
 }

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- A Runner or image fetcher restart no longer adds full execution-image hashing to the first Sandbox start of each cached image. The Runner keeps its verification records across restarts and verifies prepared and cached images ahead of starts, and the fetcher no longer re-hashes cache hits.
+
+### Upgrade notes
+
+- Firecracker and gVisor Runners require `SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT`, a Runner-private directory outside the execution-image cache. `secondbox-deploy` renders it for managed Runners; remote, Kubernetes and hand-written Runner environments must add it. The first start after the upgrade verifies each cached image once in the background.
+
 ## 0.32.5 - 2026-11-20
 
 Renewable archive credentials support non-AWS control hosts. This release also includes the AWS AMI/cache helpers from the unpublished v0.32.4 tag. Public API v1, Runner protocol 8, migrations, standard Profiles and Firecracker bundles remain unchanged from v0.32.2. See the [v0.32.5 release notes](docs/releases/v0.32.5.md).

@@ -17,6 +17,7 @@ x-gvisor-environment: &gvisor-environment
   # reflink workspace filesystem. It is mounted beside, not inside, the rshared
   # state directory so the bind cannot propagate back to the host.
   SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT: /var/lib/secondbox-execution-images
+  SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT: /var/lib/secondbox-runner/execution-image-verifications
 
 services:
   image-fetcher:

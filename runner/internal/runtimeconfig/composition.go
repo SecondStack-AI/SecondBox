@@ -50,8 +50,9 @@ type GVisorComposition struct {
 	NetworkProfile         uint32
 	NetworkPolicy          networkpolicy.RunnerConfig
 	// The same generic execution image settings the Firecracker Runner uses.
-	ExecutionImageCacheRoot     string
-	ExecutionImageFetcherSocket string
+	ExecutionImageCacheRoot        string
+	ExecutionImageVerificationRoot string
+	ExecutionImageFetcherSocket    string
 }
 
 type MicrosandboxComposition struct {
@@ -172,6 +173,7 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		"SECONDBOX_GVISOR_MATERIALIZATION_PATH",
 		"SECONDBOX_GVISOR_RUNTIME_DIR",
 		"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT",
 		"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET",
 	} {
 		value := strings.TrimSpace(os.Getenv(name))
@@ -242,8 +244,9 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		MaximumInstances: uint32(instances), MaximumOperations: uint32(operations),
 		StorageAdmissionMode: storageMode, StorageRecoveryPercent: recovery, StorageWarningPercent: warning, StorageDenyPercent: deny,
 		NetworkProfile: uint32(networkProfile), NetworkPolicy: networkPolicyConfig,
-		ExecutionImageCacheRoot:     values["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"],
-		ExecutionImageFetcherSocket: values["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"],
+		ExecutionImageCacheRoot:        values["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"],
+		ExecutionImageVerificationRoot: values["SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT"],
+		ExecutionImageFetcherSocket:    values["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"],
 	}, int64(template), nil
 }
 

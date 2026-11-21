@@ -167,10 +167,12 @@ spec:
         # spaces, and link names.
         - name: SECONDBOX_GVISOR_NETWORK_PROFILE
           value: "0"
-        # Client-selected execution images: the shared cache, the fetcher's
-        # pod-local socket.
+        # Client-selected execution images: the shared cache, the Runner's
+        # private verification records, the fetcher's pod-local socket.
         - name: SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT
           value: /var/lib/secondbox-execution-images
+        - name: SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT
+          value: /var/lib/secondbox-runner/execution-image-verifications
         - name: SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET
           value: /run/secondbox-image-fetcher/fetcher.sock
       volumeMounts:

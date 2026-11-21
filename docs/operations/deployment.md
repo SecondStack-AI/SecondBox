@@ -276,8 +276,9 @@ The guided install values reserve 48 GiB for staging from a 16 GiB download limi
 Existing manifests must add these fields before a generation-5 Runner starts.
 Leave the three remote-only paths empty for same-host placement.
 
-For a remote Runner, map the manifest values to `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES`.
+For a remote Runner, map the manifest values to `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_CERTIFICATES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_DOWNLOAD_BYTES`, `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_EXPANDED_BYTES`, and `SECONDBOX_RUNNER_EXECUTION_IMAGE_MAX_CACHE_BYTES`.
 `SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT` must be on the same filesystem as `SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR`, because a start stages the selected rootfs into the run directory by reflink; the Runner refuses to start otherwise.
+`SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT` is a Runner-private directory outside the image cache that keeps bundle verification records across Runner restarts; the Runner refuses records it does not own with owner-only access.
 Run `secondbox-image-fetcher` as a separate unprivileged user with Skopeo, access to the image cache, and a private Unix socket at `SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET`.
 It must have no access to Workspaces, host devices, or the Docker socket.
 Configure its explicit `SECONDBOX_IMAGE_FETCHER_*` environment as shown in `deploy/compose.same-host-runner.yml`.

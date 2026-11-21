@@ -96,6 +96,13 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	executionImageVerificationRoot, err := required("SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT")
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(executionImageVerificationRoot) || filepath.Clean(executionImageVerificationRoot) != executionImageVerificationRoot {
+		return nil, fmt.Errorf("SecondBox Firecracker config requires a clean absolute SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT path")
+	}
 	executionImageFetcherSocket, err := required("SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET")
 	if err != nil {
 		return nil, err
@@ -330,6 +337,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		NetworkPolicyEgressContexts:                networkPolicyConfig.EgressContexts,
 		NetworkPolicyDNSUpstream:                   networkPolicyConfig.DNSUpstream,
 		ExecutionImageCacheRoot:                    executionImageCacheRoot,
+		ExecutionImageVerificationRoot:             executionImageVerificationRoot,
 		ExecutionImageFetcherSocket:                executionImageFetcherSocket,
 		ExecutionImageRegistryAllowlist:            executionImageRegistries,
 		ExecutionImageRegistryCertificates:         executionImageRegistryCertificates,

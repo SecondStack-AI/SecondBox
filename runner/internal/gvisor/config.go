@@ -48,6 +48,8 @@ type Config struct {
 	// into this cache; the backend only verifies and reflinks them.
 	ExecutionImageCacheRoot     string
 	ExecutionImageFetcherSocket string
+	// The Runner's private bundle verification records; see executionimage.
+	ExecutionImageVerificationRoot string
 }
 
 type validatedConfig struct {
@@ -161,6 +163,7 @@ func validateConfig(config Config) (validatedConfig, error) {
 		"workspace root":           config.WorkspaceRoot,
 		"runner executable":        config.SelfExecutable,
 		"execution image cache":    config.ExecutionImageCacheRoot,
+		"execution image records":  config.ExecutionImageVerificationRoot,
 		"image fetcher socket":     config.ExecutionImageFetcherSocket,
 	} {
 		if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {

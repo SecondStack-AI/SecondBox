@@ -1250,6 +1250,7 @@ func resolveRunnerEnvironment(r Runner, credential, gvisorMaterializationDigest 
 	r = r.withPackagedPaths()
 	env := map[string]string{"SECONDBOX_RUNNER_ID": r.RunnerID, "SECONDBOX_RUNNER_POOL_ID": r.PoolID, "SECONDBOX_RUNNER_SOFTWARE_VERSION": r.SoftwareVersion, "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": r.ControlPlaneAddress, "SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": r.ControlPlaneServerName, "SECONDBOX_RUNNER_CREDENTIAL": credential, "SECONDBOX_RUNNER_LOG_PATH": r.LogPath, "SECONDBOX_RUNNER_WORKSPACE_ROOT": r.WorkspaceRoot, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL": r.NetworkPolicyMaxDNSTTL, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": r.NetworkPolicyRunnerAddresses, "SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS": r.NetworkPolicyManagementCIDRs, "SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG": r.EgressContextConfigPath, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM": r.NetworkPolicyDNSUpstream, "SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS": r.DataPlaneListenAddress, "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS": r.DataPlaneAdvertisedAddress}
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"] = "/var/lib/secondbox-runner/execution-images"
+	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT"] = "/var/lib/secondbox-runner/state/execution-image-verifications"
 	env["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"] = "/run/secondbox-image-fetcher/fetcher.sock"
 	env["SECONDBOX_IMAGE_FETCHER_CONFIG_HOST_DIR"] = r.ExecutionImageRegistryConfigDirectory
 	env["SECONDBOX_RUNNER_EXECUTION_IMAGE_REGISTRIES"] = r.ExecutionImageRegistries

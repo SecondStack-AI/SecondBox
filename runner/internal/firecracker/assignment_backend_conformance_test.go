@@ -47,6 +47,18 @@ func (preparer conformanceExecutionImagePreparer) VerifyLocal(
 	}, nil
 }
 
+func (conformanceExecutionImagePreparer) VerifyPrepared(
+	context.Context,
+	string,
+	func(runnerprotocol.AssignmentProgressStage) error,
+) error {
+	return nil
+}
+
+func (conformanceExecutionImagePreparer) PrewarmVerifications(context.Context) error {
+	return nil
+}
+
 func TestAssignmentBackendRequiresWorkspaceStore(t *testing.T) {
 	manager := &Manager{cfg: &config.Config{}}
 	if _, err := NewAssignmentBackend(manager); err == nil ||

@@ -73,6 +73,7 @@ type Config struct {
 	NetworkPolicyEgressContexts          networkpolicy.EgressContextConfig
 	NetworkPolicyDNSUpstream             netip.AddrPort
 	ExecutionImageCacheRoot              string
+	ExecutionImageVerificationRoot       string
 	ExecutionImageFetcherSocket          string
 	ExecutionImageRegistryAllowlist      []string
 	ExecutionImageRegistryCertificates   string

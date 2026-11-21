@@ -157,6 +157,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG":             writeRuntimeContextConfig(t),
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM":       "10.201.0.10:53",
 		"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT":        "/var/lib/secondbox-runner/execution-images",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT": "/var/lib/secondbox-runner/state/execution-image-verifications",
 		"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET":              "/run/secondbox-image-fetcher/fetcher.sock",
 	}
 	for name, value := range complete {
@@ -201,6 +202,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		strings.Join(composition.NetworkPolicy.ContextNames(), ",") != "tenant-a,tenant-b" ||
 		composition.NetworkPolicy.DNSUpstream.String() != "10.201.0.10:53" ||
 		composition.ExecutionImageCacheRoot != complete["SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT"] ||
+		composition.ExecutionImageVerificationRoot != complete["SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT"] ||
 		composition.ExecutionImageFetcherSocket != complete["SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET"] {
 		t.Fatalf("gVisor composition = %#v templateBytes=%d", composition, templateBytes)
 	}
@@ -228,6 +230,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM",
 		"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT",
+		"SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT",
 		"SECONDBOX_RUNNER_IMAGE_FETCHER_SOCKET",
 	} {
 		t.Run(required, func(t *testing.T) {

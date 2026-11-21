@@ -57,6 +57,8 @@ var firecrackerVersionLock string
 // Manager owns Firecracker-backed sandbox runtime instances.
 type executionImagePreparer interface {
 	VerifyLocal(context.Context, *runnerprotocol.ExecutionImage, func(runnerprotocol.AssignmentProgressStage) error) (executionimage.PreparedImage, error)
+	VerifyPrepared(context.Context, string, func(runnerprotocol.AssignmentProgressStage) error) error
+	PrewarmVerifications(context.Context) error
 }
 
 type Manager struct {
@@ -372,6 +374,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		slog.Info("pruned stale microVM logs", "count", deleted)
 	}
 	return startupErr
+}
+
+// PrewarmExecutionImages verifies the cached bundles after a Runner start.
+func (m *Manager) PrewarmExecutionImages(ctx context.Context) error {
+	return m.executionImages.PrewarmVerifications(ctx)
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {

@@ -10,7 +10,14 @@ import (
 )
 
 func (b *AssignmentBackend) PrepareExecutionImage(ctx context.Context, command *runnerprotocol.PrepareImageCommand, progress func(runnerprotocol.AssignmentProgressStage) error) (*runnerprotocol.PrepareImageResult, error) {
-	return executionimage.PrepareThroughFetcher(ctx, b.manager.cfg.ExecutionImageFetcherSocket, command, progress)
+	result, err := executionimage.PrepareThroughFetcher(ctx, b.manager.cfg.ExecutionImageFetcherSocket, command, progress)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.manager.executionImages.VerifyPrepared(ctx, result.ResolvedDigest, progress); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // A Sandbox stages the rootfs of its execution image into the run directory by

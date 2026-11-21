@@ -23,7 +23,7 @@ const selectedImageTestDigest = "sha256:2222222222222222222222222222222222222222
 
 func selectedImageTestBackend(t *testing.T, cacheRoot string) *AssignmentBackend {
 	t.Helper()
-	verifier, err := executionimage.NewVerifier(cacheRoot)
+	verifier, err := executionimage.NewVerifier(cacheRoot, filepath.Join(t.TempDir(), "verifications"))
 	if err != nil {
 		t.Fatal(err)
 	}

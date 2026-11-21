@@ -52,7 +52,11 @@ The assignment contains a digest reference and authorized identities, never a mu
 
 The Runner independently verifies local bundle bytes and checks the assigned component identities before guest negotiation.
 Full verification hashes gigabytes, so the Runner verifies each bundle once and then admits later starts of the same bundle on the recorded filesystem identity of every verified file.
-Changed metadata forces one re-verification, and a Runner restart re-verifies each bundle it starts, the fixed Profile bundle included.
+Changed metadata forces one re-verification.
+The Runner keeps these records in its private `SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT`, outside the fetcher-owned cache, so a restart does not re-verify an unchanged bundle.
+It trusts only a record root and record files that it owns with owner-only access, opened without following links; any other record root fails verification.
+The Runner verifies a digest right after the fetcher prepares it, and after each start it verifies the cached bundles in the background, most recently used first, so the hashing does not land on a Sandbox start.
+The fetcher does not hash a cache hit again: only verified bundles enter the cache, and the Runner verifies before every launch.
 A materialization report cannot overwrite assignment authority.
 Captured-file identity checks reject replacement between verification and backend staging.
 Failed verification does not select another image.
