@@ -166,14 +166,16 @@ is a 64 GiB reflink XFS filesystem that already holds the base artifacts, the
 optional execution-image cache owned by the image fetcher, and the Runner's
 verification records for that cache. The build runs the bundle's own Runner
 image with `-record-execution-image-verifications` under the worker's container
-paths, so a worker's Runner admits the cached images from records and hashes
-nothing. Records bind files to their filesystem rather than a device number,
+paths, so a worker's Runner admits the cached images from records instead of
+hashing them. The Runner still verifies the small base root when it starts. Records bind files to their filesystem rather than a device number,
 so the clone keeps them.
 
 Each worker's data volume is created from that snapshot at the template's
-`WorkspaceGiB`. Bootstrap claims a volume that carries the snapshot's bundle
-marker and no fleet marker: it grows the filesystem, writes the fleet marker
-and skips the artifact copy, cache staging and cache ownership change. A
+`WorkspaceGiB`. The volume keeps the bundle marker of the snapshot, and every
+pre-baked bootstrap refuses a volume of another bundle. Bootstrap claims a
+volume without a fleet marker: it grows the filesystem, writes the fleet marker
+and skips the artifact copy and base-root check, cache staging and cache
+ownership change. A
 pre-baked worker's root and data volumes initialize from their snapshots at a
 provisioned 300 MiB/s, which EBS bills per restored GiB; without it, blocks
 first read before initialization load at a few MB/s, which dominated earlier

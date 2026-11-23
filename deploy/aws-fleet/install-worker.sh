@@ -43,17 +43,21 @@ if ! mountpoint -q /srv/secondbox; then mount "$data_disk" /srv/secondbox; fi
 [[ $(findmnt -n -o SOURCE /srv/secondbox) == "$data_disk" ]] || { echo 'SecondBox worker bootstrap data mount differs' >&2; exit 1; }
 marker=/srv/secondbox/.secondbox-fleet
 prebaked_marker=/srv/secondbox/.secondbox-prebaked
+# A pre-baked data volume keeps the bundle it was built from, so a retained
+# volume of another bundle is refused rather than run with stale artifacts.
+if [[ $prebaked == true ]] && [[ ! -f $prebaked_marker || $(cat "$prebaked_marker") != $(cat "$bundle/prebaked.bundle.sha256") ]]; then
+  echo 'SecondBox worker bootstrap refuses a data volume of another pre-baked worker bundle' >&2; exit 1
+fi
+if [[ $prebaked == false && -e $prebaked_marker ]]; then
+  echo 'SecondBox worker bootstrap refuses a pre-baked data volume without a pre-baked cache' >&2; exit 1
+fi
 if [[ $new_filesystem == true ]]; then
   printf '%s\n' "$fleet" > "$marker"
-elif [[ -f $prebaked_marker && ! -e $marker ]]; then
+elif [[ $prebaked == true && ! -e $marker ]]; then
   # A fresh volume from the worker data snapshot: claim it for this fleet and
   # grow its filesystem to the launched volume size.
-  [[ $prebaked == true && $(cat "$prebaked_marker") == $(cat "$bundle/prebaked.bundle.sha256") ]] || {
-    echo 'SecondBox worker bootstrap refuses a pre-baked data volume of another worker bundle' >&2; exit 1;
-  }
   xfs_growfs /srv/secondbox >/dev/null
   printf '%s\n' "$fleet" > "$marker"
-  rm -- "$prebaked_marker"
 elif [[ ! -f $marker || $(cat "$marker") != "$fleet" ]]; then
   echo 'SecondBox worker bootstrap refuses an unowned retained data volume' >&2; exit 1
 fi
@@ -125,7 +129,11 @@ test -f /etc/secondbox/image-registry/tenants.json
 if [[ ! -d /srv/secondbox/artifacts ]]; then
   cp -a "$bundle/artifacts" /srv/secondbox/artifacts
 fi
-"$bundle/bin/secondbox-flat-root-digest" /srv/secondbox/artifacts/rootfs /srv/secondbox/artifacts/materialization.json
+# The worker image build verified a pre-baked base root; the Runner verifies
+# it again before it reports ready.
+if [[ $prebaked == false ]]; then
+  "$bundle/bin/secondbox-flat-root-digest" /srv/secondbox/artifacts/rootfs /srv/secondbox/artifacts/materialization.json
+fi
 cp --reflink=always /srv/secondbox/artifacts/materialization.json /srv/secondbox/reflink-probe
 rm /srv/secondbox/reflink-probe
 if [[ $prebaked == false ]]; then

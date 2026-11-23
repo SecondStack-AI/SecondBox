@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Pre-baked AWS Code workers start from a worker data snapshot that already holds the base artifacts, the execution-image cache and its verification records. A new worker extracts, copies and hashes nothing before its Runner connects; the AMI no longer carries the compressed execution cache.
+- Pre-baked AWS Code workers start from a worker data snapshot that already holds the base artifacts, the execution-image cache and its verification records. A new worker extracts, copies and hashes no execution image before its Runner connects; the AMI no longer carries the compressed execution cache.
 
 ### Fixed
 
