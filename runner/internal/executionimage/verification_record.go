@@ -23,8 +23,14 @@ import (
 // verification root, outside the cache the unprivileged image fetcher owns,
 // and the Runner trusts only a root and record files it owns with owner-only
 // access, opened without following links.
+//
+// A record omits device numbers. Every recorded file must be on the bundle
+// directory's filesystem, and a load binds the files to that directory's
+// current device. A cloned data volume or a reboot that numbers block devices
+// differently keeps its records, while inode, size, modification and change
+// times still detect any rewrite.
 const (
-	verificationRecordSchemaVersion = 1
+	verificationRecordSchemaVersion = 2
 	maximumVerificationRecordBytes  = 64 << 10
 )
 
@@ -50,10 +56,52 @@ func pathsOverlap(left, right string) bool {
 }
 
 type verificationRecord struct {
-	SchemaVersion int                                             `json:"schemaVersion"`
-	Directory     string                                          `json:"directory"`
-	Artifacts     []runtimemanager.VerifiedExecutionImageArtifact `json:"artifacts"`
-	Identities    []runtimemanager.VerifiedExecutionImageArtifact `json:"identities"`
+	SchemaVersion int                `json:"schemaVersion"`
+	Directory     string             `json:"directory"`
+	Artifacts     []recordedArtifact `json:"artifacts"`
+	Identities    []recordedArtifact `json:"identities"`
+}
+
+type recordedArtifact struct {
+	Label           string `json:"label"`
+	Path            string `json:"path"`
+	Inode           uint64 `json:"inode"`
+	Size            int64  `json:"size"`
+	ModTimeUnixNano int64  `json:"modTimeUnixNano"`
+	ChangeUnixNano  int64  `json:"changeUnixNano"`
+}
+
+func bundleDirectoryDevice(directory string) (uint64, error) {
+	identity, err := runtimemanager.CaptureVerifiedExecutionImageArtifact("bundle directory", directory)
+	if err != nil {
+		return 0, err
+	}
+	return identity.Device, nil
+}
+
+func recordArtifacts(device uint64, artifacts []runtimemanager.VerifiedExecutionImageArtifact) ([]recordedArtifact, error) {
+	recorded := make([]recordedArtifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		if artifact.Device != device {
+			return nil, fmt.Errorf("SecondBox execution image verification record requires %s on the bundle directory's filesystem", artifact.Label)
+		}
+		recorded = append(recorded, recordedArtifact{
+			Label: artifact.Label, Path: artifact.Path, Inode: artifact.Inode, Size: artifact.Size,
+			ModTimeUnixNano: artifact.ModTimeUnixNano, ChangeUnixNano: artifact.ChangeUnixNano,
+		})
+	}
+	return recorded, nil
+}
+
+func restoreRecordedArtifacts(device uint64, recorded []recordedArtifact) []runtimemanager.VerifiedExecutionImageArtifact {
+	artifacts := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, len(recorded))
+	for _, artifact := range recorded {
+		artifacts = append(artifacts, runtimemanager.VerifiedExecutionImageArtifact{
+			Label: artifact.Label, Path: artifact.Path, Device: device, Inode: artifact.Inode, Size: artifact.Size,
+			ModTimeUnixNano: artifact.ModTimeUnixNano, ChangeUnixNano: artifact.ChangeUnixNano,
+		})
+	}
+	return artifacts
 }
 
 func verificationRecordName(directory string) string {
@@ -134,19 +182,37 @@ func (manager *Manager) loadVerificationRecord(directory string) (bundleVerifica
 	if len(content) > maximumVerificationRecordBytes {
 		return bundleVerification{}, false, fmt.Errorf("SecondBox execution image verification record %s is too large", name)
 	}
+	// A record of another schema is replaced by the next verification, so its
+	// version is read before the strict decode of the current schema.
+	var version struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if err := json.Unmarshal(content, &version); err != nil {
+		return bundleVerification{}, false, fmt.Errorf("SecondBox execution image verification record %s is invalid: %w", name, err)
+	}
+	if version.SchemaVersion != verificationRecordSchemaVersion {
+		return bundleVerification{}, false, nil
+	}
 	var record verificationRecord
 	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&record); err != nil {
 		return bundleVerification{}, false, fmt.Errorf("SecondBox execution image verification record %s is invalid: %w", name, err)
 	}
-	if record.SchemaVersion != verificationRecordSchemaVersion {
-		return bundleVerification{}, false, nil
-	}
 	if err := validateVerificationRecord(directory, record); err != nil {
 		return bundleVerification{}, false, fmt.Errorf("SecondBox execution image verification record %s: %w", name, err)
 	}
-	return bundleVerification{artifacts: record.Artifacts, identities: record.Identities}, true, nil
+	device, err := bundleDirectoryDevice(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return bundleVerification{}, false, nil
+	}
+	if err != nil {
+		return bundleVerification{}, false, fmt.Errorf("SecondBox execution image verification record %s bundle inspection failed: %w", name, err)
+	}
+	return bundleVerification{
+		artifacts:  restoreRecordedArtifacts(device, record.Artifacts),
+		identities: restoreRecordedArtifacts(device, record.Identities),
+	}, true, nil
 }
 
 // validateVerificationRecord requires the record to name exactly the files a
@@ -178,11 +244,23 @@ func validateVerificationRecord(directory string, record verificationRecord) err
 // storeVerificationRecord atomically replaces the record of directory and
 // removes records whose bundle directory no longer exists.
 func (manager *Manager) storeVerificationRecord(directory string, verification bundleVerification) error {
+	device, err := bundleDirectoryDevice(directory)
+	if err != nil {
+		return fmt.Errorf("SecondBox execution image verification record bundle inspection failed: %w", err)
+	}
+	artifacts, err := recordArtifacts(device, verification.artifacts)
+	if err != nil {
+		return err
+	}
+	identities, err := recordArtifacts(device, verification.identities)
+	if err != nil {
+		return err
+	}
 	content, err := json.Marshal(verificationRecord{
 		SchemaVersion: verificationRecordSchemaVersion,
 		Directory:     directory,
-		Artifacts:     verification.artifacts,
-		Identities:    verification.identities,
+		Artifacts:     artifacts,
+		Identities:    identities,
 	})
 	if err != nil {
 		return err

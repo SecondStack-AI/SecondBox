@@ -108,6 +108,32 @@ func TestPrewarmVerificationsOrdersBundlesByRecentUse(t *testing.T) {
 	}
 }
 
+// A worker image build records every cached bundle and fails rather than ship
+// a corrupt bundle or an empty cache.
+func TestRecordCachedBundleVerificationsFailsOnCorruptOrEmptyCaches(t *testing.T) {
+	cacheRoot := t.TempDir()
+	if _, err := (&Manager{cacheRoot: cacheRoot, verificationRoot: privateRecordRoot(t)}).RecordCachedBundleVerifications(t.Context()); err == nil ||
+		!strings.Contains(err.Error(), "holds no bundle") {
+		t.Fatalf("empty cache error = %v", err)
+	}
+	valid := publishCachedBundle(t, cacheRoot, "sha256:"+strings.Repeat("a8", 32))
+	records := privateRecordRoot(t)
+	if verified, err := (&Manager{cacheRoot: cacheRoot, verificationRoot: records}).RecordCachedBundleVerifications(t.Context()); err != nil || verified != 1 {
+		t.Fatalf("valid cache verified = %d, error = %v", verified, err)
+	}
+	if _, stored, err := (&Manager{cacheRoot: cacheRoot, verificationRoot: records}).loadVerificationRecord(valid); err != nil || !stored {
+		t.Fatalf("recorded bundle stored = %v, error = %v", stored, err)
+	}
+	corrupt := publishCachedBundle(t, cacheRoot, "sha256:"+strings.Repeat("b9", 32))
+	if err := os.WriteFile(filepath.Join(corrupt, "rootfs.ext4"), []byte("corrupted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Manager{cacheRoot: cacheRoot, verificationRoot: records}).RecordCachedBundleVerifications(t.Context()); err == nil ||
+		!strings.Contains(err.Error(), strings.Repeat("b9", 32)) {
+		t.Fatalf("corrupt cache error = %v", err)
+	}
+}
+
 // The Runner verifies a freshly prepared digest during preparation, so its
 // first start finds a recorded verification.
 func TestVerifyPreparedRecordsTheBundle(t *testing.T) {

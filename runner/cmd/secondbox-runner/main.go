@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/executionimage"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtimeconfig"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
@@ -52,11 +53,15 @@ func run(arguments []string) (runErr error) {
 	flags.SetOutput(io.Discard)
 	healthcheck := flags.Bool("healthcheck", false, "open the authenticated runner protocol stream and exit")
 	healthcheckTimeout := flags.Duration("healthcheck-timeout", 10*time.Second, "maximum runner protocol probe time")
+	recordVerifications := flags.Bool("record-execution-image-verifications", false, "verify and record every cached execution image, then exit")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if err := validateRunnerExecutionIdentity(*healthcheck, os.Geteuid()); err != nil {
 		return err
+	}
+	if *recordVerifications {
+		return recordExecutionImageVerifications()
 	}
 
 	composition, err := runtimeconfig.LoadFromEnvironment(*healthcheck)
@@ -119,6 +124,34 @@ func run(arguments []string) (runErr error) {
 		runErr = nil
 	}
 	return errors.Join(runErr, shutdownErr)
+}
+
+// recordExecutionImageVerifications runs in a worker image build, with the
+// Runner's own identity and cache paths, so a Runner started from that image
+// admits its cached bundles from records instead of hashing them.
+func recordExecutionImageVerifications() error {
+	variables := []string{"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT", "SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT"}
+	values := make([]string, len(variables))
+	for index, name := range variables {
+		values[index] = strings.TrimSpace(os.Getenv(name))
+		if values[index] == "" {
+			return fmt.Errorf("SecondBox execution image verification recording requires %s", name)
+		}
+	}
+	verifier, err := executionimage.NewVerifier(values[0], values[1])
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	started := time.Now()
+	verified, err := verifier.RecordCachedBundleVerifications(ctx)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]int64{
+		"recordedBundles": int64(verified), "durationMilliseconds": time.Since(started).Milliseconds(),
+	})
 }
 
 func configureRunnerLogging(path string) (func() error, error) {
