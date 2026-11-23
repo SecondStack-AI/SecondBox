@@ -205,6 +205,17 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
         receipt = json.loads((self.root / 'output/ami-build.json').read_text())
         self.assertEqual((receipt['state'], receipt['dataSnapshotId']), ('available', 'snap-data'))
 
+    def test_data_snapshot_precedes_the_image(self):
+        self.run_builder()
+        operations = [operation for _, operation, _ in self.calls]
+        self.assertLess(operations.index('create-snapshot'), operations.index('create-image'))
+
+    def test_data_snapshot_fits_every_fleet_template_workspace(self):
+        template = (source.parent / 'fleet.cloudformation.yaml').read_text()
+        workspace = template[template.index('  WorkspaceGiB:'):]
+        minimum = int(workspace[workspace.index('MinValue:') + len('MinValue:'):].split()[0])
+        self.assertLessEqual(worker_ami.DATA_VOLUME_GIB, minimum)
+
     def test_image_that_kept_the_data_disk_is_not_reported_available(self):
         self.image_keeps_data_disk = True
         with self.assertRaisesRegex(ValueError, 'single EBS root'):

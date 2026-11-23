@@ -126,6 +126,9 @@ systemctl daemon-reload
 systemctl enable --now secondbox-fleet-renew.timer
 cp -a /etc/secondbox/runner/image-registry/. /etc/secondbox/image-registry/
 test -f /etc/secondbox/image-registry/tenants.json
+if [[ $prebaked == true && ! -d /srv/secondbox/artifacts ]]; then
+  echo 'SecondBox worker bootstrap requires base artifacts on the pre-baked data volume' >&2; exit 1
+fi
 if [[ ! -d /srv/secondbox/artifacts ]]; then
   cp -a "$bundle/artifacts" /srv/secondbox/artifacts
 fi

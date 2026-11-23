@@ -132,6 +132,17 @@ func TestRecordCachedBundleVerificationsFailsOnCorruptOrEmptyCaches(t *testing.T
 		!strings.Contains(err.Error(), strings.Repeat("b9", 32)) {
 		t.Fatalf("corrupt cache error = %v", err)
 	}
+	if err := os.RemoveAll(corrupt); err != nil {
+		t.Fatal(err)
+	}
+	incomplete := publishCachedBundle(t, cacheRoot, "sha256:"+strings.Repeat("c7", 32))
+	if err := os.Remove(filepath.Join(incomplete, "kernel")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Manager{cacheRoot: cacheRoot, verificationRoot: records}).RecordCachedBundleVerifications(t.Context()); err == nil ||
+		!strings.Contains(err.Error(), strings.Repeat("c7", 32)) {
+		t.Fatalf("incomplete cache error = %v", err)
+	}
 }
 
 // The Runner verifies a freshly prepared digest during preparation, so its

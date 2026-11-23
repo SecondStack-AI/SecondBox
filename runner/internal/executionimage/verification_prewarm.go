@@ -22,7 +22,7 @@ import (
 // and the remaining bundles are still verified.
 func (manager *Manager) PrewarmVerifications(ctx context.Context) error {
 	started := time.Now()
-	verified, failures, err := manager.verifyCachedBundles(ctx)
+	verified, failures, err := manager.verifyCachedBundles(ctx, true)
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func (manager *Manager) PrewarmVerifications(ctx context.Context) error {
 // prewarming it fails when a bundle fails or the cache holds none, because the
 // built image would otherwise ship unverified bundles.
 func (manager *Manager) RecordCachedBundleVerifications(ctx context.Context) (int, error) {
-	verified, failures, err := manager.verifyCachedBundles(ctx)
+	verified, failures, err := manager.verifyCachedBundles(ctx, false)
 	if err != nil {
 		return verified, err
 	}
@@ -52,7 +52,9 @@ func (manager *Manager) RecordCachedBundleVerifications(ctx context.Context) (in
 	return verified, nil
 }
 
-func (manager *Manager) verifyCachedBundles(ctx context.Context) (int, []error, error) {
+// skipEvicted ignores a bundle that disappeared after listing, which only a
+// running fetcher's eviction causes; recording runs with no fetcher.
+func (manager *Manager) verifyCachedBundles(ctx context.Context, skipEvicted bool) (int, []error, error) {
 	directories, err := manager.cachedBundleDirectoriesByRecency()
 	if err != nil {
 		return 0, nil, err
@@ -70,7 +72,7 @@ func (manager *Manager) verifyCachedBundles(ctx context.Context) (int, []error, 
 		if ctx.Err() != nil {
 			return verified, failures, context.Cause(ctx)
 		}
-		if errors.Is(err, os.ErrNotExist) {
+		if skipEvicted && errors.Is(err, os.ErrNotExist) {
 			// The fetcher evicted the bundle, and with it its lock file, after
 			// it was listed.
 			continue

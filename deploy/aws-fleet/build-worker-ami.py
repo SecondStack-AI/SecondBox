@@ -221,16 +221,18 @@ systemctl poweroff
         bundle_tag = [{'Key':'secondstack.ai/bundle-sha256','Value':config['bundleSHA256']}]
         # The AMI holds only the root; the data disk becomes a separate snapshot
         # that the fleet template names explicitly for each worker's data volume.
-        image = aws('ec2', 'create-image', '--instance-id', instance, '--name', config['imageName'], '--no-reboot',
-                    '--block-device-mappings', json.dumps([{'DeviceName': DATA_DEVICE_NAME, 'NoDevice': ''}]),
-                    '--tag-specifications', json.dumps([{'ResourceType': kind, 'Tags': tags + bundle_tag}
-                                                        for kind in ['image','snapshot']]))['ImageId']
-        receipt.update(imageId=image, state='snapshotting'); persist()
+        # The snapshot comes first, so a missing snapshot permission fails before
+        # any AMI is registered.
         data_snapshot = aws('ec2', 'create-snapshot', '--volume-id', data_volume,
                             '--description', 'SecondBox worker data ' + config['bundleSHA256'],
                             '--tag-specifications', json.dumps([{'ResourceType': 'snapshot', 'Tags': tags + bundle_tag +
                                 [{'Key': 'secondstack.ai/worker-data', 'Value': 'true'}]}]))['SnapshotId']
         receipt.update(dataSnapshotId=data_snapshot); persist()
+        image = aws('ec2', 'create-image', '--instance-id', instance, '--name', config['imageName'], '--no-reboot',
+                    '--block-device-mappings', json.dumps([{'DeviceName': DATA_DEVICE_NAME, 'NoDevice': ''}]),
+                    '--tag-specifications', json.dumps([{'ResourceType': kind, 'Tags': tags + bundle_tag}
+                                                        for kind in ['image','snapshot']]))['ImageId']
+        receipt.update(imageId=image, state='snapshotting'); persist()
         available = wait_until(lambda: aws('ec2', 'describe-images', '--image-ids', image)['Images'][0],
                                lambda item: item['State'] in {'available','failed','error'}, 'AMI snapshot completion')
         if available['State'] != 'available':
