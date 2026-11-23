@@ -24,11 +24,12 @@ import (
 // and the Runner trusts only a root and record files it owns with owner-only
 // access, opened without following links.
 //
-// A record omits device numbers. Every recorded file must be on the bundle
-// directory's filesystem, and a load binds the files to that directory's
-// current device. A cloned data volume or a reboot that numbers block devices
-// differently keeps its records, while inode, size, modification and change
-// times still detect any rewrite.
+// A record omits the device number of every file on the bundle directory's
+// filesystem, and a load binds those files to that directory's current device.
+// A cloned data volume or a reboot that numbers block devices differently
+// keeps its records, while inode, size, modification and change times still
+// detect any rewrite. A file on another filesystem, such as a symlinked
+// release asset, keeps its exact device.
 const (
 	verificationRecordSchemaVersion = 2
 	maximumVerificationRecordBytes  = 64 << 10
@@ -63,12 +64,13 @@ type verificationRecord struct {
 }
 
 type recordedArtifact struct {
-	Label           string `json:"label"`
-	Path            string `json:"path"`
-	Inode           uint64 `json:"inode"`
-	Size            int64  `json:"size"`
-	ModTimeUnixNano int64  `json:"modTimeUnixNano"`
-	ChangeUnixNano  int64  `json:"changeUnixNano"`
+	Label           string  `json:"label"`
+	Path            string  `json:"path"`
+	ForeignDevice   *uint64 `json:"foreignDevice,omitempty"`
+	Inode           uint64  `json:"inode"`
+	Size            int64   `json:"size"`
+	ModTimeUnixNano int64   `json:"modTimeUnixNano"`
+	ChangeUnixNano  int64   `json:"changeUnixNano"`
 }
 
 func bundleDirectoryDevice(directory string) (uint64, error) {
@@ -79,27 +81,33 @@ func bundleDirectoryDevice(directory string) (uint64, error) {
 	return identity.Device, nil
 }
 
-func recordArtifacts(device uint64, artifacts []runtimemanager.VerifiedExecutionImageArtifact) ([]recordedArtifact, error) {
+func recordArtifacts(device uint64, artifacts []runtimemanager.VerifiedExecutionImageArtifact) []recordedArtifact {
 	recorded := make([]recordedArtifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		if artifact.Device != device {
-			return nil, fmt.Errorf("SecondBox execution image verification record requires %s on the bundle directory's filesystem", artifact.Label)
-		}
-		recorded = append(recorded, recordedArtifact{
+		entry := recordedArtifact{
 			Label: artifact.Label, Path: artifact.Path, Inode: artifact.Inode, Size: artifact.Size,
 			ModTimeUnixNano: artifact.ModTimeUnixNano, ChangeUnixNano: artifact.ChangeUnixNano,
-		})
+		}
+		if artifact.Device != device {
+			foreign := artifact.Device
+			entry.ForeignDevice = &foreign
+		}
+		recorded = append(recorded, entry)
 	}
-	return recorded, nil
+	return recorded
 }
 
 func restoreRecordedArtifacts(device uint64, recorded []recordedArtifact) []runtimemanager.VerifiedExecutionImageArtifact {
 	artifacts := make([]runtimemanager.VerifiedExecutionImageArtifact, 0, len(recorded))
 	for _, artifact := range recorded {
-		artifacts = append(artifacts, runtimemanager.VerifiedExecutionImageArtifact{
+		restored := runtimemanager.VerifiedExecutionImageArtifact{
 			Label: artifact.Label, Path: artifact.Path, Device: device, Inode: artifact.Inode, Size: artifact.Size,
 			ModTimeUnixNano: artifact.ModTimeUnixNano, ChangeUnixNano: artifact.ChangeUnixNano,
-		})
+		}
+		if artifact.ForeignDevice != nil {
+			restored.Device = *artifact.ForeignDevice
+		}
+		artifacts = append(artifacts, restored)
 	}
 	return artifacts
 }
@@ -248,19 +256,11 @@ func (manager *Manager) storeVerificationRecord(directory string, verification b
 	if err != nil {
 		return fmt.Errorf("SecondBox execution image verification record bundle inspection failed: %w", err)
 	}
-	artifacts, err := recordArtifacts(device, verification.artifacts)
-	if err != nil {
-		return err
-	}
-	identities, err := recordArtifacts(device, verification.identities)
-	if err != nil {
-		return err
-	}
 	content, err := json.Marshal(verificationRecord{
 		SchemaVersion: verificationRecordSchemaVersion,
 		Directory:     directory,
-		Artifacts:     artifacts,
-		Identities:    identities,
+		Artifacts:     recordArtifacts(device, verification.artifacts),
+		Identities:    recordArtifacts(device, verification.identities),
 	})
 	if err != nil {
 		return err

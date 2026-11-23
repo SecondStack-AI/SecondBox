@@ -1,7 +1,6 @@
 package executionimage
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -255,7 +254,7 @@ func TestBundleVerificationRecordBindsFilesToTheBundleFilesystem(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(strings.ToLower(string(content)), "device") {
-		t.Fatalf("verification record persisted a device number: %s", content)
+		t.Fatalf("verification record persisted the device number of a bundle-filesystem file: %s", content)
 	}
 	device, err := bundleDirectoryDevice(directory)
 	if err != nil {
@@ -272,19 +271,26 @@ func TestBundleVerificationRecordBindsFilesToTheBundleFilesystem(t *testing.T) {
 	}
 }
 
-func TestBundleVerificationRecordRefusesFilesOutsideTheBundleFilesystem(t *testing.T) {
+// A file on another filesystem than its bundle directory keeps its exact
+// device, so a record never admits it from a different filesystem.
+func TestBundleVerificationRecordKeepsTheDeviceOfAForeignFile(t *testing.T) {
 	records := privateRecordRoot(t)
 	directory := writeBundleFixture(t)
-	_, err := (&Manager{verificationRoot: records}).memoizedBundleVerification(directory, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+	verify := func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 		artifacts := capturedArtifacts(t, "rootfs", filepath.Join(directory, "rootfs.ext4"))
 		artifacts[0].Device++
 		return artifacts, nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "on the bundle directory's filesystem") {
-		t.Fatalf("foreign-filesystem artifact error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(records, verificationRecordName(directory))); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("foreign-filesystem artifact was recorded: %v", err)
+	artifacts, err := (&Manager{verificationRoot: records}).memoizedBundleVerification(directory, verify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, stored, err := (&Manager{verificationRoot: records}).loadVerificationRecord(directory)
+	if err != nil || !stored {
+		t.Fatalf("record stored = %v, error = %v", stored, err)
+	}
+	if loaded.artifacts[0].Device != artifacts[0].Device {
+		t.Fatalf("foreign file device = %d, want %d", loaded.artifacts[0].Device, artifacts[0].Device)
 	}
 }
 

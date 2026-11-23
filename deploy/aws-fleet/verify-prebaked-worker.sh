@@ -6,17 +6,17 @@ cache=$1 expected=$2
 [[ -f $cache/prebaked.bundle.sha256 && $(cat "$cache/prebaked.bundle.sha256") == "$expected" ]] || {
   echo 'SecondBox pre-baked cache does not match the requested worker bundle' >&2; exit 1;
 }
-for asset in install-worker.sh stage-worker-execution-cache.sh bin/secondbox-fleet-enroll bin/secondbox-flat-root-digest runtime.env compose.yaml enrollment-ca.pem artifacts/materialization.json worker.tar.gz; do
+for asset in install-worker.sh stage-worker-execution-cache.sh bin/secondbox-fleet-enroll bin/secondbox-flat-root-digest runtime.env compose.yaml enrollment-ca.pem artifacts/materialization.json; do
   [[ -f $cache/$asset ]] || { echo "SecondBox pre-baked cache is missing $asset" >&2; exit 1; }
 done
 for executable in install-worker.sh stage-worker-execution-cache.sh bin/secondbox-fleet-enroll bin/secondbox-flat-root-digest; do
   [[ -x $cache/$executable ]] || { echo "SecondBox pre-baked cache cannot execute $executable" >&2; exit 1; }
 done
 [[ -d $cache/artifacts/rootfs ]] || { echo 'SecondBox pre-baked cache has no base root' >&2; exit 1; }
-[[ ! -e $cache/execution-images ]] || { echo 'SecondBox pre-baked cache requires compressed execution-image staging' >&2; exit 1; }
-if [[ -e $cache/prebaked.execution-images ]]; then
-  [[ $(cat "$cache/prebaked.execution-images") == archive ]] || { echo 'SecondBox pre-baked execution-image marker is invalid' >&2; exit 1; }
-fi
+# Execution images live on the worker data snapshot, never on the AMI root.
+for staged in execution-images worker.tar.gz; do
+  [[ ! -e $cache/$staged ]] || { echo "SecondBox pre-baked cache must not hold $staged on the AMI root" >&2; exit 1; }
+done
 # A prepared cache contains immutable release inputs, never per-worker enrollment output.
 for identity in runner.env runner.crt runner.key gateway.key enrollment.json; do
   [[ ! -e $cache/$identity ]] || { echo 'SecondBox pre-baked cache contains a worker identity' >&2; exit 1; }

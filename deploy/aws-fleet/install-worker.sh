@@ -29,6 +29,9 @@ mapfile -t data_disks < <(lsblk -dpno NAME,TYPE | awk -v root="/dev/$root_parent
 data_disk=${data_disks[0]}
 filesystem=$(blkid -s TYPE -o value "$data_disk" || true)
 new_filesystem=false
+if [[ $prebaked == true && $filesystem != xfs ]]; then
+  echo 'SecondBox worker bootstrap requires the pre-baked worker data volume' >&2; exit 1
+fi
 if [[ -z $filesystem ]]; then
   mkfs.xfs -m reflink=1 "$data_disk"
   new_filesystem=true
@@ -39,8 +42,18 @@ install -d -m 0700 /srv/secondbox
 if ! mountpoint -q /srv/secondbox; then mount "$data_disk" /srv/secondbox; fi
 [[ $(findmnt -n -o SOURCE /srv/secondbox) == "$data_disk" ]] || { echo 'SecondBox worker bootstrap data mount differs' >&2; exit 1; }
 marker=/srv/secondbox/.secondbox-fleet
+prebaked_marker=/srv/secondbox/.secondbox-prebaked
 if [[ $new_filesystem == true ]]; then
   printf '%s\n' "$fleet" > "$marker"
+elif [[ -f $prebaked_marker && ! -e $marker ]]; then
+  # A fresh volume from the worker data snapshot: claim it for this fleet and
+  # grow its filesystem to the launched volume size.
+  [[ $prebaked == true && $(cat "$prebaked_marker") == $(cat "$bundle/prebaked.bundle.sha256") ]] || {
+    echo 'SecondBox worker bootstrap refuses a pre-baked data volume of another worker bundle' >&2; exit 1;
+  }
+  xfs_growfs /srv/secondbox >/dev/null
+  printf '%s\n' "$fleet" > "$marker"
+  rm -- "$prebaked_marker"
 elif [[ ! -f $marker || $(cat "$marker") != "$fleet" ]]; then
   echo 'SecondBox worker bootstrap refuses an unowned retained data volume' >&2; exit 1
 fi
@@ -118,10 +131,13 @@ rm /srv/secondbox/reflink-probe
 if [[ $prebaked == false ]]; then
   docker image load --input "$bundle/worker-images.tar"
 fi
-cache_mode=download
-if [[ $prebaked == true ]]; then cache_mode=prebaked; fi
-"$bundle/stage-worker-execution-cache.sh" "$bundle" /srv/secondbox/state "$cache_mode"
-chown -R 10002:10002 /srv/secondbox/state/execution-images /run/secondbox-image-fetcher /etc/secondbox/image-registry
+"$bundle/stage-worker-execution-cache.sh" "$bundle" /srv/secondbox/state
+chown -R 10002:10002 /run/secondbox-image-fetcher /etc/secondbox/image-registry
+# The data snapshot already gives the fetcher its cache. A chown there would
+# change the times the Runner's baked verification records bind.
+if [[ $prebaked == false ]]; then
+  chown -R 10002:10002 /srv/secondbox/state/execution-images
+fi
 install -m 0600 "$bundle/runtime.env" /etc/secondbox/runtime.env
 install -m 0644 "$bundle/compose.yaml" /etc/secondbox/compose.yaml
 docker compose --project-name secondbox-elastic-worker \

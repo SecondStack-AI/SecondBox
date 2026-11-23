@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an identity-free worker AMI from an explicitly pinned bundle and placement."""
+"""Build an identity-free worker AMI and worker data snapshot from an explicitly pinned bundle and placement."""
 from datetime import datetime, timezone
 from pathlib import Path
 import argparse
@@ -15,10 +15,24 @@ import subprocess
 import time
 
 
+# The data snapshot is no larger than the fleet template's smallest WorkspaceGiB,
+# so every fleet can launch from it; a worker grows the filesystem to its volume.
+DATA_VOLUME_GIB = 64
+DATA_DEVICE_NAME = '/dev/sdf'
+
+
 def require_single_ami_root(resource):
     mappings = resource.get('BlockDeviceMappings', [])
     if len(mappings) != 1 or mappings[0].get('DeviceName') != '/dev/sda1' or 'Ebs' not in mappings[0]:
         raise ValueError('SecondBox AMI requires a single EBS root at /dev/sda1 and no other disks')
+
+
+def require_builder_data_volume(instance):
+    mappings = instance.get('BlockDeviceMappings', [])
+    names = sorted(mapping.get('DeviceName') for mapping in mappings)
+    if names != ['/dev/sda1', DATA_DEVICE_NAME] or any('Ebs' not in mapping for mapping in mappings):
+        raise ValueError('SecondBox AMI builder requires exactly its EBS root at /dev/sda1 and data disk at ' + DATA_DEVICE_NAME)
+    return next(mapping['Ebs']['VolumeId'] for mapping in mappings if mapping['DeviceName'] == DATA_DEVICE_NAME)
 
 
 def _build_worker_ami(config_path, output_directory):
@@ -146,8 +160,11 @@ printf '%s\\n' {quote(config['bundleSHA256'])} > /var/lib/secondbox-image-build/
                        '--security-group-ids', config['securityGroupId'], '--associate-public-ip-address',
                        '--iam-instance-profile', json.dumps({'Name': config['instanceProfile']}),
                        '--metadata-options', json.dumps({'HttpTokens': 'required', 'HttpPutResponseHopLimit': 1}),
-                       '--block-device-mappings', json.dumps([{'DeviceName': base['RootDeviceName'], 'Ebs': {
-                           'VolumeSize': config['rootVolumeGiB'], 'VolumeType': 'gp3', 'Encrypted': True, 'DeleteOnTermination': True}}]),
+                       '--block-device-mappings', json.dumps([
+                           {'DeviceName': base['RootDeviceName'], 'Ebs': {
+                               'VolumeSize': config['rootVolumeGiB'], 'VolumeType': 'gp3', 'Encrypted': True, 'DeleteOnTermination': True}},
+                           {'DeviceName': DATA_DEVICE_NAME, 'Ebs': {
+                               'VolumeSize': DATA_VOLUME_GIB, 'VolumeType': 'gp3', 'Encrypted': True, 'DeleteOnTermination': True}}]),
                        '--tag-specifications', json.dumps([{'ResourceType': kind, 'Tags': tags} for kind in
                                                           ['instance', 'volume', 'network-interface']]),
                        '--user-data', 'file://' + str(output_directory / 'builder-user-data.sh'))
@@ -200,17 +217,32 @@ systemctl poweroff
         aws('ec2', 'stop-instances', '--instance-ids', instance)
         stopped = wait_until(lambda: aws('ec2', 'describe-instances', '--instance-ids', instance)['Reservations'][0]['Instances'][0],
                              lambda item: item['State']['Name'] == 'stopped', 'identity scrub and poweroff')
-        require_single_ami_root(stopped)
+        data_volume = require_builder_data_volume(stopped)
+        bundle_tag = [{'Key':'secondstack.ai/bundle-sha256','Value':config['bundleSHA256']}]
+        # The AMI holds only the root; the data disk becomes a separate snapshot
+        # that the fleet template names explicitly for each worker's data volume.
         image = aws('ec2', 'create-image', '--instance-id', instance, '--name', config['imageName'], '--no-reboot',
-                    '--tag-specifications', json.dumps([{'ResourceType': kind, 'Tags': tags +
-                        [{'Key':'secondstack.ai/bundle-sha256','Value':config['bundleSHA256']}]} for kind in ['image','snapshot']]))['ImageId']
+                    '--block-device-mappings', json.dumps([{'DeviceName': DATA_DEVICE_NAME, 'NoDevice': ''}]),
+                    '--tag-specifications', json.dumps([{'ResourceType': kind, 'Tags': tags + bundle_tag}
+                                                        for kind in ['image','snapshot']]))['ImageId']
         receipt.update(imageId=image, state='snapshotting'); persist()
+        data_snapshot = aws('ec2', 'create-snapshot', '--volume-id', data_volume,
+                            '--description', 'SecondBox worker data ' + config['bundleSHA256'],
+                            '--tag-specifications', json.dumps([{'ResourceType': 'snapshot', 'Tags': tags + bundle_tag +
+                                [{'Key': 'secondstack.ai/worker-data', 'Value': 'true'}]}]))['SnapshotId']
+        receipt.update(dataSnapshotId=data_snapshot); persist()
         available = wait_until(lambda: aws('ec2', 'describe-images', '--image-ids', image)['Images'][0],
                                lambda item: item['State'] in {'available','failed','error'}, 'AMI snapshot completion')
         if available['State'] != 'available':
             raise RuntimeError('SecondBox AMI snapshot failed: ' + image)
-        receipt.update(state='available', image=available, completedAt=datetime.now(timezone.utc).isoformat()); persist()
-        print('SecondBox pre-baked worker AMI available:', image, flush=True)
+        require_single_ami_root(available)
+        completed = wait_until(lambda: aws('ec2', 'describe-snapshots', '--snapshot-ids', data_snapshot)['Snapshots'][0],
+                               lambda item: item['State'] in {'completed', 'error'}, 'worker data snapshot completion')
+        if completed['State'] != 'completed':
+            raise RuntimeError('SecondBox worker data snapshot failed: ' + data_snapshot)
+        receipt.update(state='available', image=available, dataSnapshot=completed,
+                       completedAt=datetime.now(timezone.utc).isoformat()); persist()
+        print('SecondBox pre-baked worker AMI available:', image, 'data snapshot:', data_snapshot, flush=True)
     except BaseException as error:
         receipt.update(state='failed', error=str(error)); persist()
         raise

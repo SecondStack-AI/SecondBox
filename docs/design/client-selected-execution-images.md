@@ -55,6 +55,7 @@ Full verification hashes gigabytes, so the Runner verifies each bundle once and 
 Changed metadata forces one re-verification.
 The Runner keeps these records in its private `SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT`, outside the fetcher-owned cache, so a restart does not re-verify an unchanged bundle.
 It trusts only a record root and record files that it owns with owner-only access, opened without following links; any other record root fails verification.
+A record binds each file on the bundle directory's filesystem by inode, size and modification and change times, without its device number, so a reboot that renumbers block devices, or a worker data volume cloned from a snapshot, keeps it; a file on another filesystem keeps its exact device.
 The Runner verifies a digest right after the fetcher prepares it, and after each start it verifies the cached bundles in the background, most recently used first, so the hashing does not land on a Sandbox start.
 The fetcher does not hash a cache hit again: only verified bundles enter the cache, and the Runner verifies before every launch.
 A materialization report cannot overwrite assignment authority.

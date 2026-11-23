@@ -41,6 +41,9 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
         self.seal_acknowledged = True
         self.extra_base_disk = False
         self.extra_builder_disk = False
+        self.missing_builder_data_disk = False
+        self.image_keeps_data_disk = False
+        self.snapshot_state = 'completed'
         self.interrupt_readiness = False
         self.interrupt_termination = False
         self.stopped_console_unavailable = False
@@ -64,12 +67,14 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
         if operation == 'get-caller-identity':
             result = {'Account': self.config['accountId']}
         elif operation == 'describe-images':
+            built = arguments[arguments.index('--image-ids') + 1] == 'ami-fedcba'
             result = {'Images': [{'Architecture': 'x86_64', 'State': 'available',
                                   'OwnerId': self.config['baseAMIOwner'],
                                   'PlatformDetails': 'Linux/UNIX', 'RootDeviceName': '/dev/sda1',
                                   'RootDeviceType': 'ebs',
                                   'BlockDeviceMappings': [{'DeviceName': '/dev/sda1', 'Ebs': {'SnapshotId': 'snap-abcdef'}}] +
-                                      ([{'DeviceName': '/dev/sdf', 'Ebs': {'SnapshotId': 'snap-fedcba'}}] if self.extra_base_disk else [])}]}
+                                      ([{'DeviceName': '/dev/sdf', 'Ebs': {'SnapshotId': 'snap-fedcba'}}]
+                                       if self.extra_base_disk or built and self.image_keeps_data_disk else [])}]}
         elif operation == 'describe-instances':
             if '--instance-ids' in arguments:
                 self.instance_reads += 1
@@ -77,7 +82,8 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
                 self.stopped_observed = state == 'stopped'
                 result = {'Reservations': [{'Instances': [{'InstanceId': 'i-abcdef', 'State': {'Name': state},
                     'BlockDeviceMappings': [{'DeviceName': '/dev/sda1', 'Ebs': {'VolumeId': 'vol-abcdef'}}] +
-                        ([{'DeviceName': '/dev/sdf', 'Ebs': {'VolumeId': 'vol-fedcba'}}] if self.extra_builder_disk else [])}]}]}
+                        ([] if self.missing_builder_data_disk else [{'DeviceName': '/dev/sdf', 'Ebs': {'VolumeId': 'vol-fedcba'}}]) +
+                        ([{'DeviceName': '/dev/sdg', 'Ebs': {'VolumeId': 'vol-123456'}}] if self.extra_builder_disk else [])}]}]}
             elif any('Name=client-token,' in value for value in arguments):
                 self.assertIn('Name=client-token,Values=' + self.launch_token, arguments)
                 self.assertIn('Name=tag:secondstack.ai/fleet-ref,Values=test-fleet', arguments)
@@ -118,6 +124,11 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
             result = {'CommandInvocations': [{'Status': 'Success'}]}
         elif operation == 'create-image':
             result = {'ImageId': 'ami-fedcba'}
+        elif operation == 'create-snapshot':
+            self.assertEqual(arguments[arguments.index('--volume-id') + 1], 'vol-fedcba')
+            result = {'SnapshotId': 'snap-data'}
+        elif operation == 'describe-snapshots':
+            result = {'Snapshots': [{'SnapshotId': 'snap-data', 'State': self.snapshot_state}]}
         elif operation == 'terminate-instances' and self.interrupt_termination:
             os.kill(os.getpid(), signal.SIGTERM)
         elif operation not in {'put-object', 'terminate-instances'}:
@@ -165,12 +176,49 @@ class WorkerAMIFailureBoundaries(unittest.TestCase):
             self.run_builder()
         self.assertNotIn('run-instances', [operation for _, operation, _ in self.calls])
 
-    def test_builder_with_extra_attached_disk_is_never_imaged(self):
-        self.extra_builder_disk = True
+    def test_builder_with_unexpected_disks_is_never_imaged(self):
+        for scenario in ('extra_builder_disk', 'missing_builder_data_disk'):
+            with self.subTest(scenario):
+                self.setUp()
+                setattr(self, scenario, True)
+                with self.assertRaisesRegex(ValueError, 'data disk at /dev/sdf'):
+                    self.run_builder()
+                operations = [operation for _, operation, _ in self.calls]
+                self.assertNotIn('create-image', operations)
+                self.assertNotIn('create-snapshot', operations)
+                receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+                self.assertTrue(receipt['builderTerminationRequested'])
+
+    def test_builder_images_only_the_root_and_snapshots_the_data_disk(self):
+        self.run_builder()
+        launch = next(arguments for _, operation, arguments in self.calls if operation == 'run-instances')
+        mappings = json.loads(launch[launch.index('--block-device-mappings') + 1])
+        self.assertEqual([mapping['DeviceName'] for mapping in mappings], ['/dev/sda1', '/dev/sdf'])
+        self.assertEqual(mappings[1]['Ebs'], {'VolumeSize': 64, 'VolumeType': 'gp3', 'Encrypted': True, 'DeleteOnTermination': True})
+        image = next(arguments for _, operation, arguments in self.calls if operation == 'create-image')
+        self.assertEqual(json.loads(image[image.index('--block-device-mappings') + 1]), [{'DeviceName': '/dev/sdf', 'NoDevice': ''}])
+        snapshot = next(arguments for _, operation, arguments in self.calls if operation == 'create-snapshot')
+        tags = json.loads(snapshot[snapshot.index('--tag-specifications') + 1])[0]['Tags']
+        self.assertIn({'Key': 'secondstack.ai/bundle-sha256', 'Value': self.config['bundleSHA256']}, tags)
+        operations = [operation for _, operation, _ in self.calls]
+        self.assertLess(operations.index('create-snapshot'), operations.index('terminate-instances'))
+        receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+        self.assertEqual((receipt['state'], receipt['dataSnapshotId']), ('available', 'snap-data'))
+
+    def test_image_that_kept_the_data_disk_is_not_reported_available(self):
+        self.image_keeps_data_disk = True
         with self.assertRaisesRegex(ValueError, 'single EBS root'):
             self.run_builder()
-        self.assertNotIn('create-image', [operation for _, operation, _ in self.calls])
         receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+        self.assertEqual(receipt['state'], 'failed')
+        self.assertTrue(receipt['builderTerminationRequested'])
+
+    def test_failed_data_snapshot_is_not_reported_available(self):
+        self.snapshot_state = 'error'
+        with self.assertRaisesRegex(RuntimeError, 'worker data snapshot failed'):
+            self.run_builder()
+        receipt = json.loads((self.root / 'output/ami-build.json').read_text())
+        self.assertEqual((receipt['state'], receipt['dataSnapshotId']), ('failed', 'snap-data'))
         self.assertTrue(receipt['builderTerminationRequested'])
 
     def test_stopped_without_seal_acknowledgement_is_never_imaged(self):

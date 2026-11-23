@@ -128,10 +128,10 @@ extraction preserves the same metadata, and installation checks the copied XFS
 artifact again. A metadata mismatch fails the build or worker startup; it never
 rewrites the pinned materialization digest.
 
-Worker bootstrap stages the execution cache privately, verifies checksums and
-publishes complete digest directories atomically under the Runner's digest
-lock. An interrupted extraction cannot publish a partial image. Retries retain
-existing image directories and live lock inodes.
+Worker bootstrap (or, for a pre-baked fleet, the AMI build) stages the execution
+cache privately, verifies checksums and publishes complete digest directories
+atomically under the Runner's digest lock. An interrupted copy cannot publish a
+partial image. Retries retain existing image directories and live lock inodes.
 
 Deploy `fleet.cloudformation.yaml` with an Ubuntu 24.04 amd64 AMI, dedicated VPC
 and public subnets (or supply equivalent outbound connectivity), explicit ports
@@ -159,16 +159,30 @@ destructive test expiry is not a normal retirement or durability policy.
 
 ## Pre-baked worker AMI
 
-The AMI contains Docker, XFS tools, AWS CLI, immutable runtime images, base
-artifacts and the original compressed worker bundle. Optional execution-image
-disks remain in that compressed archive; bootstrap extracts them sequentially
-onto XFS with sparse extents, avoiding expanded disk copies through cold EBS
-snapshot blocks. The cached archive is an immutable release input; Runner
-execution-image verification still applies before use. The AMI contains no enrolled Runner
-or gateway identity, registry credentials, Workspace disk or application data.
-Each new worker enrolls independently and receives a blank encrypted data disk.
-The enrollment CA is deployment-specific; rebuilding is required when changing
-it or any pinned bundle input. An AMI is a cache, not a Workspace recovery set.
+A pre-baked fleet uses two build outputs: an AMI and a worker data snapshot.
+The AMI root contains Docker, XFS tools, AWS CLI, the immutable runtime images
+and the unpacked worker bundle without its execution images. The data snapshot
+is a 64 GiB reflink XFS filesystem that already holds the base artifacts, the
+optional execution-image cache owned by the image fetcher, and the Runner's
+verification records for that cache. The build runs the bundle's own Runner
+image with `-record-execution-image-verifications` under the worker's container
+paths, so a worker's Runner admits the cached images from records and hashes
+nothing. Records bind files to their filesystem rather than a device number,
+so the clone keeps them.
+
+Each worker's data volume is created from that snapshot at the template's
+`WorkspaceGiB`. Bootstrap claims a volume that carries the snapshot's bundle
+marker and no fleet marker: it grows the filesystem, writes the fleet marker
+and skips the artifact copy, cache staging and cache ownership change. Blocks
+load from the snapshot on first read, so a start reads only the image blocks
+its Sandbox touches. All clones share one XFS UUID; mount two on one host only
+with `nouuid`, for example during operator recovery of a retained volume.
+
+Neither output contains an enrolled Runner or gateway identity, registry
+credentials, a Workspace or application data. Each worker enrolls
+independently. The enrollment CA is deployment-specific; rebuild both outputs
+when changing it or any pinned bundle input. They are a cache, not a Workspace
+recovery set.
 
 Copy `ami-build.example.json` outside the checkout and replace every placeholder.
 Select an available Ubuntu 24.04 amd64 base AMI and its expected owner explicitly.
@@ -188,11 +202,13 @@ uv run --no-project deploy/aws-fleet/build-worker-ami.py \
 
 Use an existing task-scoped AWS profile or an operator-assumed role. The script
 checks the account and base owner, launches at most one owned builder, uploads
-and pins the preparer, and prepares the checksum-pinned cache without enrolling.
-It verifies the cache, stops and removes SSM registration, clears cloud-init
-identity and SSH host keys, then powers off before creating the AMI. It records
-the AMI and snapshot identities in `ami-build.json` and requests termination of
-the builder even on failure. The explicit build deadline is at most two hours;
+and pins the preparer, and prepares the checksum-pinned cache and the builder's
+blank 64 GiB data disk without enrolling. It verifies the cache, stops and
+removes SSM registration, clears cloud-init identity and SSH host keys, then
+powers off. It creates the AMI from the root only and a separate snapshot of the
+data disk, records the AMI, its root snapshot and `dataSnapshotId` in
+`ami-build.json`, and requests termination of the builder, whose disks are
+deleted with it, even on failure. The explicit build deadline is at most two hours;
 the guest also schedules shutdown. Inspect the receipt after interruption;
 never blindly rerun against a live builder. A launch token is persisted before
 allocation; an ambiguous CLI response triggers bounded recovery and termination
@@ -202,7 +218,8 @@ retained for inspection and must be inventoried and removed by the operator.
 
 Before imaging, the builder observes a per-build nonce acknowledgement written
 to the serial console after identity scrubbing, then requests an EC2 stop and
-confirms that the stopped instance still has only its root disk. Console output
+confirms that the stopped instance has exactly its root and data disks. It
+refuses an AMI that kept the data disk mapping. Console output
 is read while the instance runs because EC2 can return empty output after
 shutdown. The sealed guest powers off after five minutes if the provisioner
 disappears. An unrelated stop or a stale console acknowledgement does not
@@ -211,7 +228,7 @@ receipted cleanup path; after SIGKILL or host loss, inspect the receipt and AWS
 inventory explicitly.
 
 The provisioning role needs EC2 describe, scoped launch/tag/stop/terminate/create-image
-authority, `iam:PassRole` for only the builder profile's role, `s3:PutObject` for
+and create-snapshot authority (including `ec2:DescribeSnapshots`), `iam:PassRole` for only the builder profile's role, `s3:PutObject` for
 the preparer key and SSM RunShellScript on only owned builders. It needs no IAM
 write authority or archive-bucket credentials. Existing account-wide SSM
 associations may run on the builder; account operators must account for these
@@ -220,15 +237,17 @@ when assessing AMI provenance and package-manager contention.
 The provisioner also needs `ec2:GetConsoleOutput` on its owned builder instances
 to verify the seal acknowledgement; worker roles do not need that permission.
 
-Deploy `fleet.cloudformation.yaml` with `WorkerAMI` set to the available result,
-and both `PrebakedWorkerBundleSHA256` and `WorkerBundleSHA256` set to the bundle's
-exact SHA256. Keep `WorkerBundleBucket`, prefix and key pinned to the same input.
-The root volume is 32 GiB and must accommodate the cached bundle and loaded
-images. The template rejects unequal SHA values; bootstrap checks the cache
-marker and exact Docker image IDs before enrollment. A missing or mismatched
-cache fails explicitly, with no download fallback. Empty
-`PrebakedWorkerBundleSHA256` selects the existing download mode and refuses a
-pre-baked cache. Switching an idle fleet changes subsequent workers; it does
+Deploy `fleet.cloudformation.yaml` with `WorkerAMI` and
+`PrebakedWorkerDataSnapshot` set to the build's results, and both
+`PrebakedWorkerBundleSHA256` and `WorkerBundleSHA256` set to the bundle's exact
+SHA256. Keep `WorkerBundleBucket`, prefix and key pinned to the same input.
+The root volume is 32 GiB and must accommodate the unpacked bundle and loaded
+images. The template rejects unequal SHA values and a pre-baked SHA256 without
+its data snapshot, or the reverse. Bootstrap checks the cache marker, the exact
+Docker image IDs and the data volume's bundle marker before enrollment. A
+missing or mismatched cache or data volume fails explicitly, with no download
+fallback. Empty `PrebakedWorkerBundleSHA256` selects the existing download mode
+and refuses a pre-baked cache or data volume. Switching an idle fleet changes subsequent workers; it does
 not roll active Workspaces or authorize forced ASG scale-in.
 
 For a permanent deployment, place the controller, PostgreSQL, issuer and egress
@@ -252,8 +271,9 @@ that mount before starting. Docker also recreates the fetcher socket directory
 with UID 10002 before restarting containers, so reboot cannot fall back to an
 unmounted root-directory workspace or an inaccessible `/run` socket directory.
 
-The bootstrap formats only a blank, single non-root volume as XFS with reflink.
-Retained XFS requires the same fleet marker. Artifacts, cache, workspaces and
+The download-mode bootstrap formats only a blank, single non-root volume as XFS
+with reflink; a pre-baked bootstrap requires the snapshot's volume. Retained XFS
+requires the same fleet marker. Artifacts, cache, workspaces and
 archive staging share the XFS disk. Budget for the materialized base, image
 cache, active workspace capacity and an additional full logical image per
 concurrent incompressible export; archive concurrency defaults to one in the
