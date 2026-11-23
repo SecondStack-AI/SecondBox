@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +19,7 @@ func TestBundleVerificationRepeatsOnlyWhenBundleMetadataChanges(t *testing.T) {
 	verifications := 0
 	verify := func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 		verifications++
-		return []runtimemanager.VerifiedExecutionImageArtifact{{Label: "rootfs", Path: filepath.Join(directory, "rootfs.ext4")}}, nil
+		return capturedArtifacts(t, "rootfs", filepath.Join(directory, "rootfs.ext4")), nil
 	}
 	for range 4 {
 		artifacts, err := manager.memoizedBundleVerification(directory, verify)
@@ -93,7 +94,7 @@ func TestBundleVerificationRecordSurvivesRunnerRestart(t *testing.T) {
 	verifications := 0
 	verify := func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 		verifications++
-		return []runtimemanager.VerifiedExecutionImageArtifact{{Label: "rootfs", Path: filepath.Join(directory, "rootfs.ext4")}}, nil
+		return capturedArtifacts(t, "rootfs", filepath.Join(directory, "rootfs.ext4")), nil
 	}
 	if _, err := (&Manager{verificationRoot: records}).memoizedBundleVerification(directory, verify); err != nil {
 		t.Fatal(err)
@@ -122,7 +123,7 @@ func TestBundleVerificationRecordSurvivesRunnerRestart(t *testing.T) {
 func TestBundleVerificationRecordsRefuseSharedOrLinkedRoots(t *testing.T) {
 	directory := writeBundleFixture(t)
 	verify := func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
-		return []runtimemanager.VerifiedExecutionImageArtifact{{Label: "rootfs", Path: filepath.Join(directory, "rootfs.ext4")}}, nil
+		return capturedArtifacts(t, "rootfs", filepath.Join(directory, "rootfs.ext4")), nil
 	}
 	shared := filepath.Join(t.TempDir(), "records")
 	if err := os.Mkdir(shared, 0o700); err != nil {
@@ -160,7 +161,7 @@ func TestBundleVerificationRecordRejectsAnotherBundle(t *testing.T) {
 	recorded := writeBundleFixture(t)
 	manager := &Manager{verificationRoot: records}
 	if _, err := manager.memoizedBundleVerification(recorded, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
-		return []runtimemanager.VerifiedExecutionImageArtifact{{Label: "rootfs", Path: filepath.Join(recorded, "rootfs.ext4")}}, nil
+		return capturedArtifacts(t, "rootfs", filepath.Join(recorded, "rootfs.ext4")), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestBundleVerificationRecordsPruneRemovedBundles(t *testing.T) {
 	records := privateRecordRoot(t)
 	verifyKernel := func(directory string) func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
 		return func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
-			return []runtimemanager.VerifiedExecutionImageArtifact{{Label: "kernel", Path: filepath.Join(directory, "kernel")}}, nil
+			return capturedArtifacts(t, "kernel", filepath.Join(directory, "kernel")), nil
 		}
 	}
 	removed := writeBundleFixture(t)
@@ -211,7 +212,7 @@ func TestBundleVerificationRecordsTolerateConcurrentWriters(t *testing.T) {
 	}
 	evicted := writeBundleFixture(t)
 	if _, err := manager.memoizedBundleVerification(evicted, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
-		return []runtimemanager.VerifiedExecutionImageArtifact{{Label: "kernel", Path: filepath.Join(evicted, "kernel")}}, nil
+		return capturedArtifacts(t, "kernel", filepath.Join(evicted, "kernel")), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +224,7 @@ func TestBundleVerificationRecordsTolerateConcurrentWriters(t *testing.T) {
 	for _, directory := range append(others, slices.Repeat([]string{shared}, len(others))...) {
 		group.Go(func() {
 			_, err := manager.memoizedBundleVerification(directory, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
-				return []runtimemanager.VerifiedExecutionImageArtifact{{Label: "kernel", Path: filepath.Join(directory, "kernel")}}, nil
+				return capturedArtifacts(t, "kernel", filepath.Join(directory, "kernel")), nil
 			})
 			errs <- err
 		})
@@ -235,6 +236,98 @@ func TestBundleVerificationRecordsTolerateConcurrentWriters(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// A record carries no device numbers, so a cloned data volume or a reboot that
+// numbers block devices differently keeps it; a load binds the files to the
+// bundle directory's current device.
+func TestBundleVerificationRecordBindsFilesToTheBundleFilesystem(t *testing.T) {
+	records := privateRecordRoot(t)
+	directory := writeBundleFixture(t)
+	if _, err := (&Manager{verificationRoot: records}).memoizedBundleVerification(directory, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+		return capturedArtifacts(t, "rootfs", filepath.Join(directory, "rootfs.ext4")), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(records, verificationRecordName(directory)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(content)), "device") {
+		t.Fatalf("verification record persisted the device number of a bundle-filesystem file: %s", content)
+	}
+	device, err := bundleDirectoryDevice(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, stored, err := (&Manager{verificationRoot: records}).loadVerificationRecord(directory)
+	if err != nil || !stored {
+		t.Fatalf("record stored = %v, error = %v", stored, err)
+	}
+	for _, artifact := range append(loaded.artifacts, loaded.identities...) {
+		if artifact.Device != device {
+			t.Fatalf("loaded %s device = %d, want bundle directory device %d", artifact.Label, artifact.Device, device)
+		}
+	}
+}
+
+// A file on another filesystem than its bundle directory keeps its exact
+// device, so a record never admits it from a different filesystem.
+func TestBundleVerificationRecordKeepsTheDeviceOfAForeignFile(t *testing.T) {
+	records := privateRecordRoot(t)
+	directory := writeBundleFixture(t)
+	verify := func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+		artifacts := capturedArtifacts(t, "rootfs", filepath.Join(directory, "rootfs.ext4"))
+		artifacts[0].Device++
+		return artifacts, nil
+	}
+	artifacts, err := (&Manager{verificationRoot: records}).memoizedBundleVerification(directory, verify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, stored, err := (&Manager{verificationRoot: records}).loadVerificationRecord(directory)
+	if err != nil || !stored {
+		t.Fatalf("record stored = %v, error = %v", stored, err)
+	}
+	if loaded.artifacts[0].Device != artifacts[0].Device {
+		t.Fatalf("foreign file device = %d, want %d", loaded.artifacts[0].Device, artifacts[0].Device)
+	}
+}
+
+// A record written by an earlier schema is ignored and replaced by the next
+// verification rather than failing the start.
+func TestBundleVerificationRecordIgnoresAnEarlierSchema(t *testing.T) {
+	records := privateRecordRoot(t)
+	directory := writeBundleFixture(t)
+	if err := os.MkdirAll(records, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	earlier := `{"schemaVersion":1,"directory":` + strconv.Quote(directory) + `,"artifacts":[{"Label":"rootfs","Path":"x","Device":7}],"identities":[]}`
+	if err := os.WriteFile(filepath.Join(records, verificationRecordName(directory)), []byte(earlier), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	verifications := 0
+	if _, err := (&Manager{verificationRoot: records}).memoizedBundleVerification(directory, func() ([]runtimemanager.VerifiedExecutionImageArtifact, error) {
+		verifications++
+		return capturedArtifacts(t, "rootfs", filepath.Join(directory, "rootfs.ext4")), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, stored, err := (&Manager{verificationRoot: records}).loadVerificationRecord(directory); verifications != 1 || err != nil || !stored {
+		t.Fatalf("earlier schema: verifications = %d, replacement stored = %v, error = %v", verifications, stored, err)
+	}
+}
+
+// capturedArtifacts is the identity a real verification returns for path. It
+// reports through t.Error so concurrent verifications may call it.
+func capturedArtifacts(t *testing.T, label, path string) []runtimemanager.VerifiedExecutionImageArtifact {
+	t.Helper()
+	artifact, err := runtimemanager.CaptureVerifiedExecutionImageArtifact(label, path)
+	if err != nil {
+		t.Error(err)
+		return nil
+	}
+	return []runtimemanager.VerifiedExecutionImageArtifact{artifact}
 }
 
 // privateRecordRoot is a record root the Runner creates on first use.

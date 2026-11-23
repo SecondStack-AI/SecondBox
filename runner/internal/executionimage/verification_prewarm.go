@@ -22,11 +22,46 @@ import (
 // and the remaining bundles are still verified.
 func (manager *Manager) PrewarmVerifications(ctx context.Context) error {
 	started := time.Now()
-	directories, err := manager.cachedBundleDirectoriesByRecency()
+	verified, failures, err := manager.verifyCachedBundles(ctx, true)
 	if err != nil {
 		return err
 	}
-	verified, failed := 0, 0
+	for _, failure := range failures {
+		slog.Error("SecondBox execution image prewarm verification failed", "error", failure)
+	}
+	slog.Info("SecondBox execution image prewarm verification completed",
+		"verified", verified, "failed", len(failures), "durationMs", time.Since(started).Milliseconds())
+	return nil
+}
+
+// RecordCachedBundleVerifications verifies and records every cached bundle
+// before any Runner starts on this cache, as a worker image build does. Unlike
+// prewarming it fails when a bundle fails or the cache holds none, because the
+// built image would otherwise ship unverified bundles.
+func (manager *Manager) RecordCachedBundleVerifications(ctx context.Context) (int, error) {
+	verified, failures, err := manager.verifyCachedBundles(ctx, false)
+	if err != nil {
+		return verified, err
+	}
+	if len(failures) > 0 {
+		return verified, errors.Join(failures...)
+	}
+	if verified == 0 {
+		return 0, errors.New("SecondBox execution image cache holds no bundle to record")
+	}
+	return verified, nil
+}
+
+// skipEvicted ignores a bundle whose directory disappeared after listing,
+// which only a running fetcher's eviction causes; recording runs with no
+// fetcher. A missing file in a remaining directory is a failure either way.
+func (manager *Manager) verifyCachedBundles(ctx context.Context, skipEvicted bool) (int, []error, error) {
+	directories, err := manager.cachedBundleDirectoriesByRecency()
+	if err != nil {
+		return 0, nil, err
+	}
+	verified := 0
+	var failures []error
 	for _, directory := range directories {
 		digest := "sha256:" + filepath.Base(directory)
 		prepared, err := manager.verifyCachedDigest(ctx, digest, manager.lockExistingDigest)
@@ -36,19 +71,18 @@ func (manager *Manager) PrewarmVerifications(ctx context.Context) error {
 			continue
 		}
 		if ctx.Err() != nil {
-			return context.Cause(ctx)
+			return verified, failures, context.Cause(ctx)
 		}
-		if errors.Is(err, os.ErrNotExist) {
-			// The fetcher evicted the bundle, and with it its lock file, after
-			// it was listed.
-			continue
+		if skipEvicted && errors.Is(err, os.ErrNotExist) {
+			if _, statErr := os.Stat(directory); errors.Is(statErr, os.ErrNotExist) {
+				// The fetcher evicted the bundle, and with it its lock file,
+				// after it was listed.
+				continue
+			}
 		}
-		failed++
-		slog.Error("SecondBox execution image prewarm verification failed", "digest", digest, "error", err)
+		failures = append(failures, fmt.Errorf("SecondBox execution image %s verification failed: %w", digest, err))
 	}
-	slog.Info("SecondBox execution image prewarm verification completed",
-		"verified", verified, "failed", failed, "durationMs", time.Since(started).Milliseconds())
-	return nil
+	return verified, failures, nil
 }
 
 func (manager *Manager) cachedBundleDirectoriesByRecency() ([]string, error) {

@@ -56,6 +56,11 @@ Parameters:
     Default: ''
     AllowedPattern: '^$|^[a-f0-9]{64}$'
     Description: Opt in to an AMI prepared with this exact bundle SHA256. Empty selects download bootstrap.
+  PrebakedWorkerDataSnapshot:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^snap-[0-9a-f]+$'
+    Description: The worker data snapshot built with the pre-baked AMI. Required exactly when PrebakedWorkerBundleSHA256 is set.
   EnrollmentURL:
     Type: String
     AllowedPattern: 'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9./-]*)?'
@@ -84,6 +89,12 @@ Rules:
     Assertions:
       - Assert: !Or [!Equals [!Ref PrebakedWorkerBundleSHA256, ''], !Equals [!Ref PrebakedWorkerBundleSHA256, !Ref WorkerBundleSHA256]]
         AssertDescription: The pre-baked AMI and worker bundle must use the same SHA256.
+  PrebakedDataSnapshot:
+    Assertions:
+      - Assert: !Or
+          - !And [!Equals [!Ref PrebakedWorkerBundleSHA256, ''], !Equals [!Ref PrebakedWorkerDataSnapshot, '']]
+          - !And [!Not [!Equals [!Ref PrebakedWorkerBundleSHA256, '']], !Not [!Equals [!Ref PrebakedWorkerDataSnapshot, '']]]
+        AssertDescription: A pre-baked AMI requires its worker data snapshot, and a data snapshot requires the pre-baked AMI.
 Resources:
   WorkerRole:
     Type: AWS::IAM::Role
@@ -138,10 +149,20 @@ Resources:
             AssociatePublicIpAddress: true
             Groups: [!Ref WorkerSecurityGroup]
         BlockDeviceMappings:
+          # Pre-baked volumes initialize from their snapshots at a provisioned
+          # rate; the default lazy restore reads first-touched blocks at a few MB/s.
           - DeviceName: /dev/sda1
-            Ebs: {VolumeSize: 32, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+            Ebs:
+              Fn::If:
+                - PrebakedWorkerEnabled
+                - {VolumeSize: 32, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true, VolumeInitializationRate: 300}
+                - {VolumeSize: 32, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
           - DeviceName: /dev/sdf
-            Ebs: {VolumeSize: !Ref WorkspaceGiB, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false}
+            Ebs:
+              Fn::If:
+                - PrebakedWorkerEnabled
+                - {SnapshotId: !Ref PrebakedWorkerDataSnapshot, VolumeSize: !Ref WorkspaceGiB, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false, VolumeInitializationRate: 300}
+                - {VolumeSize: !Ref WorkspaceGiB, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false}
         TagSpecifications:
           - ResourceType: instance
             Tags:

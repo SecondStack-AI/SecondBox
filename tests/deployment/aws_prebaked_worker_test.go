@@ -23,21 +23,13 @@ func TestPrebakedWorkerCacheRequiresExactBundleAndImages(t *testing.T) {
 		{name: "different bundle", fail: true, change: func(t *testing.T, cache, _ string) {
 			writePrebakedFixture(t, filepath.Join(cache, "prebaked.bundle.sha256"), strings.Repeat("f", 64), 0o600)
 		}},
-		{name: "missing retained archive", fail: true, change: func(t *testing.T, cache, _ string) {
-			if err := os.Remove(filepath.Join(cache, "worker.tar.gz")); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "expanded execution cache", fail: true, change: func(t *testing.T, cache, _ string) {
+		{name: "execution cache on the AMI root", fail: true, change: func(t *testing.T, cache, _ string) {
 			if err := os.Mkdir(filepath.Join(cache, "execution-images"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "invalid execution cache marker", fail: true, change: func(t *testing.T, cache, _ string) {
-			writePrebakedFixture(t, filepath.Join(cache, "prebaked.execution-images"), "invalid", 0o600)
-		}},
-		{name: "compressed execution cache", change: func(t *testing.T, cache, _ string) {
-			writePrebakedFixture(t, filepath.Join(cache, "prebaked.execution-images"), "archive\n", 0o600)
+		{name: "bundle archive on the AMI root", fail: true, change: func(t *testing.T, cache, _ string) {
+			writePrebakedFixture(t, filepath.Join(cache, "worker.tar.gz"), "fixture", 0o600)
 		}},
 		{name: "mutable image reference", fail: true, change: func(t *testing.T, cache, _ string) {
 			writePrebakedFixture(t, filepath.Join(cache, "runtime.env"), "SECONDBOX_RUNNER_IMAGE=runner:latest\nAGENT_RUNNER_GATEWAY_IMAGE=sha256:"+strings.Repeat("b", 64)+"\n", 0o600)
@@ -62,7 +54,7 @@ func TestPrebakedWorkerCacheRequiresExactBundleAndImages(t *testing.T) {
 			for _, name := range []string{"install-worker.sh", "stage-worker-execution-cache.sh", "bin/secondbox-fleet-enroll", "bin/secondbox-flat-root-digest"} {
 				writePrebakedFixture(t, filepath.Join(cache, name), "#!/bin/sh\nexit 0\n", 0o755)
 			}
-			for _, name := range []string{"compose.yaml", "enrollment-ca.pem", "artifacts/materialization.json", "worker.tar.gz"} {
+			for _, name := range []string{"compose.yaml", "enrollment-ca.pem", "artifacts/materialization.json"} {
 				writePrebakedFixture(t, filepath.Join(cache, name), "fixture", 0o600)
 			}
 			writePrebakedFixture(t, filepath.Join(cache, "runtime.env"), "SECONDBOX_RUNNER_IMAGE=sha256:"+strings.Repeat("a", 64)+"\nAGENT_RUNNER_GATEWAY_IMAGE=sha256:"+strings.Repeat("b", 64)+"\n", 0o600)
@@ -86,5 +78,34 @@ func writePrebakedFixture(t *testing.T, path, text string, mode os.FileMode) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(text), mode); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Verification records name bundle directories by their Runner container
+// path, so the paths a worker image build records under must be the paths the
+// worker's Runner uses.
+func TestPrebakedWorkerRecordsVerificationsUnderRunnerPaths(t *testing.T) {
+	repository := repositoryRootForDeploymentPolicy(t)
+	compose, err := os.ReadFile(filepath.Join(repository, "deploy/aws-fleet/compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparer, err := os.ReadFile(filepath.Join(repository, "deploy/aws-fleet/prepare-prebaked-worker.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range []struct{ variable, path string }{
+		{"SECONDBOX_RUNNER_EXECUTION_IMAGE_CACHE_ROOT", "/var/lib/secondbox/state/execution-images"},
+		{"SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT", "/var/lib/secondbox/state/execution-image-verifications"},
+	} {
+		if !strings.Contains(string(compose), setting.variable+": "+setting.path+"\n") {
+			t.Fatalf("worker compose.yaml no longer sets %s to %s", setting.variable, setting.path)
+		}
+		if !strings.Contains(string(preparer), "--env "+setting.variable+"="+setting.path+" ") {
+			t.Fatalf("pre-baked preparation does not record under %s=%s", setting.variable, setting.path)
+		}
+	}
+	if !strings.Contains(string(compose), "- /srv/secondbox:/var/lib/secondbox:") || !strings.Contains(string(preparer), `--volume "$data:/var/lib/secondbox"`) {
+		t.Fatal("pre-baked preparation and the worker Runner mount the data volume at different paths")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"net/url"
@@ -99,7 +100,9 @@ func TestRunnerConnectAcceptsEnrollmentCertificateChain(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := stream.Send(helloFrame("runner-fleet", runnerv1.SupportedProtocolMinimum, runnerv1.SupportedProtocolMaximum)); err != nil {
+			// A rejecting server can end the stream before this Send; gRPC then
+			// reports io.EOF and Recv carries the stream's status.
+			if err := stream.Send(helloFrame("runner-fleet", runnerv1.SupportedProtocolMinimum, runnerv1.SupportedProtocolMaximum)); err != nil && !errors.Is(err, io.EOF) {
 				t.Fatal(err)
 			}
 			response, err := stream.Recv()

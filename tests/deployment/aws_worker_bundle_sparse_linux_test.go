@@ -133,10 +133,10 @@ esac
 	}
 }
 
-func TestAWSPrebakedExecutionCacheRetryKeepsLiveLocks(t *testing.T) {
+func TestAWSWorkerExecutionCacheRetryKeepsLiveLocks(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "bundle")
-	source := filepath.Join(root, "archive/execution-images")
+	source := filepath.Join(bundle, "execution-images")
 	state := filepath.Join(root, "state")
 	cache := filepath.Join(state, "execution-images")
 	existingDigest := strings.Repeat("a", 64)
@@ -151,14 +151,8 @@ func TestAWSPrebakedExecutionCacheRetryKeepsLiveLocks(t *testing.T) {
 		writePrebakedFixture(t, filepath.Join(source, digest, "SHA256SUMS"), fmt.Sprintf("%x  rootfs.ext4\n", sha256.Sum256([]byte(payload))), 0o600)
 	}
 	writePrebakedFixture(t, filepath.Join(cache, existingDigest, "rootfs.ext4"), "Runner-owned bytes", 0o600)
-	writePrebakedFixture(t, filepath.Join(bundle, "prebaked.execution-images"), "archive\n", 0o600)
 	if err := os.Chmod(cache, 0o710); err != nil {
 		t.Fatal(err)
-	}
-	archive := exec.Command("tar", "--create", "--gzip", "--format=pax", "--file", filepath.Join(bundle, "worker.tar.gz"),
-		"--directory", filepath.Join(root, "archive"), "execution-images")
-	if output, err := archive.CombinedOutput(); err != nil {
-		t.Fatalf("create worker cache fixture: %v\n%s", err, output)
 	}
 	lockPath := filepath.Join(cache, ".locks", existingDigest+".lock")
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
@@ -170,7 +164,7 @@ func TestAWSPrebakedExecutionCacheRetryKeepsLiveLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for attempt := range 2 {
-		stage := exec.Command("bash", filepath.Join(repositoryRootForDeploymentPolicy(t), "deploy/aws-fleet/stage-worker-execution-cache.sh"), bundle, state, "prebaked")
+		stage := exec.Command("bash", filepath.Join(repositoryRootForDeploymentPolicy(t), "deploy/aws-fleet/stage-worker-execution-cache.sh"), bundle, state)
 		if output, err := stage.CombinedOutput(); err != nil {
 			t.Fatalf("stage retry %d: %v\n%s", attempt, err, output)
 		}
@@ -196,12 +190,12 @@ func TestAWSPrebakedExecutionCacheRetryKeepsLiveLocks(t *testing.T) {
 	}
 }
 
-func TestAWSPrebakedExecutionCacheInterruptedStagingIsRetryable(t *testing.T) {
+func TestAWSWorkerExecutionCacheInterruptedStagingIsRetryable(t *testing.T) {
 	root := t.TempDir()
 	bundle := filepath.Join(root, "bundle")
 	state := filepath.Join(root, "state")
 	digest := strings.Repeat("b", 64)
-	source := filepath.Join(root, "archive/execution-images", digest)
+	source := filepath.Join(bundle, "execution-images", digest)
 	tools := filepath.Join(root, "tools")
 	for _, directory := range []string{bundle, source, tools, filepath.Join(state, "execution-images")} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -211,33 +205,25 @@ func TestAWSPrebakedExecutionCacheInterruptedStagingIsRetryable(t *testing.T) {
 	payload := "complete execution disk payload"
 	writePrebakedFixture(t, filepath.Join(source, "rootfs.ext4"), payload, 0o600)
 	writePrebakedFixture(t, filepath.Join(source, "SHA256SUMS"), fmt.Sprintf("%x  rootfs.ext4\n", sha256.Sum256([]byte(payload))), 0o600)
-	writePrebakedFixture(t, filepath.Join(bundle, "prebaked.execution-images"), "archive\n", 0o600)
-	realTar, err := exec.LookPath("tar")
+	realCopy, err := exec.LookPath("cp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive := exec.Command(realTar, "--create", "--gzip", "--format=pax", "--file", filepath.Join(bundle, "worker.tar.gz"),
-		"--directory", filepath.Join(root, "archive"), "execution-images")
-	if output, err := archive.CombinedOutput(); err != nil {
-		t.Fatalf("create interrupted cache fixture: %v\n%s", err, output)
-	}
-	writePrebakedFixture(t, filepath.Join(tools, "tar"), `#!/bin/bash
+	// The first copy writes a truncated image and fails, as an interrupted
+	// copy onto the data volume would.
+	writePrebakedFixture(t, filepath.Join(tools, "cp"), `#!/bin/bash
 set -eu
-"$REAL_TAR" "$@"
+"$REAL_CP" "$@"
 if [[ ! -e $INTERRUPTION_MARKER ]]; then
-  args=("$@")
-  for ((i=0; i<${#args[@]}; i++)); do
-    if [[ ${args[i]} == --directory ]]; then
-      printf 'partial' > "${args[i+1]}/execution-images/$CACHE_DIGEST/rootfs.ext4"
-    fi
-  done
+  destination=${@: -1}
+  printf 'partial' > "$destination/$CACHE_DIGEST/rootfs.ext4"
   touch "$INTERRUPTION_MARKER"
   exit 73
 fi
 `, 0o755)
 	stage := func() ([]byte, error) {
-		command := exec.Command("bash", filepath.Join(repositoryRootForDeploymentPolicy(t), "deploy/aws-fleet/stage-worker-execution-cache.sh"), bundle, state, "prebaked")
-		command.Env = append(os.Environ(), "PATH="+tools+":"+os.Getenv("PATH"), "REAL_TAR="+realTar,
+		command := exec.Command("bash", filepath.Join(repositoryRootForDeploymentPolicy(t), "deploy/aws-fleet/stage-worker-execution-cache.sh"), bundle, state)
+		command.Env = append(os.Environ(), "PATH="+tools+":"+os.Getenv("PATH"), "REAL_CP="+realCopy,
 			"INTERRUPTION_MARKER="+filepath.Join(root, "interrupted"), "CACHE_DIGEST="+digest)
 		return command.CombinedOutput()
 	}

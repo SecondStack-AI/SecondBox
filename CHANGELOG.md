@@ -2,12 +2,18 @@
 
 ## Unreleased
 
+### Changed
+
+- Pre-baked AWS Code workers start from a worker data snapshot that already holds the base artifacts, the execution-image cache and its verification records. A new worker extracts, copies and hashes no execution image before its Runner connects; the AMI no longer carries the compressed execution cache.
+
 ### Fixed
 
 - A Runner or image fetcher restart no longer adds full execution-image hashing to the first Sandbox start of each cached image. The Runner keeps its verification records across restarts and verifies prepared and cached images ahead of starts, and the fetcher no longer re-hashes cache hits.
+- Execution-image verification records survive a block-device renumbering, so a reboot or a data volume cloned from a snapshot no longer re-hashes cached images.
 
 ### Upgrade notes
 
+- A pre-baked AWS worker fleet needs a new AMI build, which now also produces the worker data snapshot. Deploy the fleet template with both `WorkerAMI` and the new `PrebakedWorkerDataSnapshot`; the AMI provisioning role additionally needs `ec2:CreateSnapshot` and `ec2:DescribeSnapshots` on its owned builder volume and snapshot.
 - Firecracker and gVisor Runners require `SECONDBOX_RUNNER_EXECUTION_IMAGE_VERIFICATION_ROOT`, a Runner-private directory outside the execution-image cache. `secondbox-deploy` renders it for managed Runners; remote, Kubernetes and hand-written Runner environments must add it. The first start after the upgrade verifies each cached image once in the background.
 
 ## 0.32.5 - 2026-11-20
