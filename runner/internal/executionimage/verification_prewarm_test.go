@@ -108,6 +108,20 @@ func TestPrewarmVerificationsOrdersBundlesByRecentUse(t *testing.T) {
 	}
 }
 
+// Prewarming reports a remaining bundle that lacks a file instead of treating
+// it as evicted.
+func TestPrewarmVerificationsReportsABundleMissingAFile(t *testing.T) {
+	cacheRoot := t.TempDir()
+	incomplete := publishCachedBundle(t, cacheRoot, "sha256:"+strings.Repeat("d8", 32))
+	if err := os.Remove(filepath.Join(incomplete, "kernel")); err != nil {
+		t.Fatal(err)
+	}
+	verified, failures, err := (&Manager{cacheRoot: cacheRoot, verificationRoot: privateRecordRoot(t)}).verifyCachedBundles(t.Context(), true)
+	if err != nil || verified != 0 || len(failures) != 1 || !strings.Contains(failures[0].Error(), strings.Repeat("d8", 32)) {
+		t.Fatalf("verified = %d, failures = %v, error = %v", verified, failures, err)
+	}
+}
+
 // A worker image build records every cached bundle and fails rather than ship
 // a corrupt bundle or an empty cache.
 func TestRecordCachedBundleVerificationsFailsOnCorruptOrEmptyCaches(t *testing.T) {

@@ -52,8 +52,9 @@ func (manager *Manager) RecordCachedBundleVerifications(ctx context.Context) (in
 	return verified, nil
 }
 
-// skipEvicted ignores a bundle that disappeared after listing, which only a
-// running fetcher's eviction causes; recording runs with no fetcher.
+// skipEvicted ignores a bundle whose directory disappeared after listing,
+// which only a running fetcher's eviction causes; recording runs with no
+// fetcher. A missing file in a remaining directory is a failure either way.
 func (manager *Manager) verifyCachedBundles(ctx context.Context, skipEvicted bool) (int, []error, error) {
 	directories, err := manager.cachedBundleDirectoriesByRecency()
 	if err != nil {
@@ -73,9 +74,11 @@ func (manager *Manager) verifyCachedBundles(ctx context.Context, skipEvicted boo
 			return verified, failures, context.Cause(ctx)
 		}
 		if skipEvicted && errors.Is(err, os.ErrNotExist) {
-			// The fetcher evicted the bundle, and with it its lock file, after
-			// it was listed.
-			continue
+			if _, statErr := os.Stat(directory); errors.Is(statErr, os.ErrNotExist) {
+				// The fetcher evicted the bundle, and with it its lock file,
+				// after it was listed.
+				continue
+			}
 		}
 		failures = append(failures, fmt.Errorf("SecondBox execution image %s verification failed: %w", digest, err))
 	}
