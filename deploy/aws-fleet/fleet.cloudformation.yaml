@@ -149,13 +149,19 @@ Resources:
             AssociatePublicIpAddress: true
             Groups: [!Ref WorkerSecurityGroup]
         BlockDeviceMappings:
+          # Pre-baked volumes initialize from their snapshots at a provisioned
+          # rate; the default lazy restore reads first-touched blocks at a few MB/s.
           - DeviceName: /dev/sda1
-            Ebs: {VolumeSize: 32, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+            Ebs:
+              Fn::If:
+                - PrebakedWorkerEnabled
+                - {VolumeSize: 32, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true, VolumeInitializationRate: 300}
+                - {VolumeSize: 32, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
           - DeviceName: /dev/sdf
             Ebs:
               Fn::If:
                 - PrebakedWorkerEnabled
-                - {SnapshotId: !Ref PrebakedWorkerDataSnapshot, VolumeSize: !Ref WorkspaceGiB, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false}
+                - {SnapshotId: !Ref PrebakedWorkerDataSnapshot, VolumeSize: !Ref WorkspaceGiB, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false, VolumeInitializationRate: 300}
                 - {VolumeSize: !Ref WorkspaceGiB, VolumeType: gp3, Encrypted: true, DeleteOnTermination: false}
         TagSpecifications:
           - ResourceType: instance

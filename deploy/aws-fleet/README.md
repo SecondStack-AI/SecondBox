@@ -173,9 +173,11 @@ so the clone keeps them.
 Each worker's data volume is created from that snapshot at the template's
 `WorkspaceGiB`. Bootstrap claims a volume that carries the snapshot's bundle
 marker and no fleet marker: it grows the filesystem, writes the fleet marker
-and skips the artifact copy, cache staging and cache ownership change. Blocks
-load from the snapshot on first read, so a start reads only the image blocks
-its Sandbox touches. All clones share one XFS UUID; mount two on one host only
+and skips the artifact copy, cache staging and cache ownership change. A
+pre-baked worker's root and data volumes initialize from their snapshots at a
+provisioned 300 MiB/s, which EBS bills per restored GiB; without it, blocks
+first read before initialization load at a few MB/s, which dominated earlier
+cold starts. All clones share one XFS UUID; mount two on one host only
 with `nouuid`, for example during operator recovery of a retained volume.
 
 Neither output contains an enrolled Runner or gateway identity, registry
