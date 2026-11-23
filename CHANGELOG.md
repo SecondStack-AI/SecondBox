@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.33.0 - 2026-11-23
+
+Pre-baked AWS Code workers start from a worker data snapshot that already holds the execution-image cache and its verification records, and Runners keep those records across restarts. Public API v1, Runner protocol 8, migrations, standard Profiles and Firecracker bundles are unchanged from v0.32.5. Runners require a new verification-record directory. See the [v0.33.0 release notes](docs/releases/v0.33.0.md).
+
 ### Changed
 
 - Pre-baked AWS Code workers start from a worker data snapshot that already holds the base artifacts, the execution-image cache and its verification records. A new worker extracts, copies and hashes no execution image before its Runner connects; the AMI no longer carries the compressed execution cache.
