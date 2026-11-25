@@ -39,8 +39,9 @@ shared worker bundle and from the persisted certificate receipt.
 The Runner env template pins the release: `SECONDBOX_RUNNER_SOFTWARE_VERSION`
 and `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST`. The controller does not update
 them. When you update the fleet to a new release, set both to the new
-release's version and verified gVisor materialization digest before workers
-enroll. A worker whose digest differs from its bundle's materialization exits
+release's version and verified gVisor materialization digest before you start
+the updated controller. This applies to pre-baked and download-mode fleets.
+A worker whose digest differs from its bundle's materialization exits
 before its Runner registers, and the controller then stops at the bootstrap
 timeout.
 
