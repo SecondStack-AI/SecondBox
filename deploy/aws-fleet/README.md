@@ -36,6 +36,15 @@ and certificate files under `enrollment.registryDirectory`. Registry data is
 returned only after EC2/STS enrollment verification; it is excluded from the
 shared worker bundle and from the persisted certificate receipt.
 
+The Runner env template pins the release: `SECONDBOX_RUNNER_SOFTWARE_VERSION`
+and `SECONDBOX_GVISOR_MATERIALIZATION_DIGEST`. The controller does not update
+them. When you update the fleet to a new release, set both to the new
+release's version and verified gVisor materialization digest before you start
+the updated controller. This applies to pre-baked and download-mode fleets.
+A worker whose digest differs from its bundle's materialization exits
+before its Runner registers, and the controller then stops at the bootstrap
+timeout.
+
 The controller needs private connectivity to PostgreSQL, SecondBox and the
 issuer. `controller-policy.example.json` describes its runtime AWS policy;
 replace every angle-bracket placeholder and attach it to the controller's
