@@ -164,8 +164,9 @@ func newQualificationFixtureWithNetworkPolicy(t *testing.T, suffix string, polic
 		MaximumVCPUs:   2, MaximumMemoryBytes: 1 << 30,
 		MaximumDiskBytes: uint64(backendQualificationWorkspaceBytes),
 		MaximumInstances: 1, MaximumOperations: 8, WorkspaceStore: store,
-		ExecutionImageCacheRoot:     imageRoot,
-		ExecutionImageFetcherSocket: filepath.Join(runtimeDir, "unused-fetcher.sock"),
+		ExecutionImageCacheRoot:        imageRoot,
+		ExecutionImageVerificationRoot: filepath.Join(qualificationRoot, "image-records"),
+		ExecutionImageFetcherSocket:    filepath.Join(runtimeDir, "unused-fetcher.sock"),
 	})
 	if err != nil {
 		t.Fatal(err)

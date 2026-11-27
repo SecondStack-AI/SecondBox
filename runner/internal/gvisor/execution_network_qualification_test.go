@@ -22,6 +22,14 @@ import (
 
 // Run only in an isolated network namespace with NET_ADMIN and SYS_ADMIN.
 func TestAttributedExecutionNetworkQualification(t *testing.T) {
+	for _, slot := range []struct{ profile, index uint32 }{{0, 0}, {15, 64}, {15, 255}} {
+		t.Run(fmt.Sprintf("profile-%d-slot-%d", slot.profile, slot.index), func(t *testing.T) {
+			testAttributedExecutionNetworkQualification(t, slot.profile, slot.index)
+		})
+	}
+}
+
+func testAttributedExecutionNetworkQualification(t *testing.T, profile, index uint32) {
 	directory, err := os.MkdirTemp("/tmp", "gvisor-attribution-")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +55,12 @@ func TestAttributedExecutionNetworkQualification(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &AssignmentBackend{nftPath: "/usr/sbin/nft"}
-	backend.config.NetworkProfile = 0
+	backend.config.NetworkProfile = profile
+	for lower := uint32(0); lower < index; lower++ {
+		if _, err := backend.acquireNetworkSlot(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	backend.config.NetworkPolicy = networkpolicy.RunnerConfig{
 		CompileOptions: networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Second}, EgressContexts: contexts,
 	}

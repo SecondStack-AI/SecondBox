@@ -3,11 +3,52 @@
 package gvisor
 
 import (
+	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
+
+func TestValidateConfigNetworkCapacity(t *testing.T) {
+	// Asset loading follows capacity validation. An absent manifest lets this
+	// test distinguish accepted capacity from a rejected bound without runsc.
+	root := t.TempDir()
+	config := Config{
+		RunscPath: root + "/runsc", AgentPath: root + "/agent", FlatRootPath: root + "/flat",
+		MaterializationPath: root + "/absent.json", RuntimeDir: "/run/secondbox-capacity-test",
+		MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
+		WorkspaceRoot:         root + "/store", SelfExecutable: root + "/runner",
+		ExecutionImageCacheRoot: root + "/images", ExecutionImageVerificationRoot: root + "/records",
+		ExecutionImageFetcherSocket: root + "/fetcher.sock", WorkspaceStore: &workspacestore.Store{},
+		MaximumVCPUs: 1, MaximumMemoryBytes: 1 << 30, MaximumDiskBytes: 1 << 30, MaximumOperations: 1,
+		NetworkPolicy: networkpolicy.RunnerConfig{
+			DNSUpstream:    netip.MustParseAddrPort("127.0.0.1:53"),
+			CompileOptions: networkpolicy.CompileOptions{MaximumPins: 8, MaximumTTL: time.Minute},
+		},
+	}
+	for _, capacity := range []uint32{1, 63, 64, 65, 256, 257, ^uint32(0)} {
+		config.MaximumInstances = capacity
+		_, err := validateConfig(config)
+		if capacity <= 256 {
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("capacity %d did not reach asset loading: %v", capacity, err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "at most 256 concurrent Instances") {
+			t.Errorf("capacity %d: %v", capacity, err)
+		}
+	}
+	config.MaximumInstances = 256
+	config.NetworkProfile = 16
+	if _, err := validateConfig(config); err == nil || !strings.Contains(err.Error(), "network profile must be below 16") {
+		t.Fatalf("profile 16: %v", err)
+	}
+}
 
 // TestValidateRuntimeDirRefusesDestructivePaths proves the runtime directory
 // - whose startup reconciliation removes every child - can never point at the

@@ -31,9 +31,12 @@ policy into `inet`-family tables (with a paired `ip`-family NAT table for masque
 and the policy-aware DNS proxy listens on a per-profile address of the Runner's `sbxgv-dns`
 dummy interface instead of a bridge address. Runners sharing a host network namespace are
 separated by an explicit network profile in `0`-`15`. The reserved link-local ranges are
-exact: profile `N` owns the `/24` at `169.254.(104+N).0` - `169.254.104.0/24` through
-`169.254.119.0/24` across all profiles - carved into per-Instance `/30` subnets (host side
-`.1`, guest side `.2`), bounding each profile at 63 concurrent Instances, and its DNS proxy
+exact: profile `N` owns four interleaved `/24` banks at `169.254.(104+N+16*B).0/24`,
+where bank `B` is `0` through `3`. Together all profiles reserve exactly
+`169.254.104.0` through `169.254.167.255`. Each bank contains 64 separate `/30`
+links, giving 256 slots per profile. Slot `I` uses bank `I/64` (integer division),
+with host/guest final octets `4*(I%64)+1` and `4*(I%64)+2`. Bank zero preserves every
+address assigned by releases limited to 63 slots. The DNS proxy
 binds `169.254.99.(53+N)` on `sbxgv-dns`. Operators must keep these ranges, the `gvh` (host) and
 `gvg` (guest) veth prefixes, the `sbxgv` network-namespace prefix, and the `169.254.99.*`
 proxy addresses free of conflicting host use. Per-Instance teardown removes the namespace, veth, and both policy-table families,

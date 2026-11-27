@@ -33,13 +33,15 @@ const (
 	dnsListenBase    = 53
 	dnsListenPrefix  = "169.254.99."
 	dnsInterfaceName = "sbxgv-dns"
-	// instanceSubnetPrefix carves a link-local /24 per profile at third
-	// octet 104+profile, then /30 subnets per Instance index inside it:
-	// host side .1, guest side .2.
+	// Each profile owns four interleaved /24 banks, each with 64 /30 links.
+	// Bank B for profile P uses third octet 104+P+16*B. Bank zero preserves
+	// every legacy mapping, so other profiles can run older runners safely.
+	// All banks stay below 169.254.168.0, away from DNS and metadata.
 	instanceSubnetPrefix    = "169.254."
 	instanceSubnetBaseOctet = 104
 	maximumNetworkProfiles  = 16
-	maximumNetworkslots     = 63
+	networkSlotsPerBank     = 64
+	maximumNetworkSlots     = 256
 	allowedInetMark         = "0x53425801"
 	natTableSuffix          = "nat"
 	guestVethNamePrefix     = "gvg"
@@ -70,8 +72,9 @@ func (network instanceNetwork) namespacePath() string {
 }
 
 func networkForIndex(profile, index uint32) instanceNetwork {
-	subnet := fmt.Sprintf("%s%d.", instanceSubnetPrefix, instanceSubnetBaseOctet+profile)
-	base := index * 4
+	bank := index / networkSlotsPerBank
+	subnet := fmt.Sprintf("%s%d.", instanceSubnetPrefix, instanceSubnetBaseOctet+profile+maximumNetworkProfiles*bank)
+	base := (index % networkSlotsPerBank) * 4
 	return instanceNetwork{
 		index:         index,
 		namespaceName: fmt.Sprintf("%s%d-%d", namespaceNamePrefix, profile, index),
@@ -88,7 +91,7 @@ func (backend *AssignmentBackend) acquireNetworkSlot() (instanceNetwork, error) 
 	if backend.networkSlots == nil {
 		backend.networkSlots = make(map[uint32]bool)
 	}
-	for index := uint32(0); index < maximumNetworkslots; index++ {
+	for index := uint32(0); index < maximumNetworkSlots; index++ {
 		if !backend.networkSlots[index] {
 			backend.networkSlots[index] = true
 			return networkForIndex(backend.config.NetworkProfile, index), nil
@@ -174,8 +177,8 @@ func destroyInstanceNetwork(ctx context.Context, network instanceNetwork) error 
 // profiles' resources belong to other runners.
 func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
 	var joined error
-	interfaces := make([]string, 0, maximumNetworkslots)
-	for index := uint32(0); index < maximumNetworkslots; index++ {
+	interfaces := make([]string, 0, maximumNetworkSlots)
+	for index := uint32(0); index < maximumNetworkSlots; index++ {
 		interfaces = append(interfaces, networkForIndex(profile, index).hostVeth)
 	}
 	joined = errors.Join(joined, egressforwarder.RemoveExecutionListenerRules(ctx, "nft", interfaces))
@@ -202,7 +205,12 @@ func reconcileStaleNetworks(ctx context.Context, profile uint32) error {
 			name := strings.TrimSuffix(fields[1], ":")
 			name, _, _ = strings.Cut(name, "@")
 			if strings.HasPrefix(name, vethPrefix) {
-				joined = errors.Join(joined, ipCommand(ctx, "link", "delete", name))
+				// Namespace deletion releases its veth asynchronously. A link
+				// enumerated above can disappear before this deletion runs.
+				if err := ipCommand(ctx, "link", "delete", name); err != nil &&
+					!strings.Contains(err.Error(), "Cannot find device") {
+					joined = errors.Join(joined, err)
+				}
 			}
 		}
 	}
