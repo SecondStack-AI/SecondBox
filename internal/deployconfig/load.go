@@ -50,7 +50,7 @@ const (
 	maxFirecrackerInstanceIDBytes = 42
 	// The Runner's gVisor backend owns these bounds; validation mirrors them.
 	maximumGVisorNetworkProfiles        = 16
-	maximumGVisorInstancesPerProfile    = 63
+	maximumGVisorInstancesPerProfile    = 1024
 	minimumGVisorWorkspaceTemplateBytes = 64 << 20
 	cleanInstallBoundaryVersion         = "0.6.0"
 	// updateMigrationBaselineVersion is the oldest release whose database

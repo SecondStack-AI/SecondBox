@@ -3,8 +3,10 @@
 package gvisor
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,9 +40,96 @@ func TestNetworkProfilesSeparateRunnersOnOneHost(t *testing.T) {
 		shared.namespaceName == relocated.namespaceName {
 		t.Fatalf("profiles collide: %+v vs %+v", shared, relocated)
 	}
-	last := networkForIndex(15, maximumNetworkslots-1)
-	if last.hostAddress != "169.254.119.249" || last.guestAddress != "169.254.119.250" {
+	last := networkForIndex(15, maximumNetworkSlots-1)
+	if last.hostAddress != "198.18.191.253" || last.guestAddress != "198.18.191.254" {
 		t.Fatalf("final slot = %+v", last)
+	}
+}
+
+func TestNetworkSlotBankBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		index       uint32
+		host, guest string
+	}{
+		{62, "169.254.104.249", "169.254.104.250"},
+		{63, "169.254.104.253", "169.254.104.254"},
+		{64, "169.254.120.1", "169.254.120.2"},
+		{127, "169.254.120.253", "169.254.120.254"},
+		{128, "169.254.136.1", "169.254.136.2"},
+		{191, "169.254.136.253", "169.254.136.254"},
+		{192, "169.254.152.1", "169.254.152.2"},
+		{255, "169.254.152.253", "169.254.152.254"},
+		{256, "198.18.0.1", "198.18.0.2"},
+		{319, "198.18.0.253", "198.18.0.254"},
+		{320, "198.18.16.1", "198.18.16.2"},
+		{959, "198.18.160.253", "198.18.160.254"},
+		{960, "198.18.176.1", "198.18.176.2"},
+		{999, "198.18.176.157", "198.18.176.158"},
+		{1023, "198.18.176.253", "198.18.176.254"},
+	} {
+		network := networkForIndex(0, test.index)
+		if network.hostAddress != test.host || network.guestAddress != test.guest {
+			t.Errorf("slot %d = %+v", test.index, network)
+		}
+	}
+}
+
+func TestAllNetworkSlotsAreDisjointAndPreserveLegacyMappings(t *testing.T) {
+	policy, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode:         networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{{Protocol: networkpolicy.ProtocolTCP, Domain: "allowed.test", Port: 443}},
+	}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subnets := make(map[netip.Prefix]bool)
+	names := make(map[string]bool)
+	for profile := uint32(0); profile < maximumNetworkProfiles; profile++ {
+		for index := uint32(0); index < maximumNetworkSlots; index++ {
+			network := networkForIndex(profile, index)
+			host := netip.MustParseAddr(network.hostAddress)
+			guest := netip.MustParseAddr(network.guestAddress)
+			subnet := netip.PrefixFrom(host, 30).Masked()
+			if subnets[subnet] || !subnet.Contains(guest) || host.Next() != guest || subnet.Addr().Next() != host {
+				t.Fatalf("invalid or overlapping /30: %+v (%s)", network, subnet)
+			}
+			subnets[subnet] = true
+			for _, address := range []netip.Addr{host, guest} {
+				if decision := policy.AuthorizeIP(networkpolicy.ProtocolTCP, address, 443); decision.Allowed || decision.Reason != networkpolicy.ReasonProtectedDestination {
+					t.Fatalf("slot address %s escaped protected destinations: %+v", address, decision)
+				}
+				if _, decision := policy.PinDNS(networkpolicy.ProtocolTCP, "allowed.test", 443, []netip.Addr{address}, time.Minute, time.Now()); decision.Allowed || decision.Reason != networkpolicy.ReasonProtectedDNSAnswer {
+					t.Fatalf("slot address %s escaped protected DNS answers: %+v", address, decision)
+				}
+			}
+			for _, name := range []string{network.hostVeth, network.guestVeth, network.namespaceName} {
+				if names[name] || len(name) > 15 {
+					t.Fatalf("duplicate or overlong link/namespace name %q", name)
+				}
+				names[name] = true
+			}
+			if index < 63 && (network.hostAddress != fmt.Sprintf("169.254.%d.%d", 104+profile, index*4+1) ||
+				network.guestAddress != fmt.Sprintf("169.254.%d.%d", 104+profile, index*4+2)) {
+				t.Fatalf("legacy slot moved: %+v", network)
+			}
+			if index < 256 && (network.hostAddress != fmt.Sprintf("169.254.%d.%d", 104+profile+16*(index/64), (index%64)*4+1) ||
+				network.guestAddress != fmt.Sprintf("169.254.%d.%d", 104+profile+16*(index/64), (index%64)*4+2)) {
+				t.Fatalf("256-slot mapping moved: %+v", network)
+			}
+			if index >= 256 && !netip.MustParsePrefix("198.18.0.0/16").Contains(host) {
+				t.Fatalf("expanded slot outside benchmarking pool: %+v", network)
+			}
+			for other := uint32(0); other < maximumNetworkProfiles; other++ {
+				if subnet.Contains(netip.MustParseAddr(dnsAddressForProfile(other))) {
+					t.Fatalf("slot overlaps DNS profile %d: %+v", other, network)
+				}
+			}
+			for _, reserved := range []string{"169.254.0.0/24", "169.254.255.0/24", "169.254.169.0/24", "169.254.170.0/24", "198.18.192.0/18", "198.19.0.0/16"} {
+				if netip.MustParsePrefix(reserved).Contains(host) {
+					t.Fatalf("slot overlaps reserved range %s: %+v", reserved, network)
+				}
+			}
+		}
 	}
 }
 
@@ -58,6 +147,48 @@ func TestNetworkSlotAllocatorReleasesAndBounds(t *testing.T) {
 	reused, err := backend.acquireNetworkSlot()
 	if err != nil || reused.index != 0 {
 		t.Fatalf("reused slot = %+v, %v", reused, err)
+	}
+	for index := uint32(2); index < maximumNetworkSlots; index++ {
+		network, err := backend.acquireNetworkSlot()
+		if err != nil || network.index != index {
+			t.Fatalf("slot %d = %+v, %v", index, network, err)
+		}
+	}
+	if _, err := backend.acquireNetworkSlot(); err == nil {
+		t.Fatal("allocator exceeded its address space")
+	}
+	last := networkForIndex(0, maximumNetworkSlots-1)
+	backend.releaseNetworkSlot(last)
+	if network, err := backend.acquireNetworkSlot(); err != nil || network.index != last.index || network.hostAddress != last.hostAddress {
+		t.Fatalf("reuse final slot = %+v, %v", network, err)
+	}
+}
+
+func TestNetworkSlotAllocatorConcurrent(t *testing.T) {
+	backend := &AssignmentBackend{}
+	results := make(chan instanceNetwork, maximumNetworkSlots)
+	var workers sync.WaitGroup
+	for range maximumNetworkSlots {
+		workers.Go(func() {
+			network, err := backend.acquireNetworkSlot()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			results <- network
+		})
+	}
+	workers.Wait()
+	close(results)
+	seen := make(map[uint32]bool)
+	for network := range results {
+		if seen[network.index] {
+			t.Fatalf("concurrent allocation duplicated slot %d", network.index)
+		}
+		seen[network.index] = true
+	}
+	if len(seen) != maximumNetworkSlots {
+		t.Fatalf("allocated %d slots", len(seen))
 	}
 }
 

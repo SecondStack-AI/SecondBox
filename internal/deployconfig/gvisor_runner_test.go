@@ -36,6 +36,7 @@ func TestSameHostGVisorRunnerRendersItsOverlayAndPackagedSettings(t *testing.T) 
 	manifestPath := initializedDevelopment(t)
 	gvisorRelease := developmentGVisorReleaseForTest(t, manifestPath)
 	runner := validSameHostGVisorTestRunner("runner-gvisor")
+	runner.GVisorMaximumInstances = integer(1024)
 	runner.PoolID = hostStandardPool(t)
 	runner = provisionSameHostRunnerForTest(t, manifestPath, runner)
 	content, err := os.ReadFile(manifestPath)
@@ -67,7 +68,7 @@ func TestSameHostGVisorRunnerRendersItsOverlayAndPackagedSettings(t *testing.T) 
 		"SECONDBOX_GVISOR_RUNTIME_DIR":                       "/run/secondbox-gvisor",
 		"SECONDBOX_GVISOR_NETWORK_PROFILE":                   "0",
 		"SECONDBOX_GVISOR_MAXIMUM_VCPUS":                     "8",
-		"SECONDBOX_GVISOR_MAXIMUM_INSTANCES":                 "8",
+		"SECONDBOX_GVISOR_MAXIMUM_INSTANCES":                 "1024",
 		"SECONDBOX_GVISOR_WORKSPACE_TEMPLATE_CAPACITY_BYTES": "8589934592",
 		"SECONDBOX_RUNNER_STORAGE_ADMISSION_MODE":            "logical",
 		"SECONDBOX_RUNNER_WORKSPACE_ROOT":                    "/var/lib/secondbox-runner/workspaces",
@@ -202,9 +203,9 @@ func TestGVisorRunnerValidationOwnsBackendSettings(t *testing.T) {
 			runner.GVisorMaximumMemoryBytes = nil
 			return runner
 		}},
-		{"Instances above one network profile", "gvisor_maximum_instances must not exceed 63", func() Runner {
+		{"Instances above one network profile", "gvisor_maximum_instances must not exceed 1024", func() Runner {
 			runner := validGVisorTestRunner("runner", "remote")
-			runner.GVisorMaximumInstances = integer(64)
+			runner.GVisorMaximumInstances = integer(1025)
 			return runner
 		}},
 		{"small workspace template", "gvisor_workspace_template_capacity_bytes must be at least 67108864", func() Runner {

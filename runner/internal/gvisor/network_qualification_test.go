@@ -256,12 +256,27 @@ func guestFetch(
 // TestQualifiedGVisorNetworkPolicy proves the enforced matrix end to end
 // through the real backend, DNS proxy, and nftables state.
 func TestQualifiedGVisorNetworkPolicy(t *testing.T) {
+	for _, index := range []uint32{0, 255, 256, 999, maximumNetworkSlots - 1} {
+		t.Run(fmt.Sprintf("slot-%d", index), func(t *testing.T) {
+			testQualifiedGVisorNetworkPolicy(t, index)
+		})
+	}
+}
+
+func testQualifiedGVisorNetworkPolicy(t *testing.T, index uint32) {
 	qualificationBuild(t)
 	targets := startNetworkTargets(t)
 
 	fixture := newQualificationFixtureWithDNS(t, "network", netTargetsDNSAddr+":53")
 	backend, fence := fixture.backend, fixture.fence
 	t.Cleanup(func() { _ = backend.Shutdown(context.Background()) })
+	// Reserve earlier slots without starting compute: this qualifies the
+	// final bank's real runsc/DNS/firewall path, not concurrent load capacity.
+	for lower := uint32(0); lower < index; lower++ {
+		if _, err := backend.acquireNetworkSlot(); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	command := proto.Clone(fixture.command).(*runnerprotocol.AssignmentCommand)
 	command.NetworkPolicy = &runnerprotocol.NetworkPolicy{

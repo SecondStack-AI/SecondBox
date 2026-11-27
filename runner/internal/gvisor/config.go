@@ -197,8 +197,8 @@ func validateConfig(config Config) (validatedConfig, error) {
 	if _, err := networkpolicy.Compile(networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll}, compileOptions); err != nil {
 		return validatedConfig{}, fmt.Errorf("SecondBox gVisor network policy config: %w", err)
 	}
-	if config.MaximumInstances > maximumNetworkslots {
-		return validatedConfig{}, fmt.Errorf("SecondBox gVisor supports at most %d concurrent Instances per runner", maximumNetworkslots)
+	if config.MaximumInstances > maximumNetworkSlots {
+		return validatedConfig{}, fmt.Errorf("SecondBox gVisor supports at most %d concurrent Instances per runner", maximumNetworkSlots)
 	}
 	manifest, err := materialization.Load(config.MaterializationPath, config.MaterializationDigest)
 	if err != nil {

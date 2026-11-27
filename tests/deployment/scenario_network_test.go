@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestScenarioNetworksExcludeExpandedGVisorSlots(t *testing.T) {
+	command := exec.Command("bash", "-euc", `
+source ../../scripts/scenario-network.sh
+for index in {0..511}; do
+ if scenario_network_reserved_for_gvisor "$index"; then
+  [[ "$index" -lt 192 ]]
+ else
+  [[ "$index" -ge 192 ]]
+ fi
+done
+`, "reserved")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("reserved gVisor networks: %v\n%s", err, output)
+	}
+}
+
 func TestScenarioNetworkReservationSurvivesConcurrentSelection(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux scenario network reservation uses flock")

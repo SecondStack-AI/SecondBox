@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+# Indices select /24s in 198.18.0.0/15. The first 192 belong to the
+# gVisor expanded slot pool, including links not currently instantiated.
+scenario_network_reserved_for_gvisor() {
+  (( $1 >= 0 && $1 < 192 ))
+}
+
 # Linux suite processes hold these advisory locks through teardown. The lock
 # directory is shared by checkouts using the same explicit workspace root.
 # Never unlink lock files: doing so would let two processes lock different
