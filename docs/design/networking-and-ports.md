@@ -30,13 +30,18 @@ namespace connected by a routed veth pair, the shared enforcer renders the ident
 policy into `inet`-family tables (with a paired `ip`-family NAT table for masqueraded egress),
 and the policy-aware DNS proxy listens on a per-profile address of the Runner's `sbxgv-dns`
 dummy interface instead of a bridge address. Runners sharing a host network namespace are
-separated by an explicit network profile in `0`-`15`. The reserved link-local ranges are
-exact: profile `N` owns four interleaved `/24` banks at `169.254.(104+N+16*B).0/24`,
-where bank `B` is `0` through `3`. Together all profiles reserve exactly
-`169.254.104.0` through `169.254.167.255`. Each bank contains 64 separate `/30`
-links, giving 256 slots per profile. Slot `I` uses bank `I/64` (integer division),
-with host/guest final octets `4*(I%64)+1` and `4*(I%64)+2`. Bank zero preserves every
-address assigned by releases limited to 63 slots. The DNS proxy
+separated by an explicit network profile in `0`-`15`. The reserved address ranges are
+exact: slot `I` uses bank `B=I/64` (integer division). For banks `0` through `3`,
+profile `N` uses `169.254.(104+N+16*B).0/24`; banks `4` through `15` use
+`198.18.(N+16*(B-4)).0/24`. Together all profiles reserve exactly
+`169.254.104.0` through `169.254.167.255` and `198.18.0.0` through
+`198.18.191.255`. Each bank contains 64 separate `/30` links, giving 1,024 slots
+per profile. Host/guest final octets are `4*(I%64)+1` and `4*(I%64)+2`.
+Slots `0`-`255` retain their previous mappings, including every address assigned
+by releases limited to 63 slots. A complete 16-profile, 1,024-slot allocation
+would fill an entire `/16`, so it cannot all use link-local space while keeping
+DNS, metadata, and reserved addresses separate. The additional benchmarking
+range is already protected by the shared policy compiler. The DNS proxy
 binds `169.254.99.(53+N)` on `sbxgv-dns`. Operators must keep these ranges, the `gvh` (host) and
 `gvg` (guest) veth prefixes, the `sbxgv` network-namespace prefix, and the `169.254.99.*`
 proxy addresses free of conflicting host use. Per-Instance teardown removes the namespace, veth, and both policy-table families,

@@ -22,7 +22,7 @@ import (
 
 // Run only in an isolated network namespace with NET_ADMIN and SYS_ADMIN.
 func TestAttributedExecutionNetworkQualification(t *testing.T) {
-	for _, slot := range []struct{ profile, index uint32 }{{0, 0}, {15, 64}, {15, 255}} {
+	for _, slot := range []struct{ profile, index uint32 }{{0, 0}, {15, 255}, {0, 256}, {15, 999}, {15, 1023}} {
 		t.Run(fmt.Sprintf("profile-%d-slot-%d", slot.profile, slot.index), func(t *testing.T) {
 			testAttributedExecutionNetworkQualification(t, slot.profile, slot.index)
 		})

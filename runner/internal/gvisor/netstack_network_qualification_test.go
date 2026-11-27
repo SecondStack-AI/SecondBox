@@ -12,10 +12,10 @@ import (
 )
 
 // Run only in an isolated network namespace with NET_ADMIN and SYS_ADMIN.
-// This qualifies 256 concurrent kernel links, not 256 running sentries.
+// This qualifies 1024 concurrent kernel links, not 1024 running sentries.
 func TestNetworkSlotExpansionQualification(t *testing.T) {
 	ctx := t.Context()
-	neighbor := networkForIndex(14, 62) // A live legacy Runner's final slot.
+	neighbors := []instanceNetwork{networkForIndex(14, 62), networkForIndex(14, 255), networkForIndex(0, 256), networkForIndex(14, 1023)}
 	create := func(network instanceNetwork) {
 		t.Helper()
 		t.Cleanup(func() {
@@ -59,15 +59,18 @@ func TestNetworkSlotExpansionQualification(t *testing.T) {
 		}
 		return table
 	}
-	create(neighbor)
-	neighborTable := install(neighbor)
+	var neighborTables []string
+	for _, neighbor := range neighbors {
+		create(neighbor)
+		neighborTables = append(neighborTables, install(neighbor))
+	}
 	for index := uint32(0); index < maximumNetworkSlots; index++ {
 		create(networkForIndex(15, index))
 	}
-	for _, index := range []uint32{62, 63, 64, 127, 128, 191, 192, 255} {
+	for _, index := range []uint32{62, 63, 64, 127, 128, 191, 192, 255, 256, 319, 320, 959, 960, 999, 1023} {
 		network := networkForIndex(15, index)
 		table := install(network)
-		if index == 255 {
+		if index == maximumNetworkSlots-1 {
 			// Reconciliation must also find a NAT-only crash leftover.
 			if output, err := exec.CommandContext(ctx, "nft", "delete", "table", "inet", table).CombinedOutput(); err != nil {
 				t.Fatalf("leave orphaned NAT: %v: %s", err, output)
@@ -77,15 +80,22 @@ func TestNetworkSlotExpansionQualification(t *testing.T) {
 	if err := reconcileStaleNetworks(ctx, 15); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"link", "show", neighbor.hostVeth}, {"-n", neighbor.namespaceName, "link", "show", neighbor.guestVeth}} {
-		if output, err := exec.CommandContext(ctx, "ip", args...).CombinedOutput(); err != nil {
-			t.Fatalf("reconciliation damaged other profile: %v: %s", err, output)
+	for _, neighbor := range neighbors {
+		for _, args := range [][]string{{"link", "show", neighbor.hostVeth}, {"-n", neighbor.namespaceName, "link", "show", neighbor.guestVeth}} {
+			if output, err := exec.CommandContext(ctx, "ip", args...).CombinedOutput(); err != nil {
+				t.Fatalf("reconciliation damaged other profile: %v: %s", err, output)
+			}
 		}
 	}
 	for _, family := range []string{"inet", "ip"} {
 		output, err := exec.CommandContext(ctx, "nft", "list", "tables", family).CombinedOutput()
-		if err != nil || strings.Contains(string(output), "secondbox_slot_gvh15_") || !strings.Contains(string(output), neighborTable) {
+		if err != nil || strings.Contains(string(output), "secondbox_slot_gvh15_") {
 			t.Fatalf("profile policy sweep (%s): %v: %s", family, err, output)
+		}
+		for _, table := range neighborTables {
+			if !strings.Contains(string(output), table) {
+				t.Fatalf("profile sweep removed neighboring policy %s (%s)", table, family)
+			}
 		}
 	}
 	for index := uint32(0); index < maximumNetworkSlots; index++ {

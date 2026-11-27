@@ -32,18 +32,18 @@ func TestValidateConfigNetworkCapacity(t *testing.T) {
 			CompileOptions: networkpolicy.CompileOptions{MaximumPins: 8, MaximumTTL: time.Minute},
 		},
 	}
-	for _, capacity := range []uint32{1, 63, 64, 65, 256, 257, ^uint32(0)} {
+	for _, capacity := range []uint32{1, 63, 64, 65, 256, 257, 999, 1000, 1024, 1025, ^uint32(0)} {
 		config.MaximumInstances = capacity
 		_, err := validateConfig(config)
-		if capacity <= 256 {
+		if capacity <= 1024 {
 			if !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("capacity %d did not reach asset loading: %v", capacity, err)
 			}
-		} else if err == nil || !strings.Contains(err.Error(), "at most 256 concurrent Instances") {
+		} else if err == nil || !strings.Contains(err.Error(), "at most 1024 concurrent Instances") {
 			t.Errorf("capacity %d: %v", capacity, err)
 		}
 	}
-	config.MaximumInstances = 256
+	config.MaximumInstances = 1024
 	config.NetworkProfile = 16
 	if _, err := validateConfig(config); err == nil || !strings.Contains(err.Error(), "network profile must be below 16") {
 		t.Fatalf("profile 16: %v", err)

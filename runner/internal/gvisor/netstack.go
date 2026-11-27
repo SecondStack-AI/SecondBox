@@ -33,15 +33,18 @@ const (
 	dnsListenBase    = 53
 	dnsListenPrefix  = "169.254.99."
 	dnsInterfaceName = "sbxgv-dns"
-	// Each profile owns four interleaved /24 banks, each with 64 /30 links.
-	// Bank B for profile P uses third octet 104+P+16*B. Bank zero preserves
-	// every legacy mapping, so other profiles can run older runners safely.
-	// All banks stay below 169.254.168.0, away from DNS and metadata.
+	// Preserve the first four /24 banks in link-local space. Twelve more
+	// banks use benchmarking space, already protected by the shared policy:
+	// 16 profiles * 1024 /30 links would consume an entire /16, leaving no
+	// room in link-local space for DNS, metadata, or reserved addresses.
+	// Banks interleave profiles, keeping existing mappings stable.
 	instanceSubnetPrefix    = "169.254."
 	instanceSubnetBaseOctet = 104
+	instanceExpansionPrefix = "198.18."
+	linkLocalNetworkBanks   = 4
 	maximumNetworkProfiles  = 16
 	networkSlotsPerBank     = 64
-	maximumNetworkSlots     = 256
+	maximumNetworkSlots     = 1024
 	allowedInetMark         = "0x53425801"
 	natTableSuffix          = "nat"
 	guestVethNamePrefix     = "gvg"
@@ -73,7 +76,13 @@ func (network instanceNetwork) namespacePath() string {
 
 func networkForIndex(profile, index uint32) instanceNetwork {
 	bank := index / networkSlotsPerBank
-	subnet := fmt.Sprintf("%s%d.", instanceSubnetPrefix, instanceSubnetBaseOctet+profile+maximumNetworkProfiles*bank)
+	prefix := instanceSubnetPrefix
+	octet := instanceSubnetBaseOctet + profile + maximumNetworkProfiles*bank
+	if bank >= linkLocalNetworkBanks {
+		prefix = instanceExpansionPrefix
+		octet = profile + maximumNetworkProfiles*(bank-linkLocalNetworkBanks)
+	}
+	subnet := fmt.Sprintf("%s%d.", prefix, octet)
 	base := (index % networkSlotsPerBank) * 4
 	return instanceNetwork{
 		index:         index,

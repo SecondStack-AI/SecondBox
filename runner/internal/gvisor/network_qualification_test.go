@@ -256,7 +256,7 @@ func guestFetch(
 // TestQualifiedGVisorNetworkPolicy proves the enforced matrix end to end
 // through the real backend, DNS proxy, and nftables state.
 func TestQualifiedGVisorNetworkPolicy(t *testing.T) {
-	for _, index := range []uint32{0, maximumNetworkSlots - 1} {
+	for _, index := range []uint32{0, 255, 256, 999, maximumNetworkSlots - 1} {
 		t.Run(fmt.Sprintf("slot-%d", index), func(t *testing.T) {
 			testQualifiedGVisorNetworkPolicy(t, index)
 		})

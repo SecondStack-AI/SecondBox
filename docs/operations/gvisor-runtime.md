@@ -208,20 +208,27 @@ destinations are unreachable regardless of policy. All five `SECONDBOX_RUNNER_NE
 values above, together with `SECONDBOX_RUNNER_EGRESS_CONTEXT_CONFIG`, are the same explicit generic contract used by Firecracker. The absolute configuration path names a root-owned, non-writable, non-symlink strict `secondbox.runner-egress-contexts/v1` JSON file. Pin and TTL bounds, Runner addresses, management CIDRs, and the selected context's logical Runner gateways all reach the shared compiler; missing or malformed values keep the runner from starting. The reference pod projects the file from `secondbox-gvisor-runner-egress-contexts` as a read-only ConfigMap. Put only context names and logical-name-to-local-IP mappings in it, never certificates or upstream proxy addresses.
 
 `SECONDBOX_GVISOR_NETWORK_PROFILE` separates runners sharing one host network namespace: each
-profile selects its own DNS proxy address, link-local slot space, and veth and namespace names.
+profile selects its own DNS proxy address, network slot space, and veth and namespace names.
 It must be set explicitly - there is no default - and a single runner per host states `0`. Valid profiles are `0`-`15`, every
 runner in the same host network namespace **must** use a unique profile, and each profile bounds
-the runner at 256 concurrent Instances (its link-local slot space). A reused profile is not
+the runner at 1,024 concurrent Instances (its network address slots). A reused profile is not
 detected: startup reconciliation sweeps the profile's networks and cgroups and would tear down
 another live runner's Instances.
 
-Each profile `N` reserves four `/24` banks with third octets `104+N`, `120+N`,
-`136+N`, and `152+N`, divided into 64 `/30` links each. Reserve the full combined
-range `169.254.104.0` through `169.254.167.255` against conflicting host routes or
-addresses before increasing capacity. DNS remains `169.254.99.(53+N)`; the link
-banks exclude that range and metadata addresses. No guest subnet mask changes.
+Each profile `N` keeps four `/24` banks with third octets `104+N`, `120+N`,
+`136+N`, and `152+N` in link-local space. Slots `256`-`1023` use twelve more
+`/24` banks at `198.18.(N+16*B).0/24`, where `B` is `0` through `11`.
+Every bank contains 64 `/30` links. Reserve both full combined ranges,
+`169.254.104.0` through `169.254.167.255` and `198.18.0.0` through
+`198.18.191.255`, against conflicting host/VPN routes or addresses before
+increasing capacity. The second range is reserved benchmarking space, already
+blocked as an ordinary destination and DNS answer by the shared policy.
+DNS remains `169.254.99.(53+N)`; the banks exclude that range and metadata
+addresses. No guest subnet mask changes. Compose/scenario network selectors
+exclude the new pool even when its links have not yet been created.
 
-Upgrading one Runner preserves its old slots `0`-`62`, DNS address, link names,
+Upgrading one Runner preserves slots `0`-`255` from the earlier allocation,
+including legacy slots `0`-`62`, DNS address, link names,
 and profile-scoped cleanup. Other profiles may keep running older releases;
 there is no coordinated address migration. Drain and stop the Runner being
 replaced before restarting it with the same profile, as for any Runner upgrade.
@@ -229,15 +236,16 @@ Before downgrading, drain every Instance and confirm successful teardown before
 stopping the upgraded Runner. If it crashed with network residue, restart the
 upgraded binary while drained to reconcile that profile, then stop it; older
 startup sweeps do not know the additional attributed-listener slots. Restore
-its configured maximum to at most 63 before starting the older release.
+its configured maximum to the older binary's bound before restarting it
+(63 for releases with the legacy allocator).
 
-The 256 bound is address capacity, not a load-qualified concurrency guarantee.
+The 1,024 bound is address capacity, not a load-qualified concurrency guarantee.
 Choose `SECONDBOX_GVISOR_MAXIMUM_INSTANCES` within separately qualified CPU,
 memory, disk, process, DNS, firewall, and startup/teardown performance limits.
-The isolated `listener_qualification` tests exercise all 256 kernel links and
+The isolated `listener_qualification` tests exercise all 1,024 kernel links and
 high-slot attributed egress/reconciliation; the real gVisor network matrix also
-exercises slot 255 with earlier slots reserved, without claiming 256 sentries
-were running concurrently.
+exercises slots 999 and 1023 with earlier slots reserved, without claiming
+1,000 sentries were running concurrently.
 
 Also set every required runner protocol address, RunnerPool ID, runner identity, mTLS
 certificate, private key, CA, enabled feature, and evidence setting. These are deployment

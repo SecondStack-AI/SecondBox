@@ -580,6 +580,7 @@ scenario_network_lock_dir="$workspace_root/.scenario-network-locks"
 scenario_network_found=false
 for offset in $(seq 0 511); do
   scenario_network_index=$(( ($$ + offset) % 512 ))
+  if scenario_network_reserved_for_gvisor "$scenario_network_index"; then continue; fi
   scenario_network_second_octet=$(( 18 + scenario_network_index / 256 ))
   scenario_network_third_octet=$(( scenario_network_index % 256 ))
   scenario_guest_cidr="198.${scenario_network_second_octet}.${scenario_network_third_octet}.0/24"
@@ -595,6 +596,7 @@ done
 scenario_compose_network_found=false
 for offset in $(seq 1 511); do
   scenario_compose_network_index=$(( (scenario_network_index + offset) % 512 ))
+  if scenario_network_reserved_for_gvisor "$scenario_compose_network_index"; then continue; fi
   scenario_compose_second_octet=$(( 18 + scenario_compose_network_index / 256 ))
   scenario_compose_third_octet=$(( scenario_compose_network_index % 256 ))
   scenario_compose_cidr="198.${scenario_compose_second_octet}.${scenario_compose_third_octet}.0/24"

@@ -98,8 +98,10 @@ cleanup() {
 trap cleanup EXIT
 
 network_created=false
+source "$repo_root/scripts/scenario-network.sh"
 for offset in $(seq 0 511); do
   network_index=$(( ($$ + offset) % 512 ))
+  if scenario_network_reserved_for_gvisor "$network_index"; then continue; fi
   second_octet=$(( 18 + network_index / 256 ))
   third_octet=$(( network_index % 256 ))
   if docker network create \

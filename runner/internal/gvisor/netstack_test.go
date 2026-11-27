@@ -41,7 +41,7 @@ func TestNetworkProfilesSeparateRunnersOnOneHost(t *testing.T) {
 		t.Fatalf("profiles collide: %+v vs %+v", shared, relocated)
 	}
 	last := networkForIndex(15, maximumNetworkSlots-1)
-	if last.hostAddress != "169.254.167.253" || last.guestAddress != "169.254.167.254" {
+	if last.hostAddress != "198.18.191.253" || last.guestAddress != "198.18.191.254" {
 		t.Fatalf("final slot = %+v", last)
 	}
 }
@@ -59,6 +59,13 @@ func TestNetworkSlotBankBoundaries(t *testing.T) {
 		{191, "169.254.136.253", "169.254.136.254"},
 		{192, "169.254.152.1", "169.254.152.2"},
 		{255, "169.254.152.253", "169.254.152.254"},
+		{256, "198.18.0.1", "198.18.0.2"},
+		{319, "198.18.0.253", "198.18.0.254"},
+		{320, "198.18.16.1", "198.18.16.2"},
+		{959, "198.18.160.253", "198.18.160.254"},
+		{960, "198.18.176.1", "198.18.176.2"},
+		{999, "198.18.176.157", "198.18.176.158"},
+		{1023, "198.18.176.253", "198.18.176.254"},
 	} {
 		network := networkForIndex(0, test.index)
 		if network.hostAddress != test.host || network.guestAddress != test.guest {
@@ -68,6 +75,13 @@ func TestNetworkSlotBankBoundaries(t *testing.T) {
 }
 
 func TestAllNetworkSlotsAreDisjointAndPreserveLegacyMappings(t *testing.T) {
+	policy, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode:         networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{{Protocol: networkpolicy.ProtocolTCP, Domain: "allowed.test", Port: 443}},
+	}, networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
 	subnets := make(map[netip.Prefix]bool)
 	names := make(map[string]bool)
 	for profile := uint32(0); profile < maximumNetworkProfiles; profile++ {
@@ -80,6 +94,14 @@ func TestAllNetworkSlotsAreDisjointAndPreserveLegacyMappings(t *testing.T) {
 				t.Fatalf("invalid or overlapping /30: %+v (%s)", network, subnet)
 			}
 			subnets[subnet] = true
+			for _, address := range []netip.Addr{host, guest} {
+				if decision := policy.AuthorizeIP(networkpolicy.ProtocolTCP, address, 443); decision.Allowed || decision.Reason != networkpolicy.ReasonProtectedDestination {
+					t.Fatalf("slot address %s escaped protected destinations: %+v", address, decision)
+				}
+				if _, decision := policy.PinDNS(networkpolicy.ProtocolTCP, "allowed.test", 443, []netip.Addr{address}, time.Minute, time.Now()); decision.Allowed || decision.Reason != networkpolicy.ReasonProtectedDNSAnswer {
+					t.Fatalf("slot address %s escaped protected DNS answers: %+v", address, decision)
+				}
+			}
 			for _, name := range []string{network.hostVeth, network.guestVeth, network.namespaceName} {
 				if names[name] || len(name) > 15 {
 					t.Fatalf("duplicate or overlong link/namespace name %q", name)
@@ -90,12 +112,19 @@ func TestAllNetworkSlotsAreDisjointAndPreserveLegacyMappings(t *testing.T) {
 				network.guestAddress != fmt.Sprintf("169.254.%d.%d", 104+profile, index*4+2)) {
 				t.Fatalf("legacy slot moved: %+v", network)
 			}
+			if index < 256 && (network.hostAddress != fmt.Sprintf("169.254.%d.%d", 104+profile+16*(index/64), (index%64)*4+1) ||
+				network.guestAddress != fmt.Sprintf("169.254.%d.%d", 104+profile+16*(index/64), (index%64)*4+2)) {
+				t.Fatalf("256-slot mapping moved: %+v", network)
+			}
+			if index >= 256 && !netip.MustParsePrefix("198.18.0.0/16").Contains(host) {
+				t.Fatalf("expanded slot outside benchmarking pool: %+v", network)
+			}
 			for other := uint32(0); other < maximumNetworkProfiles; other++ {
 				if subnet.Contains(netip.MustParseAddr(dnsAddressForProfile(other))) {
 					t.Fatalf("slot overlaps DNS profile %d: %+v", other, network)
 				}
 			}
-			for _, reserved := range []string{"169.254.0.0/24", "169.254.255.0/24", "169.254.169.0/24", "169.254.170.0/24"} {
+			for _, reserved := range []string{"169.254.0.0/24", "169.254.255.0/24", "169.254.169.0/24", "169.254.170.0/24", "198.18.192.0/18", "198.19.0.0/16"} {
 				if netip.MustParsePrefix(reserved).Contains(host) {
 					t.Fatalf("slot overlaps reserved range %s: %+v", reserved, network)
 				}
