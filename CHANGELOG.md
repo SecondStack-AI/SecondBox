@@ -2,14 +2,24 @@
 
 ## Unreleased
 
+## 0.34.0 - 2026-11-28
+
+Applications can enforce compute allowances for individual resource accounts within a Subject. This release adds migration 0044 and updates existing v0.33.0 deployments in place. It also expands gVisor address capacity to 1,024 slots per Runner; Public API v1, Runner protocol 8, standard Profile revisions and Firecracker bundles remain unchanged. See the [v0.34.0 release notes](docs/releases/v0.34.0.md).
+
 ### Added
 
 - Trusted applications can assign compute to resource accounts and limit their active Instances, allocated vCPU and memory within a Subject. Profiles can require attribution, and applications can read each account's current allocations.
+- gVisor Runners support up to 1,024 network slots while preserving earlier slot mappings. This is address capacity, not a load-qualified concurrency guarantee.
 
 ### Fixed
 
 - Failed Instances keep their compute charge until they are fenced and detached. Reusing a charged allocation does not require a second resource allowance.
 - Retrying a Sandbox create or start with a new remaining capacity wait replays the admitted operation and preserves its original deadline.
+
+### Upgrade notes
+
+- Applications enabling account quotas need this control plane and must resolve account limits from trusted policy. Set `requireResourceAccount` on the intended Profiles; already-running unattributed compute must stop and release before it can adopt an account.
+- gVisor hosts must reserve `169.254.104.0` through `169.254.167.255` and `198.18.0.0` through `198.18.191.255` against conflicting host or VPN routes and addresses before starting the new Runner.
 
 ## 0.33.0 - 2026-11-23
 
