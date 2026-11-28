@@ -54,6 +54,31 @@ test("Sandbox start sends the capacity wait bound", async () => {
   assert.equal(operation.id, "operation-start");
 });
 
+test("resource account context reaches create and start; usage reads the same account", async () => {
+  const account = { key: "human:actor-12", limits: { maxActiveInstances: 1, maxVcpuCount: null, maxMemoryBytes: 0 } };
+  const paths: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    const path = decodeURIComponent(new URL(request.url).pathname);
+    paths.push(path);
+    if (request.method === "POST") {
+      assert.deepEqual((await request.json()).resourceAccount, account);
+      return Response.json({ id: "operation-1", sandboxId: "sandbox-1", state: "pending" });
+    }
+    if (path.endsWith("/usage")) {
+      return Response.json({ accountKey: account.key, observedAt: "2026-01-01T00:00:00Z",
+        activeInstances: 0, vcpuCount: 0, memoryBytes: 0, allocations: [] });
+    }
+    return Response.json(sandbox("stopped"));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const { handle } = await api.createSandbox({ profile: "workspace", resourceAccount: account });
+  await handle.start({ resourceAccount: account });
+  assert.equal((await api.getResourceAccountUsage(account.key)).accountKey, account.key);
+  assert.deepEqual(paths, ["/v1/sandboxes", "/v1/sandboxes/sandbox-1", "/v1/sandboxes/sandbox-1:start",
+    "/v1/resource-accounts/human:actor-12/usage"]);
+});
+
 test("Sandbox exec sends attributed execution for that exec", async () => {
   const attributedExecution = { authorizationRef: "command-sdk", expiresAt: "2026-09-10T12:00:00Z" };
   let requestBody: unknown;

@@ -177,6 +177,7 @@
     "optional": [
       "capacityWaitMilliseconds",
       "image",
+      "resourceAccount",
       "resources",
       "sourceSnapshotId"
     ]
@@ -722,6 +723,7 @@
       "ceiling",
       "details",
       "requested",
+      "resourceAccountQuota",
       "retryAfterMilliseconds"
     ]
   },
@@ -785,6 +787,7 @@
       "attributedExecution",
       "attributedExecutionCeiling",
       "lifecycleCeiling",
+      "requireResourceAccount",
       "resourceCeiling"
     ]
   },
@@ -850,6 +853,52 @@
   "RenewLeaseRequest": {
     "required": [
       "durationSeconds"
+    ],
+    "optional": []
+  },
+  "ResourceAccount": {
+    "required": [
+      "key",
+      "limits"
+    ],
+    "optional": []
+  },
+  "ResourceAccountAllocation": {
+    "required": [
+      "desiredState",
+      "memoryBytes",
+      "sandboxId",
+      "state",
+      "vcpuCount"
+    ],
+    "optional": []
+  },
+  "ResourceAccountLimits": {
+    "required": [
+      "maxActiveInstances",
+      "maxMemoryBytes",
+      "maxVcpuCount"
+    ],
+    "optional": []
+  },
+  "ResourceAccountQuotaRefusal": {
+    "required": [
+      "accountKey",
+      "axis",
+      "limit",
+      "requested",
+      "used"
+    ],
+    "optional": []
+  },
+  "ResourceAccountUsage": {
+    "required": [
+      "accountKey",
+      "activeInstances",
+      "allocations",
+      "memoryBytes",
+      "observedAt",
+      "vcpuCount"
     ],
     "optional": []
   },
@@ -965,7 +1014,8 @@
       "deletedAt",
       "image",
       "instance",
-      "lastActivityAt"
+      "lastActivityAt",
+      "resourceAccountKey"
     ]
   },
   "SandboxInspection": {
@@ -1051,7 +1101,8 @@
     "required": [],
     "optional": [
       "capacityWaitMilliseconds",
-      "image"
+      "image",
+      "resourceAccount"
     ]
   },
   "StartupPolicy": {
@@ -1154,6 +1205,7 @@
       "limits",
       "observedAt",
       "subjectRef",
+      "unattributedActiveInstancesByProfile",
       "usage"
     ],
     "optional": []

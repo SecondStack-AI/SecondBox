@@ -139,6 +139,8 @@ type PoolCapacityScope struct {
 
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
+	LegacyCapacityWaitHash   func(contracts.CapacityWaitBound) (string, error)
+	ResourceAccount          *contracts.ResourceAccount
 	Resources                *contracts.SandboxResourceRequest
 	Principal                contracts.Principal
 	Sandbox                  contracts.Sandbox
@@ -233,15 +235,17 @@ type WorkspaceMutationCompletion struct {
 
 // LifecycleIntentInput records desired state and one durable asynchronous operation.
 type LifecycleIntentInput struct {
-	Principal        contracts.Principal
-	SandboxID        string
-	DesiredState     string
-	Operation        contracts.Operation
-	Now              time.Time
-	IdempotencyKey   string
-	RequestHash      string
-	IdempotencyEnds  time.Time
-	ExpectedRevision int64
+	LegacyCapacityWaitHash func(contracts.CapacityWaitBound) (string, error)
+	ResourceAccount        *contracts.ResourceAccount
+	Principal              contracts.Principal
+	SandboxID              string
+	DesiredState           string
+	Operation              contracts.Operation
+	Now                    time.Time
+	IdempotencyKey         string
+	RequestHash            string
+	IdempotencyEnds        time.Time
+	ExpectedRevision       int64
 	// AuditEvent records this request, original or replayed, in the
 	// admission transaction.
 	AuditEvent contracts.AuditEvent

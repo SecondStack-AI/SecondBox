@@ -176,6 +176,7 @@ export interface CreateSandboxRequest {
   readonly image?: ExecutionImage;
   readonly metadata: Metadata;
   readonly profile: ProfileName;
+  readonly resourceAccount?: ResourceAccount;
   readonly resources?: SandboxResourceRequest;
   readonly sourceSnapshotId?: OpaqueID;
 }
@@ -636,6 +637,7 @@ export interface Problem {
   readonly details?: readonly ProblemDetail[];
   readonly requestId: CorrelationID;
   readonly requested?: SandboxResources;
+  readonly resourceAccountQuota?: ResourceAccountQuotaRefusal;
   readonly retryAfterMilliseconds?: number;
   readonly retryable: boolean;
   readonly status: number;
@@ -643,7 +645,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "snapshot_name_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "profile_incompatible" | "profile_switch_snapshots_present" | "runner_pool_backend_in_use" | "quota_exceeded" | "image_preparation_targets_exceeded" | "image_preparation_failed" | "resources_exceed_profile" | "resources_fixed_by_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired" | "capacity_wait_expired" | "profile_policy_ceiling_exceeded" | "file_not_found" | "workspace_full";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "authority_kind_mismatch" | "management_unavailable" | "credential_response_unavailable" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "snapshot_name_conflict" | "invalid_lifecycle_transition" | "resource_expired" | "tenant_suspended" | "tenant_egress_context_required" | "egress_context_unavailable" | "grant_escalation_denied" | "cleanup_state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "profile_incompatible" | "profile_switch_snapshots_present" | "runner_pool_backend_in_use" | "quota_exceeded" | "image_preparation_targets_exceeded" | "image_preparation_failed" | "resources_exceed_profile" | "resources_fixed_by_profile" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired" | "capacity_wait_expired" | "profile_policy_ceiling_exceeded" | "file_not_found" | "workspace_full" | "resource_account_quota_exceeded";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -696,6 +698,7 @@ export interface ProfileRevisionSpec {
   readonly network: NetworkPolicy;
   readonly pool: string;
   readonly ports: readonly PortPolicy[];
+  readonly requireResourceAccount?: boolean;
   readonly resourceCeiling?: ProfileResourceCeiling;
   readonly resources: ResourcePolicy;
   readonly retention: RetentionPolicy;
@@ -752,6 +755,42 @@ export interface RemovePathRequest {
 
 export interface RenewLeaseRequest {
   readonly durationSeconds: number;
+}
+
+export interface ResourceAccount {
+  readonly key: string;
+  readonly limits: ResourceAccountLimits;
+}
+
+export interface ResourceAccountAllocation {
+  readonly desiredState: SandboxDesiredState;
+  readonly memoryBytes: number;
+  readonly sandboxId: OpaqueID;
+  readonly state: SandboxState;
+  readonly vcpuCount: number;
+}
+
+export interface ResourceAccountLimits {
+  readonly maxActiveInstances: PolicyLimit;
+  readonly maxMemoryBytes: PolicyLimit;
+  readonly maxVcpuCount: PolicyLimit;
+}
+
+export interface ResourceAccountQuotaRefusal {
+  readonly accountKey: string;
+  readonly axis: "maxActiveInstances" | "maxVcpuCount" | "maxMemoryBytes";
+  readonly limit: number;
+  readonly requested: number;
+  readonly used: number;
+}
+
+export interface ResourceAccountUsage {
+  readonly accountKey: string;
+  readonly activeInstances: number;
+  readonly allocations: readonly ResourceAccountAllocation[];
+  readonly memoryBytes: number;
+  readonly observedAt: Timestamp;
+  readonly vcpuCount: number;
 }
 
 /** Default Sandbox resources and concurrent operation limit. Also the size ceiling when resourceCeiling is absent. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes). */
@@ -847,6 +886,7 @@ export interface Sandbox {
   readonly metadata: Metadata;
   readonly profile: ProfileName;
   readonly profileRevisionId: OpaqueID;
+  readonly resourceAccountKey?: string;
   readonly resources: SandboxResources;
   readonly revision: number;
   readonly state: SandboxState;
@@ -924,6 +964,7 @@ export type SpawnFailureKind = "not_found" | "permission_denied" | "invalid_cwd"
 export interface StartSandboxRequest {
   readonly capacityWaitMilliseconds?: number;
   readonly image?: ExecutionImage;
+  readonly resourceAccount?: ResourceAccount;
 }
 
 /** cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot. */
@@ -1009,6 +1050,7 @@ export interface SubjectCapacity {
   readonly limits: SubjectQuota;
   readonly observedAt: Timestamp;
   readonly subjectRef: OwnershipRef;
+  readonly unattributedActiveInstancesByProfile: Readonly<Record<string, number>>;
   readonly usage: QuotaUsage;
 }
 
@@ -1301,6 +1343,7 @@ export type OperationID =
   | "getOperationTiming"
   | "getPoolCapacity"
   | "getProfile"
+  | "getResourceAccountUsage"
   | "getRunner"
   | "getRunnerPool"
   | "getSandbox"
@@ -1403,6 +1446,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   getOperationTiming: { method: "GET", path: "/v1/operations/{operationId}/timings" },
   getPoolCapacity: { method: "GET", path: "/v1/pool-capacity" },
   getProfile: { method: "GET", path: "/v1/profiles/{profileName}" },
+  getResourceAccountUsage: { method: "GET", path: "/v1/resource-accounts/{key}/usage" },
   getRunner: { method: "GET", path: "/v1/runners/{runnerId}" },
   getRunnerPool: { method: "GET", path: "/v1/runner-pools/{runnerPoolName}" },
   getSandbox: { method: "GET", path: "/v1/sandboxes/{sandboxId}" },

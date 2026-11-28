@@ -149,18 +149,19 @@ type ProfileRevision struct {
 
 // ProfileRevisionSpec resolves every execution, durability, and placement bound.
 type ProfileRevisionSpec struct {
-	Pool                string                     `json:"pool"`
-	Architecture        string                     `json:"architecture"`
-	Resources           ResourcePolicy             `json:"resources"`
-	ResourceCeiling     ProfileResourceCeiling     `json:"resourceCeiling,omitzero"`
-	Startup             StartupPolicy              `json:"startup"`
-	LifecycleCeiling    *SandboxLifecycleLimits    `json:"lifecycleCeiling,omitempty"`
-	Lifecycle           LifecyclePolicy            `json:"lifecycle"`
-	Retention           RetentionPolicy            `json:"retention"`
-	Execution           ExecutionPolicy            `json:"execution"`
-	Network             NetworkPolicy              `json:"network"`
-	Ports               []PortPolicy               `json:"ports"`
-	AttributedExecution *AttributedExecutionPolicy `json:"attributedExecution,omitempty"`
+	RequireResourceAccount bool                       `json:"requireResourceAccount,omitempty"`
+	Pool                   string                     `json:"pool"`
+	Architecture           string                     `json:"architecture"`
+	Resources              ResourcePolicy             `json:"resources"`
+	ResourceCeiling        ProfileResourceCeiling     `json:"resourceCeiling,omitzero"`
+	Startup                StartupPolicy              `json:"startup"`
+	LifecycleCeiling       *SandboxLifecycleLimits    `json:"lifecycleCeiling,omitempty"`
+	Lifecycle              LifecyclePolicy            `json:"lifecycle"`
+	Retention              RetentionPolicy            `json:"retention"`
+	Execution              ExecutionPolicy            `json:"execution"`
+	Network                NetworkPolicy              `json:"network"`
+	Ports                  []PortPolicy               `json:"ports"`
+	AttributedExecution    *AttributedExecutionPolicy `json:"attributedExecution,omitempty"`
 	// Zero represents omission; field decoding rejects explicit zero and null.
 	AttributedExecutionCeiling AttributedExecutionConnectionLimits `json:"attributedExecutionCeiling,omitzero"`
 }
@@ -532,26 +533,27 @@ type ActivitySession struct {
 
 // Sandbox is durable Project intent pinned to one immutable ProfileRevision.
 type Sandbox struct {
-	Image             *PublicExecutionImage `json:"image,omitempty"`
-	Lifecycle         LifecyclePolicy       `json:"lifecycle"`
-	Resources         SandboxResources      `json:"resources"`
-	ID                string                `json:"id"`
-	TenantRef         string                `json:"-"`
-	SubjectRef        string                `json:"-"`
-	EgressContext     *string               `json:"egressContext"`
-	Profile           string                `json:"profile"`
-	ProfileRevisionID string                `json:"profileRevisionId"`
-	State             string                `json:"state"`
-	DesiredState      string                `json:"desiredState"`
-	Generation        int64                 `json:"generation"`
-	Workspace         Workspace             `json:"workspace"`
-	Instance          *Instance             `json:"instance,omitempty"`
-	Metadata          map[string]string     `json:"metadata"`
-	LastActivityAt    *time.Time            `json:"lastActivityAt,omitempty"`
-	Revision          int64                 `json:"revision"`
-	CreatedAt         time.Time             `json:"createdAt"`
-	UpdatedAt         time.Time             `json:"updatedAt"`
-	DeletedAt         *time.Time            `json:"deletedAt,omitempty"`
+	ResourceAccountKey string                `json:"resourceAccountKey,omitempty"`
+	Image              *PublicExecutionImage `json:"image,omitempty"`
+	Lifecycle          LifecyclePolicy       `json:"lifecycle"`
+	Resources          SandboxResources      `json:"resources"`
+	ID                 string                `json:"id"`
+	TenantRef          string                `json:"-"`
+	SubjectRef         string                `json:"-"`
+	EgressContext      *string               `json:"egressContext"`
+	Profile            string                `json:"profile"`
+	ProfileRevisionID  string                `json:"profileRevisionId"`
+	State              string                `json:"state"`
+	DesiredState       string                `json:"desiredState"`
+	Generation         int64                 `json:"generation"`
+	Workspace          Workspace             `json:"workspace"`
+	Instance           *Instance             `json:"instance,omitempty"`
+	Metadata           map[string]string     `json:"metadata"`
+	LastActivityAt     *time.Time            `json:"lastActivityAt,omitempty"`
+	Revision           int64                 `json:"revision"`
+	CreatedAt          time.Time             `json:"createdAt"`
+	UpdatedAt          time.Time             `json:"updatedAt"`
+	DeletedAt          *time.Time            `json:"deletedAt,omitempty"`
 }
 
 // SandboxPage is one bounded stable Project Sandbox traversal page.
@@ -563,6 +565,7 @@ type SandboxPage struct {
 // CreateSandboxRequest contains a caller-selected Profile, bounded metadata,
 // and an optional retained Snapshot used to seed generation one.
 type CreateSandboxRequest struct {
+	ResourceAccount  *ResourceAccount        `json:"resourceAccount,omitempty"`
 	Resources        *SandboxResourceRequest `json:"resources,omitempty"`
 	Image            ExecutionImage          `json:"image,omitzero"`
 	Profile          string                  `json:"profile"`
@@ -1044,16 +1047,17 @@ type DeploymentTimingSummary struct {
 
 // Problem is the stable typed failure envelope.
 type Problem struct {
-	Ceiling                *SandboxResourceRequest `json:"ceiling,omitempty"`
-	Requested              *SandboxResources       `json:"requested,omitempty"`
-	Type                   string                  `json:"type"`
-	Title                  string                  `json:"title"`
-	Status                 int                     `json:"status"`
-	Code                   string                  `json:"code"`
-	RequestID              string                  `json:"requestId"`
-	Retryable              bool                    `json:"retryable"`
-	RetryAfterMilliseconds *int64                  `json:"retryAfterMilliseconds,omitempty"`
-	Details                []ProblemDetail         `json:"details,omitempty"`
+	ResourceAccountQuota   *ResourceAccountQuotaRefusal `json:"resourceAccountQuota,omitempty"`
+	Ceiling                *SandboxResourceRequest      `json:"ceiling,omitempty"`
+	Requested              *SandboxResources            `json:"requested,omitempty"`
+	Type                   string                       `json:"type"`
+	Title                  string                       `json:"title"`
+	Status                 int                          `json:"status"`
+	Code                   string                       `json:"code"`
+	RequestID              string                       `json:"requestId"`
+	Retryable              bool                         `json:"retryable"`
+	RetryAfterMilliseconds *int64                       `json:"retryAfterMilliseconds,omitempty"`
+	Details                []ProblemDetail              `json:"details,omitempty"`
 }
 
 // ProblemDetail identifies one bounded invalid field.
@@ -1107,6 +1111,7 @@ type ExecDurationMetric struct {
 
 // MetricsSnapshot contains only fixed-cardinality state, outcome, and timing signals.
 type MetricsSnapshot struct {
+	ResourceAccountAllocationStates         map[string]int64
 	SandboxStates                           map[string]int64
 	OperationStates                         map[string]int64
 	OperationDurations                      []OperationDurationMetric

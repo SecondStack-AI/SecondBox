@@ -5175,6 +5175,62 @@
           }
         }
       }
+    },
+    "/v1/resource-accounts/{key}/usage": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TenantRef"
+        },
+        {
+          "$ref": "#/components/parameters/SubjectRef"
+        },
+        {
+          "in": "path",
+          "name": "key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9:@._-]{0,255}$"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "TenantUsage"
+        ],
+        "operationId": "getResourceAccountUsage",
+        "description": "Requires sandbox:read. Returns the authenticated Tenant and Subject's active allocations for the opaque account, including pending starts. An unknown account has zero usage.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resource account allocation observation.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceAccountUsage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7570,7 +7626,8 @@
           "usage",
           "available",
           "observedAt",
-          "constrainingScopes"
+          "constrainingScopes",
+          "unattributedActiveInstancesByProfile"
         ],
         "properties": {
           "subjectRef": {
@@ -7590,6 +7647,15 @@
           },
           "constrainingScopes": {
             "$ref": "#/components/schemas/QuotaConstrainingScopes"
+          },
+          "unattributedActiveInstancesByProfile": {
+            "type": "object",
+            "description": "Compute allocations without a resource account, grouped by pinned Profile name for this Subject.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
           }
         }
       },
@@ -7945,6 +8011,10 @@
           },
           "attributedExecutionCeiling": {
             "$ref": "#/components/schemas/AttributedExecutionConnectionLimits"
+          },
+          "requireResourceAccount": {
+            "type": "boolean",
+            "description": "Requires a trusted resourceAccount on each new compute admission when enabled by either the Sandbox's pinned revision or the current revision of its Profile."
           }
         }
       },
@@ -7961,6 +8031,9 @@
             "minimum": 1,
             "maximum": 3600000,
             "description": "Bounds how long the start may remain unplaced. A start not placed on its home Runner within this interval fails its Operation with capacity_wait_expired, releases the Workspace, and leaves the Sandbox wanted stopped. Omission waits until the home Runner can place the start."
+          },
+          "resourceAccount": {
+            "$ref": "#/components/schemas/ResourceAccount"
           }
         }
       },
@@ -9020,6 +9093,13 @@
           },
           "lifecycle": {
             "$ref": "#/components/schemas/LifecyclePolicy"
+          },
+          "resourceAccountKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9:@._-]{0,255}$",
+            "description": "Account holding the active compute allocation. Absent when there is no active charged allocation."
           }
         }
       },
@@ -9052,6 +9132,9 @@
             "minimum": 1,
             "maximum": 3600000,
             "description": "Bounds how long the start of a Profile whose initial state is running may remain unplaced after the Workspace is created. If it is not placed on the home Runner within this interval, measured from admission, the create Operation fails with capacity_wait_expired; the Sandbox and its Workspace remain, stopped and wanted stopped, and an ordinary start runs it. Ignored by a Profile whose initial state is stopped. Omission waits until the home Runner can place the start."
+          },
+          "resourceAccount": {
+            "$ref": "#/components/schemas/ResourceAccount"
           }
         }
       },
@@ -11265,7 +11348,8 @@
           "capacity_wait_expired",
           "profile_policy_ceiling_exceeded",
           "file_not_found",
-          "workspace_full"
+          "workspace_full",
+          "resource_account_quota_exceeded"
         ]
       },
       "ProblemDetail": {
@@ -11344,6 +11428,9 @@
           },
           "requested": {
             "$ref": "#/components/schemas/SandboxResources"
+          },
+          "resourceAccountQuota": {
+            "$ref": "#/components/schemas/ResourceAccountQuotaRefusal"
           }
         }
       },
@@ -11877,6 +11964,163 @@
           },
           "truncated": {
             "type": "boolean"
+          }
+        }
+      },
+      "ResourceAccountLimits": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "maxActiveInstances",
+          "maxVcpuCount",
+          "maxMemoryBytes"
+        ],
+        "properties": {
+          "maxActiveInstances": {
+            "$ref": "#/components/schemas/PolicyLimit"
+          },
+          "maxVcpuCount": {
+            "$ref": "#/components/schemas/PolicyLimit"
+          },
+          "maxMemoryBytes": {
+            "$ref": "#/components/schemas/PolicyLimit"
+          }
+        }
+      },
+      "ResourceAccount": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "limits"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9:@._-]{0,255}$"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ResourceAccountLimits"
+          }
+        }
+      },
+      "ResourceAccountAllocation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sandboxId",
+          "state",
+          "desiredState",
+          "vcpuCount",
+          "memoryBytes"
+        ],
+        "properties": {
+          "sandboxId": {
+            "$ref": "#/components/schemas/OpaqueID"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SandboxState"
+          },
+          "desiredState": {
+            "$ref": "#/components/schemas/SandboxDesiredState"
+          },
+          "vcpuCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ResourceAccountUsage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "accountKey",
+          "observedAt",
+          "activeInstances",
+          "vcpuCount",
+          "memoryBytes",
+          "allocations"
+        ],
+        "properties": {
+          "accountKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9:@._-]{0,255}$"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "activeInstances": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "vcpuCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "allocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceAccountAllocation"
+            }
+          }
+        }
+      },
+      "ResourceAccountQuotaRefusal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "accountKey",
+          "axis",
+          "used",
+          "requested",
+          "limit"
+        ],
+        "properties": {
+          "accountKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9:@._-]{0,255}$"
+          },
+          "axis": {
+            "type": "string",
+            "enum": [
+              "maxActiveInstances",
+              "maxVcpuCount",
+              "maxMemoryBytes"
+            ]
+          },
+          "used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "requested": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       }

@@ -506,6 +506,7 @@ func (keeper *LeaseKeeper) Close() error {
 
 // RunRequest is one create-then-execute request against a fresh Sandbox.
 type RunRequest struct {
+	ResourceAccount      *ResourceAccount
 	Resources            *SandboxResourceRequest
 	Image                ExecutionImage
 	Profile              ProfileName
@@ -551,6 +552,7 @@ func (client *Client) Run(
 		metadata = Metadata{}
 	}
 	handle, _, err := client.CreateSandbox(ctx, CreateSandboxRequest{
+		ResourceAccount:  request.ResourceAccount,
 		Image:            request.Image,
 		Profile:          request.Profile,
 		Metadata:         metadata,

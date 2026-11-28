@@ -172,6 +172,9 @@ var operations = map[string]OperationMetadata{
 	"getProfile": {
 		OperationID: "getProfile", Method: "GET", PathTemplate: "/v1/profiles/{profileName}",
 	},
+	"getResourceAccountUsage": {
+		OperationID: "getResourceAccountUsage", Method: "GET", PathTemplate: "/v1/resource-accounts/{key}/usage",
+	},
 	"getRunner": {
 		OperationID: "getRunner", Method: "GET", PathTemplate: "/v1/runners/{runnerId}",
 	},

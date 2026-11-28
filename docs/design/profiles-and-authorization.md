@@ -2,6 +2,45 @@
 
 Profile resources state integer `vcpuCount`, guest memory, Workspace capacity, concurrency, duration, and output bounds. They make no universal CPU-share or guest PID-enforcement promise; those controls remain backend-specific. Profiles select a homogeneous RunnerPool but contain no backend kind.
 
+### Resource accounts
+
+An application authority can pass `resourceAccount` on Sandbox create and start.
+It supplies an opaque `key` and three complete limits, `maxActiveInstances`,
+`maxVcpuCount` and `maxMemoryBytes`. Each accepts a nonnegative exact JSON
+integer or explicit null for unlimited. These limits come from the trusted
+application's current policy. An operator can set `requireResourceAccount`
+on a Profile revision to require this context for positive compute demand.
+An initially stopped Sandbox needs its context when it starts. The requirement
+applies when either the pinned or current Profile revision enables it. This
+lets operators protect already-created workspaces at their next admission.
+Their size, image and execution settings stay pinned.
+
+Admission holds the Tenant and Subject quota locks while it counts active
+Sandboxes for that account in that Subject. It uses each Sandbox's pinned
+resources, including admitted starts waiting for placement. An idle running
+Sandbox and one stopping both hold their charge. A failed generation with an
+attached Instance holds its charge through fencing. A failed start that never
+placed holds none. A running workspace keeps its account across shared use,
+recovery and idempotent replay. After release, a fresh admission can supply
+another account. The account key belongs to the operation's idempotency
+identity. An accepted operation retains its original capacity-wait deadline if the
+caller retries with a new remaining wait. Refreshed limits apply only to
+fresh admission after a definitive refusal. A replay of an accepted request returns its original operation.
+
+A resource account refusal returns HTTP 429 with code
+`resource_account_quota_exceeded`, `retryable: false` and a
+`resourceAccountQuota` object containing `accountKey`, `axis`, `used`,
+`requested` and `limit`. Control-plane audit records include these values.
+`GET /v1/resource-accounts/{key}/usage` requires `sandbox:read` and returns
+a timestamped total and its contributing Sandbox IDs, states and sizes.
+An unknown account returns an empty observation. `GET /v1/subject-usage` reports
+active uncharged allocations grouped by Profile in
+`unattributedActiveInstancesByProfile` so an application can monitor adoption
+across old revisions. Metrics expose refusal counts by axis and charged
+allocations by state.
+
+### Profile sizing
+
 Profiles are server-owned policy. Application clients select an authorized
 Profile name and may request Sandbox size within its policy, Tenant/Subject
 quota, and Runner admission. Image, network, ports, execution bounds, and

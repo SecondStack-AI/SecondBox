@@ -678,6 +678,7 @@ const (
 	ProblemCodeProfilePolicyCeilingExceeded         ProblemCode = "profile_policy_ceiling_exceeded"
 	ProblemCodeFileNotFound                         ProblemCode = "file_not_found"
 	ProblemCodeWorkspaceFull                        ProblemCode = "workspace_full"
+	ProblemCodeResourceAccountQuotaExceeded         ProblemCode = "resource_account_quota_exceeded"
 )
 
 type ProblemDetail struct {
@@ -762,6 +763,16 @@ type RemovePathRequest struct {
 }
 
 type RenewLeaseRequest = contracts.RenewLeaseRequest
+
+type ResourceAccount = contracts.ResourceAccount
+
+type ResourceAccountAllocation = contracts.ResourceAccountAllocation
+
+type ResourceAccountLimits = contracts.ResourceAccountLimits
+
+type ResourceAccountQuotaRefusal = contracts.ResourceAccountQuotaRefusal
+
+type ResourceAccountUsage = contracts.ResourceAccountUsage
 
 // ResourcePolicy Default Sandbox resources and concurrent operation limit. Also the size ceiling when resourceCeiling is absent. memoryBytes and workspaceBytes must use whole MiB (multiples of 1048576 bytes).
 type ResourcePolicy = contracts.ResourcePolicy
@@ -959,12 +970,13 @@ type Subject struct {
 }
 
 type SubjectCapacity struct {
-	Available          QuotaHeadroom           `json:"available"`
-	ConstrainingScopes QuotaConstrainingScopes `json:"constrainingScopes"`
-	Limits             SubjectQuota            `json:"limits"`
-	ObservedAt         Timestamp               `json:"observedAt"`
-	SubjectRef         OwnershipRef            `json:"subjectRef"`
-	Usage              QuotaUsage              `json:"usage"`
+	Available                            QuotaHeadroom           `json:"available"`
+	ConstrainingScopes                   QuotaConstrainingScopes `json:"constrainingScopes"`
+	Limits                               SubjectQuota            `json:"limits"`
+	ObservedAt                           Timestamp               `json:"observedAt"`
+	SubjectRef                           OwnershipRef            `json:"subjectRef"`
+	UnattributedActiveInstancesByProfile map[string]int64        `json:"unattributedActiveInstancesByProfile"`
+	Usage                                QuotaUsage              `json:"usage"`
 }
 
 type SubjectCleanupState = string

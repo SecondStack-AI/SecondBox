@@ -37,7 +37,8 @@ func (bound *CapacityWaitBound) UnmarshalJSON(data []byte) error {
 }
 
 type StartSandboxRequest struct {
-	Image ExecutionImage `json:"image,omitzero"`
+	ResourceAccount *ResourceAccount `json:"resourceAccount,omitempty"`
+	Image           ExecutionImage   `json:"image,omitzero"`
 	// CapacityWaitMilliseconds, when positive, bounds how long the start may
 	// wait unplaced. Zero waits until the home Runner can place it.
 	CapacityWaitMilliseconds CapacityWaitBound `json:"capacityWaitMilliseconds,omitempty"`
@@ -45,6 +46,7 @@ type StartSandboxRequest struct {
 
 func (request *StartSandboxRequest) UnmarshalJSON(data []byte) error {
 	var body struct {
+		ResourceAccount          ResourceAccount `json:"resourceAccount"`
 		Image                    json.RawMessage `json:"image"`
 		CapacityWaitMilliseconds json.RawMessage `json:"capacityWaitMilliseconds"`
 	}
@@ -53,6 +55,7 @@ func (request *StartSandboxRequest) UnmarshalJSON(data []byte) error {
 	if err := decoder.Decode(&body); err != nil {
 		return err
 	}
+	request.ResourceAccount = body.ResourceAccount.optional()
 	request.Image = ExecutionImage{}
 	request.CapacityWaitMilliseconds = 0
 	if len(body.CapacityWaitMilliseconds) != 0 {

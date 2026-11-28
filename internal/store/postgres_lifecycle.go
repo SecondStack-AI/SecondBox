@@ -86,13 +86,13 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		if expired {
 			idempotencyErr = pgx.ErrNoRows
 		} else {
-			if priorHash != input.RequestHash {
-				return contracts.Operation{}, ports.ErrIdempotencyConflict
-			}
 			operation, err := getOperationWithQuerier(
 				ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, `id=$3`, priorOperationID,
 			)
 			if err != nil {
+				return contracts.Operation{}, err
+			}
+			if err := verifySandboxReplayHash(priorHash, input.RequestHash, input.LegacyCapacityWaitHash, operation); err != nil {
 				return contracts.Operation{}, err
 			}
 			if err := insertAuditEvent(ctx, tx, input.AuditEvent); err != nil {
@@ -181,6 +181,17 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		if observed != contracts.SandboxStateStopped && observed != contracts.SandboxStateFailed {
 			return contracts.Operation{}, ports.ErrWorkspaceMutation
 		}
+		// A failed Instance keeps its reservation until fencing detaches it.
+		holdsCompute := rowlock.QuotaUsageActive(observed, desired) || observed == contracts.SandboxStateFailed && locked.CurrentInstanceID != ""
+		if !holdsCompute {
+			_, required, err := rowlock.SandboxResourceAccountPolicy(ctx, tx, input.SandboxID)
+			if err != nil {
+				return contracts.Operation{}, err
+			}
+			if err := admitResourceAccount(ctx, tx, input.Principal, required, input.ResourceAccount, locked.Resources); err != nil {
+				return contracts.Operation{}, err
+			}
+		}
 		if input.Operation.RequestMetadata["executionImageReference"] == "" {
 			var reference, digest string
 			if err := tx.QueryRow(ctx, `SELECT execution_image_reference,execution_image_digest FROM secondbox.sandboxes WHERE id=$1`, input.SandboxID).Scan(&reference, &digest); err != nil {
@@ -207,10 +218,10 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			return contracts.Operation{}, err
 		}
 		delta := quotaUsage{activeInstances: 1, vcpuCount: locked.Resources.VCPUCount, memoryBytes: locked.Resources.MemoryBytes}
-		if !subjectQuota.MaxActiveInstances.Allows(subjectUsage.activeInstances+1) ||
+		if !holdsCompute && (!subjectQuota.MaxActiveInstances.Allows(subjectUsage.activeInstances+1) ||
 			!subjectQuota.MaxVCPUCount.Allows(subjectUsage.vcpuCount+delta.vcpuCount) ||
 			!subjectQuota.MaxMemoryBytes.Allows(subjectUsage.memoryBytes+delta.memoryBytes) ||
-			tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, delta) {
+			tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, delta)) {
 			if tenantDurableQuotaWouldExceed(tenantQuota, tenantUsage, delta) ||
 				!computeQuotaCanFit(subjectQuota, tenantQuota, delta) {
 				return contracts.Operation{}, ports.ErrQuotaExceeded
@@ -243,6 +254,11 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 	}
 	databaseSatisfied := observed == contracts.SandboxStateStopped && (kind == "drain" || kind == "stop") || finishUnhomedCreate
 	nextState := observed
+	// Retrying a failed start with no attached Instance reopens the stopped
+	// Workspace. Reserve the new intent immediately, before asynchronous placement.
+	if kind == "start" && observed == contracts.SandboxStateFailed && locked.CurrentInstanceID == "" {
+		nextState = contracts.SandboxStateStopped
+	}
 	switch input.DesiredState {
 	case contracts.SandboxDesiredStateRunning,
 		contracts.SandboxDesiredStateStopped,
@@ -274,10 +290,11 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		    lifecycle_failure_message='',lifecycle_intent_kind=$7,
 		    lifecycle_action='intent_received',
 		    lifecycle_request_metadata_json=$8,lifecycle_termination_reason=$9,
+ resource_account_key=CASE WHEN $7='start' AND NOT secondbox.sandbox_quota_active(state,desired_state,current_instance_id) THEN NULLIF($10,'') ELSE resource_account_key END,
 		    revision=revision+1,updated_at=$6
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
 		input.Principal.TenantRef, input.Principal.SubjectRef, input.SandboxID,
-		input.DesiredState, nextState, input.Now.UTC(), kind, requestMetadataJSON, terminationReason,
+		input.DesiredState, nextState, input.Now.UTC(), kind, requestMetadataJSON, terminationReason, input.ResourceAccount.AccountKey(),
 	); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle intent update failed: %w", err)
 	}

@@ -6,6 +6,15 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
+var ErrResourceAccountQuotaExceeded = errors.New("SecondBox resource account quota exceeded")
+
+type ResourceAccountQuotaError struct {
+	Refusal contracts.ResourceAccountQuotaRefusal
+}
+
+func (err *ResourceAccountQuotaError) Error() string { return ErrResourceAccountQuotaExceeded.Error() }
+func (err *ResourceAccountQuotaError) Unwrap() error { return ErrResourceAccountQuotaExceeded }
+
 var ErrResourcesExceedProfile = errors.New("SecondBox requested resources exceed Profile ceiling")
 
 // ResourcesExceedProfileError preserves the resolved request and its immutable ceiling.

@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/observability"
@@ -48,6 +49,7 @@ type HandlerConfig struct {
 }
 
 type handler struct {
+	resourceAccountRefusals   map[string]*atomic.Uint64
 	service                   *service.ControlPlaneService
 	logger                    *slog.Logger
 	platformTokenHash         [sha256.Size]byte
@@ -75,7 +77,8 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	}
 	platformTokenHash := sha256.Sum256([]byte(config.PlatformToken))
 	apiHandler := &handler{
-		service: config.Service, logger: config.Logger,
+		resourceAccountRefusals: map[string]*atomic.Uint64{"maxActiveInstances": {}, "maxVcpuCount": {}, "maxMemoryBytes": {}},
+		service:                 config.Service, logger: config.Logger,
 		platformTokenHash:         platformTokenHash,
 		persistedAuthorities:      config.PersistedAuthorities,
 		maximumDataPlaneBodyBytes: config.MaximumDataPlaneBodyBytes,
@@ -108,6 +111,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("POST /v1/application-authorities/{authorityAction}", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.applicationAuthorityManagementAction)))
 	mux.Handle("GET /v1/usage", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getTenantUsage)))
 	mux.Handle("GET /v1/subject-policy", apiHandler.authenticate(http.HandlerFunc(apiHandler.getApplicationSandboxPolicy)))
+	mux.Handle("GET /v1/resource-accounts/{key}/usage", apiHandler.authenticate(http.HandlerFunc(apiHandler.getResourceAccountUsage)))
 	mux.Handle("GET /v1/subject-usage", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSubjectCapacity)))
 	mux.Handle("GET /v1/pool-capacity", apiHandler.authenticate(http.HandlerFunc(apiHandler.getPoolCapacity)))
 	mux.Handle("GET /v1/tenant-pool-capacity", apiHandler.authenticateTenantControllerManagement(http.HandlerFunc(apiHandler.getPoolCapacity)))
@@ -409,9 +413,20 @@ func (apiHandler *handler) metrics(writer http.ResponseWriter, request *http.Req
 	}{
 		{name: "secondbox_sandboxes", values: snapshot.SandboxStates},
 		{name: "secondbox_operations", values: snapshot.OperationStates},
+		{name: "secondbox_resource_account_allocations", values: snapshot.ResourceAccountAllocationStates},
 	} {
 		if err := writeMetricFamily(writer, family.name, family.values); err != nil {
 			apiHandler.logResponseAbort(request, "metrics response", err)
+			return
+		}
+	}
+	if _, err := fmt.Fprintln(writer, "# TYPE secondbox_resource_account_refusals_total counter"); err != nil {
+		apiHandler.logResponseAbort(request, "resource account metrics response", err)
+		return
+	}
+	for _, axis := range []string{"maxActiveInstances", "maxVcpuCount", "maxMemoryBytes"} {
+		if _, err := fmt.Fprintf(writer, "secondbox_resource_account_refusals_total{axis=%q} %d\n", axis, apiHandler.resourceAccountRefusals[axis].Load()); err != nil {
+			apiHandler.logResponseAbort(request, "resource account metrics response", err)
 			return
 		}
 	}
@@ -1101,6 +1116,13 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 	if code == "invalid_request" {
 		problem.Title, problem.Details = invalidRequestProblemDetails(err, title)
 	}
+	var accountError *ports.ResourceAccountQuotaError
+	if errors.As(err, &accountError) {
+		problem.ResourceAccountQuota = &accountError.Refusal
+		if counter := apiHandler.resourceAccountRefusals[accountError.Refusal.Axis]; counter != nil {
+			counter.Add(1)
+		}
+	}
 	var resourcesError *ports.ResourcesExceedProfileError
 	if errors.As(err, &resourcesError) {
 		problem.Ceiling = &resourcesError.Ceiling
@@ -1228,6 +1250,8 @@ func classifyError(err error) (int, string, string, bool) {
 	case errors.Is(err, ports.ErrImagePreparationTargetsExceeded):
 		return http.StatusBadRequest, "image_preparation_targets_exceeded",
 			"Eligible execution node set exceeds the image preparation limit; select a narrower Profile", false
+	case errors.Is(err, ports.ErrResourceAccountQuotaExceeded):
+		return http.StatusTooManyRequests, "resource_account_quota_exceeded", "Resource account quota exceeded", false
 	case errors.Is(err, ports.ErrComputeQuotaExceeded):
 		return http.StatusTooManyRequests, "quota_exceeded", "Compute quota exceeded", true
 	case errors.Is(err, ports.ErrQuotaExceeded):

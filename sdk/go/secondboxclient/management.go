@@ -191,6 +191,12 @@ func (client *Client) ExtendApplicationAuthority(ctx context.Context, authorityI
 	return authority, err
 }
 
+func (client *Client) GetResourceAccountUsage(ctx context.Context, key string) (ResourceAccountUsage, error) {
+	var usage ResourceAccountUsage
+	err := client.RequestJSON(ctx, "getResourceAccountUsage", CallOptions{PathParameters: map[string]string{"key": key}}, &usage)
+	return usage, err
+}
+
 func (client *Client) GetSubjectCapacity(ctx context.Context) (SubjectCapacity, error) {
 	var capacity SubjectCapacity
 	err := client.RequestJSON(ctx, "getSubjectCapacity", CallOptions{}, &capacity)

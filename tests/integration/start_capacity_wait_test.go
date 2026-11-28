@@ -1,7 +1,10 @@
 package integration_test
 
 import (
-	"errors"
+	"crypto/sha256"
+	"fmt"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -30,7 +33,7 @@ func TestStartCapacityWaitExpiryReleasesTheWorkspaceWithoutPlacing(t *testing.T)
 	if err != nil || replayed {
 		t.Fatalf("bounded start replayed=%t error=%v", replayed, err)
 	}
-	// The bound is part of the canonical request.
+	// Each replay must preserve the first accepted operation and deadline.
 	if _, replayed, err := fixture.controlPlane.StartSandboxOperation(
 		t.Context(), fixture.principal, sandboxID, key, stopped.Revision, request,
 	); err != nil || !replayed {
@@ -38,10 +41,10 @@ func TestStartCapacityWaitExpiryReleasesTheWorkspaceWithoutPlacing(t *testing.T)
 	}
 	changed := request
 	changed.CapacityWaitMilliseconds = capacityWait + 1
-	if _, _, err := fixture.controlPlane.StartSandboxOperation(
+	if repeated, replayed, err := fixture.controlPlane.StartSandboxOperation(
 		t.Context(), fixture.principal, sandboxID, key, stopped.Revision, changed,
-	); !errors.Is(err, ports.ErrIdempotencyConflict) {
-		t.Fatalf("start reusing the key with another capacity wait error = %v, want idempotency conflict", err)
+	); err != nil || !replayed || repeated.ID != operation.ID || repeated.CapacityWaitDeadline == nil || operation.CapacityWaitDeadline == nil || !repeated.CapacityWaitDeadline.Equal(operation.CapacityWaitDeadline.Truncate(time.Microsecond)) {
+		t.Fatalf("start with refreshed wait replayed=%t operation=%+v err=%v", replayed, repeated, err)
 	}
 
 	setFixtureRunnerState(t, fixture, "offline")
@@ -487,5 +490,123 @@ func TestStopCancelsStartWaitingForRunnerCapacity(t *testing.T) {
 	}
 	if assignments := sandboxAssignmentCount(t, fixture, sandboxID); assignments != 0 {
 		t.Fatalf("cancelled start placed %d Assignments", assignments)
+	}
+}
+
+// The API exposes the operation ID. Its placement deadline is internal,
+// so verify the persisted deadline as well as the HTTP replay response.
+func TestCapacityWaitHTTPReplayPreservesAdmission(t *testing.T) {
+	for _, kind := range []string{"create", "start"} {
+		for _, legacy := range []bool{false, true} {
+			name := fmt.Sprintf("%s-legacy-%t", kind, legacy)
+			t.Run(name, func(t *testing.T) {
+				ctx := t.Context()
+				plane, db := newControlPlaneFixture(t, generousQuota())
+				admin := fixtureAdmin(t, plane)
+				_, subject, credential := createProjectAccountAndCredential(t, plane, admin, "replay-"+name)
+				principal := authenticateCredential(t, plane, credential)
+				profile := createGrantedProfile(t, plane, db, admin, subject, "replay-"+name)
+				spec := profile.CurrentRevision.Spec
+				spec.RequireResourceAccount = !legacy
+				if kind == "create" {
+					spec.Lifecycle.InitialState = "running"
+				}
+				if _, _, err := plane.ReviseProfileAtRevisionIdempotent(ctx, admin, profile.Name, "replay-policy", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision); err != nil {
+					t.Fatal(err)
+				}
+				server := contractServer(t, persistedHTTPHandler(t, plane, db))
+				defer server.Close()
+				pool, err := pgxpool.New(ctx, integrationDatabaseURL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer pool.Close()
+				key := "capacity-replay-" + name
+				path, revision := "/v1/sandboxes", ""
+				body := map[string]any{"capacityWaitMilliseconds": 20000}
+				account := contracts.ResourceAccount{Key: "actor:first", Limits: contracts.ResourceAccountLimits{MaxActiveInstances: 1, MaxVCPUCount: contracts.Unlimited, MaxMemoryBytes: contracts.Unlimited}}
+				if !legacy {
+					body["resourceAccount"] = account
+				}
+				var legacyCanonical string
+				if kind == "create" {
+					body["profile"] = profile.Name
+					body["metadata"] = map[string]string{}
+					legacyCanonical = fmt.Sprintf(`{"profile":%q,"metadata":{},"capacityWaitMilliseconds":20000}`, profile.Name)
+				} else {
+					stopped, _, err := plane.CreateSandbox(ctx, principal, "stopped-"+name, contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					completeFixtureSandboxCreation(t, stopped.ID)
+					stopped, err = plane.GetSandbox(ctx, principal, stopped.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					path += "/" + stopped.ID + ":start"
+					revision = strconv.FormatInt(stopped.Revision, 10)
+					legacyCanonical = `{"kind":"start","metadata":{},"capacityWaitMilliseconds":20000}`
+				}
+				post := func() *http.Response {
+					return lifecycleHTTPRequest(t, server.URL, credential, http.MethodPost, path, key, revision, "", body)
+				}
+				accepted := func(replayed bool) contracts.Operation {
+					r := post()
+					if r.StatusCode != http.StatusAccepted || r.Header.Get("Idempotency-Replayed") != strconv.FormatBool(replayed) {
+						t.Fatalf("expected replay=%t, status=%d body=%s", replayed, r.StatusCode, readResponse(t, r))
+					}
+					var op contracts.Operation
+					decodeResponseJSON(t, r, &op)
+					return op
+				}
+				first := accepted(false)
+				deadline := func() time.Time {
+					var value time.Time
+					if err := pool.QueryRow(ctx, `SELECT capacity_wait_deadline FROM secondbox.operations WHERE id=$1`, first.ID).Scan(&value); err != nil {
+						t.Fatal(err)
+					}
+					return value
+				}
+				original := deadline()
+				if !original.Equal(first.CreatedAt.Truncate(time.Microsecond).Add(20 * time.Second)) {
+					t.Fatalf("original deadline %s for operation created %s", original, first.CreatedAt)
+				}
+				if legacy {
+					// The release before wait-independent hashing stored this SHA only.
+					hash := fmt.Sprintf("%x", sha256.Sum256([]byte(legacyCanonical)))
+					result, err := pool.Exec(ctx, `UPDATE secondbox.idempotency_records SET request_hash=$1 WHERE tenant_ref=$2 AND subject_ref=$3 AND idempotency_key=$4`, hash, principal.TenantRef, principal.SubjectRef, key)
+					if err != nil || result.RowsAffected() != 1 {
+						t.Fatalf("seed pre-upgrade identity: %v %v", result, err)
+					}
+				}
+				for _, wait := range []int{10000, 45000, 0} {
+					if wait == 0 {
+						delete(body, "capacityWaitMilliseconds")
+					} else {
+						body["capacityWaitMilliseconds"] = wait
+					}
+					if !legacy {
+						account.Limits.MaxActiveInstances = 0
+						body["resourceAccount"] = account
+					}
+					again := accepted(true)
+					if again.ID != first.ID || !deadline().Equal(original) {
+						t.Fatalf("wait %d replaced admitted operation or deadline", wait)
+					}
+				}
+				body["image"] = testExecutionImage()
+				assertProblem(t, post(), http.StatusConflict, "idempotency_conflict")
+				delete(body, "image")
+				account.Key = "actor:other"
+				body["resourceAccount"] = account
+				assertProblem(t, post(), http.StatusConflict, "idempotency_conflict")
+				if !legacy {
+					usage, err := plane.GetResourceAccountUsage(ctx, principal, "actor:first")
+					if err != nil || usage.ActiveInstances != 1 || usage.Allocations[0].SandboxID != first.SandboxID {
+						t.Fatalf("replay charge=%+v err=%v", usage, err)
+					}
+				}
+			})
+		}
 	}
 }
