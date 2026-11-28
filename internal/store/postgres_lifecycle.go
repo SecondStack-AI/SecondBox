@@ -183,14 +183,16 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		}
 		// A failed Instance keeps its reservation until fencing detaches it.
 		holdsCompute := rowlock.QuotaUsageActive(observed, desired) || observed == contracts.SandboxStateFailed && locked.CurrentInstanceID != ""
+		previousKey, required, err := rowlock.SandboxResourceAccountPolicy(ctx, tx, input.SandboxID)
+		if err != nil {
+			return contracts.Operation{}, err
+		}
 		if !holdsCompute {
-			_, required, err := rowlock.SandboxResourceAccountPolicy(ctx, tx, input.SandboxID)
-			if err != nil {
-				return contracts.Operation{}, err
-			}
 			if err := admitResourceAccount(ctx, tx, input.Principal, required, input.ResourceAccount, locked.Resources); err != nil {
 				return contracts.Operation{}, err
 			}
+		} else if previousKey == "" && required {
+			return contracts.Operation{}, &ports.InvalidFieldError{Field: "resourceAccount", Reason: "requires stopping and releasing the unattributed Instance before starting"}
 		}
 		if input.Operation.RequestMetadata["executionImageReference"] == "" {
 			var reference, digest string

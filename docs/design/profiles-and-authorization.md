@@ -22,8 +22,9 @@ Sandbox and one stopping both hold their charge. A failed generation with an
 attached Instance holds its charge through fencing. A failed start that never
 placed holds none. A running workspace keeps its account across shared use,
 recovery and idempotent replay. After release, a fresh admission can supply
-another account. The account key belongs to the operation's idempotency
-identity. An accepted operation retains its original capacity-wait deadline if the
+another account. A held unattributed Instance must stop and release before a
+Profile requiring attribution accepts another start. The account key belongs to
+the operation's idempotency identity. An accepted operation retains its original capacity-wait deadline if the
 caller retries with a new remaining wait. Refreshed limits apply only to
 fresh admission after a definitive refusal. A replay of an accepted request returns its original operation.
 
@@ -104,7 +105,7 @@ Narrowing is not supported. To remove a grant or scope from an application autho
 
 ## Profile and revision
 
-A Profile is a stable operator-chosen name with an enabled state and current revision. Creation and each revision operation produce an immutable ProfileRevision. Updating the Profile changes the revision selected by future Sandbox creation. Existing Sandboxes remain pinned until an explicit [Profile switch](#profile-switch) repins a stopped Sandbox. Only the attributed connection numeric default and ceiling follow the current head at each new Assignment, as described below.
+A Profile is a stable operator-chosen name with an enabled state and current revision. Creation and each revision operation produce an immutable ProfileRevision. Updating the Profile changes the revision selected by future Sandbox creation. Existing Sandboxes remain pinned until an explicit [Profile switch](#profile-switch) repins a stopped Sandbox. The attributed connection numeric default and ceiling follow the current head at each new Assignment, as described below. Resource-account admission also enforces `requireResourceAccount` when either the pinned revision or the current head enables it; other pinned execution settings do not change.
 
 Every ProfileRevision contains:
 

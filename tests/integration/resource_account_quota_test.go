@@ -371,6 +371,65 @@ func TestResourceAccountCurrentProfileProtectsLegacyStoppedSandbox(t *testing.T)
 	}
 }
 
+func TestResourceAccountCurrentProfileRejectsHeldUnattributedRecovery(t *testing.T) {
+	ctx := t.Context()
+	control, db := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, control)
+	_, subject, credential := createProjectAccountAndCredential(t, control, admin, "held-legacy-account")
+	principal := authenticateCredential(t, control, credential)
+	profile := createGrantedProfile(t, control, db, admin, subject, "held-legacy-account")
+	legacy, _, err := control.CreateSandbox(ctx, principal, "held-legacy-create", contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeFixtureSandboxCreation(t, legacy.ID)
+	pool, err := pgxpool.New(ctx, integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `UPDATE secondbox.sandboxes SET state='failed',current_instance_id='legacy-attached',revision=revision+1 WHERE id=$1`, legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	spec := profile.CurrentRevision.Spec
+	spec.RequireResourceAccount = true
+	if _, _, err := control.ReviseProfileAtRevisionIdempotent(ctx, admin, profile.Name, "held-legacy-protection", contracts.ReviseProfileRequest{Spec: spec}, profile.Revision); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = control.GetSandbox(ctx, principal, legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := contracts.ResourceAccount{Key: "user:held-legacy", Limits: contracts.ResourceAccountLimits{MaxActiveInstances: 1, MaxVCPUCount: contracts.Unlimited, MaxMemoryBytes: contracts.Unlimited}}
+	for _, candidate := range []*contracts.ResourceAccount{nil, &account} {
+		if _, _, err := control.StartSandboxOperation(ctx, principal, legacy.ID, "held-legacy-start", legacy.Revision, contracts.StartSandboxRequest{ResourceAccount: candidate}); !errors.Is(err, ports.ErrInvalidRequest) {
+			t.Fatalf("held unattributed recovery was admitted: %v", err)
+		}
+	}
+	unchanged, err := control.GetSandbox(ctx, principal, legacy.ID)
+	if err != nil || unchanged.Revision != legacy.Revision || unchanged.DesiredState != legacy.DesiredState {
+		t.Fatalf("refused recovery changed intent: %+v %v", unchanged, err)
+	}
+	if _, err := control.StopSandbox(ctx, principal, legacy.ID, "held-legacy-stop", legacy.Revision); err != nil {
+		t.Fatal(err)
+	}
+	// Runner fencing releases the old allocation before a new account can own compute.
+	if _, err := pool.Exec(ctx, `UPDATE secondbox.sandboxes SET state='stopped',current_instance_id='',revision=revision+1 WHERE id=$1`, legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = control.GetSandbox(ctx, principal, legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := control.StartSandboxOperation(ctx, principal, legacy.ID, "held-legacy-attributed-start", legacy.Revision, contracts.StartSandboxRequest{ResourceAccount: &account}); err != nil {
+		t.Fatalf("released legacy allocation did not adopt account: %v", err)
+	}
+	usage, err := control.GetResourceAccountUsage(ctx, principal, account.Key)
+	if err != nil || usage.ActiveInstances != 1 {
+		t.Fatalf("adopted allocation was not charged: %+v %v", usage, err)
+	}
+}
+
 func TestResourceAccountPlacementCannotResurrectReleasedCharge(t *testing.T) {
 	fixture := newSchedulerLockFixture(t)
 	if _, err := fixture.pool.Exec(t.Context(), `UPDATE secondbox.sandboxes SET state='failed',resource_account_key='user:released' WHERE id=$1`, fixture.request.SandboxID); err != nil {

@@ -138,7 +138,14 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 		strconv.FormatInt(sandbox.Revision, 10), "",
 		contracts.StartSandboxRequest{Image: testExecutionImage(), CapacityWaitMilliseconds: 30_000},
 	)
-	assertProblem(t, boundedReplay, http.StatusConflict, "idempotency_conflict")
+	if boundedReplay.StatusCode != http.StatusAccepted || boundedReplay.Header.Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("bounded replay status=%d replay=%q body=%s", boundedReplay.StatusCode, boundedReplay.Header.Get("Idempotency-Replayed"), readResponse(t, boundedReplay))
+	}
+	var boundedOperation contracts.Operation
+	decodeResponseJSON(t, boundedReplay, &boundedOperation)
+	if boundedOperation.ID != startOperation.ID || boundedOperation.CapacityWaitDeadline != nil {
+		t.Fatalf("bounded replay changed accepted operation or deadline: %+v", boundedOperation)
+	}
 	unboundedWait := lifecycleHTTPRequest(
 		t, server.URL, credential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "lifecycle-http-start-unbounded-wait",
