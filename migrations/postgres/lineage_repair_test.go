@@ -62,6 +62,7 @@ var postFenceMigrationFiles = []string{
 	"0041_unhomed_runner_command_wakeups.sql",
 	"0042_preserve_eager_runner_dispatch.sql",
 	"0043_workspace_start_archive_phases.sql",
+	"0044_resource_account_quotas.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

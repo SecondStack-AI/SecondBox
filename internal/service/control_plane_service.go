@@ -62,6 +62,7 @@ type SandboxStore interface {
 	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string, filter contracts.SandboxListFilter) (contracts.SandboxPage, error)
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
 	GetTenantOperation(ctx context.Context, tenantRef, operationID string) (contracts.Operation, error)
+	GetResourceAccountUsage(ctx context.Context, tenantRef, subjectRef, key string) (contracts.ResourceAccountUsage, error)
 	GetSubjectUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.SubjectUsage, error)
 	GetSubjectSandboxPolicy(context.Context, string, string, string, time.Time) (contracts.SubjectSandboxPolicyObservation, error)
 	UpdateSubjectSandboxPolicy(context.Context, string, string, contracts.SubjectSandboxPolicy, int64, time.Time, ports.AdminIdempotencyInput) (contracts.SubjectSandboxPolicyObservation, ports.AdminIdempotencyResult, error)
@@ -412,6 +413,9 @@ func (service *ControlPlaneService) createSandboxOperation(
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
+	if err := validateResourceAccount(request.ResourceAccount); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
 	if !profileNamePattern.MatchString(request.Profile) {
 		return contracts.Sandbox{}, contracts.Operation{}, false, invalidField("profile", "must match ^[a-z][a-z0-9-]{0,79}$")
 	}
@@ -432,11 +436,22 @@ func (service *ControlPlaneService) createSandboxOperation(
 		return contracts.Sandbox{}, contracts.Operation{}, false,
 			invalidField("capacityWaitMilliseconds", "must be an integer between 1 and 3600000")
 	}
-	canonicalRequest, err := json.Marshal(request)
-	if err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox request canonicalization failed: %w", err)
+	// Wait and policy limits are evaluated on first admission. The account
+	// key and the rest of the request identify the durable operation.
+	account := request.ResourceAccount
+	requestHashWithWait := func(wait contracts.CapacityWaitBound) (string, error) {
+		identity := request
+		identity.ResourceAccount = nil
+		identity.CapacityWaitMilliseconds = wait
+		return hashCanonicalRequest(struct {
+			contracts.CreateSandboxRequest
+			ResourceAccountKey string `json:"resourceAccountKey,omitempty"`
+		}{identity, account.AccountKey()})
 	}
-	requestHash := sha256.Sum256(canonicalRequest)
+	requestHash, err := requestHashWithWait(0)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
 	now := service.now().UTC()
 	sandboxID := service.newID("sbx")
 	workspaceID := service.newID("wsp")
@@ -466,18 +481,21 @@ func (service *ControlPlaneService) createSandboxOperation(
 	}
 	audit := service.newAudit(ctx, principal, "sandbox.created", "sandbox", sandboxID, principal.TenantRef, now)
 	storedSandbox, storedOperation, created, err := service.store.CreateSandbox(ctx, ports.CreateSandboxInput{
-		Principal: principal,
-		Sandbox:   sandbox, Operation: operation,
-		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
+		Principal: principal, ResourceAccount: account,
+		Sandbox: sandbox, Operation: operation,
+		IdempotencyKey: idempotencyKey, RequestHash: requestHash, LegacyCapacityWaitHash: requestHashWithWait,
 		IdempotencyEnds:   service.idempotencyExpiration(now),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
 		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID, Resources: request.Resources,
 		LifecycleRequestMetadata: request.Image.LifecycleMetadata(),
 	})
 	if err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, err
+		return contracts.Sandbox{}, contracts.Operation{}, false, service.auditResourceAccountRefusal(ctx, audit, err)
 	}
 	if created {
+		if storedSandbox.ResourceAccountKey != "" {
+			audit.Details["resourceAccountKey"] = storedSandbox.ResourceAccountKey
+		}
 		if storedSandbox.EgressContext != nil {
 			audit.Details["egressContext"] = *storedSandbox.EgressContext
 		}
@@ -556,6 +574,16 @@ func (service *ControlPlaneService) ListSandboxes(
 	return service.store.ListSandboxes(
 		ctx, principal.TenantRef, principal.SubjectRef, boundedLimit(limit), cursor, filter,
 	)
+}
+
+func (service *ControlPlaneService) GetResourceAccountUsage(ctx context.Context, principal contracts.Principal, key string) (contracts.ResourceAccountUsage, error) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
+		return contracts.ResourceAccountUsage{}, ports.ErrAuthorizationDenied
+	}
+	if !contracts.ValidResourceAccountKey(key) {
+		return contracts.ResourceAccountUsage{}, invalidField("key", "must be a URL-safe resource account key of at most 256 characters")
+	}
+	return service.store.GetResourceAccountUsage(ctx, principal.TenantRef, principal.SubjectRef, key)
 }
 
 // GetSubjectUsage returns aggregate quota reservations for the asserted subject.
@@ -649,6 +677,9 @@ func (service *ControlPlaneService) StartSandboxOperation(
 	expectedRevision int64,
 	request contracts.StartSandboxRequest,
 ) (contracts.Operation, bool, error) {
+	if err := validateResourceAccount(request.ResourceAccount); err != nil {
+		return contracts.Operation{}, false, err
+	}
 	if request.Image.Reference != "" {
 		if err := request.Image.Validate(); err != nil {
 			return contracts.Operation{}, false, errors.Join(executionImageFieldError(), err)
@@ -663,7 +694,7 @@ func (service *ControlPlaneService) StartSandboxOperation(
 	operation, err := service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "start", contracts.SandboxDesiredStateRunning,
 		idempotencyKey, expectedRevision, request.Image.LifecycleMetadata(),
-		int64(request.CapacityWaitMilliseconds), &replayed,
+		int64(request.CapacityWaitMilliseconds), request.ResourceAccount, &replayed,
 	)
 	return operation, replayed, err
 }
@@ -678,7 +709,7 @@ func (service *ControlPlaneService) StopSandbox(
 ) (contracts.Operation, error) {
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "stop", contracts.SandboxDesiredStateStopped,
-		idempotencyKey, expectedRevision, nil, 0, nil,
+		idempotencyKey, expectedRevision, nil, 0, nil, nil,
 	)
 }
 
@@ -692,7 +723,7 @@ func (service *ControlPlaneService) DeleteSandbox(
 ) (contracts.Operation, error) {
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "delete", contracts.SandboxDesiredStateDeleted,
-		idempotencyKey, expectedRevision, nil, 0, nil,
+		idempotencyKey, expectedRevision, nil, 0, nil, nil,
 	)
 }
 
@@ -811,6 +842,7 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 	expectedRevision int64,
 	requestMetadata map[string]string,
 	capacityWaitMilliseconds int64,
+	resourceAccount *contracts.ResourceAccount,
 	replayed *bool,
 ) (contracts.Operation, error) {
 	if principal.TenantRef == "" {
@@ -822,17 +854,18 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 	if expectedRevision < 1 {
 		return contracts.Operation{}, invalidField("If-Match", "must contain a positive revision ETag")
 	}
-	// The capacity wait is part of the canonical request; omission keeps the
-	// hash every earlier start recorded.
-	canonicalRequest, err := json.Marshal(struct {
-		Kind                     string            `json:"kind"`
-		Metadata                 map[string]string `json:"metadata"`
-		CapacityWaitMilliseconds int64             `json:"capacityWaitMilliseconds,omitempty"`
-	}{Kind: kind, Metadata: requestMetadata, CapacityWaitMilliseconds: capacityWaitMilliseconds})
-	if err != nil {
-		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle request canonicalization failed: %w", err)
+	requestHashWithWait := func(wait contracts.CapacityWaitBound) (string, error) {
+		return hashCanonicalRequest(struct {
+			Kind                     string                      `json:"kind"`
+			Metadata                 map[string]string           `json:"metadata"`
+			CapacityWaitMilliseconds contracts.CapacityWaitBound `json:"capacityWaitMilliseconds,omitempty"`
+			ResourceAccountKey       string                      `json:"resourceAccountKey,omitempty"`
+		}{kind, requestMetadata, wait, resourceAccount.AccountKey()})
 	}
-	requestHash := sha256.Sum256(canonicalRequest)
+	requestHash, err := requestHashWithWait(0)
+	if err != nil {
+		return contracts.Operation{}, err
+	}
 	now := service.now().UTC()
 	operation := contracts.Operation{
 		ID: service.newID("op"), SandboxID: sandboxID, Kind: kind,
@@ -846,20 +879,55 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 	audit := service.newAudit(
 		ctx, principal, "sandbox."+kind, "sandbox", sandboxID, principal.TenantRef, now,
 	)
+	if resourceAccount != nil {
+		audit.Details["requestedResourceAccountKey"] = resourceAccount.Key
+	}
 	storedOperation, err := service.store.SetSandboxDesiredState(ctx, ports.LifecycleIntentInput{
 		Principal: principal, SandboxID: sandboxID, DesiredState: desiredState,
-		Operation: operation, Now: now,
-		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
+		Operation: operation, Now: now, ResourceAccount: resourceAccount,
+		IdempotencyKey: idempotencyKey, RequestHash: requestHash, LegacyCapacityWaitHash: requestHashWithWait,
 		IdempotencyEnds: service.idempotencyExpiration(now), ExpectedRevision: expectedRevision,
 		AuditEvent: audit,
 	})
 	if err != nil {
-		return contracts.Operation{}, err
+		return contracts.Operation{}, service.auditResourceAccountRefusal(ctx, audit, err)
 	}
 	if replayed != nil {
 		*replayed = storedOperation.ID != operation.ID
 	}
 	return storedOperation, nil
+}
+
+func validateResourceAccount(account *contracts.ResourceAccount) error {
+	if account == nil {
+		return nil
+	}
+	if !contracts.ValidResourceAccountKey(account.Key) {
+		return invalidField("resourceAccount.key", "must be a URL-safe resource account key of at most 256 characters")
+	}
+	if !account.Limits.MaxActiveInstances.Valid(0) || !account.Limits.MaxVCPUCount.Valid(0) || !account.Limits.MaxMemoryBytes.Valid(0) {
+		return invalidField("resourceAccount.limits", "must contain nonnegative exact JSON integers or null")
+	}
+	return nil
+}
+
+func (service *ControlPlaneService) auditResourceAccountRefusal(ctx context.Context, event contracts.AuditEvent, err error) error {
+	var refused *ports.ResourceAccountQuotaError
+	if !errors.As(err, &refused) {
+		return err
+	}
+	refusal := refused.Refusal
+	event.Outcome = "denied"
+	event.Details["reason"] = "resource_account_quota_exceeded"
+	event.Details["resourceAccountKey"] = refusal.AccountKey
+	event.Details["axis"] = refusal.Axis
+	event.Details["used"] = fmt.Sprint(refusal.Used)
+	event.Details["requested"] = fmt.Sprint(refusal.Requested)
+	event.Details["limit"] = fmt.Sprint(refusal.Limit)
+	if auditErr := service.store.AppendAuditEvent(ctx, event); auditErr != nil {
+		return auditErr
+	}
+	return err
 }
 
 // MutateSandbox exposes one exact HTTP lifecycle action with replay evidence.
@@ -882,7 +950,7 @@ func (service *ControlPlaneService) MutateSandbox(
 	var replayed bool
 	operation, err := service.setSandboxDesiredState(
 		ctx, principal, sandboxID, kind, desiredState, idempotencyKey,
-		expectedRevision, nil, 0, &replayed,
+		expectedRevision, nil, 0, nil, &replayed,
 	)
 	return operation, replayed, err
 }

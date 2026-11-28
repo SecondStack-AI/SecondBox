@@ -42,8 +42,29 @@ func readSubjectCapacity(ctx context.Context, tx pgx.Tx, tenantRef, subjectRef s
 	if err != nil {
 		return contracts.SubjectCapacity{}, err
 	}
+	rows, err := tx.Query(ctx, `SELECT profile_name,count(*) FROM secondbox.sandboxes
+ WHERE tenant_ref=$1 AND subject_ref=$2 AND resource_account_key IS NULL
+ AND secondbox.sandbox_quota_active(state,desired_state,current_instance_id)
+ GROUP BY profile_name`, tenantRef, subjectRef)
+	if err != nil {
+		return contracts.SubjectCapacity{}, fmt.Errorf("SecondBox unattributed resource account usage query failed: %w", err)
+	}
+	defer rows.Close()
+	unattributed := make(map[string]int64)
+	for rows.Next() {
+		var profile string
+		var count int64
+		if err := rows.Scan(&profile, &count); err != nil {
+			return contracts.SubjectCapacity{}, err
+		}
+		unattributed[profile] = count
+	}
+	if err := rows.Err(); err != nil {
+		return contracts.SubjectCapacity{}, err
+	}
 	return contracts.SubjectCapacity{
-		SubjectRef: subjectRef, Limits: limits, ObservedAt: observedAt.UTC(),
+		UnattributedActiveInstancesByProfile: unattributed,
+		SubjectRef:                           subjectRef, Limits: limits, ObservedAt: observedAt.UTC(),
 		Usage: contracts.QuotaUsage{Sandboxes: usage.sandboxes, ActiveInstances: usage.activeInstances, VCPUCount: usage.vcpuCount, MemoryBytes: usage.memoryBytes, Snapshots: usage.snapshots, PortSessions: usage.portSessions, ConcurrentOperations: usage.concurrentOperations},
 		ConstrainingScopes: contracts.QuotaConstrainingScopes{
 			Sandboxes:            quotaHeadroomScope(limits.MaxSandboxes.Remaining(usage.sandboxes), tenantLimits.MaxSandboxes.Remaining(tenantUsage.Sandboxes)),

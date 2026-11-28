@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Trusted applications can assign compute to resource accounts and limit their active Instances, allocated vCPU and memory within a Subject. Profiles can require attribution, and applications can read each account's current allocations.
+
+### Fixed
+
+- Failed Instances keep their compute charge until they are fenced and detached. Reusing a charged allocation does not require a second resource allowance.
+- Retrying a Sandbox create or start with a new remaining capacity wait replays the admitted operation and preserves its original deadline.
+
 ## 0.33.0 - 2026-11-23
 
 Pre-baked AWS Code workers start from a worker data snapshot that already holds the execution-image cache and its verification records, and Runners keep those records across restarts. Public API v1, Runner protocol 8, migrations, standard Profiles and Firecracker bundles are unchanged from v0.32.5. Runners require a new verification-record directory. See the [v0.33.0 release notes](docs/releases/v0.33.0.md).

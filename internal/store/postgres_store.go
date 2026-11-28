@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -340,9 +341,6 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		if expired {
 			idempotencyErr = pgx.ErrNoRows
 		} else {
-			if priorHash != input.RequestHash {
-				return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrIdempotencyConflict
-			}
 			sandbox, err := getSandboxWithQuerier(
 				ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, priorSandboxID,
 			)
@@ -353,6 +351,9 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 				ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, priorSandboxID,
 			)
 			if err != nil {
+				return contracts.Sandbox{}, contracts.Operation{}, false, err
+			}
+			if err := verifySandboxReplayHash(priorHash, input.RequestHash, input.LegacyCapacityWaitHash, operation); err != nil {
 				return contracts.Sandbox{}, contracts.Operation{}, false, err
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -398,6 +399,13 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	lifecycleJSON, err := json.Marshal(resolvedLifecycle)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	resourceAccountKey := ""
+	if profile.CurrentRevision.Spec.Lifecycle.InitialState == contracts.SandboxDesiredStateRunning {
+		if err := admitResourceAccount(ctx, tx, input.Principal, profile.CurrentRevision.Spec.RequireResourceAccount, input.ResourceAccount, resolvedResources); err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, err
+		}
+		resourceAccountKey = input.ResourceAccount.AccountKey()
 	}
 	placementSpec := sandboxPlacementSpec(profile.CurrentRevision.Spec, resolvedResources)
 	var tenantEgressContext *string
@@ -474,6 +482,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	sandbox := input.Sandbox
 	sandbox.Lifecycle = resolvedLifecycle
 	sandbox.Resources = resolvedResources
+	sandbox.ResourceAccountKey = resourceAccountKey
 	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.SubjectRef = input.Principal.SubjectRef
 	sandbox.EgressContext = clonePostgresOptionalString(tenantEgressContext)
@@ -540,15 +549,15 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			lifecycle_termination_reason,lifecycle_failure_class,lifecycle_failure_message,lifecycle_intent_kind,
 			reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,reconcile_retry_count,
 			reconcile_retry_limit,created_at,updated_at,deleted_at,vcpu_count,memory_bytes,workspace_bytes,lifecycle_policy_json,
-			lifecycle_request_metadata_json,execution_image_reference
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)`,
+			lifecycle_request_metadata_json,execution_image_reference,resource_account_key
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,NULLIF($34,''))`,
 		sandbox.ID, sandbox.TenantRef, sandbox.SubjectRef,
 		sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
 		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", sandbox.EgressContext, metadataJSON,
 		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
 		"", nil, nil, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
 		sandbox.Resources.VCPUCount, sandbox.Resources.MemoryBytes, sandbox.Resources.WorkspaceBytes, lifecycleJSON,
-		lifecycleRequestMetadataJSON, input.LifecycleRequestMetadata["executionImageReference"],
+		lifecycleRequestMetadataJSON, input.LifecycleRequestMetadata["executionImageReference"], resourceAccountKey,
 	); err != nil {
 		if isSandboxNameConflict(err) {
 			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrSandboxNameConflict
@@ -806,6 +815,26 @@ func (store *PostgresControlPlaneStore) GetTenantOperation(
 	return getOperationWithQuerier(ctx, store.pool, tenantRef, subjectRef, `id=$3`, operationID)
 }
 
+// Earlier servers included a positive capacity wait in the recorded hash.
+// Only the original admitted bound can reproduce that identity during an
+// upgrade. A caller's new remaining wait never changes an accepted deadline.
+func verifySandboxReplayHash(recorded, stable string, legacyHash func(contracts.CapacityWaitBound) (string, error), operation contracts.Operation) error {
+	if recorded == stable {
+		return nil
+	}
+	if legacyHash != nil && operation.CapacityWaitDeadline != nil {
+		originalWait := operation.CapacityWaitDeadline.Sub(operation.CreatedAt).Milliseconds()
+		hash, err := legacyHash(contracts.CapacityWaitBound(originalWait))
+		if err != nil {
+			return err
+		}
+		if recorded == hash {
+			return nil
+		}
+	}
+	return ports.ErrIdempotencyConflict
+}
+
 func getCreateOperationWithQuerier(
 	ctx context.Context,
 	querier queryRower,
@@ -842,7 +871,7 @@ func getOperationWithQuerier(
 	var requestMetadataJSON []byte
 	err := querier.QueryRow(ctx, `
 		SELECT id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
-		       created_at,started_at,completed_at,updated_at
+		       created_at,started_at,completed_at,updated_at,capacity_wait_deadline
 		FROM secondbox.operations `+where+` ORDER BY created_at LIMIT 1`,
 		tenantRef, subjectRef, identifier,
 	).Scan(
@@ -850,7 +879,7 @@ func getOperationWithQuerier(
 		&operation.SandboxID, &snapshotID, &operation.Kind, &operation.State, &operation.RequestID,
 		&requestMetadataJSON,
 		&errorCode, &errorMessage, &retryable, &operation.CreatedAt, &operation.StartedAt,
-		&operation.CompletedAt, &operation.UpdatedAt,
+		&operation.CompletedAt, &operation.UpdatedAt, &operation.CapacityWaitDeadline,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.Operation{}, ports.ErrSandboxNotFound
@@ -967,7 +996,9 @@ func (store *PostgresControlPlaneStore) ReadMetricsSnapshot(
 			contracts.OperationStateCancelled: 0,
 		},
 	}
+	snapshot.ResourceAccountAllocationStates = maps.Clone(snapshot.SandboxStates)
 	for query, destination := range map[string]map[string]int64{
+		`SELECT state,count(*) FROM secondbox.sandboxes WHERE resource_account_key IS NOT NULL AND secondbox.sandbox_quota_active(state,desired_state,current_instance_id) GROUP BY state`: snapshot.ResourceAccountAllocationStates,
 		`SELECT state,count(*) FROM secondbox.sandboxes GROUP BY state`:  snapshot.SandboxStates,
 		`SELECT state,count(*) FROM secondbox.operations GROUP BY state`: snapshot.OperationStates,
 	} {
@@ -1105,7 +1136,8 @@ const sandboxSelect = `
 	       instance.id,instance.state,COALESCE(instance.guest_liveness,''),instance.termination_reason,
 	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at,instance.guest_features,
 	       instance.requested_image_reference,instance.resolved_image_digest,
-	       sandbox.execution_image_reference,sandbox.execution_image_digest
+	       sandbox.execution_image_reference,sandbox.execution_image_digest,
+ COALESCE(CASE WHEN secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id) THEN sandbox.resource_account_key END,'')
 	FROM secondbox.sandboxes AS sandbox
 	JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
  JOIN secondbox.profile_revisions AS pinned_profile ON pinned_profile.id=sandbox.profile_revision_id
@@ -1136,7 +1168,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		&instanceID, &instanceState, &guestLiveness, &terminationReason,
 		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt, &guestFeatures,
 		&requestedImageReference, &resolvedImageDigest,
-		&pinnedImage.RequestedReference, &pinnedImage.ResolvedDigest,
+		&pinnedImage.RequestedReference, &pinnedImage.ResolvedDigest, &sandbox.ResourceAccountKey,
 	); err != nil {
 		return contracts.Sandbox{}, err
 	}
@@ -1561,17 +1593,11 @@ func readSubjectQuotaUsage(
 	var usage quotaUsage
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*),
-		       count(*) FILTER (WHERE (sandbox.desired_state='running'
-		           AND sandbox.state IN ('creating','stopped'))
-		         OR sandbox.state IN ('starting','ready','draining','stopping')),
+		       count(*) FILTER (WHERE secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id)),
 		       COALESCE(sum(sandbox.vcpu_count)
-		         FILTER (WHERE (sandbox.desired_state='running'
-		             AND sandbox.state IN ('creating','stopped'))
-		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
+		         FILTER (WHERE secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id)),0),
 		       COALESCE(sum(sandbox.memory_bytes)
-		         FILTER (WHERE (sandbox.desired_state='running'
-		             AND sandbox.state IN ('creating','stopped'))
-		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
+		         FILTER (WHERE secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id)),0),
 		       (SELECT count(*) FROM secondbox.snapshots
 		        WHERE tenant_ref=$1 AND subject_ref=$2
 		          AND state IN ('creating','ready','deleting')),
@@ -1602,17 +1628,11 @@ func readTenantQuotaUsage(
 	var usage contracts.TenantQuotaUsage
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*),
-		       count(*) FILTER (WHERE (sandbox.desired_state='running'
-		           AND sandbox.state IN ('creating','stopped'))
-		         OR sandbox.state IN ('starting','ready','draining','stopping')),
+		       count(*) FILTER (WHERE secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id)),
 		       COALESCE(sum(sandbox.vcpu_count)
-		         FILTER (WHERE (sandbox.desired_state='running'
-		             AND sandbox.state IN ('creating','stopped'))
-		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
+		         FILTER (WHERE secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id)),0),
 		       COALESCE(sum(sandbox.memory_bytes)
-		         FILTER (WHERE (sandbox.desired_state='running'
-		             AND sandbox.state IN ('creating','stopped'))
-		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
+		         FILTER (WHERE secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id)),0),
 		       (SELECT count(*) FROM secondbox.snapshots
 		        WHERE tenant_ref=$1 AND state IN ('creating','ready','deleting')),
 		       (SELECT count(*) FROM secondbox.port_sessions
@@ -1646,16 +1666,13 @@ func readDeploymentQuotaUsage(
 	if err := tx.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM secondbox.sandboxes WHERE state<>'deleted'),
 		       (SELECT count(*) FROM secondbox.sandboxes
-		        WHERE (desired_state='running' AND state IN ('creating','stopped'))
-		           OR state IN ('starting','ready','draining','stopping')),
+		        WHERE secondbox.sandbox_quota_active(state,desired_state,current_instance_id)),
 		       (SELECT COALESCE(sum(sandbox.vcpu_count),0)
 		        FROM secondbox.sandboxes AS sandbox
-		        WHERE (sandbox.desired_state='running' AND sandbox.state IN ('creating','stopped'))
-		           OR sandbox.state IN ('starting','ready','draining','stopping')),
+		        WHERE secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id)),
 		       (SELECT COALESCE(sum(sandbox.memory_bytes),0)
 		        FROM secondbox.sandboxes AS sandbox
-		        WHERE (sandbox.desired_state='running' AND sandbox.state IN ('creating','stopped'))
-		           OR sandbox.state IN ('starting','ready','draining','stopping')),
+		        WHERE secondbox.sandbox_quota_active(sandbox.state,sandbox.desired_state,sandbox.current_instance_id)),
 		       (SELECT count(*) FROM secondbox.snapshots
 		        WHERE state IN ('creating','ready','deleting')),
 		       (SELECT count(*) FROM secondbox.port_sessions

@@ -306,6 +306,18 @@ func (store *PostgresStore) scheduleOnce(
 	if currentInstanceID != "" {
 		return DurableAssignment{}, false, errors.New("SecondBox scheduler Sandbox has an Instance without durable assignment")
 	}
+	// A plan can outlive its generation's admission (for example after a
+	// queued start is cancelled or a preparation failure releases its charge).
+	// A charged or protected Sandbox needs a new public start to reacquire.
+	if !rowlock.QuotaUsageActive(locked.SandboxState, locked.DesiredState) {
+		previousKey, required, err := rowlock.SandboxResourceAccountPolicy(ctx, tx, request.SandboxID)
+		if err != nil {
+			return DurableAssignment{}, false, err
+		}
+		if previousKey != "" || required {
+			return DurableAssignment{}, false, ports.ErrRevisionConflict
+		}
+	}
 	timing.assignmentCheckedAt, err = store.observeAtOrAfter(timing.sandboxLockedAt)
 	if err != nil {
 		return DurableAssignment{}, false, err

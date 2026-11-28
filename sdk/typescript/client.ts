@@ -48,6 +48,8 @@ import {
   type ApplicationCredentialResponse,
   type TenantUsage,
   type SubjectCapacity,
+  type ResourceAccount,
+  type ResourceAccountUsage,
   type PoolCapacityObservation,
   type SubjectSandboxPolicy,
   type SubjectSandboxPolicyObservation,
@@ -113,6 +115,11 @@ export type {
   ApplicationCredentialResponse,
   TenantUsage,
   SubjectCapacity,
+  ResourceAccount,
+  ResourceAccountLimits,
+  ResourceAccountUsage,
+  ResourceAccountAllocation,
+  ResourceAccountQuotaRefusal,
   PoolCapacityObservation,
   RunnerPoolCapacity,
   PoolComputeCapacity,
@@ -268,6 +275,10 @@ export class SecondBox {
       ...(request === undefined ? {} : { body: encodeJSONBody(request) }),
       signal,
     });
+  }
+
+  public getResourceAccountUsage(key: string, signal?: AbortSignal): Promise<ResourceAccountUsage> {
+    return this.requestJSON("getResourceAccountUsage", { pathParameters: { key }, signal });
   }
 
   public async getSubjectCapacity(): Promise<SubjectCapacity> {
@@ -558,6 +569,7 @@ export class SecondBox {
         profile: request.profile,
         metadata: request.metadata ?? {},
         ...(request.resources === undefined ? {} : { resources: request.resources }),
+        ...(request.resourceAccount === undefined ? {} : { resourceAccount: request.resourceAccount }),
         ...(request.sourceSnapshotId === undefined
           ? {}
           : { sourceSnapshotId: request.sourceSnapshotId }),
@@ -592,6 +604,7 @@ export class SecondBox {
       profile: request.profile,
       ...(request.metadata === undefined ? {} : { metadata: request.metadata }),
       ...(request.resources === undefined ? {} : { resources: request.resources }),
+      ...(request.resourceAccount === undefined ? {} : { resourceAccount: request.resourceAccount }),
       ...(request.sourceSnapshotId === undefined
         ? {}
         : { sourceSnapshotId: request.sourceSnapshotId }),
@@ -1263,6 +1276,7 @@ export class SandboxHandle implements SandboxFilesystem {
   public start(options: LifecycleOptions & StartSandboxRequest): Promise<Operation> {
     const request: JSONValue = {
       ...(options.image === undefined ? {} : { image: executionImageJSON(options.image) }),
+      ...(options.resourceAccount === undefined ? {} : { resourceAccount: { key: options.resourceAccount.key, limits: { ...options.resourceAccount.limits } } }),
       ...(options.capacityWaitMilliseconds === undefined
         ? {}
         : { capacityWaitMilliseconds: options.capacityWaitMilliseconds }),
@@ -1860,6 +1874,7 @@ export interface CreateSandboxOptions {
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
   readonly resources?: SandboxResourceRequest;
+  readonly resourceAccount?: ResourceAccount;
   /**
    * Bounds how long the start of a running-initial Profile may remain
    * unplaced; the create Operation then fails with `capacity_wait_expired`.
@@ -1880,6 +1895,7 @@ export interface RunRequest extends Omit<BufferedExecRequest, "environment"> {
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
   readonly resources?: SandboxResourceRequest;
+  readonly resourceAccount?: ResourceAccount;
   readonly environment?: BufferedExecRequest["environment"];
   readonly readyTimeoutMilliseconds: number;
   readonly signal?: AbortSignal;
